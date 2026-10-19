@@ -2,6 +2,12 @@
 //! Staging contexts deliberately have no conversion to facts or final evidence.
 use super::*;
 
+mod reduction_rows;
+use reduction_rows::ReductionRows;
+
+#[cfg(test)]
+mod freeze_tests;
+
 impl ValidatedFacts {
     /// True only for finalized rigid projected calls using a required equality view.
     pub(in crate::compiler) fn uses_equality_required_call(
@@ -28,15 +34,57 @@ pub(super) struct DeclaredCallableContext {
     pub(super) predicates: Arc<[Predicate]>,
     pub(super) raw: GenericSchema,
     pub(super) origins: Arc<[super::parameter_equality::EqualityObligationOrigin]>,
-    reductions: Mutex<Vec<DeclaredEqualityReduction>>,
+    reductions: ReductionRows,
 }
 
+#[derive(Clone)]
 struct DeclaredEqualityReduction {
     world: WorldId,
     stage: DeclaredStageId,
     declaration: DeclId,
     projection: ir::AssociatedTypeProjection,
     rhs: Ty,
+}
+
+/// Private construction result, never independently published.
+pub(super) struct DeclaredCallableNormalization {
+    schema: GenericSchema,
+    world: WorldId,
+    stage: DeclaredStageId,
+    declaration: DeclId,
+    reductions: ReductionRows,
+}
+impl DeclaredCallableNormalization {
+    pub(super) fn finish(
+        self,
+        context: &mut DeclaredCallableContext,
+        budget: &PlanBudget,
+    ) -> Result<GenericSchema> {
+        if self.world != context.world
+            || self.stage != context.stage
+            || self.declaration != context.declaration
+        {
+            return Err(FactsError::invalid(
+                budget,
+                "declared reduction result changed stage or owner",
+            ));
+        }
+        self.reductions.check(budget)?;
+        charged(budget, budget.charge_work(self.reductions.values.len()))?;
+        for row in &self.reductions.values {
+            if row.world != context.world
+                || row.stage != context.stage
+                || row.declaration != context.declaration
+            {
+                return Err(FactsError::invalid(
+                    budget,
+                    "declared reduction row changed stage or owner",
+                ));
+            }
+        }
+        context.reductions.append(self.reductions, budget)?;
+        Ok(self.schema)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -210,13 +258,8 @@ impl ValidatedTraitWorld {
                     ));
                 }
             }
-            let reductions = context.reductions.lock().map_err(|_| {
-                FactsError::resource(
-                    &self.budget,
-                    "declared equality dependency storage poisoned",
-                )
-            })?;
-            for reduction in reductions.iter() {
+            context.reductions.check(&self.budget)?;
+            for reduction in &context.reductions.values {
                 if reduction.world != self.id
                     || reduction.stage != context.stage
                     || reduction.declaration != context.declaration
@@ -882,7 +925,7 @@ impl ValidatedTraitWorld {
                     predicates: rows.into(),
                     raw: clone_schema(&callable.schema, &self.budget)?,
                     origins: super::parameter_equality::result_slice(&self.budget, origins)?,
-                    reductions: Mutex::new(Vec::new()),
+                    reductions: ReductionRows::default(),
                 },
             )?;
         }
@@ -907,7 +950,7 @@ impl ValidatedTraitWorld {
         &self,
         declaration: DeclId,
         raw: &GenericSchema,
-    ) -> Result<GenericSchema> {
+    ) -> Result<DeclaredCallableNormalization> {
         let context = self.declared_callable_context(declaration)?;
         if context.world != self.id
             || context.stage != DeclaredStageId(self.id)
@@ -922,18 +965,26 @@ impl ValidatedTraitWorld {
         }
         self.compare_predicate_rows(&context.raw.predicates, &raw.predicates)?;
         let mut schema = clone_schema(raw, &self.budget)?;
+        let mut reductions = ReductionRows::default();
         for ty in &mut schema.signature.params {
-            *ty = self.normalize_declared_type(ty, context, 0)?;
+            *ty = self.normalize_declared_type(ty, context, &mut reductions, 0)?;
         }
         schema.signature.result =
-            self.normalize_declared_type(&schema.signature.result, context, 0)?;
+            self.normalize_declared_type(&schema.signature.result, context, &mut reductions, 0)?;
         self.validate_schema_signature(declaration, &schema.signature, &schema.env, None)?;
-        Ok(schema)
+        Ok(DeclaredCallableNormalization {
+            schema,
+            world: self.id,
+            stage: context.stage,
+            declaration,
+            reductions,
+        })
     }
     fn normalize_declared_type(
         &self,
         ty: &Ty,
         context: &DeclaredCallableContext,
+        reductions: &mut ReductionRows,
         depth: usize,
     ) -> Result<Ty> {
         self.map_equality_type(ty, depth, &mut |projection| {
@@ -963,15 +1014,7 @@ impl ValidatedTraitWorld {
                         "declared equality lacks exact owner membership",
                     ));
                 }
-                let mut reductions = context.reductions.lock().map_err(|_| {
-                    FactsError::resource(
-                        &self.budget,
-                        "declared equality dependency storage poisoned",
-                    )
-                })?;
-                push(
-                    &self.budget,
-                    &mut reductions,
+                reductions.push(
                     DeclaredEqualityReduction {
                         world: self.id,
                         stage: context.stage,
@@ -979,6 +1022,7 @@ impl ValidatedTraitWorld {
                         projection: projection.clone(),
                         rhs: rhs.clone(),
                     },
+                    &self.budget,
                 )?;
                 Ok(rhs)
             } else {
@@ -1123,7 +1167,7 @@ mod tests {
         };
         plan.checked_body(&target, &facts, &budget).unwrap();
         let context = world.declared_callable_context(declaration).unwrap();
-        assert!(!context.reductions.lock().unwrap().is_empty());
+        assert!(!context.reductions.values.is_empty());
         assert!(
             world
                 .requirements

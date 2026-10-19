@@ -26,4 +26,3 @@
 3 Atomic src/compiler/token_tree.rs
 1 static src/compiler/token_tree.rs
 5 Mutex src/compiler/traits.rs
-2 Mutex src/compiler/traits/equality.rs

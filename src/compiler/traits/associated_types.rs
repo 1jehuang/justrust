@@ -906,8 +906,18 @@ impl ValidatedTraitWorld {
             let mut schema = clone_schema(&callable.schema, &self.budget)?;
             if self.schema_contains_projection(&schema)? {
                 if self.has_declared_callable_equalities(callable.declaration)? {
-                    schema =
+                    let result =
                         self.normalize_declared_callable_schema(callable.declaration, &schema)?;
+                    let position = self
+                        .declared_callable_index
+                        .get(&self.budget, callable.declaration)?
+                        .ok_or_else(|| {
+                            FactsError::invalid(
+                                &self.budget,
+                                "missing declared reduction destination",
+                            )
+                        })?;
+                    schema = result.finish(&mut self.declared_callables[position], &self.budget)?;
                     push(
                         &self.budget,
                         &mut normalized,

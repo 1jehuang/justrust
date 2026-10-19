@@ -110,14 +110,14 @@ declaration in `src/compiler` and `src/project`, excluding test code. A
 breadth-first search from each root records every carrier type that directly
 holds a mutable primitive, with one shortest witness path.
 
-Recorded 2026-10-19: 11 fact roots reach 7 carriers, 72 entries (77 before the
-name-versus-type parser fix below):
+Recorded 2026-10-19: 11 fact roots reach 6 carriers, 62 entries (72 before
+construction-final declared reductions were frozen, 77 before the name-versus-type
+parser fix below):
 
 | Carrier | Mutable field | Owner of removal |
 |---|---|---|
 | `PlanCtx` | `state: Arc<Mutex<PlanState>>` | llama (cr-graphunify) |
 | `ValidatedTraitWorld` | `memo`, `projection_memo` | llama |
-| `DeclaredCallableContext` (traits/equality.rs) | `reductions` | llama |
 | `PlanBudget` | `usage: Arc<Mutex<PlanUsage>>` | budget lane |
 | `PlanReservation` | `usage` (shared ledger) | budget lane |
 | `ExpansionBudget` | `state: Arc<Mutex<State>>` | budget lane |

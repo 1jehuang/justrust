@@ -692,6 +692,12 @@ real crates and multi-crate applications, not just adapted source snippets.
 
 ### G9. Integrated graph, persistence, security and operations
 
+Construction-final declared equality reductions now move from explicit local
+sinks into immutable contexts before world publication (DECLARED-REDUCTIONS.md).
+The actual reductions mutex removal tightens lexical debt by two tokens and
+reachable debt by exactly ten entries, 72 to 62. PlanCtx, nominal mint/interner,
+world proof/projection memo and budget debt remain; no wide activation is implied.
+
 Bounded private source metadata extraction is documented in SOURCE-SCHEMAS.md:
 five final tables move once into an immutable paid owner, with exact parameter
 storage and authoritative compact callable projections. The unchanged graph
