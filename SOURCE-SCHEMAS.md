@@ -2,7 +2,10 @@
 
 ## Status and frozen contract
 
-Private composition on `af5c06a69`, not full immutable-world activation. Five
+Accepted bounded composition: frozen `7598bfa48` passed the complete 3,502-test
+suite and forced-hosted strict lint. Central receipts are in
+`data/runs/source-schemas/CENTRAL-ACCEPTANCE.md`. This is not full immutable-world
+activation. Five
 construction-final tables move once from the local builder into `SourceSchemas`:
 raw callable schemas, callable region-mode projections, original source region
 environments, associated assignment rows, and first raw assignment RHS values.
