@@ -700,6 +700,12 @@ read/write/borrow out-of-bounds aborts, immutable-place rejection, and exactly-o
 non-Copy indexed formatting. Range indexing remains a separate compiler/library
 blocker, not full Vec or std acceptance.
 
+`Vec<T>` additionally implements source-level `contains`/`dedup` for `PartialEq`
+and stable `sort`/`binary_search` for `Ord`. `tests/vec_algorithms.rs` exercises
+empty inputs, insertion positions, generic non-Copy elements and stable equal-key
+ordering against stock Rust at workers 1 and 8. Iterator-dependent methods and
+slice delegation remain open.
+
 - [ ] Establish pinned library source manifests, language-item/intrinsic inventory,
       sysroot identity and library feature/target configuration without embedding
       rustc or pretending catalog recipes compile the libraries.

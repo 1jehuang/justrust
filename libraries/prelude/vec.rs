@@ -287,3 +287,59 @@ impl<T> super::ops::IndexMut<usize> for Vec<T> {
         unsafe { &mut *p }
     }
 }
+
+impl<T: super::cmp::PartialEq> Vec<T> {
+    pub fn contains(&self, value: &T) -> bool {
+        let mut i = 0usize;
+        while i < self.len {
+            if self.get_ref(i).eq(value) {
+                return true;
+            }
+            i += 1usize;
+        }
+        false
+    }
+
+    pub fn dedup(&mut self) {
+        let mut i = 1usize;
+        while i < self.len {
+            if self.get_ref(i - 1usize).eq(self.get_ref(i)) {
+                let _removed = self.remove(i);
+            } else {
+                i += 1usize;
+            }
+        }
+    }
+}
+
+impl<T: super::cmp::Ord> Vec<T> {
+    pub fn sort(&mut self) {
+        // Stable insertion sort. Keep equal elements in their original order.
+        let mut i = 1usize;
+        while i < self.len {
+            let mut j = i;
+            while j > 0usize {
+                if !self.get_ref(j - 1usize).cmp(self.get_ref(j)).is_gt() {
+                    break;
+                }
+                self.swap(j - 1usize, j);
+                j -= 1usize;
+            }
+            i += 1usize;
+        }
+    }
+
+    pub fn binary_search(&self, value: &T) -> super::result::Result<usize, usize> {
+        let mut left = 0usize;
+        let mut right = self.len;
+        while left < right {
+            let middle = left + (right - left) / 2usize;
+            match self.get_ref(middle).cmp(value) {
+                super::cmp::Ordering::Less => { left = middle + 1usize; }
+                super::cmp::Ordering::Greater => { right = middle; }
+                super::cmp::Ordering::Equal => return super::result::Result::Ok(middle),
+            }
+        }
+        super::result::Result::Err(left)
+    }
+}
