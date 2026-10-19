@@ -347,6 +347,10 @@ pub struct Object {
     /// Absolute u64 immediate fields that receive the address of a linked
     /// read-only trait object vtable.
     pub vtables: Vec<(usize, Vtable)>,
+    /// Immutable evidence that this object's storage was paid, set by the
+    /// SSA backend (OPTIMIZATION.md 13). The stack emitter accounts through
+    /// its own retained-byte path and leaves this `None`. Holds no ledger.
+    pub receipt: Option<std::sync::Arc<super::ssa::meter::Receipt>>,
 }
 
 /// Private trait object vtable: `[drop_in_place, size, align, methods...]`,
@@ -1862,6 +1866,7 @@ impl<'a> Emitter<'a> {
                     calls: Vec::new(),
                     strings: Vec::new(),
                     vtables: Vec::new(),
+                    receipt: None,
                 },
             ),
         };
@@ -1910,6 +1915,7 @@ pub fn panic_object(
             calls: Vec::new(),
             strings: Vec::new(),
             vtables: Vec::new(),
+            receipt: None,
         },
     };
     emit_panic(&mut code, message, location, budget)?;
@@ -2861,6 +2867,7 @@ pub fn emit_cfg_function(
             calls: Vec::new(),
             strings: Vec::new(),
             vtables: Vec::new(),
+            receipt: None,
         },
         concrete,
         resolve,
@@ -3789,6 +3796,7 @@ mod tests {
                 calls: Vec::new(),
                 strings: Vec::new(),
                 vtables: Vec::new(),
+                receipt: None,
             },
             concrete: &concrete,
             resolve: &resolve,
@@ -3853,6 +3861,7 @@ mod tests {
                 calls: Vec::new(),
                 strings: Vec::new(),
                 vtables: Vec::new(),
+                receipt: None,
             },
             concrete: &concrete,
             resolve: &resolve,
@@ -3901,6 +3910,7 @@ mod tests {
                 calls: Vec::new(),
                 strings: Vec::new(),
                 vtables: Vec::new(),
+                receipt: None,
             },
             concrete: &concrete,
             resolve: &resolve,
@@ -4367,6 +4377,7 @@ mod tests {
                 calls: Vec::new(),
                 strings: Vec::new(),
                 vtables: Vec::new(),
+                receipt: None,
             },
             concrete: &concrete,
             resolve: &resolve,
@@ -4507,6 +4518,7 @@ mod tests {
                 calls: Vec::new(),
                 strings: Vec::new(),
                 vtables: Vec::new(),
+                receipt: None,
             },
             concrete: &concrete,
             resolve: &resolve,
@@ -6829,6 +6841,7 @@ mod tests {
                 calls: vec![],
                 strings: vec![],
                 vtables: vec![],
+                receipt: None,
             },
             concrete: &concrete,
             resolve: &|_| Err("physical fixture has no instance calls".into()),
@@ -7083,6 +7096,7 @@ mod tests {
                     calls: vec![],
                     strings: vec![],
                     vtables: vec![],
+                    receipt: None,
                 },
                 concrete: &concrete,
                 resolve: &|_| Err("physical fixture has no instance calls".into()),
@@ -7168,6 +7182,7 @@ mod tests {
                 calls: vec![],
                 strings: vec![],
                 vtables: vec![],
+                receipt: None,
             },
             concrete: &concrete,
             resolve: &|_| Err("physical fixture has no instance calls".into()),

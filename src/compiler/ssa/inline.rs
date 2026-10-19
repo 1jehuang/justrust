@@ -8,10 +8,21 @@
 //!
 //! Decisions depend only on canonical inputs (callee summaries and the fixed
 //! size threshold), never on scheduling order, so output is deterministic.
-use super::lower::Lowered;
+//!
+//! Accounting (audit priority 3): `inline` first counts every call site and
+//! the exact output dimensions (blocks, instructions, call arguments, edge
+//! arguments, panic bytes, value and block IDs) with checked arithmetic and
+//! per-element work, admits the whole output before allocating, then builds
+//! it in one pass into exact-capacity buffers. No repeated searches, no
+//! clone-then-extend, no unpaid growth.
+use super::lower::{Lowered, SsaCallee};
+use super::meter::{self, Meter};
+use super::store::{self, Owned};
 use super::{
-    BlockData, FuncRef, Inst, InstKind, PanicKind, SsaBlock, SsaTarget, SsaTerminator, SsaValue,
+    BlockData, FuncRef, Inst, InstKind, PanicKind, SsaBlock, SsaFunction, SsaPanicText, SsaTarget,
+    SsaTerminator, SsaValue,
 };
+use std::mem::size_of;
 
 /// Largest callee body (instructions) that may be inlined.
 pub const INLINE_LIMIT: usize = 24;
@@ -29,11 +40,14 @@ pub struct Summary {
 }
 
 impl Summary {
-    pub fn of(lowered: &Lowered) -> Self {
+    /// Scans every instruction once and hashes the body; all work is metered.
+    /// The summary is `Copy` and owns no heap storage.
+    pub fn of(lowered: &Lowered, meter: &Meter<'_>) -> Result<Self, String> {
         let function = &lowered.function;
         let mut leaf = true;
         let mut may_panic = false;
         for data in &function.blocks {
+            meter.work(meter::add(data.insts.len(), 1)?)?;
             for inst in &data.insts {
                 match inst.kind {
                     InstKind::Call { .. } => {
@@ -52,13 +66,13 @@ impl Summary {
             }
             may_panic |= matches!(data.term, SsaTerminator::Panic(_));
         }
-        Summary {
-            body_hash: lowered.hash(),
+        Ok(Summary {
+            body_hash: lowered.hash(meter)?,
             insts: function.inst_count(),
             blocks: function.blocks.len(),
             leaf,
             may_panic,
-        }
+        })
     }
 
     pub fn inlinable(&self) -> bool {
@@ -67,158 +81,386 @@ impl Summary {
 }
 
 /// Callees (by index into `lowered.callees`) worth inlining, given each
-/// callee's summary. Deterministic in the inputs.
-pub fn candidates(lowered: &Lowered, summary: &dyn Fn(usize) -> Option<Summary>) -> Vec<usize> {
-    let mut chosen = Vec::new();
-    for index in 0..lowered.callees.len() {
+/// callee's summary. Deterministic in the inputs. The result list is paid
+/// scratch sized by the callee count.
+pub fn candidates(
+    lowered: &Lowered,
+    summary: &dyn Fn(usize) -> Option<Summary>,
+    meter: &Meter<'_>,
+) -> Result<meter::List<usize>, String> {
+    let count = lowered.callees.len();
+    meter.work(count)?;
+    let mut chosen = meter.list(count)?;
+    for index in 0..count {
         if summary(index).is_some_and(|s| s.inlinable()) {
-            chosen.push(index);
+            chosen.push(index)?;
         }
     }
-    chosen
+    Ok(chosen)
+}
+
+/// Exact output dimensions of an inline, from one counting pass.
+struct Expansion {
+    blocks: usize,
+    insts: usize,
+    params: usize,
+    call_args: usize,
+    edge_args: usize,
+    panics: usize,
+    panic_bytes: usize,
+    values: usize,
 }
 
 /// Inline every call to a callee present in `bodies` (index into
 /// `lowered.callees` -> optimized callee). Bodies must be leaves.
-pub fn inline(lowered: &Lowered, bodies: &[(usize, &Lowered)]) -> Result<Lowered, String> {
-    let mut function = lowered.function.clone();
-    let mut panics = function.panics.clone();
-    let mut next_value = function.value_bound() as u32;
-    let mut fresh = || {
-        let value = SsaValue(next_value);
-        next_value += 1;
-        value
-    };
-    let mut block_index = 0usize;
-    while block_index < function.blocks.len() {
-        let Some(position) = function.blocks[block_index].insts.iter().position(|inst| {
-            matches!(&inst.kind, InstKind::Call { callee, .. }
-                if bodies.iter().any(|(index, _)| *index == callee.0 as usize))
-        }) else {
-            block_index += 1;
-            continue;
-        };
-        let call = function.blocks[block_index].insts[position].clone();
-        let InstKind::Call { callee, args } = &call.kind else {
-            unreachable!()
-        };
-        let body = bodies
-            .iter()
-            .find(|(index, _)| *index == callee.0 as usize)
-            .map(|(_, body)| *body)
-            .ok_or("missing inline body")?;
+///
+/// Layout of the output: the caller's blocks first, in order; each block that
+/// contains inlined calls is split at every such call, with the split tails
+/// appended as continuation blocks (receiving the call result as their one
+/// parameter) and each callee copy's blocks appended after it.
+pub fn inline(
+    lowered: &Lowered,
+    bodies: &[(usize, &Lowered)],
+    meter: &Meter<'_>,
+) -> Result<Owned<Lowered>, String> {
+    let callees = lowered.callees.len();
+    // Callee index -> body, O(callees + bodies) instead of a search per call.
+    let mut body_of = meter.table::<Option<&Lowered>>(callees, None)?;
+    for (index, body) in bodies {
         if !body.callees.is_empty() {
             return Err("only leaf callees are inlined".into());
         }
-        let callee_fn = &body.function;
-        // Split: the continuation block receives the call result.
-        let ret_ty = callee_fn.ret;
-        let result = call.result;
-        let tail_insts = function.blocks[block_index].insts.split_off(position + 1);
-        function.blocks[block_index].insts.pop();
-        let continuation = SsaBlock(function.blocks.len() as u32);
-        let old_term = std::mem::replace(
-            &mut function.blocks[block_index].term,
-            SsaTerminator::Panic(PanicKind::Unreachable),
-        );
-        function.blocks.push(BlockData {
-            params: vec![(result, ret_ty)],
-            insts: tail_insts,
-            term: old_term,
-        });
-        // Copy callee blocks with renamed values and blocks.
-        let base = function.blocks.len() as u32;
-        let mut map = vec![SsaValue(u32::MAX); callee_fn.value_bound()];
-        for data in &callee_fn.blocks {
-            for (value, _) in &data.params {
-                map[value.0 as usize] = fresh();
-            }
-            for inst in &data.insts {
-                map[inst.result.0 as usize] = fresh();
-            }
-        }
-        let rename = |value: SsaValue| map[value.0 as usize];
-        let panic_base = panics.len() as u32;
-        panics.extend(callee_fn.panics.iter().cloned());
-        for data in &callee_fn.blocks {
-            let insts = data
-                .insts
-                .iter()
-                .map(|inst| {
-                    let mut kind = inst.kind.clone();
-                    for operand in kind.operands_mut() {
-                        *operand = rename(*operand);
-                    }
-                    Inst {
-                        result: rename(inst.result),
-                        kind,
-                    }
-                })
-                .collect();
-            let term = match &data.term {
-                SsaTerminator::Return(value) => SsaTerminator::Jump(SsaTarget {
-                    block: continuation,
-                    args: vec![rename(*value)],
-                }),
-                SsaTerminator::Panic(PanicKind::Message(index)) => {
-                    SsaTerminator::Panic(PanicKind::Message(panic_base + index))
-                }
-                other => {
-                    let mut term = other.clone();
-                    for target in term.targets_mut() {
-                        target.block = SsaBlock(base + target.block.0);
-                    }
-                    for operand in term.operands_mut() {
-                        *operand = rename(*operand);
-                    }
-                    term
-                }
-            };
-            function.blocks.push(BlockData {
-                params: data
-                    .params
-                    .iter()
-                    .map(|(value, ty)| (rename(*value), *ty))
-                    .collect(),
-                insts,
-                term,
-            });
-        }
-        function.blocks[block_index].term = SsaTerminator::Jump(SsaTarget {
-            block: SsaBlock(base),
-            args: args.clone(),
-        });
-        // Continue scanning the same block: it may hold no more calls, but
-        // the continuation will be visited in order.
-        block_index += 1;
+        *body_of
+            .get_mut(*index)
+            .ok_or("inline body for an unknown callee")? = Some(body);
     }
-    function.panics = panics;
-    // Drop callees that are no longer referenced, renumbering FuncRefs.
-    let mut used = vec![false; lowered.callees.len()];
-    for data in &function.blocks {
+    meter.work(meter::add(callees, bodies.len())?)?;
+    let caller = &lowered.function;
+    let inlined_at = |inst: &Inst| -> Option<&Lowered> {
+        match inst.kind {
+            InstKind::Call { callee, .. } => body_of.get(callee.0 as usize).copied().flatten(),
+            _ => None,
+        }
+    };
+
+    // Counting pass.
+    let mut x = Expansion {
+        blocks: caller.blocks.len(),
+        insts: 0,
+        params: 0,
+        call_args: 0,
+        edge_args: 0,
+        panics: caller.panics.len(),
+        panic_bytes: 0,
+        values: caller.value_bound(),
+    };
+    for text in &caller.panics {
+        x.panic_bytes = meter::add(
+            x.panic_bytes,
+            meter::add(text.message.len(), text.location.len())?,
+        )?;
+    }
+    let mut used = meter.table(callees, false)?;
+    for data in &caller.blocks {
+        meter.work(meter::add(data.insts.len(), data.term.operand_count())?)?;
+        x.params = meter::add(x.params, data.params.len())?;
+        x.edge_args = meter::add(x.edge_args, data.term.operand_count())?;
         for inst in &data.insts {
-            if let InstKind::Call { callee, .. } = inst.kind {
-                used[callee.0 as usize] = true;
+            match inlined_at(inst) {
+                None => {
+                    x.insts = meter::add(x.insts, 1)?;
+                    if let InstKind::Call { callee, args } = &inst.kind {
+                        x.call_args = meter::add(x.call_args, args.len())?;
+                        used[callee.0 as usize] = true;
+                    }
+                }
+                Some(body) => {
+                    let callee = &body.function;
+                    meter.work(meter::add(callee.blocks.len(), callee.inst_count())?)?;
+                    // One continuation block with one parameter, plus the
+                    // callee's blocks; the call site's jump passes its args.
+                    x.blocks = meter::add(x.blocks, meter::add(callee.blocks.len(), 1)?)?;
+                    x.params = meter::add(x.params, 1)?;
+                    x.insts = meter::add(x.insts, callee.inst_count())?;
+                    x.values = meter::add(x.values, callee.value_bound())?;
+                    if let InstKind::Call { args, .. } = &inst.kind {
+                        x.edge_args = meter::add(x.edge_args, args.len())?;
+                    }
+                    for block in &callee.blocks {
+                        x.params = meter::add(x.params, block.params.len())?;
+                        // A return becomes a one-argument jump.
+                        x.edge_args = meter::add(x.edge_args, block.term.operand_count())?;
+                    }
+                    x.panics = meter::add(x.panics, callee.panics.len())?;
+                    for text in &callee.panics {
+                        x.panic_bytes = meter::add(
+                            x.panic_bytes,
+                            meter::add(text.message.len(), text.location.len())?,
+                        )?;
+                    }
+                }
             }
         }
     }
-    let mut remap = vec![u32::MAX; lowered.callees.len()];
-    let mut callees = Vec::new();
+    u32::try_from(x.values).map_err(|_| "inlined value IDs exhausted")?;
+    u32::try_from(x.blocks).map_err(|_| "inlined block IDs exhausted")?;
+    u32::try_from(x.panics).map_err(|_| "inlined panic IDs exhausted")?;
+    let kept: usize = used.iter().filter(|u| **u).count();
+    let mut callee_shape = meter::mul(kept, size_of::<SsaCallee>())?;
     for (index, callee) in lowered.callees.iter().enumerate() {
         if used[index] {
-            remap[index] = callees.len() as u32;
-            callees.push(callee.clone());
+            callee_shape = meter::add(
+                callee_shape,
+                meter::add(
+                    callee.symbol.len(),
+                    meter::mul(callee.signature.params.len(), size_of::<super::SsaTy>())?,
+                )?,
+            )?;
         }
     }
-    for data in &mut function.blocks {
-        for inst in &mut data.insts {
-            if let InstKind::Call { callee, .. } = &mut inst.kind {
-                *callee = FuncRef(remap[callee.0 as usize]);
+    let preflight = [
+        meter::mul(caller.params.len(), size_of::<super::SsaTy>()),
+        meter::mul(x.blocks, size_of::<BlockData>()),
+        meter::mul(x.params, size_of::<(SsaValue, super::SsaTy)>()),
+        meter::mul(x.insts, size_of::<Inst>()),
+        meter::mul(meter::add(x.call_args, x.edge_args)?, size_of::<SsaValue>()),
+        meter::mul(x.panics, size_of::<SsaPanicText>()),
+        Ok(x.panic_bytes),
+        Ok(callee_shape),
+    ]
+    .into_iter()
+    .try_fold(0usize, |total, part| meter::add(total, part?))?;
+    meter.work(meter::add(x.insts, x.blocks)?)?;
+
+    Owned::build(
+        meter,
+        preflight,
+        || build(lowered, &body_of, &used, &x, meter),
+        store::lowered_capacity_bytes,
+    )
+    .and_then(|owned| {
+        owned
+            .value
+            .verify(meter)
+            .map_err(|error| format!("inlining produced {error}"))?;
+        Ok(owned)
+    })
+}
+
+fn try_vec<T>(capacity: usize) -> Result<Vec<T>, String> {
+    let mut data = Vec::new();
+    data.try_reserve_exact(capacity)
+        .map_err(|_| "optimizer allocation failed".to_string())?;
+    Ok(data)
+}
+
+fn build(
+    lowered: &Lowered,
+    body_of: &[Option<&Lowered>],
+    used: &[bool],
+    x: &Expansion,
+    meter: &Meter<'_>,
+) -> Result<Lowered, String> {
+    let caller = &lowered.function;
+    let mut blocks: Vec<BlockData> = try_vec(x.blocks)?;
+    let mut panics = store::try_clone_panics(&caller.panics)?;
+    panics
+        .try_reserve_exact(x.panics - panics.len())
+        .map_err(|_| "optimizer allocation failed".to_string())?;
+    let mut next_value = caller.value_bound() as u32;
+    // Remap caller callee indices to the kept ones (paid scratch).
+    let mut remap = meter.table::<u32>(used.len(), u32::MAX)?;
+    let mut kept = 0u32;
+    for (slot, flag) in remap.iter_mut().zip(used) {
+        if *flag {
+            *slot = kept;
+            kept += 1;
+        }
+    }
+    // Reserve the caller block slots first so appended blocks get stable IDs.
+    for _ in &caller.blocks {
+        blocks.push(BlockData {
+            params: Vec::new(),
+            insts: Vec::new(),
+            term: SsaTerminator::Panic(PanicKind::Unreachable),
+        });
+    }
+    // Maximum callee value bound, for one reusable rename table.
+    let rename_len = body_of
+        .iter()
+        .flatten()
+        .map(|body| body.function.value_bound())
+        .max()
+        .unwrap_or(0);
+    let mut rename = meter.table(rename_len, SsaValue(u32::MAX))?;
+    let remap_kind = |kind: &InstKind| -> Result<InstKind, String> {
+        Ok(match kind {
+            InstKind::Call { callee, args } => {
+                let mut copy = try_vec(args.len())?;
+                copy.extend_from_slice(args);
+                InstKind::Call {
+                    callee: FuncRef(remap[callee.0 as usize]),
+                    args: copy,
+                }
             }
+            other => other.clone(),
+        })
+    };
+    for (index, data) in caller.blocks.iter().enumerate() {
+        // Segment the block at each inlined call. `slot` is the block being
+        // filled: the caller's own slot first, then each continuation.
+        let mut slot = index;
+        let mut params = try_vec(data.params.len())?;
+        params.extend_from_slice(&data.params);
+        let mut start = 0usize;
+        loop {
+            let split = data.insts[start..]
+                .iter()
+                .position(|inst| matches!(inst.kind, InstKind::Call { callee, .. } if body_of[callee.0 as usize].is_some()))
+                .map(|offset| start + offset);
+            let end = split.unwrap_or(data.insts.len());
+            let mut insts = try_vec(end - start)?;
+            for inst in &data.insts[start..end] {
+                insts.push(Inst {
+                    result: inst.result,
+                    kind: remap_kind(&inst.kind)?,
+                });
+            }
+            let Some(at) = split else {
+                blocks[slot] = BlockData {
+                    params,
+                    insts,
+                    term: store::try_clone_term(&data.term)?,
+                };
+                break;
+            };
+            let call = &data.insts[at];
+            let InstKind::Call { callee, args } = &call.kind else {
+                return Err("inline split lost its call".into());
+            };
+            let body = body_of[callee.0 as usize].ok_or("inline split lost its body")?;
+            let callee_fn = &body.function;
+            let body_base = blocks.len() as u32;
+            let continuation = body_base + callee_fn.blocks.len() as u32;
+            // Rename callee values into fresh IDs.
+            for block in &callee_fn.blocks {
+                for value in block
+                    .params
+                    .iter()
+                    .map(|(v, _)| *v)
+                    .chain(block.insts.iter().map(|i| i.result))
+                {
+                    rename[value.0 as usize] = SsaValue(next_value);
+                    next_value += 1;
+                }
+            }
+            let panic_base = panics.len() as u32;
+            for text in &callee_fn.panics {
+                panics.push(SsaPanicText {
+                    message: store::try_string(&text.message)?,
+                    location: store::try_string(&text.location)?,
+                });
+            }
+            let mut entry_args = try_vec(args.len())?;
+            entry_args.extend_from_slice(args);
+            blocks[slot] = BlockData {
+                params,
+                insts,
+                term: SsaTerminator::Jump(SsaTarget {
+                    block: SsaBlock(body_base),
+                    args: entry_args,
+                }),
+            };
+            for block in &callee_fn.blocks {
+                meter.work(meter::add(block.insts.len(), block.term.operand_count())?)?;
+                let mut block_params = try_vec(block.params.len())?;
+                for (value, ty) in &block.params {
+                    block_params.push((rename[value.0 as usize], *ty));
+                }
+                let mut block_insts = try_vec(block.insts.len())?;
+                for inst in &block.insts {
+                    let mut kind = inst.kind.clone();
+                    for operand in kind.operands_mut() {
+                        *operand = rename[operand.0 as usize];
+                    }
+                    block_insts.push(Inst {
+                        result: rename[inst.result.0 as usize],
+                        kind,
+                    });
+                }
+                let term = match &block.term {
+                    SsaTerminator::Return(value) => {
+                        let mut args = try_vec(1)?;
+                        args.push(rename[value.0 as usize]);
+                        SsaTerminator::Jump(SsaTarget {
+                            block: SsaBlock(continuation),
+                            args,
+                        })
+                    }
+                    SsaTerminator::Panic(PanicKind::Message(message)) => {
+                        SsaTerminator::Panic(PanicKind::Message(panic_base + message))
+                    }
+                    other => {
+                        let mut term = store::try_clone_term(other)?;
+                        for target in term.targets_mut() {
+                            target.block = SsaBlock(body_base + target.block.0);
+                        }
+                        for operand in term.operands_mut() {
+                            *operand = rename[operand.0 as usize];
+                        }
+                        term
+                    }
+                };
+                if blocks.len() == blocks.capacity() {
+                    return Err("inlining exceeded its admitted shape".into());
+                }
+                blocks.push(BlockData {
+                    params: block_params,
+                    insts: block_insts,
+                    term,
+                });
+            }
+            // The continuation receives the call result.
+            if blocks.len() == blocks.capacity() {
+                return Err("inlining exceeded its admitted shape".into());
+            }
+            blocks.push(BlockData {
+                params: Vec::new(),
+                insts: Vec::new(),
+                term: SsaTerminator::Panic(PanicKind::Unreachable),
+            });
+            slot = continuation as usize;
+            params = try_vec(1)?;
+            params.push((call.result, callee_fn.ret));
+            start = at + 1;
         }
     }
-    let out = Lowered { function, callees };
-    out.verify()
-        .map_err(|error| format!("inlining produced {error}"))?;
-    Ok(out)
+    let mut out_callees = try_vec(kept as usize)?;
+    for (index, callee) in lowered.callees.iter().enumerate() {
+        if used[index] {
+            out_callees.push(SsaCallee {
+                symbol: store::try_string(&callee.symbol)?,
+                target: callee.target.clone(),
+                signature: super::SsaSignature {
+                    params: {
+                        let mut p = try_vec(callee.signature.params.len())?;
+                        p.extend_from_slice(&callee.signature.params);
+                        p
+                    },
+                    ret: callee.signature.ret,
+                },
+            });
+        }
+    }
+    let mut params = try_vec(caller.params.len())?;
+    params.extend_from_slice(&caller.params);
+    Ok(Lowered {
+        function: SsaFunction {
+            params,
+            ret: caller.ret,
+            blocks,
+            panics,
+        },
+        callees: out_callees,
+    })
 }

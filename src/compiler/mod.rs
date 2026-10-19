@@ -202,10 +202,67 @@ struct ConcreteProofFact {
 }
 /// `SSA`, `LOCAL_OPT` and `IPO_OPT` output. `None` means the function is
 /// outside the optimizer's current subset and keeps the stack emitter.
+///
+/// Each published fact carries an immutable receipt for the storage it keeps
+/// alive: the body's reconciled capacity plus its `Arc` allocation and the
+/// engine's fact envelope. A fact that re-publishes a shared body pays only
+/// for its own envelope. No mutable budget is reachable from the fact.
 struct SsaFact {
     lowered: Option<Arc<ssa::lower::Lowered>>,
     unsupported: Option<&'static str>,
     inlined: usize,
+    _receipt: Option<ssa::meter::Receipt>,
+}
+impl SsaFact {
+    /// Bytes of the fact itself plus the `Arc` holding it in the engine.
+    const ENVELOPE: usize = std::mem::size_of::<SsaFact>() + 2 * std::mem::size_of::<usize>();
+    /// The `Arc<Lowered>` header and value slot.
+    const BODY_ARC: usize =
+        std::mem::size_of::<ssa::lower::Lowered>() + 2 * std::mem::size_of::<usize>();
+
+    fn publish(
+        mut owned: ssa::store::Owned<ssa::lower::Lowered>,
+        inlined: usize,
+        meter: &ssa::meter::Meter<'_>,
+    ) -> Result<Self, Error> {
+        owned
+            .admit(meter, Self::BODY_ARC + Self::ENVELOPE)
+            .map_err(Error::new)?;
+        let (lowered, receipt) = owned.seal().map_err(Error::new)?;
+        Ok(Self {
+            lowered: Some(Arc::new(lowered)),
+            unsupported: None,
+            inlined,
+            _receipt: Some(receipt),
+        })
+    }
+
+    fn share(
+        lowered: Arc<ssa::lower::Lowered>,
+        meter: &ssa::meter::Meter<'_>,
+    ) -> Result<Self, Error> {
+        let receipt = meter
+            .lease(Self::ENVELOPE)
+            .and_then(ssa::meter::Lease::seal)
+            .map_err(Error::new)?;
+        Ok(Self {
+            lowered: Some(lowered),
+            unsupported: None,
+            inlined: 0,
+            _receipt: Some(receipt),
+        })
+    }
+
+    fn unsupported(reason: &'static str) -> Self {
+        // No owned storage beyond the envelope, which the engine's own
+        // publication accounting covers for every fact.
+        Self {
+            lowered: None,
+            unsupported: Some(reason),
+            inlined: 0,
+            _receipt: None,
+        }
+    }
 }
 /// Analysis nodes (`UNIVERSAL_ANALYZE`, `ANALYZE`) have a second output: the
 /// complete analysis, published on success and on failure (before the node
@@ -985,13 +1042,26 @@ impl Provider for CompilerProvider {
                     if this.0.source_options.opt != ssa::OptMode::Off {
                         let optimized: Arc<SsaFact> = facts.get(function(IPO_OPT, index)).await?;
                         if let Some(lowered) = &optimized.lowered {
-                            let types = lowered.verify().map_err(|e| Error::new(e.to_string()))?;
+                            let meter = ssa::meter::Meter::new(&this.0.budget);
+                            let types = lowered
+                                .verify(&meter)
+                                .map_err(|error| Error::new(error.to_string()))?;
                             let budget = &this.0.budget;
-                            let (object, _stats) = ssa::machine::emit(lowered, &types, &|text| {
-                                backend::panic_object(&text.message, &text.location, budget)
-                            })
+                            let (object, _stats) = ssa::machine::emit(
+                                lowered,
+                                &types,
+                                &|text| {
+                                    backend::panic_object(&text.message, &text.location, budget)
+                                },
+                                &meter,
+                            )
                             .map_err(Error::new)?;
-                            this.retain(object.code.len())?;
+                            drop(types);
+                            // The object's storage is paid by the reconciled
+                            // lease; the sealed immutable receipt travels inside
+                            // the published object for exactly its lifetime.
+                            let (mut object, receipt) = object.seal().map_err(Error::new)?;
+                            object.receipt = Some(Arc::new(receipt));
                             return cx.publish_fact(0, object);
                         }
                     }
@@ -1005,49 +1075,45 @@ impl Provider for CompilerProvider {
                     let index = item_index(&key, "missing instance index")?;
                     let proof: Arc<ConcreteProofFact> = facts.get(function(ANALYZE, index)).await?;
                     let types = facts.types().await?;
+                    let meter = ssa::meter::Meter::new(&this.0.budget);
                     let function = proof.concrete.function();
-                    this.0
-                        .budget
-                        .charge_work(function.blocks.len().saturating_add(function.locals.len()))
-                        .map_err(Error::new)?;
-                    let fact = match ssa::lower::lower(function, &|target| {
-                        instances::symbol_of(target, &types, &this.0.budget)
-                    })
+                    let fact = match ssa::lower::lower(
+                        function,
+                        &|target| instances::symbol_of(target, &types, &this.0.budget),
+                        &meter,
+                    )
                     .map_err(Error::new)?
                     {
-                        ssa::lower::Lowering::Lowered(lowered) => SsaFact {
-                            lowered: Some(Arc::new(*lowered)),
-                            unsupported: None,
-                            inlined: 0,
-                        },
-                        ssa::lower::Lowering::Unsupported(reason) => SsaFact {
-                            lowered: None,
-                            unsupported: Some(reason),
-                            inlined: 0,
-                        },
+                        ssa::lower::Lowering::Lowered(lowered) => {
+                            SsaFact::publish(*lowered, 0, &meter)?
+                        }
+                        ssa::lower::Lowering::Unsupported(reason) => SsaFact::unsupported(reason),
                     };
                     cx.publish_fact(0, fact)
                 }
                 LOCAL_OPT => {
                     let index = item_index(&key, "missing instance index")?;
                     let input: Arc<SsaFact> = facts.get(function(SSA, index)).await?;
-                    let lowered = match &input.lowered {
-                        Some(lowered) => Some(Arc::new(local_opt(lowered, &this.0.budget)?)),
-                        None => None,
+                    let meter = ssa::meter::Meter::new(&this.0.budget);
+                    let fact = match &input.lowered {
+                        Some(lowered) => SsaFact::publish(local_opt(lowered, &meter)?, 0, &meter)?,
+                        None => SsaFact::unsupported(input.unsupported.unwrap_or("unknown")),
                     };
-                    cx.publish_fact(
-                        0,
-                        SsaFact {
-                            lowered,
-                            unsupported: input.unsupported,
-                            inlined: 0,
-                        },
-                    )
+                    cx.publish_fact(0, fact)
                 }
                 SUMMARY => {
                     let index = item_index(&key, "missing instance index")?;
                     let body: Arc<SsaFact> = facts.get(function(LOCAL_OPT, index)).await?;
-                    let summary = body.lowered.as_deref().map(ssa::inline::Summary::of);
+                    let meter = ssa::meter::Meter::new(&this.0.budget);
+                    // Summary is Copy and owns no heap storage; its fact
+                    // envelope is admitted once here.
+                    let summary = match body.lowered.as_deref() {
+                        Some(lowered) => {
+                            Some(ssa::inline::Summary::of(lowered, &meter).map_err(Error::new)?)
+                        }
+                        None => None,
+                    };
+                    this.retain(std::mem::size_of::<Option<ssa::inline::Summary>>())?;
                     cx.publish_fact(0, summary)
                 }
                 IPO_OPT => {
@@ -1056,79 +1122,88 @@ impl Provider for CompilerProvider {
                     let Some(lowered) = body.lowered.clone() else {
                         return cx.publish_fact(
                             0,
-                            SsaFact {
-                                lowered: None,
-                                unsupported: body.unsupported,
-                                inlined: 0,
-                            },
+                            SsaFact::unsupported(body.unsupported.unwrap_or("unknown")),
                         );
                     };
+                    let meter = ssa::meter::Meter::new(&this.0.budget);
                     // Callers read only their own direct callees' summaries,
                     // requested together, then the bodies they inline. Each
                     // inlined body is a recorded edge (OPTIMIZATION.md 8.3).
+                    // Every frontier buffer below is paid scratch, admitted at
+                    // its exact capacity and held across the awaits that use it.
                     let types = facts.types().await?;
-                    let mut slots = Vec::with_capacity(lowered.callees.len());
+                    let count = lowered.callees.len();
+                    let mut slots = meter.list::<Option<usize>>(count).map_err(Error::new)?;
                     for callee in &lowered.callees {
-                        this.0.budget.charge_work(1).map_err(Error::new)?;
-                        slots.push(instance_slot(&facts, &types, &callee.target).await?);
+                        meter.work(1).map_err(Error::new)?;
+                        slots
+                            .push(instance_slot(&facts, &types, &callee.target).await?)
+                            .map_err(Error::new)?;
                     }
-                    let summary_handles: Vec<_> = slots
-                        .iter()
-                        .map(|slot| {
-                            slot.filter(|slot| *slot != index)
-                                .map(|slot| cx.request(function(SUMMARY, slot)).get(0))
-                        })
-                        .collect();
-                    let mut summaries = Vec::with_capacity(summary_handles.len());
-                    for handle in summary_handles {
-                        summaries.push(match handle {
-                            Some(handle) => {
-                                let summary: Arc<Option<ssa::inline::Summary>> =
-                                    cx.read_fact(handle).await?;
-                                *summary
-                            }
-                            None => None,
-                        });
+                    let mut summary_handles = meter.list(count).map_err(Error::new)?;
+                    for slot in slots.iter() {
+                        summary_handles
+                            .push(
+                                slot.filter(|slot| *slot != index)
+                                    .map(|slot| cx.request(function(SUMMARY, slot)).get(0)),
+                            )
+                            .map_err(Error::new)?;
                     }
-                    let chosen = ssa::inline::candidates(&lowered, &|callee| summaries[callee]);
+                    let mut summaries = meter
+                        .table::<Option<ssa::inline::Summary>>(count, None)
+                        .map_err(Error::new)?;
+                    for (slot, handle) in summaries.iter_mut().zip(summary_handles.iter()) {
+                        if let Some(handle) = handle {
+                            let summary: Arc<Option<ssa::inline::Summary>> =
+                                cx.read_fact(handle.clone()).await?;
+                            *slot = *summary;
+                        }
+                    }
+                    drop(summary_handles);
+                    let chosen =
+                        ssa::inline::candidates(&lowered, &|callee| summaries[callee], &meter)
+                            .map_err(Error::new)?;
+                    drop(summaries);
                     if chosen.is_empty() {
-                        return cx.publish_fact(
-                            0,
-                            SsaFact {
-                                lowered: Some(lowered),
-                                unsupported: None,
-                                inlined: 0,
-                            },
-                        );
+                        // The LOCAL_OPT body is shared, not copied: this fact
+                        // re-publishes the same Arc and admits only its own
+                        // envelope.
+                        return cx.publish_fact(0, SsaFact::share(lowered, &meter)?);
                     }
-                    let body_handles: Vec<_> = chosen
-                        .iter()
-                        .map(|callee| {
-                            let slot = slots[*callee].expect("chosen callee has a slot");
-                            cx.request(function(LOCAL_OPT, slot)).get(0)
-                        })
-                        .collect();
-                    let mut bodies = Vec::with_capacity(body_handles.len());
-                    for handle in body_handles {
-                        let body: Arc<SsaFact> = cx.read_fact(handle).await?;
-                        bodies.push(body);
+                    let mut body_handles = meter.list(chosen.len()).map_err(Error::new)?;
+                    for callee in chosen.iter() {
+                        let slot = slots[*callee]
+                            .ok_or_else(|| Error::new("chosen callee has no slot"))?;
+                        body_handles
+                            .push(cx.request(function(LOCAL_OPT, slot)).get(0))
+                            .map_err(Error::new)?;
                     }
-                    let pairs: Vec<(usize, &ssa::lower::Lowered)> = chosen
-                        .iter()
-                        .zip(&bodies)
-                        .filter_map(|(callee, body)| body.lowered.as_deref().map(|b| (*callee, b)))
-                        .collect();
+                    let mut bodies = meter
+                        .list::<Arc<SsaFact>>(chosen.len())
+                        .map_err(Error::new)?;
+                    for handle in body_handles.iter() {
+                        bodies
+                            .push(cx.read_fact(handle.clone()).await?)
+                            .map_err(Error::new)?;
+                    }
+                    drop(body_handles);
+                    let mut pairs = meter
+                        .list::<(usize, &ssa::lower::Lowered)>(chosen.len())
+                        .map_err(Error::new)?;
+                    for (callee, body) in chosen.iter().zip(bodies.iter()) {
+                        if let Some(b) = body.lowered.as_deref() {
+                            pairs.push((*callee, b)).map_err(Error::new)?;
+                        }
+                    }
                     let inlined = pairs.len();
-                    let merged = ssa::inline::inline(&lowered, &pairs).map_err(Error::new)?;
-                    let optimized = local_opt(&merged, &this.0.budget)?;
-                    cx.publish_fact(
-                        0,
-                        SsaFact {
-                            lowered: Some(Arc::new(optimized)),
-                            unsupported: None,
-                            inlined,
-                        },
-                    )
+                    // Peak: the merged body and the optimized result are both
+                    // live and both paid until `merged` drops after local_opt.
+                    let merged =
+                        ssa::inline::inline(&lowered, &pairs, &meter).map_err(Error::new)?;
+                    drop(pairs);
+                    let optimized = local_opt(&merged.value, &meter)?;
+                    drop(merged);
+                    cx.publish_fact(0, SsaFact::publish(optimized, inlined, &meter)?)
                 }
                 CHECK | BUILD => {
                     // Closed source roots have stable slots from SIGNATURES.
@@ -1243,21 +1318,23 @@ impl Provider for CompilerProvider {
         })
     }
 }
-/// Run `opt::local` on a lowered function, charging work to this node.
+/// Run the metered local pipeline. The result's callee table is a paid
+/// copy; the returned value owns a lease covering both.
 fn local_opt(
     lowered: &ssa::lower::Lowered,
-    budget: &ir::PlanBudget,
-) -> Result<ssa::lower::Lowered, Error> {
-    budget
-        .charge_work(lowered.function.inst_count().saturating_add(1))
-        .map_err(Error::new)?;
-    let (function, _stats) =
-        ssa::opt::local(&lowered.function, &|callee| lowered.signature_of(callee))
-            .map_err(|error| Error::new(error.to_string()))?;
-    Ok(ssa::lower::Lowered {
-        function,
-        callees: lowered.callees.clone(),
+    meter: &ssa::meter::Meter<'_>,
+) -> Result<ssa::store::Owned<ssa::lower::Lowered>, Error> {
+    let (function, _stats) = ssa::opt::local_metered(
+        &lowered.function,
+        &|callee| lowered.signature(callee),
+        meter,
+    )
+    .map_err(|error| Error::new(error.to_string()))?;
+    let callees = ssa::store::copy_callees(meter, &lowered.callees).map_err(Error::new)?;
+    ssa::store::Owned::combine(function, callees, meter, |function, callees| {
+        ssa::lower::Lowered { function, callees }
     })
+    .map_err(Error::new)
 }
 
 /// The instance slot of a direct call target, if it is a planned instance.

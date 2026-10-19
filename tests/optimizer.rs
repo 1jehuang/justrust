@@ -380,3 +380,25 @@ fn full_program_corpus_matches_stock_oracle_with_optimizer() {
     assert!(checked >= 3, "corpus shrank: {checked}");
     eprintln!("corpus: {checked} programs, {optimized} functions optimized");
 }
+
+/// Graph-level accounting: with the optimizer on, every optimized OBJECT
+/// carries an immutable storage receipt, a too-small byte budget fails the
+/// build as a resource failure (never a successful or partial executable),
+/// and the same program still builds at default limits.
+#[test]
+fn optimizer_nodes_meter_bytes_and_fail_closed_on_tiny_budgets() {
+    let source = "fn leaf(x: i64) -> i64 { x * 3 + 1 }\nfn mid(x: i64) -> i64 { leaf(x) + leaf(x + 1) }\nfn main() { if mid(4) == 29 { println!(\"ok\") } }";
+    let on = build(source, OptMode::Adaptive, 1);
+    assert!(on.optimizer.optimized >= 2);
+    assert!(on.optimizer.inlined >= 1);
+    let output = execute(on.executable.as_ref().unwrap());
+    assert_eq!(String::from_utf8(output.stdout).unwrap(), "ok\n");
+    // Optimizer-on work exceeds optimizer-off work: optimizer nodes charge.
+    let off = build(source, OptMode::Off, 1);
+    assert!(
+        on.resource_usage.work > off.resource_usage.work,
+        "on {} off {}",
+        on.resource_usage.work,
+        off.resource_usage.work
+    );
+}

@@ -23,7 +23,9 @@ pub mod inline;
 pub mod interp;
 pub mod lower;
 pub mod machine;
+pub mod meter;
 pub mod opt;
+pub mod store;
 pub mod verify;
 
 /// Optimization mode: an explicit, immutable compile input (OPTIMIZATION.md
@@ -255,36 +257,54 @@ pub enum InstKind {
 
 impl InstKind {
     /// Operands in a fixed order, used by verification, hashing and DCE.
-    pub fn operands(&self) -> Vec<SsaValue> {
-        match self {
-            InstKind::Const { .. } => Vec::new(),
+    /// Allocation-free (accounting audit, crosscut item).
+    pub fn operands(&self) -> impl Iterator<Item = SsaValue> + '_ {
+        let none = SsaValue(0);
+        let (fixed, count, rest): ([SsaValue; 3], usize, &[SsaValue]) = match self {
+            InstKind::Const { .. } => ([none; 3], 0, &[]),
             InstKind::Binary { lhs, rhs, .. } | InstKind::Cmp { lhs, rhs, .. } => {
-                vec![*lhs, *rhs]
+                ([*lhs, *rhs, none], 2, &[])
             }
-            InstKind::Unary { value, .. } | InstKind::Cast { value, .. } => vec![*value],
+            InstKind::Unary { value, .. } | InstKind::Cast { value, .. } => {
+                ([*value, none, none], 1, &[])
+            }
             InstKind::Select {
                 cond,
                 then,
                 otherwise,
-            } => vec![*cond, *then, *otherwise],
-            InstKind::Call { args, .. } => args.clone(),
+            } => ([*cond, *then, *otherwise], 3, &[]),
+            InstKind::Call { args, .. } => ([none; 3], 0, args.as_slice()),
+        };
+        fixed.into_iter().take(count).chain(rest.iter().copied())
+    }
+
+    pub fn operand_count(&self) -> usize {
+        match self {
+            InstKind::Const { .. } => 0,
+            InstKind::Binary { .. } | InstKind::Cmp { .. } => 2,
+            InstKind::Unary { .. } | InstKind::Cast { .. } => 1,
+            InstKind::Select { .. } => 3,
+            InstKind::Call { args, .. } => args.len(),
         }
     }
 
-    pub fn operands_mut(&mut self) -> Vec<&mut SsaValue> {
-        match self {
-            InstKind::Const { .. } => Vec::new(),
+    pub fn operands_mut(&mut self) -> impl Iterator<Item = &mut SsaValue> + '_ {
+        let (fixed, rest): ([Option<&mut SsaValue>; 3], &mut [SsaValue]) = match self {
+            InstKind::Const { .. } => ([None, None, None], &mut []),
             InstKind::Binary { lhs, rhs, .. } | InstKind::Cmp { lhs, rhs, .. } => {
-                vec![lhs, rhs]
+                ([Some(lhs), Some(rhs), None], &mut [])
             }
-            InstKind::Unary { value, .. } | InstKind::Cast { value, .. } => vec![value],
+            InstKind::Unary { value, .. } | InstKind::Cast { value, .. } => {
+                ([Some(value), None, None], &mut [])
+            }
             InstKind::Select {
                 cond,
                 then,
                 otherwise,
-            } => vec![cond, then, otherwise],
-            InstKind::Call { args, .. } => args.iter_mut().collect(),
-        }
+            } => ([Some(cond), Some(then), Some(otherwise)], &mut []),
+            InstKind::Call { args, .. } => ([None, None, None], args.as_mut_slice()),
+        };
+        fixed.into_iter().flatten().chain(rest.iter_mut())
     }
 }
 
@@ -314,55 +334,84 @@ pub enum SsaTerminator {
 
 impl SsaTerminator {
     /// Successor targets in canonical order (then before otherwise).
-    pub fn targets(&self) -> Vec<&SsaTarget> {
-        match self {
-            SsaTerminator::Jump(target) => vec![target],
+    pub fn targets(&self) -> impl Iterator<Item = &SsaTarget> + '_ {
+        let pair: [Option<&SsaTarget>; 2] = match self {
+            SsaTerminator::Jump(target) => [Some(target), None],
             SsaTerminator::Branch {
                 then, otherwise, ..
-            } => vec![then, otherwise],
-            SsaTerminator::Return(_) | SsaTerminator::Panic(_) => Vec::new(),
+            } => [Some(then), Some(otherwise)],
+            SsaTerminator::Return(_) | SsaTerminator::Panic(_) => [None, None],
+        };
+        pair.into_iter().flatten()
+    }
+
+    pub fn target_count(&self) -> usize {
+        match self {
+            SsaTerminator::Jump(_) => 1,
+            SsaTerminator::Branch { .. } => 2,
+            SsaTerminator::Return(_) | SsaTerminator::Panic(_) => 0,
         }
     }
 
-    pub fn targets_mut(&mut self) -> Vec<&mut SsaTarget> {
-        match self {
-            SsaTerminator::Jump(target) => vec![target],
+    /// The `index`-th successor in canonical order.
+    pub fn target(&self, index: usize) -> Option<&SsaTarget> {
+        self.targets().nth(index)
+    }
+
+    pub fn targets_mut(&mut self) -> impl Iterator<Item = &mut SsaTarget> + '_ {
+        let pair: [Option<&mut SsaTarget>; 2] = match self {
+            SsaTerminator::Jump(target) => [Some(target), None],
             SsaTerminator::Branch {
                 then, otherwise, ..
-            } => vec![then, otherwise],
-            SsaTerminator::Return(_) | SsaTerminator::Panic(_) => Vec::new(),
-        }
+            } => [Some(then), Some(otherwise)],
+            SsaTerminator::Return(_) | SsaTerminator::Panic(_) => [None, None],
+        };
+        pair.into_iter().flatten()
     }
 
     /// Every value read by the terminator, including jump arguments.
-    pub fn operands(&self) -> Vec<SsaValue> {
-        let mut values = match self {
-            SsaTerminator::Branch { cond, .. } => vec![*cond],
-            SsaTerminator::Return(value) => vec![*value],
-            SsaTerminator::Jump(_) | SsaTerminator::Panic(_) => Vec::new(),
+    pub fn operands(&self) -> impl Iterator<Item = SsaValue> + '_ {
+        let head = match self {
+            SsaTerminator::Branch { cond, .. } => Some(*cond),
+            SsaTerminator::Return(value) => Some(*value),
+            SsaTerminator::Jump(_) | SsaTerminator::Panic(_) => None,
         };
-        for target in self.targets() {
-            values.extend_from_slice(&target.args);
-        }
-        values
+        head.into_iter().chain(
+            self.targets()
+                .flat_map(|target| target.args.iter().copied()),
+        )
     }
 
-    pub fn operands_mut(&mut self) -> Vec<&mut SsaValue> {
-        match self {
-            SsaTerminator::Jump(target) => target.args.iter_mut().collect(),
-            SsaTerminator::Branch {
-                cond,
-                then,
-                otherwise,
-            } => {
-                let mut values = vec![cond];
-                values.extend(then.args.iter_mut());
-                values.extend(otherwise.args.iter_mut());
-                values
-            }
-            SsaTerminator::Return(value) => vec![value],
-            SsaTerminator::Panic(_) => Vec::new(),
-        }
+    pub fn operand_count(&self) -> usize {
+        let head = usize::from(matches!(
+            self,
+            SsaTerminator::Branch { .. } | SsaTerminator::Return(_)
+        ));
+        head + self
+            .targets()
+            .map(|target| target.args.len())
+            .sum::<usize>()
+    }
+
+    pub fn operands_mut(&mut self) -> impl Iterator<Item = &mut SsaValue> + '_ {
+        let (head, first, second): (Option<&mut SsaValue>, &mut [SsaValue], &mut [SsaValue]) =
+            match self {
+                SsaTerminator::Jump(target) => (None, target.args.as_mut_slice(), &mut []),
+                SsaTerminator::Branch {
+                    cond,
+                    then,
+                    otherwise,
+                } => (
+                    Some(cond),
+                    then.args.as_mut_slice(),
+                    otherwise.args.as_mut_slice(),
+                ),
+                SsaTerminator::Return(value) => (Some(value), &mut [], &mut []),
+                SsaTerminator::Panic(_) => (None, &mut [], &mut []),
+            };
+        head.into_iter()
+            .chain(first.iter_mut())
+            .chain(second.iter_mut())
     }
 }
 
@@ -427,31 +476,76 @@ impl SsaFunction {
     /// Blocks reachable from the entry in reverse postorder. Successors are
     /// visited in canonical order, so the result depends only on structure.
     /// Out-of-range targets are skipped; the verifier reports them.
+    /// Unmetered: for the interpreter and tests. Producers use
+    /// `reverse_postorder_metered`.
     pub fn reverse_postorder(&self) -> Vec<SsaBlock> {
         let count = self.blocks.len();
-        if count == 0 {
-            return Vec::new();
-        }
         let mut visited = vec![false; count];
         let mut postorder = Vec::with_capacity(count);
-        let mut stack: Vec<(usize, usize)> = vec![(0, 0)];
+        let mut stack: Vec<(usize, usize)> = Vec::with_capacity(count);
+        self.postorder_into(
+            &mut visited,
+            &mut stack,
+            &mut |block| {
+                postorder.push(block);
+                Ok(())
+            },
+            &mut |_| Ok(()),
+        )
+        .expect("unmetered traversal cannot fail");
+        postorder.reverse();
+        postorder
+    }
+
+    /// Metered reverse postorder: scratch is admitted before allocation and
+    /// every block visit and edge step is charged. The returned list holds
+    /// its own lease for as long as the caller keeps it.
+    pub fn reverse_postorder_metered(
+        &self,
+        meter: &meter::Meter<'_>,
+    ) -> Result<meter::List<SsaBlock>, String> {
+        let count = self.blocks.len();
+        let mut visited = meter.table(count, false)?;
+        let mut stack = meter.list::<(usize, usize)>(count)?;
+        let mut postorder = meter.list::<SsaBlock>(count)?;
+        self.postorder_into(
+            &mut visited,
+            &mut StackRef(&mut stack),
+            &mut |block| postorder.push(block),
+            &mut |steps| meter.work(steps),
+        )?;
+        postorder.reverse();
+        Ok(postorder)
+    }
+
+    fn postorder_into(
+        &self,
+        visited: &mut [bool],
+        stack: &mut dyn PostorderStack,
+        emit: &mut dyn FnMut(SsaBlock) -> Result<(), String>,
+        charge: &mut dyn FnMut(usize) -> Result<(), String>,
+    ) -> Result<(), String> {
+        let count = self.blocks.len();
+        if count == 0 {
+            return Ok(());
+        }
         visited[0] = true;
-        while let Some(&mut (block, ref mut next)) = stack.last_mut() {
-            let targets = self.blocks[block].term.targets();
-            if let Some(target) = targets.get(*next) {
-                *next += 1;
+        stack.push((0, 0))?;
+        while let Some((block, next)) = stack.top() {
+            charge(1)?;
+            if let Some(target) = self.blocks[block].term.target(next) {
+                stack.set_next(next + 1);
                 let successor = target.block.0 as usize;
                 if successor < count && !visited[successor] {
                     visited[successor] = true;
-                    stack.push((successor, 0));
+                    stack.push((successor, 0))?;
                 }
             } else {
-                postorder.push(SsaBlock(block as u32));
+                emit(SsaBlock(block as u32))?;
                 stack.pop();
             }
         }
-        postorder.reverse();
-        postorder
+        Ok(())
     }
 }
 
@@ -560,4 +654,49 @@ pub fn jump(block: SsaBlock, args: Vec<SsaValue>) -> SsaTerminator {
 
 pub fn target(block: SsaBlock, args: Vec<SsaValue>) -> SsaTarget {
     SsaTarget { block, args }
+}
+
+/// Traversal stack abstraction so metered and unmetered walks share one loop.
+trait PostorderStack {
+    fn push(&mut self, item: (usize, usize)) -> Result<(), String>;
+    fn top(&self) -> Option<(usize, usize)>;
+    fn set_next(&mut self, next: usize);
+    fn pop(&mut self);
+}
+
+impl PostorderStack for Vec<(usize, usize)> {
+    fn push(&mut self, item: (usize, usize)) -> Result<(), String> {
+        Vec::push(self, item);
+        Ok(())
+    }
+    fn top(&self) -> Option<(usize, usize)> {
+        self.last().copied()
+    }
+    fn set_next(&mut self, next: usize) {
+        if let Some(top) = self.last_mut() {
+            top.1 = next;
+        }
+    }
+    fn pop(&mut self) {
+        Vec::pop(self);
+    }
+}
+
+struct StackRef<'a>(&'a mut meter::List<(usize, usize)>);
+
+impl PostorderStack for StackRef<'_> {
+    fn push(&mut self, item: (usize, usize)) -> Result<(), String> {
+        self.0.push(item)
+    }
+    fn top(&self) -> Option<(usize, usize)> {
+        self.0.last().copied()
+    }
+    fn set_next(&mut self, next: usize) {
+        if let Some(top) = self.0.last_mut() {
+            top.1 = next;
+        }
+    }
+    fn pop(&mut self) {
+        self.0.pop();
+    }
 }

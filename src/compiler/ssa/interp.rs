@@ -2,7 +2,9 @@
 //! differential oracle for every pass and for lowering. Semantics come from
 //! `eval`, shared with constant folding.
 use super::eval;
-use super::verify::{self, Types};
+use super::verify;
+
+type Types = Vec<Option<super::SsaTy>>;
 use super::{FuncRef, InstKind, Module, PanicKind, SsaTerminator, SsaTy, SsaValue};
 
 #[derive(Clone, Debug, PartialEq, Eq)]

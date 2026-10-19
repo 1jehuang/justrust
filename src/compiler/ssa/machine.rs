@@ -14,12 +14,14 @@
 //! each edge. A comparison used only by the following branch is fused into
 //! a compare-and-jump.
 use super::lower::Lowered;
-use super::verify::Types;
+use super::meter::{self, Meter, Table};
+use super::store::{self, Owned};
 use super::{
     BinOp, CmpOp, InstKind, Overflow, PanicKind, SsaIntTy, SsaPanicText, SsaTerminator, SsaTy,
     SsaValue, UnOp,
 };
 use crate::compiler::backend::Object;
+use std::mem::size_of;
 
 const RAX: u8 = 0;
 const RCX: u8 = 1;
@@ -230,14 +232,10 @@ fn condition(op: CmpOp, signed: bool) -> u8 {
 }
 
 struct Layout {
-    loc: Vec<Loc>,
-    fused: Vec<bool>,
+    loc: Table<Loc>,
+    fused: Table<bool>,
     frame: i32,
     stats: Stats,
-}
-
-fn bitset(words: usize) -> Vec<u64> {
-    vec![0; words]
 }
 
 fn set(bits: &mut [u64], index: usize) -> bool {
@@ -252,16 +250,28 @@ fn get(bits: &[u64], index: usize) -> bool {
     bits[index / 64] & (1u64 << (index % 64)) != 0
 }
 
-fn allocate(lowered: &Lowered, types: &Types) -> Result<Layout, String> {
+/// Register allocation with paid scratch (audit priority 5): every table is
+/// admitted before allocation; the four liveness matrices are single flat
+/// `blocks x words` tables with two reused scratch rows; every fixed-point
+/// round charges its word visits; the call-crossing test is a binary search
+/// over sorted call positions; spill victims are found through a
+/// register-owner table rather than a scan over all values.
+fn allocate(
+    lowered: &Lowered,
+    types: &[Option<SsaTy>],
+    meter: &Meter<'_>,
+) -> Result<Layout, String> {
     let function = &lowered.function;
     let bound = function.value_bound();
     let words = bound.div_ceil(64).max(1);
     let count = function.blocks.len();
 
     // Use counts, for fusion.
-    let mut uses = vec![0usize; bound];
+    let mut uses = meter.table(bound, 0usize)?;
     for data in &function.blocks {
+        meter.work(data.term.operand_count())?;
         for inst in &data.insts {
+            meter.work(inst.kind.operand_count())?;
             for operand in inst.kind.operands() {
                 uses[operand.0 as usize] += 1;
             }
@@ -270,7 +280,8 @@ fn allocate(lowered: &Lowered, types: &Types) -> Result<Layout, String> {
             uses[operand.0 as usize] += 1;
         }
     }
-    let mut fused = vec![false; bound];
+    let mut fused = meter.table(bound, false)?;
+    meter.work(count)?;
     for data in &function.blocks {
         if let SsaTerminator::Branch { cond, .. } = &data.term
             && uses[cond.0 as usize] == 1
@@ -281,28 +292,40 @@ fn allocate(lowered: &Lowered, types: &Types) -> Result<Layout, String> {
             fused[cond.0 as usize] = true;
         }
     }
+    drop(uses);
 
     // Linear positions.
-    let mut start = Vec::with_capacity(count);
+    let mut start = meter.table(count, 0usize)?;
     let mut position = 0usize;
-    for data in &function.blocks {
-        start.push(position);
-        position += data.insts.len() + 2;
+    let mut call_count = 0usize;
+    for (block, data) in function.blocks.iter().enumerate() {
+        start[block] = position;
+        position = meter::add(position, meter::add(data.insts.len(), 2)?)?;
+        call_count += data
+            .insts
+            .iter()
+            .filter(|inst| matches!(inst.kind, InstKind::Call { .. }))
+            .count();
     }
     let term_pos = |block: usize| start[block] + function.blocks[block].insts.len() + 1;
 
-    // Local uses/defs and liveness.
-    let mut def_pos = vec![usize::MAX; bound];
-    let mut end = vec![0usize; bound];
-    let mut gen_sets = Vec::with_capacity(count);
-    let mut defs = Vec::with_capacity(count);
-    let mut calls = Vec::new();
+    // Local uses/defs and liveness. Flat matrices: row `b` is
+    // `[b * words .. (b + 1) * words]`.
+    let cells = meter::mul(count, words)?;
+    let mut def_pos = meter.table(bound, usize::MAX)?;
+    let mut end = meter.table(bound, 0usize)?;
+    let mut generated = meter.table(cells, 0u64)?;
+    let mut defined = meter.table(cells, 0u64)?;
+    let mut calls = meter.list::<usize>(call_count)?;
     for (block, data) in function.blocks.iter().enumerate() {
-        let mut generated = bitset(words);
-        let mut defined = bitset(words);
+        let row = block * words..(block + 1) * words;
+        meter.work(meter::add(
+            meter::add(data.params.len(), data.insts.len())?,
+            data.term.operand_count(),
+        )?)?;
         for (value, _) in &data.params {
             def_pos[value.0 as usize] = start[block];
-            set(&mut defined, value.0 as usize);
+            set(&mut defined[row.clone()], value.0 as usize);
         }
         let term = term_pos(block);
         for (index, inst) in data.insts.iter().enumerate() {
@@ -312,68 +335,74 @@ fn allocate(lowered: &Lowered, types: &Types) -> Result<Layout, String> {
             } else {
                 at
             };
+            meter.work(inst.kind.operand_count())?;
             for operand in inst.kind.operands() {
                 let v = operand.0 as usize;
-                if !get(&defined, v) {
-                    set(&mut generated, v);
+                if !get(&defined[row.clone()], v) {
+                    set(&mut generated[row.clone()], v);
                 }
                 end[v] = end[v].max(read_at);
             }
             if matches!(inst.kind, InstKind::Call { .. }) {
-                calls.push(at);
+                calls.push(at)?;
             }
             def_pos[inst.result.0 as usize] = at;
-            set(&mut defined, inst.result.0 as usize);
+            set(&mut defined[row.clone()], inst.result.0 as usize);
         }
         for operand in data.term.operands() {
             let v = operand.0 as usize;
-            if !get(&defined, v) {
-                set(&mut generated, v);
+            if !get(&defined[row.clone()], v) {
+                set(&mut generated[row.clone()], v);
             }
             end[v] = end[v].max(term);
         }
-        gen_sets.push(generated);
-        defs.push(defined);
     }
-    let successors: Vec<Vec<usize>> = function
-        .blocks
-        .iter()
-        .map(|data| {
-            data.term
-                .targets()
-                .iter()
-                .map(|t| t.block.0 as usize)
-                .collect()
-        })
-        .collect();
-    let mut live_in = vec![bitset(words); count];
-    let mut live_out = vec![bitset(words); count];
+    let mut live_in = meter.table(cells, 0u64)?;
+    let mut live_out = meter.table(cells, 0u64)?;
+    let mut out = meter.table(words, 0u64)?;
+    let mut inn = meter.table(words, 0u64)?;
     let mut changed = true;
     while changed {
         changed = false;
+        // One round visits every block row plus every successor row.
+        meter.work2(count, words)?;
         for block in (0..count).rev() {
-            let mut out = bitset(words);
-            for &successor in &successors[block] {
-                for (word, other) in out.iter_mut().zip(&live_in[successor]) {
+            let row = block * words..(block + 1) * words;
+            out.iter_mut().for_each(|word| *word = 0);
+            for target in function.blocks[block].term.targets() {
+                meter.work(words)?;
+                let successor = target.block.0 as usize;
+                let other = &live_in[successor * words..(successor + 1) * words];
+                for (word, other) in out.iter_mut().zip(other) {
                     *word |= other;
                 }
             }
-            let mut inn = gen_sets[block].clone();
-            for ((word, o), d) in inn.iter_mut().zip(&out).zip(&defs[block]) {
-                *word |= o & !d;
+            for (((word, g), o), d) in inn
+                .iter_mut()
+                .zip(&generated[row.clone()])
+                .zip(out.iter())
+                .zip(&defined[row.clone()])
+            {
+                *word = g | (o & !d);
             }
-            if inn != live_in[block] || out != live_out[block] {
-                live_in[block] = inn;
-                live_out[block] = out;
+            if inn[..] != live_in[row.clone()] || out[..] != live_out[row.clone()] {
+                live_in[row.clone()].copy_from_slice(&inn);
+                live_out[row].copy_from_slice(&out);
                 changed = true;
             }
         }
     }
-    for (block, out) in live_out.iter().enumerate() {
+    drop((generated, defined, live_in, out, inn));
+    for block in 0..count {
         let block_end = term_pos(block) + 1;
-        for (word_index, word) in out.iter().enumerate() {
+        meter.work(words)?;
+        for (word_index, word) in live_out[block * words..(block + 1) * words]
+            .iter()
+            .enumerate()
+        {
             let mut word = *word;
             while word != 0 {
+                meter.work(1)?;
                 let bit = word.trailing_zeros() as usize;
                 word &= word - 1;
                 let v = word_index * 64 + bit;
@@ -381,9 +410,10 @@ fn allocate(lowered: &Lowered, types: &Types) -> Result<Layout, String> {
             }
         }
     }
+    drop(live_out);
 
     // Assign locations.
-    let mut loc = vec![Loc::None; bound];
+    let mut loc = meter.table(bound, Loc::None)?;
     let mut stats = Stats::default();
     let mut slots = 0i32;
     let spill = |slots: &mut i32| -> Result<Loc, String> {
@@ -401,63 +431,91 @@ fn allocate(lowered: &Lowered, types: &Types) -> Result<Layout, String> {
         let later = (param_count - 1 - index) as i32;
         loc[value.0 as usize] = Loc::Stack(16 + 8 * later);
     }
-    let mut candidates = Vec::new();
+    let candidate_count = function.inst_count()
+        + function
+            .blocks
+            .iter()
+            .skip(1)
+            .map(|data| data.params.len())
+            .sum::<usize>();
+    let mut candidates = meter.list::<usize>(candidate_count)?;
     for data in &function.blocks {
+        meter.work(data.insts.len())?;
         for inst in &data.insts {
             let v = inst.result.0 as usize;
             if let InstKind::Const { bits, .. } = inst.kind {
                 let ty = types[v].ok_or("untyped SSA constant")?;
                 loc[v] = Loc::Const(image(ty, bits));
             } else if !fused[v] {
-                candidates.push(v);
+                candidates.push(v)?;
             }
         }
     }
     for data in function.blocks.iter().skip(1) {
+        meter.work(data.params.len())?;
         for (value, _) in &data.params {
-            candidates.push(value.0 as usize);
+            candidates.push(value.0 as usize)?;
         }
     }
-    candidates.sort_by_key(|&v| (def_pos[v], v));
-    let mut active: Vec<(usize, u8)> = Vec::new(); // (end, reg)
-    let mut free: Vec<u8> = ALLOCATABLE.iter().rev().copied().collect();
-    for v in candidates {
+    // Sorting n candidates: charge n * ceil(log2 n) comparisons.
+    let n = candidates.len();
+    meter.work2(n, (usize::BITS - n.leading_zeros()) as usize)?;
+    candidates.sort_unstable_by_key(|&v| (def_pos[v], v));
+    // Calls are recorded in increasing position order already.
+    let crosses_call = |from: usize, to: usize| -> Result<bool, String> {
+        meter.work((usize::BITS - calls.len().leading_zeros()) as usize + 1)?;
+        let first_after = calls.partition_point(|&call| call <= from);
+        Ok(calls.get(first_after).is_some_and(|&call| call < to))
+    };
+    // Register file state: fixed size, no heap growth.
+    let mut active: [(usize, u8, usize); 16] = [(0, 0, 0); 16]; // (end, reg, owner)
+    let mut active_len = 0usize;
+    let mut free = [false; 16];
+    for reg in ALLOCATABLE {
+        free[reg as usize] = true;
+    }
+    for &v in candidates.iter() {
+        meter.work(ALLOCATABLE.len())?;
         let (from, to) = (def_pos[v], end[v].max(def_pos[v]));
-        if calls.iter().any(|&call| from < call && call < to) {
+        if crosses_call(from, to)? {
             loc[v] = spill(&mut slots)?;
             stats.spilled += 1;
             continue;
         }
-        active.retain(|&(active_end, reg)| {
-            if active_end <= from {
-                free.push(reg);
-                false
+        let mut kept = 0;
+        for index in 0..active_len {
+            let entry = active[index];
+            if entry.0 <= from {
+                free[entry.1 as usize] = true;
             } else {
-                true
+                active[kept] = entry;
+                kept += 1;
             }
-        });
+        }
+        active_len = kept;
         // Deterministic: always take the lowest-numbered free register.
-        free.sort_unstable_by(|a, b| b.cmp(a));
-        if let Some(reg) = free.pop() {
+        let lowest = ALLOCATABLE
+            .iter()
+            .copied()
+            .filter(|r| free[*r as usize])
+            .min();
+        if let Some(reg) = lowest {
+            free[reg as usize] = false;
             loc[v] = Loc::Reg(reg);
-            active.push((to, reg));
+            active[active_len] = (to, reg, v);
+            active_len += 1;
             stats.registers += 1;
         } else {
             // Spill whichever interval ends last.
-            let (index, &(last_end, reg)) = active
+            let (index, &(last_end, reg, owner)) = active[..active_len]
                 .iter()
                 .enumerate()
-                .max_by_key(|(_, (e, r))| (*e, *r))
+                .max_by_key(|(_, (e, r, _))| (*e, *r))
                 .ok_or("register file empty")?;
             if last_end > to {
-                // Reassign the value currently holding `reg` to a stack slot.
-                let owner = (0..bound)
-                    .filter(|&w| loc[w] == Loc::Reg(reg) && end[w].max(def_pos[w]) == last_end)
-                    .max_by_key(|&w| def_pos[w])
-                    .ok_or("spill victim not found")?;
                 loc[owner] = spill(&mut slots)?;
                 loc[v] = Loc::Reg(reg);
-                active[index] = (to, reg);
+                active[index] = (to, reg, v);
             } else {
                 loc[v] = spill(&mut slots)?;
             }
@@ -479,8 +537,20 @@ fn allocate(lowered: &Lowered, types: &Types) -> Result<Layout, String> {
 
 /// Sequentialize a parallel move. rax breaks cycles, rcx carries
 /// memory-to-memory moves. Destinations are distinct storage locations.
-fn parallel_move(asm: &mut Asm, moves: &[(Loc, Loc)]) -> Result<(), String> {
-    let mut pending: Vec<(Loc, Loc)> = moves.iter().copied().filter(|(d, s)| d != s).collect();
+/// `pending` is caller-owned paid scratch, reused across edges; the search is
+/// charged per comparison (moves are at most the target's parameter count).
+fn parallel_move(
+    asm: &mut Asm,
+    moves: &[(Loc, Loc)],
+    pending: &mut meter::List<(Loc, Loc)>,
+    meter: &Meter<'_>,
+) -> Result<(), String> {
+    pending.clear();
+    for &(dst, src) in moves {
+        if dst != src {
+            pending.push((dst, src))?;
+        }
+    }
     let emit = |asm: &mut Asm, dst: Loc, src: Loc| -> Result<(), String> {
         match (dst, src) {
             (Loc::Reg(reg), _) => asm.load(reg, src),
@@ -492,12 +562,14 @@ fn parallel_move(asm: &mut Asm, moves: &[(Loc, Loc)]) -> Result<(), String> {
         }
     };
     while !pending.is_empty() {
+        let n = pending.len();
+        meter.work2(n, n)?;
         let ready = pending
             .iter()
             .position(|(dst, _)| !pending.iter().any(|(_, src)| src == dst));
         match ready {
             Some(index) => {
-                let (dst, src) = pending.remove(index);
+                let (dst, src) = pending.swap_remove(index);
                 emit(asm, dst, src)?;
             }
             None => {
@@ -515,15 +587,97 @@ fn parallel_move(asm: &mut Asm, moves: &[(Loc, Loc)]) -> Result<(), String> {
     Ok(())
 }
 
+/// Longest encoding (bytes) any single instruction kind emits, including
+/// operand loads and the result store. Div/Rem with the signed guard is the
+/// longest sequence.
+const MAX_INST_BYTES: usize = 96;
+/// Longest single move (load + store through rcx) or push.
+const MAX_MOVE_BYTES: usize = 24;
+/// Terminator overhead: compare, jumps, leave/ret.
+const MAX_TERM_BYTES: usize = 48;
+const PROLOGUE_BYTES: usize = 16;
+const TRAP_BYTES: usize = 14;
+
+/// Sound upper bounds on emitted output, computed before emission so code,
+/// relocation and label tables are admitted at their maximum capacity.
+struct EmitBound {
+    code: usize,
+    traps: usize,
+    calls: usize,
+    edges: usize,
+    moves: usize,
+    panic_texts: usize,
+}
+
+fn emit_bound(lowered: &Lowered, meter: &Meter<'_>) -> Result<EmitBound, String> {
+    let function = &lowered.function;
+    let mut bound = EmitBound {
+        code: PROLOGUE_BYTES + TRAP_BYTES,
+        traps: 0,
+        calls: 0,
+        edges: 0,
+        moves: 0,
+        panic_texts: 0,
+    };
+    for data in &function.blocks {
+        meter.work(meter::add(data.insts.len(), data.term.operand_count())?)?;
+        for inst in &data.insts {
+            let pushes = match &inst.kind {
+                InstKind::Call { args, .. } => {
+                    bound.calls = meter::add(bound.calls, 1)?;
+                    args.len()
+                }
+                _ => 0,
+            };
+            bound.code = meter::add(
+                bound.code,
+                meter::add(MAX_INST_BYTES, meter::mul(pushes, MAX_MOVE_BYTES)?)?,
+            )?;
+            // At most four trap sites per instruction (div signed guard).
+            bound.traps = meter::add(bound.traps, 4)?;
+        }
+        let mut moves = 0usize;
+        for target in data.term.targets() {
+            moves = meter::add(moves, target.args.len())?;
+        }
+        bound.moves = bound.moves.max(moves);
+        // A cycle costs one extra move per argument at most.
+        bound.code = meter::add(
+            bound.code,
+            meter::add(
+                MAX_TERM_BYTES,
+                meter::mul(meter::mul(moves, 2)?, MAX_MOVE_BYTES)?,
+            )?,
+        )?;
+        bound.edges = meter::add(bound.edges, 3)?;
+        bound.traps = meter::add(bound.traps, 1)?;
+        if matches!(data.term, SsaTerminator::Panic(PanicKind::Message(_))) {
+            bound.panic_texts = meter::add(bound.panic_texts, 1)?;
+        }
+    }
+    Ok(bound)
+}
+
 /// Generate machine code for a verified, optimized function. `panic` renders
 /// an explicit panic diagnostic sequence (shared with the stack emitter).
+///
+/// Accounting: register allocation scratch is paid (`allocate`). The code
+/// buffer and relocation tables are reserved at proven upper bounds
+/// (`emit_bound`) and that reservation is admitted first; panic sequences from
+/// the callback are moved in after admitting their exact bytes. The
+/// published `Object` is reconciled to its real capacities, and its receipt
+/// (`Emitted::receipt`) stays with the object for its lifetime. Pushing past
+/// a bound is an internal error, never unpaid growth.
 pub fn emit(
     lowered: &Lowered,
-    types: &Types,
+    types: &[Option<SsaTy>],
     panic: &dyn Fn(&SsaPanicText) -> Result<Object, String>,
-) -> Result<(Object, Stats), String> {
+    meter: &Meter<'_>,
+) -> Result<(Owned<Object>, Stats), String> {
     let function = &lowered.function;
-    let layout = allocate(lowered, types)?;
+    let layout = allocate(lowered, types, meter)?;
+    let bound = emit_bound(lowered, meter)?;
+    let mut lease = meter.lease(object_bound_bytes(&bound, lowered)?)?;
     let loc = &layout.loc;
     let ty = |value: SsaValue| -> Result<SsaTy, String> {
         types
@@ -533,26 +687,31 @@ pub fn emit(
             .ok_or_else(|| "untyped SSA value".to_string())
     };
     let mut asm = Asm {
-        code: Vec::new(),
-        traps: Vec::new(),
-        calls: Vec::new(),
-        strings: Vec::new(),
+        code: reserve(bound.code)?,
+        traps: reserve(bound.traps)?,
+        calls: reserve(bound.calls)?,
+        strings: reserve(bound.panic_texts)?,
     };
     asm.bytes(&[0x55, 0x48, 0x89, 0xe5]); // push rbp; mov rbp, rsp
     if layout.frame > 0 {
         asm.bytes(&[0x48, 0x81, 0xec]);
         asm.i32(layout.frame);
     }
-    let mut labels = vec![0usize; function.blocks.len()];
-    let mut edges: Vec<(usize, usize)> = Vec::new();
-    let edge_moves = |target: &super::SsaTarget| -> Vec<(Loc, Loc)> {
-        let params = &function.blocks[target.block.0 as usize].params;
-        params
-            .iter()
-            .zip(&target.args)
-            .map(|((param, _), arg)| (loc[param.0 as usize], loc[arg.0 as usize]))
-            .collect()
-    };
+    let mut labels = meter.table(function.blocks.len(), 0usize)?;
+    let mut edges = meter.list::<(usize, usize)>(bound.edges)?;
+    let mut pending = meter.list::<(Loc, Loc)>(bound.moves)?;
+    let mut then_moves = meter.list::<(Loc, Loc)>(bound.moves)?;
+    let mut else_moves = meter.list::<(Loc, Loc)>(bound.moves)?;
+    let edge_moves =
+        |target: &super::SsaTarget, out: &mut meter::List<(Loc, Loc)>| -> Result<(), String> {
+            out.clear();
+            let params = &function.blocks[target.block.0 as usize].params;
+            meter.work(params.len())?;
+            for ((param, _), arg) in params.iter().zip(&target.args) {
+                out.push((loc[param.0 as usize], loc[arg.0 as usize]))?;
+            }
+            Ok(())
+        };
     for (block, data) in function.blocks.iter().enumerate() {
         labels[block] = asm.code.len();
         for inst in &data.insts {
@@ -716,7 +875,11 @@ pub fn emit(
                         asm.push(loc[arg.0 as usize])?;
                     }
                     let at = asm.rel32(&[0xe8]);
-                    asm.calls.push((at, callee.symbol.clone()));
+                    // The symbol string is a new copy owned by the object.
+                    let symbol = store::try_string(&callee.symbol)?;
+                    lease.admit(meter, symbol.capacity())?;
+                    meter.work(symbol.len())?;
+                    bounded_push(&mut asm.calls, (at, symbol))?;
                     if !args.is_empty() {
                         asm.bytes(&[0x48, 0x81, 0xc4]);
                         asm.i32((args.len() * 8) as i32);
@@ -737,26 +900,38 @@ pub fn emit(
                     .panics
                     .get(*index as usize)
                     .ok_or("missing SSA panic message")?;
+                // The callback admits its own diagnostic bytes; its code is
+                // copied here, so the copy is admitted before the code buffer
+                // grows past its bound. String payloads are moved, not copied.
                 let object = panic(text)?;
                 if !object.calls.is_empty() || !object.vtables.is_empty() {
                     return Err("panic sequence must be self-contained".into());
                 }
+                meter.work(object.code.len())?;
                 let base = asm.code.len();
-                asm.bytes(&object.code);
+                let needed = meter::add(base, object.code.len())?;
+                if needed > asm.code.capacity() {
+                    lease.admit(meter, needed - asm.code.capacity())?;
+                    asm.code
+                        .try_reserve_exact(needed - asm.code.len())
+                        .map_err(|_| "optimizer allocation failed".to_string())?;
+                }
+                asm.code.extend_from_slice(&object.code);
                 for (at, bytes) in object.strings {
-                    asm.strings.push((base + at, bytes));
+                    bounded_push(&mut asm.strings, (base + at, bytes))?;
                 }
             }
             SsaTerminator::Panic(_) => {
                 let at = asm.rel32(&[0xe9]);
-                asm.traps.push(at);
+                bounded_push(&mut asm.traps, at)?;
             }
             SsaTerminator::Jump(target) => {
-                parallel_move(&mut asm, &edge_moves(target))?;
+                edge_moves(target, &mut then_moves)?;
+                parallel_move(&mut asm, &then_moves, &mut pending, meter)?;
                 let to = target.block.0 as usize;
                 if to != next {
                     let at = asm.rel32(&[0xe9]);
-                    edges.push((at, to));
+                    edges.push((at, to))?;
                 }
             }
             SsaTerminator::Branch {
@@ -783,49 +958,100 @@ pub fn emit(
                     asm.bytes(&[0x48, 0x85, 0xc0]);
                     0x84
                 };
-                let then_moves = edge_moves(then);
-                let else_moves = edge_moves(otherwise);
+                edge_moves(then, &mut then_moves)?;
+                edge_moves(otherwise, &mut else_moves)?;
                 let to_else = asm.rel32(&[0x0f, false_jump]);
-                parallel_move(&mut asm, &then_moves)?;
+                parallel_move(&mut asm, &then_moves, &mut pending, meter)?;
                 let then_block = then.block.0 as usize;
-                if then_block != next || !else_moves.iter().all(|(d, s)| d == s) {
+                let else_trivial = else_moves.iter().all(|(d, s)| d == s);
+                if then_block != next || !else_trivial {
                     let at = asm.rel32(&[0xe9]);
-                    edges.push((at, then_block));
+                    edges.push((at, then_block))?;
                 }
-                if else_moves.iter().all(|(d, s)| d == s) {
-                    edges.push((to_else, otherwise.block.0 as usize));
-                    if then_block == next {
-                        // Fallthrough already handled above.
-                    }
+                if else_trivial {
+                    edges.push((to_else, otherwise.block.0 as usize))?;
                 } else {
                     let here = asm.code.len();
                     asm.patch(to_else, here)?;
-                    parallel_move(&mut asm, &else_moves)?;
+                    parallel_move(&mut asm, &else_moves, &mut pending, meter)?;
                     let at = asm.rel32(&[0xe9]);
-                    edges.push((at, otherwise.block.0 as usize));
+                    edges.push((at, otherwise.block.0 as usize))?;
                 }
             }
         }
     }
-    for (at, block) in edges {
+    meter.work(edges.len())?;
+    for &(at, block) in edges.iter() {
         asm.patch(at, labels[block])?;
     }
     let trap = asm.code.len();
     asm.bytes(&[
         0xbf, 101, 0, 0, 0, 0xb8, 60, 0, 0, 0, 0x0f, 0x05, 0x0f, 0x0b,
     ]);
+    meter.work(asm.traps.len())?;
     for at in std::mem::take(&mut asm.traps) {
         asm.patch(at, trap)?;
     }
+    if asm.code.len() > asm.code.capacity() {
+        return Err("machine code exceeded its admitted bound".into());
+    }
     let mut stats = layout.stats;
     stats.code_bytes = asm.code.len();
-    Ok((
-        Object {
-            code: asm.code,
-            calls: asm.calls,
-            strings: asm.strings,
-            vtables: Vec::new(),
-        },
-        stats,
-    ))
+    let object = Object {
+        code: asm.code,
+        calls: asm.calls,
+        strings: asm.strings,
+        vtables: Vec::new(),
+        receipt: None,
+    };
+    // Reconcile to the real retained capacity (bounds were upper bounds).
+    let actual = object_bytes(&object)?;
+    let owned = store::Owned::adopt(lease, object, actual, meter)?;
+    Ok((owned, stats))
+}
+
+/// Pushes within a reserved bound; exceeding it is an internal error.
+fn bounded_push<T>(data: &mut Vec<T>, value: T) -> Result<(), String> {
+    if data.len() == data.capacity() {
+        return Err("machine emission exceeded its admitted bound".into());
+    }
+    data.push(value);
+    Ok(())
+}
+
+fn reserve<T>(capacity: usize) -> Result<Vec<T>, String> {
+    let mut data = Vec::new();
+    data.try_reserve_exact(capacity)
+        .map_err(|_| "optimizer allocation failed".to_string())?;
+    Ok(data)
+}
+
+fn object_bound_bytes(bound: &EmitBound, _lowered: &Lowered) -> Result<usize, String> {
+    [
+        Ok(bound.code),
+        meter::mul(bound.traps, size_of::<usize>()),
+        meter::mul(bound.calls, size_of::<(usize, String)>()),
+        meter::mul(bound.panic_texts, size_of::<(usize, Vec<u8>)>()),
+    ]
+    .into_iter()
+    .try_fold(0usize, |total, part| meter::add(total, part?))
+}
+
+/// Bytes the published object owns: buffer capacities plus call symbol
+/// strings. Panic string payloads are moved from callback objects whose
+/// producer admitted them, so they are not charged again here.
+fn object_bytes(object: &Object) -> Result<usize, String> {
+    let mut total = [
+        Ok(object.code.capacity()),
+        meter::mul(object.calls.capacity(), size_of::<(usize, String)>()),
+        meter::mul(object.strings.capacity(), size_of::<(usize, Vec<u8>)>()),
+    ]
+    .into_iter()
+    .try_fold(0usize, |total, part: Result<usize, String>| {
+        meter::add(total, part?)
+    })?;
+    for (_, symbol) in &object.calls {
+        total = meter::add(total, symbol.capacity())?;
+    }
+    Ok(total)
 }

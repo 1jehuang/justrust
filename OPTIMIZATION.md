@@ -367,6 +367,17 @@ flowchart LR
   joins (read every summary; one extra read per callee) fail these gates.
 - Machine code: linear-scan allocation over 11 registers. Values live across
   calls go to stack slots.
+- Accounting (repair of `data/runs/graph-recovery/OPTIMIZER-ACCOUNTING-AUDIT.md`,
+  `src/compiler/ssa/meter.rs` and `store.rs`): every optimizer allocation is
+  admitted through the snapshot `PlanBudget` before it happens, at exact
+  capacity, and reconciled to the real capacity afterwards (growth reserves the
+  new total before releasing the old charge). Scratch tables and lists hold a
+  refunding lease for exactly their lifetime, including across awaits in
+  IPO_OPT. Published `SsaFact`s and optimized `Object`s carry an immutable
+  `Receipt` (no ledger back-reference); a fact that shares a body pays only its
+  envelope. Work is charged per element, round, chain hop, dominance step,
+  liveness word and hashed byte. Resource failures stay distinct from invalid
+  IR and unsupported input. Operand and target traversal is allocation-free.
 - Overflow checks are always on in the native profile today (matching the
   stack emitter), so lowered arithmetic uses `Overflow::Trap`.
 
