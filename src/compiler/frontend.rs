@@ -4856,6 +4856,7 @@ impl PlanCtx {
 mod array_len;
 #[cfg(test)]
 mod associated_bounds;
+mod associated_declarations;
 mod const_inputs;
 mod const_items;
 #[cfg(test)]
@@ -4915,7 +4916,7 @@ struct AssociatedBoundSource {
     module: ModuleId,
     trait_name: AstPath,
     member_name: AstIdent,
-    bounds: Arc<[(GenericPath, BuiltinTrait)]>,
+    bounds: Arc<[(GenericPath, TraitPath)]>,
 }
 /// Syntax-only result. Resolve this once before publishing callable signatures.
 #[derive(Clone, Debug)]
@@ -15417,6 +15418,7 @@ enum TraitLookupKey {
 #[derive(Debug)]
 struct FrozenAssociatedBounds {
     ids: Arc<[ir::DeclId]>,
+    predicates: Arc<[ir::Predicate]>,
     source_index: Option<usize>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -15553,6 +15555,9 @@ impl DeclRegistry {
         let info = self.declaration(context.declaration)?;
         let names = self.names.as_ref();
         let mut found = match info.kind {
+            ir::DeclKind::AssociatedType => {
+                associated_declarations::contains_projection(self, info.id, projection, budget)?
+            }
             ir::DeclKind::TraitImpl => {
                 let block = self
                     .program
@@ -16943,19 +16948,15 @@ impl PlanCtx {
                     if source.trait_index != trait_index || source.member_index != member_index {
                         return Err("associated bound source order changed".into());
                     }
-                    for (_, kind) in source.bounds.iter() {
-                        let id = registry
-                            .traits
-                            .get(&TraitLookupKey::Builtin(*kind))
-                            .copied()
-                            .ok_or("missing associated bound catalog identity")?;
-                        ids.push(id);
+                    for (_, path) in source.bounds.iter() {
+                        ids.push(registry.resolve_trait_path(path)?);
                     }
                 }
                 registry.associated_type_bounds.insert(
                     declaration,
                     FrozenAssociatedBounds {
                         ids: ids.into(),
+                        predicates: Arc::from([]),
                         source_index: (!program.associated_bound_sources.is_empty())
                             .then_some(source_index),
                     },
@@ -17467,6 +17468,7 @@ impl PlanCtx {
                 )?;
             }
         }
+        associated_declarations::seal(&mut registry, &mut state, budget)?;
         state.source_context = None;
         let root = program.modules.source_root().map_err(module_diagnostic)?;
         let mut has_main = false;
@@ -19035,6 +19037,17 @@ impl tr::SchemaCx for SchemaAdapter {
             .map(|bounds| bounds.ids.clone())
             .ok_or_else(|| self.error("missing authoritative associated declaration bounds".into()))
     }
+    fn associated_type_predicates(
+        &self,
+        associated: ir::DeclId,
+    ) -> Result<Arc<[ir::Predicate]>, tr::FactsError> {
+        self.associated_type_bounds(associated)?;
+        self.registry
+            .associated_type_bounds
+            .get(&associated)
+            .map(|bounds| bounds.predicates.clone())
+            .ok_or_else(|| self.error("missing source associated bound applications".into()))
+    }
     fn source_region_env(
         &self,
         id: ir::DeclId,
@@ -19072,16 +19085,12 @@ impl tr::SchemaCx for SchemaAdapter {
             schema_only_item |= declaration.kind == ir::DeclKind::TraitItem;
         }
         let mut projection_actuals = false;
-        if !schema_only_item {
-            for argument in args {
-                projection_actuals |= ir::contains_associated_types(argument, budget)
-                    .map_err(|error| self.error(error))?;
-            }
+        for argument in args {
+            projection_actuals |= ir::contains_associated_types(argument, budget)
+                .map_err(|error| self.error(error))?;
         }
         let mut sub = |ty: &ir::Ty| {
-            if schema_only_item {
-                ir::substitute_schema_ty(ty, &schema.env, args, facts, &mut cx, self, budget)
-            } else if projection_actuals {
+            if projection_actuals {
                 ir::substitute_schema_metadata_ty(
                     ty,
                     &schema.env,
@@ -19091,6 +19100,8 @@ impl tr::SchemaCx for SchemaAdapter {
                     self,
                     budget,
                 )
+            } else if schema_only_item {
+                ir::substitute_schema_ty(ty, &schema.env, args, facts, &mut cx, self, budget)
             } else {
                 ir::substitute_ty(ty, &schema.env, args, facts, &mut cx, budget)
             }

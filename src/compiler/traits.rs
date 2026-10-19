@@ -10,6 +10,7 @@ use super::ir::{
 use super::module_identity::{ModuleArena, ModuleError, ModuleId};
 use std::sync::{Arc, Mutex};
 
+mod associated_bounds;
 mod associated_types;
 mod carrier_regions;
 mod catalog;
@@ -25,6 +26,7 @@ mod normal_drop;
 mod parameter_equality;
 mod predicate_subjects;
 mod projected_methods;
+mod symbolic_equalities;
 mod universal_carriers;
 mod universal_methods;
 mod universal_projections;
@@ -458,6 +460,46 @@ pub trait SchemaCx {
     fn associated_type_bounds(&self, associated: DeclId) -> Result<Arc<[DeclId]>> {
         let _ = associated;
         Ok(Arc::from([]))
+    }
+    fn associated_type_is_sized(&self, associated: DeclId) -> Result<bool> {
+        self.declaration_info(associated)?;
+        Ok(true)
+    }
+    fn associated_type_predicates(&self, associated: DeclId) -> Result<Arc<[Predicate]>> {
+        let info = self.declaration_info(associated)?;
+        let owner = info.owner.ok_or_else(|| {
+            FactsError::invalid(self.budget(), "associated bounds have no trait owner")
+        })?;
+        let declaration = self.declaration_info(owner)?;
+        let mut parameters = declaration.env.ordered_params();
+        let self_ty = Ty::Param(parameters.next().ok_or_else(|| {
+            FactsError::invalid(self.budget(), "associated owner has no Self binder")
+        })?);
+        let mut arguments = Vec::new();
+        for parameter in parameters {
+            push(self.budget(), &mut arguments, Ty::Param(parameter))?;
+        }
+        let subject = Ty::AssociatedType(Arc::new(ir::AssociatedTypeProjection {
+            trait_ref: TraitRef {
+                declaration: owner,
+                self_ty,
+                args: arguments.into(),
+            },
+            item: associated,
+        }));
+        let mut predicates = Vec::new();
+        for bound in self.associated_type_bounds(associated)?.iter() {
+            push(
+                self.budget(),
+                &mut predicates,
+                Predicate::Implements(TraitRef {
+                    declaration: *bound,
+                    self_ty: subject.clone(),
+                    args: Arc::from([]),
+                }),
+            )?;
+        }
+        Ok(predicates.into())
     }
     fn associated_type_rhs(&self, implementation: DeclId, associated: DeclId) -> Result<Ty> {
         let _ = (implementation, associated);
@@ -960,6 +1002,9 @@ enum ProofOrigin {
     },
     Assumption,
     DeclaredEquality,
+    ReflexiveEquality {
+        membership: ProofEvidence,
+    },
     ClosedEquality {
         normalization: NormalizedAssociatedType,
     },
@@ -3208,6 +3253,22 @@ impl ValidatedTraitWorld {
         Ok(())
     }
     fn supers_for(&self, goal: &TraitRef, caller: &GenericEnv) -> Result<Vec<Predicate>> {
+        let mut result = self.supertrait_predicates_for(goal, caller)?;
+        for associated in self.trait_header(goal.declaration)?.associated_types.iter() {
+            for predicate in self
+                .associated_bounds_for(*associated, goal, caller)?
+                .iter()
+            {
+                self.append_predicate(&mut result, predicate)?;
+            }
+        }
+        Ok(result)
+    }
+    fn supertrait_predicates_for(
+        &self,
+        goal: &TraitRef,
+        caller: &GenericEnv,
+    ) -> Result<Vec<Predicate>> {
         let header = self.trait_header(goal.declaration)?;
         if goal.args.len().checked_add(1) != Some(header.env.total_arity()) {
             return Err(FactsError::invalid(
@@ -4668,7 +4729,7 @@ impl ValidatedTraitWorld {
             ));
         }
         let actual = &goal.self_ty;
-        for p in self.supers_for(goal, context.env())? {
+        for p in self.supertrait_predicates_for(goal, context.env())? {
             self.require_in(&p, context, active)?;
         }
         if goal.declaration != self.catalog.id(CatalogItem::Copy) {
@@ -5247,6 +5308,8 @@ impl ValidatedTraitWorld {
         for (raw, actual) in schema.predicates.iter().zip(result.predicates.iter()) {
             self.validate_predicate_substitution(raw, actual, &schema.env, args)?;
         }
+        result.predicates =
+            self.normalize_instantiated_projection_predicates(&result.predicates, facts)?;
         self.validate_signature_shape(&result.signature, facts.env(), None)?;
         self.validate_predicates(&result.predicates, facts.env(), None)?;
         // The complete predicate batch, including ordinary membership rows,
@@ -6097,6 +6160,28 @@ impl ValidatedTraitWorld {
         origin: ProofOrigin,
     ) -> Result<ProofOutcome> {
         self.validate_projected_subject_evidence(predicate, facts, &origin)?;
+        if let ProofOrigin::ReflexiveEquality { membership } = &origin {
+            let Predicate::ProjectionEq { projection, ty } = predicate else {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "reflexive equality evidence changed predicate kind",
+                ));
+            };
+            if membership.0.world != self.id
+                || membership.0.environment != facts.predicates.index
+                || membership.0.phase != facts.phase
+                || !self.eq_predicate(
+                    &membership.0.goal,
+                    &Predicate::Implements(projection.trait_ref.clone()),
+                )?
+                || !matches!(ty, Ty::AssociatedType(rhs) if self.same_projection(projection, rhs)?)
+            {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "reflexive equality lost exact membership or projection identity",
+                ));
+            }
+        }
         if let ProofOrigin::ClosedEquality { normalization } = &origin {
             self.validate_projected_dependency(normalization, facts)?;
             let Predicate::ProjectionEq { ty, .. } = predicate else {

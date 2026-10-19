@@ -657,11 +657,12 @@ impl ValidatedTraitWorld {
             }
             return Ok(());
         }
-        if self.type_contains_projection(rhs, 0)? || !self.raw_associated_ty_is_closed(rhs, 0)? {
-            return Err(FactsError::unsupported(
-                &self.budget,
-                "unsupported: equality RHS must be closed or one authoritative parameter",
-            ));
+        if !self.raw_associated_ty_is_closed(rhs, 0)? {
+            // Symbolic RHS terms are metadata, not executable or concrete
+            // assignments. Their contextual membership/Sized proof is checked
+            // when the immutable predicate environment is formed or consumed.
+            self.reject_projected_references(rhs, 0)?;
+            return Ok(());
         }
         self.reject_projected_references(rhs, 0)?;
         self.validate_ty(rhs, env, None, true, 0)
@@ -703,8 +704,8 @@ impl ValidatedTraitWorld {
                 continue;
             };
             self.validate_equality_domain(projection, ty, env)?;
-            if let Ty::Param(parameter) = ty {
-                if !self.predicates_prove_sized(*parameter, rows)? {
+            if !self.raw_associated_ty_is_closed(ty, 0)? {
+                if !self.declared_rhs_proves_sized(ty, rows, env, 0)? {
                     return Err(FactsError::unproved(
                         &self.budget,
                         "declared equality RHS lacks genuine contextual Sized evidence",
@@ -753,18 +754,7 @@ impl ValidatedTraitWorld {
     ) -> Result<Option<Ty>> {
         // Validate every written row before either conflict detection or selection.
         self.validate_predicates(rows, env, None)?;
-        let mut result = None;
-        for row in rows {
-            if let Predicate::ProjectionEq {
-                projection: candidate,
-                ty,
-            } = row
-                && self.same_projection(projection, candidate)?
-            {
-                result = Some(ty.clone());
-            }
-        }
-        Ok(result)
+        self.reduce_declared_equality_rhs(projection, rows, env, &mut Vec::new())
     }
     pub fn normalize_projection_equality(
         &self,
@@ -838,6 +828,20 @@ impl ValidatedTraitWorld {
             projection: projection.clone(),
             ty: rhs.clone(),
         };
+        if let Ty::AssociatedType(rhs_projection) = rhs
+            && self.same_projection(projection, rhs_projection)?
+        {
+            let membership = self.require_in(
+                &Predicate::Implements(projection.trait_ref.clone()),
+                context,
+                active,
+            )?;
+            return self.evidence(
+                &goal,
+                context,
+                ProofOrigin::ReflexiveEquality { membership },
+            );
+        }
         if self.goal_is_closed(&projection.trait_ref, context.env())? {
             let normalization =
                 self.normalize_closed_equality_projection(projection, context, active)?;
@@ -1091,13 +1095,33 @@ impl ValidatedTraitWorld {
         })
     }
     pub(super) fn normalize_equality_type(&self, ty: &Ty, facts: &ValidatedFacts) -> Result<Ty> {
+        self.check_facts(facts, false)?;
         self.validate_ty_metadata_in(ty, facts.env(), 0)?;
-        self.map_equality_type(ty, 0, &mut |projection| {
+        self.map_universal_projection_type(ty, facts.env(), 0, &mut |projection| {
             if let FactsSubject::UniversalCallable(declaration) = facts.subject
                 && let Some(normal) =
                     self.normalize_exact_owner_projection(declaration, projection)?
             {
                 return Ok(normal);
+            }
+            if !self.goal_is_closed(&projection.trait_ref, facts.env())?
+                && self
+                    .declared_equality_rhs(projection, &facts.predicates.predicates, facts.env())?
+                    .is_none()
+            {
+                if facts.phase() != FactsPhase::Universal {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "unreduced projection requires a universal caller",
+                    ));
+                }
+                self.validate_universal_projection(projection, facts.env())?;
+                self.require_in(
+                    &Predicate::Implements(projection.trait_ref.clone()),
+                    ProofContext::from_facts(facts),
+                    &mut Vec::new(),
+                )?;
+                return Ok(Ty::AssociatedType(Arc::new(projection.clone())));
             }
             Ok(self
                 .normalize_projection_for_facts(projection, facts)?

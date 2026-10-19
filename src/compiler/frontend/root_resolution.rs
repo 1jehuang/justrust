@@ -1050,7 +1050,7 @@ impl Resolver<'_> {
         &mut self,
         path: &mut TraitPath,
         module: ModuleId,
-    ) -> Result<BuiltinTrait, String> {
+    ) -> Result<TraitPath, String> {
         let TraitPath::Source(source) = path else {
             return Err(
                 "unsupported: associated bound requires an original source occurrence".into(),
@@ -1074,7 +1074,7 @@ impl Resolver<'_> {
         }
         let original = source.path(self.names())?;
         let resolved = self.path(&original, module, true, false)?;
-        let target = match resolved {
+        let _target = match resolved {
             Some(item) if item.kind != ResolvedKind::Trait => {
                 return Err(format!("{} is not a trait", self.display(&original)?));
             }
@@ -1098,23 +1098,11 @@ impl Resolver<'_> {
         if let Some(error) = boundary {
             return Err(error);
         }
-        if source
-            .segments
-            .iter()
-            .any(|segment| !segment.args.is_empty() || !segment.associated_types.is_empty())
-        {
-            return Err(
-                "unsupported: associated declaration bounds require unapplied catalog traits"
-                    .into(),
-            );
-        }
-        let Some(target @ (BuiltinTrait::Copy | BuiltinTrait::Sized)) = target else {
-            return Err(
-                "unsupported: associated declaration bounds require catalog Copy or Sized".into(),
-            );
-        };
         self.certify_generic(source, &original)?;
-        Ok(target)
+        source_clone::clone_path(source, &self.alias_budget)?;
+        let mut canonical = TraitPath::Source(source.clone());
+        self.trait_application(&mut canonical, module, true)?;
+        Ok(canonical)
     }
     fn trait_application(
         &mut self,
@@ -4025,7 +4013,7 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
                 )?;
             }
             for (member_index, associated) in declaration.associated_types.iter_mut().enumerate() {
-                resolver.charge_entries::<(GenericPath, BuiltinTrait)>(associated.bounds.len())?;
+                resolver.charge_entries::<(GenericPath, TraitPath)>(associated.bounds.len())?;
                 let mut bounds = Vec::new();
                 bounds
                     .try_reserve_exact(associated.bounds.len())

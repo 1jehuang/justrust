@@ -883,23 +883,7 @@ impl ValidatedTraitWorld {
         // All headers, callback identities and assignment metadata precede the
         // capability boundary, including a bad later member after a user trait.
         for header in self.headers.associated_types.iter() {
-            for bound in header.bounds.iter() {
-                charged(&self.budget, self.budget.charge_work(1))?;
-                if *bound != self.catalog.id(CatalogItem::Copy)
-                    && *bound != self.catalog.id(CatalogItem::Sized)
-                {
-                    return Err(FactsError::unsupported(
-                        &self.budget,
-                        "unsupported: associated bounds require canonical Copy or Sized",
-                    ));
-                }
-                if self.trait_header(*bound)?.env.total_arity() != 1 {
-                    return Err(FactsError::invalid(
-                        &self.budget,
-                        "canonical associated bound has unexpected arguments",
-                    ));
-                }
-            }
+            self.associated_bound_predicates(header.declaration)?;
         }
         Ok(())
     }
@@ -907,6 +891,7 @@ impl ValidatedTraitWorld {
     pub(super) fn require_associated_assignment_bounds(
         &self,
         associated: DeclId,
+        owner: &TraitRef,
         normal: &Ty,
         context: ProofContext<'_>,
         active: &mut Vec<GoalKey>,
@@ -926,19 +911,7 @@ impl ValidatedTraitWorld {
                 "associated bounds changed after header validation",
             ));
         }
-        for bound in header.bounds.iter() {
-            charged(&self.budget, self.budget.charge_work(1))?;
-            self.require_in(
-                &Predicate::Implements(TraitRef {
-                    declaration: *bound,
-                    self_ty: normal.clone(),
-                    args: Arc::from([]),
-                }),
-                context,
-                active,
-            )?;
-        }
-        Ok(())
+        self.discharge_associated_bound_predicates(associated, owner, normal, context, active, None)
     }
 
     pub(super) fn stage_associated_types(&mut self) -> Result<()> {
@@ -1437,6 +1410,7 @@ impl ValidatedTraitWorld {
             )?;
             self.require_associated_assignment_bounds(
                 projection.item,
+                &projection.trait_ref,
                 &normal,
                 selection_context,
                 &mut stack.obligations,
@@ -1763,6 +1737,7 @@ impl ValidatedTraitWorld {
                 }
                 self.require_associated_assignment_bounds(
                     evidence.key.projection.item,
+                    &evidence.key.projection.trait_ref,
                     &evidence.normal,
                     context.proof,
                     &mut Vec::new(),
@@ -1809,6 +1784,7 @@ impl ValidatedTraitWorld {
         // Caller assumptions must not certify a closed implementation's bound.
         self.require_associated_assignment_bounds(
             evidence.key.projection.item,
+            &evidence.key.projection.trait_ref,
             &evidence.normal,
             ProofContext {
                 predicates: &self.empty,

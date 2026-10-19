@@ -1,4 +1,37 @@
-# Associated declaration bounds: bounded next milestone
+# Associated declaration bounds
+
+## General applied declaration bounds (2026-10-19)
+
+Status: native general trait applications and associated equalities implemented.
+The historical catalog-only milestone below remains a record of its original scope,
+not the current admission boundary. Full Rust and the full Iterator library remain open.
+
+A declaration such as `type IntoIter: Iterator<Item = Self::Item>` retains each
+original source occurrence and a separate canonical trait application. Immutable
+source schema facts carry the resolved trait, ordered actual arguments and equality
+rows. Header bound IDs must agree in source order. Predicate closure specializes
+these rows under the exact owning trait application, including inherited bounds.
+Assignments, including unused generic implementations, must discharge the real
+specialized membership and equality obligations under their implementation context.
+
+Symbolic equality RHS projections remain canonical terms until declared equalities
+or closed implementation proofs reduce them. Reflexivity requires exact membership
+proof tied to the same world, caller environment and phase. Cyclic RHS reductions
+fail explicitly. Closed predicate terms normalize only after raw substitution replay,
+with canonical normalization dependency replay before executable validation.
+Unknown rigid projections retain exact membership-backed identity, never an invented
+equality, layout, Copy proof or empty carrier family.
+
+Acceptance: `associated_declaration_bounds` covers applied ordered arguments and
+equalities, inherited obligations, and four unused invalid assignments against stock
+rustc at workers 1 and 8. The unchanged generic IntoIterator loop control covers
+`IntoIter: Iterator<Item = Self::Item>`, generic `Item = i32`, labelled continue/break
+and single evaluation, with CHECK, BUILD and native run matching stock at both worker
+counts. Source-backed authority controls reject foreign worlds/items, wrong ordered
+arguments and cyclic reductions, and replay exact caller obligations. `?Sized`, GATs,
+associated defaults and closure result-carrier extensions are separate work.
+
+## Historical catalog-only milestone
 
 Status: delivered as a bounded milestone, verified on 2026-10-18. Builds on `458253eb5` and PARAMETER-EQUALITY.md. Full Rust remains open.
 

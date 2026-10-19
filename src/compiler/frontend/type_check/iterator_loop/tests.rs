@@ -52,6 +52,37 @@ fn blanket_into_iterator_for_calls_match_stock() {
     stock_matching_loop(LIBRARY, USER, "blanket", b"make\n4\n");
 }
 
+#[test]
+fn generic_into_iterator_loop_matches_stock() {
+    let library = LIBRARY.replace(
+        "type IntoIter;",
+        "type IntoIter: Iterator<Item = Self::Item>;",
+    );
+    let user = r#"
+use std::option::Option::{Some, None};
+use std::iter::{Iterator, IntoIterator};
+struct Counter { n: i32 }
+impl Iterator for Counter {
+    type Item = i32;
+    fn next(&mut self) -> std::option::Option<i32> {
+        if self.n < 4 { self.n += 1; Some(self.n) } else { None }
+    }
+}
+fn make() -> Counter { println!("make"); Counter { n: 0 } }
+fn sum<I: IntoIterator<Item = i32>>(items: I) -> i32 {
+    let mut total = 0;
+    'outer: for x in items {
+        if x == 2 { continue 'outer; }
+        total += x;
+        if x == 3 { break 'outer; }
+    }
+    total
+}
+fn main() { println!("{}", sum(make())); }
+"#;
+    stock_matching_loop(&library, user, "generic-into-iterator", b"make\n4\n");
+}
+
 const EXPLICIT_LIBRARY: &str = r#"
 mod std {
     pub mod option { pub enum Option<T> { None, Some(T) } }

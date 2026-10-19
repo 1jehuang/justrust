@@ -210,7 +210,7 @@ mod tests {
 }
 
 impl ValidatedTraitWorld {
-    fn map_universal_projection_type(
+    pub(super) fn map_universal_projection_type(
         &self,
         ty: &Ty,
         env: &GenericEnv,
@@ -337,6 +337,60 @@ impl ValidatedTraitWorld {
             &mut normalize,
         )?;
         Ok(())
+    }
+
+    pub(super) fn normalize_instantiated_projection_predicates(
+        &self,
+        predicates: &[Predicate],
+        context: ProofContext<'_>,
+    ) -> Result<Arc<[Predicate]>> {
+        self.check_context(context)?;
+        let mut normalize = |projection: &ir::AssociatedTypeProjection| -> Result<Ty> {
+            let raw = Ty::AssociatedType(Arc::new(projection.clone()));
+            if !self.raw_associated_ty_is_closed(&raw, 0)? {
+                return Ok(raw);
+            }
+            let (normal, dependencies) =
+                self.normalize_closed_projected_type(&raw, context, false)?;
+            for dependency in dependencies.iter() {
+                self.validate_projected_dependency(dependency, context)?;
+            }
+            Ok(normal)
+        };
+        let mut rows = Vec::new();
+        for predicate in predicates {
+            let goal = predicate.trait_ref();
+            let mut args = Vec::new();
+            for argument in goal.args.iter() {
+                push(
+                    &self.budget,
+                    &mut args,
+                    self.map_universal_projection_type(argument, context.env(), 0, &mut normalize)?,
+                )?;
+            }
+            let goal = TraitRef {
+                declaration: goal.declaration,
+                self_ty: self.map_universal_projection_type(
+                    &goal.self_ty,
+                    context.env(),
+                    0,
+                    &mut normalize,
+                )?,
+                args: args.into(),
+            };
+            let row = match predicate {
+                Predicate::Implements(_) => Predicate::Implements(goal),
+                Predicate::ProjectionEq { projection, ty } => Predicate::ProjectionEq {
+                    projection: ir::AssociatedTypeProjection {
+                        trait_ref: goal,
+                        item: projection.item,
+                    },
+                    ty: self.map_universal_projection_type(ty, context.env(), 0, &mut normalize)?,
+                },
+            };
+            push(&self.budget, &mut rows, row)?;
+        }
+        Ok(rows.into())
     }
 
     pub(super) fn retain_universal_owner_projection(

@@ -3,7 +3,7 @@
 //! Neither a raw projection nor an owner context is an executable carrier proof.
 use super::*;
 
-struct OwnerNormalizationContext<'a> {
+pub(super) struct OwnerNormalizationContext<'a> {
     world: WorldId,
     finalized: bool,
     implementation: &'a ImplHeader,
@@ -343,7 +343,7 @@ impl ValidatedTraitWorld {
         Ok(())
     }
 
-    fn owner_context<'a>(
+    pub(super) fn owner_context<'a>(
         &self,
         implementation: &'a ImplHeader,
     ) -> Result<OwnerNormalizationContext<'a>> {
@@ -446,7 +446,7 @@ impl ValidatedTraitWorld {
         Ok(value)
     }
 
-    fn normalize_owner_type(
+    pub(super) fn normalize_owner_type(
         &self,
         ty: &Ty,
         owner: &OwnerNormalizationContext<'_>,
@@ -700,14 +700,16 @@ impl ValidatedTraitWorld {
                 let normal = self.normalize_owner_type(&projection, &owner, &mut Vec::new(), 0)?;
                 // The owner context contains only actual impl constraints, never
                 // its own head or an equality manufactured from this assignment.
-                self.require_associated_assignment_bounds(
+                self.discharge_associated_bound_predicates(
                     value.associated,
+                    &implementation.trait_ref,
                     &normal,
                     ProofContext {
                         predicates: &owner.predicates,
                         phase: FactsPhase::Universal,
                     },
                     &mut Vec::new(),
+                    Some(&owner),
                 )?;
             }
         }

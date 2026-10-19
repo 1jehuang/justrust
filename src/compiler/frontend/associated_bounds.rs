@@ -28,30 +28,32 @@ fn associated_bounds_keep_order_duplicates_and_original_catalog_occurrences() {
 #[test]
 fn associated_bounds_resolve_catalog_imports_without_losing_source_paths() {
     let program = parse("use core::marker::Copy as Bits;trait Family{type A:Bits;type B:core::marker::Sized;}fn main(){}").unwrap();
-    assert_eq!(
+    assert!(matches!(
         program.associated_bound_sources[0].bounds[0].1,
-        BuiltinTrait::Copy
-    );
-    assert_eq!(
+        TraitPath::Builtin(BuiltinTrait::Copy)
+    ));
+    assert!(matches!(
         program.associated_bound_sources[1].bounds[0].1,
-        BuiltinTrait::Sized
-    );
+        TraitPath::Builtin(BuiltinTrait::Sized)
+    ));
     for member in &program.traits[0].associated_types {
         let TraitPath::Source(path) = &member.bounds[0] else {
             panic!("erased source bound")
         };
         assert!(path.resolved_use.is_some());
     }
-    assert!(
-        parse("trait Copy{}trait Family{type Out:Copy;}fn main(){}")
-            .unwrap_err()
-            .starts_with("unsupported:")
-    );
-    assert!(
-        parse("trait Family{type Out:Clone;}fn main(){}")
-            .unwrap_err()
-            .starts_with("unsupported:")
-    );
+    let user = parse("trait Copy{}trait Family{type Out:Copy;}fn main(){}").unwrap();
+    assert!(matches!(
+        user.associated_bound_sources[0].bounds[0].1,
+        TraitPath::Source(_)
+    ));
+    user.validate_associated_bound_sources(&ir::PlanBudget::default())
+        .unwrap();
+    let clone = parse("trait Family{type Out:Clone;}fn main(){}").unwrap();
+    assert!(matches!(
+        clone.associated_bound_sources[0].bounds[0].1,
+        TraitPath::Builtin(BuiltinTrait::Clone)
+    ));
 }
 
 #[test]

@@ -499,7 +499,8 @@ cleanup failures.
       normalization replay. Identity and Iterator `last` match stock CHECK/BUILD/run
       at workers 1/8. The canonical blanket `IntoIterator for I: Iterator`
       assignment and concrete `for` consumer also pass stock/native 1/8;
-      applied associated declaration bounds and full adapters remain open.
+      generic consumers retain associated declaration obligations as described below.
+      Full Iterator adapters remain open.
 - [x] Impl parameters determined by associated output equalities use a
       dependency-ordered fixed point, then canonical closed normalization to
       infer missing output actuals. Unused and cyclic unconstrained impls are
@@ -508,10 +509,13 @@ cleanup failures.
       alpha-rename provider signatures and predicates exactly, and select
       overrides or provided defaults with ordered method actuals
       (`generic_trait_methods`). Universal projected signatures remain open.
-- [x] Catalog Copy/Sized associated declaration bounds under ASSOCIATED-BOUNDS.md,
-      with exact retained source occurrences and header/callback identity, all unused
-      assignment checks under real impl predicates, and closed normalization replay.
-      This does not infer Copy for an equality-bound U or admit arbitrary user bounds.
+- [x] General associated declaration trait applications and equality bounds under
+      ASSOCIATED-BOUNDS.md retain exact source/owner/ordered argument identity and
+      prove every assignment, including unused generic impls. Transitive symbolic
+      RHS reduction and closed predicate normalization replay support the standard
+      `IntoIter: Iterator<Item = Self::Item>` generic loop, matching stock native
+      CHECK/BUILD/run at workers 1/8. This does not invent Copy for equality-bound U;
+      `?Sized`, GATs and associated defaults remain separate work.
 - [x] Inherited associated type lookup through supertraits canonicalizes the owning
       declaration and ordered actuals. Generic `IndexMut<I>: Index<I>` implementations
       normalize inherited `Output` using an independently proved superclass impl,
