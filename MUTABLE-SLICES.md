@@ -1,6 +1,6 @@
 # Mutable slice parameters
 
-Status: mutable slice parameters and local carriers. Slice returns, raw constructors and mutable range borrows remain open. This is not full Rust support.
+Status: mutable slice parameters and local carriers. Root slice returns are covered by `SLICE-RETURNS.md`; raw constructors and mutable range borrows remain open. This is not full Rust support.
 
 ## Frozen contract
 

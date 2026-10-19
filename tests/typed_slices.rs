@@ -229,7 +229,7 @@ fn cases() -> Vec<Case> {
             source: r###"fn read(s:&[i32])->&[i32]{s}fn main(){let a=[42];if read(&a)[0]==42{println!("ok");}}"###,
             stdout: Some("ok\n"),
             stock_diagnostic: None,
-            outcome: Outcome::Unsupported,
+            outcome: Outcome::Runtime,
         },
         Case {
             name: "mutable_slice",
@@ -437,7 +437,7 @@ fn stock_all() {
             }
         }
     }
-    assert_eq!(counts, [20, 3, 5, 4]);
+    assert_eq!(counts, [21, 3, 5, 3]);
 }
 #[test]
 fn stock_typed_slices_edition2024_actual_toolchain() {
@@ -569,7 +569,7 @@ fn every_admitted_function_checks_universally_and_slice_ir_keeps_exact_element()
         }
         count += 1;
     }
-    assert_eq!(count, 23);
+    assert_eq!(count, 24);
     assert_eq!(generic, 3);
     assert!(indices >= 20);
     assert!(coercions >= 21);
@@ -631,7 +631,7 @@ fn valid_borrowed_projection_reference_elements_returns_mutability_and_ranges_st
         );
         count += 1;
     }
-    assert_eq!(count, 4);
+    assert_eq!(count, 3);
 }
 #[test]
 fn native_typed_slices_workers1_8_check_build_no_compiler_fallback() {
@@ -729,9 +729,9 @@ fn native_typed_slices_workers1_8_check_build_no_compiler_fallback() {
         }
     }
     assert_eq!(gates, 128);
-    assert_eq!(modes, [40, 40, 6, 6, 10, 10, 8, 8]);
-    assert_eq!(images, 46);
+    assert_eq!(modes, [42, 42, 6, 6, 10, 10, 6, 6]);
+    assert_eq!(images, 48);
     eprintln!(
-        "TYPED SLICES native128cells/46ELF executions/profile, modes{modes:?};4stock-validUnsupported capabilities are not ordinary-invalid parity, general borrowing or full Rust"
+        "TYPED SLICES native128cells/48ELF executions/profile, modes{modes:?};3stock-validUnsupported capabilities are not ordinary-invalid parity, general borrowing or full Rust"
     );
 }

@@ -509,8 +509,17 @@ fn mutable_slice_element_writes_require_and_accept_exclusive_carriers() {
     }
 }
 #[test]
-fn new_slice_element_types_do_not_grant_slice_return_capability() {
-    observed_unsupported("fn identity<'a>(values:&'a [i32])->&'a [i32]{values}fn main(){}");
+fn root_slice_returns_preserve_source_lifetimes() {
+    for workers in [1, 8] {
+        let result = compiler::compile(
+            "fn identity<'a>(values:&'a [i32])->&'a [i32]{values}fn main(){}".into(),
+            workers,
+            true,
+        )
+        .unwrap();
+        assert!(result.executable.is_none());
+        assert!(result.analyses.iter().all(|analysis| analysis.passed()));
+    }
 }
 #[test]
 fn noncopy_borrowed_index_field_read_remains_a_separate_closed_capability() {

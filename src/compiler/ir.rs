@@ -7983,15 +7983,7 @@ impl CheckedFunction {
             }
         }
         facts.validate_value_ty(&self.result)?;
-        // Returns remain closed even though the descriptor is a legal local
-        // and argument. All metadata is checked before the position boundary.
-        slice_boundary_walk(
-            &self.result,
-            true,
-            facts.validated().map(|f| f.budget()),
-            0,
-            &mut 0,
-        )?;
+        validate_slice_carrier_with_facts(&self.result, facts)?;
         for local in &self.locals {
             facts.validate_value_ty(&local.ty)?;
             validate_slice_carrier_with_facts(&local.ty, facts)?;

@@ -105,9 +105,8 @@ fn expected_slice_coercions_do_not_equate_array_and_slice_shapes() {
         "field-slice",
         "struct P { a: [u8; 2] } fn main() { let p = P { a: [7, 8] }; let s: &[u8] = &p.a; println!(\"{}\", s.len()); }",
     );
-    // The analogous `fn view(p: &P) -> &[u8] { &p.a }` still receives the
-    // explicit `unsupported: slice return types` diagnostic. This block case
-    // isolates expected-type inference without claiming new return support.
+    // This block case isolates expected-type inference. Root slice-return
+    // transport has separate coverage in tests/slice_returns.rs.
     compare(
         "block-slice",
         "struct P { a: [u8; 2] } fn main() { let p = P { a: [7, 8] }; let s: &[u8] = { &p.a }; println!(\"{}\", s.len()); }",

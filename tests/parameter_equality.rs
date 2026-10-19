@@ -54,7 +54,6 @@ enum Phase {
     None,
     OrdinaryInvalid,
     Attribute,
-    SliceReturn,
     ReferenceRhs,
     CompositeRhs,
 }
@@ -763,7 +762,7 @@ fn main(){ let a=[49i32,50]; let s:&[i32]=&a; let v=slice::<Wrap<&[i32]>,i32>(Wr
             stock_diagnostic: None,
             stdout: b"ok\n",
             outcome: Outcome::Unsupported,
-            phase: Phase::SliceReturn,
+            phase: Phase::CompositeRhs,
             original_stock_flags: false,
         },
         // Source SHA256 6bbed7fe5efa0f88cf3640dd76f13a597c66fdad4e3d9d2c5d891c0ece041091
@@ -1140,7 +1139,6 @@ fn assert_native_diagnostic(case: &Case, diagnostic: &str) {
     );
     let expected = match case.phase {
         Phase::Attribute => "active attribute `allow` is unsupported",
-        Phase::SliceReturn => "unsupported: slice return types",
         Phase::ReferenceRhs | Phase::CompositeRhs => {
             "unsupported: equality RHS must be closed or one authoritative parameter"
         }

@@ -170,10 +170,6 @@ fn explicit_remaining_boundaries() {
             "fn main(){let mut a=[1,2];let r=&mut a[1..];r[0]=4;}",
         ),
         (
-            "slice_return",
-            "fn same(s:&mut[i32])->&mut[i32]{s}fn main(){}",
-        ),
-        (
             "noncopy_write",
             "struct A{x:i32} fn bad(s:&mut[A]){s[0]=A{x:2};}fn main(){}",
         ),

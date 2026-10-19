@@ -211,6 +211,7 @@ fn typed_shared_slice_parameters_are_admitted() {
         "fn f(b: &[i32]) {}",
         "fn f<T>(b: &[T]) {}",
         "fn f(b: &mut [u8]) {}",
+        "fn f<'a>(b: &'a [u8]) -> &'a [u8] { b }",
         "fn f<T>(b: &[u8], t: T) {}",
     ] {
         publish(source, 0).unwrap_or_else(|error| panic!("{source}: {error}"));
@@ -226,7 +227,6 @@ fn rejects_outside_admitted_domain() {
             0,
             "bare by-value slice",
         ),
-        ("fn f<'a>(b: &'a [u8]) -> &'a [u8] { b }", 0, "slice return"),
         ("fn f(b: &&[u8]) {}", 0, "slice"),
         ("fn f(b: (&[u8], u8)) {}", 0, "slice"),
         ("struct S { b: &[u8] } fn f(s: S) {}", 0, ""),

@@ -2190,10 +2190,7 @@ fn admit_slice_value_shape(ty: &ir::Ty) -> Result<(), String> {
     Ok(())
 }
 pub(super) fn reject_slice_result(result: &ir::Ty) -> Result<(), String> {
-    if result.contains_slice() {
-        return Err("unsupported: slice return types".into());
-    }
-    Ok(())
+    admit_slice_value_shape(result)
 }
 pub(super) const BARE_SLICE_UNSUPPORTED: &str = "unsupported: bare by-value slice type [T]; only &[T] and &mut [T] parameters and locals are admitted";
 
@@ -7457,6 +7454,13 @@ impl<'a> Checker<'a> {
         _kind: ir::BorrowKind,
         referent: &ir::Ty,
     ) -> Result<(), String> {
+        if let ir::Ty::Slice { element } = referent {
+            return ir::validate_shared_slice_element(
+                element,
+                self.facts(),
+                &self.signatures.plan()?.budget,
+            );
+        }
         if referent.contains_slice() {
             return Err("unsupported: borrowing or reborrowing slice places".into());
         }

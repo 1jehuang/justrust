@@ -159,14 +159,10 @@ fn argument_slot_offsets(words: &[usize], sret: bool) -> Result<Vec<i32>, String
 /// remain unsupported, as do elements rejected by concrete admission.
 const SLICE_UNSUPPORTED: &str =
     "unsupported: only shared &[T] parameters and locals have a native slice layout";
-const SLICE_RESULT_UNSUPPORTED: &str = "unsupported: shared slice returns have no native ABI";
-
-/// Transport class of a function or call result. Slice results are rejected
-/// here, before `indirect` would classify the carrier as snapshot storage.
+/// Root slice results use the existing indirect result convention. The
+/// carrier is copied into caller-owned result storage, never returned as
+/// the address of callee-local descriptor storage.
 fn result_indirect(ty: &ir::Ty) -> Result<bool, String> {
-    if ty.contains_slice() {
-        return Err(SLICE_RESULT_UNSUPPORTED.into());
-    }
     indirect(ty)
 }
 

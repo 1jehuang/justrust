@@ -6,7 +6,8 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 
 ## Completed foundations, not full compatibility
 
-- [x] Mutable slice parameters and local carriers with same-kind array unsizing, generic reference-free elements, shared read reborrows and Copy-element checked writes (`MUTABLE-SLICES.md`). G0-G12 remain partial: slice returns, raw constructors, mutable ranges and non-Copy replacement remain open.
+- [x] Mutable slice parameters and local carriers with same-kind array unsizing, generic reference-free elements, shared read reborrows and Copy-element checked writes (`MUTABLE-SLICES.md`). G0-G12 remain partial: raw constructors, mutable ranges and non-Copy replacement remain open.
+- [x] Root shared and mutable slice returns use caller-owned descriptor storage and preserve source lifetime/alias authority, including generic non-Copy element transport (`SLICE-RETURNS.md`). G0-G12 remain partial: nested slice carriers, raw constructors and mutable subslices remain open.
 
 - [x] Independent graph runtime with shared immutable facts and lifecycle telemetry.
 - [x] Direct native Linux x86-64 executable generation for the initial subset.
@@ -97,7 +98,7 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
       iteration uses the same canonical runtime loans, genuine captured descriptor
       data/length, and declaration-owned lifetime-qualified result origin envelopes.
       FOR-LOANS.md records the contract and explicit boundaries. Structured
-      referenced elements, mutable slice descriptors and slice descriptor returns,
+      referenced elements and mutable-slice iteration,
       SCC-born item loans retained across backedges, non-Copy by-value
       elements, adapters and expression-position for loops remain open.
 - [x] Genuine let-else with old-frontier initializer/else validation, dedicated

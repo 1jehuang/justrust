@@ -2430,9 +2430,7 @@ impl Function {
         for local in &self.locals {
             validate_slice_position(&local.ty, facts)?;
         }
-        if self.result.contains_slice() {
-            return Err(SLICE_UNSUPPORTED.into());
-        }
+        validate_slice_position(&self.result, facts)?;
         let block = |id: BlockId| -> Result<(), String> {
             if id.0 < self.blocks.len() {
                 Ok(())
@@ -4900,9 +4898,7 @@ fn reject_slices(
                 .ok_or("CFG slice type work overflow")?,
         )?;
     }
-    if source.result.contains_slice() {
-        return Err(SLICE_UNSUPPORTED.into());
-    }
+    validate_slice_position(&source.result, facts)?;
     for local in &source.locals {
         validate_slice_position(&local.ty, facts)?;
     }
