@@ -979,6 +979,11 @@ impl<'a> Validator<'a> {
                         self.push(Visit::Expr(argument))?;
                     }
                 }
+                Expr::FormatInto(source) => {
+                    for argument in source.arguments.iter().chain(source.rest.iter().flatten()) {
+                        self.push(Visit::Expr(argument))?;
+                    }
+                }
                 Expr::Panic(panic) => validate_panic_site(panic, &self.program.names)?,
                 Expr::Integer(_)
                 | Expr::Float(_)

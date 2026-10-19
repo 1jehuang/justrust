@@ -9569,6 +9569,7 @@ impl<'a> Checker<'a> {
                 stream,
                 newline,
             } => self.check_format(pieces, arguments, modes, specs, *stream, *newline)?,
+            Expr::FormatInto(source) => self.check_format_into(source)?,
             Expr::Unary { op, value } => {
                 if matches!(op, UnaryOp::Neg)
                     && let Expr::Integer(literal) = value.as_ref()

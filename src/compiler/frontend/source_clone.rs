@@ -193,6 +193,15 @@ pub(super) fn preflight_clone_node(
                 clone_vector(arguments, budget)?;
                 clone_vector(modes, budget)?;
             }
+            Expr::FormatInto(source) => {
+                budget.retain_bytes(std::mem::size_of::<SourceFormatInto>())?;
+                clone_vector(&source.arguments, budget)?;
+                clone_vector(&source.specs, budget)?;
+                clone_vector(&source.rest, budget)?;
+                for row in &source.rest {
+                    clone_vector(row, budget)?;
+                }
+            }
             Expr::Output(output) => {
                 budget.retain_bytes(std::mem::size_of::<SourceOutput>())?;
                 clone_text(&output.output.text, budget)?;

@@ -42,7 +42,8 @@ mod token_cursor;
 use char_literal::{parse_byte_literal, parse_char_literal};
 mod deref_coercion;
 mod format_args;
-mod int_consts;
+mod format_macros;
+pub use format_macros::SourceFormatInto;
 mod format_spec;
 mod operators;
 mod panic_format;
@@ -1832,6 +1833,35 @@ impl SourceInventory {
             )?,
             Expr::Output(output) => validate_output_site(output, &self.names)
                 .map_err(|message| source_error(budget, &message))?,
+            Expr::FormatInto(source) => {
+                for (index, argument) in source.arguments.iter().enumerate() {
+                    self.operator_site(
+                        argument as *const Expr as usize | 2,
+                        &node.child(42, index, budget)?,
+                        budget,
+                    )?;
+                    self.expr(
+                        argument,
+                        &node.child(21, index, budget)?,
+                        None,
+                        None,
+                        budget,
+                        depth + 1,
+                    )?;
+                }
+                for (index, row) in source.rest.iter().enumerate() {
+                    for (column, argument) in row.iter().enumerate() {
+                        self.expr(
+                            argument,
+                            &node.child(43, index * 16 + column, budget)?,
+                            None,
+                            None,
+                            budget,
+                            depth + 1,
+                        )?;
+                    }
+                }
+            }
             Expr::Format { arguments, .. } => {
                 for (index, argument) in arguments.iter().enumerate() {
                     self.operator_site(
@@ -6052,6 +6082,8 @@ pub enum Expr {
         newline: bool,
     },
     Output(Box<SourceOutput>),
+    /// format!/write! placeholder calls (format_macros.rs).
+    FormatInto(Box<SourceFormatInto>),
     Panic(Box<SourcePanic>),
     /// Postfix `?` on an Option or Result operand (TRY.md).
     Try(Box<Expr>),
@@ -7445,6 +7477,11 @@ impl<'input, 'names> Parser<'input, 'names> {
         }
         if self.builtin_macro_ahead("matches")? {
             return self.matches_expression();
+        }
+        for spelling in ["format", "write", "writeln"] {
+            if self.builtin_macro_ahead(spelling)? {
+                return self.format_into_expression(spelling);
+            }
         }
         if self.builtin_macro_ahead("vec")? {
             return self.vec_expression();
@@ -11937,9 +11974,6 @@ impl<'input, 'names> Parser<'input, 'names> {
         Ok(expr)
     }
     fn named_expr(&mut self) -> Result<Expr, ParseError> {
-        if let Some(limit) = self.int_const_expr()? {
-            return Ok(limit);
-        }
         let println_syntax =
             self.is("println") && self.cursor.peek(1).is_some_and(|token| token.matches("!"));
         if !println_syntax && self.cursor.peek(1).is_some_and(|token| token.matches("!")) {
@@ -14580,6 +14614,11 @@ fn walk_depth_inspecting(
                     arguments: args, ..
                 } => {
                     for arg in args {
+                        push(DepthNode::Expr(arg))?;
+                    }
+                }
+                Expr::FormatInto(source) => {
+                    for arg in source.arguments.iter().chain(source.rest.iter().flatten()) {
                         push(DepthNode::Expr(arg))?;
                     }
                 }

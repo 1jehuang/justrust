@@ -3139,6 +3139,16 @@ impl Resolver<'_> {
                     self.expr(value, module, locals)?;
                 }
             }
+            Expr::FormatInto(source) => {
+                let source = &mut **source;
+                for value in source
+                    .arguments
+                    .iter_mut()
+                    .chain(source.rest.iter_mut().flatten())
+                {
+                    self.expr(value, module, locals)?;
+                }
+            }
             Expr::Cast { .. } => {
                 return Err("cast bypassed resolver expression dispatcher".into());
             }

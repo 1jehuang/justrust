@@ -483,6 +483,11 @@ pub(super) fn inventory(
                     expr(argument, ds, b, d + 1)?;
                 }
             }
+            Expr::FormatInto(source) => {
+                for argument in source.arguments.iter().chain(source.rest.iter().flatten()) {
+                    expr(argument, ds, b, d + 1)?;
+                }
+            }
             Expr::Tuple(es) => {
                 add(
                     ds,

@@ -424,6 +424,12 @@ impl Solver<'_, '_> {
                 }
                 self.fixed(ir::Ty::Unit)
             }
+            Expr::FormatInto(source) => {
+                for arg in source.arguments.iter().chain(source.rest.iter().flatten()) {
+                    self.expr(arg, depth + 1)?;
+                }
+                self.fixed(ir::Ty::Unit)
+            }
             // Unknown forms contribute no speculative evidence. The ordinary
             // checker still handles/rejects them with its full semantic rules.
             _ => self.node(Domain::Unknown),
