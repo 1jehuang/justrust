@@ -39,15 +39,19 @@ support. See `FORMAT-SCALARS.md`.
 
 ## Current first rejection boundaries
 
-Measured on `40feb23c8` by the native corpus gate, run
-`20261018-204121969-2792890`: both harness tests pass and the unchanged programs
-01, 03 and 05 match their frozen stdout. The other 17 programs reject explicitly:
+Refreshed on compiler source `af5c06a69` through 40 direct native CLI CHECK
+requests (20 unchanged sources, workers 1 and 8). Both worker counts agree:
+01, 03 and 05 check successfully; the other 17 reject explicitly as below.
+`data/runs/const-source/corpus-check-boundaries.json` records source/binary hashes,
+exit codes and exact diagnostics. This refresh does not rerun BUILD, execution or
+the stock oracle. The earlier complete corpus gate on `40feb23c8`, run
+`20261018-204121969-2792890`, remains historical execution evidence.
 
 | Programs | First reported boundary |
 |---|---|
 | 02, 07 | unresolved type |
 | 04, 13 | unknown local macro invocation |
-| 06 | const items / constant evaluation |
+| 06 | const-expression array length |
 | 08, 12, 14, 15, 18, 19, 20 | unsupported `derive` attribute |
 | 09 | or-pattern / `@` pattern support |
 | 10 | stored closure / capture-environment form |
