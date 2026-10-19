@@ -918,6 +918,13 @@ impl ValidatedFacts {
             self_ty: ty.clone(),
             args: Arc::from([]),
         });
+        self.world.check_facts(self, true)?;
+        if let Some(decision) =
+            self.world
+                .decide_builtin_leaf(&predicate, ProofContext::from_facts(self), 0)?
+        {
+            return Ok(decision);
+        }
         Ok(matches!(
             self.world.prove_goal(&predicate, self)?,
             ProofOutcome::Proved(_)
@@ -1208,6 +1215,15 @@ struct TypeWalk {
     has_parameters: bool,
 }
 impl TypeWalk {
+    fn growth_slots(len: usize, capacity: usize) -> Option<usize> {
+        if len < capacity {
+            Some(0)
+        } else if len == capacity {
+            len.checked_add(len.max(1)).map(|_| len.max(1))
+        } else {
+            None
+        }
+    }
     fn key(ty: &Ty) -> Option<TypeNode> {
         match ty {
             Ty::Struct(t) => Some(TypeNode::Struct(
@@ -1251,18 +1267,64 @@ impl TypeWalk {
                     + 32,
             ),
         )?;
-        let relocation = self
+        // The per-entry receipt pays two slots in both vectors. Doubling only
+        // at capacity therefore remains paid after publication of this entry.
+        // During relocation the old allocation is still live, so separately
+        // admit that temporary peak before requesting either new allocation.
+        let complete_growth = Self::growth_slots(self.complete.len(), self.complete.capacity())
+            .ok_or_else(|| FactsError::resource(budget, "type memo capacity overflow"))?;
+        let reservation_growth =
+            Self::growth_slots(self.reservations.len(), self.reservations.capacity())
+                .ok_or_else(|| FactsError::resource(budget, "type memo capacity overflow"))?;
+        let grow_complete = complete_growth != 0;
+        let grow_reservations = reservation_growth != 0;
+        let old_complete = if grow_complete {
+            self.complete.len()
+        } else {
+            0
+        };
+        let old_reservations = if grow_reservations {
+            self.reservations.len()
+        } else {
+            0
+        };
+        let relocation = old_complete
+            .checked_add(old_reservations)
+            .ok_or_else(|| FactsError::resource(budget, "type memo relocation overflow"))?;
+        let temporary_bytes = old_complete
+            .checked_mul(std::mem::size_of::<((TypeNode, TypeUse), usize)>())
+            .and_then(|bytes| {
+                old_reservations
+                    .checked_mul(std::mem::size_of::<ir::PlanReservation>())
+                    .and_then(|other| bytes.checked_add(other))
+            })
+            .ok_or_else(|| FactsError::resource(budget, "type memo storage overflow"))?;
+        let _relocation_storage = charged(budget, budget.reserve_bytes(temporary_bytes))?;
+        charged(budget, budget.charge_work(relocation))?;
+        if grow_complete {
+            self.complete
+                .try_reserve_exact(complete_growth)
+                .map_err(|_| FactsError::resource(budget, "type memo allocation failed"))?;
+        }
+        if grow_reservations {
+            self.reservations
+                .try_reserve_exact(reservation_growth)
+                .map_err(|_| {
+                    FactsError::resource(budget, "type memo reservation allocation failed")
+                })?;
+        }
+        let paid_slots = self
             .complete
             .len()
-            .checked_add(self.reservations.len())
-            .ok_or_else(|| FactsError::resource(budget, "type memo relocation overflow"))?;
-        charged(budget, budget.charge_work(relocation))?;
-        self.complete
-            .try_reserve_exact(1)
-            .map_err(|_| FactsError::resource(budget, "type memo allocation failed"))?;
-        self.reservations
-            .try_reserve_exact(1)
-            .map_err(|_| FactsError::resource(budget, "type memo reservation allocation failed"))?;
+            .checked_add(1)
+            .and_then(|len| len.checked_mul(2))
+            .ok_or_else(|| FactsError::resource(budget, "type memo capacity overflow"))?;
+        if self.complete.capacity() > paid_slots || self.reservations.capacity() > paid_slots {
+            return Err(FactsError::resource(
+                budget,
+                "type memo allocator exceeded paid capacity",
+            ));
+        }
         self.complete.push((key, height));
         self.reservations.push(reservation);
         Ok(())
@@ -5955,6 +6017,61 @@ impl ValidatedTraitWorld {
             Ok(ProofOutcome::NotProven)
         }
     }
+    fn builtin_leaf_known(item: CatalogItem, ty: &Ty) -> Option<bool> {
+        Some(match ty {
+            Ty::Ref { kind, .. } => item == CatalogItem::Sized || *kind == ir::BorrowKind::Shared,
+            Ty::Slice { .. } | Ty::Str | Ty::Dyn(_) => false,
+            Ty::RawPtr { .. }
+            | Ty::Int(_)
+            | Ty::Float(_)
+            | Ty::Char
+            | Ty::Bool
+            | Ty::Unit
+            | Ty::Never => true,
+            _ => return None,
+        })
+    }
+    /// A boolean consumer does not retain a proof certificate. Decide only
+    /// complete catalog leaves, after ordinary admission and exact assumptions,
+    /// and still discharge every canonical supertrait. Recursive or user rules
+    /// fall back to the evidence-producing search rather than inventing facts.
+    fn decide_builtin_leaf(
+        &self,
+        predicate: &Predicate,
+        context: ProofContext<'_>,
+        depth: usize,
+    ) -> Result<Option<bool>> {
+        let Predicate::Implements(goal) = predicate else {
+            return Ok(None);
+        };
+        let item = [CatalogItem::Sized, CatalogItem::Copy, CatalogItem::Clone]
+            .into_iter()
+            .find(|item| goal.declaration == self.catalog.id(*item));
+        let Some(item) = item else { return Ok(None) };
+        let Some(known) = Self::builtin_leaf_known(item, &goal.self_ty) else {
+            return Ok(None);
+        };
+        charged(&self.budget, self.budget.check_depth(depth))?;
+        charged(&self.budget, self.budget.charge_work(1))?;
+        self.check_normalization_budget()?;
+        self.validate_ref_in(goal, context.env(), None)?;
+        for assumption in context.predicates.predicates.iter() {
+            if self.eq_predicate(assumption, predicate)? {
+                return Ok(Some(true));
+            }
+        }
+        if !known {
+            return Ok(Some(false));
+        }
+        for parent in self.supers_for(goal, context.env())? {
+            match self.decide_builtin_leaf(&parent, context, depth + 1)? {
+                Some(true) => {}
+                Some(false) => return Ok(Some(false)),
+                None => return Ok(None),
+            }
+        }
+        Ok(Some(true))
+    }
     fn prove_builtin(
         &self,
         predicate: &Predicate,
@@ -6001,11 +6118,19 @@ impl ValidatedTraitWorld {
                 push(&self.budget, &mut children, element.as_ref())?;
                 true
             }
-            Ty::Ref { kind, .. } => item == CatalogItem::Sized || *kind == ir::BorrowKind::Shared,
-            // `[T]`, `str` and `dyn Trait` are neither Sized nor Copy/Clone.
-            Ty::Slice { .. } | Ty::Str | Ty::Dyn(_) => false,
-            Ty::RawPtr { .. } => true,
-            Ty::Int(_) | Ty::Float(_) | Ty::Char | Ty::Bool | Ty::Unit | Ty::Never => true,
+            Ty::Ref { .. }
+            | Ty::Slice { .. }
+            | Ty::Str
+            | Ty::Dyn(_)
+            | Ty::RawPtr { .. }
+            | Ty::Int(_)
+            | Ty::Float(_)
+            | Ty::Char
+            | Ty::Bool
+            | Ty::Unit
+            | Ty::Never => Self::builtin_leaf_known(item, &goal.self_ty).ok_or_else(|| {
+                FactsError::invalid(&self.budget, "catalog leaf rule is incomplete")
+            })?,
             Ty::AssociatedType(_) => {
                 return Err(FactsError::unsupported(
                     &self.budget,
@@ -8771,6 +8896,101 @@ mod tests {
         let foreign_facts = foreign_world.callable_facts(foreign.caller).unwrap();
         assert!(
             matches!(world.prove_goal(&unbounded, &foreign_facts), Err(error) if error.kind() == FactsErrorKind::InvalidMetadata)
+        );
+    }
+
+    #[test]
+    fn local_type_memo_growth_is_paid_checked_and_amortized() {
+        assert_eq!(TypeWalk::growth_slots(0, 0), Some(1));
+        assert_eq!(TypeWalk::growth_slots(3, 4), Some(0));
+        assert_eq!(TypeWalk::growth_slots(4, 4), Some(4));
+        assert_eq!(TypeWalk::growth_slots(usize::MAX, usize::MAX), None);
+        assert_eq!(TypeWalk::growth_slots(2, 1), None);
+        let budget = PlanBudget::new(ir::PlanLimits::default());
+        let mut memo = TypeWalk::default();
+        for index in 0..65 {
+            let before = budget.usage_snapshot();
+            let old_capacity = memo.complete.capacity();
+            memo.insert((TypeNode::Tuple(index, 1), TypeUse::Root), index, &budget)
+                .unwrap();
+            let after = budget.usage_snapshot();
+            assert_eq!(
+                after.work - before.work,
+                if index == old_capacity { 2 * index } else { 0 }
+            );
+            assert!(memo.complete.capacity() <= 2 * memo.complete.len());
+            assert!(memo.reservations.capacity() <= 2 * memo.reservations.len());
+            assert!(after.bytes > before.bytes);
+        }
+        assert_eq!(budget.usage_snapshot().work, 254);
+        assert_eq!(
+            memo.lookup((TypeNode::Tuple(64, 1), TypeUse::Root), &budget)
+                .unwrap(),
+            Some(64)
+        );
+        let exhausted = PlanBudget::new(ir::PlanLimits {
+            bytes: 0,
+            ..ir::PlanLimits::default()
+        });
+        let mut unpaid = TypeWalk::default();
+        assert!(
+            unpaid
+                .insert((TypeNode::Tuple(0, 1), TypeUse::Root), 0, &exhausted)
+                .unwrap_err()
+                .is_resource()
+        );
+        assert!(unpaid.complete.is_empty());
+        assert!(unpaid.reservations.is_empty());
+    }
+
+    #[test]
+    fn boolean_copy_leaves_match_proofs_without_retaining_discarded_certificates() {
+        let c = case();
+        let world = c.build().unwrap();
+        let facts = world.callable_facts(c.caller).unwrap();
+        for ty in [
+            Ty::Int(ir::IntTy::I32),
+            Ty::Bool,
+            Ty::Unit,
+            reference(c.caller_parameter.clone()),
+            Ty::Ref {
+                kind: BorrowKind::Mut,
+                referent: Arc::new(Ty::Bool),
+            },
+            Ty::RawPtr {
+                kind: BorrowKind::Mut,
+                pointee: Arc::new(Ty::Bool),
+            },
+            Ty::Tuple(Arc::from([Ty::Bool, Ty::Unit])),
+            c.caller_parameter.clone(),
+            c.leaf.clone(),
+        ] {
+            let predicate = Predicate::Implements(TraitRef {
+                declaration: world.catalog.id(CatalogItem::Copy),
+                self_ty: ty.clone(),
+                args: Arc::from([]),
+            });
+            let before = c.budget.usage_snapshot();
+            let decision = facts.must_copy(&ty).unwrap();
+            let after_boolean = c.budget.usage_snapshot();
+            let proof = world.prove_goal(&predicate, &facts).unwrap();
+            let after_proof = c.budget.usage_snapshot();
+            assert_eq!(decision, matches!(proof, ProofOutcome::Proved(_)));
+            assert!(after_boolean.work > before.work);
+            if decision && ValidatedTraitWorld::builtin_leaf_known(CatalogItem::Copy, &ty).is_some()
+            {
+                assert!(
+                    after_boolean.bytes - before.bytes < after_proof.bytes - after_boolean.bytes
+                );
+                assert_eq!(after_boolean.obligations, before.obligations);
+            }
+        }
+        let before = c.budget.usage_snapshot();
+        c.budget
+            .charge_work(c.budget.limits().work - before.work)
+            .unwrap();
+        assert!(
+            matches!(facts.must_copy(&Ty::Bool), Err(error) if error.kind() == FactsErrorKind::Resource)
         );
     }
 
