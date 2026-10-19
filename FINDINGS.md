@@ -1,5 +1,25 @@
 # Findings: where agent build time goes
 
+## 2026-10-19: Source-sync errors must not terminate shared hosted jobs
+
+At 09:14:32 PDT (16:14:32 UTC), daemon.log recorded rsync exit 24
+("file has vanished") for tigress-algorithms-final, immediately followed by
+"agent connection closed". Reconnection occurred at 09:14:37. The watcher
+unconditionally called drop_link on any push error, killing the shared SSH
+agent and unrelated in-flight builds. Source errors now invalidate only the
+affected root, requiring a successful full mirror before its next build.
+Only a dead transport is discarded; protocol write failures mark it dead.
+Rsync exit 24 receives at most two fresh traversal retries with 25 ms pauses,
+and a nonzero final result remains an error. Other rsync errors do not retry.
+
+Bootstrap validation used local justrust because exercising the installed
+unsafe hosted watcher could kill unrelated jobs: check passed, all 727 tests
+passed (3 ignored), including a real watcher/rsync failure with an unrelated
+run completing over the preserved framed transport. Retry tests cover
+24-to-success, persistent 24, exit 23, and 24 followed by exit 12. No build
+speedup is claimed. Run export was deferred while other hosted jobs are active
+at the coordinator's request.
+
 ## 2026-10-17: Jcode client usage audit focused validation
 
 Hosted OpenRouter check `20261017-031745643-3580854` spent 6.59 s waiting

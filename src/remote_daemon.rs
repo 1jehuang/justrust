@@ -228,7 +228,11 @@ impl Link {
     }
 
     fn send(&self, m: &Msg, payload: &[u8]) -> Result<()> {
-        write_frame(&mut *self.stdin.lock().unwrap(), m, payload)
+        let result = write_frame(&mut *self.stdin.lock().unwrap(), m, payload);
+        if result.is_err() {
+            self.routes.lock().unwrap().dead = true;
+        }
+        result
     }
 
     fn kill(&self) {
@@ -257,6 +261,13 @@ struct Sync {
 impl Sync {
     fn needs_mirror(&self, root: &Path) -> bool {
         self.roots.get(root).is_none_or(|r| r.needs_full_sync)
+    }
+
+    /// A partial copy invalidates this workspace, not the shared SSH session.
+    fn source_sync_failed(&mut self, root: &Path) {
+        if let Some(r) = self.roots.get_mut(root) {
+            r.needs_full_sync = true;
+        }
     }
 
     fn invalidate_sources(&mut self) {
@@ -509,8 +520,11 @@ fn push_loop(d: &Daemon, rx: Receiver<PathBuf>) {
             }
             if let Err(e) = push_root(d, &mut st, &r) {
                 log(&format!("push {}: {e:#}", r.display()));
-                drop_link(d, &mut st);
-                break;
+                st.source_sync_failed(&r);
+                if st.link.as_ref().is_some_and(|l| !l.alive()) {
+                    drop_link(d, &mut st);
+                    break;
+                }
             }
         }
     }
@@ -1113,10 +1127,17 @@ fn run(
             let linked = t.elapsed();
             let mut files = 0;
             for root in &roots {
-                if st.needs_mirror(root) {
-                    add_root(d, &mut st, &link, root)?;
+                let result = if st.needs_mirror(root) {
+                    add_root(d, &mut st, &link, root).map(|()| 0)
                 } else {
-                    files += push_root(d, &mut st, root)?;
+                    push_root(d, &mut st, root)
+                };
+                match result {
+                    Ok(n) => files += n,
+                    Err(e) => {
+                        st.source_sync_failed(root);
+                        return Err(e);
+                    }
                 }
             }
             let pushed = t.elapsed();
@@ -1341,6 +1362,76 @@ fn peer_sync_loop(d: &Daemon) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn source_sync_error_preserves_shared_link_and_unrelated_run_route() {
+        let base = std::env::temp_dir().join(format!("jr-sync-isolation-{}", std::process::id()));
+        std::fs::create_dir_all(&base).unwrap();
+        let mut child = Command::new("cat")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let stdin = Arc::new(Mutex::new(BufWriter::new(child.stdin.take().unwrap())));
+        let stdout = BufReader::new(child.stdout.take().unwrap());
+        let peer = peercache::Relay::new(true, |_, _| true);
+        let link = Arc::new(Link {
+            child: Mutex::new(child),
+            stdin,
+            routes: Mutex::default(),
+            peer,
+            // A guaranteed rsync receiver error without SSH or global env changes.
+            mirror: Mirror {
+                target: None,
+                prefix: "/dev/null/".into(),
+            },
+        });
+        let reader = link.clone();
+        let reader = std::thread::spawn(move || read_agent(&reader, stdout));
+        let (run_tx, run_rx) = channel();
+        link.routes.lock().unwrap().runs.insert(77, run_tx);
+        let (watch_tx, watch_rx) = channel();
+        let make_root = || Root {
+            manifest: (0..=remote_sync::RSYNC_ABOVE)
+                .map(|i| (PathBuf::from(format!("gone-{i}")), UNKNOWN))
+                .collect(),
+            oversized: Vec::new(),
+            needs_full_sync: false,
+        };
+        let other = base.join("unrelated");
+        let d = Daemon {
+            sync: Mutex::new(Sync {
+                backend: Backend::Hosted,
+                link: Some(link.clone()),
+                roots: BTreeMap::from([(base.clone(), make_root()), (other.clone(), make_root())]),
+            }),
+            info: Mutex::default(),
+            next_id: AtomicU64::new(1),
+            watcher: Watcher::new(channel().0).unwrap(),
+            sock: (base.join("unused.sock"), (0, 0)),
+            lock: Mutex::new(None),
+            draining: AtomicBool::new(false),
+            peer: Arc::default(),
+            peer_sock: Mutex::default(),
+        };
+        watch_tx.send(base.clone()).unwrap();
+        drop(watch_tx);
+        push_loop(&d, watch_rx);
+        {
+            let st = d.sync.lock().unwrap();
+            assert!(Arc::ptr_eq(st.link.as_ref().unwrap(), &link));
+            assert!(st.needs_mirror(&base));
+            assert!(!st.needs_mirror(&other));
+        }
+        assert!(link.alive());
+        assert!(link.child.lock().unwrap().try_wait().unwrap().is_none());
+        link.send(&Msg::Exit { id: 77, code: 0 }, &[]).unwrap();
+        let (msg, _) = run_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(matches!(msg, Msg::Exit { id: 77, code: 0 }));
+        link.kill();
+        reader.join().unwrap();
+        std::fs::remove_dir_all(base).unwrap();
+    }
 
     #[test]
     fn failed_sync_invalidates_writes_and_deletes_without_touching_other_roots() {

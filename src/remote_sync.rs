@@ -616,30 +616,82 @@ impl Mirror {
             }
             None => format!("{remote}/"),
         };
-        let out = c
-            .arg(&src)
+        c.arg(&src)
             .arg(&dst)
             .stdin(Stdio::null())
-            .stderr(Stdio::piped())
-            .output()
-            .context("rsync (is it installed?)")?;
-        if !out.status.success() {
-            bail!(
-                "rsync {} failed: {}",
-                root.display(),
-                String::from_utf8_lossy(&out.stderr).trim()
-            );
-        }
-        Ok(String::from_utf8_lossy(&out.stdout)
+            .stderr(Stdio::piped());
+        rsync_retry(root, || c.output().context("rsync (is it installed?)"))
+    }
+}
+
+/// Exit 24 means the sender's file list raced local source replacement. A
+/// fresh invocation rescans it and applies deletions. Never accept a partial
+/// transfer as success, even after exhausting retries.
+fn rsync_retry(
+    root: &Path,
+    mut transfer: impl FnMut() -> Result<std::process::Output>,
+) -> Result<usize> {
+    let mut sent = 0;
+    for attempt in 0..3 {
+        let out = transfer()?;
+        sent += String::from_utf8_lossy(&out.stdout)
             .lines()
             .filter(|l| l.starts_with(">f") || l.starts_with("<f"))
-            .count())
+            .count();
+        if out.status.success() {
+            return Ok(sent);
+        }
+        if out.status.code() == Some(24) && attempt < 2 {
+            std::thread::sleep(std::time::Duration::from_millis(25));
+            continue;
+        }
+        bail!(
+            "rsync {} failed ({}): {}",
+            root.display(),
+            out.status,
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
     }
+    unreachable!()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rsync_vanished_retries_require_a_successful_fresh_transfer() {
+        use std::os::unix::process::ExitStatusExt;
+        for (codes, expected_calls, success) in [
+            (vec![24, 0], 2, true),
+            (vec![24, 24, 24], 3, false),
+            (vec![23], 1, false),
+            (vec![24, 12], 2, false),
+        ] {
+            let mut calls = 0;
+            let result = rsync_retry(Path::new("/source"), || {
+                let code = codes[calls];
+                calls += 1;
+                Ok(std::process::Output {
+                    status: std::process::ExitStatus::from_raw(code << 8),
+                    stdout: b">f+++++++++ source.rs\n".to_vec(),
+                    stderr: b"source transfer failed".to_vec(),
+                })
+            });
+            assert_eq!(calls, expected_calls);
+            assert_eq!(result.is_ok(), success);
+            if success {
+                assert_eq!(result.unwrap(), expected_calls);
+            } else {
+                assert!(
+                    result
+                        .unwrap_err()
+                        .to_string()
+                        .contains("source transfer failed")
+                );
+            }
+        }
+    }
 
     fn st(t: i128) -> Stamp {
         Stamp {
