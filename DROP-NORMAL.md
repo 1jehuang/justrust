@@ -224,6 +224,9 @@ This is a pointer-field owner prerequisite, not source Box support.
 
 ## Next prerequisite: pointee destruction
 
+HEAP-LAYOUT.md proposes the closed-type graph contract and acceptance gates.
+It reserves no operation ID and does not implement layout intrinsics or Box.
+
 Layout and `drop_in_place` need typed graph facts keyed
 by the closed type, never process-global reflection or unvalidated backend
 calls. A source `Box<T>` must destroy its pointee before freeing its allocation,
