@@ -60,6 +60,16 @@ impl Checker<'_> {
         expected: Option<&ir::Ty>,
     ) -> Result<Vec<ir::Ty>, String> {
         let partial = type_args.iter().any(partial_annotation::has_nested_infer);
+        // Fully written method arguments are already authoritative. Re-solving
+        // them against an uninstantiated impl schema confuses enclosing impl
+        // parameters with the method's own inference slots.
+        if !type_args.is_empty() && !partial {
+            self.infer_storage(type_args.len())?;
+            return type_args
+                .iter()
+                .map(|ty| self.checked_type_actual(ty))
+                .collect();
+        }
         {
             let inferred = if type_args.is_empty() && expected.is_none() {
                 self.infer_method_type_args(owner, name, args)?
