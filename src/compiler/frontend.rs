@@ -1585,6 +1585,24 @@ impl SourceInventory {
                         )?;
                     }
                 }
+                Stmt::AssignNestedIndex { target, value, .. } => {
+                    self.expr(
+                        target,
+                        &here.child(4, 0, budget)?,
+                        None,
+                        None,
+                        budget,
+                        depth + 1,
+                    )?;
+                    self.expr(
+                        value,
+                        &here.child(4, 1, budget)?,
+                        None,
+                        None,
+                        budget,
+                        depth + 1,
+                    )?;
+                }
                 Stmt::AssignIndex { index, value, .. }
                 | Stmt::AssignIndexOp { index, value, .. } => {
                     self.expr(
@@ -5415,6 +5433,14 @@ pub enum Stmt {
         index: Expr,
         value: Expr,
     },
+    /// `m[i][j] OP= value` whose array base itself contains a runtime index
+    /// rooted at a local (NESTED-INDEX.md). `target` is the full written
+    /// `DynamicIndex` expression; `op` is None for `=`.
+    AssignNestedIndex {
+        target: Expr,
+        op: Option<BinaryOp>,
+        value: Expr,
+    },
     AssignOp {
         place: Place,
         op: BinaryOp,
@@ -6089,6 +6115,34 @@ struct Token {
     constituents: [Option<super::expansion_span::SpanId>; 3],
     suffixes: [Option<TokenPart>; 2],
     name: Option<std::num::NonZeroU32>,
+}
+/// An assignment target with a runtime index strictly inside its place path
+/// (`m[i][j]`, `m[i][0]`), rooted at a local through indexes and fields.
+/// A single outermost runtime index (`a[i] = v`) keeps `AssignIndex`.
+fn nested_runtime_target(target: &Expr) -> bool {
+    match target {
+        Expr::DynamicIndex { base, .. } | Expr::Index { base, .. } | Expr::Field { base, .. } => {
+            nested_runtime_base(base)
+        }
+        _ => false,
+    }
+}
+/// An array base that contains a runtime index and is rooted at a local
+/// through indexes and fields only, e.g. the `m[i]` of `m[i][j] = v`.
+fn nested_runtime_base(mut base: &Expr) -> bool {
+    let mut runtime = false;
+    for _ in 0..128 {
+        match base {
+            Expr::Var(_) => return runtime,
+            Expr::DynamicIndex { base: inner, .. } => {
+                runtime = true;
+                base = inner;
+            }
+            Expr::Index { base: inner, .. } | Expr::Field { base: inner, .. } => base = inner,
+            _ => return false,
+        }
+    }
+    false
 }
 /// Split `*call()`, `call().f`, `(*call()).f`, `call().a[K]` and
 /// `call().a[i]` assignment targets into the genuine call carrier, its
@@ -11259,6 +11313,13 @@ impl<'input, 'names> Parser<'input, 'names> {
             Ok(statement) => return Ok(statement),
             Err(unchanged) => *unchanged,
         };
+        if nested_runtime_target(&target) {
+            return Ok(Stmt::AssignNestedIndex {
+                target,
+                op: None,
+                value,
+            });
+        }
         if let Expr::DynamicIndex { base, index } = target {
             return Ok(Stmt::AssignIndex {
                 array: self.assignment_place(*base)?,
@@ -11284,6 +11345,13 @@ impl<'input, 'names> Parser<'input, 'names> {
             Ok(statement) => return Ok(statement),
             Err(unchanged) => *unchanged,
         };
+        if nested_runtime_target(&target) {
+            return Ok(Stmt::AssignNestedIndex {
+                target,
+                op: Some(op),
+                value,
+            });
+        }
         if let Expr::DynamicIndex { base, index } = target {
             return Ok(Stmt::AssignIndexOp {
                 array: self.assignment_place(*base)?,
@@ -14324,6 +14392,10 @@ fn walk_depth_inspecting(
                             push(DepthNode::Pattern(pattern))?;
                             push(DepthNode::Type(ty))?;
                             push(DepthNode::Expr(value))?;
+                        }
+                        Stmt::AssignNestedIndex { target, value, .. } => {
+                            push(DepthNode::Expr(value))?;
+                            push(DepthNode::Expr(target))?;
                         }
                         Stmt::AssignDeref {
                             carrier,

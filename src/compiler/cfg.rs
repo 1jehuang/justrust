@@ -1921,7 +1921,7 @@ impl Function {
         facts: ir::FactsCtx<'_>,
     ) -> Result<&Ty, String> {
         self.require_operand_with_facts(index, &Ty::Int(IntTy::Usize), facts)?;
-        let array_ty = self.place_ty(array)?;
+        let array_ty = self.indexed_array_place_ty(array)?;
         if facts.validated().is_none() {
             validate_type(array_ty, 0)?;
         }
@@ -1937,7 +1937,25 @@ impl Function {
         if !array.projection.contains(&Projection::Deref) && !local.mutable {
             return Err("compound indexed mutation requires mutable binding".into());
         }
-        ir::projected_mut_ty(&local.ty, &array.projection)
+        ir::indexed_array_ty(&local.ty, &array.projection, true)
+    }
+
+    /// Array operand type of a runtime index statement, whose trailing
+    /// runtime row is an interior step indexed again (NESTED-INDEX.md).
+    pub fn indexed_array_place_ty(&self, place: &Place) -> Result<&Ty, String> {
+        let ty = &self
+            .locals
+            .get(place.local.0)
+            .ok_or("invalid CFG local")?
+            .ty;
+        for projection in &place.projection {
+            if let Projection::DynamicIndex(index) = projection
+                && self.locals.get(index.0).map(|local| &local.ty) != Some(&Ty::Int(IntTy::Usize))
+            {
+                return Err("runtime place index requires a valid usize local".into());
+            }
+        }
+        ir::indexed_array_ty(ty, &place.projection, false)
     }
 
     fn binary_ty(op: BinaryOp, left: Ty, right: Ty, count: Option<IntValue>) -> Result<Ty, String> {
@@ -3448,16 +3466,23 @@ impl Lowerer<'_> {
                 .get(root.0)
                 .ok_or("invalid dynamic array base")?;
             match &expression.kind {
-                ir::ExprKind::DynamicIndex { .. } => return Err("unsupported: chained dynamic array indexing; snapshot the intermediate array in a local".into()),
+                // Inner runtime indexes are addressed in place by
+                // pattern_source, each evaluated and bounds-checked in order.
+                ir::ExprKind::DynamicIndex { .. } => break,
                 ir::ExprKind::Index { base, .. } | ir::ExprKind::Field { base, .. } => {
-                    if depth == ir::MAX_PATTERN_PROJECTION_DEPTH { return Err("dynamic array base projection depth exceeds limit 128".into()); }
+                    if depth == ir::MAX_PATTERN_PROJECTION_DEPTH {
+                        return Err("dynamic array base projection depth exceeds limit 128".into());
+                    }
                     root = *base;
                 }
                 _ => break,
             }
         }
         let array = self.pattern_source(base)?;
-        if !matches!(self.result.place_ty(&array)?, Ty::Array { .. }) {
+        if !matches!(
+            self.result.indexed_array_place_ty(&array)?,
+            Ty::Array { .. }
+        ) {
             return Err("dynamic indexing requires array place".into());
         }
         let index = self.expression(index)?;
@@ -3470,6 +3495,10 @@ impl Lowerer<'_> {
     /// addresses. Fields do not read their parent. An index inspects its array
     /// base even when the selected element is ignored, but never moves it.
     fn pattern_source(&mut self, id: ExprId) -> Result<Place, String> {
+        enum PendingProjection {
+            Static(Projection),
+            Dynamic(ExprId),
+        }
         let mut root = id;
         let mut projection = Vec::new();
         let mut source = loop {
@@ -3484,13 +3513,37 @@ impl Lowerer<'_> {
                     if projection.len() >= ir::MAX_PATTERN_PROJECTION_DEPTH {
                         return Err("dereference projection depth exceeds limit 128".into());
                     }
-                    projection.push(Projection::Deref);
+                    projection.push(PendingProjection::Static(Projection::Deref));
                     root = *value;
                 }
+                // A runtime row inside a place path, e.g. the `m[i]` of
+                // `m[i][j]`: addressed in place, never copied out. Only an
+                // array row that is indexed again takes this path; any other
+                // runtime element keeps the existing whole-value read.
+                ir::ExprKind::DynamicIndex { base, index }
+                    if root != id
+                        && matches!(expression.ty, Ty::Array { .. })
+                        && matches!(
+                            projection.last(),
+                            Some(
+                                PendingProjection::Dynamic(_)
+                                    | PendingProjection::Static(Projection::ConstantIndex(_))
+                            )
+                        ) =>
+                {
+                    if projection.len() >= ir::MAX_PATTERN_PROJECTION_DEPTH {
+                        return Err("pattern initializer projection depth exceeds limit 128".into());
+                    }
+                    projection.push(PendingProjection::Dynamic(*index));
+                    root = *base;
+                }
                 ir::ExprKind::DynamicIndex { .. }
-                    if projection
-                        .iter()
-                        .any(|part| matches!(part, Projection::ConstantIndex(_))) =>
+                    if projection.iter().any(|part| {
+                        matches!(
+                            part,
+                            PendingProjection::Static(Projection::ConstantIndex(_))
+                        )
+                    }) =>
                 {
                     return Err("unsupported: chained dynamic array indexing; snapshot the intermediate array in a local".into());
                 }
@@ -3498,21 +3551,58 @@ impl Lowerer<'_> {
                     if projection.len() >= ir::MAX_PATTERN_PROJECTION_DEPTH {
                         return Err("pattern initializer projection depth exceeds limit 128".into());
                     }
-                    projection.push(if matches!(expression.kind, ir::ExprKind::Index { .. }) {
-                        Projection::ConstantIndex(*index)
-                    } else {
-                        Projection::Field(*index)
-                    });
+                    projection.push(PendingProjection::Static(
+                        if matches!(expression.kind, ir::ExprKind::Index { .. }) {
+                            Projection::ConstantIndex(*index)
+                        } else {
+                            Projection::Field(*index)
+                        },
+                    ));
                     root = *base;
                 }
                 _ => break self.materialize_expression(root)?,
             }
         };
+        // Outermost first: stock evaluates and bounds-checks each runtime
+        // index level before evaluating the next index expression. A prefix
+        // ending at a runtime row is only valid once the next index step is
+        // attached, so its structural check is the following full place.
+        let ends_in_runtime_row =
+            |place: &Place| matches!(place.projection.last(), Some(Projection::DynamicIndex(_)));
         for part in projection.into_iter().rev() {
-            if matches!(part, Projection::ConstantIndex(_)) {
-                self.result.place_ty(&source)?;
-                self.statement(Statement::Inspect(source.clone()), Some(id));
-            }
+            let part = match part {
+                PendingProjection::Static(part) => {
+                    // A prefix ending at a runtime row was already read and
+                    // bounds-checked by that level's IndexInspect.
+                    if matches!(part, Projection::ConstantIndex(_)) && !ends_in_runtime_row(&source)
+                    {
+                        self.result.place_ty(&source)?;
+                        self.statement(Statement::Inspect(source.clone()), Some(id));
+                    }
+                    part
+                }
+                PendingProjection::Dynamic(index) => {
+                    if !ends_in_runtime_row(&source)
+                        && !matches!(self.result.place_ty(&source)?, Ty::Array { .. })
+                    {
+                        return Err("dynamic indexing requires array place".into());
+                    }
+                    let value = self.materialize_expression(index)?;
+                    if !value.projection.is_empty()
+                        || self.result.place_ty(&value)? != &Ty::Int(IntTy::Usize)
+                    {
+                        return Err("runtime place index requires a usize local".into());
+                    }
+                    self.statement(
+                        Statement::IndexInspect {
+                            array: source.clone(),
+                            index: Operand::Copy(value.clone()),
+                        },
+                        Some(index),
+                    );
+                    Projection::DynamicIndex(value.local)
+                }
+            };
             source.projection.push(part);
         }
         // Final structural metadata validation is not an additional value read.
@@ -3527,7 +3617,36 @@ impl Lowerer<'_> {
         origin: Option<ExprId>,
     ) -> Result<(), String> {
         self.result.place_ty(destination)?;
+        self.inspect_prefix_parts(destination, origin)
+    }
+
+    /// Prefix inspections for the array operand of a runtime index statement,
+    /// whose trailing runtime row is an interior step (NESTED-INDEX.md).
+    fn inspect_indexed_array_prefixes(
+        &mut self,
+        array: &Place,
+        origin: Option<ExprId>,
+    ) -> Result<(), String> {
+        self.result.indexed_array_place_ty(array)?;
+        self.inspect_prefix_parts(array, origin)
+    }
+
+    fn inspect_prefix_parts(
+        &mut self,
+        destination: &Place,
+        origin: Option<ExprId>,
+    ) -> Result<(), String> {
         for (index, part) in destination.projection.iter().enumerate() {
+            // A prefix ending at a runtime row was already read and bounds
+            // checked by that row's IndexInspect (NESTED-INDEX.md).
+            if index > 0
+                && matches!(
+                    destination.projection[index - 1],
+                    Projection::DynamicIndex(_)
+                )
+            {
+                continue;
+            }
             if matches!(
                 part,
                 Projection::ConstantIndex(_) | Projection::DynamicIndex(_)
@@ -3581,7 +3700,7 @@ impl Lowerer<'_> {
                     value,
                 } => {
                     let value = self.expression(*value)?;
-                    self.inspect_index_prefixes(array, Some(*index))?;
+                    self.inspect_indexed_array_prefixes(array, Some(*index))?;
                     let index_value = self.expression(*index)?;
                     self.statement(
                         Statement::IndexAssignOp {
@@ -3600,7 +3719,7 @@ impl Lowerer<'_> {
                 } => {
                     // Own the RHS snapshot before any left-hand-side effects.
                     let value = self.expression(*value)?;
-                    self.inspect_index_prefixes(array, Some(*index))?;
+                    self.inspect_indexed_array_prefixes(array, Some(*index))?;
                     let index_value = self.expression(*index)?;
                     self.statement(
                         Statement::IndexAssign {

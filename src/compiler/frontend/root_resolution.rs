@@ -2577,6 +2577,10 @@ impl Resolver<'_> {
                         .map_err(|_| "pattern scope allocation failed")?;
                     scope.extend(names);
                 }
+                Stmt::AssignNestedIndex { target, value, .. } => {
+                    self.expr(value, module, locals)?;
+                    self.expr(target, module, locals)?;
+                }
                 Stmt::AssignDeref {
                     carrier,
                     index,

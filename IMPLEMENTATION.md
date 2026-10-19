@@ -312,6 +312,10 @@ missing-file changes invalidate only justified consumers without stale lookup.
 - [ ] Complete remaining slice/DST metadata, mutable/range indexing, slice returns,
       nested reference-bearing elements and borrowed indexed-place capabilities,
       retaining bounds/evaluation order, concrete admission and size limits.
+      Delivered: nested runtime array reads and writes (`m[i][j]`, `= / OP=`,
+      through fields) with per-level stock order and bounds checks
+      (NESTED-INDEX.md). Reference-rooted and non-scalar-leaf forms remain
+      Unsupported.
 - [ ] Complete nested/or/range/ref/@/slice patterns, guards, match ergonomics,
       exhaustiveness/usefulness, conditional pattern forms beyond delivered
       IF-LET.md/WHILE-LET.md/LET-ELSE.md slices and destructuring assignment.

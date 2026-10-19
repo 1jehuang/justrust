@@ -3691,10 +3691,31 @@ pub fn projected_ty<'a>(root: &'a Ty, path: &[Projection]) -> Result<&'a Ty, Str
     projected_ty_inner(root, path, false)
 }
 
-/// Static mutation authority, including unreachable metadata. Binding lifetime,
-/// initialization and exclusive loan access remain ownership-analysis duties.
-pub(super) fn projected_mut_ty<'a>(root: &'a Ty, path: &[Projection]) -> Result<&'a Ty, String> {
-    projected_ty_inner(root, path, true)
+/// Array operand of a runtime index statement (`AssignIndex{Op}`,
+/// `IndexAssign{Op}`, `IndexInspect`). That statement indexes the result
+/// again, so a trailing runtime row is an interior step (NESTED-INDEX.md).
+/// With `mutable`, also checks static mutation authority, including
+/// unreachable metadata; binding lifetime, initialization and exclusive loan
+/// access remain ownership-analysis duties.
+pub(super) fn indexed_array_ty<'a>(
+    root: &'a Ty,
+    path: &[Projection],
+    mutable: bool,
+) -> Result<&'a Ty, String> {
+    if let Some((Projection::DynamicIndex(_), prefix)) = path.split_last() {
+        // The prefix is itself followed by this index step, so a trailing
+        // runtime row in the prefix is interior too.
+        let ty = indexed_array_ty(root, prefix, mutable)?;
+        return match ty {
+            Ty::Array { element, len }
+                if *len <= MAX_ARRAY_LEN && matches!(element.as_ref(), Ty::Array { .. }) =>
+            {
+                Ok(element)
+            }
+            _ => Err("runtime place index requires array or slice type".into()),
+        };
+    }
+    projected_ty_inner(root, path, mutable)
 }
 
 fn projected_ty_inner<'a>(
@@ -3744,10 +3765,22 @@ fn projected_ty_inner<'a>(
                     Ty::Slice { element } => element,
                     _ => return Err("runtime place index requires array or slice type".into()),
                 };
-                if !matches!(
-                    element.as_ref(),
-                    Ty::Int(_) | Ty::Float(_) | Ty::Char | Ty::Bool | Ty::Unit
-                ) {
+                // Runtime elements stay restricted to scalar/unit leaves. An
+                // array element is admitted only as an interior step that is
+                // immediately indexed again (`m[i][j]`), so a whole row is
+                // never a runtime element loan. Analyses already treat a
+                // runtime element's footprint as the whole array.
+                let interior = matches!(element.as_ref(), Ty::Array { .. })
+                    && matches!(
+                        path.clone().next(),
+                        Some(Projection::ConstantIndex(_) | Projection::DynamicIndex(_))
+                    );
+                if !interior
+                    && !matches!(
+                        element.as_ref(),
+                        Ty::Int(_) | Ty::Float(_) | Ty::Char | Ty::Bool | Ty::Unit
+                    )
+                {
                     return Err("unsupported: runtime element loans currently require scalar or unit elements".into());
                 }
                 element
@@ -8547,8 +8580,11 @@ impl CheckedFunction {
                         {
                             return Err("compound indexed mutation requires mutable binding".into());
                         }
-                        let array_ty =
-                            projected_mut_ty(&self.locals[array.local.0].ty, &array.projection)?;
+                        let array_ty = indexed_array_ty(
+                            &self.locals[array.local.0].ty,
+                            &array.projection,
+                            true,
+                        )?;
                         let Ty::Array { element, .. } = array_ty else {
                             return Err("compound indexed assignment requires array type".into());
                         };
@@ -8565,8 +8601,11 @@ impl CheckedFunction {
                         local(array.local)?;
                         expr(*index)?;
                         expr(*value)?;
-                        let array_ty =
-                            projected_ty(&self.locals[array.local.0].ty, &array.projection)?;
+                        let array_ty = indexed_array_ty(
+                            &self.locals[array.local.0].ty,
+                            &array.projection,
+                            false,
+                        )?;
                         if !matches!(array_ty, Ty::Array { .. }) {
                             return Err("dynamic indexed assignment requires array type".into());
                         }

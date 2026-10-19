@@ -2732,6 +2732,9 @@ fn usize_does_not_convert_i32_or_erase_runtime_index_pattern_boundaries() {
     for source in [
         "fn main(){let x=0usize;match x{0=>(),_=>()};}",
         "fn main(){match 0usize{0usize=>(),_=>()};}",
+        // Nested runtime row indexing is admitted (NESTED-INDEX.md); stock
+        // accepts this unchanged source.
+        "fn main(){let a=[[1]];let i=0usize;let x=a[i][0];}",
     ] {
         check(&parse(source).unwrap()).unwrap();
     }
@@ -2741,7 +2744,6 @@ fn usize_does_not_convert_i32_or_erase_runtime_index_pattern_boundaries() {
         "fn main(){let x:i32=1usize;}",
         "fn main(){let x:usize=-1;}",
         "fn main(){let x=18446744073709551616usize;}",
-        "fn main(){let a=[[1]];let i=0usize;let x=a[i][0];}",
         "struct S{x:i32}fn main(){let a=[S{x:1}];let i=0usize;let S{x:_}=a[i];}",
     ] {
         assert!(

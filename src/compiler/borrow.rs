@@ -2643,6 +2643,33 @@ impl CarrierBuilder<'_, '_> {
                 index: subscript,
                 value,
             } => {
+                // A runtime row prefix (`m[i][j] = v`, NESTED-INDEX.md) has no
+                // constant element enumeration. Its admitted elements are
+                // scalar/unit (ir::projected_ty), so the write cannot create,
+                // replace or duplicate a reference carrier component.
+                if array
+                    .projection
+                    .iter()
+                    .any(|part| matches!(part, Projection::DynamicIndex(_)))
+                {
+                    let Ty::Array { element, .. } = ir::indexed_array_ty(
+                        &self.f.locals[array.local.0].ty,
+                        &array.projection,
+                        false,
+                    )
+                    .map_err(|_| Exhausted)?
+                    else {
+                        return Err(Exhausted);
+                    };
+                    if !matches!(
+                        element.as_ref(),
+                        Ty::Int(_) | Ty::Float(_) | Ty::Char | Ty::Bool | Ty::Unit
+                    ) {
+                        return Err(Exhausted);
+                    }
+                    self.consume(state, value)?;
+                    return Ok(());
+                }
                 let saved = self.operand_value(state, value)?;
                 let Ty::Array { len: count, .. } = self.place_ty(self.f, array)? else {
                     return Err(Exhausted);

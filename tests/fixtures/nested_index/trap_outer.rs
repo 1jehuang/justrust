@@ -1,0 +1,6 @@
+fn i(tag: i32, n: usize) -> usize { println!("index {}", tag); n }
+fn main() {
+    let m = [[0i64; 3]; 2];
+    let x = m[i(1, 7)][i(2, 0)];
+    println!("{}", x);
+}

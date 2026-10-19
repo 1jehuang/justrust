@@ -4391,6 +4391,22 @@ impl<'a> Checker<'a> {
             }
         }
     }
+    /// A runtime-indexed place path rooted directly at a local through
+    /// array indexing and fields only (`m[i][j]`, `s.rows[i][0]`), with no
+    /// dereference. CFG addresses each runtime level in place, evaluating and
+    /// bounds-checking indexes outermost first, and never copies a row.
+    pub(super) fn nested_array_place(mut e: &Expr) -> bool {
+        for _ in 0..ir::MAX_PATTERN_PROJECTION_DEPTH {
+            match e {
+                Expr::Var(_) => return true,
+                Expr::DynamicIndex { base, .. }
+                | Expr::Index { base, .. }
+                | Expr::Field { base, .. } => e = base,
+                _ => return false,
+            }
+        }
+        false
+    }
     pub(super) fn dynamic_place(e: &Expr) -> bool {
         match e {
             Expr::DynamicIndex { .. } => true,
@@ -5488,6 +5504,274 @@ impl<'a> Checker<'a> {
         self.plan_budget_guard()?;
         Ok(result)
     }
+    /// `m[i1]..[ik] OP= value` with runtime rows (NESTED-INDEX.md). Stock order:
+    /// value, then each runtime index outermost first with its bounds check
+    /// before the next index is evaluated, then the final index and write.
+    /// Lowered to existing IR: `Let $v`, per-level `Let $iN` plus an ignored
+    /// runtime read (a bounds probe that lowers to IndexInspect), then
+    /// AssignIndex/AssignIndexOp on a place with DynamicIndex($iN) steps.
+    fn nested_index_assignment(
+        &mut self,
+        target: &Expr,
+        op: Option<BinaryOp>,
+        value: &Expr,
+        statements: &mut Vec<ir::Stmt>,
+    ) -> Result<(ir::Stmt, bool), String> {
+        // Written path from the root local outward, including the final step.
+        enum NestedStep<'e> {
+            Static(&'e FieldSelector),
+            ConstIndex(usize),
+            Runtime(&'e Expr),
+        }
+        let mut steps = Vec::new();
+        let mut cursor: &Expr = target;
+        let root = loop {
+            if steps.len() >= ir::MAX_PATTERN_PROJECTION_DEPTH {
+                return Err("place projection nesting exceeds limit128".into());
+            }
+            match cursor {
+                Expr::Var(path) => break path,
+                Expr::DynamicIndex { base, index } => {
+                    steps.push(NestedStep::Runtime(index));
+                    cursor = base;
+                }
+                Expr::Index { base, index } => {
+                    steps.push(NestedStep::ConstIndex(*index));
+                    cursor = base;
+                }
+                Expr::Field { base, field } => {
+                    steps.push(NestedStep::Static(field));
+                    cursor = base;
+                }
+                _ => {
+                    return Err(
+                        "unsupported: nested index assignment requires a local-rooted array".into(),
+                    );
+                }
+            }
+        };
+        steps.reverse();
+        let root = self.lookup(root)?;
+        // Type the whole path before evaluating anything. Each runtime row must
+        // be an array that is indexed again, or the final runtime index.
+        let mut ty = self.locals[root.0].ty.clone();
+        let last = steps.len() - 1;
+        for (position, step) in steps.iter().enumerate() {
+            ty = match step {
+                NestedStep::Static(field) => {
+                    if matches!(ty, ir::Ty::Ref { .. }) {
+                        return Err(
+                            "unsupported: nested index assignment through a reference".into()
+                        );
+                    }
+                    self.field_type(&ty, field)?.1
+                }
+                NestedStep::ConstIndex(index) => self.index_type(&ty, *index)?,
+                NestedStep::Runtime(_) => {
+                    let element = match &ty {
+                        ir::Ty::Array { element, .. } => element.as_ref().clone(),
+                        ir::Ty::Ref { .. } => {
+                            return Err(
+                                "unsupported: nested index assignment through a reference".into()
+                            );
+                        }
+                        _ => return Err("runtime index assignment requires an array".into()),
+                    };
+                    if position != last
+                        && !(matches!(element, ir::Ty::Array { .. })
+                            && matches!(
+                                steps[position + 1],
+                                NestedStep::Runtime(_) | NestedStep::ConstIndex(_)
+                            ))
+                    {
+                        return Err("unsupported: field or whole-row access after a runtime index in an assignment target".into());
+                    }
+                    element
+                }
+            };
+        }
+        let destination = ty;
+        if !matches!(
+            destination,
+            ir::Ty::Int(_) | ir::Ty::Float(_) | ir::Ty::Char | ir::Ty::Bool | ir::Ty::Unit
+        ) {
+            return Err(
+                "unsupported: nested runtime index assignment of a non-scalar element".into(),
+            );
+        }
+        if !self.locals[root.0].mutable {
+            return Err("runtime index assignment requires a mutable place".into());
+        }
+        // 1. value
+        let (rhs, rhs_flow) = match op {
+            Some(op) => self.compound_value(op, &destination, value)?,
+            None => {
+                let rhs = self.expr_expected(value, Some(&destination))?;
+                let flow = self.flow(rhs);
+                self.require(&flow, &destination)?;
+                (rhs, flow)
+            }
+        };
+        let saved_ty = if rhs_flow.ty == ir::Ty::Never {
+            destination.clone()
+        } else {
+            rhs_flow.ty.clone()
+        };
+        let saved = self.temporary(
+            &format!("$nv{}", self.locals.len()),
+            saved_ty.clone(),
+            false,
+        )?;
+        self.charge_node(std::mem::size_of::<ir::Stmt>())?;
+        statements.push(ir::Stmt::Let {
+            local: saved,
+            value: rhs,
+        });
+        let mut completes = rhs_flow.completes;
+        // 2. path steps in source order. Each interior runtime index is saved
+        // and bounds-checked before the next index expression is evaluated.
+        let usize_ty = ir::Ty::Int(ir::IntTy::Usize);
+        let mut place = ir::Place {
+            local: root,
+            projection: Vec::new(),
+        };
+        let mut place_ty = self.locals[root.0].ty.clone();
+        let mut final_index = None;
+        for (position, step) in steps.iter().enumerate() {
+            match step {
+                NestedStep::Static(field) => {
+                    let (index, field_ty) = self.field_type(&place_ty, field)?;
+                    place.projection.push(ir::Projection::Field(index));
+                    place_ty = field_ty;
+                }
+                NestedStep::ConstIndex(index) => {
+                    place_ty = self.index_type(&place_ty, *index)?;
+                    place.projection.push(ir::Projection::ConstantIndex(*index));
+                }
+                NestedStep::Runtime(index) => {
+                    let index = self.expr_expected_when(
+                        index,
+                        self.reachable && completes,
+                        Some(&usize_ty),
+                    )?;
+                    let index_flow = self.flow(index);
+                    self.require_index(&index_flow)?;
+                    completes &= index_flow.completes;
+                    if position == last {
+                        final_index = Some(index);
+                        break;
+                    }
+                    let saved_index = self.temporary(
+                        &format!("$ni{}", self.locals.len()),
+                        usize_ty.clone(),
+                        false,
+                    )?;
+                    self.charge_node(std::mem::size_of::<ir::Stmt>() * 2)?;
+                    statements.push(ir::Stmt::Let {
+                        local: saved_index,
+                        value: index,
+                    });
+                    // Bounds probe: an ignored runtime read of this row.
+                    let row = self.place_read_expr(&place, place_ty.clone())?;
+                    let probe_index =
+                        self.for_expr(usize_ty.clone(), ir::ExprKind::Local(saved_index))?;
+                    let ir::Ty::Array {
+                        element: row_ty, ..
+                    } = &place_ty
+                    else {
+                        return Err("runtime index assignment requires an array".into());
+                    };
+                    let row_ty = row_ty.as_ref().clone();
+                    let probe = self.for_expr(
+                        row_ty.clone(),
+                        ir::ExprKind::DynamicIndex {
+                            base: row,
+                            index: probe_index,
+                        },
+                    )?;
+                    statements.push(ir::Stmt::LetPattern {
+                        value: probe,
+                        ty: row_ty.clone(),
+                        bindings: Vec::new(),
+                    });
+                    place
+                        .projection
+                        .push(ir::Projection::DynamicIndex(saved_index));
+                    place_ty = row_ty;
+                }
+            }
+        }
+        let loaded = self.for_expr(saved_ty, ir::ExprKind::Local(saved))?;
+        self.charge_node(std::mem::size_of::<ir::Stmt>())?;
+        Ok((
+            match (final_index, op) {
+                (Some(index), Some(op)) => ir::Stmt::AssignIndexOp {
+                    array: place,
+                    index,
+                    op,
+                    value: loaded,
+                },
+                (Some(index), None) => ir::Stmt::AssignIndex {
+                    array: place,
+                    index,
+                    value: loaded,
+                },
+                (None, Some(op)) => ir::Stmt::AssignOp {
+                    place,
+                    op,
+                    value: loaded,
+                },
+                (None, None) => ir::Stmt::AssignPlace {
+                    place,
+                    value: loaded,
+                },
+            },
+            completes,
+        ))
+    }
+    /// A nonconsuming read expression of a typed local-rooted place, built
+    /// from Local / Field / Index / DynamicIndex(saved local) expressions.
+    fn place_read_expr(&mut self, place: &ir::Place, ty: ir::Ty) -> Result<ir::ExprId, String> {
+        let mut current_ty = self.locals[place.local.0].ty.clone();
+        let mut id = self.for_expr(current_ty.clone(), ir::ExprKind::Local(place.local))?;
+        for projection in &place.projection {
+            let (kind, next) = match projection {
+                ir::Projection::Field(index) => (
+                    ir::ExprKind::Field {
+                        base: id,
+                        index: *index,
+                    },
+                    current_ty
+                        .field_ty(*index)
+                        .ok_or("invalid field projection")?
+                        .clone(),
+                ),
+                ir::Projection::ConstantIndex(index) => (
+                    ir::ExprKind::Index {
+                        base: id,
+                        index: *index,
+                    },
+                    self.index_type(&current_ty, *index)?,
+                ),
+                ir::Projection::DynamicIndex(local) => {
+                    let ir::Ty::Array { element, .. } = &current_ty else {
+                        return Err("runtime index assignment requires an array".into());
+                    };
+                    let element = element.as_ref().clone();
+                    let index =
+                        self.for_expr(ir::Ty::Int(ir::IntTy::Usize), ir::ExprKind::Local(*local))?;
+                    (ir::ExprKind::DynamicIndex { base: id, index }, element)
+                }
+                _ => return Err("contract: nested index place projection".into()),
+            };
+            id = self.for_expr(next.clone(), kind)?;
+            current_ty = next;
+        }
+        if current_ty != ty {
+            return Err("contract: nested index place type".into());
+        }
+        Ok(id)
+    }
     /// Explicit stop after any recorded planning resource failure. PlanBudget
     /// records the first failure but still admits later in-limit charges, so
     /// producers must not allocate or publish once a failure exists.
@@ -5781,6 +6065,9 @@ impl<'a> Checker<'a> {
                         },
                         flow.completes,
                     )
+                }
+                Stmt::AssignNestedIndex { target, op, value } => {
+                    self.nested_index_assignment(target, *op, value, &mut statements)?
                 }
                 Stmt::AssignDeref {
                     carrier,
@@ -8610,7 +8897,7 @@ impl<'a> Checker<'a> {
                 )
             }
             Expr::DynamicIndex { base, index } => {
-                if Self::dynamic_place(base) {
+                if Self::dynamic_place(base) && !Self::nested_array_place(base) {
                     return Err("nested/chained runtime indexed place bases are unsupported; snapshot the row first".into());
                 }
                 let base = self.expr(base)?;
@@ -8622,6 +8909,12 @@ impl<'a> Checker<'a> {
                 }
                 let source = self.flow(base);
                 let ir::Ty::Array { element, .. } = &source.ty else {
+                    // Stock auto-derefs `r[i]` for references to arrays; that
+                    // legal form is outside this slice, not invalid.
+                    if matches!(&source.ty, ir::Ty::Ref { referent, .. } if matches!(referent.as_ref(), ir::Ty::Array { .. }))
+                    {
+                        return Err("unsupported: runtime indexing through a reference to an array; copy the array into a local first".into());
+                    }
                     return Err("runtime indexing requires an array".into());
                 };
                 let ty = element.as_ref().clone();
@@ -8642,7 +8935,7 @@ impl<'a> Checker<'a> {
                 )
             }
             Expr::Index { base, index } => {
-                if Self::dynamic_place(base) {
+                if Self::dynamic_place(base) && !Self::nested_array_place(base) {
                     return Err("nested/chained runtime indexed place bases are unsupported; snapshot the row first".into());
                 }
                 let base = self.expr(base)?;

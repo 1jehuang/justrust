@@ -1213,7 +1213,7 @@ impl<'a> Emitter<'a> {
         array: &ir::Place,
         index: &cfg::Operand,
     ) -> Result<&'a ir::Ty, String> {
-        let ty = self.function().place_ty(array)?;
+        let ty = self.function().indexed_array_place_ty(array)?;
         let ir::Ty::Array { element, len } = ty else {
             return Err("runtime index requires array storage".into());
         };

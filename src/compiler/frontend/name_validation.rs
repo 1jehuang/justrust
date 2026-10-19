@@ -716,6 +716,10 @@ impl<'a> Validator<'a> {
                     self.push(Visit::LocalName(*name))?;
                     self.push(Visit::Expr(value))?;
                 }
+                Stmt::AssignNestedIndex { target, value, .. } => {
+                    self.push(Visit::Expr(target))?;
+                    self.push(Visit::Expr(value))?;
+                }
                 Stmt::AssignDeref {
                     carrier,
                     fields,

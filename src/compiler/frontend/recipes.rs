@@ -402,6 +402,10 @@ pub(super) fn inventory(
                     expr(value, ds, b, d + 1)?;
                     block(else_block, ds, b, d + 1)?;
                 }
+                Stmt::AssignNestedIndex { target, value, .. } => {
+                    expr(target, ds, b, d + 1)?;
+                    expr(value, ds, b, d + 1)?;
+                }
                 Stmt::AssignDeref {
                     carrier,
                     index,
