@@ -1,6 +1,8 @@
 //! Source checking, local inference and checked body construction.
 use super::*;
 
+#[path = "type_check/associated_hint.rs"]
+mod associated_hint;
 mod byte_strings;
 #[path = "type_check/callable_arguments.rs"]
 mod callable_arguments;
@@ -24,6 +26,8 @@ mod primitive_actuals;
 mod projected_formals;
 #[path = "type_check/shared_or_arms.rs"]
 mod shared_or_arms;
+#[path = "type_check/trait_method_hint.rs"]
+mod trait_method_hint;
 #[path = "try_operator.rs"]
 mod try_operator;
 #[path = "type_check/unsafety.rs"]
@@ -4408,6 +4412,7 @@ impl<'a> Checker<'a> {
                 owner,
                 trait_path,
                 name,
+                type_args,
                 args,
             } => {
                 let plan = self
@@ -4423,11 +4428,23 @@ impl<'a> Checker<'a> {
                     self.facts(),
                     &plan.budget,
                 )?;
+                let Some(actuals) =
+                    self.inferred_trait_method_actuals(&trait_ref, name, type_args, args, None)?
+                else {
+                    return Ok(None);
+                };
                 Some(
-                    plan.select_trait(&trait_ref, name, &[], self.facts(), false, &plan.budget)?
-                        .ok_or("trait obligation not proven")?
-                        .1
-                        .result,
+                    plan.select_trait(
+                        &trait_ref,
+                        name,
+                        &actuals,
+                        self.facts(),
+                        false,
+                        &plan.budget,
+                    )?
+                    .ok_or("trait obligation not proven")?
+                    .1
+                    .result,
                 )
             }
             Expr::Apply { .. } => {
@@ -4438,60 +4455,8 @@ impl<'a> Checker<'a> {
                 owner,
                 name,
                 type_args,
-                ..
-            } => {
-                let plan = self
-                    .signatures
-                    .plan
-                    .as_ref()
-                    .ok_or("missing associated registry")?;
-                self.infer_storage(type_args.len())?;
-                let args = type_args
-                    .iter()
-                    .map(|t| self.checked_type_actual(t))
-                    .collect::<Result<Vec<_>, _>>()?;
-                if inferred_owner::has_inferred_owner(owner) {
-                    let Expr::AssociatedCall {
-                        args: call_args, ..
-                    } = e
-                    else {
-                        unreachable!()
-                    };
-                    match self.infer_associated_owner(owner, name, type_args.len(), call_args, None)
-                    {
-                        Ok(owner) => Some(owner),
-                        Err(_) => None,
-                    }
-                    .map(|owner| {
-                        plan.select_associated(
-                            &owner,
-                            name,
-                            &args,
-                            self.facts(),
-                            &self.module,
-                            false,
-                            &plan.budget,
-                        )
-                    })
-                    .transpose()?
-                    .map(|found| found.1.result)
-                } else {
-                    let owner = checked_local_ty(owner, self.signatures)?;
-                    Some(
-                        plan.select_associated(
-                            &owner,
-                            name,
-                            &args,
-                            self.facts(),
-                            &self.module,
-                            false,
-                            &plan.budget,
-                        )?
-                        .1
-                        .result,
-                    )
-                }
-            }
+                args,
+            } => self.associated_result_hint(owner, name, type_args, args)?,
             Expr::MethodCall { receiver, .. }
                 if leading_zeros_candidate(e, self.names()?)?
                     && matches!(self.scalar_hint(receiver)?, Some(ir::Ty::Int(_))) =>
@@ -8124,7 +8089,6 @@ impl<'a> Checker<'a> {
             .plan
             .clone()
             .ok_or("associated call requires registry")?;
-        let empty = Vec::new();
         let (owner, name, type_args, args, receiver) = match expression {
             Expr::MethodCall {
                 receiver,
@@ -8158,11 +8122,15 @@ impl<'a> Checker<'a> {
                 None,
             ),
             Expr::TraitCall {
-                owner, name, args, ..
+                owner,
+                name,
+                type_args,
+                args,
+                ..
             } => (
                 self.trait_call_owner(owner, args)?,
                 name,
-                &empty,
+                type_args,
                 args,
                 None,
             ),
@@ -8171,6 +8139,16 @@ impl<'a> Checker<'a> {
         self.infer_storage(type_args.len() + args.len() + 1)?;
         let actuals = if matches!(expression, Expr::AssociatedCall { .. }) {
             self.resolved_method_actuals(&owner, name, type_args, args, expected)?
+        } else if let Expr::TraitCall { trait_path, .. } = expression {
+            let trait_ref = plan.resolve_trait_use(
+                &owner,
+                trait_path,
+                self.signatures,
+                self.facts(),
+                &plan.budget,
+            )?;
+            self.inferred_trait_method_actuals(&trait_ref, name, type_args, args, expected)?
+                .ok_or("E0282: type annotations needed for trait method arguments")?
         } else {
             type_args
                 .iter()
@@ -9603,6 +9581,12 @@ impl<'a> Checker<'a> {
             }
         }
         let (kind, flow) = match e {
+            Expr::Invoke { .. } => {
+                return Err(
+                    "unresolved callee-expression invocation requires canonical source resolution"
+                        .into(),
+                );
+            }
             Expr::UnexpandedMacro(_) => return Err(UNEXPANDED_MACRO_CHECK_ERROR.into()),
             Expr::Try(operand) => self.lower_try(operand)?,
             Expr::Cast { .. } => return Err("cast bypassed expression dispatcher".into()),

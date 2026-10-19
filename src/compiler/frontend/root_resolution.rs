@@ -439,6 +439,7 @@ impl Resolver<'_> {
             owner: Type::Infer,
             trait_path: Box::new(trait_path),
             name: method,
+            type_args: Vec::new(),
             args: std::mem::take(args),
         }))
     }
@@ -3144,6 +3145,23 @@ impl Resolver<'_> {
             *expr = self.capture_read(path)?;
             return Ok(());
         }
+        if let Expr::Invoke { receiver, args } = expr {
+            let receiver = std::mem::replace(
+                receiver,
+                Box::new(Expr::Block(Block {
+                    statements: Vec::new(),
+                    tail: None,
+                })),
+            );
+            let args = std::mem::take(args);
+            *expr = Expr::MethodCall {
+                receiver,
+                name: self.callable_call_ident()?,
+                type_args: Vec::new(),
+                args,
+            };
+            return self.expr(expr, module, locals);
+        }
         if let Expr::Var(path) | Expr::Call { name: path, .. } = expr
             && self.local_contains(path, locals)?
         {
@@ -3606,6 +3624,7 @@ impl Resolver<'_> {
             Expr::TraitCall {
                 owner,
                 trait_path,
+                type_args,
                 args,
                 ..
             } => {
@@ -3613,6 +3632,9 @@ impl Resolver<'_> {
                     self.ty(owner, module)?;
                 }
                 self.trait_path(trait_path, module)?;
+                for actual in type_args {
+                    self.ty(actual, module)?;
+                }
                 for arg in args {
                     self.expr(arg, module, locals)?;
                 }
@@ -4203,6 +4225,9 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
             Ok(())
         })?;
     }
+    // The input program was checked against parser-issued source certificates
+    // before resolution. Only this canonical rewrite can publish resolved heads.
+    program.generated_owners = generated_owners::capture(&program)?;
     program.validate_name_handles()?;
     if let Some(error) = associated_boundary {
         return Err(error);

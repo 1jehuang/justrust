@@ -531,6 +531,12 @@ pub(super) fn inventory(
                 generic_path(path, ds, b, d)?;
                 expr(value, ds, b, d + 1)?;
             }
+            Expr::Invoke { receiver, args } => {
+                expr(receiver, ds, b, d + 1)?;
+                for argument in args {
+                    expr(argument, ds, b, d + 1)?;
+                }
+            }
             Expr::MethodCall {
                 receiver,
                 type_args,
@@ -562,11 +568,15 @@ pub(super) fn inventory(
             Expr::TraitCall {
                 owner,
                 trait_path: path,
+                type_args,
                 args,
                 ..
             } => {
                 ty(owner, ds, b, d + 1)?;
                 trait_path(path, ds, b, d + 1)?;
+                for actual in type_args {
+                    ty(actual, ds, b, d + 1)?;
+                }
                 for e in args {
                     expr(e, ds, b, d + 1)?;
                 }

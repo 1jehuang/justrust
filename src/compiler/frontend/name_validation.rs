@@ -17,6 +17,7 @@ fn transport(error: TokenError) -> String {
 /// No recursion or unaccounted traversal storage is used here. Existing source
 /// depth validation remains a separate gate, with its existing policy unchanged.
 pub(super) fn validate_program_names(program: &Program) -> Result<(), String> {
+    generated_owners::validate(program)?;
     let mut validator = Validator::new(program)?;
     validator.require_coverage = true;
     if let Some(scopes) = &program.scopes {
@@ -47,6 +48,7 @@ pub(super) fn validate_function_names(
     function: &Function,
     containing_module: Option<ModuleId>,
 ) -> Result<(), String> {
+    generated_owners::validate_callable(program, function)?;
     let mut validator = Validator::new(program)?;
     validator.push(Visit::Function(function, containing_module))?;
     validator.run()
@@ -383,10 +385,13 @@ impl<'a> Validator<'a> {
                     let generated = scopes
                         .generated_function_declaration(scope)
                         .map_err(scope_diagnostic)?;
-                    if containing_module.is_some() && generated.is_some() {
+                    if containing_module.is_some()
+                        && generated.is_some()
+                        && !generated_owners::contains(self.program, scope, function.module)
+                    {
                         return Err(scope_diagnostic(ScopeError::FunctionMismatch));
                     }
-                    if containing_module.is_none() {
+                    if containing_module.is_none() || generated.is_some() {
                         let declaration = *function
                             .name
                             .segments()
@@ -423,7 +428,23 @@ impl<'a> Validator<'a> {
                 }
                 if containing_module.is_some() {
                     self.enter_scope(function.lexical_scope, function.module)?;
-                    self.push(Visit::Path(&function.name))?;
+                    if matches!(
+                        declaration_role,
+                        OccurrenceRole::GeneratedDeclaration { .. }
+                    ) {
+                        function
+                            .name
+                            .check(self.program.names.as_ref())
+                            .map_err(native_adapter::name_diagnostic)?;
+                        let (PathAnchor::Relative, [member]) =
+                            (function.name.anchor(), function.name.segments())
+                        else {
+                            return Err(scope_diagnostic(ScopeError::FunctionMismatch));
+                        };
+                        self.occurrence_in(*member, declaration_role)?;
+                    } else {
+                        self.push(Visit::Path(&function.name))?;
+                    }
                 } else {
                     self.declaration_path_in(&function.name, function.module, declaration_role)?;
                     self.enter_scope(function.lexical_scope, function.module)?;
@@ -826,11 +847,17 @@ impl<'a> Validator<'a> {
                     owner,
                     trait_path,
                     name,
+                    type_args,
                     args,
                 } => {
                     self.push(Visit::Type(owner))?;
                     self.push(Visit::TraitPath(trait_path))?;
+                    self.many(type_args, Visit::Type)?;
                     self.push(Visit::Ident(*name, LookupClass::Member))?;
+                    self.many(args, Visit::Expr)?;
+                }
+                Expr::Invoke { receiver, args } => {
+                    self.push(Visit::Expr(receiver))?;
                     self.many(args, Visit::Expr)?;
                 }
                 Expr::MethodCall {

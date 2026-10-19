@@ -14,6 +14,9 @@ use crate::compiler::token::{Delimiter, Edition, LiteralKind, Token, TokenKind};
 use crate::compiler::token_session::{BudgetVec, TokenError, TokenSession};
 use crate::compiler::token_tree::Node;
 
+#[path = "expanded_adapter/lifetime.rs"]
+mod lifetime;
+
 struct Frame {
     cursor: MacroCursor,
     close: Option<(Delimiter, SpanId)>,
@@ -435,17 +438,7 @@ fn push_logical(
             push_punctuation(output, session, text, &parts[..len])
         }
         LogicalToken::Lifetime { quote, ident, span } => {
-            let token = Token {
-                kind: TokenKind::Ident(ident),
-                span,
-            };
-            token.validate(session).map_err(transport_error)?;
-            // Only Local/Item/Member projection has an anchored contract.
-            Err(failure(
-                session,
-                quote,
-                "expanded lifetimes and labels are unsupported",
-            ))
+            lifetime::push(output, session, quote, ident, span, edition)
         }
         LogicalToken::Group { .. } => Err(transport_error(TokenError::InvalidInput(
             "group must be lowered by the iterative adapter",

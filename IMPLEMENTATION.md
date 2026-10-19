@@ -517,6 +517,14 @@ cleanup failures.
       i32/f64 only after constraint quiescence, preserving later explicit widths
       (`tests/projection_defaults.rs`). Reference-bearing callable tuples, named
       function-item values and full Iterator adapter execution remain open.
+- [x] Source UFCS calls retain explicit method actuals separately from ordered
+      trait-owner actuals. Omitted method arguments use canonical schema-based
+      inference, including zero-argument expected-result inference; final trait
+      selection still checks arity and predicates. Generated generic/associated
+      callable products retain exact immutable owner inventories, and genuine
+      postfix invocation retains the actual callee expression and evaluation
+      order (`GENERATED-CALLABLES.md`). Full Iterator source activation remains
+      separate and is not established by these helper gates.
 - [x] General associated declaration trait applications and equality bounds under
       ASSOCIATED-BOUNDS.md retain exact source/owner/ordered argument identity and
       prove every assignment, including unused generic impls. Transitive symbolic

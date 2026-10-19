@@ -887,6 +887,7 @@ mod tests {
         expansion: ExpansionId,
         marked: Token,
         captured: Token,
+        unrelated_marked: Token,
     }
     fn fixture() -> Fixture {
         let budget = ExpansionBudget::default();
@@ -920,6 +921,26 @@ mod tests {
         };
         let marked = token(marked_context);
         let captured = token(root);
+        let foreign = session
+            .add_expansion(ExpansionRecord {
+                definition: original,
+                call: original,
+                parent: None,
+                defining_crate,
+                edition: Edition::E2024,
+            })
+            .unwrap();
+        let context = session
+            .apply_mark(root, foreign, Transparency::SemiTransparent)
+            .unwrap();
+        let unrelated_marked = Token {
+            kind: TokenKind::Ident(Ident {
+                symbol,
+                raw: false,
+                context,
+            }),
+            span: session.reissue_span(original, context, foreign).unwrap(),
+        };
         let names = NameStoreBuilder::new(session, session_cap, Edition::E2024).unwrap();
         let modules = ModuleArenaBuilder::for_source(&names).unwrap();
         Fixture {
@@ -929,6 +950,7 @@ mod tests {
             expansion,
             marked,
             captured,
+            unrelated_marked,
         }
     }
     fn anchor(f: &Fixture, scopes: &mut ScopeArenaBuilder) -> ItemExpansionAdmission {
@@ -969,6 +991,38 @@ mod tests {
                 .module_root(&f.names, &f.modules, root, Some(entered))
                 .is_err()
         );
+    }
+
+    #[test]
+    fn parameter_textual_keys_require_real_item_expansion_admission() {
+        let mut f = fixture();
+        let mut scopes = ScopeArenaBuilder::for_names(&f.names).unwrap();
+        let proof = anchor(&f, &mut scopes);
+        let admitted = f
+            .names
+            .admit_item_token(f.marked, Edition::E2024, &proof)
+            .unwrap();
+        let captured = f
+            .names
+            .admit_item_token(f.captured, Edition::E2024, &proof)
+            .unwrap();
+        let token = f.unrelated_marked;
+        // This token is valid in this same token session, but is not authorized
+        // by the actual item expansion proof. Rejection reaches admission.
+        token.validate(f.names.session()).unwrap();
+        assert!(
+            f.names
+                .admit_item_token(token, Edition::E2024, &proof)
+                .is_err()
+        );
+        let names = f.names.freeze().unwrap();
+        for class in [LookupClass::TypeParameter, LookupClass::LifetimeParameter] {
+            assert_eq!(
+                names.key(admitted, class).unwrap(),
+                names.key(captured, class).unwrap()
+            );
+        }
+        assert_ne!(names.span(admitted).unwrap(), names.span(captured).unwrap());
     }
 
     #[test]

@@ -93,7 +93,7 @@ fn match_trait_self<'actual>(
     }
 }
 impl PlanCtx {
-    fn trait_item(
+    pub(super) fn trait_item(
         &self,
         trait_id: ir::DeclId,
         name: &AstIdent,

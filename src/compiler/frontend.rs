@@ -37,6 +37,11 @@ mod carrier_regions;
 mod char_literal;
 pub(super) mod closures;
 mod function_qualifiers;
+mod generated_callables;
+mod generated_owners;
+mod invocation;
+#[cfg(test)]
+mod invocation_authority;
 mod let_chains;
 mod name_scope;
 mod name_validation;
@@ -44,6 +49,8 @@ mod pattern_usefulness;
 mod program_symbols;
 mod source_inventory_walk;
 mod source_schemas;
+#[cfg(test)]
+mod trait_method_arguments;
 mod type_alignment;
 use source_schemas::{SourceSchemas, SourceSchemasBuilder, StoredSchema};
 mod token_cursor;
@@ -2021,7 +2028,8 @@ impl SourceInventory {
                     )?;
                 }
             }
-            Expr::MethodCall { args, .. }
+            Expr::Invoke { args, .. }
+            | Expr::MethodCall { args, .. }
             | Expr::AssociatedCall { args, .. }
             | Expr::TraitCall { args, .. } => {
                 let index = self.calls.len();
@@ -2052,7 +2060,7 @@ impl SourceInventory {
                     index,
                     budget,
                 )?;
-                if let Expr::MethodCall { receiver, .. } = expr {
+                if let Expr::Invoke { receiver, .. } | Expr::MethodCall { receiver, .. } = expr {
                     self.expr(
                         receiver,
                         &node.child(10, 0, budget)?,
@@ -4881,6 +4889,7 @@ pub use tr::CallableProvider;
 
 #[derive(Clone, Debug)]
 pub struct Program {
+    generated_owners: Arc<[generated_owners::Certificate]>,
     c_abi: Arc<c_abi::Declarations>,
     pub names: Arc<NameStore>,
     pub modules: Arc<ModuleArena>,
@@ -4967,6 +4976,7 @@ impl ProgramDeclarations {
         scopes: Option<Arc<super::semantic_scope::ScopeArena>>,
     ) -> Program {
         Program {
+            generated_owners: Arc::from([]),
             c_abi: Arc::new(self.c_abi),
             names,
             modules,
@@ -6126,6 +6136,12 @@ fn validate_source_site(
 #[derive(Clone, Debug)]
 pub enum Expr {
     TypeAlignment(Type),
+    /// Source callee-expression invocation, resolved to the canonical callable
+    /// trait method before active checking. Arguments retain one tuple value.
+    Invoke {
+        receiver: Box<Expr>,
+        args: Vec<Expr>,
+    },
     /// Bootstrap-only Linux x86-64 ABI primitive, never an allocator policy.
     NativeSyscall(Vec<Expr>),
     RawSlice {
@@ -6137,6 +6153,7 @@ pub enum Expr {
         owner: Type,
         trait_path: Box<TraitPath>,
         name: AstIdent,
+        type_args: Vec<Type>,
         args: Vec<Expr>,
     },
     MethodCall {
@@ -7354,28 +7371,7 @@ impl<'input, 'names> Parser<'input, 'names> {
         // token buffer has been consumed. The shared expansion is provenance,
         // not a substitute for each function's exact occurrence and fresh scope.
         drop(child);
-        let scopes = self.lexical.scopes.as_mut().ok_or_else(|| {
-            native_adapter::transport_error(super::token_session::TokenError::InvalidHandle)
-        })?;
-        for generated in &product.program.functions {
-            let declaration = *generated.name.segments().last().ok_or_else(|| {
-                native_adapter::transport_error(super::token_session::TokenError::InvalidHandle)
-            })?;
-            let function = generated.lexical_scope.ok_or_else(|| {
-                native_adapter::transport_error(super::token_session::TokenError::InvalidHandle)
-            })?;
-            scopes
-                .seal_item_product(self.names, &*self.modules, &proof, function, declaration)
-                .map_err(scope_parse_error)?;
-        }
-        scopes
-            .complete_item_expansion(
-                self.names,
-                &*self.modules,
-                &proof,
-                product.program.functions.len(),
-            )
-            .map_err(scope_parse_error)?;
+        self.seal_emitted_callables(&product.program, &proof)?;
         for key in product.items.keys() {
             if parsed.items.contains_key(key) {
                 return Err(self.error("duplicate item name"));
@@ -9181,6 +9177,9 @@ impl<'input, 'names> Parser<'input, 'names> {
         result
     }
     fn ty_inner(&mut self) -> Result<Type, ParseError> {
+        if self.is("fn") {
+            return Err(self.unsupported("function pointer types are unsupported"));
+        }
         if self.token().string {
             return Err(self.error("quoted tokens are not types"));
         }
@@ -10385,7 +10384,8 @@ impl<'input, 'names> Parser<'input, 'names> {
                     return Err(self.error("duplicate required trait item"));
                 }
                 let default = if self.is("{") {
-                    let (body, lexical_scope) = self.function_body(&signature.params)?;
+                    let (body, lexical_scope) =
+                        self.emitted_callable_body(signature.name, &signature.params)?;
                     Some(Function {
                         lexical_scope,
                         module,
@@ -11032,39 +11032,8 @@ impl<'input, 'names> Parser<'input, 'names> {
                     },
                     None,
                 )
-            } else if let Some(proof) = self.item_expansion {
-                if associated
-                    || !inherited.is_empty()
-                    || !head.type_params.is_empty()
-                    || !head.regions.params.is_empty()
-                {
-                    return Err(
-                        self.unsupported("item macro products must be nongeneric free functions")
-                    );
-                }
-                let scopes = self.lexical.scopes.as_mut().ok_or_else(|| {
-                    native_adapter::transport_error(super::token_session::TokenError::InvalidHandle)
-                })?;
-                let frontier = scopes
-                    .generated_function_root(self.names, &*self.modules, &proof, head.name)
-                    .map_err(scope_parse_error)?;
-                let owner = scopes.function(frontier).map_err(scope_parse_error)?;
-                let previous = self.lexical.function.replace(FunctionMacroState {
-                    frontier,
-                    driver: None,
-                });
-                let result = (|| {
-                    for (name, _) in &head.params {
-                        if let BindingName::Named(name) = name {
-                            self.bind_lexical(*name)?;
-                        }
-                    }
-                    self.block()
-                })();
-                self.lexical.function = previous;
-                (result?, Some(owner))
             } else {
-                self.function_body(&head.params)?
+                self.emitted_callable_body(head.name, &head.params)?
             };
             Ok((
                 Function {
@@ -11248,7 +11217,14 @@ impl<'input, 'names> Parser<'input, 'names> {
             if !self.is(")") {
                 self.expect(",")?;
             }
-        } else if associated && (self.is("self") || self.is("mut")) {
+        } else if associated
+            && (self.is("self")
+                || (self.is("mut")
+                    && self
+                        .cursor
+                        .peek(1)
+                        .is_some_and(|token| token.matches("self"))))
+        {
             let mutable = self.eat("mut");
             self.receiver_binding_token()?;
             if self.is(":") {
@@ -12447,6 +12423,9 @@ impl<'input, 'names> Parser<'input, 'names> {
     #[inline(never)]
     fn labeled_expression(&mut self, min: u8, statement: bool) -> Result<Expr, ParseError> {
         let site = self.token().span;
+        if self.token().provenance == TokenProvenance::Expanded {
+            return Err(self.unsupported("expanded labels are unsupported"));
+        }
         let label = self.input.mint_name(&self.token(), self.names)?;
         self.cursor.bump();
         self.expect(":")?;
@@ -12484,9 +12463,12 @@ impl<'input, 'names> Parser<'input, 'names> {
         self.expect(">")?;
         self.expect("::")?;
         let name = self.ident()?;
-        if self.is("::") {
-            return Err(self.unsupported("generic trait methods are unsupported"));
-        }
+        let type_args = if self.is("::") && self.cursor.peek(1).is_some_and(|t| t.text == "<") {
+            self.expect("::")?;
+            self.type_arguments()?
+        } else {
+            Vec::new()
+        };
         self.expect("(")?;
         let mut args = Vec::new();
         while !self.is(")") {
@@ -12503,6 +12485,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             owner,
             trait_path,
             name,
+            type_args,
             args,
         })
     }
@@ -12632,6 +12615,9 @@ impl<'input, 'names> Parser<'input, 'names> {
             }
         } else if self.eat("continue") {
             let label = if self.token().is_lifetime() {
+                if self.token().provenance == TokenProvenance::Expanded {
+                    return Err(self.unsupported("expanded labels are unsupported"));
+                }
                 let label = self.input.mint_name(&self.token(), self.names)?;
                 self.cursor.bump();
                 Some(label)
@@ -13140,6 +13126,26 @@ impl<'input, 'names> Parser<'input, 'names> {
                 validate_depth(DepthNode::Expr(&left)).map_err(|e| self.depth_error(&e))?;
                 continue;
             }
+            if self.is("(")
+                && statement_blocklike
+                && matches!(
+                    left,
+                    Expr::If { .. }
+                        | Expr::IfLet { .. }
+                        | Expr::Match { .. }
+                        | Expr::Loop { .. }
+                        | Expr::LabeledBlock { .. }
+                        | Expr::Block(_)
+                        | Expr::Unsafe(_)
+                )
+            {
+                break;
+            }
+            if self.eat("(") {
+                left = self.invocation_after_open(left)?;
+                validate_depth(DepthNode::Expr(&left)).map_err(|e| self.depth_error(&e))?;
+                continue;
+            }
             if !self.token().string && self.eat("?") {
                 left = Expr::Try(Box::new(left));
                 validate_depth(DepthNode::Expr(&left)).map_err(|e| self.depth_error(&e))?;
@@ -13337,11 +13343,23 @@ fn parse_syntax_tokens_configured(
     debug_assertions: bool,
 ) -> Result<ParsedProgram, ParseError> {
     let unit = parse_syntax_unit(tokens, ParserPurpose::Active, debug_assertions)?;
-    Ok(ParsedProgram {
-        program: unit
-            .parsed
+    let mut program =
+        unit.parsed
             .program
-            .publish(unit.names, unit.modules, unit.symbols, unit.scopes),
+            .publish(unit.names, unit.modules, unit.symbols, unit.scopes);
+    program.generated_owners =
+        generated_owners::capture(&program).map_err(|message| ParseError {
+            kind: super::source::SourceErrorKind::Contract,
+            has_location: false,
+            bytes: 0..0,
+            primary: None,
+            line: 1,
+            column: 1,
+            message,
+            _diagnostic_lease: None,
+        })?;
+    Ok(ParsedProgram {
+        program,
         items: unit.parsed.items,
         empty_use_prefixes: unit.parsed.empty_use_prefixes,
         glob_imports: unit.parsed.glob_imports,
@@ -14541,14 +14559,19 @@ mod generic_trait_source_tests {
         let budget = ir::PlanBudget::default();
         let body = sr::OriginalBodyId::new(&budget).unwrap();
         let inventory = SourceInventory::build(program, function, body, &budget).unwrap();
-        assert_eq!(inventory.calls.len(), 1);
-        assert!(inventory.calls[0].ordinary.is_none());
+        let calls = inventory
+            .calls
+            .iter()
+            .filter(|call| !call.operator_candidate)
+            .collect::<Vec<_>>();
+        assert_eq!(calls.len(), 1);
+        assert!(calls[0].ordinary.is_none());
     }
 
     #[test]
-    fn source_trait_argument_placement_and_method_generic_boundaries_stay_closed() {
+    fn source_trait_argument_placement_and_invalid_generic_boundaries_stay_closed() {
+        assert!(parse_syntax_unprepared("trait T{fn value<U>(x:U);}fn main(){}").is_ok());
         for source in [
-            "trait T{fn value<U>(x:U);}fn main(){}",
             "trait T<const N:usize>{}fn main(){}",
             "trait T<U=i32>{}fn main(){}",
             "fn f<T:module<i32>::Trait>(){}fn main(){}",
@@ -14806,6 +14829,12 @@ fn walk_depth_inspecting(
                 }
             }
             DepthNode::Expr(expr) => match expr {
+                Expr::Invoke { receiver, args } => {
+                    push(DepthNode::Expr(receiver))?;
+                    for arg in args {
+                        push(DepthNode::Expr(arg))?;
+                    }
+                }
                 Expr::MethodCall {
                     receiver,
                     type_args,
@@ -14823,10 +14852,14 @@ fn walk_depth_inspecting(
                 Expr::TraitCall {
                     owner,
                     trait_path,
+                    type_args,
                     args,
                     ..
                 } => {
                     push(DepthNode::Type(owner))?;
+                    for actual in type_args {
+                        push(DepthNode::Type(actual))?;
+                    }
                     if let TraitPath::Source(path) = trait_path.as_ref() {
                         for segment in &path.segments {
                             name_walk_work(names, 1)?;

@@ -629,21 +629,25 @@ impl NameStore {
     }
     pub fn key(&self, ident: AstIdent, class: LookupClass) -> Result<NameKey, NameError> {
         let record = self.record(ident)?;
-        if record.context != self.session.root_context()
-            && matches!(
-                class,
-                LookupClass::Label | LookupClass::TypeParameter | LookupClass::LifetimeParameter
-            )
-        {
+        if record.context != self.session.root_context() && class == LookupClass::Label {
             return Err(NameError::Unsupported(UnsupportedName::NonRootContext));
         }
         // Only the compiler-private, driver-proof-checked ingress can append
-        // nonroot records. The first slice admits one semi-transparent mark;
+        // nonroot records. Lifetime and type parameter names, like item names, have textual lookup
+        // under semi-transparent macro marks. Their AstIdent still retains the
+        // original occurrence and context, while the lexical region scope binds
+        // the projected key. Labels remain explicitly unsupported above.
+        // The first slice admits one semi-transparent mark;
         // item/member references use its checked invocation (root) context.
         // Local keys retain their mark and resolve through lexical frontiers.
         let context = if record.context == self.session.root_context()
-            || !matches!(class, LookupClass::Item(_) | LookupClass::Member)
-        {
+            || !matches!(
+                class,
+                LookupClass::Item(_)
+                    | LookupClass::Member
+                    | LookupClass::LifetimeParameter
+                    | LookupClass::TypeParameter
+            ) {
             record.context
         } else {
             match *self.session.context(record.context)? {

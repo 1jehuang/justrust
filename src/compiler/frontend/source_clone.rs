@@ -215,6 +215,7 @@ pub(super) fn preflight_clone_node(
                 clone_ast_path(name, budget)?;
                 clone_vector(args, budget)?;
             }
+            Expr::Invoke { args, .. } => clone_vector(args, budget)?,
             Expr::MethodCall {
                 type_args, args, ..
             }
@@ -225,13 +226,17 @@ pub(super) fn preflight_clone_node(
                 clone_vector(args, budget)?;
             }
             Expr::TraitCall {
-                trait_path, args, ..
+                trait_path,
+                type_args,
+                args,
+                ..
             } => {
                 budget.retain_bytes(std::mem::size_of::<TraitPath>())?;
                 // The parent depth walker visits the actual type arguments.
                 // Admit just this node's GenericPath backing here, without a
                 // second recursive walk of its children.
                 clone_trait_path_shallow(trait_path, budget)?;
+                clone_vector(type_args, budget)?;
                 clone_vector(args, budget)?;
             }
             Expr::Apply { path, .. } => clone_path(path, budget)?,
