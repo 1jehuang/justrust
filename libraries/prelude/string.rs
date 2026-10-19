@@ -334,3 +334,15 @@ impl Clone for String {
         String::from(self.as_str())
     }
 }
+
+/// `std::string::ToString`, blanket-implemented for every `Display` type.
+pub trait ToString {
+    fn to_string(&self) -> String;
+}
+impl<T: super::fmt::Display + ?Sized> ToString for T {
+    fn to_string(&self) -> String {
+        let mut f = super::fmt::Formatter::new();
+        let _ = self.fmt(&mut f);
+        f.into_string()
+    }
+}

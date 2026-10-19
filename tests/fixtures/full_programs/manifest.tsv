@@ -15,7 +15,7 @@
 #            program requires beyond the already-supported core. Keep this
 #            accurate when a feature lands: delete the tag from every line.
 01_hello	pass
-02_fizzbuzz	fail	fmt-display,str,string,for
+02_fizzbuzz	pass
 03_collatz	pass
 04_primes_sieve	fail	fmt-display,for,vec,iter,match-ergonomics
 05_gcd_fib	pass

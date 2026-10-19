@@ -7,6 +7,6 @@ pub mod v1 {
     pub use super::super::result::Result::{Err, Ok};
     pub use super::super::vec::Vec;
     pub use super::super::boxed::Box;
-    pub use super::super::string::String;
+    pub use super::super::string::{String, ToString};
     pub use super::super::ptr::{ConstPtr, MutPtr};
 }
