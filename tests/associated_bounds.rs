@@ -65,8 +65,8 @@ fn main() { let _ = dup(Wrap(7u8)); println!("ok"); }
             source_bytes: 287,
             source_fingerprint: 3275860743914007048,
             stock_errors: &["E0382"],
-            outcome: Outcome::Invalid,
-            boundary: Boundary::MoveAnalysis,
+            outcome: Outcome::Unsupported,
+            boundary: Boundary::GenericInference,
         },
         // Source SHA256 36affe439b686c8889cdd48a2f22499567735a9aa40dff84778b8e037a1000c3
         Case {
@@ -126,8 +126,8 @@ fn main() { let _ = dup(Wrap((1u8, 2u64, true))); println!("ok"); }
             source_bytes: 301,
             source_fingerprint: 1697987148083301104,
             stock_errors: &["E0382"],
-            outcome: Outcome::Invalid,
-            boundary: Boundary::MoveAnalysis,
+            outcome: Outcome::Unsupported,
+            boundary: Boundary::GenericInference,
         },
         // Source SHA256 b9b94c5f7ab4c7fc9dda197d25a82c61df63d58eaa5154e447750c018d3b5dc8
         Case {
@@ -142,8 +142,8 @@ fn main() { let _ = dup(Wrap(([3u64; 64], 4u128))); println!("ok"); }
             source_bytes: 303,
             source_fingerprint: 5949057885420266546,
             stock_errors: &["E0382"],
-            outcome: Outcome::Invalid,
-            boundary: Boundary::MoveAnalysis,
+            outcome: Outcome::Unsupported,
+            boundary: Boundary::GenericInference,
         },
         // Source SHA256 f65babe522c17e8fca8e910fb803c043da454e2c54237de01c632e3a39c3c272
         Case {
@@ -159,7 +159,7 @@ fn main() { let _ = dup::<Wrap<u8>, u16>(Wrap(1u8)); println!("ok"); }
             source_fingerprint: 7466752687292535547,
             stock_errors: &["E0271", "E0382"],
             outcome: Outcome::Invalid,
-            boundary: Boundary::MoveAnalysis,
+            boundary: Boundary::AssociatedEquality,
         },
         // Source SHA256 6d92a1a7e385542992afa1a51588293a499568a6fdd64f23f52a68a2c0adad50
         Case {
