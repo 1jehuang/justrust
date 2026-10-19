@@ -29,6 +29,18 @@ and drop behavior, zero-byte receipts, arithmetic-overflow rejection, poisoned
 promotion, runtime scratch release, ledger-drop ordering, and actual graph task
 publication under the unchanged byte cap.
 
+## Validation checkpoint
+
+Foundation commit `d1c2bce26`, integrated with origin `1d3f991ce` in
+`af847941b`, passed explicit hosted check, all 1,369 library tests, all seven
+graph integrity tests, and strict all-target clippy. Hosted run receipts:
+`20261018-201512793-2274395`, `20261018-201519226-2278862`,
+`20261018-201531641-2286525`, `20261018-201551250-2272342`.
+`justrust show` confirms `where remote on hosted` for graph acceptance.
+Earlier default-command runs used the client's remote-failure cooldown local
+fallback. Those receipts remain recorded as local evidence, not hosted evidence.
+The explicit hosted retry succeeded. `cargo fmt --check` also passed.
+
 ## Remaining stages, not delivered by this foundation
 
 Published fact holders must replace retained `PlanReservation` fields with
