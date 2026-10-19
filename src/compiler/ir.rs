@@ -2065,6 +2065,13 @@ impl PlanBudget {
             };
             let amount64 = u64::try_from(amount).unwrap_or(u64::MAX);
             let limit64 = u64::try_from(limit).unwrap_or(u64::MAX);
+            let limit64 = match kind {
+                ResourceBudgetKind::Work | ResourceBudgetKind::OwnershipWork => {
+                    meter.work_limit(limit64)
+                }
+                _ => limit64,
+            };
+            let limit = usize::try_from(limit64).unwrap_or(usize::MAX);
             Some(
                 match crate::engine::Meter::admit(counter, amount64, limit64) {
                     Ok(()) => Ok(()),
@@ -2161,11 +2168,12 @@ impl PlanBudget {
     /// Charge live bytes to one task's meter under the per-task byte limit.
     #[track_caller]
     fn charge_meter_bytes(&self, meter: &crate::engine::Meter, bytes: usize) -> Result<(), String> {
-        let limit = self.limits.bytes;
+        let limit64 = meter.bytes_limit(u64::try_from(self.limits.bytes).unwrap_or(u64::MAX));
+        let limit = usize::try_from(limit64).unwrap_or(usize::MAX);
         match crate::engine::Meter::admit(
             &meter.bytes,
             u64::try_from(bytes).unwrap_or(u64::MAX),
-            u64::try_from(limit).unwrap_or(u64::MAX),
+            limit64,
         ) {
             Ok(()) => {
                 if self.usage.is_poisoned() {

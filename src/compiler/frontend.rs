@@ -10717,7 +10717,11 @@ impl<'input, 'names> Parser<'input, 'names> {
         bounds.extend(impl_bounds);
         self.expect(")")?;
         let result = if self.eat("->") {
-            if self.eat("!") { Type::Never } else { self.ty()? }
+            if self.eat("!") {
+                Type::Never
+            } else {
+                self.ty()?
+            }
         } else {
             Type::Unit
         };
@@ -14822,6 +14826,16 @@ impl DeclRegistry {
                 .and_then(|item| item.default.as_ref()),
         }
     }
+    /// Size of one callable's own source input (parameters plus statements).
+    pub fn source_callable_input_size(&self, decl: ir::DeclId) -> usize {
+        self.source_callable(decl).map_or(0, |function| {
+            function
+                .params
+                .len()
+                .saturating_add(function.body.statements.len())
+                .saturating_add(1)
+        })
+    }
     /// Explicit generic arguments may name only the written parameters, never
     /// anonymous argument-position `impl Trait` parameters (stock E0107/E0632).
     pub(super) fn check_explicit_impl_params(
@@ -17293,6 +17307,9 @@ impl PlanCtx {
     }
     pub fn callable_count(&self) -> usize {
         self.registry.function_ids.len()
+    }
+    pub fn source_callable_input_size(&self, decl: ir::DeclId) -> usize {
+        self.registry.source_callable_input_size(decl)
     }
     pub fn callable_decl(&self, index: usize) -> Result<ir::DeclId, String> {
         self.function_decl(index)

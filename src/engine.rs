@@ -30,7 +30,7 @@ mod cycle;
 pub use cycle::{DependencyCycle, DependencyCycleEdge};
 
 const SHARDS: usize = 64;
-const EVENT_CAPACITY: usize = 65_536;
+const EVENT_CAPACITY: usize = 1 << 20;
 type PendingWaits = (u64, u64, HashSet<(u64, usize)>);
 static NEXT_GRAPH: AtomicU64 = AtomicU64::new(1);
 
@@ -51,8 +51,26 @@ pub struct Meter {
     pub nodes: AtomicU64,
     /// Live (reserved or retained) bytes attributed to this task.
     pub bytes: AtomicU64,
+    /// Input-scaled work allowance declared by this task for its own input
+    /// (0 = only the fixed per-task default). Grows monotonically and is
+    /// never shared with another node.
+    pub work_allowance: AtomicU64,
 }
 impl Meter {
+    /// Effective per-task work limit: the fixed default or the allowance this
+    /// task derived from its own input size, whichever is larger.
+    pub fn work_limit(&self, default: u64) -> u64 {
+        default.max(self.work_allowance.load(Ordering::Relaxed))
+    }
+    /// Effective per-task live-byte limit, scaled from the same input-derived
+    /// allowance (a few bytes of live state per unit of admitted work).
+    pub fn bytes_limit(&self, default: u64) -> u64 {
+        default.max(
+            self.work_allowance
+                .load(Ordering::Relaxed)
+                .saturating_mul(BYTES_PER_WORK_ALLOWANCE),
+        )
+    }
     /// Add `amount` to `counter` if the result stays within `limit`. Returns
     /// the previous value on rejection.
     pub fn admit(counter: &AtomicU64, amount: u64, limit: u64) -> Result<(), u64> {
@@ -74,6 +92,19 @@ impl Meter {
             }
         }
     }
+}
+
+/// Live bytes a task may hold per unit of its input-scaled work allowance.
+const BYTES_PER_WORK_ALLOWANCE: u64 = 8;
+
+/// Declare that the currently polled task's input justifies `work` units of
+/// work. Only raises this task's own limit; no effect outside polling.
+pub fn scale_task_work(work: u64) {
+    with_current_meter(|meter| {
+        if let Some(meter) = meter {
+            meter.work_allowance.fetch_max(work, Ordering::Relaxed);
+        }
+    });
 }
 
 /// Run `f` with the meter of the node whose task is being polled on this

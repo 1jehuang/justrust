@@ -1048,6 +1048,25 @@ impl Budget {
         }
     }
     fn for_plan(remaining: usize, plan: Option<&super::ir::PlanBudget>) -> Self {
+        // Per task: the polled task's input-scaled allowance may raise this
+        // analysis' own limit; it is never shared with another node.
+        let remaining = if plan.is_some() {
+            crate::engine::with_current_meter(|meter| {
+                meter.map_or(remaining, |meter| {
+                    usize::try_from(meter.work_limit(remaining as u64)).unwrap_or(usize::MAX)
+                })
+            })
+        } else {
+            remaining
+        };
+        const STATE_LIMIT: u64 = 128 * 1024 * 1024;
+        let state_limit = if plan.is_some() {
+            crate::engine::with_current_meter(|meter| {
+                meter.map_or(STATE_LIMIT, |meter| meter.bytes_limit(STATE_LIMIT))
+            })
+        } else {
+            STATE_LIMIT
+        };
         Self {
             remaining,
             work_limit: remaining,
@@ -1055,7 +1074,7 @@ impl Budget {
             reservations: Vec::new(),
             peak_scratch: 0,
             reserved_bytes: 0,
-            state_limit: 128 * 1024 * 1024,
+            state_limit: usize::try_from(state_limit).unwrap_or(usize::MAX),
         }
     }
     #[track_caller]
@@ -3250,7 +3269,13 @@ fn analyze_with_context(
     let result = (|| -> Result<(), Exhausted> {
         let scratch = preflight_with_plan(f, limits, plan, facts)?;
         let mut budget = Budget::for_plan(limits.work, plan);
-        budget.state_limit = limits.state_bytes;
+        // Per task: scale this analysis' own state bound by its input.
+        let state_bytes = crate::engine::with_current_meter(|meter| {
+            meter.map_or(limits.state_bytes, |meter| {
+                usize::try_from(meter.bytes_limit(limits.state_bytes as u64)).unwrap_or(usize::MAX)
+            })
+        });
+        budget.state_limit = state_bytes;
         let verification_scratch = budget.scratch(scratch)?;
         if let Err(error) = f.validate_with_facts(facts) {
             let resource = plan.map_or_else(
@@ -3290,7 +3315,7 @@ fn analyze_with_context(
             selected_slots,
             f.blocks.len(),
         )?;
-        if bytes > limits.state_bytes {
+        if bytes > state_bytes {
             return Err(Exhausted);
         }
         budget.reserve_bytes(bytes)?;

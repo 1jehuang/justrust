@@ -95,6 +95,46 @@ pub(super) fn analysis_diagnostic(
 }
 
 /// Present typed source errors only at the existing bounded graph diagnostic boundary.
+/// Work units granted per program item to a task whose input is the whole
+/// item list (remaining whole-program debt nodes only).
+const WORK_PER_PROGRAM_ITEM: u64 = 64 * 1024;
+/// Work units granted per unit of one callable's own source input.
+const WORK_PER_CALLABLE_UNIT: u64 = 64 * 1024;
+fn scale_task_work_by_callable(types: &frontend::PlanCtx, declaration: ir::DeclId) {
+    crate::engine::scale_task_work(
+        u64::try_from(types.source_callable_input_size(declaration))
+            .unwrap_or(u64::MAX)
+            .saturating_mul(WORK_PER_CALLABLE_UNIT),
+    );
+}
+/// Work units granted per lowered CFG element of one instance.
+const WORK_PER_CFG_UNIT: u64 = 16 * 1024;
+fn scale_task_work_by_cfg(function: &cfg::Function) {
+    let size = function
+        .blocks
+        .iter()
+        .map(|block| block.statements.len() + 1)
+        .sum::<usize>()
+        + function.locals.len();
+    crate::engine::scale_task_work(
+        u64::try_from(size)
+            .unwrap_or(u64::MAX)
+            .saturating_mul(WORK_PER_CFG_UNIT),
+    );
+}
+fn scale_task_work_by_items(program: &frontend::Program) {
+    let items = program.functions.len()
+        + program.constants.len()
+        + program.structs.len()
+        + program.enums.len()
+        + program.impls.len()
+        + program.traits.len();
+    crate::engine::scale_task_work(
+        u64::try_from(items)
+            .unwrap_or(u64::MAX)
+            .saturating_mul(WORK_PER_PROGRAM_ITEM),
+    );
+}
 fn source_fact_error(error: traits::FactsError, budget: &ir::PlanBudget) -> Error {
     const EXHAUSTED: &str = "source planning ResourceLimit (diagnostic transport exhausted)";
     let category = match error.kind() {
@@ -529,6 +569,9 @@ impl Provider for CompilerProvider {
                 }
                 SIGNATURES => {
                     let program: Arc<Arc<frontend::Program>> = facts.get(root(RESOLVE)).await?;
+                    // Debt: whole-program node. Its input is the whole program,
+                    // so its per-task work limit scales with that input.
+                    scale_task_work_by_items(&program);
                     let context = frontend::PlanCtx::from_shared_program(
                         program.as_ref().clone(),
                         &this.0.budget,
@@ -638,6 +681,7 @@ impl Provider for CompilerProvider {
                         }
                     }
                     let declaration = types.callable_decl(index).map_err(Error::new)?;
+                    scale_task_work_by_callable(&types, declaration);
                     let prepared = types
                         .prepare_body_constants(declaration, &this.0.budget)
                         .map_err(|error| source_fact_error(error, &this.0.budget))?;
@@ -950,6 +994,7 @@ impl Provider for CompilerProvider {
                         facts.get(function(LOWER, index)).await?;
                     let lowered = lowered.as_ref().clone();
                     let body: Arc<InstanceBodyFact> = facts.get(function(BODY, index)).await?;
+                    scale_task_work_by_cfg(&lowered);
                     if !Self::universal_body(&types, instance_target.declaration)? {
                         let template = facts.template(instance_source).await?;
                         lowered
