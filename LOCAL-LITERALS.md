@@ -56,9 +56,11 @@ Final validation on composed `ae799cafd` plus this change:
 - Local `justrust test --local --test local_literals --test format_scalars`:
   all three tests pass, with real stock rustc for all 28 inference sources and
   the existing formatting oracle (`20261018-193156673-419201`). Local execution
-  is required because hosted workers lack the stock oracle executable.
+  explicitly exercises the installed stock oracle independently of hosted tool
+  availability.
 
-Only these four task-owned exported receipts were appended to `data/runs/`.
+For the initial increment, these four task-owned exported receipts were appended
+to `data/runs/`.
 These are correctness gates under contention, not speed measurements.
 
 ## Bidirectional iterable item increment
@@ -91,9 +93,15 @@ Final composition `520819783` plus this increment passes hosted check,
 1,412 selected library/compiler/loop/inference/corpus/prelude tests, all five
 unchanged graph gates, strict all-target clippy, formatting and diff checks.
 Local stock inference/iterable/formatting suites pass all five tests. Exact
-commands and four exported task-owned receipts are retained in
-`data/runs/inference-validation/`. Local oracle execution is necessary because
-hosted workers lack stock rustc. Stable installations remain untouched.
+commands and exported task-owned receipts are retained in
+`data/runs/inference-validation/`. Local oracle execution guarantees the
+installed external stock compiler is exercised. Stable installations remain
+untouched. After composing concurrent heap/dyn/format work, 1,437 hosted tests
+passed, including a mandatory stock oracle using PATH `rustc`. Its exact hosted
+path/version was not recorded, so no hardcoded system path is assumed. Final
+engine-guard composition then passed 28 engine/graph/inference/corpus tests and
+strict clippy. The local oracle was verified as `/usr/bin/rustc` 1.98.1
+(`48a229cea`, 2026-09-01), LLVM 22.1.8.
 
 The corpus now has three passing programs. This is narrowly expected-type
 propagation into known literal shapes, not a general structured solver:
