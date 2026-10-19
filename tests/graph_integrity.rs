@@ -1572,7 +1572,6 @@ const STANDALONE_OWNER_ENTRIES: &[(&str, &str)] = &[
     ("src/compiler/owner_path.rs", "standalone_issued"),
     ("src/compiler/token_session.rs", "standalone"),
     ("src/compiler/frontend.rs", "new"),
-    ("src/compiler/frontend.rs", "lex"),
     ("src/compiler/frontend.rs", "validate_inactive_syntax"),
     ("src/compiler/frontend.rs", "parse_prepared"),
 ];

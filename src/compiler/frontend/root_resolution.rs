@@ -1804,13 +1804,24 @@ impl Resolver<'_> {
             return Ok(None);
         };
         let rest = &parts[1..];
+        let no_std = self.program.no_std_module(from)?;
+        if no_std && self.atom_is(first, BuiltinAtom::Std, Namespace::Type)? {
+            return Err("unresolved std crate in no_std source; explicit extern crate std opt-in is unsupported".into());
+        }
         let library = type_namespace
             && !rest.is_empty()
             && (self.atom_is(first, BuiltinAtom::Core, Namespace::Type)?
                 || self.atom_is(first, BuiltinAtom::Std, Namespace::Type)?);
         let (base, suffix) = if library {
-            (prelude, rest)
-        } else if let Some(scope) = self.program.prelude_scope {
+            let base = if no_std {
+                self.program
+                    .core_library_module
+                    .ok_or("unsupported: native core library surface is unavailable")?
+            } else {
+                prelude
+            };
+            (base, rest)
+        } else if let Some(scope) = self.program.implicit_prelude(from)? {
             (scope, parts)
         } else {
             return Ok(None);

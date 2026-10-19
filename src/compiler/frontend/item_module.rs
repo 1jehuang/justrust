@@ -33,6 +33,9 @@ impl Parser<'_, '_> {
             parsed.program.extern_mounts.push(child);
         }
         if let Some(prelude) = parsed.program.prelude_module {
+            if module == prelude && spelling == "core_surface" {
+                parsed.program.core_library_module = Some(child);
+            }
             let parent = self.modules.parent(module).map_err(module_parse_error)?;
             if spelling == "v1"
                 && parent == Some(prelude)
@@ -46,6 +49,19 @@ impl Parser<'_, '_> {
                     == Some(true)
             {
                 parsed.program.prelude_scope = Some(child);
+            }
+            if spelling == "core_v1"
+                && parent == Some(prelude)
+                && self
+                    .modules
+                    .name(module)
+                    .map_err(module_parse_error)?
+                    .map(|ident| self.names.spelling(ident).map(|s| s == "prelude"))
+                    .transpose()
+                    .map_err(native_adapter::name_error)?
+                    == Some(true)
+            {
+                parsed.program.core_prelude_scope = Some(child);
             }
         }
         if self.eat(";") {

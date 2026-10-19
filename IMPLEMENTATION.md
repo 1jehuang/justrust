@@ -972,6 +972,16 @@ registry/git sources, lockfiles, build scripts, proc macros, doc tests, test
 filters/harness flags, parallel units, per-crate graph identity (dependency
 crates are currently re-checked inside each dependent unit).
 
+**Independent no_std prerequisite (2026-10-19):** `NO-STD.md` freezes source-owned
+crate policy, canonical core-prelude selection, defining-crate inheritance and
+explicit std opt-in boundaries. Original metadata is parsed completely before
+private policy issuance. Public attribute audit records cannot grant policy;
+original-source and snapshot identities are checked on consumption. Mixed
+ordinary/no_std dependencies and unchanged utf8-width have passed CHECK/BUILD/run
+at workers 1/8 on earlier private snapshots. Final rebased-tree gates remain
+pending. The standalone frontend `lex` owner entry is removed, tightening the
+graph ratchet. This is not full core/alloc/std support, nor a hosted release claim.
+
 **Progress (2026-10-18):** `src/project/toml.rs` is a native TOML 1.0 reader
 (offsets, line/column errors, duplicate/redefinition/inline-seal rules, bounded
 depth) with unit tests (hosted run `20261018-142549166-1772846`). It is not yet

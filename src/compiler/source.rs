@@ -231,11 +231,40 @@ pub struct PreparedAttribute {
     pub effective: bool,
 }
 #[derive(Clone, Debug)]
+pub(super) struct CratePolicy {
+    root: FileId,
+    original: Arc<str>,
+    no_std: bool,
+}
+impl CratePolicy {
+    pub(super) fn no_std_root(
+        &self,
+        source: &PreparedSource,
+    ) -> Result<Option<usize>, SourceError> {
+        let index = self.root.0 as usize;
+        if source.crate_roots.get(index) != Some(&self.root)
+            || !source
+                .sources
+                .files
+                .get(index)
+                .is_some_and(|f| f.contents == self.original)
+        {
+            return Err(Loader::error(
+                SourceErrorKind::Contract,
+                None,
+                "crate policy source identity mismatch",
+            ));
+        }
+        Ok(self.no_std.then_some(index))
+    }
+}
+#[derive(Clone, Debug)]
 pub struct PreparedSource {
     debug_assertions: bool,
     /// Assembly-owned crate root for each original file. Empty only for raw
     /// caller-built maps, whose files all belong to the single input crate.
     pub(super) crate_roots: Vec<FileId>,
+    pub(super) crate_policies: Vec<CratePolicy>,
     pub text: String,
     pub sources: SourceMap,
     pub origins: Vec<OriginSegment>,
@@ -250,6 +279,7 @@ impl Default for PreparedSource {
         Self {
             debug_assertions: CfgSet::DEFAULT_DEBUG_ASSERTIONS,
             crate_roots: Vec::new(),
+            crate_policies: Vec::new(),
             text: String::new(),
             sources: SourceMap::default(),
             origins: Vec::new(),
@@ -418,6 +448,7 @@ pub struct ChildModule {
 /// Spans use [`LOCAL_FILE`] for this file.
 #[derive(Debug)]
 pub struct FileUnit {
+    no_std: bool,
     pub path: PathBuf,
     pub contents: Arc<str>,
     /// Canonical paths of the open files from the root to this one, for cycle
@@ -660,6 +691,7 @@ fn snapshot_unit<'a>(
     builder.lexical_budget = budget.clone();
     let terminal = builder.snapshot(directory, depth).err();
     Ok(FileUnit {
+        no_std: builder.no_std,
         path,
         contents,
         chain,
@@ -791,6 +823,13 @@ impl SourceAssembler {
             }
             Ok(_) => Arc::new(Self::take(unit)),
         };
+        if ordinal == [0] && unit.no_std && (!self.library || self.harness.is_some()) {
+            return Err(self.fail(Loader::error(
+                SourceErrorKind::Unsupported,
+                None,
+                "no_std executable startup and panic-handler semantics are unsupported; only library targets and dependencies are admitted",
+            )));
+        }
         if unit.contents.len() > MAX_BYTES - self.prepared.source_bytes {
             return Err(self.fail(Loader::error(
                 SourceErrorKind::Limit,
@@ -819,6 +858,13 @@ impl SourceAssembler {
         // module spelling or filesystem path. Descendant files inherit it.
         let crate_root = self.frames.first().map_or(id, |frame| frame.id);
         self.prepared.crate_roots.push(crate_root);
+        if crate_root == id {
+            self.prepared.crate_policies.push(CratePolicy {
+                root: id,
+                original: unit.contents.clone(),
+                no_std: unit.no_std,
+            });
+        }
         if ordinal.len() == 1
             && ordinal[0] >= 2
             && let Some(name) = self.externs.get(ordinal[0] as usize - 2)
@@ -859,6 +905,7 @@ impl SourceAssembler {
                     unreachable!("failures are handled before take")
                 };
                 FileUnit {
+                    no_std: unit.no_std,
                     path: unit.path.clone(),
                     contents: unit.contents.clone(),
                     chain: unit.chain.clone(),
@@ -1127,6 +1174,7 @@ struct Loader<'a> {
     derives: Vec<(usize, String)>,
     /// Inline module names enclosing the text being expanded.
     module_stack: Vec<String>,
+    no_std: bool,
     tests: Vec<source_attrs::TestItem>,
 }
 impl<'a> Loader<'a> {
@@ -1150,6 +1198,7 @@ impl<'a> Loader<'a> {
             children: Vec::new(),
             derives: Vec::new(),
             module_stack: Vec::new(),
+            no_std: false,
             tests: Vec::new(),
         }
     }
@@ -1191,6 +1240,19 @@ impl<'a> Loader<'a> {
         // Disabled syntax is checked without name resolution, typing or child IO.
         // Legal Rust outside this parser's bounded grammar remains Unsupported,
         // not a claim that the disabled program is invalid or full cfg is supported.
+        let no_std: Vec<_> = filtered
+            .attributes
+            .iter()
+            .filter(|a| a.name == "no_std" && a.effective)
+            .collect();
+        if no_std.len() > 1 || (!self.root && !no_std.is_empty()) {
+            return Err(Self::error(
+                SourceErrorKind::Unsupported,
+                no_std.first().map(|a| Self::span(id, a.range.clone())),
+                "no_std must occur once at a crate root",
+            ));
+        }
+        self.no_std = !no_std.is_empty();
         for inactive in filtered.inactive_items {
             let syntax = inactive_syntax(&inactive.text).map_err(|message| {
                 Self::error(

@@ -459,8 +459,8 @@ impl PlanCtx {
                 info.path.module == *module || self.catalog.declaration(*trait_id).is_some();
             for (import_module, path) in &self.registry.trait_imports {
                 budget.charge_work(1)?;
-                let in_scope =
-                    import_module == module || Some(*import_module) == self.program.prelude_scope;
+                let in_scope = import_module == module
+                    || Some(*import_module) == self.program.implicit_prelude(*module)?;
                 if in_scope && self.resolve_trait_path(path)? == *trait_id {
                     visible = true;
                 }

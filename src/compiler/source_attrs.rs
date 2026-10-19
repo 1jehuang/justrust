@@ -524,7 +524,10 @@ impl Filter<'_> {
                 }
                 continue;
             }
-            let meta = if matches!(raw.name.as_str(), "doc" | "inline" | "repr" | "unsafe") {
+            let meta = if matches!(
+                raw.name.as_str(),
+                "doc" | "inline" | "repr" | "unsafe" | "no_std"
+            ) {
                 parse_meta(&self.text[raw.range.clone()], raw.range.start).map_err(|e| {
                     if raw.name == "doc" && !e.limit {
                         error(
@@ -606,6 +609,7 @@ impl Filter<'_> {
                         }
                     }
                 }
+                "no_std" if owner == Owner::Crate && matches!(meta.value, MetaValue::Word) => {}
                 "test" | "ignore" | "should_panic" if owner == Owner::Function => {
                     self.test_attribute(&meta)?;
                     // Outside `cfg(test)` a test function is configured out.
@@ -881,11 +885,14 @@ impl Filter<'_> {
         {
             i += 1;
         }
-        if i + 1 < end
-            && self.tokens[i].text(self.text) == "const"
-            && self.tokens[i + 1].text(self.text) == "fn"
-        {
-            i += 1;
+        if i < end && self.tokens[i].text(self.text) == "const" {
+            let mut next = i + 1;
+            if next < end && self.tokens[next].text(self.text) == "unsafe" {
+                next += 1;
+            }
+            if next < end && self.tokens[next].text(self.text) == "fn" {
+                i = next;
+            }
         }
         if i < end && self.tokens[i].text(self.text) == "extern" {
             let mut next = i + 1;

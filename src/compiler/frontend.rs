@@ -4924,6 +4924,9 @@ pub use tr::CallableProvider;
 
 #[derive(Clone, Debug)]
 pub struct Program {
+    no_std_roots: Arc<[super::token_session::SourceFileHandle]>,
+    core_prelude_scope: Option<ModuleId>,
+    core_library_module: Option<ModuleId>,
     generated_owners: Arc<[generated_owners::Certificate]>,
     c_abi: Arc<c_abi::Declarations>,
     pub names: Arc<NameStore>,
@@ -4983,6 +4986,9 @@ struct GlobImport {
 /// final program is published only after its one mutable owner is frozen.
 #[derive(Default)]
 struct ProgramDeclarations {
+    no_std_roots: Arc<[super::token_session::SourceFileHandle]>,
+    core_prelude_scope: Option<ModuleId>,
+    core_library_module: Option<ModuleId>,
     c_abi: c_abi::Declarations,
     functions: Vec<Function>,
     constants: Vec<ConstDecl>,
@@ -5011,6 +5017,9 @@ impl ProgramDeclarations {
         scopes: Option<Arc<super::semantic_scope::ScopeArena>>,
     ) -> Program {
         Program {
+            no_std_roots: self.no_std_roots,
+            core_prelude_scope: self.core_prelude_scope,
+            core_library_module: self.core_library_module,
             generated_owners: Arc::from([]),
             c_abi: Arc::new(self.c_abi),
             names,
@@ -5168,6 +5177,9 @@ impl ProgramBuilder {
             trait_imports: self.trait_imports,
             prelude_module: None,
             prelude_scope: None,
+            no_std_roots: Arc::from([]),
+            core_prelude_scope: None,
+            core_library_module: None,
             extern_mounts: Vec::new(),
             closure_sources: HashMap::new(),
         }
@@ -5177,6 +5189,48 @@ impl ProgramBuilder {
     }
 }
 impl Program {
+    fn no_std_module(&self, mut module: ModuleId) -> Result<bool, String> {
+        if self.no_std_roots.is_empty() {
+            return Ok(false);
+        }
+        let source = self.modules.source_root().map_err(module_diagnostic)?;
+        while let Some(parent) = self.modules.parent(module).map_err(module_diagnostic)? {
+            if parent == source {
+                break;
+            }
+            module = parent;
+        }
+        let root = if module == source {
+            self.names.session().sources().file(0)
+        } else {
+            let name = self
+                .modules
+                .name(module)
+                .map_err(module_diagnostic)?
+                .ok_or("crate module has no original name")?;
+            let span = self
+                .names
+                .span(name)
+                .map_err(native_adapter::name_diagnostic)?;
+            super::source_macro_binding::invocation_root(self.names.session(), span)
+        }
+        .map_err(|e| super::source::SourceError::from_token(e).to_string())?;
+        for issued in self.no_std_roots.iter() {
+            self.names
+                .session()
+                .sources()
+                .text(*issued)
+                .map_err(|e| super::source::SourceError::from_token(e).to_string())?;
+        }
+        Ok(self.no_std_roots.contains(&root))
+    }
+    fn implicit_prelude(&self, module: ModuleId) -> Result<Option<ModuleId>, String> {
+        Ok(if self.no_std_module(module)? {
+            self.core_prelude_scope
+        } else {
+            self.prelude_scope
+        })
+    }
     pub(super) fn in_prelude(&self, module: ModuleId) -> bool {
         self.prelude_module
             .is_some_and(|prelude| self.modules.is_descendant(module, prelude).unwrap_or(false))
@@ -6638,6 +6692,7 @@ fn compound_operator(token: TokenView<'_>) -> Option<BinaryOp> {
         _ => return None,
     })
 }
+#[cfg(test)]
 fn lex(source: &str) -> Result<NativeParserInput, ParseError> {
     let budget = super::expansion_budget::ExpansionBudget::default();
     let projection = super::source::PreparedLexInput::identity(
@@ -7136,6 +7191,7 @@ enum ConditionPurpose {
 }
 
 struct Parser<'input, 'names> {
+    no_std_roots: Arc<[super::token_session::SourceFileHandle]>,
     c_abi: c_abi::Declarations,
     pending_c_abi: bool,
     pending_c_export: bool,
@@ -7322,6 +7378,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             &proof,
         )?;
         let mut child = Parser {
+            no_std_roots: self.no_std_roots.clone(),
             c_abi: c_abi::Declarations::default(),
             pending_c_abi: false,
             pending_c_export: false,
@@ -7820,7 +7877,28 @@ impl<'input, 'names> Parser<'input, 'names> {
         {
             return Ok(false);
         }
-        Ok(!self.known_module_macro(name)?)
+        let builtin = !self.known_module_macro(name)?;
+        if builtin
+            && matches!(
+                spelling,
+                "print"
+                    | "println"
+                    | "eprint"
+                    | "eprintln"
+                    | "vec"
+                    | "format"
+                    | "write"
+                    | "writeln"
+            )
+        {
+            let root =
+                super::source_macro_binding::invocation_root(self.names.session(), token.span)
+                    .map_err(native_adapter::transport_error)?;
+            if self.no_std_roots.contains(&root) {
+                return Err(self.unsupported("std/alloc macro is unavailable in this no_std crate; explicit library opt-in is unsupported"));
+            }
+        }
+        Ok(builtin)
     }
     /// Lower through the existing bounded pattern grammar and source Match.
     fn matches_expression(&mut self) -> Result<Expr, ParseError> {
@@ -8644,6 +8722,7 @@ impl<'input, 'names> Parser<'input, 'names> {
         expansion_depth: u32,
     ) -> Result<Expr, ParseError> {
         let mut child = Parser {
+            no_std_roots: self.no_std_roots.clone(),
             c_abi: c_abi::Declarations::default(),
             pending_c_abi: false,
             pending_c_export: false,
@@ -9033,6 +9112,7 @@ impl<'input, 'names> Parser<'input, 'names> {
         }
         let lexical = ParserState::owned(state, names.budget())?;
         Ok(Self {
+            no_std_roots: Arc::from([]),
             debug_assertions: super::source::CfgSet::DEFAULT_DEBUG_ASSERTIONS,
             c_abi: c_abi::Declarations::default(),
             pending_c_abi: false,
@@ -13424,11 +13504,24 @@ impl std::fmt::Debug for InactiveSyntaxCertificate {
 fn parse_syntax_tokens(tokens: NativeParserInput) -> Result<ParsedProgram, ParseError> {
     parse_syntax_tokens_configured(tokens, super::source::CfgSet::DEFAULT_DEBUG_ASSERTIONS)
 }
+#[cfg(test)]
 fn parse_syntax_tokens_configured(
     tokens: NativeParserInput,
     debug_assertions: bool,
 ) -> Result<ParsedProgram, ParseError> {
-    let unit = parse_syntax_unit(tokens, ParserPurpose::Active, debug_assertions)?;
+    parse_syntax_tokens_policy(tokens, debug_assertions, Arc::from([]))
+}
+fn parse_syntax_tokens_policy(
+    tokens: NativeParserInput,
+    debug_assertions: bool,
+    no_std_roots: Arc<[super::token_session::SourceFileHandle]>,
+) -> Result<ParsedProgram, ParseError> {
+    let unit = parse_syntax_unit(
+        tokens,
+        ParserPurpose::Active,
+        debug_assertions,
+        no_std_roots,
+    )?;
     let mut program =
         unit.parsed
             .program
@@ -13455,6 +13548,7 @@ fn parse_syntax_unit(
     tokens: NativeParserInput,
     purpose: ParserPurpose,
     debug_assertions: bool,
+    no_std_roots: Arc<[super::token_session::SourceFileHandle]>,
 ) -> Result<ParsedSyntaxUnit, ParseError> {
     let (tokens, session, cap) = tokens.into_parts();
     let mut names = NameStoreBuilder::new(session, cap, super::token::Edition::E2024)
@@ -13464,6 +13558,7 @@ fn parse_syntax_unit(
         ParserPurpose::Active => Parser::new(&tokens, &mut names)?,
         ParserPurpose::InactiveSyntax => Parser::with_purpose(&tokens, &mut names, purpose)?,
     };
+    parser.no_std_roots = no_std_roots;
     parser.debug_assertions = debug_assertions;
     let mut parsed = ParsedDeclarations {
         program: ProgramDeclarations::default(),
@@ -13475,6 +13570,7 @@ fn parse_syntax_unit(
     let root_path =
         AstPath::new(parser.names, PathAnchor::Crate, &[]).map_err(native_adapter::name_error)?;
     parser.items(root, &root_path, &mut parsed)?;
+    parsed.program.no_std_roots = parser.no_std_roots.clone();
     parsed.program.c_abi = std::mem::take(&mut parser.c_abi);
     if !parser.is("") {
         return Err(parser.error("unexpected module closing brace"));
@@ -13600,6 +13696,7 @@ pub(super) fn validate_inactive_syntax(
             input,
             ParserPurpose::InactiveSyntax,
             super::source::CfgSet::DEFAULT_DEBUG_ASSERTIONS,
+            Arc::from([]),
         )?,
     })
 }
@@ -14452,8 +14549,20 @@ pub fn parse_prepared_owned(
         diagnostic.with_sources(&source.sources)
     };
     let projection = super::source::PreparedLexInput::prepared(source, &budget)?;
+    let mut no_std_roots = Vec::new();
+    for policy in &source.crate_policies {
+        if let Some(root) = policy.no_std_root(source)? {
+            no_std_roots.push(
+                projection
+                    .snapshot()
+                    .file(root)
+                    .map_err(super::source::SourceError::from_token)?,
+            );
+        }
+    }
     let tokens = native_input(&projection, budget, owner).map_err(mapped)?;
-    parse_syntax_tokens_configured(tokens, source.debug_assertions()).map_err(mapped)
+    parse_syntax_tokens_policy(tokens, source.debug_assertions(), no_std_roots.into())
+        .map_err(mapped)
 }
 
 /// Parse syntax with the same preparation policy as file inputs, retaining the
@@ -14462,8 +14571,7 @@ pub fn parse_unresolved(source: &str) -> Result<ParsedProgram, String> {
     let prepared =
         super::source::prepare_text("<text>", source, &super::source::SourceOptions::default())
             .map_err(|e| e.to_string())?;
-    let tokens = lex(&prepared.text).map_err(|e| e.to_string())?;
-    parse_syntax_tokens_configured(tokens, prepared.debug_assertions()).map_err(|e| e.to_string())
+    parse_prepared(&prepared).map_err(|e| e.to_string())
 }
 
 /// Convenience frontend for callers without separate parse/signatures phases.

@@ -5,6 +5,28 @@
 // See PRELUDE.md. Add a file with `pub mod name;` here plus one entry in
 // src/compiler/source_prelude.rs.
 
+pub mod core_surface {
+    pub use super::option;
+    pub use super::result;
+    pub mod mem {
+        pub use super::super::mem::{size_of, align_of, swap, replace};
+    }
+    pub use super::ops;
+    pub use super::cmp;
+    pub use super::default;
+    pub use super::convert;
+    pub mod hash {
+        pub use super::super::hash::{Hash, Hasher};
+    }
+    pub mod ptr {
+        pub use super::super::ptr::{null, null_mut, read, write, eq};
+    }
+    pub use super::slice;
+    pub mod prelude {
+        pub use super::super::prelude::core_v1 as v1;
+    }
+}
+
 pub mod option;
 pub mod result;
 pub mod prelude;
