@@ -86,6 +86,61 @@ fn exprs<'a>(
 }
 
 #[test]
+fn array_len_rejects_replaced_length_receiver() {
+    let (budget, f) = published("fn f(a:[u8;2], b:[u8;2])->usize { a.len() }", 0);
+    let original = f.original().source_for_test();
+    replay(&original, &f, &budget).unwrap();
+    let row = original.builtin_len_mapping[0];
+    let mut replaced = f.source().as_ref().clone();
+    replaced.exprs[row.expr.0].kind = ir::ExprKind::Int(ir::IntValue::usize(2));
+    invalid(replay_source_body(
+        &original,
+        &Arc::new(replaced),
+        f.facts(),
+        &budget,
+    ));
+    let mut changed_receiver = f.source().as_ref().clone();
+    let borrow = changed_receiver
+        .exprs
+        .iter_mut()
+        .find_map(|e| match &mut e.kind {
+            ir::ExprKind::Borrow { place, .. } => Some(place),
+            _ => None,
+        })
+        .expect("array receiver must have a real borrow");
+    borrow.local = f.source().params[1];
+    assert!(
+        f.validate_source(&Arc::new(changed_receiver), f.facts(), &budget)
+            .is_err()
+    );
+    let lowered = super::super::cfg::lower_source_closed(&f, &budget).unwrap();
+    let mut altered = lowered.clone();
+    let node = altered
+        .blocks
+        .iter_mut()
+        .flat_map(|b| &mut b.statements)
+        .find(|s| {
+            matches!(
+                s.value,
+                super::super::cfg::Statement::Assign {
+                    value: super::super::cfg::Rvalue::ArrayToSlice { .. },
+                    ..
+                }
+            )
+        })
+        .expect("array receiver must use canonical unsizing");
+    node.origin = None;
+    assert!(
+        altered
+            .validate_with_facts(ir::FactsCtx::Validated(f.facts()))
+            .is_err()
+    );
+    let mut missing = original.clone();
+    missing.builtin_len_mapping.clear();
+    invalid(replay(&missing, &f, &budget));
+}
+
+#[test]
 fn parses_slice_and_array_types() {
     let p = parse("fn f(a: &[u8], b: [u8; 3], c: &&[u8]) {}").unwrap();
     let f = &p.functions[0];

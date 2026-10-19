@@ -14,6 +14,20 @@ impl Checker<'_> {
         arguments: &[Expr],
         expected: Option<&ir::Ty>,
     ) -> Result<Option<MethodSelection>, String> {
+        self.method_selection_with_inference_state(receiver, name, explicit, arguments, expected)
+            .map(|(selection, _)| selection)
+    }
+
+    /// Preserve an unresolved higher-priority candidate when considering an
+    /// unsizing fallback. A deferred candidate is not an absent method.
+    pub(super) fn method_selection_with_inference_state(
+        &self,
+        receiver: &ir::Ty,
+        name: &AstIdent,
+        explicit: &[Type],
+        arguments: &[Expr],
+        expected: Option<&ir::Ty>,
+    ) -> Result<(Option<MethodSelection>, bool), String> {
         let plan = self.signatures.plan()?;
         let written =
             if !explicit.is_empty() && !explicit.iter().any(partial_annotation::has_nested_infer) {
@@ -27,7 +41,8 @@ impl Checker<'_> {
             } else {
                 None
             };
-        plan.select_method_with_arguments(
+        let mut deferred = false;
+        let selection = plan.select_method_with_arguments(
             receiver,
             name,
             self.facts(),
@@ -48,7 +63,10 @@ impl Checker<'_> {
                             Some(mode),
                         )? {
                             InherentMethodInference::Missing => MethodArguments::Missing,
-                            InherentMethodInference::Applicable(None) => MethodArguments::Deferred,
+                            InherentMethodInference::Applicable(None) => {
+                                deferred = true;
+                                MethodArguments::Deferred
+                            }
                             InherentMethodInference::Applicable(Some(actuals)) => {
                                 MethodArguments::Ready(Cow::Owned(actuals))
                             }
@@ -96,10 +114,14 @@ impl Checker<'_> {
                         true,
                     )? {
                         Some(actuals) => MethodArguments::Ready(Cow::Owned(actuals)),
-                        None => MethodArguments::Deferred,
+                        None => {
+                            deferred = true;
+                            MethodArguments::Deferred
+                        }
                     },
                 )
             },
-        )
+        )?;
+        Ok((selection, deferred))
     }
 }

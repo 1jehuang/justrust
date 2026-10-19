@@ -4393,12 +4393,21 @@ impl<'a> Checker<'a> {
         }
         if matches!(
             base,
-            Expr::Struct { .. } | Expr::TupleStruct { .. } | Expr::EnumVariant { .. }
+            Expr::Struct { .. }
+                | Expr::TupleStruct { .. }
+                | Expr::EnumVariant { .. }
+                | Expr::Array(_)
+                | Expr::Repeat { .. }
         ) {
             let evidence = self.inference_evidence(receiver, 0)?;
             // The receiver is typed independently, exactly like a standalone
             // constructor. Do not infer it from method inputs, results or impls.
             return Inference::empty(self)?.resolve(&evidence, true, 0);
+        }
+        if matches!(base, Expr::Borrow { .. } | Expr::BorrowValue { .. }) {
+            let evidence = self.inference_evidence(receiver, 0)?;
+            let ty = Inference::empty(self)?.resolve(&evidence, true, 0)?;
+            return Ok(ty.filter(array_len_receiver::receiver_is_array));
         }
         Ok(None)
     }
@@ -4477,9 +4486,12 @@ impl<'a> Checker<'a> {
                 .map(|signature| signature.result),
             Expr::MethodCall { receiver, .. }
                 if slice_len_candidate(e, self.names()?)?
-                    && self.scalar_hint(receiver)?.is_some_and(|ty| {
-                        ty.descriptor_element().is_some() || ty.shared_array_element_len().is_some()
-                    }) =>
+                    && (matches!(receiver.as_ref(), Expr::Array(_) | Expr::Repeat { .. })
+                        || self.method_receiver_hint(receiver)?.is_some_and(|ty| {
+                            ty.descriptor_element().is_some()
+                                || array_len_receiver::receiver_is_array(&ty)
+                        }))
+                    && !self.array_len_shadowed_by_method(e)? =>
             {
                 Some(ir::Ty::Int(ir::IntTy::Usize))
             }
@@ -7285,19 +7297,57 @@ impl<'a> Checker<'a> {
         Ok(Some(id))
     }
 
+    /// Resolve genuine array/reference method candidates before the slice
+    /// unsizing fallback. An in-scope array trait method can shadow slice len.
+    fn array_len_shadowed_by_method(&self, e: &Expr) -> Result<bool, String> {
+        let Expr::MethodCall {
+            receiver,
+            name,
+            type_args,
+            args,
+        } = e
+        else {
+            return Ok(false);
+        };
+        let Some(ty) = self.method_receiver_hint(receiver)? else {
+            return Ok(false);
+        };
+        if !array_len_receiver::receiver_is_array(&ty) {
+            return Ok(false);
+        }
+        let (selection, deferred) =
+            self.method_selection_with_inference_state(&ty, name, type_args, args, None)?;
+        Ok(selection.is_some() || deferred)
+    }
+
     /// Builtin `.len()` only on an exactly typed shared slice with no arguments.
     pub(super) fn builtin_slice_len(&mut self, e: &Expr) -> Result<Option<ir::ExprId>, String> {
         let Expr::MethodCall { receiver, .. } = e else {
             return Ok(None);
         };
         if !slice_len_candidate(e, self.names()?)?
-            || !self.scalar_hint(receiver)?.is_some_and(|ty| {
-                ty.descriptor_element().is_some() || ty.shared_array_element_len().is_some()
-            })
+            || !(matches!(receiver.as_ref(), Expr::Array(_) | Expr::Repeat { .. })
+                || self.method_receiver_hint(receiver)?.is_some_and(|ty| {
+                    ty.descriptor_element().is_some() || array_len_receiver::receiver_is_array(&ty)
+                }))
+            || self.array_len_shadowed_by_method(e)?
         {
             return Ok(None);
         }
         let slice = match receiver.as_ref() {
+            receiver @ (Expr::Array(_) | Expr::Repeat { .. }) => {
+                self.borrow_value(ir::BorrowKind::Shared, receiver, None)?
+            }
+            receiver
+                if array_len_receiver::receiver_is_array(
+                    &self
+                        .method_receiver_hint(receiver)?
+                        .ok_or("array receiver type disappeared")?,
+                ) =>
+            {
+                self.array_len_receiver(receiver)?
+                    .ok_or("array receiver adjustment disappeared")?
+            }
             receiver
                 if self
                     .scalar_hint(receiver)?
@@ -7902,6 +7952,28 @@ impl<'a> Checker<'a> {
             ir::Callee::Direct(target) => target.type_args.len().saturating_sub(type_args.len()),
             ir::Callee::TraitItem(_) | ir::Callee::Virtual(_) => 0,
         };
+        if selected.depth == 1
+            && matches!(selected.adjustment, ReceiverAdjustment::SharedAutoref)
+            && matches!(
+                selected.mode,
+                ReceiverKind::Borrowed {
+                    kind: ir::BorrowKind::Shared
+                }
+            )
+            && array_len_receiver::explicit_mut_array_borrow(receiver)
+            && matches!(&ty, ir::Ty::Ref { kind: ir::BorrowKind::Mut, referent }
+                if matches!(referent.as_ref(), ir::Ty::Array { .. }))
+        {
+            let borrowed = self.shared_array_reference_temporary(receiver)?;
+            return self.finish_checked_call(
+                selected.target,
+                name,
+                selected.signature,
+                args,
+                self.type_actual_regions(type_args, region_offset)?,
+                Some((borrowed, None)),
+            );
+        }
         // Value temporaries (rvalue receivers such as `Type::new().get()`) are
         // materialized in a block-scoped local and autoref'd. Values with drop
         // glue are excluded because the block would end their lifetime before

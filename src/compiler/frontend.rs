@@ -4897,6 +4897,7 @@ impl PlanCtx {
 }
 
 mod array_len;
+mod array_len_receiver;
 #[cfg(test)]
 mod associated_bounds;
 mod associated_declarations;

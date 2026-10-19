@@ -6,6 +6,8 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 
 ## Completed foundations, not full compatibility
 
+- [x] Native array `.len()` uses ordinary shared borrowing/reborrowing, checked array-to-slice unsizing and canonical slice-length source authority, preserving non-Copy local storage and receiver effects (`ARRAY-LEN.md`). G0-G12 remain partial; destructor-bearing temporary receivers remain explicitly unsupported.
+
 - [x] Indexed native format arguments retain checked shared place borrows, evaluate source indices once and reject conflicting later mutations (`INDEXED-FORMAT.md`). G0-G12 remain partial.
 - [x] Mutable slice parameters and local carriers with same-kind array unsizing, generic reference-free elements, shared read reborrows and Copy-element checked writes (`MUTABLE-SLICES.md`). G0-G12 remain partial: non-Copy replacement remains open.
 - [x] Mutable range borrows and shared views use ordinary local-rooted reborrow authority and conservatively retain the whole source loan, with stock range-order/trap, lifetime and canonical-source tests (`MUTABLE-RANGES.md`). G0-G12 remain partial.
