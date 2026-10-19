@@ -1242,6 +1242,14 @@ impl<'s> Solver<'_, '_, 's> {
             Expr::Char(_) => self.fixed(ir::Ty::Char),
             Expr::Str(_) => self.fixed(ir::Ty::shared_str_ty()),
             Expr::ByteStr(bytes) => self.fixed(ir::Ty::byte_string_ty(bytes.len())),
+            Expr::ConstItem(_) => {
+                let value = self
+                    .checker
+                    .canonical
+                    .ok_or("contract: constant constraints require sealed graph inputs")?
+                    .constant_value(expr)?;
+                self.fixed(const_inputs::scalar_ir_type(value.ty()))
+            }
             Expr::Var(path) => {
                 if let Some(term) = self.stored_callable(path, depth + 1)? {
                     return Ok(term);

@@ -83,6 +83,22 @@ budget and recognizes E0391 only for authenticated119 qualification1 edges whose
 body0 source metadata contains every direct reference. Non-constant cycles,
 resource faults, external waits and unrelated root failures are not relabeled.
 
+## Body constraint propagation
+
+A resolved constant occurrence contributes its scalar type through the same
+sealed `canonical.constant_value` input used by expression lowering. The body
+solver does not evaluate the initializer again or infer authority from a name.
+This constraint precedes numeric fallback, so named and qualified `N: usize`
+endpoints constrain `0..N` items to `usize` rather than `i32`.
+
+`tests/const_constraints.rs` passes stock/native CHECK, BUILD and execution at
+workers 1 and 8 for both endpoint forms, and rejects incompatible stores and
+unused invalid bodies (receipt `20261019-155728070-934903`). The current-parent
+mandatory graph gate passes all 14 tests (`20261019-161009565-990082`). The
+unchanged matrix program advances past the prior integer mismatch but still
+rejects with E0282 for a closure parameter (`20261019-160812150-983718`). This is
+not matrix acceptance, Iterator activation or general const evaluation.
+
 ## Validation boundaries
 
 `tests/const_eval_scalar.rs` checks the isolated canonical arithmetic contract and

@@ -684,6 +684,11 @@ iteration and suspended-state destruction each have executable oracle cases.
       Delivered: `usize` source constants with u64 semantics pinned to the
       frozen 64-bit native target (CONST-EVAL-SCALAR.md); `isize` stays
       Unsupported. Array lengths remain literal-only.
+      Body inference now reads the same sealed scalar constant type as lowering
+      before numeric fallback; named/qualified `usize` range endpoints and unused
+      incompatible stores pass stock/native controls at workers 1 and 8, plus
+      graph14 (CONST-EVAL-SCALAR.md). The unchanged matrix still rejects on closure
+      parameter inference; G0-G12 and full const/Iterator compatibility stay open.
 - [ ] Make newly expanded/generated declarations explicit graph discoveries;
       track observed files/environment and conservatively disable reuse for
       uncontrolled effects. Enforce execution/resource/isolation policies.
