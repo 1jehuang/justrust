@@ -111,9 +111,20 @@ impl Lowerer<'_> {
                 let join = self.block();
                 self.branch(x_nan, pick_y, compare, origin)?;
                 self.current = compare;
-                let keep = self.compare(op, x.clone(), y.clone(), origin);
+                let ordered = self.compare(op, x.clone(), y.clone(), origin);
+                let y_nan = self.compare(BinaryOp::Ne, y.clone(), y.clone(), origin);
+                let keep = self.temporary(Ty::Bool, origin);
+                self.assign(
+                    keep.clone(),
+                    Rvalue::Binary {
+                        op: BinaryOp::BitOr,
+                        left: ordered,
+                        right: y_nan,
+                    },
+                    origin,
+                );
                 let pick_x = self.block();
-                self.branch(keep, pick_x, pick_y, origin)?;
+                self.branch(Operand::Copy(keep), pick_x, pick_y, origin)?;
                 self.current = pick_x;
                 self.assign(destination.clone(), Rvalue::Use(x), origin);
                 self.terminate(Terminator::Goto(join), origin)?;
