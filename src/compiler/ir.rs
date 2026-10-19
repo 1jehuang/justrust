@@ -12,6 +12,9 @@ pub const MAX_LOAN_SITES: usize = 4096;
 use std::sync::atomic::{AtomicU64, Ordering};
 #[path = "ir/intrinsics.rs"]
 mod intrinsics;
+#[cfg(test)]
+#[path = "ir/root_or_tests.rs"]
+mod root_or_tests;
 pub use intrinsics::{Intrinsic, IntrinsicOp, IntrinsicSignature, ScalarTy};
 
 /// Process-local namespace for one validated declaration environment. IDs must
@@ -1264,6 +1267,33 @@ fn identical_pattern_types(
 ) -> Result<bool, String> {
     budget.charge_work(1)?;
     match (a, b) {
+        (
+            MatchPattern::Alternatives { ty: a, rows: ar },
+            MatchPattern::Alternatives { ty: b, rows: br },
+        ) => {
+            if !identical_type(a, b, budget)? || ar.len() != br.len() {
+                return Ok(false);
+            }
+            for (a, b) in ar.iter().zip(br) {
+                budget.charge_work(1)?;
+                if a.len() != b.len() {
+                    return Ok(false);
+                }
+                for (a, b) in a.iter().zip(b) {
+                    budget.charge_work(
+                        a.projection
+                            .len()
+                            .checked_add(b.projection.len())
+                            .and_then(|n| n.checked_add(1))
+                            .ok_or("or-pattern identity work overflow")?,
+                    )?;
+                    if a != b {
+                        return Ok(false);
+                    }
+                }
+            }
+            Ok(true)
+        }
         (MatchPattern::EnumVariant { ty: a, .. }, MatchPattern::EnumVariant { ty: b, .. }) => {
             identical_type(&Ty::Enum(a.clone()), &Ty::Enum(b.clone()), budget)
         }
@@ -3170,6 +3200,16 @@ impl<C: SubstitutionCx> Instantiate<'_, C> {
     }
     fn pattern(&mut self, pattern: &mut MatchPattern) -> Result<(), String> {
         match pattern {
+            MatchPattern::Alternatives { ty, rows } => {
+                *ty = self.ty(ty)?;
+                self.budget.charge_work(rows.len())?;
+                for row in rows {
+                    self.budget.charge_work(row.len())?;
+                    for test in row {
+                        self.path(&mut test.projection)?;
+                    }
+                }
+            }
             MatchPattern::EnumVariant { ty, bindings, .. } => {
                 self.enum_ty(ty)?;
                 self.bindings(bindings)?;
@@ -6173,6 +6213,11 @@ impl PatternTestKind {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MatchPattern {
+    /// Ordered source root alternatives. Each row is a binder-free conjunction.
+    Alternatives {
+        ty: Ty,
+        rows: Vec<Vec<PatternTest>>,
+    },
     Wildcard,
     Binding(LocalId),
     Bool(bool),
@@ -6202,6 +6247,112 @@ pub enum MatchPattern {
 pub struct MatchArm {
     pub pattern: MatchPattern,
     pub body: ExprId,
+}
+
+/// The deliberately closed Copy domain of original root-arm alternatives.
+pub fn validate_alternative_domain(ty: &Ty, budget: Option<&PlanBudget>) -> Result<(), String> {
+    fn walk(
+        ty: &Ty,
+        budget: Option<&PlanBudget>,
+        depth: usize,
+        work: &mut usize,
+    ) -> Result<(), String> {
+        if depth > MAX_PATTERN_PROJECTION_DEPTH {
+            return Err("or-pattern domain depth resource limit exceeded".into());
+        }
+        *work = work
+            .checked_add(1)
+            .ok_or("or-pattern domain work overflow")?;
+        if *work > MAX_PATTERN_PROJECTION_WORK {
+            return Err("or-pattern domain work resource limit exceeded".into());
+        }
+        if let Some(budget) = budget {
+            budget.check_depth(depth)?;
+            budget.charge_work(1)?;
+        }
+        match ty {
+            Ty::Bool | Ty::Int(_) | Ty::Char | Ty::Unit => Ok(()),
+            Ty::Tuple(fields) => {
+                for field in fields.iter() {
+                    walk(field, budget, depth + 1, work)?;
+                }
+                Ok(())
+            }
+            _ => Err("unsupported: or-patterns require a scalar or scalar tuple domain".into()),
+        }
+    }
+    walk(ty, budget, 0, &mut 0)
+}
+
+fn validate_alternative_rows(
+    ty: &Ty,
+    rows: &[Vec<PatternTest>],
+    budget: Option<&PlanBudget>,
+) -> Result<(), String> {
+    fn charge(work: &mut usize, amount: usize, budget: Option<&PlanBudget>) -> Result<(), String> {
+        CheckedFunction::decision_work(work, amount)?;
+        if let Some(budget) = budget {
+            budget.charge_work(amount)?;
+        }
+        Ok(())
+    }
+    validate_alternative_domain(ty, budget)?;
+    if rows.len() < 2 {
+        return Err("invalid or-pattern alternative count".into());
+    }
+    let mut work = 0;
+    charge(&mut work, rows.len(), budget)?;
+    for row in rows {
+        if row.len() > MAX_PATTERN_BINDINGS {
+            return Err("or-pattern row test limit exceeded".into());
+        }
+        charge(&mut work, row.len(), budget)?;
+        for (index, test) in row.iter().enumerate() {
+            charge(
+                &mut work,
+                test.projection
+                    .len()
+                    .checked_add(1)
+                    .ok_or("or-pattern projection work overflow")?,
+                budget,
+            )?;
+            if !matches!(
+                test.kind,
+                PatternTestKind::Bool(_) | PatternTestKind::Int(_) | PatternTestKind::Char(_)
+            ) || test
+                .projection
+                .iter()
+                .any(|p| !matches!(p, Projection::Field(_)))
+            {
+                return Err("invalid scalar tuple or-pattern row".into());
+            }
+            for previous in &row[..index] {
+                let amount = previous
+                    .projection
+                    .len()
+                    .checked_add(test.projection.len())
+                    .and_then(|n| n.checked_add(1))
+                    .ok_or("or-pattern row work overflow")?;
+                charge(&mut work, amount, budget)?;
+                if previous.projection == test.projection {
+                    return Err("or-pattern repeats a tested source path".into());
+                }
+            }
+            let actual = projected_ty(ty, &test.projection)?;
+            let valid = match &test.kind {
+                PatternTestKind::Bool(_) => *actual == Ty::Bool,
+                PatternTestKind::Int(_) | PatternTestKind::Char(_) => {
+                    test.kind.scalar_interval()?;
+                    test.kind.scalar_ty().as_ref() == Some(actual)
+                }
+                _ => false,
+            };
+            if !valid {
+                return Err("or-pattern test type mismatch".into());
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Cold diagnostic payload for an abort-only, nonreturning panic.
@@ -6657,6 +6808,14 @@ impl CheckedFunction {
         ) -> Result<(), String> {
             rows(1, budget, work)?;
             match pattern {
+                MatchPattern::Alternatives {
+                    ty,
+                    rows: alternatives,
+                } => {
+                    visit(ty)?;
+                    validate_alternative_rows(ty, alternatives, budget)?;
+                    rows(alternatives.len(), budget, work)?;
+                }
                 MatchPattern::Aggregate { ty, .. } => visit(ty)?,
                 MatchPattern::EnumVariant { ty, .. } => visit(&Ty::Enum(ty.clone()))?,
                 MatchPattern::Decision { ty, tests, .. } => {
@@ -6817,6 +6976,26 @@ impl CheckedFunction {
             budget: &PlanBudget,
         ) -> Result<(), String> {
             match pattern {
+                MatchPattern::Alternatives { ty, rows } => {
+                    validate_alternative_domain(ty, Some(budget))?;
+                    facts.validate_value_ty_with_budget(ty, budget)?;
+                    storage(
+                        budget,
+                        rows.capacity(),
+                        std::mem::size_of::<Vec<PatternTest>>(),
+                    )?;
+                    for row in rows {
+                        storage(budget, row.capacity(), std::mem::size_of::<PatternTest>())?;
+                        for test in row {
+                            budget.check_depth(test.projection.len())?;
+                            storage(
+                                budget,
+                                test.projection.capacity(),
+                                std::mem::size_of::<Projection>(),
+                            )?;
+                        }
+                    }
+                }
                 MatchPattern::EnumVariant {
                     ty,
                     bindings: values,
@@ -7069,6 +7248,11 @@ impl CheckedFunction {
         bindings: &mut std::collections::HashSet<LocalId>,
     ) -> Result<(), String> {
         let valid = match pattern {
+            MatchPattern::Alternatives { ty: domain, rows } => {
+                validate_alternative_rows(domain, rows, None)?;
+                let mut work = 0;
+                *ty == Ty::Never || pattern_types_equal(ty, domain, &mut work)?
+            }
             MatchPattern::Wildcard => true,
             MatchPattern::Binding(local) => {
                 let decl = self
@@ -7314,6 +7498,9 @@ impl CheckedFunction {
         else_branch: ExprId,
         parameters: &std::collections::HashSet<LocalId>,
     ) -> Result<(), String> {
+        if matches!(pattern, MatchPattern::Alternatives { .. }) {
+            return Err("unsupported: or-pattern outside match arm root".into());
+        }
         let value = self
             .exprs
             .get(value.0)
@@ -7895,7 +8082,10 @@ impl CheckedFunction {
                     expr(*scrutinee)?;
                     for arm in arms {
                         match &arm.pattern {
-                            MatchPattern::Aggregate { ty, .. } => facts.validate_value_ty(ty)?,
+                            MatchPattern::Aggregate { ty, .. }
+                            | MatchPattern::Alternatives { ty, .. } => {
+                                facts.validate_value_ty(ty)?
+                            }
                             MatchPattern::Decision { ty, tests, .. } => {
                                 facts.validate_value_ty(ty)?;
                                 for test in tests {
@@ -8395,7 +8585,10 @@ impl CheckedFunction {
                             MatchPattern::EnumVariant { ty, .. } => {
                                 facts.validate_value_ty(&Ty::Enum(ty.clone()))?
                             }
-                            MatchPattern::Aggregate { ty, .. } => facts.validate_value_ty(ty)?,
+                            MatchPattern::Aggregate { ty, .. }
+                            | MatchPattern::Alternatives { ty, .. } => {
+                                facts.validate_value_ty(ty)?
+                            }
                             MatchPattern::Decision { ty, tests, .. } => {
                                 facts.validate_value_ty(ty)?;
                                 for test in tests {

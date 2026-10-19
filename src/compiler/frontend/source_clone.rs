@@ -158,7 +158,9 @@ pub(super) fn preflight_clone_node(
                     clone_selector(field, budget)?;
                 }
             }
-            Pattern::Tuple(fields) | Pattern::Array(fields) => clone_vector(fields, budget)?,
+            Pattern::Tuple(fields) | Pattern::Array(fields) | Pattern::Alternatives(fields) => {
+                clone_vector(fields, budget)?
+            }
             Pattern::TupleRest(fields) | Pattern::ArrayRest(fields) => {
                 clone_vector(&fields.prefix, budget)?;
                 clone_vector(&fields.suffix, budget)?;

@@ -59,6 +59,54 @@ pub(super) enum PublishedCallableBody {
 #[cfg(test)]
 mod canonical_source_replay_tests {
     use super::*;
+    #[test]
+    fn root_or_seal_binds_order_tests_projections_body_and_scrutinee() {
+        let text = "fn pick(p:(bool,u8))->u8{match p{(true,0)|(false,1)=>7,_=>0}}fn main(){}";
+        let (_, _, budget, publication) = published(text, 0);
+        publication
+            .validate_source(publication.source(), publication.facts(), &budget)
+            .unwrap();
+        for mutation in 0..7 {
+            let mut changed = publication.source().as_ref().clone();
+            let index = changed
+                .exprs
+                .iter()
+                .position(|value| matches!(value.kind, ir::ExprKind::Match { .. }))
+                .unwrap();
+            let ir::ExprKind::Match { scrutinee, arms } = &mut changed.exprs[index].kind else {
+                unreachable!()
+            };
+            let ir::MatchPattern::Alternatives { rows, .. } = &mut arms[0].pattern else {
+                panic!("missing original alternatives")
+            };
+            match mutation {
+                0 => rows.swap(0, 1),
+                1 => {
+                    rows.pop();
+                }
+                2 => rows[0].clear(),
+                3 => rows[0][0].projection = vec![ir::Projection::Field(1)],
+                4 => rows[0][0].kind = ir::PatternTestKind::Bool(false),
+                5 => arms[0].body = arms[1].body,
+                6 => *scrutinee = arms[0].body,
+                _ => unreachable!(),
+            }
+            assert_eq!(
+                kind_error(publication.validate_source(
+                    &Arc::new(changed),
+                    publication.facts(),
+                    &budget
+                )),
+                tr::FactsErrorKind::InvalidMetadata,
+                "mutation {mutation}"
+            );
+        }
+        let (_, _, _, foreign) = published(text, 0);
+        assert_eq!(
+            kind_error(publication.validate_source(foreign.source(), publication.facts(), &budget)),
+            tr::FactsErrorKind::InvalidMetadata
+        );
+    }
     fn fixture_program(source: &str) -> Program {
         let mut program = parse(source).unwrap();
         if !program.functions.iter().any(|function| {
@@ -1334,7 +1382,7 @@ impl SourceInventory {
             Pattern::Apply { pattern, .. } | Pattern::Ref { pattern, .. } => {
                 self.shadow_pattern(pattern, node, budget, depth + 1)?
             }
-            Pattern::Tuple(fields) | Pattern::Array(fields) => {
+            Pattern::Tuple(fields) | Pattern::Array(fields) | Pattern::Alternatives(fields) => {
                 for (i, p) in fields.iter().enumerate() {
                     self.shadow_pattern(p, &node.child(8, i, budget)?, budget, depth + 1)?;
                 }
@@ -5071,6 +5119,8 @@ pub struct Place {
 }
 #[derive(Clone, Debug)]
 pub enum Pattern {
+    /// Original match-arm root alternatives, never a nested pattern grammar.
+    Alternatives(Vec<Pattern>),
     Apply {
         path: GenericPath,
         pattern: Box<Pattern>,
@@ -7066,8 +7116,11 @@ impl<'input, 'names> Parser<'input, 'names> {
         };
         let scrutinee = self.nested_expr()?;
         self.expect(",")?;
-        let pattern = self.pattern()?;
+        let pattern = self.arm_pattern()?;
         let guarded = self.eat("if");
+        if guarded && matches!(pattern, Pattern::Alternatives(_)) {
+            return Err(self.unsupported("guards on or-patterns are unsupported"));
+        }
         let body = if guarded {
             let frontier = self.enter_lexical()?;
             let guard = (|| {
@@ -7977,7 +8030,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                 })?;
             match pattern {
                 Pattern::Binding { name, .. } => self.bind_lexical(*name)?,
-                Pattern::Tuple(fields) => {
+                Pattern::Tuple(fields) | Pattern::Alternatives(fields) => {
                     for field in fields {
                         pending
                             .push(field)
@@ -10329,6 +10382,61 @@ impl<'input, 'names> Parser<'input, 'names> {
         self.nesting -= 1;
         result
     }
+    fn arm_pattern(&mut self) -> Result<Pattern, ParseError> {
+        let first = self.pattern_no_alternatives()?;
+        if !self.is("|") {
+            if self.is("@") {
+                return Err(self.unsupported("@ patterns are unsupported"));
+            }
+            if self.is("..") || self.is("..=") {
+                return Err(
+                    self.unsupported("path and constant range pattern bounds are unsupported")
+                );
+            }
+            return Ok(first);
+        }
+        // Generated match owners have not been granted original OR authority.
+        let site = self.token().span;
+        let span = self
+            .names
+            .session()
+            .span(site)
+            .map_err(native_adapter::transport_error)?;
+        if span.expansion.is_some()
+            || !matches!(span.origin, super::expansion_span::SpanOrigin::Original(_))
+        {
+            return Err(self.unsupported("generated or-pattern owners are unsupported"));
+        }
+        let original = self
+            .names
+            .session()
+            .original(
+                panic_callsite(self.names.session(), site)
+                    .map_err(native_adapter::transport_error)?,
+                512,
+            )
+            .map_err(native_adapter::transport_error)?;
+        self.names
+            .session()
+            .sources()
+            .location(original)
+            .map_err(native_adapter::transport_error)?;
+        let mut rows = Vec::new();
+        self.reserve_rest_patterns(&mut rows, 1)?;
+        rows.push(first);
+        while self.eat("|") {
+            self.names
+                .budget()
+                .charge(super::expansion_budget::Counter::Work, 1)
+                .map_err(|error| native_adapter::transport_error(error.into()))?;
+            self.reserve_rest_patterns(&mut rows, 1)?;
+            rows.push(self.pattern_no_alternatives()?);
+        }
+        if self.is("@") {
+            return Err(self.unsupported("@ patterns are unsupported"));
+        }
+        Ok(Pattern::Alternatives(rows))
+    }
     fn reserve_rest_patterns(
         &mut self,
         fields: &mut Vec<Pattern>,
@@ -11850,7 +11958,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             if arms.len() >= 4096 {
                 return Err(self.limit("match arm count exceeds limit 4096"));
             }
-            let pattern = self.pattern()?;
+            let pattern = self.arm_pattern()?;
             if self.is("if") || self.is("|") || self.is("@") {
                 return Err(
                     self.unsupported("match guards, or-patterns and @ patterns are unsupported")
@@ -13593,7 +13701,9 @@ fn walk_depth_inspecting(
                             push(DepthNode::Pattern(p))?;
                         }
                     }
-                    Pattern::Tuple(fields) | Pattern::Array(fields) => {
+                    Pattern::Tuple(fields)
+                    | Pattern::Array(fields)
+                    | Pattern::Alternatives(fields) => {
                         for pattern in fields {
                             push(DepthNode::Pattern(pattern))?;
                         }

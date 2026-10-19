@@ -2556,6 +2556,7 @@ impl<'a> Checker<'a> {
             | Pattern::Char(_)
             | Pattern::Range { .. } => Err("unsupported: refutable aggregate match leaf".into()),
             Pattern::Apply { .. } => Err("pattern application normalization invariant".into()),
+            Pattern::Alternatives(_) => Err("unsupported: nested or-patterns".into()),
         }
     }
     fn pending_pattern_bindings(&self) -> Result<PendingPatternBindings, String> {
@@ -2942,6 +2943,7 @@ impl<'a> Checker<'a> {
             Pattern::Apply { .. } => {
                 return Err("decision application normalization invariant".into());
             }
+            Pattern::Alternatives(_) => return Err("unsupported: nested or-patterns".into()),
         }
         Ok(())
     }
@@ -3006,6 +3008,9 @@ impl<'a> Checker<'a> {
         pattern: &Pattern,
         domain: &ir::Ty,
     ) -> Result<PendingPatternPlan, String> {
+        if matches!(pattern, Pattern::Alternatives(_)) {
+            return Err("unsupported: or-patterns are only admitted at match arm roots".into());
+        }
         if Self::implicitly_dereferenced(pattern, domain) {
             return self.collect_complex_pattern(pattern, domain);
         }
@@ -3123,6 +3128,50 @@ impl<'a> Checker<'a> {
             },
             PatternTest::Binding => return Err("contract: whole binding publication".into()),
         })
+    }
+    fn alternative_leaf(&self, pattern: &Pattern, depth: usize) -> Result<bool, String> {
+        let budget = &self.signatures.plan()?.budget;
+        budget.check_depth(depth)?;
+        budget.charge_work(1)?;
+        Ok(match pattern {
+            Pattern::Bool(_) | Pattern::Int { .. } | Pattern::Char(_) | Pattern::Wildcard => true,
+            Pattern::Tuple(fields) => {
+                let mut admitted = true;
+                for field in fields {
+                    admitted &= self.alternative_leaf(field, depth + 1)?;
+                }
+                admitted
+            }
+            _ => false,
+        })
+    }
+    fn publish_alternative_row(
+        &mut self,
+        plan: PendingPatternPlan,
+    ) -> Result<Vec<ir::PatternTest>, String> {
+        let pattern = self.publish_pattern(plan)?;
+        let kind = match pattern {
+            ir::MatchPattern::Decision {
+                tests, bindings, ..
+            } if bindings.is_empty() => return Ok(tests),
+            ir::MatchPattern::Wildcard | ir::MatchPattern::Unit => return Ok(Vec::new()),
+            ir::MatchPattern::Aggregate { bindings, .. } if bindings.is_empty() => {
+                return Ok(Vec::new());
+            }
+            ir::MatchPattern::Bool(value) => ir::PatternTestKind::Bool(value),
+            ir::MatchPattern::Int(value) => ir::PatternTestKind::Int(value),
+            _ => {
+                return Err(
+                    "unsupported: or-pattern bindings and nominal rows are unsupported".into(),
+                );
+            }
+        };
+        let mut tests = self.retained_pattern_vec(1)?;
+        tests.push(ir::PatternTest {
+            projection: Vec::new(),
+            kind,
+        });
+        Ok(tests)
     }
     fn source_fields(
         &self,
@@ -4666,6 +4715,7 @@ impl<'a> Checker<'a> {
             return Ok(ty.clone());
         }
         match pattern {
+            Pattern::Alternatives(_) => Err("unsupported: or-pattern outside match arm root".into()),
             Pattern::Ref { kind, pattern: inner } => {
                 self.explicit_deref(*kind, ty, &mut Vec::new(), |this, referent, _| {
                     this.pattern_ty(inner, referent)
@@ -4739,6 +4789,9 @@ impl<'a> Checker<'a> {
             });
         }
         match pattern {
+            Pattern::Alternatives(_) => {
+                return Err("unsupported: or-pattern binding extraction".into());
+            }
             Pattern::Ref { kind, pattern } => {
                 return self.explicit_deref(*kind, ty, path, |this, referent, path| {
                     this.pattern_locals(pattern, referent, path, names, pending, work)
@@ -7762,11 +7815,69 @@ impl<'a> Checker<'a> {
         let mut checked = Vec::with_capacity(arms.len());
         let mut result = ir::Ty::Never;
         let mut completes = false;
+        let mut unsupported_alternative = false;
         for arm in arms.clone() {
             let scope_depth = self.scopes.len();
             self.scopes.push(HashMap::new());
             let arm_result = (|| {
-                let (pattern, coverage, exact_useful) = if let Some(source_pattern) = arm.pattern {
+                let (pattern, coverage, exact_useful) = if let Some(Pattern::Alternatives(rows)) =
+                    arm.pattern
+                {
+                    if arm.guarded {
+                        return Err("unsupported: guards on or-patterns are unsupported".into());
+                    }
+                    ir::validate_alternative_domain(
+                        &domain,
+                        Some(&self.signatures.plan()?.budget),
+                    )?;
+                    if rows.len() < 2 {
+                        return Err("invalid or-pattern alternative count".into());
+                    }
+                    let mut pending = super::super::token_session::BudgetVec::new(
+                        self.names()?.budget(),
+                        super::super::expansion_budget::Storage::Temporary,
+                    )
+                    .map_err(pattern_token_error)?;
+                    let mut admitted = true;
+                    for row in rows {
+                        pending
+                            .push(self.collect_pattern(row, &domain)?)
+                            .map_err(pattern_token_error)?;
+                        admitted &= self.alternative_leaf(row, 0)?;
+                    }
+                    if !admitted {
+                        return Err(
+                            "unsupported: or-patterns require binder-free scalar and tuple leaves"
+                                .into(),
+                        );
+                    }
+                    let matrix = matrix
+                        .as_mut()
+                        .ok_or("unsupported: or-pattern coverage domain")?;
+                    let mut useful = false;
+                    for row in pending.as_slice() {
+                        let row_useful = row.insert_coverage(matrix)?;
+                        unsupported_alternative |= !row_useful;
+                        useful |= row_useful;
+                    }
+                    let mut published = self.retained_pattern_vec(rows.len())?;
+                    while let Some(row) = pending.pop() {
+                        published.push(self.publish_alternative_row(row)?);
+                    }
+                    self.signatures
+                        .plan()?
+                        .budget
+                        .charge_work(published.len())?;
+                    published.reverse();
+                    (
+                        ir::MatchPattern::Alternatives {
+                            ty: domain.clone(),
+                            rows: published,
+                        },
+                        PatternCoverage::Predicate { root_variant: None },
+                        Some(useful),
+                    )
+                } else if let Some(source_pattern) = arm.pattern {
                     let plan = self.collect_pattern(source_pattern, &domain)?;
                     if arm.guarded {
                         // Validate real pending locals before publication, even on dead
@@ -7900,6 +8011,12 @@ impl<'a> Checker<'a> {
                 }.to_string());
             }
             return Err(format!("non-exhaustive match on {domain:?}"));
+        }
+        if unsupported_alternative {
+            return Err(
+                "unsupported: unreachable or-pattern alternatives require warning diagnostics"
+                    .into(),
+            );
         }
         Ok((
             ir::ExprKind::Match {
@@ -10165,6 +10282,77 @@ mod checked_identity_tests {
         assert!(budget.snapshot().temporary_bytes > before);
         drop(plan);
         assert_eq!(budget.snapshot().temporary_bytes, before);
+    }
+
+    #[test]
+    fn root_or_pending_rows_hold_all_nested_scratch_until_drop() {
+        use super::super::super::{expansion_budget::Storage, token_session::BudgetVec};
+        let program =
+            parse("fn value(p:(bool,u8))->u8{match p{(true,0)|(false,1)=>7,_=>0}}fn main(){}")
+                .unwrap();
+        let function = &program.functions[0];
+        let Expr::Match { arms, .. } = function.body.tail.as_deref().unwrap() else {
+            panic!("match")
+        };
+        let Pattern::Alternatives(rows) = &arms[0].pattern else {
+            panic!("alternatives")
+        };
+        let signatures = signature_table(&program).unwrap();
+        let checker = Checker::new(&signatures, ir::Ty::Unit, function.module);
+        let budget = program.names.budget();
+        let before = budget.snapshot().temporary_bytes;
+        let mut pending = BudgetVec::new(budget, Storage::Temporary).unwrap();
+        let domain = ir::Ty::Tuple(vec![ir::Ty::Bool, ir::Ty::Int(ir::IntTy::U8)].into());
+        for row in rows {
+            pending
+                .push(checker.collect_pattern(row, &domain).unwrap())
+                .unwrap();
+        }
+        assert_eq!(pending.len(), 2);
+        assert!(
+            budget.snapshot().temporary_bytes
+                > before + (2 * std::mem::size_of::<PendingPatternPlan>()) as u64
+        );
+        assert!(checker.locals.is_empty());
+        drop(pending);
+        assert_eq!(budget.snapshot().temporary_bytes, before);
+    }
+
+    #[test]
+    fn root_or_pending_header_denies_saturation_and_retry_without_publication() {
+        use super::super::super::{
+            expansion_budget::{BudgetResource, Storage},
+            token_session::BudgetVec,
+        };
+        let program = parse("fn value()->u8{match true{true|false=>7}}fn main(){}").unwrap();
+        let function = &program.functions[0];
+        let Expr::Match { arms, .. } = function.body.tail.as_deref().unwrap() else {
+            panic!("match")
+        };
+        let Pattern::Alternatives(rows) = &arms[0].pattern else {
+            panic!("alternatives")
+        };
+        let signatures = signature_table(&program).unwrap();
+        let checker = Checker::new(&signatures, ir::Ty::Unit, function.module);
+        let budget = program.names.budget();
+        let mut pending = BudgetVec::new(budget, Storage::Temporary).unwrap();
+        let row = checker.collect_pattern(&rows[0], &ir::Ty::Bool).unwrap();
+        let before = budget.snapshot();
+        let remaining = budget.limits().bytes - before.retained_bytes - before.temporary_bytes;
+        let saturation = budget.reserve(Storage::Temporary, remaining).unwrap();
+        assert!(pending.push(row).is_err());
+        assert_eq!(pending.len(), 0);
+        let failure = budget.snapshot().failure.unwrap();
+        assert_eq!(failure.resource, BudgetResource::Bytes);
+        assert_eq!(
+            failure.requested,
+            (4 * std::mem::size_of::<PendingPatternPlan>()) as u64
+        );
+        drop(saturation);
+        assert!(checker.collect_pattern(&rows[1], &ir::Ty::Bool).is_err());
+        assert!(checker.locals.is_empty());
+        drop(pending);
+        assert_eq!(budget.snapshot().temporary_bytes, before.temporary_bytes);
     }
 
     #[test]

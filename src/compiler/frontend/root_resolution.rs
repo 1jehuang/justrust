@@ -2323,8 +2323,21 @@ impl Resolver<'_> {
                     self.pattern(field, module, names)?;
                 }
             }
+            Pattern::Alternatives(fields) => {
+                let mut binds = false;
+                for field in fields {
+                    self.alias_budget.charge_work(1)?;
+                    let mut row_names = std::collections::HashSet::new();
+                    self.pattern(field, module, &mut row_names)?;
+                    binds |= !row_names.is_empty();
+                }
+                if binds {
+                    return Err("unsupported: or-pattern bindings are unsupported".into());
+                }
+            }
             Pattern::Tuple(fields) => {
                 for field in fields {
+                    self.alias_budget.charge_work(1)?;
                     self.pattern(field, module, names)?;
                 }
             }

@@ -2653,6 +2653,34 @@ impl Lowerer<'_> {
         pattern: &ir::MatchPattern,
         completes: bool,
     ) -> Result<PatternTest, String> {
+        if let ir::MatchPattern::Alternatives { rows, .. } = pattern {
+            self.divergence_work(rows.len())?;
+            let selected = self.block();
+            let rejected = self.block();
+            for row in rows {
+                if row.is_empty() {
+                    self.terminate(Terminator::Goto(selected), Some(id))?;
+                    self.current = self.block();
+                    continue;
+                }
+                let tested = self.decision_pattern_test(id, source, row, completes)?;
+                self.current = tested.selected;
+                for local in tested.temporaries.iter().rev() {
+                    self.end_storage(*local, Some(id));
+                }
+                self.terminate(Terminator::Goto(selected), Some(id))?;
+                self.current = tested.rejected;
+                for local in tested.temporaries.iter().rev() {
+                    self.end_storage(*local, Some(id));
+                }
+            }
+            self.terminate(Terminator::Goto(rejected), Some(id))?;
+            return Ok(PatternTest {
+                selected,
+                rejected,
+                temporaries: Vec::new(),
+            });
+        }
         if let ir::MatchPattern::Decision { tests, .. } = pattern {
             return self.decision_pattern_test(id, source, tests, completes);
         }

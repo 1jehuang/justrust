@@ -980,7 +980,9 @@ impl<'a> Validator<'a> {
                 }
                 Pattern::Path(path) => self.push(Visit::Path(path))?,
                 Pattern::Binding { name, .. } => self.local(*name, true)?,
-                Pattern::Tuple(elements) | Pattern::Array(elements) => {
+                Pattern::Tuple(elements)
+                | Pattern::Array(elements)
+                | Pattern::Alternatives(elements) => {
                     self.many(elements, Visit::Pattern)?;
                 }
                 Pattern::Struct { name, fields, .. } => {
