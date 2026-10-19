@@ -367,6 +367,9 @@ fn rejects_source(name: &str, source: &str, needle: &str) {
             let stderr = String::from_utf8_lossy(&result.stderr);
             assert!(!result.status.success(), "{name}: accepted");
             assert!(stderr.contains(needle), "{name}: {stderr}");
+            if name == "drop_borrow_escape" {
+                assert!(!stderr.contains("unsupported"), "{name}: {stderr}");
+            }
             assert!(!stderr.contains("panicked at"), "{name}: {stderr}");
             assert!(!output.exists(), "{name}: published executable");
         }
@@ -433,7 +436,7 @@ fn source_heap_handle_cannot_be_forged_or_released_twice() {
 }
 
 #[test]
-fn source_heap_private_guard_blocks_user_copy_impl() {
+fn source_heap_canonical_drop_blocks_user_copy_impl() {
     let body = r#"
 impl Copy for heap::Allocation {}
 impl Clone for heap::Allocation {
@@ -442,7 +445,7 @@ impl Clone for heap::Allocation {
 fn main() {}
 "#;
     let source = format!("mod heap {{\n{HEAP_SOURCE}\n}}\n{body}");
-    rejects_source("allocation_copy", &source, "trait obligation");
+    rejects_source("allocation_copy", &source, "Copy and Drop");
     let available = Command::new("rustc")
         .arg("-vV")
         .output()
@@ -461,7 +464,7 @@ fn main() {}
         );
         assert!(!result.status.success());
         assert!(
-            String::from_utf8_lossy(&result.stderr).contains("E0204"),
+            String::from_utf8_lossy(&result.stderr).contains("E0184"),
             "{result:?}"
         );
     } else {
@@ -490,6 +493,260 @@ fn main() {
     println!("ok");
 }
 "#,
+    );
+}
+
+#[test]
+fn source_heap_automatic_drop_moves_and_early_returns() {
+    heap_case(
+        "automatic_drop_moves_and_early_returns",
+        r#"
+fn mapped(address: usize) -> bool {
+    let mut status = 0u8;
+    let output = &mut status as *mut u8 as usize;
+    let result = unsafe { __justrust_linux_syscall6!(27usize, address, 4096usize, output, 0usize, 0usize, 0usize) };
+    if result == 0usize { return true; }
+    assert!(result == 18446744073709551604usize);
+    false
+}
+fn identity(value: heap::Allocation) -> heap::Allocation { value }
+fn early(address: &mut usize, take: bool) {
+    let owner = heap::allocate(4096usize, 4096usize);
+    *address = heap::pointer(&owner) as usize;
+    assert!(mapped(*address));
+    if take { return; }
+    assert!(heap::len(&owner) == 4096usize);
+}
+fn main() {
+    let address: usize;
+    {
+        let original = heap::allocate(4096usize, 4096usize);
+        address = heap::pointer(&original) as usize;
+        assert!(mapped(address));
+        let moved = identity(original);
+        assert!(mapped(address));
+        let final_owner = moved;
+        assert!(heap::len(&final_owner) == 4096usize);
+    }
+    assert!(!mapped(address));
+    let mut early_address = 0usize;
+    early(&mut early_address, true);
+    assert!(!mapped(early_address));
+    early(&mut early_address, false);
+    assert!(!mapped(early_address));
+    let explicit = heap::allocate(4096usize, 4096usize);
+    let explicit_address = heap::pointer(&explicit) as usize;
+    assert!(heap::release(explicit));
+    assert!(!mapped(explicit_address));
+    println!("ok");
+}
+"#,
+    );
+}
+
+#[test]
+fn source_drop_ordinary_borrows_and_copy_field_reads() {
+    heap_case(
+        "drop_owner_ordinary_borrows",
+        r#"
+struct Owner { value: i32 }
+impl Drop for Owner { fn drop(&mut self) { assert!(self.value == 8); } }
+fn inspect(owner: &Owner) -> i32 { owner.value }
+fn mutate(owner: &mut Owner) { owner.value = owner.value + 1; }
+fn main() {
+    {
+        let mut owner = Owner { value: 7 };
+        assert!(inspect(&owner) == 7);
+        mutate(&mut owner);
+        let copy = owner.value;
+        assert!(copy == 8);
+        assert!(inspect(&owner) == 8);
+    }
+    println!("ok");
+}
+"#,
+    );
+}
+
+#[test]
+fn source_pointer_field_drop_flags_are_exactly_once() {
+    heap_case(
+        "pointer_field_drop_flags",
+        r#"
+struct Owner { count: *mut u64 }
+impl Drop for Owner {
+    fn drop(&mut self) {
+        let pointer = self.count;
+        unsafe { *pointer = *pointer + 1u64; }
+    }
+}
+fn transfer(owner: Owner) -> Owner { owner }
+fn conditional(pointer: *mut u64, take: bool) {
+    let owner = Owner { count: pointer };
+    if take { let moved = transfer(owner); }
+}
+fn main() {
+    let mut count = 0u64;
+    let pointer = &mut count as *mut u64;
+    {
+        let original = Owner { count: pointer };
+        let moved = transfer(original);
+        unsafe { assert!(*pointer == 0u64); }
+    }
+    assert!(count == 1u64);
+    conditional(pointer, true);
+    assert!(count == 2u64);
+    conditional(pointer, false);
+    assert!(count == 3u64);
+    let mut step = 0i32;
+    while step < 3 {
+        let local = Owner { count: pointer };
+        step = step + 1;
+        if step == 2 { continue; }
+    }
+    assert!(count == 6u64);
+    {
+        let mut owner = Owner { count: pointer };
+        owner = Owner { count: pointer };
+        assert!(count == 7u64);
+        owner = owner;
+    }
+    assert!(count == 8u64);
+    println!("ok");
+}
+"#,
+    );
+}
+
+#[test]
+fn source_heap_abort_does_not_run_unwind_cleanup() {
+    let body = r#"
+struct Witness { value: i32 }
+impl Drop for Witness { fn drop(&mut self) { println!("unexpected unwind cleanup"); } }
+fn main() {
+    let allocation = heap::allocate(4096usize, 4096usize);
+    assert!(!heap::is_null::<u8>(heap::pointer(&allocation) as *const u8));
+    let witness = Witness { value: 1 };
+    panic!("heap abort control");
+}
+"#;
+    for stock in [false, true] {
+        if stock
+            && !Command::new("rustc")
+                .arg("-vV")
+                .output()
+                .is_ok_and(|r| r.status.success())
+        {
+            assert!(std::env::var_os("JUSTRUST_HEAP_STOCK_REQUIRED").is_none());
+            continue;
+        }
+        let scratch = Scratch::new();
+        let source = if stock {
+            format!("{STOCK_SYSCALL}\nmod heap {{\n{HEAP_SOURCE}\n}}\n{body}")
+        } else {
+            format!("use std::native_heap as heap;\n{body}")
+        };
+        let input = scratch.source(&source);
+        let image = scratch.path("abort-control");
+        let mut command = if stock {
+            Command::new("rustc")
+        } else {
+            Command::new(env!("CARGO_BIN_EXE_jr-rust"))
+        };
+        if stock {
+            command.args(["--edition=2024", "-Cpanic=abort", "-Awarnings"]);
+        }
+        let compiled = capture(command.arg(input).arg("-o").arg(&image), &scratch, 60);
+        assert!(compiled.status.success(), "stock={stock}: {compiled:?}");
+        let result = capture(&mut Command::new(image), &scratch, 20);
+        assert!(!result.status.success(), "stock={stock}: {result:?}");
+        assert!(result.stdout.is_empty(), "stock={stock}: {result:?}");
+        assert!(
+            String::from_utf8_lossy(&result.stderr).contains("heap abort control"),
+            "stock={stock}: {result:?}"
+        );
+    }
+}
+
+#[test]
+fn source_drop_escaping_borrows_and_unsupported_aggregates_reject() {
+    let stock = Command::new("rustc")
+        .arg("-vV")
+        .output()
+        .is_ok_and(|r| r.status.success());
+    assert!(stock || std::env::var_os("JUSTRUST_HEAP_STOCK_REQUIRED").is_none());
+    for body in [
+        "struct D { value:i32 } impl Drop for D { fn drop(&mut self) {} } fn main(){ let escaped; { let owner=D{value:1}; escaped=&owner; } println!(\"{}\",escaped.value); }",
+        "struct D { value:i32 } impl Drop for D { fn drop(&mut self) {} } fn main(){ let mut owner=D{value:1}; let loan=&owner; owner=D{value:2}; println!(\"{}\",loan.value); }",
+        "struct D { value:i32 } impl Drop for D { fn drop(&mut self) {} } fn escape() -> &D { let owner=D{value:1}; &owner } fn main() {}",
+        "struct D { value:i32 } impl Drop for D { fn drop(&mut self) {} } fn consume(owner:D){} fn main(){let owner=D{value:1};let field=&owner.value;consume(owner);println!(\"{}\",*field);}",
+        "struct D { value:i32 } impl Drop for D { fn drop(&mut self) {} } fn mutate(owner:&mut D){owner.value=2;} fn main(){let mut owner=D{value:1};let field=&owner.value;mutate(&mut owner);println!(\"{}\",*field);}",
+        "struct D { value:i32 } impl Drop for D { fn drop(&mut self) {} } fn field(owner:&D)->&i32{&owner.value} fn main(){let escaped;{let owner=D{value:1};escaped=field(&owner);}println!(\"{}\",*escaped);}",
+        "struct D { value:i32 } impl Drop for D { fn drop(&mut self) {} } fn main(){let escaped;loop{let owner=D{value:1};escaped=&owner.value;break;}println!(\"{}\",*escaped);}",
+        "struct D { value:i32 } impl Drop for D { fn drop(&mut self) {} } fn main(){let seed=0i32;let mut escaped=&seed;let mut step=0i32;while step<1{let owner=D{value:1};escaped=&owner.value;step=step+1;continue;}println!(\"{}\",*escaped);}",
+        "struct D { value:i32 } impl Drop for D { fn drop(&mut self) { let escaped; { let value=3i32;escaped=&value; } self.value=*escaped; } } fn main(){}",
+    ] {
+        if body.contains("continue;") {
+            // The SCC loan boundary is additive here. Require the actual
+            // cleanup conflict too, not merely an unsupported diagnostic.
+            rejects_source("drop_borrow_backedge", body, "BorrowConflict");
+        } else {
+            rejects_source("drop_borrow_escape", body, "");
+        }
+        if stock {
+            let scratch = Scratch::new();
+            let input = scratch.source(body);
+            let result = capture(
+                Command::new("rustc")
+                    .args(["--edition=2024", "-Cpanic=abort"])
+                    .arg(input)
+                    .arg("-o")
+                    .arg(scratch.path("invalid")),
+                &scratch,
+                60,
+            );
+            assert!(!result.status.success(), "{body}: {result:?}");
+        }
+    }
+    for body in [
+        "fn main(){ let pair=(heap::allocate(8usize,8usize),1i32); }",
+        "fn carry<T>(value:T){} fn main(){ carry::<heap::Allocation>(heap::allocate(8usize,8usize)); }",
+    ] {
+        rejects_source(
+            "unsupported_drop_position",
+            &format!("use std::native_heap as heap; {body}"),
+            "unsupported",
+        );
+    }
+    rejects_source(
+        "explicit_allocation_drop",
+        "fn main(){let mut owner=std::native_heap::allocate(8usize,8usize);owner.drop();}",
+        "explicit canonical destructor",
+    );
+    if stock {
+        let scratch = Scratch::new();
+        let input = scratch.source(&format!("{STOCK_SYSCALL}\nmod heap {{\n{HEAP_SOURCE}\n}}\nfn main(){{let mut owner=heap::allocate(8usize,8usize);owner.drop();}}"));
+        let result = capture(
+            Command::new("rustc")
+                .args(["--edition=2024", "-Cpanic=abort"])
+                .arg(input)
+                .arg("-o")
+                .arg(scratch.path("invalid-drop")),
+            &scratch,
+            60,
+        );
+        assert!(!result.status.success(), "{result:?}");
+        assert!(
+            String::from_utf8_lossy(&result.stderr).contains("E0040"),
+            "{result:?}"
+        );
+    }
+    // The broader owner shape remains explicitly excluded, never silently
+    // lowered as a partial move or treated as a successful destructor test.
+    rejects_source(
+        "drop_partial_move",
+        "struct N { value:i32 } struct D { value:N } impl Drop for D { fn drop(&mut self){} } fn main(){let owner=D{value:N{value:1}};let moved=owner.value;}",
+        "unsupported",
     );
 }
 

@@ -1,6 +1,6 @@
-# Referenced-array for-loop loans
+# Referenced-array and shared-slice for-loop loans
 
-Status: bounded language milestone, not general Iterator or slice support.
+Status: bounded language milestone, not general Iterator or mutable-slice support.
 
 ## Admitted source
 
@@ -12,10 +12,23 @@ array sources, source calls, nested control flow and ordinary source-body
 bindings/calls use the same machinery. The iterable expression is evaluated
 once before the new binder and loop frame become available.
 
+Shared scalar/unit slice sources (`for item in slice`, where `slice: &[T]`)
+use the same single checked body and canonical element-place authority. The
+descriptor is evaluated and saved once. The loop reads its genuine captured
+length, and each borrow creation captures data/length together before checking
+the index. An item may outlive a descriptor local when its actual owner still
+lives. No mutable descriptor authority is inferred from shared slice support.
+
 The source body is checked and emitted once. A discarded bounded-dispatch
 experiment duplicated bodies and conflicted with original source call/binding
 identity. Its local checkpoint is retained in history, but no dispatch or
 source-capture exception remains in the implementation.
+
+Every value iterable has an exact retained source length occurrence: a fixed
+array bound or a checked shared-descriptor `SliceLen`. These are inventoried
+as genuine for occurrences, not fabricated `.len()` calls. Replay rejects
+missing/duplicate rows, changed receivers/operations, forged source kinds and
+orphan lengths. Existing `.len()` source-call obligations remain unchanged.
 
 ## Runtime place authority
 
@@ -37,6 +50,8 @@ scaling or address formation, and stores the selected address in the reference.
 The private array element stride is unchanged. Subsequent index-local mutation
 or cursor advancement cannot retarget that already materialized reference.
 Unit elements and unused reference bindings still perform bounds checks.
+Runtime slice lengths are checked even for empty/unit slices. Dynamic address
+scratch preserves store RHS values rather than clobbering the saved value.
 
 ## Conservative ownership
 
@@ -48,6 +63,13 @@ initialized and do not establish initialization or variant proofs for a guessed
 element. A retained element reference carries the ordinary canonical loan,
 parent authority, lifetime and last-use obligations.
 
+Runtime slice elements cannot be enumerated into fixed declaration input paths.
+Their declared lifetime/kind-qualified input envelopes therefore supply result
+origin authority, as for other abstract referents. Actual returned body loans
+must still originate from that genuine parameter, never owned local storage.
+This does not change fixed aggregate path derivation, mutable authority, or
+source admission of slice descriptor return types.
+
 Break, continue, labels and return use the existing checked loop/match CFG and
 cleanup authority. Body-local destructors run on their actual control-flow exit,
 not at every possible dispatch arm. Empty arrays do not fabricate a reference or
@@ -55,7 +77,7 @@ turn their source bodies into unchecked dead syntax.
 
 ## Explicit open boundaries
 
-- Runtime slice iteration and slice element-place/loan authority.
+- Mutable slice descriptors and slice descriptor return types.
 - Structured, enum, reference-carrier and Drop-bearing referenced elements.
 - Existing SCC-born loan values retained across a loop backedge. Such Rust-valid
   cases remain explicitly Unsupported rather than relaxing the borrow solver.
@@ -81,5 +103,9 @@ uninitialized index and whole-array reads, conservative overlap of unequal
 indices, runtime bounds at 0/length/usize::MAX for scalar and unit arrays, and
 creation-time address capture before index mutation. These typed fixture
 mutations test authority/backend behavior, not source-language compatibility.
+Shared slice controls additionally cover parameter-origin returned elements,
+descriptor-local scope ending before item use, root mutation conflicts, distinct
+input lifetimes, owned-local escapes, temporary slice call arguments, once-only
+descriptor evaluation, and bounds on empty/scalar/unit slice descriptors.
 Graph-integrity ratchets are unchanged. No performance claim follows from this
 milestone.

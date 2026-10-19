@@ -300,6 +300,46 @@ fn replay_valid_builtin_len_occurrences() {
     replay(&original, &f, &budget).unwrap();
 }
 
+#[test]
+fn replay_for_iterable_lengths_are_exact_source_occurrences() {
+    for source in [
+        "fn f(a:&[u8]){for x in a {let n=*x;}}",
+        "fn f(){for x in [1,2] {let n=x;}}",
+        "fn f(a:&[u8]){let n=a.len();for x in a {let m=a.len();let v=*x;}}",
+    ] {
+        let (budget, f) = published(source, 0);
+        let original = f.original().source_for_test();
+        replay(&original, &f, &budget).unwrap();
+        let index = original
+            .builtin_len_mapping
+            .iter()
+            .position(|row| original.calls[row.source_index].for_iterable)
+            .unwrap();
+        let row = original.builtin_len_mapping[index];
+        assert!(!original.calls[row.source_index].len_candidate);
+        let mut missing = original.clone();
+        missing.builtin_len_mapping.remove(index);
+        invalid(replay(&missing, &f, &budget));
+        let mut duplicate = original.clone();
+        duplicate.builtin_len_mapping.insert(index, row);
+        invalid(replay(&duplicate, &f, &budget));
+        let mut operation = f.source().as_ref().clone();
+        operation.exprs[row.expr.0].kind = ir::ExprKind::Int(ir::IntValue::usize(99));
+        invalid(replay_source_body(
+            &original,
+            &Arc::new(operation),
+            f.facts(),
+            &budget,
+        ));
+        let mut site = original.clone();
+        site.calls[row.source_index].for_iterable = false;
+        invalid(replay(&site, &f, &budget));
+        let mut receiver = original.clone();
+        receiver.builtin_len_mapping[index].receiver = row.expr;
+        invalid(replay(&receiver, &f, &budget));
+    }
+}
+
 // Case 2: a missing checked length occurrence fails, including dead code.
 #[test]
 fn replay_rejects_missing_builtin_len() {

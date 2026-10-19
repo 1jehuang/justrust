@@ -381,6 +381,15 @@ fn type_requires_carrier_proof(
     budget: &super::ir::PlanBudget,
 ) -> Result<bool, FactsError> {
     let classify = |message: String| FactsError::from_message(budget, &message);
+    budget.charge_work(1).map_err(classify)?;
+    // Scalar values and raw pointers carry no tracked reference authority.
+    // Their checked outer shape proves absence without an associated-type walk.
+    if matches!(
+        ty,
+        Ty::Int(_) | Ty::Float(_) | Ty::Bool | Ty::Char | Ty::Unit | Ty::Never | Ty::RawPtr { .. }
+    ) {
+        return Ok(false);
+    }
     let mut cursor = ty;
     let mut depth = 0usize;
     let mut mutable = false;
@@ -1392,12 +1401,10 @@ fn preflight_with_plan(
                     }
                     element
                 }
-                Projection::DynamicIndex(_) => {
-                    let Ty::Array { element, .. } = ty else {
-                        return Ok(());
-                    };
-                    element
-                }
+                Projection::DynamicIndex(_) => match ty {
+                    Ty::Array { element, .. } | Ty::Slice { element } => element,
+                    _ => return Ok(()),
+                },
                 Projection::Downcast(variant) => {
                     let Ty::Enum(enumeration) = ty else {
                         return Ok(());
@@ -2843,6 +2850,22 @@ impl Transfer<'_> {
         if !facts.has_normal_drop_impls() {
             return Ok(false);
         }
+        // The analyzed CFG has already validated every local type. These outer
+        // forms cannot own a destructor, independently of any pointee type.
+        // Keep nominal/aggregate queries on the canonical facts path below.
+        if matches!(
+            self.f.locals[local.0].ty,
+            Ty::Int(_)
+                | Ty::Float(_)
+                | Ty::Bool
+                | Ty::Char
+                | Ty::Unit
+                | Ty::Never
+                | Ty::Ref { .. }
+                | Ty::RawPtr { .. }
+        ) {
+            return Ok(false);
+        }
         match facts.normal_drop_plan(&self.f.locals[local.0].ty) {
             Ok(super::traits::NormalDropPlan::Destructor(_)) => Ok(true),
             Ok(_) => Ok(false),
@@ -3424,6 +3447,55 @@ fn analyze_with_context(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn scalar_carrier_absence_is_paid_and_keeps_reference_boundaries() {
+        use super::super::ir::{BorrowKind, IntTy, PlanBudget, PlanLimits};
+        use super::*;
+        let reference = Ty::Ref {
+            kind: BorrowKind::Mut,
+            referent: Arc::new(Ty::Int(IntTy::I32)),
+        };
+        for ty in [
+            Ty::Int(IntTy::I32),
+            Ty::Bool,
+            Ty::Char,
+            Ty::Unit,
+            Ty::Never,
+            Ty::RawPtr {
+                kind: BorrowKind::Mut,
+                pointee: Arc::new(reference.clone()),
+            },
+        ] {
+            let budget = PlanBudget::new(PlanLimits {
+                work: 1,
+                ..PlanLimits::default()
+            });
+            assert!(!type_requires_carrier_proof(&ty, &budget).unwrap());
+            assert!(
+                super::super::ir::carrier_locations(&ty, &PlanBudget::default())
+                    .unwrap()
+                    .is_empty()
+            );
+            assert!(budget.charge_work(1).is_err());
+            let empty = PlanBudget::new(PlanLimits {
+                work: 0,
+                ..PlanLimits::default()
+            });
+            assert!(
+                type_requires_carrier_proof(&ty, &empty)
+                    .unwrap_err()
+                    .is_resource()
+            );
+        }
+        let nested = Ty::Tuple(vec![reference.clone()].into());
+        assert!(type_requires_carrier_proof(&nested, &PlanBudget::default()).unwrap());
+        let double = Ty::Ref {
+            kind: BorrowKind::Shared,
+            referent: Arc::new(reference),
+        };
+        assert!(type_requires_carrier_proof(&double, &PlanBudget::default()).unwrap());
+    }
+
     #[test]
     fn sparse_ownership_storage_bound_covers_retained_capacity() {
         use super::*;

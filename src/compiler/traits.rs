@@ -1490,7 +1490,12 @@ impl ValidatedTraitWorld {
                 || owner.def().fields.iter().any(|field| {
                     !matches!(
                         field.ty,
-                        Ty::Int(_) | Ty::Float(_) | Ty::Bool | Ty::Char | Ty::Unit
+                        Ty::Int(_)
+                            | Ty::Float(_)
+                            | Ty::Bool
+                            | Ty::Char
+                            | Ty::Unit
+                            | Ty::RawPtr { .. }
                     )
                 })
             {
