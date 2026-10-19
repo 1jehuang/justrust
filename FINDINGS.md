@@ -7709,3 +7709,9 @@ in the client/host: evict remote `target/` for roots whose local directory is
 gone or idle beyond N days, plus an LRU sweep with a free-space floor before
 each build. Report disk-full as an explicit hosted failure that falls back to
 local instead of a cargo I/O error.
+
+## 2026-10-19: hosted `justrust test -p jcode-tui --lib cache` hung >15 min
+
+- Repo: jcode. Run started ~09:59 PT, produced no output, left several `[justrust] <defunct>` children.
+- Same command with `--local` finished in 58.5s (137 tests). Hosted `-p jcode-base` run just before was fine (21.8s).
+- Suspect: hosted client never reaped/terminated after the remote side stalled; needs a stall timeout + fallback.
