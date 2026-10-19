@@ -266,6 +266,7 @@ missing-file changes invalidate only justified consumers without stale lookup.
 - [x] Native i128/u128 scalar arithmetic, numeric casts, transport and exact
       typed constants under INTEGER128.md (not platform ABI or full Rust).
 - [x] Bounded Unicode `char` literals, scalar transport, Copy/Clone/Sized and comparisons (CHARS.md). Character casts `char as int`/`u8 as char` are implemented (CHAR-CASTS.md).
+- [x] Exact ASCII byte literals and byte escapes with rigid `u8` typing, pattern/range and macro forwarding support (BYTE-LITERALS.md). Byte strings remain unsupported.
 - [x] Character literal patterns and integer/char range patterns with exact interval exhaustiveness (SCALAR-PATTERNS.md).
 - [x] Width-correct primitive integer `.leading_zeros()` and unchanged original
       core exponent-estimator module acceptance under LEADING-ZEROS.md. This is

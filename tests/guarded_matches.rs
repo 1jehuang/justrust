@@ -3,12 +3,14 @@
 //! Receipt SHA256: 5d3cc8b9951d3a45db7a8db350c37990ef3d00d8c57475e42691efbf843d21af
 //! /usr/bin/rustc --edition=2024 -Cpanic=abort, RUSTC_BOOTSTRAP removed.
 //! Stock: 15 compile, 8 reject; one compiled case terminates with SIGABRT.
-//! Native expectations: 10 live, 7 unsupported, 5 invalid, 1 syntax.
+//! Native measured categories: 12 live, 5 unsupported, 6 invalid, 0 syntax.
 //! Guard bindings are bounded to Copy values; non-Copy bindings are explicitly unsupported.
 //! The prior21 sources/receipts are untouched. promoted_guard is byte-identical
 //! to prior21 guard (5875421359eba37b761e61cddb3b94a904ecce723b5df8d0b06e15950ff17edb),
 //! deliberately promoted here from Unsupported to Live. Root owns prior21 promotion.
-//! No native gate was run while adding this suite. These are acceptance expectations.
+//! Original bytes remeasured stock/native workers1/8 CHECK/BUILD/run on 2026-10-19.
+//! nested_tuple now matches stock exactly; binding_scope rejects unresolved local x.
+//! moved_scrutinee remains a non-Copy guard boundary, not move-diagnostic parity.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[path = "support/native_prelude.rs"]
 mod native_prelude;
@@ -66,7 +68,7 @@ guard
 hit
 "###, stock_stderr: r###""###, stock_compile_stderr: r###""### },
 Case { name: r###"nested_tuple"###, source: r###"fn main(){ let x:i32=9; if matches!((1, (2, true)), (x, (y, yes)) if x + y == 3 && yes) { println!("tuple"); } println!("{}", x); }
-"###, source_bytes: 132, source_fingerprint: 10757279220051887453, source_sha256: r###"e036289f035a637392ebbf242efdedf363161af281910418b45c0b609746e73b"###, native: Native::Unsupported, boundary: r###"println! formatting placeholders are unsupported"###, phase: r###"parse"###, stock_compile_code: 0, stock_code: Some(0), stock_signal: None, stock_stdout: r###"tuple
+"###, source_bytes: 132, source_fingerprint: 10757279220051887453, source_sha256: r###"e036289f035a637392ebbf242efdedf363161af281910418b45c0b609746e73b"###, native: Native::Live, boundary: r###""###, phase: r###"check"###, stock_compile_code: 0, stock_code: Some(0), stock_signal: None, stock_stdout: r###"tuple
 9
 "###, stock_stderr: r###""###, stock_compile_stderr: r###""### },
 Case { name: r###"nested_enum"###, source: r###"enum E { A((i32, bool)), B } fn main(){ if matches!(E::A((4, true)), E::A((x, yes)) if x == 4 && yes) { println!("enum"); } if matches!(E::B, E::A((_, _)) if panic!("bad")) { println!("bad"); } }
@@ -163,7 +165,7 @@ error: aborting due to 1 previous error
 For more information about this error, try `rustc --explain E0308`.
 "### },
 Case { name: r###"binding_scope"###, source: r###"fn main(){ let _hit=matches!(1, x if x == 1); println!("{}", x); }
-"###, source_bytes: 67, source_fingerprint: 14129497231029623708, source_sha256: r###"35be6abf6f758887d75015313beea58f194df3e7f632f4788af24ef755f340e3"###, native: Native::Unsupported, boundary: r###"println! formatting placeholders are unsupported"###, phase: r###"parse"###, stock_compile_code: 1, stock_code: None, stock_signal: None, stock_stdout: r###""###, stock_stderr: r###""###, stock_compile_stderr: r###"error[E0425]: cannot find value `x` in this scope
+"###, source_bytes: 67, source_fingerprint: 14129497231029623708, source_sha256: r###"35be6abf6f758887d75015313beea58f194df3e7f632f4788af24ef755f340e3"###, native: Native::Invalid, boundary: r###""###, phase: r###"check"###, stock_compile_code: 1, stock_code: None, stock_signal: None, stock_stdout: r###""###, stock_stderr: r###""###, stock_compile_stderr: r###"error[E0425]: cannot find value `x` in this scope
  --> sources/binding_scope.rs:1:62
   |
 1 | fn main(){ let _hit=matches!(1, x if x == 1); println!("{}", x); }
@@ -200,7 +202,7 @@ Case { name: r###"ordinary_guard"###, source: r###"fn main(){ match 1 { x if x =
 "###, source_bytes: 70, source_fingerprint: 7241983642770566222, source_sha256: r###"710afcfefcec6c25be050920549d708f02246b4a12830425687b8f0444a36f42"###, native: Native::Unsupported, boundary: r###"match guards, or-patterns and @ patterns are unsupported"###, phase: r###"parse"###, stock_compile_code: 0, stock_code: Some(0), stock_signal: None, stock_stdout: r###"ordinary
 "###, stock_stderr: r###""###, stock_compile_stderr: r###""### },
 Case { name: r###"moved_scrutinee"###, source: r###"struct S { value:i32 } fn main(){ let s=S { value:1 }; let _hit=matches!(s, x if x.value == 1); println!("{}", s.value); }
-"###, source_bytes: 123, source_fingerprint: 17245422516474392823, source_sha256: r###"6509c35e96c03042aaf2abd9560440602163a2d2b3e8a247891a043355789194"###, native: Native::Unsupported, boundary: r###"println! formatting placeholders are unsupported"###, phase: r###"parse"###, stock_compile_code: 1, stock_code: None, stock_signal: None, stock_stdout: r###""###, stock_stderr: r###""###, stock_compile_stderr: r###"error[E0382]: borrow of moved value: `s`
+"###, source_bytes: 123, source_fingerprint: 17245422516474392823, source_sha256: r###"6509c35e96c03042aaf2abd9560440602163a2d2b3e8a247891a043355789194"###, native: Native::Unsupported, boundary: r###"guarded matches with non-Copy bindings are unsupported"###, phase: r###"check"###, stock_compile_code: 1, stock_code: None, stock_signal: None, stock_stdout: r###""###, stock_stderr: r###""###, stock_compile_stderr: r###"error[E0382]: borrow of moved value: `s`
  --> sources/moved_scrutinee.rs:1:112
   |
 1 | struct S { value:i32 } fn main(){ let s=S { value:1 }; let _hit=matches!(s, x if x.value == 1); println!("{}", s.value); }
@@ -511,7 +513,7 @@ fn frozen_guarded_matches_sources_and_strict_phases() {
         });
     }
     // range_pattern became Live with SCALAR-PATTERNS.md (sources unchanged).
-    assert_eq!(partition, [11, 7, 5, 0]);
+    assert_eq!(partition, [12, 5, 6, 0]);
     failures.finish();
 }
 fn stock_all() {
@@ -644,7 +646,9 @@ fn diagnostic(case: &Case, text: &str) {
                         case.name
                     );
                 }
-                "binding_scope_literal" => assert!(text.contains('x'), "{text}"),
+                "binding_scope" | "binding_scope_literal" => {
+                    assert!(text.contains("unresolved local x"), "{text}")
+                }
                 "dead_unknown" => assert!(text.contains("missing"), "{text}"),
                 "moved_scrutinee" => {
                     assert!(text.to_ascii_lowercase().contains("mov"), "{text}")
