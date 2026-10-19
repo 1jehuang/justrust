@@ -31,6 +31,13 @@ oracle stdout) and by feature tags disappearing from it, not by slice docs.
    `justrust test --lib` if you touched shared types. If a test outside your
    area breaks because of you, fix it before pushing. Never push red main.
 8. No worktrees, no branches. Work in `~/justrust-clean-room` on `main`.
+9. The checkout is shared: files you edit may also hold other agents'
+   uncommitted hunks. Never `git add` a whole shared file blindly. Stage only
+   your hunks (`git add -p`, or a private `GIT_INDEX_FILE` built from HEAD),
+   check `git diff --cached`, and verify the staged tree compiles in isolation
+   (e.g. `git stash`-free: export the index with `git checkout-index -a
+   --prefix=$JCODE_SCRATCH_DIR/verify/` and `cargo test --no-run` there) before
+   pushing. Commit your WIP often so other agents' commits can't depend on it.
 
 ## Streams
 
