@@ -1392,13 +1392,10 @@ fn preflight_with_plan(
                     }
                     element
                 }
-                Projection::DynamicIndex(_) => {
-                    let element = match ty {
-                        Ty::Array { element, .. } | Ty::Slice { element } => element,
-                        _ => return Ok(()),
-                    };
-                    element
-                }
+                Projection::DynamicIndex(_) => match ty {
+                    Ty::Array { element, .. } | Ty::Slice { element } => element,
+                    _ => return Ok(()),
+                },
                 Projection::Downcast(variant) => {
                     let Ty::Enum(enumeration) = ty else {
                         return Ok(());

@@ -83,9 +83,12 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
       existing irrefutable scalar/tuple/array patterns. Referenced fixed arrays
       (`&array` and `&mut array`) now yield genuine scalar/unit element loans
       through typed runtime Place projections, with one source body and canonical
-      whole-array overlap/initialization authority. FOR-LOANS.md records the
-      contract and explicit boundaries. Structured referenced elements, runtime
-      slices, SCC-born item loans retained across backedges, non-Copy by-value
+      whole-array overlap/initialization authority. Shared scalar/unit slice
+      iteration uses the same canonical runtime loans, genuine captured descriptor
+      data/length, and declaration-owned lifetime-qualified result origin envelopes.
+      FOR-LOANS.md records the contract and explicit boundaries. Structured
+      referenced elements, mutable slice descriptors and slice descriptor returns,
+      SCC-born item loans retained across backedges, non-Copy by-value
       elements, adapters and expression-position for loops remain open.
 - [x] Genuine let-else with old-frontier initializer/else validation, dedicated
       persistent-binding IR and checked failure divergence. LET-ELSE.md records

@@ -843,7 +843,7 @@ fn main(){
     for x in s {last=x;break;}
     if *last==1 {println!("slice captured ok");}
     {let inner:&[i32]=&a;for x in inner {last=x;break;}}
-    if *last!=1 {1/0;}
+    if *last==1 {println!("slice descriptor scope ok");}
     a[0]=9;
     if a[0]==9 {println!("slice last use ok");}
     let empty:[i32;0]=[];
@@ -856,8 +856,7 @@ fn main(){
     if count==3 {println!("slice empty unit ok");}
 }
 "#;
-    let expected =
-        "slice origin once ok\nslice captured ok\nslice last use ok\nslice empty unit ok\n";
+    let expected = "slice origin once ok\nslice captured ok\nslice descriptor scope ok\nslice last use ok\nslice empty unit ok\n";
     stock(source, Some(expected));
     runs(source, expected);
 }
