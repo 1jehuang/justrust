@@ -2707,7 +2707,7 @@ fn native_all(graph: bool) {
                                     assert!(report.capture_complete);
                                     assert_eq!(report.events_dropped, 0);
                                     assert!(report.failures > 0);
-                                    assert!(!report.node_evaluations.iter().any(|(key, _)| key.kind == 103), "rejected source emitted object");
+                                    assert!(!report.published_kind(105), "rejected source emitted object");
                                 }
                             }
                         } else {

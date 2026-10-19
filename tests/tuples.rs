@@ -520,7 +520,6 @@ fn tuple_checked_bodies_are_shared_once_and_check_does_not_demand_codegen() {
                 }
                 if !check {
                     expected.push(Key::new(105, vec![]));
-                    expected.push(Key::new(114, vec![]));
                 }
                 // Available catalog recipes add real universal proof nodes, but
                 // never eager concrete roots. Keep every historical source key.
@@ -590,10 +589,12 @@ fn tuple_checked_bodies_are_shared_once_and_check_does_not_demand_codegen() {
                             .any(|(key, _)| key.kind == 103)
                     );
                 } else {
-                    let sealed = published(discovered(&Key::new(114, vec![])).node.unwrap());
+                    // Each object follows its own instance proof (no global barrier).
                     for (key, _) in &report.node_evaluations {
                         if key.kind == 103 {
-                            assert!(discovered(key).at_ns >= sealed);
+                            let proof = Key::new(109, key.params.clone());
+                            let proved = published(discovered(&proof).node.unwrap());
+                            assert!(published(discovered(key).node.unwrap()) >= proved);
                         }
                     }
                 }

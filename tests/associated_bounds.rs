@@ -1192,10 +1192,7 @@ fn graph_all() {
                             assert_eq!(report.events_dropped, 0);
                             assert!(report.failures > 0);
                             assert!(
-                                !report
-                                    .node_evaluations
-                                    .iter()
-                                    .any(|(key, _)| key.kind == 103),
+                                !report.published_kind(105),
                                 "{}: rejected source emitted object",
                                 case.name
                             );

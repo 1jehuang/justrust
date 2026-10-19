@@ -53,12 +53,7 @@ fn unused_generic_moves_are_checked_universally_before_native_publication() {
                 );
                 let report = failure.report.unwrap();
                 assert!(report.capture_complete);
-                assert!(
-                    !report
-                        .node_evaluations
-                        .iter()
-                        .any(|(key, _)| key.kind == 103)
-                );
+                assert!(!report.published_kind(105));
             }
         }
     }
@@ -116,7 +111,6 @@ fn unused_generic_types_and_nominal_applications_cannot_use_concrete_witnesses()
                     }
                     if !check {
                         expected.push(Key::new(105, vec![]));
-                        expected.push(Key::new(114, vec![]));
                     }
                     let program = compiler::frontend::parse(source).unwrap();
                     let plan = compiler::frontend::PlanCtx::from_program(
@@ -188,10 +182,12 @@ fn unused_generic_types_and_nominal_applications_cannot_use_concrete_witnesses()
                                 .any(|(key, _)| key.kind == 103)
                         );
                     } else {
-                        let sealed = published(discovered(&Key::new(114, vec![])).node.unwrap());
+                        // Each object follows its own instance proof (no global barrier).
                         for (key, _) in &report.node_evaluations {
                             if key.kind == 103 {
-                                assert!(discovered(key).at_ns >= sealed);
+                                let proof = Key::new(109, key.params.clone());
+                                let proved = published(discovered(&proof).node.unwrap());
+                                assert!(published(discovered(key).node.unwrap()) >= proved);
                             }
                         }
                     }
@@ -202,12 +198,7 @@ fn unused_generic_types_and_nominal_applications_cannot_use_concrete_witnesses()
                     .unwrap();
                 let report = failure.report.unwrap();
                 assert!(report.capture_complete);
-                assert!(
-                    !report
-                        .node_evaluations
-                        .iter()
-                        .any(|(key, _)| key.kind == 103)
-                );
+                assert!(!report.published_kind(105));
             }
         }
     }
@@ -233,12 +224,7 @@ fn exact_generic_recursion_deduplicates_but_growing_instances_fail_boundedly() {
             );
             let report = failure.report.unwrap();
             assert!(report.capture_complete);
-            assert!(
-                !report
-                    .node_evaluations
-                    .iter()
-                    .any(|(key, _)| key.kind == 103)
-            );
+            assert!(!report.published_kind(105));
         }
     }
 }

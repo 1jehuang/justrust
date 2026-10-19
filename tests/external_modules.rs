@@ -455,7 +455,6 @@ fn external_source_graph_is_shared_and_accounts_for_all_files() {
                 }
                 if !check {
                     expected.push(Key::new(105, vec![]));
-                    expected.push(Key::new(114, vec![]));
                 }
                 // Include every available recipe's real universal proof, without
                 // changing source-file accounting or eager concrete roots.

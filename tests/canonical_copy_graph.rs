@@ -61,31 +61,28 @@ fn canonical_recipe_universal_proofs_and_inner_origins_precede_every_object() {
                     _ => false,
                 })
         }));
-        let barrier_key = format!("{:?}", Key::new(114, vec![]));
-        let barrier = compiled
-            .report
-            .events
-            .iter()
-            .find(|event| event.kind == "discovered" && event.detail == barrier_key)
-            .unwrap()
-            .node
-            .unwrap();
-        let published = compiled
-            .report
-            .events
-            .iter()
-            .find(|event| event.kind == "publish" && event.node == Some(barrier))
-            .unwrap()
-            .at_ns;
-        for index in 0..compiled.control_flow.len() {
-            let object_key = format!("{:?}", Key::new(103, vec![index as u64]));
-            let object = compiled
+        // Every object follows its own instance proof (no global barrier).
+        let publish_of = |key: Key| {
+            let spelling = format!("{key:?}");
+            let node = compiled
                 .report
                 .events
                 .iter()
-                .find(|event| event.kind == "discovered" && event.detail == object_key)
+                .find(|event| event.kind == "discovered" && event.detail == spelling)
+                .unwrap()
+                .node
                 .unwrap();
-            assert!(object.at_ns >= published);
+            compiled
+                .report
+                .events
+                .iter()
+                .find(|event| event.kind == "publish" && event.node == Some(node))
+                .unwrap()
+                .at_ns
+        };
+        for index in 0..compiled.control_flow.len() {
+            let object = publish_of(Key::new(103, vec![index as u64]));
+            assert!(object >= publish_of(Key::new(109, vec![index as u64])));
         }
     }
 }
@@ -141,7 +138,6 @@ fn invalid_unused_clone_and_unavailable_dispatch_never_reach_objects() {
                     }
                     if !check {
                         expected.push(Key::new(105, vec![]));
-                        expected.push(Key::new(114, vec![]));
                     }
                     let program = compiler::frontend::parse(source).unwrap();
                     let context = PlanCtx::from_program(&program, &PlanBudget::default()).unwrap();
@@ -208,10 +204,12 @@ fn invalid_unused_clone_and_unavailable_dispatch_never_reach_objects() {
                                 .any(|(key, _)| key.kind == 103)
                         );
                     } else {
-                        let sealed = published(discovered(&Key::new(114, vec![])).node.unwrap());
+                        // Each object follows its own instance proof (no global barrier).
                         for (key, _) in &report.node_evaluations {
                             if key.kind == 103 {
-                                assert!(discovered(key).at_ns >= sealed);
+                                let proof = Key::new(109, key.params.clone());
+                                let proved = published(discovered(&proof).node.unwrap());
+                                assert!(published(discovered(key).node.unwrap()) >= proved);
                             }
                         }
                     }
@@ -223,12 +221,7 @@ fn invalid_unused_clone_and_unavailable_dispatch_never_reach_objects() {
                 .unwrap();
             let report = failure.report.unwrap();
             assert!(report.capture_complete);
-            assert!(
-                !report
-                    .node_evaluations
-                    .iter()
-                    .any(|(key, _)| key.kind == 103)
-            );
+            assert!(!report.published_kind(105));
         }
     }
     let override_source = "struct S{v:i32}impl Clone for S{fn clone(&self)->Self{S{v:self.v}}fn clone_from(&mut self,source:&Self){self.v=source.v+10;}}fn run()->i32{let mut destination=S{v:1};let source=S{v:2};destination.clone_from(&source);destination.v}\nfn main(){if run()==12{println!(\"canonical copy oracle ok\");}}\n";

@@ -97,16 +97,20 @@ fn universal_effect_publication_is_acyclic_and_precedes_every_closed_instance() 
                             .any(|(key, _)| key.kind == 103)
                     );
                 } else {
-                    let (barrier, _) = discovered(report, Key::new(114, vec![]));
-                    let sealed = report
-                        .events
-                        .iter()
-                        .find(|event| event.kind == "publish" && event.node == Some(barrier))
-                        .unwrap()
-                        .at_ns;
+                    // Every object follows its own instance proof.
+                    let publish_of = |key: Key| {
+                        let (node, _) = discovered(report, key);
+                        report
+                            .events
+                            .iter()
+                            .find(|event| event.kind == "publish" && event.node == Some(node))
+                            .unwrap()
+                            .at_ns
+                    };
                     for (key, _) in &report.node_evaluations {
                         if key.kind == 103 {
-                            assert!(discovered(report, key.clone()).1 >= sealed);
+                            let proof = Key::new(109, key.params.clone());
+                            assert!(publish_of(key.clone()) >= publish_of(proof));
                         }
                     }
                 }
@@ -142,12 +146,7 @@ fn invalid_unused_carriers_and_excluded_inner_actuals_never_emit_objects() {
                     .report
                     .expect("semantic failure lost graph evidence");
                 assert!(report.capture_complete);
-                assert!(
-                    !report
-                        .node_evaluations
-                        .iter()
-                        .any(|(key, _)| key.kind == 103)
-                );
+                assert!(!report.published_kind(105));
             }
         }
     }

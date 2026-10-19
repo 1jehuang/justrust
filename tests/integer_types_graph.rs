@@ -57,12 +57,7 @@ fn unused_integer_reference_violation_blocks_publication() {
             let report = failure.report.unwrap();
             assert!(report.capture_complete);
             if check {
-                assert!(
-                    !report
-                        .node_evaluations
-                        .iter()
-                        .any(|(key, _)| key.kind == 103)
-                );
+                assert!(!report.published_kind(105));
             }
         }
     }

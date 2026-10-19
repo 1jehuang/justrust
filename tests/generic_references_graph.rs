@@ -86,12 +86,7 @@ fn unused_generic_dereference_move_is_rejected_universally() {
                 .unwrap();
             let report = failure.report.unwrap();
             assert!(report.capture_complete);
-            assert!(
-                !report
-                    .node_evaluations
-                    .iter()
-                    .any(|(key, _)| key.kind == 103)
-            );
+            assert!(!report.published_kind(105));
         }
     }
 }
@@ -112,12 +107,7 @@ fn immediate_explicit_mutable_borrow_is_not_promoted_to_reservation() {
             );
             let report = failure.report.unwrap();
             assert!(report.capture_complete);
-            assert!(
-                !report
-                    .node_evaluations
-                    .iter()
-                    .any(|(key, _)| key.kind == 103)
-            );
+            assert!(!report.published_kind(105));
         }
     }
 }

@@ -78,12 +78,7 @@ fn main(){run();}
                     .iter()
                     .any(|(key, _)| key.kind == 112)
             );
-            assert!(
-                !report
-                    .node_evaluations
-                    .iter()
-                    .any(|(key, _)| key.kind == 103)
-            );
+            assert!(!report.published_kind(105));
         }
     }
 }
@@ -111,12 +106,7 @@ fn main(){run();}
                     .unwrap();
                 let report = failure.report.unwrap();
                 assert!(report.capture_complete);
-                assert!(
-                    !report
-                        .node_evaluations
-                        .iter()
-                        .any(|(key, _)| key.kind == 103)
-                );
+                assert!(!report.published_kind(105));
             }
         }
     }

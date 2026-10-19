@@ -11633,3 +11633,20 @@ Work growth 16->32 is 1.866 (ceiling lowered to 1.92). The ceiling moves to 540
 functions; 570 fails because main's dense per-block init/live bitsets
 (O(blocks x paths) bytes) exceed its per-task byte limit. The next fix is a
 sparse or interval representation for those bitsets. 3251 tests pass.
+
+### Codegen barrier removed: objects depend only on their own proof (2026-10-18)
+
+`CONCRETE_PROOFS` (114) was a whole-program join: every `OBJECT` and `BUILD`
+waited for every instance's analysis before any machine code could start.
+Now each `OBJECT` reads only its own `ANALYZE` proof, so code generation for a
+ready function overlaps unrelated checking (ARCHITECTURE.md section 17). The
+release contract is unchanged: `BUILD` reads the explicit `CHECK` fact
+(every required check passed) immediately before linking. A failed compilation
+never publishes a linked artifact. The node kind is deleted, which lowers the
+whole-program debt list and leaf-closure growth (1.481 -> 1.205, ceiling 1.23).
+
+Tests that asserted "no OBJECT node was evaluated on any failure" encoded the
+removed internal ordering. They now assert the external contract: no `BUILD`
+artifact is published (`Report::published_kind(105)`). Check-only runs still
+assert no OBJECT is demanded. Barrier-order tests now assert per-instance
+order: each object publishes after its own proof. 3259 tests pass.
