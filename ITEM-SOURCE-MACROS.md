@@ -225,3 +225,14 @@ local fallback, confirmed by `justrust show`. Native compiler fallback remains
 blocked by the acceptance harness. The isolated target directory is separate
 from stable clients and other lanes. No install, primary-checkout mutation,
 composed full-suite acceptance or speed claim is made here.
+
+### Published-baseline follow-through
+
+The unchanged macro increment rebased cleanly onto published
+`8550f407a66b4f3d05fb65c568bc74cb8935c960`. Hosted check, full library plus all
+six macro/authority binaries and the seven graph tests passed (1,434 total,
+zero failed/ignored/filtered), followed by strict all-target lint. The later
+`3537c8fef` merge changes documentation/receipts only. Exact ancestry, run IDs
+and unchanged full-program first-boundary probes are recorded in
+`data/runs/macro-many/README.md` and `rebase-8550.jsonl`. No manifest, fixture,
+compiler source or graph-gate edits were needed for this revalidation.
