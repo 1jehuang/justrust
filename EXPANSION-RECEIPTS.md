@@ -57,3 +57,21 @@ failure, and actual graph fact publication after the runtime ledger has died.
 
 The larger cache-composed graph gate is still blocked. No main edit/build,
 installation, push, compiler compatibility claim or timing speedup claim.
+
+## Downstream OwnerPath adoption reported by its owner
+
+The coordinated `cr-split` lane adopted this bridge as `46bf8c9e6`, then
+published immutable step-storage receipts in `a95b5df48` and prepaid immutable
+root-storage receipts in `aaa4244af`. Zebra reports that the OwnerPath
+reachable-state test changed from a live ByteLease/ExpansionBudget/Mutex path
+to passing and was un-ignored. These are downstream scratch checkpoints, not
+an activation or acceptance claim about the separate cache-composed tree here.
+
+Exact hosted receipts supplied by zebra:
+- `20261018-211953364-3874008`: graph_integrity, owner_authority, engine and
+  source_error_order integration suites, all 41 tests passed.
+- `20261018-211912565-3849986`: strict clippy passed.
+- `20261018-211909292-3848206`: engine library tests passed.
+
+These results were executed and reported by the owning lane, not rerun here.
+The coordinator also received the checkpoint and receipt inventory.
