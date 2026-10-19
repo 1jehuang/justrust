@@ -4095,6 +4095,93 @@ pub(super) struct Target {
     pub authority: Vec<usize>,
 }
 
+/// A returned element path with runtime index steps (`&s[i]`) is admitted
+/// only when, for every runtime step, the declared contract contains the
+/// path for every constant index `0..len` of that array: whatever index is
+/// taken at run time, the result stays inside declared input storage.
+fn dynamic_target_covered(
+    f: &cfg::Function,
+    local: LocalId,
+    position: &ir::CarrierLocation,
+    target: &[Projection],
+    returns: &ReturnContract,
+    budget: &mut Budget,
+) -> Result<bool, Exhausted> {
+    let ir::CarrierChannel::Fixed(reference) = &position.channel else {
+        return Ok(false);
+    };
+    if !position.path.0.is_empty() {
+        return Ok(false);
+    }
+    let Some(param) = f.params.iter().position(|p| *p == local) else {
+        return Ok(false);
+    };
+    let mut ty = &f.locals[local.0].ty;
+    for _ in 0..=reference.depth {
+        let Ty::Ref { referent, .. } = ty else {
+            return Ok(false);
+        };
+        ty = referent;
+    }
+    // Lengths of each runtime step, and the total concretization count.
+    let mut lens = Vec::new();
+    let mut total: usize = 1;
+    for step in target {
+        budget.spend(1)?;
+        ty = match step {
+            Projection::Field(index) => match ty.field_ty(*index) {
+                Some(ty) => ty,
+                None => return Ok(false),
+            },
+            Projection::ConstantIndex(_) | Projection::DynamicIndex(_) => {
+                let Ty::Array { element, len } = ty else {
+                    return Ok(false);
+                };
+                let len = *len;
+                if matches!(step, Projection::DynamicIndex(_)) {
+                    lens.push(len);
+                    total = match total.checked_mul(len) {
+                        Some(total) if total <= 4096 => total,
+                        _ => return Ok(false),
+                    };
+                }
+                element
+            }
+            _ => return Ok(false),
+        };
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    for (input, projection, precision) in return_inputs(returns) {
+        budget.spend(projection.len() + 1)?;
+        if input.param != param || input.position != *reference {
+            continue;
+        }
+        if precision == TargetPrecision::Subtree {
+            return Ok(true);
+        }
+        if projection.len() != target.len() {
+            continue;
+        }
+        let mut key = Vec::new();
+        let matches = projection
+            .iter()
+            .zip(target)
+            .all(|(declared, step)| match step {
+                Projection::DynamicIndex(_) => match declared {
+                    Projection::ConstantIndex(k) => {
+                        key.push(*k);
+                        true
+                    }
+                    _ => false,
+                },
+                other => declared == other,
+            });
+        if matches && key.iter().zip(&lens).all(|(k, len)| k < len) {
+            seen.insert(key);
+        }
+    }
+    Ok(seen.len() == total)
+}
 fn return_inputs(
     contract: &ReturnContract,
 ) -> impl Iterator<Item = (InputReference, &[Projection], TargetPrecision)> {
@@ -5075,6 +5162,24 @@ impl Plan {
                             || ((target.precision == TargetPrecision::Exact || singleton)
                                 && projection == target.place.projection.as_slice());
                     }
+                }
+                if !contained
+                    && declared_input
+                    && (target.precision == TargetPrecision::Exact || singleton)
+                    && target
+                        .place
+                        .projection
+                        .iter()
+                        .any(|step| matches!(step, Projection::DynamicIndex(_)))
+                {
+                    contained = dynamic_target_covered(
+                        f,
+                        *local,
+                        position,
+                        &target.place.projection,
+                        &result.returns,
+                        budget,
+                    )?;
                 }
                 if !contained && !position.path.0.is_empty() {
                     // A reference stored inside an aggregate behind a borrowed

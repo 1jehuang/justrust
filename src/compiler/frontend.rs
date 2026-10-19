@@ -4632,6 +4632,7 @@ mod const_inputs;
 mod const_items;
 #[cfg(test)]
 mod const_source_tests;
+mod indexed_borrow;
 #[cfg(test)]
 mod leading_zero_tests;
 #[cfg(test)]

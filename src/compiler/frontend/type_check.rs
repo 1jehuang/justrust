@@ -4608,6 +4608,9 @@ impl<'a> Checker<'a> {
         expected: Option<&ir::Ty>,
     ) -> Result<ir::ExprId, String> {
         let source = value;
+        if let Some(id) = self.borrow_indexed_place(kind, value)? {
+            return Ok(id);
+        }
         if place_expression(value) {
             return Err(
                 "unsupported: borrowing runtime indexed or dereferenced places is unsupported"
