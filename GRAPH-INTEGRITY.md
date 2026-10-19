@@ -68,7 +68,7 @@ may only move toward the target:
 | Whole-program nodes | `parse`, `resolve`, `signatures`, `effects_ready`, `mono_plan` (`source` split per file and `concrete_proofs` removed 2026-10-18) | only `check`, `build` |
 | Leaf closure growth 16 to 32 | 1.205 (ceiling 1.23, was 1.481) | 1.0 |
 | Work growth 16 to 32 | 1.757 (ceiling 1.81, was 1.92; six fixed source-library method proofs lower the ratio, not an algorithmic speedup) | about 2.0 |
-| Largest compiling flat program | 996 functions (997 fails at the unchanged 32,000,000 work limit; sparse ownership accounting replaced obsolete dense selection charges, was 540/570) | no fixed ceiling |
+| Largest compiling flat program | 1165 functions (1166 fails at the unchanged 32,000,000 work limit; checked immutable call-effect lookup removed repeated full binding scans, was 996/997) | no fixed ceiling |
 
 When a change improves a number, the tests fail until it is recorded:
 
