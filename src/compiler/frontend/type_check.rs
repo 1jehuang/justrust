@@ -8995,19 +8995,36 @@ pub fn check_function_with_signatures(
     signatures: &Signatures,
 ) -> Result<(), String> {
     let typed = type_function_with_signatures(program, index, signatures)?;
-    if let Some(plan) = &signatures.plan
-        && (plan.callable_env(plan.callable_decl(index)?)?.is_generic()
-            || matches!(
-                plan.callable_provider(plan.callable_decl(index)?)?,
-                CallableProvider::Recipe { .. }
-            ))
-    {
-        let plan = signatures
-            .plan
-            .as_ref()
-            .ok_or("generic checking requires planning context")?;
-        let facts = plan.callable_facts(plan.callable_decl(index)?)?;
-        let template = super::super::cfg::lower_template(Arc::new(typed), facts, &plan.budget)?;
+    let plan = signatures
+        .plan
+        .as_ref()
+        .ok_or("semantic checking requires authoritative world")?;
+    let declaration = plan.callable_decl(index)?;
+    let publication = match plan.callable_provider(declaration)? {
+        CallableProvider::Source { .. } => {
+            match plan
+                .publish_callable_body(declaration, &plan.budget)
+                .map_err(|error| error.into_legacy_diagnostic(&plan.budget))?
+            {
+                PublishedCallableBody::Source(publication) => Some(publication),
+                PublishedCallableBody::Recipe(_) => {
+                    return Err("Source checker received a recipe publication".into());
+                }
+            }
+        }
+        CallableProvider::Recipe { .. } => None,
+        CallableProvider::UnavailableProvided { .. } => {
+            return Err("unavailable provided body cannot be checked".into());
+        }
+    };
+    if plan.callable_env(declaration)?.is_generic() || publication.is_none() {
+        let template = if let Some(publication) = &publication {
+            super::super::cfg::lower_source_template(publication, &plan.budget)
+                .map_err(|error| error.into_legacy_diagnostic(&plan.budget))?
+        } else {
+            let facts = plan.callable_facts(declaration)?;
+            super::super::cfg::lower_template(Arc::new(typed), facts, &plan.budget)?
+        };
         return super::super::ownership::verify_template(template)
             .map(|_| ())
             .map_err(|analysis| {
@@ -9019,19 +9036,12 @@ pub fn check_function_with_signatures(
                 )
             });
     }
-    let plan = signatures
-        .plan
-        .as_ref()
-        .ok_or("semantic checking requires authoritative world")?;
-    let target = ir::CallTarget {
-        declaration: plan.callable_decl(index)?,
-        type_args: Arc::from([]),
-    };
-    let facts = plan.instance_facts(&target)?;
-    let mut cx = plan.clone();
-    let typed = ir::close_checked_calls(&typed, &facts, &mut cx, &plan.budget)
-        .map_err(|e| e.into_legacy_diagnostic(&plan.budget))?;
-    let lowered = super::super::cfg::lower_with_facts(&typed, &facts, &plan.budget)?;
+    // Source ownership (including implicit Drop) requires its canonical replay
+    // publication. Raw typed lowering omits that proof for call-free bodies.
+    let publication = publication.ok_or("closed Source checker omitted publication")?;
+    let facts = publication.facts().clone();
+    let lowered = super::super::cfg::lower_source_closed(&publication, &plan.budget)
+        .map_err(|error| error.into_legacy_diagnostic(&plan.budget))?;
     let closed = super::super::cfg::close(Arc::new(lowered), facts, &plan.budget)?;
     let analysis = match super::super::ownership::analyze_closed(closed) {
         Ok(_) => return Ok(()),
@@ -9606,6 +9616,22 @@ pub(super) fn trait_object_target(ty: &ir::Ty) -> Option<(ir::BorrowKind, ir::De
 
 #[cfg(test)]
 mod checked_identity_tests {
+    #[test]
+    fn direct_check_preserves_canonical_source_lowering() {
+        for source in [
+            "struct Wrap<T>{value:T}fn unwrap<T>(x:Wrap<T>)->T{x.value}fn main(){let x=unwrap::<i32>(Wrap{value:1});}",
+            "struct D{v:i32}impl Drop for D{fn drop(&mut self){}}fn main(){let d=D{v:1};}",
+        ] {
+            let program = parse(source).unwrap();
+            check(&program).unwrap_or_else(|error| panic!("{source}: {error}"));
+        }
+        let invalid = parse("fn duplicate<T>(x:T){let a=x;let b=x;}fn main(){}").unwrap();
+        assert!(
+            check(&invalid).is_err(),
+            "unused generic moves must remain checked"
+        );
+    }
+
     #[test]
     fn guarded_matches_reject_noncopy_bindings_before_guard_checking() {
         for source in [
