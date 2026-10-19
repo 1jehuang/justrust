@@ -585,8 +585,13 @@ cleanup failures.
       No-call closure CFGs also retain exact parent-body/mode lowering proof for
       owning Drop scratch locals (`tests/closure_drop_proof.rs`), without
       weakening destructor or source-authorization gates.
-      Stored reference captures, generic-parent closures, opaque returns and
-      iterator integration remain open.
+      Stored shared/mutable scalar and owned aggregate-field captures retain
+      disjoint field identity, ordinary loan/move validation, unused-body rejection
+      and owning Drop order
+      (`tests/closure_borrows.rs`, `tests/closure_capture_places.rs`). Inferred
+      signature hints do not grant written coercion authority. Reference-bearing
+      closure results explicitly reject pending exact carrier-origin contracts.
+      Generic-parent closures, opaque returns and iterator integration remain open.
 - [ ] Extend monomorphization/recursive instance planning to the new forms while
       retaining universal checks, binder-qualified substitution and sealed native
       instances. Optimization must not bypass unused-body validation. Shared

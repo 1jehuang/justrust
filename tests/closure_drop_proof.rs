@@ -1,6 +1,6 @@
 //! Even a no-call closure retains canonical lowering proof for owning scratch locals.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
-#[path = "support/oracle.rs"]
+#[path = "support/closure_oracle.rs"]
 mod oracle;
 
 #[test]

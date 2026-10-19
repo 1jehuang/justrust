@@ -1,5 +1,7 @@
 //! Immediate closures are separate callable declarations, never substituted bodies.
 use super::*;
+#[cfg(test)]
+mod borrow_authority;
 mod capture_rewrite;
 mod capture_use;
 pub(in crate::compiler) mod check;

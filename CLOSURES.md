@@ -1,5 +1,41 @@
 # Closure callable foundation
 
+## Acceptance coverage correction
+
+The general `tests/support/oracle.rs` historically compared stock with one default
+native BUILD/run. Earlier descriptions of its value-capture and no-call Drop
+cases as worker-1/8 CHECK/BUILD coverage were incorrect. The dedicated
+`tests/support/closure_oracle.rs` now explicitly drives CHECK and BUILD at workers
+1 and 8, asserts CHECK demands no code generation and publishes no image, and
+runs each successful BUILD. Invalid controls exercise both roots and worker
+counts and may not substitute an unsupported boundary for rejection. Stage-one
+explicit graph/worker tests and independently explicit callable-hint tests retain
+their original coverage. The corrected capture matrix covers 31 retained stock
+programs with 124 explicit native CHECK/BUILD cells. Its first successful
+worker-1/8 execution is new evidence, not a retroactive description of the old
+oracle runs.
+
+## Stored closure support
+
+Stored closures can borrow shared and mutable scalar locals and owned aggregate
+field places. The parent checker
+infers the callable capability and final per-field capture layout, then publishes
+only immutable, mode-specific checked bodies. Disjoint struct fields retain
+distinct capture identities. Environment construction creates ordinary loans,
+and rewritten bodies pass the same move, borrow, escape and Drop checks as other
+functions. `tests/closure_borrows.rs` and `tests/closure_capture_places.rs` compare
+CHECK/BUILD/run at workers 1 and 8, including unused invalid bodies, conflicting
+loans, mutable callable admission, escaping locals and destructor order.
+
+Inferred closure result hints do not create source-written coercion sites.
+Reference-bearing closure results, including nested tuple/array carriers, remain
+explicitly unsupported until their exact checked input-origin contracts can be
+replayed through callable projection. This is not a successful reference-return
+or opaque-return milestone. Generic parent bodies and opaque returns remain open.
+Reference-rooted dereference precision, unique-immutable capture capability, and
+raw/owning-pointer mutation classification are separate unfinished work. This
+increment does not claim all reference-containing environment forms.
+
 No-call stored closure bodies retain canonical CFG lowering authority even when
 unused capture-check scratch locals have owning Drop obligations. The lowering
 entry reads the exact checked parent-body allocation and validates owner, site,
@@ -13,14 +49,20 @@ mode-specific concrete receiver bodies and ordinary move/drop checking. Capture
 source places, owner instantiation, site, provider and receiver capability are
 part of executable authorization. `tests/closure_captures.rs` compares valid
 execution and invalid move reuse against stock Rust at workers 1 and 8.
-Stored by-reference captures, closures in generic parents and opaque returns
-remain unsupported by this increment. This is not complete closure support.
+Closures in generic parents and opaque returns remain unsupported by this
+increment. This is not complete closure support.
 
 This is not full closure support or full Rust compatibility.
 The mutable scalar increment below is a private checkpoint with scoped replay
 passed on published `677ea96ab`, pending coordinator-composed full-suite
 acceptance. Its scoped and infrastructure receipts are in
 `data/runs/closure-mutable/README.md`.
+
+## Historical immediate-closure foundation
+
+The following foundation notes describe the earlier immediate-call subset. Its
+listed unsupported stored-value forms are superseded by the current contract
+above, not a claim that the complete closure program is finished.
 
 The first genuine executable increment admits immediately invoked,
 noncapturing closures with explicit parameter types, an explicit scalar/unit

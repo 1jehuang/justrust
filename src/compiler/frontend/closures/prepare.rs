@@ -122,7 +122,10 @@ impl Checker<'_> {
         let (mut body, flow) = child.block_with_expectation(&syntax.body, expectation)?;
         let result = result_hint.unwrap_or(flow.ty.clone());
         if !ir::carrier_locations(&result, &plan.budget)?.is_empty() {
-            return Err("unsupported: closure reference results require checked capture carrier contracts".into());
+            return Err(
+                "unsupported: closure reference results require checked capture carrier contracts"
+                    .into(),
+            );
         }
         child.require(&flow, &result)?;
         prefix.append(&mut body.statements);
@@ -136,58 +139,57 @@ impl Checker<'_> {
         )?;
         let mut sources = Vec::new();
         let mut capture_types = Vec::new();
-        let mut projections = HashMap::new();
+        let mut projections = Vec::new();
         let mut kind = ir::ClosureKind::Fn;
-        for ((parent, local), usage) in candidates.into_iter().zip(uses) {
-            if !usage.read && !usage.mutable && !usage.moved {
-                continue;
-            }
-            kind = match (kind, usage.kind()) {
-                (ir::ClosureKind::FnOnce, _) | (_, ir::ClosureKind::FnOnce) => {
-                    ir::ClosureKind::FnOnce
-                }
-                (ir::ClosureKind::FnMut, _) | (_, ir::ClosureKind::FnMut) => ir::ClosureKind::FnMut,
-                _ => ir::ClosureKind::Fn,
-            };
-            let mode = if by_move || usage.moved {
-                ir::CaptureKind::Value
-            } else if usage.mutable {
-                ir::CaptureKind::Mut
-            } else {
-                ir::CaptureKind::Shared
-            };
-            // By-reference captures are a distinct borrow-checked milestone.
-            if mode != ir::CaptureKind::Value {
-                return Err("unsupported: stored reference capture requires borrow-checked environment admission".into());
-            }
-            let original = child.locals[local.0].ty.clone();
-            let ty = match mode {
-                ir::CaptureKind::Value => original,
-                ir::CaptureKind::Shared => ir::Ty::Ref {
-                    kind: ir::BorrowKind::Shared,
-                    referent: Arc::new(original),
-                },
-                ir::CaptureKind::Mut => ir::Ty::Ref {
-                    kind: ir::BorrowKind::Mut,
-                    referent: Arc::new(original),
-                },
-            };
-            projections.insert(
-                local,
-                capture_rewrite::CaptureProjection {
+        for ((parent, local), captures) in candidates.into_iter().zip(uses) {
+            for capture in captures {
+                let usage = capture.usage;
+                kind = match (kind, usage.kind()) {
+                    (ir::ClosureKind::FnOnce, _) | (_, ir::ClosureKind::FnOnce) => {
+                        ir::ClosureKind::FnOnce
+                    }
+                    (ir::ClosureKind::FnMut, _) | (_, ir::ClosureKind::FnMut) => {
+                        ir::ClosureKind::FnMut
+                    }
+                    _ => ir::ClosureKind::Fn,
+                };
+                let mode = if by_move || usage.moved {
+                    ir::CaptureKind::Value
+                } else if usage.mutable {
+                    ir::CaptureKind::Mut
+                } else {
+                    ir::CaptureKind::Shared
+                };
+                let original = child
+                    .facts()
+                    .projected_ty(&child.locals[local.0].ty, &capture.place.projection)?
+                    .clone();
+                let ty = match mode {
+                    ir::CaptureKind::Value => original,
+                    ir::CaptureKind::Shared => ir::Ty::Ref {
+                        kind: ir::BorrowKind::Shared,
+                        referent: Arc::new(original),
+                    },
+                    ir::CaptureKind::Mut => ir::Ty::Ref {
+                        kind: ir::BorrowKind::Mut,
+                        referent: Arc::new(original),
+                    },
+                };
+                projections.push(capture_rewrite::CaptureProjection {
                     local,
                     field: capture_types.len(),
+                    prefix: capture.place.projection.clone(),
                     indirect: mode != ir::CaptureKind::Value,
-                },
-            );
-            capture_types.push(ty);
-            sources.push(ir::CaptureSource {
-                place: ir::Place {
-                    local: parent,
-                    projection: Vec::new(),
-                },
-                kind: mode,
-            });
+                });
+                capture_types.push(ty);
+                sources.push(ir::CaptureSource {
+                    place: ir::Place {
+                        local: parent,
+                        projection: capture.place.projection,
+                    },
+                    kind: mode,
+                });
+            }
         }
         let closure = Arc::new(
             ir::ClosureTy::new(
@@ -238,6 +240,7 @@ impl Checker<'_> {
                 &plan.budget,
             )?;
             let checked = ir::CheckedFunction {
+                runtime_sites: ir::RuntimeSites::from_source(child.runtime_sites.clone())?,
                 name: format!("closure {:?}:{}:{mode:?}", owner, syntax.site),
                 ref_contract: signature.ref_contract,
                 params: vec![receiver, arguments],
@@ -245,7 +248,6 @@ impl Checker<'_> {
                 locals,
                 exprs,
                 call_evidence: child.call_evidence.clone().into(),
-                runtime_sites: ir::RuntimeSites::from_source(child.runtime_sites.clone())?,
                 body_substitution: None,
                 body,
             };

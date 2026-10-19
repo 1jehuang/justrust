@@ -7,6 +7,7 @@ use std::collections::HashMap;
 pub(super) struct CaptureProjection {
     pub local: ir::LocalId,
     pub field: usize,
+    pub prefix: Vec<ir::Projection>,
     /// A shared/mutable reference capture has one extra field dereference.
     pub indirect: bool,
 }
@@ -15,9 +16,11 @@ fn captured_place(
     place: &mut ir::Place,
     receiver: ir::LocalId,
     borrowed_receiver: bool,
-    captures: &HashMap<ir::LocalId, CaptureProjection>,
+    captures: &[CaptureProjection],
 ) -> Result<(), String> {
-    let Some(capture) = captures.get(&place.local) else {
+    let Some(capture) = captures.iter().find(|capture| {
+        capture.local == place.local && place.projection.starts_with(&capture.prefix)
+    }) else {
         return Ok(());
     };
     let additional = usize::from(borrowed_receiver) + 1 + usize::from(capture.indirect);
@@ -32,7 +35,7 @@ fn captured_place(
     if capture.indirect {
         projection.push(ir::Projection::Deref);
     }
-    projection.append(&mut place.projection);
+    projection.extend_from_slice(&place.projection[capture.prefix.len()..]);
     place.local = receiver;
     place.projection = projection;
     Ok(())
@@ -42,13 +45,15 @@ fn rewrite_block(
     block: &mut ir::Block,
     receiver: ir::LocalId,
     borrowed_receiver: bool,
-    captures: &HashMap<ir::LocalId, CaptureProjection>,
+    captures: &[CaptureProjection],
 ) -> Result<(), String> {
     let mut pending = vec![block];
     while let Some(block) = pending.pop() {
         for statement in &mut block.statements {
             if let ir::Stmt::Assign { local, value } = statement
-                && captures.contains_key(local)
+                && captures
+                    .iter()
+                    .any(|capture| capture.local == *local && capture.prefix.is_empty())
             {
                 let mut place = ir::Place {
                     local: *local,
@@ -91,7 +96,7 @@ pub(super) fn rewrite(
     receiver: ir::LocalId,
     receiver_ty: ir::Ty,
     environment: Arc<ir::ClosureTy>,
-    captures: &HashMap<ir::LocalId, CaptureProjection>,
+    captures: &[CaptureProjection],
     budget: &ir::PlanBudget,
 ) -> Result<(), String> {
     let borrowed_receiver = matches!(receiver_ty, ir::Ty::Ref { .. });
@@ -125,7 +130,7 @@ pub(super) fn rewrite(
         receiver_expr
     };
     let mut indirect = HashMap::new();
-    let mut ordered: Vec<_> = captures.values().collect();
+    let mut ordered: Vec<_> = captures.iter().collect();
     ordered.sort_unstable_by_key(|capture| capture.field);
     for capture in ordered {
         if capture.indirect {
@@ -143,17 +148,22 @@ pub(super) fn rewrite(
                     index: capture.field,
                 },
             });
-            indirect.insert(capture.local, id);
+            indirect.insert(capture.field, id);
         }
     }
-    for expression in &mut exprs[..original_len] {
-        if let ir::ExprKind::Local(local) = &expression.kind
-            && let Some(capture) = captures.get(local)
+    let places = (0..original_len)
+        .map(|index| capture_use::expression_place(exprs, ir::ExprId(index)))
+        .collect::<Result<Vec<_>, _>>()?;
+    for (index, expression) in exprs[..original_len].iter_mut().enumerate() {
+        if let Some(place) = &places[index]
+            && let Some(capture) = captures
+                .iter()
+                .find(|capture| capture.local == place.local && capture.prefix == place.projection)
         {
             expression.kind = if capture.indirect {
                 ir::ExprKind::Deref {
                     value: *indirect
-                        .get(local)
+                        .get(&capture.field)
                         .ok_or("missing indirect capture field")?,
                 }
             } else {

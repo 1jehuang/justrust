@@ -1,6 +1,6 @@
 //! Stock-matching owned and consumed closure environment acceptance.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
-#[path = "support/oracle.rs"]
+#[path = "support/closure_oracle.rs"]
 mod oracle;
 use oracle::{Case, Expect};
 

@@ -1,6 +1,6 @@
-//! Per-parent-body capture use classification over already checked IR.
-//! Intermediate place projections are not value reads: only the selected leaf
-//! determines whether a non-Copy value is consumed.
+//! Per-parent-body capture use classification over checked places.
+//! Capture identity retains disjoint field paths. Dereferences and runtime
+//! indices truncate capture precision rather than inventing a movable place.
 use super::*;
 use std::collections::{HashMap, HashSet};
 
@@ -20,23 +20,91 @@ impl CaptureUse {
             ir::ClosureKind::Fn
         }
     }
+    fn merge(&mut self, other: Self) {
+        self.read |= other.read;
+        self.mutable |= other.mutable;
+        self.moved |= other.moved;
+    }
+}
+#[derive(Clone, Debug)]
+pub(super) struct Capture {
+    pub place: ir::Place,
+    pub usage: CaptureUse,
 }
 
-fn expression_root(
+pub(super) fn expression_place(
     exprs: &[ir::TypedExpr],
     mut id: ir::ExprId,
-) -> Result<Option<ir::LocalId>, String> {
+) -> Result<Option<ir::Place>, String> {
+    let mut projection = Vec::new();
     for _ in 0..=ir::MAX_PATTERN_PROJECTION_DEPTH {
-        match &exprs.get(id.0).ok_or("invalid capture expression")?.kind {
-            ir::ExprKind::Local(local) => return Ok(Some(*local)),
-            ir::ExprKind::Field { base, .. }
-            | ir::ExprKind::Index { base, .. }
-            | ir::ExprKind::DynamicIndex { base, .. } => id = *base,
-            ir::ExprKind::Deref { value } => id = *value,
+        let expression = exprs.get(id.0).ok_or("invalid capture expression")?;
+        match &expression.kind {
+            ir::ExprKind::Local(local) => {
+                projection.reverse();
+                return Ok(Some(ir::Place {
+                    local: *local,
+                    projection,
+                }));
+            }
+            ir::ExprKind::Field { base, index } => {
+                projection.push(ir::Projection::Field(*index));
+                id = *base;
+            }
+            ir::ExprKind::Index { base, index } => {
+                projection.push(ir::Projection::ConstantIndex(*index));
+                id = *base;
+            }
+            ir::ExprKind::DynamicIndex { .. } => return Ok(None),
+            ir::ExprKind::Deref { value } => {
+                projection.push(ir::Projection::Deref);
+                id = *value;
+            }
             _ => return Ok(None),
         }
     }
     Err("capture projection depth exceeds limit 128".into())
+}
+
+fn record(
+    uses: &mut [Vec<Capture>],
+    candidates: &HashMap<ir::LocalId, usize>,
+    mut place: ir::Place,
+    usage: CaptureUse,
+) -> Result<(), String> {
+    let Some(index) = candidates.get(&place.local) else {
+        return Ok(());
+    };
+    // Fields are precise captures. Array indices and dereferences retain the
+    // carrier itself, preserving ordinary index/borrow/move authorization.
+    let precise = place
+        .projection
+        .iter()
+        .take_while(|p| matches!(p, ir::Projection::Field(_)))
+        .count();
+    place.projection.truncate(precise);
+    let captures = uses.get_mut(*index).ok_or("invalid capture index")?;
+    if let Some(existing) = captures
+        .iter_mut()
+        .find(|c| place.projection.starts_with(&c.place.projection))
+    {
+        existing.usage.merge(usage);
+        return Ok(());
+    }
+    let mut combined = usage;
+    captures.retain(|existing| {
+        if existing.place.projection.starts_with(&place.projection) {
+            combined.merge(existing.usage);
+            false
+        } else {
+            true
+        }
+    });
+    captures.push(Capture {
+        place,
+        usage: combined,
+    });
+    Ok(())
 }
 
 fn binding_use(
@@ -55,7 +123,7 @@ fn binding_use(
                         .get(local.0)
                         .ok_or("invalid capture pattern binding")?
                         .ty,
-                )?;
+                )?
             }
             ir::MatchPattern::Aggregate { bindings, .. }
             | ir::MatchPattern::EnumVariant { bindings, .. }
@@ -75,11 +143,7 @@ fn binding_use(
                     }
                 }
             }
-            ir::MatchPattern::Alternatives { .. }
-            | ir::MatchPattern::Wildcard
-            | ir::MatchPattern::Bool(_)
-            | ir::MatchPattern::Int(_)
-            | ir::MatchPattern::Unit => {}
+            _ => {}
         }
     }
     Ok(())
@@ -91,37 +155,54 @@ pub(super) fn analyze(
     locals: &[ir::LocalDecl],
     candidates: &HashMap<ir::LocalId, usize>,
     facts: ir::FactsCtx<'_>,
-) -> Result<Vec<CaptureUse>, String> {
-    let mut uses = vec![CaptureUse::default(); candidates.len()];
+) -> Result<Vec<Vec<Capture>>, String> {
+    let mut uses = vec![Vec::new(); candidates.len()];
     let mut projected = HashSet::new();
     let mut blocks = vec![body];
     for expression in exprs {
         match &expression.kind {
-            ir::ExprKind::Field { base, .. }
-            | ir::ExprKind::Index { base, .. }
-            | ir::ExprKind::DynamicIndex { base, .. } => {
+            ir::ExprKind::Field { base, .. } | ir::ExprKind::Index { base, .. } => {
                 projected.insert(*base);
+            }
+            ir::ExprKind::DynamicIndex { base, .. } => {
+                projected.insert(*base);
+                if let Some(place) = expression_place(exprs, *base)? {
+                    record(
+                        &mut uses,
+                        candidates,
+                        place,
+                        CaptureUse {
+                            read: true,
+                            mutable: false,
+                            moved: !facts.must_copy(&expression.ty)?,
+                        },
+                    )?;
+                }
             }
             ir::ExprKind::Deref { value } => {
                 projected.insert(*value);
             }
-            ir::ExprKind::Borrow { kind, place, .. } => {
-                if let Some(index) = candidates.get(&place.local) {
-                    let usage = uses.get_mut(*index).ok_or("invalid capture index")?;
-                    usage.read = true;
-                    usage.mutable |= *kind == ir::BorrowKind::Mut;
-                }
-            }
+            ir::ExprKind::Borrow { kind, place, .. } => record(
+                &mut uses,
+                candidates,
+                place.clone(),
+                CaptureUse {
+                    read: true,
+                    mutable: *kind == ir::BorrowKind::Mut,
+                    moved: false,
+                },
+            )?,
             ir::ExprKind::Match { scrutinee, arms } => {
                 projected.insert(*scrutinee);
-                if let Some(root) = expression_root(exprs, *scrutinee)?
-                    && let Some(index) = candidates.get(&root)
-                {
-                    let usage = uses.get_mut(*index).ok_or("invalid capture index")?;
-                    usage.read = true;
+                if let Some(place) = expression_place(exprs, *scrutinee)? {
+                    let mut usage = CaptureUse {
+                        read: true,
+                        ..CaptureUse::default()
+                    };
                     for arm in arms {
-                        binding_use(&arm.pattern, locals, facts, usage)?;
+                        binding_use(&arm.pattern, locals, facts, &mut usage)?;
                     }
+                    record(&mut uses, candidates, place, usage)?;
                 }
             }
             ir::ExprKind::If {
@@ -140,13 +221,16 @@ pub(super) fn analyze(
     }
     while let Some(block) = blocks.pop() {
         for statement in &block.statements {
-            let mutable = match statement {
-                ir::Stmt::Assign { local, .. } => Some(*local),
+            let place = match statement {
+                ir::Stmt::Assign { local, .. } => Some(ir::Place {
+                    local: *local,
+                    projection: Vec::new(),
+                }),
                 ir::Stmt::AssignPlace { place, .. } | ir::Stmt::AssignOp { place, .. } => {
-                    Some(place.local)
+                    Some(place.clone())
                 }
                 ir::Stmt::AssignIndex { array, .. } | ir::Stmt::AssignIndexOp { array, .. } => {
-                    Some(array.local)
+                    Some(array.clone())
                 }
                 ir::Stmt::While { body, .. } => {
                     blocks.push(body);
@@ -156,11 +240,11 @@ pub(super) fn analyze(
                     value, bindings, ..
                 } => {
                     projected.insert(*value);
-                    if let Some(root) = expression_root(exprs, *value)?
-                        && let Some(index) = candidates.get(&root)
-                    {
-                        let usage = uses.get_mut(*index).ok_or("invalid capture index")?;
-                        usage.read = true;
+                    if let Some(place) = expression_place(exprs, *value)? {
+                        let mut usage = CaptureUse {
+                            read: true,
+                            ..CaptureUse::default()
+                        };
                         for binding in bindings {
                             match binding.borrow {
                                 Some(ir::BorrowKind::Mut) => usage.mutable = true,
@@ -175,31 +259,35 @@ pub(super) fn analyze(
                                 }
                             }
                         }
+                        record(&mut uses, candidates, place, usage)?;
                     }
                     None
                 }
                 ir::Stmt::LetElse { value, pattern, .. } => {
                     projected.insert(*value);
-                    if let Some(root) = expression_root(exprs, *value)?
-                        && let Some(index) = candidates.get(&root)
-                    {
-                        let usage = uses.get_mut(*index).ok_or("invalid capture index")?;
-                        usage.read = true;
-                        binding_use(pattern, locals, facts, usage)?;
+                    if let Some(place) = expression_place(exprs, *value)? {
+                        let mut usage = CaptureUse {
+                            read: true,
+                            ..CaptureUse::default()
+                        };
+                        binding_use(pattern, locals, facts, &mut usage)?;
+                        record(&mut uses, candidates, place, usage)?;
                     }
                     None
                 }
-                ir::Stmt::Declare { .. }
-                | ir::Stmt::Let { .. }
-                | ir::Stmt::Expr(_)
-                | ir::Stmt::Return(_) => None,
+                _ => None,
             };
-            if let Some(local) = mutable
-                && let Some(index) = candidates.get(&local)
-            {
-                let usage = uses.get_mut(*index).ok_or("invalid capture index")?;
-                usage.read = true;
-                usage.mutable = true;
+            if let Some(place) = place {
+                record(
+                    &mut uses,
+                    candidates,
+                    place,
+                    CaptureUse {
+                        read: true,
+                        mutable: true,
+                        moved: false,
+                    },
+                )?;
             }
         }
     }
@@ -207,13 +295,21 @@ pub(super) fn analyze(
         if projected.contains(&ir::ExprId(index)) {
             continue;
         }
-        if let Some(root) = expression_root(exprs, ir::ExprId(index))?
-            && let Some(index) = candidates.get(&root)
-        {
-            let usage = uses.get_mut(*index).ok_or("invalid capture index")?;
-            usage.read = true;
-            usage.moved |= !facts.must_copy(&expression.ty)?;
+        if let Some(place) = expression_place(exprs, ir::ExprId(index))? {
+            record(
+                &mut uses,
+                candidates,
+                place,
+                CaptureUse {
+                    read: true,
+                    mutable: false,
+                    moved: !facts.must_copy(&expression.ty)?,
+                },
+            )?;
         }
+    }
+    for captures in &mut uses {
+        captures.sort_by(|a, b| a.place.projection.cmp(&b.place.projection));
     }
     Ok(uses)
 }
