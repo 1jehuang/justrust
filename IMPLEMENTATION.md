@@ -517,6 +517,11 @@ cleanup failures.
       Comparison autoref preserves original nested operand calls instead of
       cloning their AST, with all six comparison operators checked/built/run
       against stock at workers 1 and 8 (`tests/comparison_source.rs`).
+- [ ] Complete trait-based for desugaring. Concrete canonical IntoIterator/Iterator
+      loops have stock-matching CHECK/BUILD/run coverage at workers 1 and 8,
+      including char/tuple items, original method expressions and labeled control.
+      Blanket/universal projected iteration and source-library adapter activation
+      remain blocked; this is not complete Iterator support (`iterator_loop`).
 - [ ] Complete closures and capture modes, callable traits, function values,
       iterator/for desugaring, async/await/Future state machines and pinning.
       Include capture lifetimes, suspension-safe moves, cancellation and Drop.

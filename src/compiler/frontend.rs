@@ -56,6 +56,7 @@ mod let_statement;
 pub use format_macros::SourceFormatInto;
 mod format_spec;
 mod inherited_associated;
+mod iterator_source;
 mod iterator_traits;
 mod nominal_bounds;
 #[cfg(test)]
@@ -713,6 +714,7 @@ struct SourceInventory {
     bindings: Vec<SourceBindingSite>,
     call_pointers: HashMap<usize, usize>,
     for_pointers: HashMap<usize, usize>,
+    iterator_pointers: HashMap<usize, usize>,
     statement_pointers: HashMap<usize, usize>,
     scopes: Vec<HashMap<LocalKey, sr::SourceNode>>,
     root_block_pointer: usize,
@@ -1267,6 +1269,7 @@ impl SourceInventory {
             bindings: Vec::new(),
             call_pointers: HashMap::new(),
             for_pointers: HashMap::new(),
+            iterator_pointers: HashMap::new(),
             statement_pointers: HashMap::new(),
             scopes,
             root_block_pointer: &function.body as *const Block as usize,
@@ -1790,6 +1793,7 @@ impl SourceInventory {
                         )?;
                     }
                     if matches!(source.iterable, ForIterable::Value(_)) {
+                        self.for_iterator_sites(source, &here, budget)?;
                         let index = self.calls.len();
                         sr::push(
                             &mut self.calls,
@@ -1799,7 +1803,7 @@ impl SourceInventory {
                                 for_iterable: true,
                                 leading_zeros_candidate: false,
                                 intrinsic_candidate: false,
-                                operator_candidate: false,
+                                operator_candidate: true,
                                 ordinary: None,
                                 application: None,
                                 argument_binding: None,
@@ -4206,6 +4210,13 @@ pub(super) fn replay_source_body(
     let leading_zero_sources =
         replay_builtin_leading_zeros(original, checked, &positions, &mut seen, budget)?;
     let builtin_sources = replay_builtin_lens(original, checked, &positions, &mut seen, budget)?;
+    iterator_source::validate_for_alternatives(
+        original,
+        &positions,
+        checked,
+        &builtin_sources,
+        budget,
+    )?;
     let intrinsic_sources =
         replay_builtin_intrinsics(original, checked, &positions, &mut seen, budget)?;
     replay_unsizes(original, checked, budget)?;
@@ -4614,6 +4625,11 @@ pub(super) fn replay_source_body(
     let mut mapped = vec![false; original.calls.len()];
     for (index, _, _) in &original.call_mapping {
         if let Some(slot) = mapped.get_mut(*index) {
+            *slot = true;
+        }
+    }
+    for row in &original.builtin_len_mapping {
+        if let Some(slot) = mapped.get_mut(row.source_index) {
             *slot = true;
         }
     }
@@ -12838,7 +12854,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                     inclusive,
                 }
             } else {
-                self.peel_for_adapters(start, &mut adapters)?
+                ForIterable::Value(start)
             }
         };
         let pattern = self
@@ -12867,51 +12883,14 @@ impl<'input, 'names> Parser<'input, 'names> {
     }
     fn for_value_iterable(
         &mut self,
-        adapters: &mut Vec<ForAdapter>,
+        _adapters: &mut Vec<ForAdapter>,
     ) -> Result<ForIterable, ParseError> {
         let value = self.condition_with(1, ConditionPurpose::Ordinary)?;
         if self.is("..") || self.is("..=") {
             return Err(self.unsupported("unsupported: parenthesized range start in for loop"));
         }
-        self.peel_for_adapters(value, adapters)
-    }
-    /// Retain trailing zero-argument iterator adapters as written structure.
-    fn peel_for_adapters(
-        &mut self,
-        mut value: Expr,
-        adapters: &mut Vec<ForAdapter>,
-    ) -> Result<ForIterable, ParseError> {
-        while let Expr::MethodCall {
-            name,
-            type_args,
-            args,
-            ..
-        } = &value
-        {
-            if !type_args.is_empty() || !args.is_empty() {
-                break;
-            }
-            let adapter = match self
-                .names
-                .spelling(*name)
-                .map_err(native_adapter::name_error)?
-            {
-                "iter" => ForAdapter::Iter,
-                "into_iter" => ForAdapter::IntoIter,
-                "rev" => ForAdapter::Rev,
-                "enumerate" => ForAdapter::Enumerate,
-                _ => break,
-            };
-            if adapters.len() >= 16 {
-                return Err(self.limit("for-loop adapter count exceeds limit 16"));
-            }
-            adapters.push(adapter);
-            let Expr::MethodCall { receiver, .. } = value else {
-                unreachable!()
-            };
-            value = *receiver;
-        }
-        adapters.reverse();
+        // Methods remain ordinary original source occurrences, including their
+        // actual names, generic arguments and closure-bearing argument lists.
         Ok(ForIterable::Value(value))
     }
     #[inline(never)]

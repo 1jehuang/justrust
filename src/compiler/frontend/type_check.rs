@@ -10,6 +10,7 @@ mod constructor_expectations;
 mod generic_placeholders;
 #[path = "type_check/inferred_owner.rs"]
 mod inferred_owner;
+mod iterator_loop;
 #[path = "local_literals.rs"]
 mod local_literals;
 #[path = "type_check/method_owner.rs"]
@@ -8384,6 +8385,9 @@ impl<'a> Checker<'a> {
             let ForIterable::Value(value) = &source.iterable else {
                 unreachable!()
             };
+            if self.signatures.plan()?.into_iterator_trait_id()?.is_some() {
+                return self.for_iterator_statement(label, pattern, source, value, body);
+            }
             return self.for_array_statement(label, pattern, source, value, body, item_hint);
         };
         let loop_depth = self.loops.len();
