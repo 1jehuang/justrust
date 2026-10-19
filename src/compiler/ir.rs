@@ -2801,6 +2801,7 @@ pub fn instantiate_checked(
             | ExprKind::Bool(_)
             | ExprKind::Local(_)
             | ExprKind::NativeSyscall(_)
+            | ExprKind::RawSlice { .. }
             | ExprKind::Tuple(_)
             | ExprKind::Field { .. }
             | ExprKind::Unary { .. }
@@ -6908,6 +6909,11 @@ pub struct LiteralOutput {
 pub enum ExprKind {
     /// Linux syscall number followed by its six usize ABI arguments.
     NativeSyscall(Vec<ExprId>),
+    /// Unsafe construction of a root slice descriptor from (pointer, length).
+    RawSlice {
+        kind: BorrowKind,
+        args: Vec<ExprId>,
+    },
     Char(CharValue),
     /// Inherent primitive method. `args[0]` is the by-value receiver; all
     /// operand and result types are exactly `intrinsic.signature()`.
@@ -7077,6 +7083,27 @@ pub enum ExprKind {
         newline: bool,
     },
     Panic(Box<PanicMessage>),
+}
+
+/// Exact raw pointer-to-slice carrier shape. Construction does not read an
+/// element or promise that its storage is valid; that is the unsafe contract.
+pub fn raw_slice_ty(kind: BorrowKind, pointer: &Ty) -> Result<Ty, String> {
+    let Ty::RawPtr {
+        kind: pointer_kind,
+        pointee,
+    } = pointer
+    else {
+        return Err("raw slice data must be a raw pointer".into());
+    };
+    if *pointer_kind != kind {
+        return Err("raw slice pointer mutability differs from result".into());
+    }
+    Ok(Ty::Ref {
+        kind,
+        referent: Arc::new(Ty::Slice {
+            element: pointee.clone(),
+        }),
+    })
 }
 
 impl CheckedFunction {
@@ -7671,6 +7698,7 @@ impl CheckedFunction {
                 | ExprKind::Loop { body: value, .. }
                 | ExprKind::LabeledBlock { body: value, .. } => block(value, facts, budget, 0)?,
                 ExprKind::NativeSyscall(values)
+                | ExprKind::RawSlice { args: values, .. }
                 | ExprKind::Tuple(values)
                 | ExprKind::Array(values)
                 | ExprKind::Intrinsic { args: values, .. } => {
@@ -8679,6 +8707,27 @@ impl CheckedFunction {
                     }
                 }
                 ExprKind::Local(id) => local(*id)?,
+                ExprKind::RawSlice { kind, args } => {
+                    if args.len() != 2 {
+                        return Err("invalid raw slice arity".into());
+                    }
+                    for &id in args {
+                        expr(id)?;
+                    }
+                    let pointer = &self.exprs[args[0].0];
+                    let length = &self.exprs[args[1].0];
+                    if raw_slice_ty(*kind, &pointer.ty)? != value.ty
+                        || length.ty != Ty::Int(IntTy::Usize)
+                    {
+                        return Err("raw slice operand or result type mismatch".into());
+                    }
+                    validate_slice_carrier_with_facts(&value.ty, facts)?;
+                    let completes = pointer.completion == Completion::Returns
+                        && length.completion == Completion::Returns;
+                    if (value.completion == Completion::Returns) != completes {
+                        return Err("raw slice completion mismatch".into());
+                    }
+                }
                 ExprKind::NativeSyscall(arguments) => {
                     if arguments.len() != 7 || value.ty != Ty::Int(IntTy::Usize) {
                         return Err("invalid native syscall shape".into());

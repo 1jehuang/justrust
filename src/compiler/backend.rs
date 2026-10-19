@@ -2419,6 +2419,25 @@ impl Emitter<'_> {
     }
     fn rvalue(&mut self, value: &cfg::Rvalue) -> Result<(), String> {
         match value {
+            cfg::Rvalue::RawSlice { kind, args } => {
+                if args.len() != 2 {
+                    return Err("raw slice arity mismatch".into());
+                }
+                let ty = ir::raw_slice_ty(*kind, &self.function().operand_ty(&args[0])?)?;
+                let (_, element) = ty.slice_ref_element().ok_or("raw slice result invariant")?;
+                let _ = shared_slice_layout(element)?;
+                if self.function().operand_ty(&args[1])? != ir::Ty::Int(ir::IntTy::Usize) {
+                    return Err("raw slice length must be usize".into());
+                }
+                let base = self.aggregate_scratch;
+                self.operand(&args[0])?;
+                self.bytes(&[0x48, 0x89, 0x85]);
+                self.i32(base);
+                self.operand(&args[1])?;
+                self.bytes(&[0x48, 0x89, 0x85]);
+                self.i32(base.checked_add(8).ok_or("raw slice descriptor offset")?);
+                self.address(base);
+            }
             cfg::Rvalue::NativeSyscall(arguments) => {
                 if arguments.len() != 7 {
                     return Err("native syscall requires number and six arguments".into());
@@ -3271,6 +3290,7 @@ pub fn emit_cfg_function(
                     }
                     cfg::Rvalue::EnumVariant { ty, .. } => value_size(&ir::Ty::Enum(ty.clone()))?,
                     cfg::Rvalue::ArrayToSlice { .. }
+                    | cfg::Rvalue::RawSlice { .. }
                     | cfg::Rvalue::Subslice { .. }
                     | cfg::Rvalue::Str(_)
                     | cfg::Rvalue::RefToDyn { .. }

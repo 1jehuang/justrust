@@ -3315,6 +3315,7 @@ impl Resolver<'_> {
                 }
             }
             Expr::NativeSyscall(elements)
+            | Expr::RawSlice { arguments: elements, .. }
             | Expr::Array(elements)
             | Expr::Tuple(elements)
             | Expr::Format {

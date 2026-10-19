@@ -2086,10 +2086,13 @@ impl SourceInventory {
                 depth + 1,
             )?,
             Expr::NativeSyscall(fields)
+            | Expr::RawSlice {
+                arguments: fields, ..
+            }
             | Expr::Array(fields)
             | Expr::Tuple(fields)
             | Expr::TupleStruct { fields, .. } => {
-                let tag = if matches!(expr, Expr::NativeSyscall(_)) {
+                let tag = if matches!(expr, Expr::NativeSyscall(_) | Expr::RawSlice { .. }) {
                     23
                 } else if matches!(expr, Expr::TupleStruct { .. }) {
                     14
@@ -4827,6 +4830,7 @@ mod mut_slice;
 mod name_tests;
 mod or_patterns;
 mod range_expr;
+mod raw_slices;
 mod recipes;
 #[cfg(test)]
 mod slice_tests;
@@ -6074,6 +6078,10 @@ fn validate_source_site(
 pub enum Expr {
     /// Bootstrap-only Linux x86-64 ABI primitive, never an allocator policy.
     NativeSyscall(Vec<Expr>),
+    RawSlice {
+        kind: ir::BorrowKind,
+        arguments: Vec<Expr>,
+    },
     UnexpandedMacro(Arc<UnexpandedMacroSyntax>),
     TraitCall {
         owner: Type,
@@ -7598,6 +7606,14 @@ impl<'input, 'names> Parser<'input, 'names> {
         }
         if self.builtin_macro_ahead("__justrust_linux_syscall6")? {
             return self.native_syscall_expression();
+        }
+        for (name, kind) in [
+            ("__justrust_slice_from_raw_parts", ir::BorrowKind::Shared),
+            ("__justrust_slice_from_raw_parts_mut", ir::BorrowKind::Mut),
+        ] {
+            if self.builtin_macro_ahead(name)? {
+                return self.raw_slice_expression(kind);
+            }
         }
         for spelling in ["print", "eprint", "eprintln"] {
             if self.builtin_macro_ahead(spelling)? {
@@ -14770,6 +14786,9 @@ fn walk_depth_inspecting(
                     }
                 }
                 Expr::NativeSyscall(fields)
+                | Expr::RawSlice {
+                    arguments: fields, ..
+                }
                 | Expr::Tuple(fields)
                 | Expr::TupleStruct { fields, .. } => {
                     for field in fields {

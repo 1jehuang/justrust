@@ -995,6 +995,10 @@ impl<'s> Checker<'s> {
             Expr::NativeSyscall(_) => {
                 self.infer_node(InferKind::Rigid(ir::Ty::Int(ir::IntTy::Usize)))?
             }
+            Expr::RawSlice { kind, arguments } => match self.raw_slice_hint(*kind, arguments)? {
+                Some(ty) => self.infer_type_term(&ty, None, depth + 1)?,
+                None => self.infer_node(InferKind::Unknown(false))?,
+            },
             Expr::UnexpandedMacro(_) => return Err(UNEXPANDED_MACRO_CHECK_ERROR.into()),
             Expr::Output(output) => {
                 validate_output_site(output, self.names()?)?;
@@ -4332,6 +4336,7 @@ impl<'a> Checker<'a> {
     pub(super) fn scalar_hint(&self, e: &Expr) -> Result<Option<ir::Ty>, String> {
         Ok(match e {
             Expr::NativeSyscall(_) => Some(ir::Ty::Int(ir::IntTy::Usize)),
+            Expr::RawSlice { kind, arguments } => self.raw_slice_hint(*kind, arguments)?,
             Expr::UnexpandedMacro(_) => return Err(UNEXPANDED_MACRO_CHECK_ERROR.into()),
             Expr::Output(output) => {
                 validate_output_site(output, self.names()?)?;
@@ -10158,6 +10163,7 @@ impl<'a> Checker<'a> {
                     Flow::value(ir::Ty::Unit),
                 )
             }
+            Expr::RawSlice { kind, arguments } => self.raw_slice(*kind, arguments)?,
             Expr::NativeSyscall(arguments) => {
                 if self.unsafe_depth == 0 {
                     return Err("E0133: native syscall requires unsafe block".into());

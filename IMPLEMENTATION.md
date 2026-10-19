@@ -6,8 +6,9 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 
 ## Completed foundations, not full compatibility
 
-- [x] Mutable slice parameters and local carriers with same-kind array unsizing, generic reference-free elements, shared read reborrows and Copy-element checked writes (`MUTABLE-SLICES.md`). G0-G12 remain partial: raw constructors, mutable ranges and non-Copy replacement remain open.
-- [x] Root shared and mutable slice returns use caller-owned descriptor storage and preserve source lifetime/alias authority, including generic non-Copy element transport (`SLICE-RETURNS.md`). G0-G12 remain partial: nested slice carriers, raw constructors and mutable subslices remain open.
+- [x] Mutable slice parameters and local carriers with same-kind array unsizing, generic reference-free elements, shared read reborrows and Copy-element checked writes (`MUTABLE-SLICES.md`). G0-G12 remain partial: mutable ranges and non-Copy replacement remain open.
+- [x] Canonical unsafe raw slice constructors support generic shared/mutable descriptor transport and non-Copy elements, with native stock fixtures, unsafe/forged-origin rejection and unchanged graph-integrity ceilings (`RAW-SLICES.md`). G0-G12 remain partial.
+- [x] Root shared and mutable slice returns use caller-owned descriptor storage and preserve source lifetime/alias authority, including generic non-Copy element transport (`SLICE-RETURNS.md`). G0-G12 remain partial: nested slice carriers and mutable subslices remain open.
 
 - [x] Independent graph runtime with shared immutable facts and lifecycle telemetry.
 - [x] Direct native Linux x86-64 executable generation for the initial subset.

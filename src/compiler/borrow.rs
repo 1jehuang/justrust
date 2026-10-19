@@ -742,6 +742,7 @@ struct CarrierBuilder<'a, 'b> {
     body: Option<Arc<super::traits::CarrierContractView>>,
     body_signature: Option<ir::Signature>,
     call_rows: Vec<Vec<(CarrierLocation, ReferenceOriginId)>>,
+    raw_slice_rows: Vec<(BlockId, usize, ReferenceOriginId)>,
     function: Option<Arc<cfg::Function>>,
     authority: Option<Arc<super::traits::ValidatedFacts>>,
     /// Exact `(function, facts)` pair whose provenance already validated in
@@ -1966,6 +1967,50 @@ impl<'a, 'b> CarrierBuilder<'a, 'b> {
                 }
             }
         }
+        let mut raw_slice_rows = Vec::new();
+        let mut raw_provenance_validated = false;
+        for (block_index, block) in f.blocks.iter().enumerate() {
+            ledger
+                .charge_work(block.statements.len())
+                .map_err(|_| Exhausted)?;
+            for (statement, located) in block.statements.iter().enumerate() {
+                let cfg::Statement::Assign {
+                    value: Rvalue::RawSlice { kind, args },
+                    ..
+                } = &located.value
+                else {
+                    continue;
+                };
+                if f.lowering_proof.is_none()
+                    || located.origin.is_none()
+                    || args.len() != 2
+                    || kinds.len() >= MAX_LOANS
+                {
+                    return Err(Exhausted);
+                }
+                if !raw_provenance_validated {
+                    let FactsCtx::Validated(authority) = facts else {
+                        return Err(Exhausted);
+                    };
+                    f.validate_provenance(authority, &ledger)
+                        .map_err(|_| Exhausted)?;
+                    raw_provenance_validated = true;
+                }
+                ledger
+                    .retain_bytes(
+                        4 * (size_of::<(BlockId, usize, ReferenceOriginId)>()
+                            + size_of::<BorrowKind>()),
+                    )
+                    .map_err(|_| Exhausted)?;
+                ledger.charge_work(1).map_err(|_| Exhausted)?;
+                raw_slice_rows.push((
+                    BlockId(block_index),
+                    statement,
+                    ReferenceOriginId(kinds.len()),
+                ));
+                kinds.push(*kind);
+            }
+        }
         let mut call_rows = Vec::new();
         for block in &f.blocks {
             let mut rows = Vec::new();
@@ -2059,6 +2104,7 @@ impl<'a, 'b> CarrierBuilder<'a, 'b> {
             body: None,
             body_signature: None,
             call_rows,
+            raw_slice_rows,
             function: None,
             authority: None,
             validated_provenance: None,
@@ -2487,6 +2533,21 @@ impl CarrierBuilder<'_, '_> {
                 let origin = self.static_origin.ok_or(Exhausted)?;
                 let mut origins = self.empty_origins()?;
                 origins.references.0.insert(origin.0);
+                Ok(vec![(
+                    fixed_location(ReferencePosition { depth: 0 }),
+                    origins,
+                )])
+            }
+            Rvalue::RawSlice { .. } => {
+                self.budget.spend(self.raw_slice_rows.len() + 1)?;
+                let row = self
+                    .raw_slice_rows
+                    .iter()
+                    .find(|(owner, index, _)| *owner == block && *index == statement)
+                    .map(|(_, _, origin)| *origin)
+                    .ok_or(Exhausted)?;
+                let mut origins = self.empty_origins()?;
+                origins.references.0.insert(row.0);
                 Ok(vec![(
                     fixed_location(ReferencePosition { depth: 0 }),
                     origins,
@@ -4447,6 +4508,7 @@ fn visit_rvalue(f: &cfg::Function, value: &Rvalue, mut visit: impl FnMut(&Place,
             visit_operand(right, &mut visit);
         }
         Rvalue::NativeSyscall(fields)
+        | Rvalue::RawSlice { args: fields, .. }
         | Rvalue::Aggregate { fields, .. }
         | Rvalue::EnumVariant { fields, .. }
         | Rvalue::Intrinsic { args: fields, .. }

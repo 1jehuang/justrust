@@ -21,4 +21,5 @@ pub mod string;
 pub mod fmt;
 pub mod primitive;
 pub mod ptr;
+pub mod slice;
 pub mod test;

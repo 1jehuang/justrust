@@ -1609,7 +1609,9 @@ fn preflight_with_plan(
                             operand(field, &mut budget)?;
                         }
                     }
-                    Rvalue::NativeSyscall(args) | Rvalue::Intrinsic { args, .. } => {
+                    Rvalue::NativeSyscall(args)
+                    | Rvalue::RawSlice { args, .. }
+                    | Rvalue::Intrinsic { args, .. } => {
                         for arg in args {
                             operand(arg, &mut budget)?;
                         }
@@ -2899,6 +2901,7 @@ impl Transfer<'_> {
                 self.operand(state, right)?;
             }
             Rvalue::NativeSyscall(fields)
+            | Rvalue::RawSlice { args: fields, .. }
             | Rvalue::Aggregate { fields, .. }
             | Rvalue::EnumVariant { fields, .. }
             | Rvalue::Intrinsic { args: fields, .. }

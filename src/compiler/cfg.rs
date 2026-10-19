@@ -302,6 +302,9 @@ fn same_rvalue_types(a: &Rvalue, b: &Rvalue, budget: &ir::PlanBudget) -> Result<
             ir::identical_type(&Ty::Enum(a.clone()), &Ty::Enum(b.clone()), budget)?
                 && same_operand_list(aa, bb, budget)?,
         ),
+        (Rvalue::RawSlice { kind: a, args: aa }, Rvalue::RawSlice { kind: b, args: bb }) => {
+            Ok(a == b && same_operand_list(aa, bb, budget)?)
+        }
         (Rvalue::Use(a), Rvalue::Use(b))
         | (Rvalue::ArrayToSlice { reference: a }, Rvalue::ArrayToSlice { reference: b })
         | (Rvalue::RefToDyn { reference: a, .. }, Rvalue::RefToDyn { reference: b, .. })
@@ -483,6 +486,10 @@ pub enum Operand {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Rvalue {
     NativeSyscall(Vec<Operand>),
+    RawSlice {
+        kind: ir::BorrowKind,
+        args: Vec<Operand>,
+    },
     /// Inherent primitive method over exact `intrinsic.signature()` operands.
     Intrinsic {
         intrinsic: ir::Intrinsic,
@@ -664,6 +671,7 @@ impl Rvalue {
                 visit(right)?;
             }
             Self::NativeSyscall(fields)
+            | Self::RawSlice { args: fields, .. }
             | Self::Aggregate { fields, .. }
             | Self::EnumVariant { fields, .. }
             | Self::Intrinsic { args: fields, .. }
@@ -832,7 +840,12 @@ pub fn lower_template(
     let facts = ir::FactsCtx::from_validated(&authority);
     let mut lowered = lower_internal(&source, facts, Some(budget))?;
     lowered.call_evidence = ir::bind_call_evidence(source.clone(), authority.clone(), budget)?;
-    if !lowered.call_evidence.is_empty() {
+    budget.charge_work(source.exprs.len())?;
+    let has_raw_slice = source
+        .exprs
+        .iter()
+        .any(|expr| matches!(expr.kind, ir::ExprKind::RawSlice { .. }));
+    if !lowered.call_evidence.is_empty() || has_raw_slice {
         lowered.lowering_proof = Some(std::sync::Arc::new(GeneratedCfgShape::capture(
             &lowered, &authority, budget,
         )?));
@@ -1107,6 +1120,7 @@ impl Function {
                         path(&mut bytes, destination, budget)?;
                         match value {
                             Rvalue::NativeSyscall(fields)
+                            | Rvalue::RawSlice { args: fields, .. }
                             | Rvalue::Aggregate { fields, .. }
                             | Rvalue::EnumVariant { fields, .. } => add(
                                 &mut bytes,
@@ -1755,7 +1769,8 @@ impl Function {
                                     operand(value, budget, facts)?;
                                 }
                             }
-                            Rvalue::NativeSyscall(fields) => {
+                            Rvalue::NativeSyscall(fields)
+                            | Rvalue::RawSlice { args: fields, .. } => {
                                 for value in fields {
                                     operand(value, budget, facts)?;
                                 }
@@ -2324,6 +2339,15 @@ impl Function {
             Rvalue::Subslice {
                 slice, start, end, ..
             } => self.subslice_ty(slice, start, end.as_ref(), facts),
+            Rvalue::RawSlice { kind, args } => {
+                if args.len() != 2 {
+                    return Err("CFG raw slice arity mismatch".into());
+                }
+                let ty = ir::raw_slice_ty(*kind, &self.operand_ty_with_facts(&args[0], facts)?)?;
+                self.require_operand_with_facts(&args[1], &Ty::Int(IntTy::Usize), facts)?;
+                validate_slice_position(&ty, facts)?;
+                Ok(ty)
+            }
             Rvalue::NativeSyscall(arguments) => {
                 if arguments.len() != 7 {
                     return Err("CFG native syscall arity mismatch".into());
@@ -2486,6 +2510,25 @@ impl Function {
             }
         }
         for block in &self.blocks {
+            for statement in &block.statements {
+                if matches!(
+                    statement.value,
+                    Statement::Assign {
+                        value: Rvalue::RawSlice { .. },
+                        ..
+                    }
+                ) {
+                    if self.lowering_proof.is_none() {
+                        return Err(
+                            "raw slice constructor requires its canonical lowering snapshot".into(),
+                        );
+                    }
+                    origins = origins.checked_add(1).ok_or("reference origin overflow")?;
+                    if origins > ir::MAX_LOAN_SITES {
+                        return Err("CFG combined reference origin limit exceeded".into());
+                    }
+                }
+            }
             if let Terminator::Call { signature, .. } = &block.terminator.value {
                 origins = origins
                     .checked_add(concrete_carrier_count(&signature.result, facts)?)
@@ -2561,6 +2604,9 @@ impl Function {
                         self.place_ty(&place(*local))?;
                     }
                     Statement::Assign { destination, value } => {
+                        if matches!(value, Rvalue::RawSlice { .. }) && statement.origin.is_none() {
+                            return Err("raw slice constructor has no source origin".into());
+                        }
                         if let Rvalue::Borrow(id) = value {
                             let count = loan_uses.get_mut(id.0).ok_or("invalid CFG loan site")?;
                             *count += 1;
@@ -4336,6 +4382,20 @@ impl Lowerer<'_> {
                 let p = self.pattern_source(id)?;
                 self.assign(destination.clone(), Rvalue::Use(self.consume(p)?), origin);
             }
+            ir::ExprKind::RawSlice { kind, args } => {
+                if !self.allocate(0, args.len() * std::mem::size_of::<Operand>()) {
+                    return Err(self.resource_error.clone().unwrap());
+                }
+                let args = args
+                    .iter()
+                    .map(|id| self.expression(*id))
+                    .collect::<Result<Vec<_>, _>>()?;
+                self.assign(
+                    destination.clone(),
+                    Rvalue::RawSlice { kind: *kind, args },
+                    origin,
+                );
+            }
             ir::ExprKind::NativeSyscall(arguments) => {
                 if !self.allocate(0, arguments.len() * std::mem::size_of::<Operand>()) {
                     return Err(self.resource_error.clone().unwrap());
@@ -4858,7 +4918,16 @@ pub fn lower_with_facts(
             budget,
         )?;
     }
-    if source.body_substitution.is_some() || !source.call_evidence.is_empty() {
+    let has_raw_slice = if source.body_substitution.is_none() && source.call_evidence.is_empty() {
+        budget.charge_work(source.exprs.len())?;
+        source
+            .exprs
+            .iter()
+            .any(|expr| matches!(expr.kind, ir::ExprKind::RawSlice { .. }))
+    } else {
+        false
+    };
+    if source.body_substitution.is_some() || !source.call_evidence.is_empty() || has_raw_slice {
         function.lowering_proof = Some(std::sync::Arc::new(GeneratedCfgShape::capture(
             &function, facts, budget,
         )?));
@@ -11569,6 +11638,7 @@ mod tests {
                                 live_operand(right, &live);
                             }
                             Rvalue::NativeSyscall(fields)
+                            | Rvalue::RawSlice { args: fields, .. }
                             | Rvalue::Aggregate { fields, .. }
                             | Rvalue::EnumVariant { fields, .. }
                             | Rvalue::Intrinsic { args: fields, .. }
