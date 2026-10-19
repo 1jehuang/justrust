@@ -42,6 +42,8 @@ struct Solver<'a, 'b, 's> {
     sites: Vec<(usize, Term)>,
     methods: Vec<Method>,
     projections: Vec<Projection>,
+    delayed_results: Vec<Term>,
+    coercions: Vec<(Term, Term)>,
     patterns: Vec<(&'s Pattern, Term, HashMap<LocalKey, Term>)>,
     pattern_bindings: Option<HashMap<LocalKey, Term>>,
     replaying_pattern: bool,
@@ -59,6 +61,8 @@ pub(super) fn hints(
         sites: Vec::new(),
         methods: Vec::new(),
         projections: Vec::new(),
+        delayed_results: Vec::new(),
+        coercions: Vec::new(),
         patterns: Vec::new(),
         pattern_bindings: None,
         replaying_pattern: false,
@@ -74,7 +78,7 @@ pub(super) fn hints(
     let result = solver.block(block, 0)?;
     if let Some(expected) = expected {
         let expected = solver.fixed(expected.clone())?;
-        solver.unify(result, expected)?;
+        solver.coerce(result, expected)?;
     }
     solver.solve()?;
     let mut hints = HashMap::new();
@@ -446,6 +450,17 @@ impl<'s> Solver<'_, '_, 's> {
         self.schema(&schema.signature.result, &params, 0)
     }
     fn coerce(&mut self, actual: Term, expected: Term) -> Result<(), String> {
+        // A producer may reveal an array or a Deref carrier, so assigning its
+        // unknown result the expected shape would erase a genuine coercion.
+        if matches!(self.domain(actual), Domain::Unknown)
+            && self
+                .delayed_results
+                .iter()
+                .any(|result| self.root(*result) == self.root(actual))
+        {
+            self.coercions.push((actual, expected));
+            return Ok(());
+        }
         match (self.domain(actual), self.domain(expected)) {
             (Domain::Ref(_, a), Domain::Ref(_, b)) => {
                 // A reference coercion may run an authoritative Deref chain.
@@ -550,6 +565,15 @@ impl<'s> Solver<'_, '_, 's> {
                 }
             }
             projections = pending;
+            let coercions = std::mem::take(&mut self.coercions);
+            for (actual, expected) in coercions {
+                if matches!(self.domain(actual), Domain::Unknown) {
+                    self.coercions.push((actual, expected));
+                } else {
+                    self.coerce(actual, expected)?;
+                    progress = true;
+                }
+            }
             let patterns = std::mem::take(&mut self.patterns);
             let force = !progress;
             for (pattern, term, bindings) in patterns {
@@ -614,7 +638,11 @@ impl<'s> Solver<'_, '_, 's> {
         }
     }
     fn field(&mut self, base: Term, field: FieldSelector) -> Result<Term, String> {
+        if let Some(result) = self.project(base, &field)? {
+            return Ok(result);
+        }
         let result = self.fresh()?;
+        self.delayed_results.push(result);
         self.projections.push(Projection {
             base,
             field,
@@ -1183,6 +1211,7 @@ impl<'s> Solver<'_, '_, 's> {
                     }
                 }
                 let result = self.fresh()?;
+                self.delayed_results.push(result);
                 self.methods.push(Method {
                     receiver,
                     name: *name,

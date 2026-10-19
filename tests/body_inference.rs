@@ -20,6 +20,18 @@ fn compare(name: &str, source: &str) {
     for workers in [1, 8] {
         let exe = dir.join(format!("native-{workers}"));
         let _ = std::fs::remove_file(&exe);
+        let checked = Command::new(env!("CARGO_BIN_EXE_jr-rust"))
+            .arg(&src)
+            .arg("--check")
+            .arg("--workers")
+            .arg(workers.to_string())
+            .output()
+            .unwrap();
+        assert!(
+            checked.status.success(),
+            "CHECK {name} workers {workers}: {checked:?}"
+        );
+        assert!(!exe.exists(), "CHECK published executable for {name}");
         let out = Command::new(env!("CARGO_BIN_EXE_jr-rust"))
             .arg(&src)
             .arg("--workers")
@@ -88,6 +100,25 @@ fn patterns_assignments_and_returns_solve_nominal_parameters() {
 }
 
 #[test]
+fn expected_slice_coercions_do_not_equate_array_and_slice_shapes() {
+    compare(
+        "field-slice",
+        "struct P { a: [u8; 2] } fn main() { let p = P { a: [7, 8] }; let s: &[u8] = &p.a; println!(\"{}\", s.len()); }",
+    );
+    // The analogous `fn view(p: &P) -> &[u8] { &p.a }` still receives the
+    // explicit `unsupported: slice return types` diagnostic. This block case
+    // isolates expected-type inference without claiming new return support.
+    compare(
+        "block-slice",
+        "struct P { a: [u8; 2] } fn main() { let p = P { a: [7, 8] }; let s: &[u8] = { &p.a }; println!(\"{}\", s.len()); }",
+    );
+    compare(
+        "method-slice",
+        "trait View { fn array(&self) -> &[u8; 2]; } struct P { a: [u8; 2] } impl View for P { fn array(&self) -> &[u8; 2] { &self.a } } fn consume(s: &[u8]) { println!(\"{}\", s.len()); } fn main() { let p = P { a: [7, 8] }; consume(p.array()); }",
+    );
+}
+
+#[test]
 fn contradictory_and_underconstrained_bindings_reject() {
     for (name, source) in [
         (
@@ -95,6 +126,10 @@ fn contradictory_and_underconstrained_bindings_reject() {
             "fn main() { let mut v = Vec::new(); v.push(1u8); v.push(true); }",
         ),
         ("unknown", "fn main() { let v = Vec::new(); }"),
+        (
+            "slice-element-mismatch",
+            "struct P { a: [u8; 2] } fn main() { let p = P { a: [7, 8] }; let s: &[u16] = &p.a; }",
+        ),
         (
             "unrelated-reference",
             "struct A { x: u8 } struct B { x: u8 } fn take(_: &B) {} fn main() { let a = A { x: 7 }; take(&a); }",
