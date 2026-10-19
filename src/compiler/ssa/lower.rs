@@ -487,9 +487,12 @@ impl Ctx<'_, '_> {
         call: &ir::CallTarget,
         signature: &ir::Signature,
     ) -> Result<FuncRef, String> {
-        self.meter.work(self.callees.len())?;
-        if let Some(position) = self.callees.iter().position(|c| c.target == *call) {
-            return Ok(FuncRef(position as u32));
+        // Each candidate comparison is a structural walk of the type
+        // arguments; charge every node actually visited (no hash shortcut).
+        for (position, candidate) in self.callees.iter().enumerate() {
+            if call_target_eq(&candidate.target, call, self.meter)? {
+                return Ok(FuncRef(position as u32));
+            }
         }
         let symbol = (self.resolve)(call)?;
         self.meter.work(signature.params.len())?;
@@ -719,4 +722,100 @@ pub fn lower(
         .verify(meter)
         .map_err(|error| format!("SSA lowering produced {error}"))?;
     Ok(Lowering::Lowered(Box::new(owned)))
+}
+
+/// `CallTarget` equality identical to the derived `PartialEq`, charging one
+/// unit of work per type node visited. Nominal types compare by identity
+/// (as their `PartialEq` does), so they are single nodes.
+fn call_target_eq(
+    a: &ir::CallTarget,
+    b: &ir::CallTarget,
+    meter: &Meter<'_>,
+) -> Result<bool, String> {
+    meter.work(1)?;
+    if a.declaration != b.declaration {
+        return Ok(false);
+    }
+    ty_slice_eq(&a.type_args, &b.type_args, meter, 0)
+}
+
+fn ty_slice_eq(
+    a: &[ir::Ty],
+    b: &[ir::Ty],
+    meter: &Meter<'_>,
+    depth: usize,
+) -> Result<bool, String> {
+    meter.work(1)?;
+    if a.len() != b.len() {
+        return Ok(false);
+    }
+    for (x, y) in a.iter().zip(b) {
+        if !ty_eq(x, y, meter, depth + 1)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn ty_eq(a: &ir::Ty, b: &ir::Ty, meter: &Meter<'_>, depth: usize) -> Result<bool, String> {
+    use ir::Ty;
+    meter.work(1)?;
+    if depth > 4096 {
+        return Err("type argument nesting exceeds the comparison depth limit".into());
+    }
+    Ok(match (a, b) {
+        (Ty::AssociatedType(x), Ty::AssociatedType(y)) => {
+            x.item == y.item
+                && x.trait_ref.declaration == y.trait_ref.declaration
+                && ty_eq(&x.trait_ref.self_ty, &y.trait_ref.self_ty, meter, depth + 1)?
+                && ty_slice_eq(&x.trait_ref.args, &y.trait_ref.args, meter, depth + 1)?
+        }
+        (
+            Ty::Ref {
+                kind: k,
+                referent: x,
+            },
+            Ty::Ref {
+                kind: l,
+                referent: y,
+            },
+        )
+        | (
+            Ty::RawPtr {
+                kind: k,
+                pointee: x,
+            },
+            Ty::RawPtr {
+                kind: l,
+                pointee: y,
+            },
+        ) => k == l && ty_eq(x, y, meter, depth + 1)?,
+        (Ty::Tuple(x), Ty::Tuple(y)) => ty_slice_eq(x, y, meter, depth + 1)?,
+        (Ty::Array { element: x, len: m }, Ty::Array { element: y, len: n }) => {
+            m == n && ty_eq(x, y, meter, depth + 1)?
+        }
+        (Ty::Slice { element: x }, Ty::Slice { element: y }) => ty_eq(x, y, meter, depth + 1)?,
+        // Leaves and identity-compared nominal/object types.
+        (Ty::Param(_), _)
+        | (Ty::Int(_), _)
+        | (Ty::Char, _)
+        | (Ty::Str, _)
+        | (Ty::Float(_), _)
+        | (Ty::Bool, _)
+        | (Ty::Unit, _)
+        | (Ty::Struct(_), _)
+        | (Ty::Enum(_), _)
+        | (Ty::Dyn(_), _)
+        | (Ty::Never, _) => a == b,
+        _ => false,
+    })
+}
+
+#[cfg(test)]
+pub(super) fn call_target_eq_for_tests(
+    a: &ir::CallTarget,
+    b: &ir::CallTarget,
+    meter: &Meter<'_>,
+) -> Result<bool, String> {
+    call_target_eq(a, b, meter)
 }

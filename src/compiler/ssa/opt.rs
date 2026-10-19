@@ -70,25 +70,22 @@ pub fn local_metered<'a>(
     for _ in 0..=rounds {
         meter.work(1).map_err(VerifyError::resource)?;
         let before = stats;
+        // Each assignment builds the replacement first and then drops the
+        // previous generation, so exactly the real overlap (old + new) is
+        // alive and paid at any time, never a chain of shadowed generations.
         let types = verify::verify_metered(&current.value, callee, meter)?;
-        let folded = paid(fold(&current.value, &types, &mut stats, meter))?;
+        current = paid(fold(&current.value, &types, &mut stats, meter))?;
         drop(types);
-        let folded = paid(canonical_metered(&folded.value, meter))?;
-        let merged = paid(merge(&folded.value, &mut stats, meter))?;
-        drop(folded);
-        let merged = paid(canonical_metered(&merged.value, meter))?;
-        let trimmed = paid(block_params(&merged.value, &mut stats, meter))?;
-        drop(merged);
-        let trimmed = paid(canonical_metered(&trimmed.value, meter))?;
-        let types = verify::verify_metered(&trimmed.value, callee, meter)?;
-        let swept = paid(dce(&trimmed.value, &types, &mut stats, meter))?;
+        current = paid(canonical_metered(&current.value, meter))?;
+        current = paid(merge(&current.value, &mut stats, meter))?;
+        current = paid(canonical_metered(&current.value, meter))?;
+        current = paid(block_params(&current.value, &mut stats, meter))?;
+        current = paid(canonical_metered(&current.value, meter))?;
+        let types = verify::verify_metered(&current.value, callee, meter)?;
+        current = paid(dce(&current.value, &types, &mut stats, meter))?;
         drop(types);
-        drop(trimmed);
-        let next = paid(canonical_metered(&swept.value, meter))?;
-        drop(swept);
-        let done = stats == before;
-        current = next;
-        if done {
+        current = paid(canonical_metered(&current.value, meter))?;
+        if stats == before {
             break;
         }
     }
@@ -258,13 +255,26 @@ fn fold(
             otherwise,
         } = &data.term
         {
-            let taken = match known[cond.0 as usize] {
-                Some(c) => Some(if c != 0 { then } else { otherwise }),
-                None if then == otherwise => Some(then),
+            let take_then = match known[cond.0 as usize] {
+                Some(c) => Some(c != 0),
+                None if then == otherwise => Some(true),
                 None => None,
             };
-            if let Some(taken) = taken {
-                data.term = SsaTerminator::Jump(super::store::try_clone_target(taken)?);
+            if let Some(take_then) = take_then {
+                // Move the chosen edge out of the old terminator: no clone,
+                // no unpaid temporary argument vector. The discarded edge's
+                // storage is freed, never newly allocated.
+                let old = std::mem::replace(
+                    &mut data.term,
+                    SsaTerminator::Panic(super::PanicKind::Unreachable),
+                );
+                let SsaTerminator::Branch {
+                    then, otherwise, ..
+                } = old
+                else {
+                    unreachable!("matched a branch above");
+                };
+                data.term = SsaTerminator::Jump(if take_then { then } else { otherwise });
                 stats.branches_folded += 1;
             }
         }

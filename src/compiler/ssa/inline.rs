@@ -254,6 +254,16 @@ fn try_vec<T>(capacity: usize) -> Result<Vec<T>, String> {
     Ok(data)
 }
 
+/// Copy one panic text, charging the bytes actually copied (message and
+/// location) at this site. Storage was admitted in `x.panic_bytes`.
+fn copy_panic(text: &SsaPanicText, meter: &Meter<'_>) -> Result<SsaPanicText, String> {
+    meter.work(meter::add(text.message.len(), text.location.len())?)?;
+    Ok(SsaPanicText {
+        message: store::try_string(&text.message)?,
+        location: store::try_string(&text.location)?,
+    })
+}
+
 fn build(
     lowered: &Lowered,
     body_of: &[Option<&Lowered>],
@@ -263,10 +273,13 @@ fn build(
 ) -> Result<Lowered, String> {
     let caller = &lowered.function;
     let mut blocks: Vec<BlockData> = try_vec(x.blocks)?;
-    let mut panics = store::try_clone_panics(&caller.panics)?;
-    panics
-        .try_reserve_exact(x.panics - panics.len())
-        .map_err(|_| "optimizer allocation failed".to_string())?;
+    // Build the panic table directly at its exact final capacity (paid in
+    // the final-shape lease), so its header never reallocates and no old+new
+    // overlap arises. Each text copy charges its actual bytes.
+    let mut panics: Vec<SsaPanicText> = try_vec(x.panics)?;
+    for text in &caller.panics {
+        panics.push(copy_panic(text, meter)?);
+    }
     let mut next_value = caller.value_bound() as u32;
     // Remap caller callee indices to the kept ones (paid scratch).
     let mut remap = meter.table::<u32>(used.len(), u32::MAX)?;
@@ -356,10 +369,10 @@ fn build(
             }
             let panic_base = panics.len() as u32;
             for text in &callee_fn.panics {
-                panics.push(SsaPanicText {
-                    message: store::try_string(&text.message)?,
-                    location: store::try_string(&text.location)?,
-                });
+                if panics.len() == panics.capacity() {
+                    return Err("inlined panic table exceeded its admitted bound".into());
+                }
+                panics.push(copy_panic(text, meter)?);
             }
             let mut entry_args = try_vec(args.len())?;
             entry_args.extend_from_slice(args);

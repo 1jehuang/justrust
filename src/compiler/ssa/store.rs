@@ -122,7 +122,7 @@ pub fn lowered_capacity_bytes(lowered: &Lowered) -> Result<usize, String> {
     meter::add(
         capacity_bytes(&lowered.function)?,
         meter::add(
-            callee_bytes(&lowered.callees, false)?,
+            callee_bytes(&lowered.callees, true)?,
             bytes::<SsaCallee>(
                 lowered
                     .callees
@@ -168,8 +168,12 @@ impl<T> Owned<T> {
         self.lease.admit(meter, bytes)
     }
 
-    pub fn seal(self) -> Result<(T, Receipt), String> {
-        Ok((self.value, self.lease.seal()?))
+    pub fn into_parts(self) -> (T, Lease) {
+        (self.value, self.lease)
+    }
+
+    pub fn seal(self, meter: &Meter<'_>) -> Result<(T, Receipt), String> {
+        Ok((self.value, self.lease.seal(meter)?))
     }
 
     /// Wrap a value built under an already-admitted lease, reconciling the

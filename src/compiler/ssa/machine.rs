@@ -17,8 +17,7 @@ use super::lower::Lowered;
 use super::meter::{self, Meter, Table};
 use super::store::{self, Owned};
 use super::{
-    BinOp, CmpOp, InstKind, Overflow, PanicKind, SsaIntTy, SsaPanicText, SsaTerminator, SsaTy,
-    SsaValue, UnOp,
+    BinOp, CmpOp, InstKind, Overflow, PanicKind, SsaIntTy, SsaTerminator, SsaTy, SsaValue, UnOp,
 };
 use crate::compiler::backend::Object;
 use std::mem::size_of;
@@ -68,39 +67,46 @@ fn int_of(ty: SsaTy) -> SsaIntTy {
     }
 }
 
+/// Machine output under construction. Every buffer is a `meter::Buf` whose
+/// logical limit was paid up front (`emit_bound`); appends check that limit
+/// before writing, so emission can never grow storage that was not paid for.
+/// The only growth path is `Buf::grow`, which pays the reallocation peak and
+/// reconciles the real capacity immediately.
 struct Asm {
-    code: Vec<u8>,
-    traps: Vec<usize>,
-    calls: Vec<(usize, String)>,
-    strings: Vec<(usize, Vec<u8>)>,
+    code: meter::Buf<u8>,
+    traps: meter::Buf<usize>,
 }
 
 impl Asm {
-    fn bytes(&mut self, bytes: &[u8]) {
-        self.code.extend_from_slice(bytes);
+    fn bytes(&mut self, bytes: &[u8]) -> Result<(), String> {
+        self.code.extend(bytes)
     }
 
-    fn i32(&mut self, value: i32) {
-        self.bytes(&value.to_le_bytes());
+    fn i32(&mut self, value: i32) -> Result<(), String> {
+        self.bytes(&value.to_le_bytes())
     }
 
-    fn rel32(&mut self, opcode: &[u8]) -> usize {
-        self.bytes(opcode);
+    fn rel32(&mut self, opcode: &[u8]) -> Result<usize, String> {
+        self.bytes(opcode)?;
         let at = self.code.len();
-        self.i32(0);
-        at
+        self.i32(0)?;
+        Ok(at)
     }
 
     fn patch(&mut self, at: usize, target: usize) -> Result<(), String> {
         let displacement = i32::try_from(target as i128 - at as i128 - 4)
             .map_err(|_| "function exceeds rel32 range".to_string())?;
-        self.code[at..at + 4].copy_from_slice(&displacement.to_le_bytes());
+        self.code
+            .as_mut_slice()
+            .get_mut(at..at + 4)
+            .ok_or("patch outside emitted code")?
+            .copy_from_slice(&displacement.to_le_bytes());
         Ok(())
     }
 
-    fn trap_if(&mut self, condition: u8) {
-        let at = self.rel32(&[0x0f, condition]);
-        self.traps.push(at);
+    fn trap_if(&mut self, condition: u8) -> Result<(), String> {
+        let at = self.rel32(&[0x0f, condition])?;
+        self.traps.push(at)
     }
 
     fn rex(w: bool, reg: u8, base: u8) -> u8 {
@@ -108,54 +114,58 @@ impl Asm {
     }
 
     /// mov dst, src (64-bit registers).
-    fn mov_rr(&mut self, dst: u8, src: u8) {
+    fn mov_rr(&mut self, dst: u8, src: u8) -> Result<(), String> {
         if dst != src {
             self.bytes(&[
                 Self::rex(true, src, dst),
                 0x89,
                 0xc0 | ((src & 7) << 3) | (dst & 7),
-            ]);
+            ])?;
         }
+        Ok(())
     }
 
-    fn mov_ri(&mut self, dst: u8, value: u64) {
+    fn mov_ri(&mut self, dst: u8, value: u64) -> Result<(), String> {
         if value == 0 {
             // xor r32, r32 zero-extends.
             if dst >= 8 {
-                self.bytes(&[0x45]);
+                self.bytes(&[0x45])?;
             }
-            self.bytes(&[0x31, 0xc0 | ((dst & 7) << 3) | (dst & 7)]);
+            self.bytes(&[0x31, 0xc0 | ((dst & 7) << 3) | (dst & 7)])?;
         } else if value <= u64::from(u32::MAX) {
             if dst >= 8 {
-                self.bytes(&[0x41]);
+                self.bytes(&[0x41])?;
             }
-            self.bytes(&[0xb8 + (dst & 7)]);
-            self.bytes(&(value as u32).to_le_bytes());
+            self.bytes(&[0xb8 + (dst & 7)])?;
+            self.bytes(&(value as u32).to_le_bytes())?;
         } else if (value as i64) >= i64::from(i32::MIN) && (value as i64) < 0 {
             // mov r/m64, imm32 sign-extends.
-            self.bytes(&[Self::rex(true, 0, dst), 0xc7, 0xc0 | (dst & 7)]);
-            self.bytes(&(value as u32).to_le_bytes());
+            self.bytes(&[Self::rex(true, 0, dst), 0xc7, 0xc0 | (dst & 7)])?;
+            self.bytes(&(value as u32).to_le_bytes())?;
         } else {
-            self.bytes(&[Self::rex(true, 0, dst), 0xb8 + (dst & 7)]);
-            self.bytes(&value.to_le_bytes());
+            self.bytes(&[Self::rex(true, 0, dst), 0xb8 + (dst & 7)])?;
+            self.bytes(&value.to_le_bytes())?;
         }
+        Ok(())
     }
 
-    fn load_slot(&mut self, dst: u8, offset: i32) {
-        self.bytes(&[Self::rex(true, dst, 5), 0x8b, 0x85 | ((dst & 7) << 3)]);
-        self.i32(offset);
+    fn load_slot(&mut self, dst: u8, offset: i32) -> Result<(), String> {
+        self.bytes(&[Self::rex(true, dst, 5), 0x8b, 0x85 | ((dst & 7) << 3)])?;
+        self.i32(offset)?;
+        Ok(())
     }
 
-    fn store_slot(&mut self, offset: i32, src: u8) {
-        self.bytes(&[Self::rex(true, src, 5), 0x89, 0x85 | ((src & 7) << 3)]);
-        self.i32(offset);
+    fn store_slot(&mut self, offset: i32, src: u8) -> Result<(), String> {
+        self.bytes(&[Self::rex(true, src, 5), 0x89, 0x85 | ((src & 7) << 3)])?;
+        self.i32(offset)?;
+        Ok(())
     }
 
     fn load(&mut self, dst: u8, loc: Loc) -> Result<(), String> {
         match loc {
-            Loc::Reg(reg) => self.mov_rr(dst, reg),
-            Loc::Stack(offset) => self.load_slot(dst, offset),
-            Loc::Const(value) => self.mov_ri(dst, value),
+            Loc::Reg(reg) => self.mov_rr(dst, reg)?,
+            Loc::Stack(offset) => self.load_slot(dst, offset)?,
+            Loc::Const(value) => self.mov_ri(dst, value)?,
             Loc::None => return Err("read of an unmaterialized SSA value".into()),
         }
         Ok(())
@@ -163,8 +173,8 @@ impl Asm {
 
     fn store(&mut self, loc: Loc, src: u8) -> Result<(), String> {
         match loc {
-            Loc::Reg(reg) => self.mov_rr(reg, src),
-            Loc::Stack(offset) => self.store_slot(offset, src),
+            Loc::Reg(reg) => self.mov_rr(reg, src)?,
+            Loc::Stack(offset) => self.store_slot(offset, src)?,
             Loc::Const(_) | Loc::None => return Err("store to a non-storage location".into()),
         }
         Ok(())
@@ -174,17 +184,17 @@ impl Asm {
         match loc {
             Loc::Reg(reg) => {
                 if reg >= 8 {
-                    self.bytes(&[0x41]);
+                    self.bytes(&[0x41])?;
                 }
-                self.bytes(&[0x50 + (reg & 7)]);
+                self.bytes(&[0x50 + (reg & 7)])?;
             }
             Loc::Stack(offset) => {
-                self.bytes(&[0xff, 0xb5]);
-                self.i32(offset);
+                self.bytes(&[0xff, 0xb5])?;
+                self.i32(offset)?;
             }
             Loc::Const(value) => {
-                self.mov_ri(RAX, value);
-                self.bytes(&[0x50]);
+                self.mov_ri(RAX, value)?;
+                self.bytes(&[0x50])?;
             }
             Loc::None => return Err("push of an unmaterialized SSA value".into()),
         }
@@ -192,26 +202,28 @@ impl Asm {
     }
 
     /// Re-normalize rax to the declared width.
-    fn normalize(&mut self, ty: SsaTy) {
+    fn normalize(&mut self, ty: SsaTy) -> Result<(), String> {
         if let SsaTy::Int(int) = ty
             && int.bits() < 64
         {
             let shift = 64 - int.bits();
-            self.bytes(&[0x48, 0xc1, 0xe0, shift]);
-            self.bytes(&[0x48, 0xc1, if int.signed() { 0xf8 } else { 0xe8 }, shift]);
+            self.bytes(&[0x48, 0xc1, 0xe0, shift])?;
+            self.bytes(&[0x48, 0xc1, if int.signed() { 0xf8 } else { 0xe8 }, shift])?;
         }
+        Ok(())
     }
 
     /// Trap unless rax already holds an in-range value of `ty`.
-    fn check_range(&mut self, ty: SsaTy) {
+    fn check_range(&mut self, ty: SsaTy) -> Result<(), String> {
         if let SsaTy::Int(int) = ty
             && int.bits() < 64
         {
-            self.bytes(&[0x48, 0x89, 0xc2]); // mov rdx, rax
-            self.normalize(ty);
-            self.bytes(&[0x48, 0x39, 0xd0]); // cmp rax, rdx
-            self.trap_if(0x85);
+            self.bytes(&[0x48, 0x89, 0xc2])?; // mov rdx, rax
+            self.normalize(ty)?;
+            self.bytes(&[0x48, 0x39, 0xd0])?; // cmp rax, rdx
+            self.trap_if(0x85)?;
         }
+        Ok(())
     }
 }
 
@@ -671,13 +683,13 @@ fn emit_bound(lowered: &Lowered, meter: &Meter<'_>) -> Result<EmitBound, String>
 pub fn emit(
     lowered: &Lowered,
     types: &[Option<SsaTy>],
-    panic: &dyn Fn(&SsaPanicText) -> Result<Object, String>,
     meter: &Meter<'_>,
 ) -> Result<(Owned<Object>, Stats), String> {
     let function = &lowered.function;
     let layout = allocate(lowered, types, meter)?;
     let bound = emit_bound(lowered, meter)?;
-    let mut lease = meter.lease(object_bound_bytes(&bound, lowered)?)?;
+    // Every output buffer is a paid `Buf`/`List`; each carries its own lease
+    // for its admitted limit and they are absorbed into one at the end.
     let loc = &layout.loc;
     let ty = |value: SsaValue| -> Result<SsaTy, String> {
         types
@@ -687,15 +699,17 @@ pub fn emit(
             .ok_or_else(|| "untyped SSA value".to_string())
     };
     let mut asm = Asm {
-        code: reserve(bound.code)?,
-        traps: reserve(bound.traps)?,
-        calls: reserve(bound.calls)?,
-        strings: reserve(bound.panic_texts)?,
+        code: meter.buf(bound.code)?,
+        traps: meter.buf(bound.traps)?,
     };
-    asm.bytes(&[0x55, 0x48, 0x89, 0xe5]); // push rbp; mov rbp, rsp
+    let mut calls = meter.list::<(usize, String)>(bound.calls)?;
+    let mut strings = meter.list::<(usize, Vec<u8>)>(bound.panic_texts)?;
+    // Call symbol strings: admitted before each allocation (`clone_string`).
+    let mut symbols = meter.lease(0)?;
+    asm.bytes(&[0x55, 0x48, 0x89, 0xe5])?; // push rbp; mov rbp, rsp
     if layout.frame > 0 {
-        asm.bytes(&[0x48, 0x81, 0xec]);
-        asm.i32(layout.frame);
+        asm.bytes(&[0x48, 0x81, 0xec])?;
+        asm.i32(layout.frame)?;
     }
     let mut labels = meter.table(function.blocks.len(), 0usize)?;
     let mut edges = meter.list::<(usize, usize)>(bound.edges)?;
@@ -732,59 +746,59 @@ pub fn emit(
                     asm.load(RCX, loc[rhs.0 as usize])?;
                     let trap = *overflow == Overflow::Trap;
                     match op {
-                        BinOp::And => asm.bytes(&[0x48, 0x21, 0xc8]),
-                        BinOp::Or => asm.bytes(&[0x48, 0x09, 0xc8]),
-                        BinOp::Xor => asm.bytes(&[0x48, 0x31, 0xc8]),
+                        BinOp::And => asm.bytes(&[0x48, 0x21, 0xc8])?,
+                        BinOp::Or => asm.bytes(&[0x48, 0x09, 0xc8])?,
+                        BinOp::Xor => asm.bytes(&[0x48, 0x31, 0xc8])?,
                         BinOp::Add | BinOp::Sub => {
-                            asm.bytes(&[0x48, if *op == BinOp::Add { 0x01 } else { 0x29 }, 0xc8]);
+                            asm.bytes(&[0x48, if *op == BinOp::Add { 0x01 } else { 0x29 }, 0xc8])?;
                             if trap {
                                 if int.bits() == 64 {
-                                    asm.trap_if(if int.signed() { 0x80 } else { 0x82 });
+                                    asm.trap_if(if int.signed() { 0x80 } else { 0x82 })?;
                                 } else {
                                     if !int.signed() {
-                                        asm.trap_if(0x82);
+                                        asm.trap_if(0x82)?;
                                     }
-                                    asm.check_range(t);
+                                    asm.check_range(t)?;
                                 }
                             } else {
-                                asm.normalize(t);
+                                asm.normalize(t)?;
                             }
                         }
                         BinOp::Mul => {
                             if int.signed() || !trap {
-                                asm.bytes(&[0x48, 0x0f, 0xaf, 0xc1]); // imul rax, rcx
+                                asm.bytes(&[0x48, 0x0f, 0xaf, 0xc1])?; // imul rax, rcx
                                 if trap {
-                                    asm.trap_if(0x80);
+                                    asm.trap_if(0x80)?;
                                 }
                             } else {
-                                asm.bytes(&[0x48, 0xf7, 0xe1]); // mul rcx
-                                asm.trap_if(0x82);
+                                asm.bytes(&[0x48, 0xf7, 0xe1])?; // mul rcx
+                                asm.trap_if(0x82)?;
                             }
                             if trap {
-                                asm.check_range(t);
+                                asm.check_range(t)?;
                             } else {
-                                asm.normalize(t);
+                                asm.normalize(t)?;
                             }
                         }
                         BinOp::Div | BinOp::Rem => {
-                            asm.bytes(&[0x48, 0x85, 0xc9]); // test rcx, rcx
-                            asm.trap_if(0x84);
+                            asm.bytes(&[0x48, 0x85, 0xc9])?; // test rcx, rcx
+                            asm.trap_if(0x84)?;
                             if int.signed() {
                                 let minimum = u64::MAX << (int.bits() - 1);
-                                asm.bytes(&[0x48, 0xba]);
-                                asm.bytes(&minimum.to_le_bytes());
-                                asm.bytes(&[0x48, 0x39, 0xd0]); // cmp rax, rdx
-                                let ordinary = asm.rel32(&[0x0f, 0x85]);
-                                asm.bytes(&[0x48, 0x83, 0xf9, 0xff]); // cmp rcx, -1
-                                asm.trap_if(0x84);
+                                asm.bytes(&[0x48, 0xba])?;
+                                asm.bytes(&minimum.to_le_bytes())?;
+                                asm.bytes(&[0x48, 0x39, 0xd0])?; // cmp rax, rdx
+                                let ordinary = asm.rel32(&[0x0f, 0x85])?;
+                                asm.bytes(&[0x48, 0x83, 0xf9, 0xff])?; // cmp rcx, -1
+                                asm.trap_if(0x84)?;
                                 let here = asm.code.len();
                                 asm.patch(ordinary, here)?;
-                                asm.bytes(&[0x48, 0x99, 0x48, 0xf7, 0xf9]); // cqo; idiv rcx
+                                asm.bytes(&[0x48, 0x99, 0x48, 0xf7, 0xf9])?; // cqo; idiv rcx
                             } else {
-                                asm.bytes(&[0x31, 0xd2, 0x48, 0xf7, 0xf1]); // xor edx; div rcx
+                                asm.bytes(&[0x31, 0xd2, 0x48, 0xf7, 0xf1])?; // xor edx; div rcx
                             }
                             if *op == BinOp::Rem {
-                                asm.bytes(&[0x48, 0x89, 0xd0]);
+                                asm.bytes(&[0x48, 0x89, 0xd0])?;
                             }
                         }
                         BinOp::Shl | BinOp::Shr => {
@@ -796,13 +810,13 @@ pub fn emit(
                                 if amount.signed() && amount.bits() < 64 {
                                     // Raw pattern of the declared amount width.
                                     let shift = 64 - amount.bits();
-                                    asm.bytes(&[0x48, 0xc1, 0xe1, shift]);
-                                    asm.bytes(&[0x48, 0xc1, 0xe9, shift]);
+                                    asm.bytes(&[0x48, 0xc1, 0xe1, shift])?;
+                                    asm.bytes(&[0x48, 0xc1, 0xe9, shift])?;
                                 }
-                                asm.bytes(&[0x48, 0x83, 0xf9, width]); // cmp rcx, width
-                                asm.trap_if(0x83);
+                                asm.bytes(&[0x48, 0x83, 0xf9, width])?; // cmp rcx, width
+                                asm.trap_if(0x83)?;
                             } else {
-                                asm.bytes(&[0x83, 0xe1, width - 1]); // and ecx, width-1
+                                asm.bytes(&[0x83, 0xe1, width - 1])?; // and ecx, width-1
                             }
                             asm.bytes(&[
                                 0x48,
@@ -812,8 +826,8 @@ pub fn emit(
                                     _ if int.signed() => 0xf8,
                                     _ => 0xe8,
                                 },
-                            ]);
-                            asm.normalize(t);
+                            ])?;
+                            asm.normalize(t)?;
                         }
                     }
                 }
@@ -825,18 +839,18 @@ pub fn emit(
                     let t = ty(*value)?;
                     asm.load(RAX, loc[value.0 as usize])?;
                     match (op, t) {
-                        (UnOp::Not, SsaTy::Bool) => asm.bytes(&[0x83, 0xf0, 0x01]),
+                        (UnOp::Not, SsaTy::Bool) => asm.bytes(&[0x83, 0xf0, 0x01])?,
                         (UnOp::Not, _) => {
-                            asm.bytes(&[0x48, 0xf7, 0xd0]);
-                            asm.normalize(t);
+                            asm.bytes(&[0x48, 0xf7, 0xd0])?;
+                            asm.normalize(t)?;
                         }
                         (UnOp::Neg, _) => {
-                            asm.bytes(&[0x48, 0xf7, 0xd8]);
+                            asm.bytes(&[0x48, 0xf7, 0xd8])?;
                             if *overflow == Overflow::Trap {
-                                asm.trap_if(0x80);
-                                asm.check_range(t);
+                                asm.trap_if(0x80)?;
+                                asm.check_range(t)?;
                             } else {
-                                asm.normalize(t);
+                                asm.normalize(t)?;
                             }
                         }
                     }
@@ -845,13 +859,13 @@ pub fn emit(
                     let signed = matches!(ty(*lhs)?, SsaTy::Int(int) if int.signed());
                     asm.load(RAX, loc[lhs.0 as usize])?;
                     asm.load(RCX, loc[rhs.0 as usize])?;
-                    asm.bytes(&[0x48, 0x39, 0xc8]);
-                    asm.bytes(&[0x0f, 0x90 | condition(*op, signed), 0xc0, 0x0f, 0xb6, 0xc0]);
+                    asm.bytes(&[0x48, 0x39, 0xc8])?;
+                    asm.bytes(&[0x0f, 0x90 | condition(*op, signed), 0xc0, 0x0f, 0xb6, 0xc0])?;
                 }
                 InstKind::Cast { to, value } => {
                     // Values are already extended by source signedness.
                     asm.load(RAX, loc[value.0 as usize])?;
-                    asm.normalize(SsaTy::Int(*to));
+                    asm.normalize(SsaTy::Int(*to))?;
                 }
                 InstKind::Select {
                     cond,
@@ -861,7 +875,7 @@ pub fn emit(
                     asm.load(RAX, loc[then.0 as usize])?;
                     asm.load(RCX, loc[otherwise.0 as usize])?;
                     asm.load(RDX, loc[cond.0 as usize])?;
-                    asm.bytes(&[0x48, 0x85, 0xd2, 0x48, 0x0f, 0x44, 0xc1]); // test; cmovz
+                    asm.bytes(&[0x48, 0x85, 0xd2, 0x48, 0x0f, 0x44, 0xc1])?; // test; cmovz
                 }
                 InstKind::Call { callee, args } => {
                     if args.len() > MAX_ARGS {
@@ -874,15 +888,15 @@ pub fn emit(
                     for arg in args {
                         asm.push(loc[arg.0 as usize])?;
                     }
-                    let at = asm.rel32(&[0xe8]);
-                    // The symbol string is a new copy owned by the object.
-                    let symbol = store::try_string(&callee.symbol)?;
-                    lease.admit(meter, symbol.capacity())?;
-                    meter.work(symbol.len())?;
-                    bounded_push(&mut asm.calls, (at, symbol))?;
+                    let at = asm.rel32(&[0xe8])?;
+                    // The symbol string is a new copy owned by the object:
+                    // admitted before allocation, surplus capacity after.
+                    // Conservative: the plan's symbol table also charged it.
+                    let symbol = meter.clone_string(&callee.symbol, &mut symbols)?;
+                    calls.push((at, symbol))?;
                     if !args.is_empty() {
-                        asm.bytes(&[0x48, 0x81, 0xc4]);
-                        asm.i32((args.len() * 8) as i32);
+                        asm.bytes(&[0x48, 0x81, 0xc4])?;
+                        asm.i32((args.len() * 8) as i32)?;
                     }
                 }
             }
@@ -892,45 +906,42 @@ pub fn emit(
         match &data.term {
             SsaTerminator::Return(value) => {
                 asm.load(RAX, loc[value.0 as usize])?;
-                asm.bytes(&[0xc9, 0xc3]); // leave; ret
+                asm.bytes(&[0xc9, 0xc3])?; // leave; ret
             }
-            SsaTerminator::Panic(PanicKind::Unreachable) => asm.bytes(&[0x0f, 0x0b]),
+            SsaTerminator::Panic(PanicKind::Unreachable) => asm.bytes(&[0x0f, 0x0b])?,
             SsaTerminator::Panic(PanicKind::Message(index)) => {
                 let text = function
                     .panics
                     .get(*index as usize)
                     .ok_or("missing SSA panic message")?;
-                // The callback admits its own diagnostic bytes; its code is
-                // copied here, so the copy is admitted before the code buffer
-                // grows past its bound. String payloads are moved, not copied.
-                let object = panic(text)?;
-                if !object.calls.is_empty() || !object.vtables.is_empty() {
-                    return Err("panic sequence must be self-contained".into());
-                }
-                meter.work(object.code.len())?;
-                let base = asm.code.len();
-                let needed = meter::add(base, object.code.len())?;
-                if needed > asm.code.capacity() {
-                    lease.admit(meter, needed - asm.code.capacity())?;
-                    asm.code
-                        .try_reserve_exact(needed - asm.code.len())
-                        .map_err(|_| "optimizer allocation failed".to_string())?;
-                }
-                asm.code.extend_from_slice(&object.code);
-                for (at, bytes) in object.strings {
-                    bounded_push(&mut asm.strings, (base + at, bytes))?;
-                }
+                // The paid sink writes the sequence straight into the paid
+                // code buffer (growth pays the old+new peak) and admits the
+                // diagnostic before allocating it; the payload is moved into
+                // `strings`, so it is paid exactly once. On error the whole
+                // emission fails and every lease refunds (transactional).
+                meter.work(meter::add(text.message.len(), text.location.len())?)?;
+                let mut sink = MachinePanic {
+                    asm: &mut asm,
+                    strings: &mut strings,
+                    diagnostics: &mut symbols,
+                    meter,
+                };
+                crate::compiler::backend::emit_panic_into(
+                    &mut sink,
+                    &text.message,
+                    &text.location,
+                )?;
             }
             SsaTerminator::Panic(_) => {
-                let at = asm.rel32(&[0xe9]);
-                bounded_push(&mut asm.traps, at)?;
+                let at = asm.rel32(&[0xe9])?;
+                asm.traps.push(at)?;
             }
             SsaTerminator::Jump(target) => {
                 edge_moves(target, &mut then_moves)?;
                 parallel_move(&mut asm, &then_moves, &mut pending, meter)?;
                 let to = target.block.0 as usize;
                 if to != next {
-                    let at = asm.rel32(&[0xe9]);
+                    let at = asm.rel32(&[0xe9])?;
                     edges.push((at, to))?;
                 }
             }
@@ -951,21 +962,21 @@ pub fn emit(
                     let signed = matches!(ty(*lhs)?, SsaTy::Int(int) if int.signed());
                     asm.load(RAX, loc[lhs.0 as usize])?;
                     asm.load(RCX, loc[rhs.0 as usize])?;
-                    asm.bytes(&[0x48, 0x39, 0xc8]);
+                    asm.bytes(&[0x48, 0x39, 0xc8])?;
                     0x80 | (condition(*op, signed) ^ 1)
                 } else {
                     asm.load(RAX, loc[cond.0 as usize])?;
-                    asm.bytes(&[0x48, 0x85, 0xc0]);
+                    asm.bytes(&[0x48, 0x85, 0xc0])?;
                     0x84
                 };
                 edge_moves(then, &mut then_moves)?;
                 edge_moves(otherwise, &mut else_moves)?;
-                let to_else = asm.rel32(&[0x0f, false_jump]);
+                let to_else = asm.rel32(&[0x0f, false_jump])?;
                 parallel_move(&mut asm, &then_moves, &mut pending, meter)?;
                 let then_block = then.block.0 as usize;
                 let else_trivial = else_moves.iter().all(|(d, s)| d == s);
                 if then_block != next || !else_trivial {
-                    let at = asm.rel32(&[0xe9]);
+                    let at = asm.rel32(&[0xe9])?;
                     edges.push((at, then_block))?;
                 }
                 if else_trivial {
@@ -974,7 +985,7 @@ pub fn emit(
                     let here = asm.code.len();
                     asm.patch(to_else, here)?;
                     parallel_move(&mut asm, &else_moves, &mut pending, meter)?;
-                    let at = asm.rel32(&[0xe9]);
+                    let at = asm.rel32(&[0xe9])?;
                     edges.push((at, otherwise.block.0 as usize))?;
                 }
             }
@@ -987,64 +998,95 @@ pub fn emit(
     let trap = asm.code.len();
     asm.bytes(&[
         0xbf, 101, 0, 0, 0, 0xb8, 60, 0, 0, 0, 0x0f, 0x05, 0x0f, 0x0b,
-    ]);
+    ])?;
     meter.work(asm.traps.len())?;
-    for at in std::mem::take(&mut asm.traps) {
+    for index in 0..asm.traps.len() {
+        let at = asm.traps.as_slice()[index];
         asm.patch(at, trap)?;
-    }
-    if asm.code.len() > asm.code.capacity() {
-        return Err("machine code exceeded its admitted bound".into());
     }
     let mut stats = layout.stats;
     stats.code_bytes = asm.code.len();
+    let (code, mut lease) = asm.code.into_parts();
+    let (_traps, traps_lease) = asm.traps.into_parts();
+    let (calls, calls_lease) = calls.into_parts();
+    let (strings, strings_lease) = strings.into_parts();
+    lease.absorb(meter, calls_lease)?;
+    lease.absorb(meter, strings_lease)?;
+    lease.absorb(meter, symbols)?;
+    // The trap table is scratch: its storage is freed here (refunded below).
     let object = Object {
-        code: asm.code,
-        calls: asm.calls,
-        strings: asm.strings,
+        code,
+        calls,
+        strings,
         vtables: Vec::new(),
         receipt: None,
     };
+    drop(_traps);
+    drop(traps_lease);
     // Reconcile to the real retained capacity (bounds were upper bounds).
     let actual = object_bytes(&object)?;
     let owned = store::Owned::adopt(lease, object, actual, meter)?;
     Ok((owned, stats))
 }
 
-/// Pushes within a reserved bound; exceeding it is an internal error.
-fn bounded_push<T>(data: &mut Vec<T>, value: T) -> Result<(), String> {
-    if data.len() == data.capacity() {
-        return Err("machine emission exceeded its admitted bound".into());
+/// Paid panic adapter: the shared abort sequence written into the machine's
+/// paid buffers under the exact meter of this emission.
+struct MachinePanic<'s, 'm> {
+    asm: &'s mut Asm,
+    strings: &'s mut meter::List<(usize, Vec<u8>)>,
+    diagnostics: &'s mut meter::Lease,
+    meter: &'s Meter<'m>,
+}
+
+impl crate::compiler::backend::PanicSink for MachinePanic<'_, '_> {
+    fn bytes(&mut self, bytes: &[u8]) -> Result<(), String> {
+        self.meter.work(bytes.len())?;
+        self.asm.code.extend_growing(self.meter, bytes)
     }
-    data.push(value);
-    Ok(())
+    fn position(&self) -> usize {
+        self.asm.code.len()
+    }
+    fn patch_rel32(&mut self, at: usize, displacement: [u8; 4]) -> Result<(), String> {
+        self.asm
+            .code
+            .as_mut_slice()
+            .get_mut(at..at + 4)
+            .ok_or("patch outside emitted code")?
+            .copy_from_slice(&displacement);
+        Ok(())
+    }
+    fn diagnostic(&mut self, length: usize) -> Result<Vec<u8>, String> {
+        self.meter.work(length)?;
+        self.diagnostics.admit(self.meter, length)?;
+        let mut diagnostic = Vec::new();
+        diagnostic
+            .try_reserve_exact(length)
+            .map_err(|_| "panic diagnostic allocation failed".to_string())?;
+        if diagnostic.capacity() > length {
+            self.diagnostics
+                .admit(self.meter, diagnostic.capacity() - length)?;
+        }
+        Ok(diagnostic)
+    }
+    fn string(&mut self, at: usize, payload: Vec<u8>) -> Result<(), String> {
+        // The relocation slot was admitted by `emit_bound`; the payload was
+        // paid by `diagnostic` and is moved here, not copied.
+        self.strings.push((at, payload))
+    }
 }
 
-fn reserve<T>(capacity: usize) -> Result<Vec<T>, String> {
-    let mut data = Vec::new();
-    data.try_reserve_exact(capacity)
-        .map_err(|_| "optimizer allocation failed".to_string())?;
-    Ok(data)
-}
-
-fn object_bound_bytes(bound: &EmitBound, _lowered: &Lowered) -> Result<usize, String> {
-    [
-        Ok(bound.code),
-        meter::mul(bound.traps, size_of::<usize>()),
-        meter::mul(bound.calls, size_of::<(usize, String)>()),
-        meter::mul(bound.panic_texts, size_of::<(usize, Vec<u8>)>()),
-    ]
-    .into_iter()
-    .try_fold(0usize, |total, part| meter::add(total, part?))
-}
-
-/// Bytes the published object owns: buffer capacities plus call symbol
-/// strings. Panic string payloads are moved from callback objects whose
-/// producer admitted them, so they are not charged again here.
-fn object_bytes(object: &Object) -> Result<usize, String> {
+/// Bytes the published object keeps alive: buffer capacities, call symbol
+/// capacities, panic diagnostic capacities, the `Object` value inside the
+/// engine's `Arc` (header included), and the `Arc<Receipt>` that travels with
+/// it. All of it is admitted before the receipt `Arc` is allocated.
+pub fn object_bytes(object: &Object) -> Result<usize, String> {
+    let arc = 2 * size_of::<usize>();
     let mut total = [
         Ok(object.code.capacity()),
         meter::mul(object.calls.capacity(), size_of::<(usize, String)>()),
         meter::mul(object.strings.capacity(), size_of::<(usize, Vec<u8>)>()),
+        Ok(size_of::<Object>() + arc),
+        Ok(size_of::<meter::Receipt>() + arc),
     ]
     .into_iter()
     .try_fold(0usize, |total, part: Result<usize, String>| {
@@ -1052,6 +1094,9 @@ fn object_bytes(object: &Object) -> Result<usize, String> {
     })?;
     for (_, symbol) in &object.calls {
         total = meter::add(total, symbol.capacity())?;
+    }
+    for (_, payload) in &object.strings {
+        total = meter::add(total, payload.capacity())?;
     }
     Ok(total)
 }

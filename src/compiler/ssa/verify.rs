@@ -329,8 +329,17 @@ pub fn verify_metered<'a>(
     loop {
         let mut last_error = None;
         let before = pending.len();
-        // One round visits every pending instruction once.
-        paid(meter.work(before))?;
+        // One round re-types every pending instruction, visiting all of its
+        // operands (a call rescans every argument on every retry), so charge
+        // the actual operand visits of this round, not a one-time count.
+        let mut visits = before;
+        for &(block, index) in pending.iter() {
+            visits = paid(super::meter::add(
+                visits,
+                function.blocks[block].insts[index].kind.operand_count(),
+            ))?;
+        }
+        paid(meter.work(visits))?;
         pending.retain(|&(block, index)| {
             let inst = &function.blocks[block].insts[index];
             match inst_type(&inst.kind, &defs, callee) {

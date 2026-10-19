@@ -1180,7 +1180,7 @@ fn scratch_is_refunded_and_outputs_keep_exact_receipts() {
     let held = usage(&budget).0 - before;
     assert_eq!(held, store::capacity_bytes(&copy.value).unwrap());
     assert_eq!(held, copy.bytes());
-    let (value, receipt) = copy.seal().unwrap();
+    let (value, receipt) = copy.seal(&m).unwrap();
     assert_eq!(receipt.bytes(), held);
     assert!(receipt.same_authority(&budget));
     // A sealed receipt never refunds: the ledger keeps the retained charge
@@ -1361,4 +1361,169 @@ fn many_inline_sites_are_admitted_and_reconciled() {
     // A byte budget below the expansion rejects before building.
     let tight = limited(out.bytes() / 2, usize::MAX / 4);
     assert!(inline::inline(&caller, &[(0, &leaf)], &meter::Meter::new(&tight)).is_err());
+}
+
+/// Full ledger state for exact no-change comparisons.
+fn ledger(budget: &PlanBudget) -> (usize, usize, usize, usize) {
+    let snapshot = budget.usage_snapshot();
+    (
+        snapshot.bytes,
+        snapshot.work,
+        snapshot.reservations.current_reservations,
+        snapshot.reservations.cumulative_bytes,
+    )
+}
+
+#[test]
+fn lease_rejects_a_foreign_authority_before_any_ledger_change() {
+    let own = PlanBudget::default();
+    let foreign = PlanBudget::default();
+    let mine = meter::Meter::new(&own);
+    let theirs = meter::Meter::new(&foreign);
+    let mut lease = mine.lease(64).unwrap();
+    let other = mine.lease(8).unwrap();
+    let before = (ledger(&own), ledger(&foreign));
+    // Every operation, including no-op and zero-sized ones, is rejected.
+    assert!(lease.resize(&theirs, 64).is_err(), "resize no-op");
+    assert!(lease.resize(&theirs, 0).is_err(), "resize shrink");
+    assert!(lease.resize(&theirs, 128).is_err(), "resize grow");
+    assert!(lease.admit(&theirs, 0).is_err(), "admit zero");
+    assert!(lease.admit(&theirs, 16).is_err(), "admit");
+    assert_eq!((ledger(&own), ledger(&foreign)), before);
+    // Absorb with a foreign meter rejects and the absorbed lease refunds
+    // normally to its own ledger (never to the foreign one).
+    assert!(lease.absorb(&theirs, other).is_err(), "absorb");
+    assert_eq!(ledger(&foreign), before.1);
+    assert_eq!(ledger(&own).0, before.0.0 - 8);
+    // A lease from a different authority cannot be absorbed even via the
+    // right meter.
+    let alien = theirs.lease(4).unwrap();
+    let foreign_before = ledger(&foreign);
+    let own_before = ledger(&own);
+    assert!(lease.absorb(&mine, alien).is_err(), "absorb alien lease");
+    assert_eq!(ledger(&own), own_before);
+    assert_eq!(ledger(&foreign).0, foreign_before.0 - 4);
+    let own_before = ledger(&own);
+    let foreign_before = ledger(&foreign);
+    assert!(lease.seal(&theirs).is_err(), "seal");
+    // The rejected seal dropped the lease: it refunds only its own ledger.
+    assert_eq!(ledger(&foreign), foreign_before);
+    assert_eq!(ledger(&own).0, own_before.0 - 64);
+}
+
+#[test]
+fn every_operation_fails_after_a_sticky_work_rejection() {
+    let budget = limited(1 << 20, 1000);
+    let m = meter::Meter::new(&budget);
+    let mut lease = m.lease(32).unwrap();
+    assert!(m.work(usize::MAX / 2).is_err(), "huge work rejected");
+    let before = ledger(&budget);
+    assert!(m.work(0).is_err(), "work(0) after failure");
+    assert!(m.lease(1).is_err(), "small lease after failure");
+    assert!(m.lease(0).is_err(), "zero lease after failure");
+    assert!(lease.resize(&m, 32).is_err(), "resize no-op after failure");
+    assert!(lease.admit(&m, 0).is_err(), "admit zero after failure");
+    assert_eq!(ledger(&budget).0, before.0, "no bytes moved");
+    assert!(lease.seal(&m).is_err(), "seal after failure");
+}
+
+#[test]
+fn growth_and_absorb_never_charge_a_phantom_peak() {
+    let budget = PlanBudget::default();
+    let m = meter::Meter::new(&budget);
+    let base = usage(&budget).0;
+    let mut lease = m.lease(1000).unwrap();
+    let mut other = m.lease(500).unwrap();
+    other.admit(&m, 250).unwrap();
+    // Growth admits only the delta (plus bounded chunk bookkeeping).
+    lease.admit(&m, 10).unwrap();
+    let book = usage(&budget).0 - base - 1000 - 750 - 10;
+    assert!(book <= 256, "chunk bookkeeping {book}");
+    assert_eq!(lease.bytes(), 1010);
+    // Absorb moves reservations: the ledger does not rise by the total.
+    let held = usage(&budget).0;
+    lease.absorb(&m, other).unwrap();
+    assert!(usage(&budget).0 - held <= 256, "absorb re-admitted");
+    assert_eq!(lease.bytes(), 1760);
+    // Shrink is exact and decrease-only.
+    let held = usage(&budget).0;
+    lease.resize(&m, 1000).unwrap();
+    assert_eq!(lease.bytes(), 1000);
+    assert_eq!(held - usage(&budget).0, 760);
+    drop(lease);
+    assert_eq!(
+        usage(&budget).0,
+        base,
+        "all chunks and bookkeeping refunded"
+    );
+}
+
+#[test]
+fn paid_buffer_never_writes_past_its_paid_limit() {
+    let budget = PlanBudget::default();
+    let m = meter::Meter::new(&budget);
+    let base = usage(&budget).0;
+    let mut buf = m.buf::<u8>(4).unwrap();
+    buf.extend(&[1, 2, 3]).unwrap();
+    assert!(buf.extend(&[4, 5]).is_err(), "limit is paid, not capacity");
+    assert_eq!(buf.as_slice(), &[1, 2, 3]);
+    buf.push(4).unwrap();
+    assert!(buf.push(5).is_err());
+    buf.extend_growing(&m, &[5, 6, 7]).unwrap();
+    assert_eq!(buf.as_slice(), &[1, 2, 3, 4, 5, 6, 7]);
+    let (data, lease) = buf.into_parts();
+    assert!(lease.bytes() >= data.capacity(), "real capacity is paid");
+    drop((data, lease));
+    assert_eq!(usage(&budget).0, base);
+}
+
+#[test]
+fn metered_call_target_eq_matches_derived_eq() {
+    use crate::compiler::ir::{BorrowKind, IntTy, Ty};
+    use std::sync::Arc;
+    let leaf = |n: usize| -> Ty {
+        let mut ty = Ty::Int(IntTy::U8);
+        for i in 0..n {
+            ty = if i % 2 == 0 {
+                Ty::Ref {
+                    kind: BorrowKind::Shared,
+                    referent: Arc::new(ty),
+                }
+            } else {
+                Ty::Tuple(Arc::from(vec![ty, Ty::Bool]))
+            };
+        }
+        ty
+    };
+    let target = |args: Vec<Ty>| crate::compiler::ir::CallTarget {
+        declaration: dummy_target().declaration,
+        type_args: Arc::from(args),
+    };
+    let samples = [
+        target(vec![]),
+        target(vec![leaf(0)]),
+        target(vec![leaf(5)]),
+        target(vec![leaf(6)]),
+        target(vec![leaf(5), Ty::Unit]),
+        target(vec![Ty::Array {
+            element: Arc::new(leaf(3)),
+            len: 4,
+        }]),
+        target(vec![Ty::Array {
+            element: Arc::new(leaf(3)),
+            len: 5,
+        }]),
+    ];
+    let budget = PlanBudget::default();
+    let m = meter::Meter::new(&budget);
+    for a in &samples {
+        for b in &samples {
+            assert_eq!(lower::call_target_eq_for_tests(a, b, &m).unwrap(), a == b);
+        }
+    }
+    // Work tracks the shared nested prefix actually visited.
+    let deep = target(vec![leaf(200)]);
+    let before = usage(&budget).1;
+    assert!(lower::call_target_eq_for_tests(&deep, &deep.clone(), &m).unwrap());
+    assert!(usage(&budget).1 - before > 200);
 }
