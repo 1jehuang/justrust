@@ -210,6 +210,12 @@ impl PlanCtx {
                 self.push_trait_application(&mut applications, bound.clone(), budget)?;
             }
         }
+        // With no ordinary trait arguments the exact application is already
+        // known. Membership, including equality-constrained impl outputs, is
+        // proved by the canonical world rather than guessed from impl heads.
+        if self.param_env(trait_id)?.arity() == 1 {
+            return Ok(applications);
+        }
         for implementation in facts.world().impl_headers() {
             budget.charge_work(1)?;
             if implementation.trait_ref.declaration != trait_id {

@@ -434,6 +434,10 @@ cleanup failures.
       results, moves and genuine Copy facts pass debug/release native gates.
       Composite symbolic RHSs and reference-bearing results remain outside this
       bounded slice.
+- [x] Impl parameters determined by associated output equalities use a
+      dependency-ordered fixed point, then canonical closed normalization to
+      infer missing output actuals. Unused and cyclic unconstrained impls are
+      rejected even when never called (`iterator_associated`).
 - [x] Catalog Copy/Sized associated declaration bounds under ASSOCIATED-BOUNDS.md,
       with exact retained source occurrences and header/callback identity, all unused
       assignment checks under real impl predicates, and closed normalization replay.

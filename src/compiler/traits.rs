@@ -13,6 +13,7 @@ use std::sync::{Arc, Mutex};
 mod associated_types;
 mod catalog;
 mod equality;
+mod impl_constraints;
 mod nominal_normalization;
 mod normal_drop;
 mod parameter_equality;
@@ -2978,18 +2979,7 @@ impl ValidatedTraitWorld {
         }
         self.validate_ref_in(&h.trait_ref, &h.schema_env, None)?;
         self.validate_predicates(&h.predicates, &h.schema_env, None)?;
-        for p in h.schema_env.ordered_params() {
-            let mut constrained = self.contains_param(&h.trait_ref.self_ty, p, 0)?;
-            for argument in h.trait_ref.args.iter() {
-                constrained |= self.contains_param(argument, p, 0)?;
-            }
-            if !constrained {
-                return Err(FactsError::invalid(
-                    &self.budget,
-                    "unconstrained trait impl parameter",
-                ));
-            }
-        }
+        self.validate_impl_parameter_constraints(h)?;
         let trait_header = self.trait_header(h.trait_ref.declaration)?;
         for id in trait_header.items.iter() {
             let item = self.item_header(*id)?;
@@ -4549,30 +4539,6 @@ impl ValidatedTraitWorld {
         }
         Ok(())
     }
-    fn contains_param(&self, ty: &Ty, p: ParamId, depth: usize) -> Result<bool> {
-        charged(&self.budget, self.budget.check_depth(depth))?;
-        charged(&self.budget, self.budget.charge_work(1))?;
-        if let Ty::Param(q) = ty {
-            return Ok(*q == p);
-        }
-        for child in type_arguments(ty) {
-            if self.contains_param(child, p, depth + 1)? {
-                return Ok(true);
-            }
-        }
-        if let Ty::Array { element, .. }
-        | Ty::Ref {
-            referent: element, ..
-        }
-        | Ty::RawPtr {
-            pointee: element, ..
-        }
-        | Ty::Slice { element } = ty
-        {
-            return self.contains_param(element, p, depth + 1);
-        }
-        Ok(false)
-    }
 }
 
 #[derive(Clone, Copy)]
@@ -5948,6 +5914,11 @@ impl ValidatedTraitWorld {
                 }
             }
             if !matches {
+                continue;
+            }
+            if slots.iter().any(|slot| slot.is_none())
+                && !self.infer_impl_equality_arguments(implementation, &mut slots, facts, active)?
+            {
                 continue;
             }
             // Generic impl parameters are instantiated only with sized

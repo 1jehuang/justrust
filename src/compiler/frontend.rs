@@ -16863,18 +16863,21 @@ impl PlanCtx {
                     }
                 }
             }
-            if block
-                .type_params
-                .iter()
-                .map(|p| {
-                    program
-                        .names
-                        .key(*p, LookupClass::TypeParameter)
-                        .map_err(native_adapter::name_diagnostic)
-                })
-                .collect::<Result<Vec<_>, _>>()?
-                .iter()
-                .any(|p| !used.contains(p))
+            // Trait impl constraints include associated equalities and are
+            // validated against the typed header by the trait world.
+            if block.trait_path.is_none()
+                && block
+                    .type_params
+                    .iter()
+                    .map(|p| {
+                        program
+                            .names
+                            .key(*p, LookupClass::TypeParameter)
+                            .map_err(native_adapter::name_diagnostic)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?
+                    .iter()
+                    .any(|p| !used.contains(p))
             {
                 return Err("unconstrained impl parameter".into());
             }

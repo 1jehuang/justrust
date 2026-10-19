@@ -768,19 +768,7 @@ impl ValidatedTraitWorld {
             }
             self.validate_ref_in(&implementation.trait_ref, &implementation.schema_env, None)?;
             self.validate_predicates(&implementation.predicates, &implementation.schema_env, None)?;
-            for parameter in implementation.schema_env.ordered_params() {
-                let mut constrained =
-                    self.contains_param(&implementation.trait_ref.self_ty, parameter, 0)?;
-                for argument in implementation.trait_ref.args.iter() {
-                    constrained |= self.contains_param(argument, parameter, 0)?;
-                }
-                if !constrained {
-                    return Err(FactsError::invalid(
-                        &self.budget,
-                        "unconstrained trait impl parameter",
-                    ));
-                }
-            }
+            self.validate_impl_parameter_constraints(implementation)?;
             let owner = self.trait_header(implementation.trait_ref.declaration)?;
             let mut seen = Vec::new();
             for value in implementation.associated_types.iter() {
