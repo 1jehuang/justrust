@@ -41,6 +41,26 @@ Earlier default-command runs used the client's remote-failure cooldown local
 fallback. Those receipts remain recorded as local evidence, not hosted evidence.
 The explicit hosted retry succeeded. `cargo fmt --check` also passed.
 
+## Ownership proof receipt checkpoint
+
+`VerifiedTemplateCfg` and `ConcreteCfg` now retain immutable `RetainedStorage`
+rather than live `PlanReservation` handles. `bind_proof` promotes its paid lease
+only after admission, and uses checked addition for its conservative wrapper,
+analysis, lease, and allocator-overhead estimate. Overflow returns an incomplete
+`ResourceLimit` analysis instead of wrapping to a smaller byte charge. The
+existing larger lease estimate is deliberately preserved during this migration.
+A direct publication regression proves exact retained bytes, no refund on proof
+or receipt clone/drop, no duplicate cumulative charge, and overflow rejection.
+
+Hosted check, all 1,370 library tests, 39 integration tests across ownership,
+accounting, borrowing_graph and graph_integrity, and strict all-target clippy
+passed. Receipts: `20261018-201913209-2456507`,
+`20261018-201919225-2461386`, `20261018-201923864-2464724`,
+`20261018-201942082-2476365`. An initial integration command named nonexistent
+`ownership_graph`/`ownership_accounting` targets and failed at target selection.
+The corrected command uses the actual `ownership` and `accounting` targets.
+No graph ceiling or debt baseline is changed. Other published lease paths remain.
+
 ## Remaining stages, not delivered by this foundation
 
 Published fact holders must replace retained `PlanReservation` fields with
