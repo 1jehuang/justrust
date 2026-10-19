@@ -1,0 +1,37 @@
+     90 unsupported: active attribute `stable` is unsupported
+     60 unsupported: active attribute `unstable` is unsupported
+     26 unsupported: active attribute `derive` is unsupported
+     24 unsupported: attributes on fields, parameters, associated items, statements, or expressions are unsupported
+     14 unsupported: active attribute `must_use` is unsupported
+     11 unsupported: attributes at this attachment position are unsupported
+     10 unsupported: active attribute `lang` is unsupported
+     10 unsupported: active attribute `allow` is unsupported
+      5 unsupported: nonliteral attribute RHS grammar is unsupported
+      3 unsupported: only doc string and doc(hidden) metadata are supported
+      3 unsupported: const items and constant evaluation are unsupported, found X
+      3 unsupported: active attribute `repr` is unsupported
+      2 visibility path escapes crate root, found X
+      2 unsupported: documentation comments in macro-bearing input require token-tree doc lowering
+      2 unsupported: active attribute `rustc_nounwind` is unsupported
+      2 unsupported: active attribute `rustc_diagnostic_item` is unsupported
+      2 unsupported: active attribute `expect` is unsupported
+      2 inline requires a function owner
+      2 inactive item: expected generic closing >, found X
+      2 expected "{", found X
+      1 visibility path must name a lexical ancestor module, found X
+      1 unsupported: unsupported token "?"
+      1 unsupported: inactive item: item syntax is unsupported, found X
+      1 unsupported: glob imports are unsupported, found X
+      1 unsupported: expanded receiver self is unsupported
+      1 unsupported: const expressions and constant evaluation are unsupported, found X
+      1 unsupported: active attribute `unsafe` is unsupported
+      1 unsupported: active attribute `rustc_specialization_trait` is unsupported
+      1 unsupported: active attribute `rustc_intrinsic` is unsupported
+      1 unsupported: active attribute `rustc_doc_primitive` is unsupported
+      1 unsupported: active attribute `no_std` is unsupported
+      1 unsupported: active attribute `macro_use` is unsupported
+      1 unsupported: active attribute `cold` is unsupported
+      1 unresolved or cyclic import crate::P
+      1 unknown unregistered attribute `rustfmt`
+      1 main must exist, take no arguments and return ()
+      1 expected generic closing >, found X
