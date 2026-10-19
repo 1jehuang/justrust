@@ -3109,6 +3109,23 @@ impl Lowerer<'_> {
             }
             self.push_scope()?;
             self.initialize_pattern_bindings(id, &source, &arm.pattern, completes)?;
+            if let Some(guard) = arm.guard {
+                let condition = self.expression(guard)?;
+                let pass = self.block();
+                let fail = self.block();
+                self.terminate(
+                    Terminator::Switch {
+                        condition,
+                        then_block: pass,
+                        else_block: fail,
+                    },
+                    Some(id),
+                )?;
+                self.current = fail;
+                self.cleanup(self.scopes.len() - 1, Some(id));
+                self.terminate(Terminator::Goto(next), Some(id))?;
+                self.current = pass;
+            }
             let value = self.expression(arm.body)?;
             if completes {
                 self.assign(destination.clone(), Rvalue::Use(value), Some(id));
@@ -9050,6 +9067,7 @@ mod tests {
                         kind: ir::ExprKind::Match {
                             scrutinee: ExprId(0),
                             arms: vec![ir::MatchArm {
+                                guard: None,
                                 pattern: ir::MatchPattern::Aggregate {
                                     ty: domain,
                                     bindings: vec![ir::PatternBinding {
@@ -10094,6 +10112,7 @@ mod tests {
                         ir::ExprKind::Match {
                             scrutinee: ExprId(0),
                             arms: vec![ir::MatchArm {
+                                guard: None,
                                 pattern: ir::MatchPattern::Aggregate {
                                     ty: ty.clone(),
                                     bindings: vec![ir::PatternBinding {
@@ -10169,6 +10188,7 @@ mod tests {
                     ir::ExprKind::Match {
                         scrutinee: ExprId(0),
                         arms: vec![ir::MatchArm {
+                            guard: None,
                             pattern: ir::MatchPattern::Aggregate {
                                 ty,
                                 bindings: vec![],

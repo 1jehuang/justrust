@@ -3080,6 +3080,9 @@ impl Resolver<'_> {
                     let mut names = std::collections::HashSet::new();
                     self.pattern(&mut arm.pattern, module, &mut names)?;
                     locals.push(names);
+                    if let Some(guard) = &mut arm.guard {
+                        self.expr(guard, module, locals)?;
+                    }
                     self.expr(&mut arm.body, module, locals)?;
                     locals.pop();
                 }

@@ -446,6 +446,9 @@ impl<'a> Validator<'a> {
             Visit::MatchArm(arm) => {
                 self.push(Visit::RestoreBindings(self.bindings.len()))?;
                 self.push(Visit::Expr(&arm.body))?;
+                if let Some(guard) = &arm.guard {
+                    self.push(Visit::Expr(guard))?;
+                }
                 self.push(Visit::Pattern(&arm.pattern))?;
             }
             Visit::IfLetThen(pattern, block) => {

@@ -21,6 +21,8 @@ struct BorrowedMatchArm<'a> {
     /// None is an internal fallback, never a fabricated source pattern.
     pattern: Option<&'a Pattern>,
     guarded: bool,
+    /// Ordinary match-arm guard, checked as a Bool in the arm's scope.
+    guard: Option<&'a Expr>,
     body: MatchBody<'a>,
 }
 
@@ -7519,6 +7521,7 @@ impl<'a> Checker<'a> {
                 [BorrowedMatchArm {
                     pattern: Some(pattern),
                     guarded: false,
+                    guard: None,
                     body: MatchBody::Block(body),
                 }]
                 .into_iter(),
@@ -7720,6 +7723,7 @@ impl<'a> Checker<'a> {
                 [BorrowedMatchArm {
                     pattern: Some(pattern),
                     guarded: false,
+                    guard: None,
                     body: MatchBody::Block(body),
                 }]
                 .into_iter(),
@@ -7798,11 +7802,13 @@ impl<'a> Checker<'a> {
                     BorrowedMatchArm {
                         pattern: Some(pattern),
                         guarded: false,
+                        guard: None,
                         body: MatchBody::Block(body),
                     },
                     BorrowedMatchArm {
                         pattern: None,
                         guarded: false,
+                        guard: None,
                         body: MatchBody::LoopExit(id),
                     },
                 ]
@@ -8181,11 +8187,24 @@ impl<'a> Checker<'a> {
                             }
                         }
                     }
+                    if arm.guard.is_some() {
+                        for pending in plan.bindings.rows.as_slice() {
+                            let binding = &pending.local;
+                            if binding.borrow.is_none() && !self.facts().must_copy(&binding.ty)? {
+                                return Err("unsupported: guarded match arms with by-value non-Copy bindings (use `ref`)".into());
+                            }
+                        }
+                    }
                     let coverage = plan.coverage();
-                    let useful = matrix
-                        .as_mut()
-                        .map(|matrix| plan.insert_coverage(matrix))
-                        .transpose()?;
+                    // A guarded arm covers nothing: the guard may fail.
+                    let useful = if arm.guard.is_some() {
+                        Some(true)
+                    } else {
+                        matrix
+                            .as_mut()
+                            .map(|matrix| plan.insert_coverage(matrix))
+                            .transpose()?
+                    };
                     (self.publish_pattern(plan)?, coverage, useful)
                 } else {
                     let useful = matrix
@@ -8220,20 +8239,28 @@ impl<'a> Checker<'a> {
                 let useful = exact_useful.unwrap_or_else(|| {
                     !catchall && !fully_covered && key.is_none_or(|key| !covered.contains(&key))
                 });
+                let guard = arm
+                    .guard
+                    .map(|guard| -> Result<ir::ExprId, String> {
+                        let id = self.expr_expected(guard, Some(&ir::Ty::Bool))?;
+                        self.require(&self.flow(id), &ir::Ty::Bool)?;
+                        Ok(id)
+                    })
+                    .transpose()?;
                 let body = self.match_arm_body(
                     arm.body,
                     self.reachable && source.completes && useful,
                     expected,
                 )?;
-                Ok::<_, String>((pattern, coverage, body, useful))
+                Ok::<_, String>((pattern, coverage, body, useful, guard))
             })();
             self.scopes.truncate(scope_depth);
-            let (pattern, coverage, body, useful) = arm_result?;
+            let (pattern, coverage, body, useful, guard) = arm_result?;
             let arm_flow = self.flow(body);
             // Even unreachable arms impose their source type obligation.
             result = self.join(&result, &arm_flow.ty, "match arms")?;
             completes |= useful && arm_flow.completes;
-            if matrix.is_none() {
+            if matrix.is_none() && guard.is_none() {
                 if let Some(key) = coverage.full_key() {
                     covered.insert(key);
                 }
@@ -8251,7 +8278,11 @@ impl<'a> Checker<'a> {
                     PatternCoverage::Scalar(_) => {}
                 }
             }
-            checked.push(ir::MatchArm { pattern, body });
+            checked.push(ir::MatchArm {
+                pattern,
+                guard,
+                body,
+            });
         }
         let exhaustive = if let Some(matrix) = matrix.as_ref() {
             matrix.exhaustive()?
@@ -8637,6 +8668,7 @@ impl<'a> Checker<'a> {
                 arms.iter().map(|arm| BorrowedMatchArm {
                     pattern: Some(&arm.pattern),
                     guarded: arm.guarded,
+                    guard: arm.guard.as_deref(),
                     body: MatchBody::Expr(&arm.body),
                 }),
                 expected,
@@ -8652,11 +8684,13 @@ impl<'a> Checker<'a> {
                     BorrowedMatchArm {
                         pattern: Some(pattern.as_ref()),
                         guarded: false,
+                        guard: None,
                         body: MatchBody::Block(then_block),
                     },
                     BorrowedMatchArm {
                         pattern: None,
                         guarded: false,
+                        guard: None,
                         body: else_branch
                             .as_deref()
                             .map_or(MatchBody::ImplicitUnit, MatchBody::Expr),

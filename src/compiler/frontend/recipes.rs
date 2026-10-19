@@ -595,6 +595,9 @@ pub(super) fn inventory(
                 expr(scrutinee, ds, b, d + 1)?;
                 for a in arms {
                     pattern(&a.pattern, ds, b, d + 1)?;
+                    if let Some(g) = &a.guard {
+                        expr(g, ds, b, d + 1)?;
+                    }
                     expr(&a.body, ds, b, d + 1)?;
                 }
             }

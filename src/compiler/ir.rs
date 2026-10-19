@@ -6246,6 +6246,8 @@ pub enum MatchPattern {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MatchArm {
     pub pattern: MatchPattern,
+    /// Bool guard evaluated after bindings; false falls through to later arms.
+    pub guard: Option<ExprId>,
     pub body: ExprId,
 }
 
@@ -7241,6 +7243,12 @@ impl CheckedFunction {
         let mut bindings = std::collections::HashSet::new();
         for arm in arms {
             self.exprs.get(arm.body.0).ok_or("invalid match arm body")?;
+            if let Some(guard) = arm.guard {
+                let guard = self.exprs.get(guard.0).ok_or("invalid match guard")?;
+                if !matches!(guard.ty, Ty::Bool | Ty::Never) {
+                    return Err("match guard must be bool".into());
+                }
+            }
             self.validate_pattern(ty, &arm.pattern, parameters, &mut bindings)?;
         }
         Ok(())
@@ -8105,6 +8113,9 @@ impl CheckedFunction {
                     }
                     self.validate_match(*scrutinee, arms, &parameters)?;
                     for arm in arms {
+                        if let Some(guard) = arm.guard {
+                            expr(guard)?;
+                        }
                         expr(arm.body)?;
                     }
                 }
@@ -11693,6 +11704,7 @@ mod tests {
                 .validate_match(
                     ExprId(0),
                     &[MatchArm {
+                        guard: None,
                         pattern: MatchPattern::Int(high),
                         body: ExprId(0),
                     }],
@@ -11725,6 +11737,7 @@ mod tests {
             function.validate().unwrap();
             let arms = [
                 MatchArm {
+                    guard: None,
                     pattern: MatchPattern::Decision {
                         ty: domain,
                         tests: vec![PatternTest {
@@ -11736,6 +11749,7 @@ mod tests {
                     body: ExprId(0),
                 },
                 MatchArm {
+                    guard: None,
                     pattern: MatchPattern::Wildcard,
                     body: ExprId(0),
                 },
@@ -11848,6 +11862,7 @@ mod tests {
                 function.exprs[0].kind = ExprKind::Int(integer);
                 function.validate().unwrap();
                 let arms = [MatchArm {
+                    guard: None,
                     pattern: MatchPattern::Int(integer),
                     body: ExprId(0),
                 }];
@@ -11882,6 +11897,7 @@ mod tests {
                 });
                 assert!(function.validate().unwrap_err().contains("noncanonical"));
                 let arms = [MatchArm {
+                    guard: None,
                     pattern: MatchPattern::Int(invalid),
                     body: ExprId(0),
                 }];
@@ -12860,6 +12876,7 @@ mod tests {
         let function = fixture();
         let parameters = function.params.iter().copied().collect();
         let arm = MatchArm {
+            guard: None,
             pattern: MatchPattern::Wildcard,
             body: ExprId(0),
         };
@@ -12878,6 +12895,7 @@ mod tests {
                 .is_err()
         );
         let invalid = MatchArm {
+            guard: None,
             pattern: MatchPattern::Binding(LocalId(usize::MAX)),
             body: ExprId(0),
         };
@@ -12887,6 +12905,7 @@ mod tests {
                 .is_err()
         );
         let invalid = MatchArm {
+            guard: None,
             pattern: MatchPattern::Wildcard,
             body: ExprId(usize::MAX),
         };
@@ -13311,6 +13330,7 @@ mod tests {
             kind: ExprKind::Match {
                 scrutinee: ExprId(0),
                 arms: vec![MatchArm {
+                    guard: None,
                     pattern: MatchPattern::Aggregate {
                         ty: domain,
                         bindings: vec![PatternBinding {
@@ -13582,6 +13602,7 @@ mod tests {
                 &ExprKind::Match {
                     scrutinee: ExprId(0),
                     arms: vec![MatchArm {
+                        guard: None,
                         pattern,
                         body: ExprId(1)
                     }]
@@ -13589,6 +13610,7 @@ mod tests {
                 &ExprKind::Match {
                     scrutinee: ExprId(0),
                     arms: vec![MatchArm {
+                        guard: None,
                         pattern: replaced,
                         body: ExprId(1)
                     }]
@@ -13616,6 +13638,7 @@ mod tests {
             kind: ExprKind::Match {
                 scrutinee: ExprId(0),
                 arms: vec![MatchArm {
+                    guard: None,
                     pattern: MatchPattern::Decision {
                         ty: Ty::Bool,
                         tests: vec![PatternTest {

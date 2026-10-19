@@ -102,6 +102,7 @@ impl Checker<'_> {
             })
         };
         let success_arm = ir::MatchArm {
+            guard: None,
             pattern: ir::MatchPattern::EnumVariant {
                 ty: input.clone(),
                 variant: success_index,
@@ -158,6 +159,7 @@ impl Checker<'_> {
             }),
         )?;
         let failure_arm = ir::MatchArm {
+            guard: None,
             pattern: ir::MatchPattern::EnumVariant {
                 ty: input.clone(),
                 variant: failure_index,

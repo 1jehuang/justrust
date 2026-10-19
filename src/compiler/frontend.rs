@@ -1982,6 +1982,16 @@ impl SourceInventory {
                     self.scopes.push(HashMap::new());
                     let here = node.child(16, i, budget)?;
                     self.shadow_pattern(&arm.pattern, &here, budget, depth + 1)?;
+                    if let Some(guard) = &arm.guard {
+                        self.expr(
+                            guard,
+                            &here.child(41, 0, budget)?,
+                            None,
+                            None,
+                            budget,
+                            depth + 1,
+                        )?;
+                    }
                     self.expr(
                         &arm.body,
                         &here.child(17, 0, budget)?,
@@ -5816,6 +5826,8 @@ pub struct MatchArm {
     /// A builtin matches! guard lowered into the body's If condition.
     /// Retained so type checking can enforce the bounded guard binding rules.
     pub guarded: bool,
+    /// Ordinary `pat if cond =>` match-arm guard (MATCH-GUARDS).
+    pub guard: Option<Box<Expr>>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UnaryOp {
@@ -7343,11 +7355,13 @@ impl<'input, 'names> Parser<'input, 'names> {
             pattern,
             body,
             guarded,
+            guard: None,
         });
         arms.push(MatchArm {
             pattern: Pattern::Wildcard,
             body: Expr::Bool(false),
             guarded: false,
+            guard: None,
         });
         let expression = Expr::Match { scrutinee, arms };
         validate_depth(DepthNode::Expr(&expression)).map_err(|e| self.depth_error(&e))?;
@@ -12149,14 +12163,22 @@ impl<'input, 'names> Parser<'input, 'names> {
                 return Err(self.limit("match arm count exceeds limit 4096"));
             }
             let pattern = self.arm_pattern()?;
-            if self.is("if") || self.is("|") || self.is("@") {
-                return Err(
-                    self.unsupported("match guards, or-patterns and @ patterns are unsupported")
-                );
+            if self.is("|") || self.is("@") {
+                return Err(self.unsupported("or-patterns and @ patterns are unsupported here"));
             }
-            self.expect("=>")?;
             let frontier = self.enter_lexical()?;
             self.bind_pattern_lexical(&pattern)?;
+            let guard = if self.eat("if") {
+                let condition = self.nested_expr()?;
+                Some(
+                    self.names
+                        .try_parser_box(condition)
+                        .map_err(native_adapter::name_error)?,
+                )
+            } else {
+                None
+            };
+            self.expect("=>")?;
             let direct_return = self.eat("return");
             let source_blocklike =
                 matches!(self.token().text, "if" | "match" | "loop" | "{" | "unsafe")
@@ -12192,6 +12214,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                 pattern,
                 body,
                 guarded: false,
+                guard,
             });
             self.restore_frontier(frontier);
             if !self.eat(",") && !self.is("}") && !blocklike {
@@ -14014,6 +14037,9 @@ fn walk_depth_inspecting(
                     for arm in arms {
                         push(DepthNode::Pattern(&arm.pattern))?;
                         push(DepthNode::Expr(&arm.body))?;
+                        if let Some(guard) = &arm.guard {
+                            push(DepthNode::Expr(guard))?;
+                        }
                     }
                 }
                 Expr::NativeSyscall(fields)
