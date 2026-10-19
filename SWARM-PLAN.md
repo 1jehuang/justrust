@@ -43,6 +43,13 @@ oracle stdout) and by feature tags disappearing from it, not by slice docs.
    update-ref comparing expected-old P. If HEAD or remote moved, coordinate
    and reapply only your patch to the new parent and rerun affected checks.
    Never reparent stale trees, force-push or overwrite concurrent staging.
+11. Isolated exports can preserve old source timestamps. When reusing a
+   validation target across snapshots, refresh exported input timestamps and
+   explicitly build `jr-rust` before CLI acceptance. Confirm the changed crate
+   actually compiled and the test uses that snapshot's executable, not merely
+   a pre-existing `target/debug/jr-rust`. Cargo-provided binary paths are
+   preferred but do not by themselves prove artifact freshness. Preserve
+   source contents and reuse one target rather than multiplying build trees.
 
 ## Streams
 
