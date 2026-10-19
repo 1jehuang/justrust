@@ -230,6 +230,9 @@ impl ValidatedTraitWorld {
         charged(&self.budget, self.budget.check_depth(depth))?;
         charged(&self.budget, self.budget.charge_work(1))?;
         charged(&self.budget, self.budget.charge_nodes(1))?;
+        if ty.is_nominal_back_edge() {
+            return Ok(0);
+        }
         let key = TypeWalk::key(ty).map(|node| (node, TypeUse::Root));
         if let Some(key) = key
             && let Some(height) = walk.lookup(key, &self.budget)?
@@ -1381,6 +1384,18 @@ impl ValidatedTraitWorld {
                 return child(left, right);
             }
             (Ty::Slice { element: left }, Ty::Slice { element: right }) => {
+                return child(left, right);
+            }
+            (
+                Ty::RawPtr {
+                    kind: left_kind,
+                    pointee: left,
+                },
+                Ty::RawPtr {
+                    kind: right_kind,
+                    pointee: right,
+                },
+            ) if left_kind == right_kind => {
                 return child(left, right);
             }
             (Ty::Dyn(left), Ty::Dyn(right)) if left.principal == right.principal => {}

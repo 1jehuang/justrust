@@ -52,6 +52,19 @@ fn match_trait_self<'actual>(
             match_trait_self(a, b, env, bindings, budget, depth + 1)
         }
         (
+            ir::Ty::RawPtr {
+                kind: a,
+                pointee: x,
+            },
+            ir::Ty::RawPtr {
+                kind: b,
+                pointee: y,
+            },
+        ) if a == b => match_trait_self(x, y, env, bindings, budget, depth + 1),
+        (ir::Ty::Slice { element: x }, ir::Ty::Slice { element: y }) => {
+            match_trait_self(x, y, env, bindings, budget, depth + 1)
+        }
+        (
             ir::Ty::Ref {
                 kind: a,
                 referent: x,
@@ -383,7 +396,9 @@ impl PlanCtx {
                 info.path.module == *module || self.catalog.declaration(*trait_id).is_some();
             for (import_module, path) in &self.registry.trait_imports {
                 budget.charge_work(1)?;
-                if import_module == module && self.resolve_trait_path(path)? == *trait_id {
+                let in_scope =
+                    import_module == module || Some(*import_module) == self.program.prelude_scope;
+                if in_scope && self.resolve_trait_path(path)? == *trait_id {
                     visible = true;
                 }
             }

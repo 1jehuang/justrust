@@ -18842,6 +18842,29 @@ fn match_impl_type(
         (ir::Ty::Array { element: a, len: n }, ir::Ty::Array { element: b, len: m }) if n == m => {
             match_impl_type(a, b, env, bindings, budget, depth + 1)
         }
+        (
+            ir::Ty::RawPtr {
+                kind: a,
+                pointee: x,
+            },
+            ir::Ty::RawPtr {
+                kind: b,
+                pointee: y,
+            },
+        ) if a == b => match_impl_type(x, y, env, bindings, budget, depth + 1),
+        (ir::Ty::Slice { element: x }, ir::Ty::Slice { element: y }) => {
+            match_impl_type(x, y, env, bindings, budget, depth + 1)
+        }
+        (
+            ir::Ty::Ref {
+                kind: a,
+                referent: x,
+            },
+            ir::Ty::Ref {
+                kind: b,
+                referent: y,
+            },
+        ) if a == b => match_impl_type(x, y, env, bindings, budget, depth + 1),
         _ => {
             if let (Some((a, aa)), Some((b, bb))) = (nominal_parts(pattern), nominal_parts(actual))
             {

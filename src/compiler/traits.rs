@@ -1871,6 +1871,9 @@ impl ValidatedTraitWorld {
         charged(&self.budget, self.budget.check_depth(depth))?;
         charged(&self.budget, self.budget.charge_work(1))?;
         charged(&self.budget, self.budget.charge_nodes(1))?;
+        if ty.is_nominal_back_edge() {
+            return Ok(0);
+        }
         walk.visits = walk
             .visits
             .checked_add(1)
@@ -4564,7 +4567,11 @@ impl ValidatedTraitWorld {
         if let Ty::Array { element, .. }
         | Ty::Ref {
             referent: element, ..
-        } = ty
+        }
+        | Ty::RawPtr {
+            pointee: element, ..
+        }
+        | Ty::Slice { element } = ty
         {
             return self.contains_param(element, p, depth + 1);
         }
@@ -4642,6 +4649,10 @@ impl ValidatedTraitWorld {
             }
         }
         if let Ty::Array { element, .. }
+        | Ty::Slice { element }
+        | Ty::RawPtr {
+            pointee: element, ..
+        }
         | Ty::Ref {
             referent: element, ..
         } = term.ty
@@ -4739,6 +4750,44 @@ impl ValidatedTraitWorld {
                         bindings,
                         depth + 1,
                     )?);
+            }
+            (
+                Ty::RawPtr {
+                    kind: a,
+                    pointee: at,
+                },
+                Ty::RawPtr {
+                    kind: b,
+                    pointee: bt,
+                },
+            ) => {
+                return Ok(a == b
+                    && self.unify(
+                        Term {
+                            side: left.side,
+                            ty: at,
+                        },
+                        Term {
+                            side: right.side,
+                            ty: bt,
+                        },
+                        bindings,
+                        depth + 1,
+                    )?);
+            }
+            (Ty::Slice { element: at }, Ty::Slice { element: bt }) => {
+                return self.unify(
+                    Term {
+                        side: left.side,
+                        ty: at,
+                    },
+                    Term {
+                        side: right.side,
+                        ty: bt,
+                    },
+                    bindings,
+                    depth + 1,
+                );
             }
             (Ty::Tuple(_), Ty::Tuple(_)) => {}
             (Ty::Struct(a), Ty::Struct(b)) if a.def().source_decl == b.def().source_decl => {}
@@ -6208,6 +6257,19 @@ impl ValidatedTraitWorld {
                     len: bl,
                 },
             ) => return Ok(al == bl && self.match_head(a, b, env, slots, depth + 1)?),
+            (
+                Ty::RawPtr {
+                    kind: a,
+                    pointee: at,
+                },
+                Ty::RawPtr {
+                    kind: b,
+                    pointee: bt,
+                },
+            ) => return Ok(a == b && self.match_head(at, bt, env, slots, depth + 1)?),
+            (Ty::Slice { element: a }, Ty::Slice { element: b }) => {
+                return self.match_head(a, b, env, slots, depth + 1);
+            }
             _ => return self.eq_ty(pattern, actual, depth + 1),
         }
         let a = type_arguments(pattern);
@@ -6645,6 +6707,9 @@ pub(crate) mod test_support {
             match ty {
                 Ty::Array { element, .. }
                 | Ty::Slice { element }
+                | Ty::RawPtr {
+                    pointee: element, ..
+                }
                 | Ty::Ref {
                     referent: element, ..
                 } => self.gather(element, depth + 1)?,

@@ -19,3 +19,4 @@ pub mod ops;
 //pub mod hash;
 pub mod string;
 //pub mod fmt; // gated until per-task Work budget lands
+pub mod ptr;
