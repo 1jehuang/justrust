@@ -59,8 +59,6 @@ TemplateCfg PlanBudget Mutex  # TemplateCfg -> PlanBudget -> Mutex
 TemplateCfg PlanCtx Mutex  # TemplateCfg -> Function -> GeneratedCfgShape -> CanonicalSourcePublication -> OriginalBody -> OriginalSource -> PlanCtx -> Mutex
 TemplateCfg PlanReservation Mutex  # TemplateCfg -> CheckedFunction -> BodySubstitutionProof -> VerifiedTemplateCfg -> PlanReservation -> Mutex
 TemplateCfg ValidatedTraitWorld Mutex  # TemplateCfg -> ValidatedFacts -> ValidatedTraitWorld -> Mutex
-UnitResult ExpansionBudget Mutex  # UnitResult -> FileUnit -> SourceError -> ByteLease -> ExpansionBudget -> Mutex
-UnitResult InvocationBudget Mutex  # UnitResult -> FileUnit -> SourceError -> ByteLease -> ExpansionBudget -> State -> StateLease -> InvocationBudget -> Mutex
 UniversalProofFact ExpansionBudget Mutex  # UniversalProofFact -> VerifiedTemplateCfg -> CarrierEffectProof -> Function -> AstPath -> PathData -> BudgetVec -> ExpansionBudget -> Mutex
 UniversalProofFact InvocationBudget Mutex  # UniversalProofFact -> VerifiedTemplateCfg -> CarrierEffectProof -> Function -> AstPath -> PathData -> BudgetVec -> ExpansionBudget -> State -> StateLease -> InvocationBudget -> Mutex
 UniversalProofFact PlanBudget Mutex  # UniversalProofFact -> VerifiedTemplateCfg -> TemplateCfg -> PlanBudget -> Mutex

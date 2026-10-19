@@ -465,9 +465,16 @@ impl Provider for CompilerProvider {
                             let parent = parent.as_ref().as_ref().map_err(|_| {
                                 Error::new("child module requested from a failed source file")
                             })?;
-                            source::prepare_child_unit(parent, *index as usize, options, &budget)
+                            source::prepare_published_child_unit(
+                                parent,
+                                *index as usize,
+                                options,
+                                &budget,
+                            )
                         }
                     };
+                    let unit = source::publish_unit(unit)
+                        .map_err(|error| Error::new(error.to_string()))?;
                     cx.publish_fact(0, unit)
                 }
                 PARSE => {
@@ -478,14 +485,14 @@ impl Provider for CompilerProvider {
                     let mut assembler = source::SourceAssembler::new(&this.0.source_options);
                     let root_unit: Arc<source::UnitResult> =
                         facts.get(Key::new(SOURCE, vec![0])).await?;
-                    let mut step = assembler.provide(root_unit);
+                    let mut step = assembler.provide_published(root_unit);
                     let prepared = loop {
                         match step.map_err(|error| Error::new(error.to_string()))? {
                             source::AssemblyStep::Done(prepared) => break *prepared,
                             source::AssemblyStep::Need(need) => {
                                 let unit: Arc<source::UnitResult> =
                                     facts.get(Key::new(SOURCE, need.ordinal)).await?;
-                                step = assembler.provide(unit);
+                                step = assembler.provide_published(unit);
                             }
                         }
                     };

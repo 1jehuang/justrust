@@ -110,9 +110,12 @@ declaration in `src/compiler` and `src/project`, excluding test code. A
 breadth-first search from each root records every carrier type that directly
 holds a mutable primitive, with one shortest witness path.
 
-Recorded 2026-10-19: 11 fact roots reach 6 carriers, 62 entries (72 before
+Recorded 2026-10-19: 10 fact roots reach 6 mutable carriers,
+60 entries (62 before lease-free source-unit diagnostic publication, 72 before
 construction-final declared reductions were frozen, 77 before the name-versus-type
-parser fix below):
+parser fix below). `UnitResult` remains a discovered fact root but now reaches no
+mutable carrier. Its concrete `SourceUnitError` excludes runtime diagnostic
+leases; general refundable `SourceError` is unchanged (SOURCE-UNIT-ERRORS.md):
 
 | Carrier | Mutable field | Owner of removal |
 |---|---|---|

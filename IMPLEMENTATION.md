@@ -692,6 +692,13 @@ real crates and multi-crate applications, not just adapted source snippets.
 
 ### G9. Integrated graph, persistence, security and operations
 
+Source-unit graph diagnostics now use a concrete lease-free publication type
+(SOURCE-UNIT-ERRORS.md). Pending/runtime `SourceError` keeps its refundable lease
+contract, and leased errors are rejected intact at the publication boundary.
+The existing `UnitResult` typed graph root remains; observed reachable debt
+shrinks only by its two entries, 62 to 60. This does not remove the six broader
+mutable carriers, pay existing unleased diagnostics, or complete parse splitting.
+
 Construction-final declared equality reductions now move from explicit local
 sinks into immutable contexts before world publication (DECLARED-REDUCTIONS.md).
 The actual reductions mutex removal tightens lexical debt by two tokens and

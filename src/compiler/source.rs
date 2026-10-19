@@ -297,7 +297,7 @@ pub fn prepare_text(
     }
 }
 
-/// Placeholder identity of the one file a [`FileUnit`] describes. The
+/// Placeholder identity of the one file a [`PendingFileUnit`] describes. The
 /// assembler maps it to the file's position in the assembled source map.
 const LOCAL_FILE: FileId = FileId(0);
 
@@ -319,7 +319,7 @@ pub struct ChildModule {
 /// declares. Pure in its explicit inputs (file bytes, options, ancestry).
 /// Spans use [`LOCAL_FILE`] for this file.
 #[derive(Debug)]
-pub struct FileUnit {
+pub struct PendingFileUnit {
     pub path: PathBuf,
     pub contents: Arc<str>,
     /// Canonical paths of the open files from the root to this one, for cycle
@@ -336,19 +336,156 @@ pub struct FileUnit {
 
 /// A file that could not be read or admitted before its bytes were registered.
 #[derive(Debug)]
-pub struct UnitFailure {
+pub struct PendingUnitFailure {
     pub error: SourceError,
     /// The error belongs at the declaring `mod name;` in the parent file.
     pub anchored: bool,
 }
+pub type PendingUnitResult = Result<PendingFileUnit, PendingUnitFailure>;
+
+/// A source-unit diagnostic admitted for graph publication. Unlike runtime
+/// `SourceError`, it cannot retain a refundable budget lease. Existing source
+/// diagnostic allocations are moved, not newly accounted by this conversion.
+#[derive(Debug)]
+pub struct SourceUnitError {
+    pub kind: SourceErrorKind,
+    pub primary: Option<SourceSpan>,
+    pub message: String,
+    pub location: Option<SourceLocation>,
+}
+impl SourceUnitError {
+    fn copy_runtime(&self, primary: Option<SourceSpan>) -> SourceError {
+        SourceError {
+            kind: self.kind,
+            primary,
+            message: self.message.clone(),
+            _diagnostic_lease: None,
+            location: None,
+        }
+    }
+}
+impl TryFrom<SourceError> for SourceUnitError {
+    type Error = SourceError;
+
+    fn try_from(error: SourceError) -> Result<Self, Self::Error> {
+        if error._diagnostic_lease.is_some() {
+            return Err(error);
+        }
+        Ok(Self {
+            kind: error.kind,
+            primary: error.primary,
+            message: error.message,
+            location: error.location,
+        })
+    }
+}
+impl From<SourceUnitError> for SourceError {
+    fn from(error: SourceUnitError) -> Self {
+        Self {
+            kind: error.kind,
+            primary: error.primary,
+            message: error.message,
+            location: error.location,
+            _diagnostic_lease: None,
+        }
+    }
+}
+
+/// Immutable published source-file payload. Construction uses a separate
+/// pending type so a refundable diagnostic cannot enter this fact by accident.
+#[derive(Debug)]
+pub struct FileUnit {
+    pub path: PathBuf,
+    pub contents: Arc<str>,
+    pub chain: Vec<PathBuf>,
+    pub text: String,
+    pub origins: Vec<OriginSegment>,
+    pub attributes: Vec<PreparedAttribute>,
+    pub children: Vec<ChildModule>,
+    pub terminal: Option<SourceUnitError>,
+}
+#[derive(Debug)]
+pub struct UnitFailure {
+    pub error: SourceUnitError,
+    pub anchored: bool,
+}
+impl FileUnit {
+    fn into_pending(self) -> PendingFileUnit {
+        PendingFileUnit {
+            path: self.path,
+            contents: self.contents,
+            chain: self.chain,
+            text: self.text,
+            origins: self.origins,
+            attributes: self.attributes,
+            children: self.children,
+            terminal: self.terminal.map(SourceError::from),
+        }
+    }
+    fn copy_pending(&self) -> PendingFileUnit {
+        PendingFileUnit {
+            path: self.path.clone(),
+            contents: self.contents.clone(),
+            chain: self.chain.clone(),
+            text: self.text.clone(),
+            origins: self.origins.clone(),
+            attributes: self.attributes.clone(),
+            children: self.children.clone(),
+            terminal: self.terminal.as_ref().map(|e| e.copy_runtime(e.primary)),
+        }
+    }
+}
 pub type UnitResult = Result<FileUnit, UnitFailure>;
+
+/// Move an unleased diagnostic into the published type, or return the original
+/// leased diagnostic intact. No lease is forgotten, retained or refunded here.
+pub fn publish_unit(unit: PendingUnitResult) -> Result<UnitResult, SourceError> {
+    Ok(match unit {
+        Ok(unit) => Ok(FileUnit {
+            terminal: unit.terminal.map(SourceUnitError::try_from).transpose()?,
+            path: unit.path,
+            contents: unit.contents,
+            chain: unit.chain,
+            text: unit.text,
+            origins: unit.origins,
+            attributes: unit.attributes,
+            children: unit.children,
+        }),
+        Err(failure) => Err(UnitFailure {
+            error: SourceUnitError::try_from(failure.error)?,
+            anchored: failure.anchored,
+        }),
+    })
+}
+
+/// Prepare a child from an immutable source fact without copying its parent.
+pub fn prepare_published_child_unit(
+    parent: &FileUnit,
+    index: usize,
+    options: &SourceOptions,
+    budget: &super::expansion_budget::ExpansionBudget,
+) -> PendingUnitResult {
+    let reader: &mut dyn SourceReader = if parent.path.starts_with(source_prelude::PRELUDE_DIR) {
+        &mut source_prelude::PreludeReader
+    } else {
+        &mut FsReader
+    };
+    child_unit_parts(
+        &parent.children,
+        &parent.chain,
+        index,
+        options,
+        reader,
+        budget,
+    )
+}
 
 /// Root unit of a file input, including option validation.
 pub fn prepare_root_unit(
     path: &Path,
     options: &SourceOptions,
     budget: &super::expansion_budget::ExpansionBudget,
-) -> UnitResult {
+) -> PendingUnitResult {
     root_unit_with(path, options, Some(&mut FsReader), budget)
 }
 fn root_unit_with(
@@ -356,8 +493,8 @@ fn root_unit_with(
     options: &SourceOptions,
     reader: Option<&mut dyn SourceReader>,
     budget: &super::expansion_budget::ExpansionBudget,
-) -> UnitResult {
-    let unanchored = |error| UnitFailure {
+) -> PendingUnitResult {
+    let unanchored = |error| PendingUnitFailure {
         error,
         anchored: false,
     };
@@ -372,11 +509,11 @@ fn root_unit_with(
 }
 /// Child `index` of an already prepared parent unit.
 pub fn prepare_child_unit(
-    parent: &FileUnit,
+    parent: &PendingFileUnit,
     index: usize,
     options: &SourceOptions,
     budget: &super::expansion_budget::ExpansionBudget,
-) -> UnitResult {
+) -> PendingUnitResult {
     if parent.path.starts_with(source_prelude::PRELUDE_DIR) {
         return child_unit_with(
             parent,
@@ -394,7 +531,7 @@ pub fn prepare_child_unit(
 pub fn prepare_prelude_unit(
     options: &SourceOptions,
     budget: &super::expansion_budget::ExpansionBudget,
-) -> UnitResult {
+) -> PendingUnitResult {
     let path = Path::new(source_prelude::PRELUDE_ROOT);
     file_unit(
         path,
@@ -407,13 +544,30 @@ pub fn prepare_prelude_unit(
     )
 }
 fn child_unit_with(
-    parent: &FileUnit,
+    parent: &PendingFileUnit,
     index: usize,
     options: &SourceOptions,
     reader: &mut dyn SourceReader,
     budget: &super::expansion_budget::ExpansionBudget,
-) -> UnitResult {
-    let child = parent.children.get(index).ok_or_else(|| UnitFailure {
+) -> PendingUnitResult {
+    child_unit_parts(
+        &parent.children,
+        &parent.chain,
+        index,
+        options,
+        reader,
+        budget,
+    )
+}
+fn child_unit_parts(
+    children: &[ChildModule],
+    chain: &[PathBuf],
+    index: usize,
+    options: &SourceOptions,
+    reader: &mut dyn SourceReader,
+    budget: &super::expansion_budget::ExpansionBudget,
+) -> PendingUnitResult {
+    let child = children.get(index).ok_or_else(|| PendingUnitFailure {
         error: Loader::error(
             SourceErrorKind::Contract,
             None,
@@ -425,7 +579,7 @@ fn child_unit_with(
         &child.path,
         &child.directory,
         child.depth,
-        &parent.chain,
+        chain,
         options,
         Some(reader),
         budget,
@@ -436,8 +590,8 @@ pub fn prepare_text_unit(
     name: impl Into<PathBuf>,
     text: &str,
     options: &SourceOptions,
-) -> UnitResult {
-    let unanchored = |error| UnitFailure {
+) -> PendingUnitResult {
+    let unanchored = |error| PendingUnitFailure {
         error,
         anchored: false,
     };
@@ -463,8 +617,8 @@ fn file_unit(
     options: &SourceOptions,
     reader: Option<&mut dyn SourceReader>,
     budget: &super::expansion_budget::ExpansionBudget,
-) -> UnitResult {
-    let anchored = |kind, message: String| UnitFailure {
+) -> PendingUnitResult {
+    let anchored = |kind, message: String| PendingUnitFailure {
         error: Loader::error(kind, None, message),
         anchored: true,
     };
@@ -534,9 +688,9 @@ fn snapshot_unit<'a>(
     options: &'a SourceOptions,
     reader: Option<&'a mut dyn SourceReader>,
     budget: &super::expansion_budget::ExpansionBudget,
-) -> UnitResult {
+) -> PendingUnitResult {
     if text.len() > MAX_BYTES {
-        return Err(UnitFailure {
+        return Err(PendingUnitFailure {
             error: Loader::error(
                 SourceErrorKind::Limit,
                 None,
@@ -550,7 +704,7 @@ fn snapshot_unit<'a>(
     let mut builder = Loader::new(options, reader, LOCAL_FILE, contents.clone(), root);
     builder.lexical_budget = budget.clone();
     let terminal = builder.snapshot(directory, depth).err();
-    Ok(FileUnit {
+    Ok(PendingFileUnit {
         path,
         contents,
         chain,
@@ -567,7 +721,7 @@ pub struct NeedUnit {
     /// Graph identity of the child file: `[0, i, j, ...]` child ordinals.
     pub ordinal: Vec<u64>,
     /// `None` for the prelude attachment unit (ordinal `[1]`).
-    pub parent: Option<Arc<FileUnit>>,
+    pub parent: Option<Arc<PendingFileUnit>>,
     pub index: usize,
 }
 pub enum AssemblyStep {
@@ -589,7 +743,7 @@ pub struct SourceAssembler {
     in_prelude: bool,
 }
 struct Frame {
-    unit: Arc<FileUnit>,
+    unit: Arc<PendingFileUnit>,
     id: FileId,
     ordinal: Vec<u64>,
     next_child: usize,
@@ -639,7 +793,41 @@ impl SourceAssembler {
         error.with_sources(&self.prepared.sources)
     }
     /// Supply the unit for the root (first call) or the last requested child.
-    pub fn provide(&mut self, unit: Arc<UnitResult>) -> Result<AssemblyStep, SourceError> {
+    pub fn provide(&mut self, unit: Arc<PendingUnitResult>) -> Result<AssemblyStep, SourceError> {
+        let unit = match unit.as_ref() {
+            Ok(_) => Ok(Self::take(unit)),
+            Err(failure) => Err(PendingUnitFailure {
+                error: copy_error(&failure.error, failure.error.primary),
+                anchored: failure.anchored,
+            }),
+        };
+        self.provide_owned(unit)
+    }
+    /// Read a lease-free graph fact, then assemble using the same source-order
+    /// path as direct preparation. Unique payloads move; shared facts copy only
+    /// the fields the pre-existing assembler already copied.
+    pub fn provide_published(
+        &mut self,
+        unit: Arc<UnitResult>,
+    ) -> Result<AssemblyStep, SourceError> {
+        let unit = match Arc::try_unwrap(unit) {
+            Ok(unit) => unit
+                .map(FileUnit::into_pending)
+                .map_err(|failure| PendingUnitFailure {
+                    error: failure.error.into(),
+                    anchored: failure.anchored,
+                }),
+            Err(shared) => match shared.as_ref() {
+                Ok(unit) => Ok(unit.copy_pending()),
+                Err(failure) => Err(PendingUnitFailure {
+                    error: failure.error.copy_runtime(failure.error.primary),
+                    anchored: failure.anchored,
+                }),
+            },
+        };
+        self.provide_owned(unit)
+    }
+    fn provide_owned(&mut self, unit: PendingUnitResult) -> Result<AssemblyStep, SourceError> {
         let (ordinal, anchor) = match self.awaiting.take() {
             Some((ordinal, _)) if ordinal == [1] => (ordinal, None),
             Some((ordinal, anchor)) => (ordinal, Some(anchor)),
@@ -653,16 +841,19 @@ impl SourceAssembler {
             }
         };
         self.started = true;
-        let unit = match unit.as_ref() {
+        let unit = match unit {
             Err(failure) => {
                 let primary = if failure.anchored {
                     anchor
                 } else {
                     failure.error.primary
                 };
-                return Err(self.fail(copy_error(&failure.error, primary)));
+                let mut error = failure.error;
+                error.primary = primary;
+                error.location = None;
+                return Err(self.fail(error));
             }
-            Ok(_) => Arc::new(Self::take(unit)),
+            Ok(unit) => Arc::new(unit),
         };
         if unit.contents.len() > MAX_BYTES - self.prepared.source_bytes {
             return Err(self.fail(Loader::error(
@@ -696,7 +887,7 @@ impl SourceAssembler {
         self.run()
     }
     /// Units are immutable shared facts. Assembly reads them through an `Arc`.
-    fn take(unit: Arc<UnitResult>) -> FileUnit {
+    fn take(unit: Arc<PendingUnitResult>) -> PendingFileUnit {
         match Arc::try_unwrap(unit) {
             Ok(Ok(unit)) => unit,
             Ok(Err(_)) => unreachable!("failures are handled before take"),
@@ -704,7 +895,7 @@ impl SourceAssembler {
                 let Ok(unit) = shared.as_ref() else {
                     unreachable!("failures are handled before take")
                 };
-                FileUnit {
+                PendingFileUnit {
                     path: unit.path.clone(),
                     contents: unit.contents.clone(),
                     chain: unit.chain.clone(),
@@ -1570,6 +1761,10 @@ fn tokens(text: &str) -> Result<Vec<Token>, String> {
 }
 
 #[cfg(test)]
+#[path = "source_unit_tests.rs"]
+mod publication_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -2206,7 +2401,7 @@ mod tests {
         let mut queue = vec![vec![0u64]];
         units.insert(
             vec![0],
-            Arc::new(prepare_root_unit(path, &options, &budget)),
+            Arc::new(publish_unit(prepare_root_unit(path, &options, &budget)).unwrap()),
         );
         while let Some(ordinal) = queue.pop() {
             let unit = units[&ordinal].clone();
@@ -2216,19 +2411,24 @@ mod tests {
                     child.push(index as u64);
                     units.insert(
                         child.clone(),
-                        Arc::new(prepare_child_unit(parent, index, &options, &budget)),
+                        Arc::new(
+                            publish_unit(prepare_published_child_unit(
+                                parent, index, &options, &budget,
+                            ))
+                            .unwrap(),
+                        ),
                     );
                     queue.push(child);
                 }
             }
         }
         let mut assembler = SourceAssembler::user_only(&options);
-        let mut step = assembler.provide(units[&vec![0]].clone())?;
+        let mut step = assembler.provide_published(units[&vec![0]].clone())?;
         loop {
             match step {
                 AssemblyStep::Done(prepared) => return Ok(*prepared),
                 AssemblyStep::Need(need) => {
-                    step = assembler.provide(units[&need.ordinal].clone())?;
+                    step = assembler.provide_published(units[&need.ordinal].clone())?;
                 }
             }
         }
