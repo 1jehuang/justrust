@@ -1357,6 +1357,7 @@ mod tests {
             name,
             visibility: ir::Visibility::Public,
             associated_types: Vec::new(),
+            self_defaults: Vec::new(),
             items: Vec::new(),
         });
         let valid = input.finish().unwrap();

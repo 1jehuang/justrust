@@ -11,6 +11,7 @@ pub mod prelude;
 pub mod native_heap;
 pub mod mem;
 pub mod vec;
+pub mod ops;
 //pub mod cmp;
 //pub mod default;
 //pub mod hash;

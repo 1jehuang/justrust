@@ -1736,9 +1736,14 @@ impl SourceInventory {
                     "unexpanded macro syntax cannot enter active source inventory",
                 ));
             }
-            Expr::Try(inner) => {
-                self.expr(inner, &node.child(40, 0, budget)?, None, None, budget, depth + 1)?
-            }
+            Expr::Try(inner) => self.expr(
+                inner,
+                &node.child(40, 0, budget)?,
+                None,
+                None,
+                budget,
+                depth + 1,
+            )?,
             Expr::Output(output) => validate_output_site(output, &self.names)
                 .map_err(|message| source_error(budget, &message))?,
             Expr::Format { arguments, .. } => {
@@ -4458,9 +4463,9 @@ impl PlanCtx {
     }
 }
 
+mod array_len;
 #[cfg(test)]
 mod associated_bounds;
-mod array_len;
 mod const_inputs;
 mod const_items;
 #[cfg(test)]
@@ -4919,6 +4924,8 @@ pub struct TraitDecl {
     pub visibility: ir::Visibility,
     pub items: Vec<TraitItemDecl>,
     pub associated_types: Vec<AssociatedTypeDecl>,
+    /// Trailing type parameters (indices) defaulted to `Self` when omitted.
+    pub self_defaults: Vec<usize>,
 }
 /// A genuine type member owned by its declaring trait.
 #[derive(Clone, Debug)]
@@ -6571,6 +6578,8 @@ struct Parser<'input, 'names> {
     module: ModuleId,
     alias_target: bool,
     pending_bounds: Vec<TypeBound>,
+    /// Indices of type parameters written `= Self` by the last parameter list.
+    pending_self_defaults: Vec<usize>,
     /// Anonymous parameters minted for argument-position `impl Trait` while a
     /// function parameter list is parsed. `None` forbids `impl Trait` (E0562).
     impl_trait_params: Option<Vec<AstIdent>>,
@@ -6743,6 +6752,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             module,
             alias_target: false,
             pending_bounds: Vec::new(),
+            pending_self_defaults: Vec::new(),
             impl_trait_params: None,
             cursor: TokenCursor::new(&buffer),
             nesting: self.nesting,
@@ -7985,6 +7995,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             module: self.module,
             alias_target: false,
             pending_bounds: Vec::new(),
+            pending_self_defaults: Vec::new(),
             impl_trait_params: None,
             cursor: TokenCursor::new(buffer),
             nesting: self.nesting,
@@ -8345,6 +8356,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             module,
             alias_target: false,
             pending_bounds: Vec::new(),
+            pending_self_defaults: Vec::new(),
             impl_trait_params: None,
             cursor: TokenCursor::new(tokens),
             nesting: 0,
@@ -8849,6 +8861,7 @@ impl<'input, 'names> Parser<'input, 'names> {
     #[inline(never)]
     fn type_parameters(&mut self) -> Result<Vec<AstIdent>, ParseError> {
         self.pending_bounds.clear();
+        self.pending_self_defaults.clear();
         let declarations = self.predeclare_type_parameters()?;
         if !self.eat("<") {
             return Ok(Vec::new());
@@ -8895,8 +8908,14 @@ impl<'input, 'names> Parser<'input, 'names> {
                 });
                 self.pending_bounds = bounds;
             }
-            if self.is("=") {
-                return Err(self.unsupported("generic defaults are unsupported"));
+            if self.eat("=") {
+                // `Rhs = Self` style defaults (trait declarations only).
+                if !self.eat("Self") {
+                    return Err(
+                        self.unsupported("generic defaults other than `Self` are unsupported")
+                    );
+                }
+                self.pending_self_defaults.push(params.len() - 1);
             }
             if !self.eat(",") || self.token().text.starts_with('>') {
                 break;
@@ -9570,6 +9589,7 @@ impl<'input, 'names> Parser<'input, 'names> {
         } else if self.eat("trait") {
             let name = self.ident()?;
             let type_params = self.type_parameters()?;
+            let self_defaults = std::mem::take(&mut self.pending_self_defaults);
             if type_params.len() >= 32 {
                 return Err(self.limit("trait binder resource limit 32 includes Self"));
             }
@@ -9690,6 +9710,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                 visibility: visibility.clone(),
                 items,
                 associated_types,
+                self_defaults,
             });
             (name, ItemKind::Trait)
         } else if self.eat("enum") {
@@ -17726,6 +17747,14 @@ impl PlanState {
             .arity()
             .checked_sub(1)
             .ok_or("contract: trait missing Self binder")?;
+        if args.len() < expected {
+            if let Ok(source) = registry.source_trait(declaration) {
+                while args.len() < expected && source.self_defaults.contains(&args.len()) {
+                    budget.retain_bytes(std::mem::size_of::<ir::Ty>())?;
+                    args.push(owner.clone());
+                }
+            }
+        }
         if args.len() != expected {
             return Err("trait type argument arity mismatch".into());
         }
