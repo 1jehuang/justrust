@@ -43,6 +43,7 @@ use char_literal::{parse_byte_literal, parse_char_literal};
 mod deref_coercion;
 mod format_args;
 mod int_consts;
+mod item_module;
 mod format_macros;
 pub use format_macros::SourceFormatInto;
 mod format_spec;
@@ -9978,63 +9979,8 @@ impl<'input, 'names> Parser<'input, 'names> {
                 continue;
             }
             if self.eat("mod") {
-                let name = self.ident()?;
-                let full = module_path
-                    .push(self.names, name)
-                    .map_err(native_adapter::name_error)?;
-                let child = self
-                    .modules
-                    .intern_child(self.names, module, name)
-                    .map_err(module_parse_error)?;
-                if module == self.modules.source_root().map_err(module_parse_error)?
-                    && self
-                        .names
-                        .spelling(name)
-                        .map_err(native_adapter::name_error)?
-                        == super::source::source_prelude::PRELUDE_MODULE
-                {
-                    if parsed.program.prelude_module.is_some() {
-                        return Err(self.error("duplicate native prelude module"));
-                    }
-                    parsed.program.prelude_module = Some(child);
-                }
-                if module == self.modules.source_root().map_err(module_parse_error)?
-                    && self
-                        .names
-                        .spelling(name)
-                        .map_err(native_adapter::name_error)?
-                        .starts_with(super::source::EXTERN_PREFIX)
-                {
-                    parsed.program.extern_mounts.push(child);
-                }
-                if let Some(prelude) = parsed.program.prelude_module {
-                    let spelling = self
-                        .names
-                        .spelling(name)
-                        .map_err(native_adapter::name_error)?;
-                    let parent = self.modules.parent(module).map_err(module_parse_error)?;
-                    if spelling == "v1"
-                        && parent == Some(prelude)
-                        && self
-                            .modules
-                            .name(module)
-                            .map_err(module_parse_error)?
-                            .map(|ident| self.names.spelling(ident).map(|s| s == "prelude"))
-                            .transpose()
-                            .map_err(native_adapter::name_error)?
-                            == Some(true)
-                    {
-                        parsed.program.prelude_scope = Some(child);
-                    }
-                }
-                if self.eat(";") {
-                    return Err(
-                        self.unsupported("external module files are unsupported; use inline mod")
-                    );
-                }
-                self.expect("{")?;
-                // Register before parsing descendants, including empty modules.
-                self.insert_item(parsed, module, &full, visibility, ItemKind::Module(child))?;
+                let (child, full) =
+                    self.inline_module_header(module, module_path, parsed, visibility)?;
                 self.items(child, &full, parsed)?;
                 self.expect("}")?;
                 continue;
@@ -11555,6 +11501,12 @@ impl<'input, 'names> Parser<'input, 'names> {
                 by_ref: None,
             });
         }
+        self.pattern_named_atom()
+    }
+    /// Constructor parsing owns substantial path/field temporaries. Keep it
+    /// off the recursive frame for parenthesized and tuple patterns.
+    #[inline(never)]
+    fn pattern_named_atom(&mut self) -> Result<Pattern, ParseError> {
         let generic_path = self.generic_path(false)?;
         let name = generic_path
             .checked_path(self.names)
