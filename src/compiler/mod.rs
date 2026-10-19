@@ -140,7 +140,6 @@ const TEMPLATE_BODY: u32 = 110;
 const UNIVERSAL_LOWER: u32 = 111;
 const UNIVERSAL_ANALYZE: u32 = 112;
 const MONO_PLAN: u32 = 113;
-const CONCRETE_PROOFS: u32 = 114;
 const UNIVERSAL_EFFECTS_READY: u32 = 115;
 
 enum Input {
@@ -536,18 +535,6 @@ impl Provider for CompilerProvider {
                         .map_err(Error::new)?;
                     cx.publish_fact(0, PlanFact { plan })
                 }
-                CONCRETE_PROOFS => {
-                    let plan = facts.plan().await?;
-                    let (mut handles, _handles_reservation) =
-                        this.scratch_vec(plan.plan.entries.len())?;
-                    for index in 0..plan.plan.entries.len() {
-                        handles.push(cx.request(function(ANALYZE, index)).get(0));
-                    }
-                    for handle in handles {
-                        cx.read(handle).await?;
-                    }
-                    cx.publish(0, 1)
-                }
                 BODY => {
                     let index = item_index(&key, "missing instance index")?;
                     let types = facts.types().await?;
@@ -694,7 +681,10 @@ impl Provider for CompilerProvider {
                 OBJECT => {
                     let index = item_index(&key, "missing instance index")?;
                     let plan = facts.plan().await?;
-                    cx.read(cx.request(root(CONCRETE_PROOFS)).get(0)).await?;
+                    // Only this instance's own proof is required. Executable
+                    // publication is gated on every check by BUILD (via CHECK),
+                    // so object code for a ready function overlaps unrelated
+                    // checking (ARCHITECTURE.md section 17).
                     let proof: Arc<ConcreteProofFact> = facts.get(function(ANALYZE, index)).await?;
                     plan.plan
                         .validate_cleanup_dependencies(proof.concrete.function())
@@ -707,11 +697,7 @@ impl Provider for CompilerProvider {
                 }
                 CHECK | BUILD => {
                     let plan = facts.plan().await?;
-                    if key.kind == BUILD {
-                        // No object task is requested until every concrete
-                        // body has passed the same sealed analysis path.
-                        cx.read(cx.request(root(CONCRETE_PROOFS)).get(0)).await?;
-                    }
+
                     let kind = if key.kind == BUILD { OBJECT } else { ANALYZE };
                     let (mut handles, _handles_reservation) =
                         this.scratch_vec(plan.plan.entries.len())?;
@@ -754,6 +740,9 @@ impl Provider for CompilerProvider {
                             object.as_ref().clone(),
                         ));
                     }
+                    // The linked artifact is released only after the explicit
+                    // "every required check passed" fact.
+                    cx.read(cx.request(root(CHECK)).get(0)).await?;
                     cx.publish_fact(0, backend::link(&objects).map_err(Error::new)?)
                 }
                 _ => Err(Error::new("unknown compiler operation")),
