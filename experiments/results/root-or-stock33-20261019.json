@@ -1,0 +1,1131 @@
+{
+  "schema": 1,
+  "scope": "stock-only OR oracle, not native support",
+  "toolchain": "rustc 1.98.1 (48a229cea 2026-09-01) (Arch Linux rust 1:1.98.1-1)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-unknown-linux-gnu\nrelease: 1.98.1\nLLVM version: 22.1.8\n",
+  "stock32_manifest_sha256": "8a1d32ebe4105e5dd74c9e361c76db11f1b6c15762a1323b54ab060f8993b658",
+  "results_tsv": "debug\ti01_nonexhaustive\t1\tNA\ndebug\ti02_leaf_type\t1\tNA\ndebug\ti03_tuple_shape\t1\tNA\ndebug\ti04_literal_overflow\t1\tNA\ndebug\ti05_unused_body_type\t1\tNA\ndebug\ti06_dead_body_name\t1\tNA\ndebug\ti07_missing_qualified\t1\tNA\ndebug\ti08_missing_alternative\t1\tNA\ndebug\tp01_duplicate\t0\t0\ndebug\tp02_subsumed\t0\t0\ndebug\tp03_nested\t0\t0\ndebug\tp04_binding\t0\t0\ndebug\tp05_match_guard\t0\t0\ndebug\tp06_matches_guard\t0\t0\ndebug\tp07_reference\t0\t0\ndebug\tp08_noncopy\t0\t0\ndebug\tp09_parameter\t0\t0\ndebug\tp10_let\t0\t0\ndebug\tp11_for\t0\t0\ndebug\tp12_generated_match\t0\t0\ndebug\tp13_generated_matches\t0\t0\ndebug\tp14_at\t0\t0\ndebug\tr01_integer\t0\t0\ndebug\tr02_bool\t0\t0\ndebug\tr03_char\t0\t0\ndebug\tr04_tuple\t0\t0\ndebug\tr05_tuple_partition\t0\t0\ndebug\tr06_signed\t0\t0\ndebug\tr07_matches\t0\t0\ndebug\tr08_fallback_once\t0\t0\ndebug\tr09_source_body_once\t0\t0\ndebug\tr10_unit_tuple\t0\t0\nrelease\ti01_nonexhaustive\t1\tNA\nrelease\ti02_leaf_type\t1\tNA\nrelease\ti03_tuple_shape\t1\tNA\nrelease\ti04_literal_overflow\t1\tNA\nrelease\ti05_unused_body_type\t1\tNA\nrelease\ti06_dead_body_name\t1\tNA\nrelease\ti07_missing_qualified\t1\tNA\nrelease\ti08_missing_alternative\t1\tNA\nrelease\tp01_duplicate\t0\t0\nrelease\tp02_subsumed\t0\t0\nrelease\tp03_nested\t0\t0\nrelease\tp04_binding\t0\t0\nrelease\tp05_match_guard\t0\t0\nrelease\tp06_matches_guard\t0\t0\nrelease\tp07_reference\t0\t0\nrelease\tp08_noncopy\t0\t0\nrelease\tp09_parameter\t0\t0\nrelease\tp10_let\t0\t0\nrelease\tp11_for\t0\t0\nrelease\tp12_generated_match\t0\t0\nrelease\tp13_generated_matches\t0\t0\nrelease\tp14_at\t0\t0\nrelease\tr01_integer\t0\t0\nrelease\tr02_bool\t0\t0\nrelease\tr03_char\t0\t0\nrelease\tr04_tuple\t0\t0\nrelease\tr05_tuple_partition\t0\t0\nrelease\tr06_signed\t0\t0\nrelease\tr07_matches\t0\t0\nrelease\tr08_fallback_once\t0\t0\nrelease\tr09_source_body_once\t0\t0\nrelease\tr10_unit_tuple\t0\t0\n",
+  "i09_separate_results": "debug\ti09_missing_alternative_spaced\t1\tNA\nerror: a trailing `|` is not allowed in an or-pattern\n --> i09_missing_alternative_spaced.rs:1:33\n  |\n1 | fn main() { let _ = match 0 { 0 | => 7, _ => 0 }; }\n  |                               - ^\n  |                               |\n  |                               while parsing this or-pattern starting here\n\nerror: aborting due to 1 previous error\n\nrelease\ti09_missing_alternative_spaced\t1\tNA\nerror: a trailing `|` is not allowed in an or-pattern\n --> i09_missing_alternative_spaced.rs:1:33\n  |\n1 | fn main() { let _ = match 0 { 0 | => 7, _ => 0 }; }\n  |                               - ^\n  |                               |\n  |                               while parsing this or-pattern starting here\n\nerror: aborting due to 1 previous error\n\n",
+  "i08_caveat": "Exact 0|=> lexes |= then >, retained without replacement",
+  "p09_native_boundary": "Unchanged native Syntax parameter parser limitation, stock-valid not invalid Rust",
+  "sources": [
+    {
+      "case": "i01_nonexhaustive",
+      "source": "fn main(){let _=match(false,false){(true,_)|(false,true)=>1};}",
+      "sha256": "ccf4e55b4720d5f435e0c7cedf601ad1b78377eb48f648c438a51d064ef6d56c"
+    },
+    {
+      "case": "i02_leaf_type",
+      "source": "fn main(){let _=match 0u8{0|true=>1,_=>2};}",
+      "sha256": "ed961ed42a19911894daac83f92077787c6f90584988aa5f5d144933d94baaad"
+    },
+    {
+      "case": "i03_tuple_shape",
+      "source": "fn main(){let _=match(0u8,1u8){(0,1)|(0,1,2)=>1,_=>0};}",
+      "sha256": "08f56dce039467e4c944bb0390f8337e398db04b590dd3a5223fe189516d63fa"
+    },
+    {
+      "case": "i04_literal_overflow",
+      "source": "fn main(){let _=match 0u8{0|256=>1,_=>0};}",
+      "sha256": "c68217032c6be24d20506c7dbc61377c48bc6a3c51460de63b27769c3e847316"
+    },
+    {
+      "case": "i05_unused_body_type",
+      "source": "fn bad(x:u8)->i32{match x{0|1=>true,_=>0}}fn main(){}",
+      "sha256": "c96bd0e884ade0da8ac530bff68e2464adaec152f15fcf3e5b081a370ea42bef"
+    },
+    {
+      "case": "i06_dead_body_name",
+      "source": "fn bad(x:bool)->i32{match x{_=>0,true|false=>missing}}fn main(){}",
+      "sha256": "d1e39088d7045b505b711f337d25a9a7101b22ad9c9b690a05a1a5c7f43278f1"
+    },
+    {
+      "case": "i07_missing_qualified",
+      "source": "fn main(){let _=match 0u8{0|Missing::VALUE=>1,_=>0};}",
+      "sha256": "1347f9d71700f36a9d5499c5d6bf65b92e295db62230fd990bcdb3593f44b2e2"
+    },
+    {
+      "case": "i08_missing_alternative",
+      "source": "fn main(){let _=match 0u8{0|=>1,_=>0};}",
+      "sha256": "bcde9ec6f0879fc5da83c75fb37e9f6ae3a7a6dd06d6fe58e4e5f3238b5cbff8"
+    },
+    {
+      "case": "i09_missing_alternative_spaced",
+      "source": "fn main() { let _ = match 0 { 0 | => 7, _ => 0 }; }\n",
+      "sha256": "957d6aa82e2c357054e56dd697df1318030487a6c49584a00ec18eb21d0f3c44"
+    },
+    {
+      "case": "p01_duplicate",
+      "source": "fn main(){let _=match 0u8{0|0=>1,_=>0};}",
+      "sha256": "a52d7ab810a6091b5b29ff6c8dd082a5211b903bedd5f0304dfbc9c917ea1500"
+    },
+    {
+      "case": "p02_subsumed",
+      "source": "fn main(){let _=match 1u8{0=>0,0|1=>1,_=>2};}",
+      "sha256": "09313f8a85eccadb8d2a9da429cdae3234dd5af0f240c51eb96a8b260be0a62d"
+    },
+    {
+      "case": "p03_nested",
+      "source": "fn main(){let _=match (0u8,1u8){(0|1,_)=>1,_=>0};}",
+      "sha256": "980cdd4cdae0c6eb431b6c9df3cf50afdb59deff1ae69ffcacd18b19fcca94d9"
+    },
+    {
+      "case": "p04_binding",
+      "source": "fn main(){let _=match 1u8{x|x=>x};}",
+      "sha256": "718c93ade7a2ab87902cae8b31699d28ea7fc39de559e541b796242abf491c9e"
+    },
+    {
+      "case": "p05_match_guard",
+      "source": "fn main(){let _=match 1u8{0|1 if true=>1,_=>0};}",
+      "sha256": "5d766944eff8dfed0312a8d517908b746f75318a7b63d2540ac2ce801967067c"
+    },
+    {
+      "case": "p06_matches_guard",
+      "source": "fn main(){let _=matches!(1u8,0|1 if true);}",
+      "sha256": "c1b073d800c9c99fe790dc6a0ffe185212288a993bad7cc37c32071e54aa46fb"
+    },
+    {
+      "case": "p07_reference",
+      "source": "fn main(){let _=match &1u8{&0|&1=>1,_=>0};}",
+      "sha256": "147c844270375f3b88cf91f41a17397b899cdcc41ba050dbc46c5403f470b286"
+    },
+    {
+      "case": "p08_noncopy",
+      "source": "struct S(u8);fn main(){let s=S(0);let _=match s{S(0)|S(1)=>0,_=>1};}",
+      "sha256": "cb15abde3ee9658be0d81a83feda8321ce3c43f8beaaebe2a38d6266799adce4"
+    },
+    {
+      "case": "p09_parameter",
+      "source": "fn f((true|false):bool){}fn main(){f(true);}",
+      "sha256": "bc513cffcecb5fb83f43316709b82ebbdee91efc055520a2d7c5f94428457d55"
+    },
+    {
+      "case": "p10_let",
+      "source": "fn main(){let (true|false)=true;}",
+      "sha256": "086a420d18fdbf70889ee97fb76930631940ef8f08556d7aac3efdf0e15958d3"
+    },
+    {
+      "case": "p11_for",
+      "source": "fn main(){for (true|false) in [true,false]{}}",
+      "sha256": "e6a0b0cc6db5ff3713a7dac9cff5e1d355e380deb821eed93009ab9c7a022f83"
+    },
+    {
+      "case": "p12_generated_match",
+      "source": "macro_rules! m{()=>{match 1u8{0|1=>7,_=>0}}}fn main(){println!(\"{}\",m!());}",
+      "sha256": "e64a59508bcd74ed75dfe5434768f82adbc89af05e3e5eb796b1974b0439969d"
+    },
+    {
+      "case": "p13_generated_matches",
+      "source": "macro_rules! m{()=>{matches!(1u8,0|1)}}fn main(){println!(\"{}\",m!());}",
+      "sha256": "f6817df57b5a256e2308667f2f4286370917a8d697fb5c4ab2ca5083886ea9ef"
+    },
+    {
+      "case": "p14_at",
+      "source": "fn main(){let _=match 1u8{x @ (0|1)=>x,_=>0};}",
+      "sha256": "676921dcf68a517b8553d64339d66e774d73fd7d3ce70b09071aa8ae59a471c5"
+    },
+    {
+      "case": "r01_integer",
+      "source": "fn main(){let n=2u8;let x=match n{1|2=>7,_=>0};println!(\"{}\",x);}",
+      "sha256": "6550540b25e2da8c855ff5c35ce0a6e0830009cd1d1901412bede0a440770da0"
+    },
+    {
+      "case": "r02_bool",
+      "source": "fn main(){let x=match true{true|false=>7};println!(\"{}\",x);}",
+      "sha256": "67851b5d01ac654a51247b7d4bec12b27f1913a17040f96287157f815ea43309"
+    },
+    {
+      "case": "r03_char",
+      "source": "fn main(){let x=match '['{'('|'['|'{'=>7,_=>0};println!(\"{}\",x);}",
+      "sha256": "cb1027d47538afea16e3db72c5c9237a26e625b083dfb2cf76d0be07a691d4a8"
+    },
+    {
+      "case": "r04_tuple",
+      "source": "fn main(){let x=match ('[',']'){('(',')')|('[',']')|('{','}')=>7,_=>0};println!(\"{}\",x);}",
+      "sha256": "911c04d1143228a52126c25ca6e66ae567b06227e901eb2a3afb6ed0d7ebd3da"
+    },
+    {
+      "case": "r05_tuple_partition",
+      "source": "fn main(){let x=match(false,true){(true,_)|(false,_)=>7};println!(\"{}\",x);}",
+      "sha256": "9a18f4e3b30bef0d7c64c744958a9276613921edeb824e85d0247c4e39b6f86b"
+    },
+    {
+      "case": "r06_signed",
+      "source": "fn main(){let x=match -128i8{-128|127=>7,_=>0};println!(\"{}\",x);}",
+      "sha256": "b5d51beaa8e6aba11558e2f1f399048bf6407e73b2cb16ce009e13eebf8e7fe0"
+    },
+    {
+      "case": "r07_matches",
+      "source": "fn main(){println!(\"{}\",matches!(('[',']'),('(',')')|('[',']')|('{','}')));}",
+      "sha256": "fe190d9a57f25afd35cb1668160dac4b9773fbd657b77f22c5cb1c9cfe11f275"
+    },
+    {
+      "case": "r08_fallback_once",
+      "source": "fn main(){let mut n=0i32;let x=match 3u8{1|2=>{n+=1;7},_=>{n+=10;0}};println!(\"{} {}\",x,n);}",
+      "sha256": "6e03476404c1da2ba3cf1a764780ec602a05552813d536b655161f20022b6958"
+    },
+    {
+      "case": "r09_source_body_once",
+      "source": "fn take(n:&mut i32)->(char,char){*n+=1;('[',']')}fn main(){let mut n=0i32;let mut b=0i32;let x=match take(&mut n){('[',')')|('[',']')=>{b+=1;7},_=>0};println!(\"{} {} {}\",x,n,b);}",
+      "sha256": "96c633d68192d545c1c2ec92783b377ee5157ccb9a0af1f3aea0e9448b520d34"
+    },
+    {
+      "case": "r10_unit_tuple",
+      "source": "fn main(){let x=match((),false){((),true)|((),false)=>7};println!(\"{}\",x);}",
+      "sha256": "f6c9b916fe7239249eadb58ff03ec3bf2d3efa37750dc7167800045e33b664f6"
+    }
+  ],
+  "raw_cells": [
+    {
+      "path": "debug/i01_nonexhaustive.compile.stderr",
+      "sha256": "8edd5493ca42a39d0cbfdb51a96ffd99c88e41144021b5d01da3915d0aab3f08",
+      "text": "error[E0004]: non-exhaustive patterns: `(false, false)` not covered\n --> i01_nonexhaustive.rs:1:22\n  |\n1 | fn main(){let _=match(false,false){(true,_)|(false,true)=>1};}\n  |                      ^^^^^^^^^^^^^ pattern `(false, false)` not covered\n  |\n  = note: the matched value is of type `(bool, bool)`\nhelp: ensure that all possible cases are being handled by adding a match arm with a wildcard pattern or an explicit pattern as shown\n  |\n1 | fn main(){let _=match(false,false){(true,_)|(false,true)=>1, (false, false) => todo!()};}\n  |                                                            +++++++++++++++++++++++++++\n\nerror: aborting due to 1 previous error\n\nFor more information about this error, try `rustc --explain E0004`.\n"
+    },
+    {
+      "path": "debug/i01_nonexhaustive.compile.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/i02_leaf_type.compile.stderr",
+      "sha256": "317559835af7524b8ae24045f4fa2608527a0af47aec4621a71d1e236178303c",
+      "text": "error[E0308]: mismatched types\n --> i02_leaf_type.rs:1:29\n  |\n1 | fn main(){let _=match 0u8{0|true=>1,_=>2};}\n  |                       ---   ^^^^ expected `u8`, found `bool`\n  |                       |\n  |                       this expression has type `u8`\n\nerror: aborting due to 1 previous error\n\nFor more information about this error, try `rustc --explain E0308`.\n"
+    },
+    {
+      "path": "debug/i02_leaf_type.compile.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/i03_tuple_shape.compile.stderr",
+      "sha256": "8568b16d1a63ef9254e57c0ba849a0da391cda8c3b9f48ed9816ccf60a7da76e",
+      "text": "error[E0308]: mismatched types\n --> i03_tuple_shape.rs:1:38\n  |\n1 | fn main(){let _=match(0u8,1u8){(0,1)|(0,1,2)=>1,_=>0};}\n  |                      ---------       ^^^^^^^ expected a tuple with 2 elements, found one with 3 elements\n  |                      |\n  |                      this expression has type `(u8, u8)`\n  |\n  = note: expected tuple `(u8, u8)`\n             found tuple `(_, _, _)`\n\nerror: aborting due to 1 previous error\n\nFor more information about this error, try `rustc --explain E0308`.\n"
+    },
+    {
+      "path": "debug/i03_tuple_shape.compile.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/i04_literal_overflow.compile.stderr",
+      "sha256": "d28373d675143076a1ad091cccbee0be5ce24b866b83de5f5881d70ea679ef19",
+      "text": "warning: unreachable pattern\n --> i04_literal_overflow.rs:1:29\n  |\n1 | fn main(){let _=match 0u8{0|256=>1,_=>0};}\n  |                           - ^^^ no value can reach this\n  |                           |\n  |                           matches all the relevant values\n  |\n  = note: `#[warn(unreachable_patterns)]` (part of `#[warn(unused)]`) on by default\n\nerror: literal out of range for `u8`\n --> i04_literal_overflow.rs:1:29\n  |\n1 | fn main(){let _=match 0u8{0|256=>1,_=>0};}\n  |                             ^^^\n  |\n  = note: the literal `256` does not fit into the type `u8` whose range is `0..=255`\n  = note: `#[deny(overflowing_literals)]` on by default\n\nerror: aborting due to 1 previous error; 1 warning emitted\n\n"
+    },
+    {
+      "path": "debug/i04_literal_overflow.compile.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/i05_unused_body_type.compile.stderr",
+      "sha256": "304691de376e88a9757cc7c7ca23b531d96ef3e29204196aebe99337e058ef13",
+      "text": "error[E0308]: mismatched types\n --> i05_unused_body_type.rs:1:32\n  |\n1 | fn bad(x:u8)->i32{match x{0|1=>true,_=>0}}fn main(){}\n  |               ---              ^^^^ expected `i32`, found `bool`\n  |               |\n  |               expected `i32` because of return type\n\nerror: aborting due to 1 previous error\n\nFor more information about this error, try `rustc --explain E0308`.\n"
+    },
+    {
+      "path": "debug/i05_unused_body_type.compile.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/i06_dead_body_name.compile.stderr",
+      "sha256": "0c632b296e3b6c8add52174fe8569231270ca2359924f15fdd0de1f92487ab31",
+      "text": "error[E0425]: cannot find value `missing` in this scope\n --> i06_dead_body_name.rs:1:46\n  |\n1 | fn bad(x:bool)->i32{match x{_=>0,true|false=>missing}}fn main(){}\n  |                                              ^^^^^^^ not found in this scope\n\nerror: aborting due to 1 previous error\n\nFor more information about this error, try `rustc --explain E0425`.\n"
+    },
+    {
+      "path": "debug/i06_dead_body_name.compile.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/i07_missing_qualified.compile.stderr",
+      "sha256": "7003f992df791d2f8213dfbe1af3c7794d0d254d9f2f57d9fdba660115c53e45",
+      "text": "error[E0433]: cannot find type `Missing` in this scope\n --> i07_missing_qualified.rs:1:29\n  |\n1 | fn main(){let _=match 0u8{0|Missing::VALUE=>1,_=>0};}\n  |                             ^^^^^^^ use of undeclared type `Missing`\n\nerror: aborting due to 1 previous error\n\nFor more information about this error, try `rustc --explain E0433`.\n"
+    },
+    {
+      "path": "debug/i07_missing_qualified.compile.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/i08_missing_alternative.compile.stderr",
+      "sha256": "aa1f406bb1c440225eb4ff156b1b1a62d26685a47dfb30a3e307975a279f456f",
+      "text": "error: expected one of `...`, `..=`, `..`, `=>`, `if`, or `|`, found `|=`\n --> i08_missing_alternative.rs:1:28\n  |\n1 | fn main(){let _=match 0u8{0|=>1,_=>0};}\n  |                            ^^ expected one of `...`, `..=`, `..`, `=>`, `if`, or `|`\n\nerror: aborting due to 1 previous error\n\n"
+    },
+    {
+      "path": "debug/i08_missing_alternative.compile.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/i09_missing_alternative_spaced.compile.stderr",
+      "sha256": "29f1fea142b2652220479a047ade45b643eb907e7aec8e3143c414581883a653",
+      "text": "error: a trailing `|` is not allowed in an or-pattern\n --> i09_missing_alternative_spaced.rs:1:33\n  |\n1 | fn main() { let _ = match 0 { 0 | => 7, _ => 0 }; }\n  |                               - ^\n  |                               |\n  |                               while parsing this or-pattern starting here\n\nerror: aborting due to 1 previous error\n\n"
+    },
+    {
+      "path": "debug/i09_missing_alternative_spaced.compile.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/p01_duplicate.compile.stderr",
+      "sha256": "0cce5839ded08e4fec6c973e6a369e269a7d3433d5f424a8d21e91bf145398c9",
+      "text": "warning: unreachable pattern\n --> p01_duplicate.rs:1:29\n  |\n1 | fn main(){let _=match 0u8{0|0=>1,_=>0};}\n  |                           - ^ no value can reach this\n  |                           |\n  |                           matches all the relevant values\n  |\n  = note: `#[warn(unreachable_patterns)]` (part of `#[warn(unused)]`) on by default\n\nwarning: 1 warning emitted\n\n"
+    },
+    {
+      "path": "debug/p01_duplicate.compile.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/p01_duplicate.run.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/p01_duplicate.run.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/p02_subsumed.compile.stderr",
+      "sha256": "9251d4a9192da28d1122d454a63a08763db55f5fc0d3dc9d6ddc08115442d866",
+      "text": "warning: unreachable pattern\n --> p02_subsumed.rs:1:32\n  |\n1 | fn main(){let _=match 1u8{0=>0,0|1=>1,_=>2};}\n  |                           -    ^ no value can reach this\n  |                           |\n  |                           matches all the relevant values\n  |\n  = note: `#[warn(unreachable_patterns)]` (part of `#[warn(unused)]`) on by default\n\nwarning: 1 warning emitted\n\n"
+    },
+    {
+      "path": "debug/p02_subsumed.compile.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/p02_subsumed.run.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/p02_subsumed.run.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/p03_nested.compile.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/p03_nested.compile.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/p03_nested.run.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/p03_nested.run.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/p04_binding.compile.stderr",
+      "sha256": "c2486812c38a99994c9f5226ece6c393c8694d0a19145cb3fdcc06793304b416",
+      "text": "warning: unreachable pattern\n --> p04_binding.rs:1:29\n  |\n1 | fn main(){let _=match 1u8{x|x=>x};}\n  |                           - ^ no value can reach this\n  |                           |\n  |                           matches any value\n  |\n  = note: `#[warn(unreachable_patterns)]` (part of `#[warn(unused)]`) on by default\n\nwarning: 1 warning emitted\n\n"
+    },
+    {
+      "path": "debug/p04_binding.compile.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/p04_binding.run.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/p04_binding.run.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/p05_match_guard.compile.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/p05_match_guard.compile.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/p05_match_guard.run.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/p05_match_guard.run.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/p06_matches_guard.compile.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/p06_matches_guard.compile.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/p06_matches_guard.run.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/p06_matches_guard.run.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/p07_reference.compile.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/p07_reference.compile.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/p07_reference.run.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/p07_reference.run.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/p08_noncopy.compile.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/p08_noncopy.compile.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/p08_noncopy.run.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/p08_noncopy.run.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/p09_parameter.compile.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/p09_parameter.compile.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/p09_parameter.run.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/p09_parameter.run.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/p10_let.compile.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/p10_let.compile.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/p10_let.run.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/p10_let.run.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/p11_for.compile.stderr",
+      "sha256": "8515507dd2b28c4f80e91ace97f272be3b8c0d5fe982238cf96310a4ed5fb358",
+      "text": "warning: unnecessary parentheses around pattern\n --> p11_for.rs:1:15\n  |\n1 | fn main(){for (true|false) in [true,false]{}}\n  |               ^          ^\n  |\n  = note: `#[warn(unused_parens)]` (part of `#[warn(unused)]`) on by default\nhelp: remove these parentheses\n  |\n1 - fn main(){for (true|false) in [true,false]{}}\n1 + fn main(){for true|false in [true,false]{}}\n  |\n\nwarning: 1 warning emitted\n\n"
+    },
+    {
+      "path": "debug/p11_for.compile.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/p11_for.run.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/p11_for.run.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/p12_generated_match.compile.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/p12_generated_match.compile.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/p12_generated_match.run.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/p12_generated_match.run.stdout",
+      "sha256": "10159baf262b43a92d95db59dae1f72c645127301661e0a3ce4e38b295a97c58",
+      "text": "7\n"
+    },
+    {
+      "path": "debug/p13_generated_matches.compile.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/p13_generated_matches.compile.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/p13_generated_matches.run.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/p13_generated_matches.run.stdout",
+      "sha256": "a17fcf0a2f50e2d495e4f90ce263410edc183add6c62699a2facbccf60410f74",
+      "text": "true\n"
+    },
+    {
+      "path": "debug/p14_at.compile.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/p14_at.compile.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/p14_at.run.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/p14_at.run.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/r01_integer.compile.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/r01_integer.compile.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/r01_integer.run.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/r01_integer.run.stdout",
+      "sha256": "10159baf262b43a92d95db59dae1f72c645127301661e0a3ce4e38b295a97c58",
+      "text": "7\n"
+    },
+    {
+      "path": "debug/r02_bool.compile.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/r02_bool.compile.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/r02_bool.run.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/r02_bool.run.stdout",
+      "sha256": "10159baf262b43a92d95db59dae1f72c645127301661e0a3ce4e38b295a97c58",
+      "text": "7\n"
+    },
+    {
+      "path": "debug/r03_char.compile.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/r03_char.compile.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/r03_char.run.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/r03_char.run.stdout",
+      "sha256": "10159baf262b43a92d95db59dae1f72c645127301661e0a3ce4e38b295a97c58",
+      "text": "7\n"
+    },
+    {
+      "path": "debug/r04_tuple.compile.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/r04_tuple.compile.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/r04_tuple.run.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/r04_tuple.run.stdout",
+      "sha256": "10159baf262b43a92d95db59dae1f72c645127301661e0a3ce4e38b295a97c58",
+      "text": "7\n"
+    },
+    {
+      "path": "debug/r05_tuple_partition.compile.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/r05_tuple_partition.compile.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/r05_tuple_partition.run.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/r05_tuple_partition.run.stdout",
+      "sha256": "10159baf262b43a92d95db59dae1f72c645127301661e0a3ce4e38b295a97c58",
+      "text": "7\n"
+    },
+    {
+      "path": "debug/r06_signed.compile.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/r06_signed.compile.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/r06_signed.run.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/r06_signed.run.stdout",
+      "sha256": "10159baf262b43a92d95db59dae1f72c645127301661e0a3ce4e38b295a97c58",
+      "text": "7\n"
+    },
+    {
+      "path": "debug/r07_matches.compile.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/r07_matches.compile.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/r07_matches.run.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/r07_matches.run.stdout",
+      "sha256": "a17fcf0a2f50e2d495e4f90ce263410edc183add6c62699a2facbccf60410f74",
+      "text": "true\n"
+    },
+    {
+      "path": "debug/r08_fallback_once.compile.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/r08_fallback_once.compile.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/r08_fallback_once.run.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/r08_fallback_once.run.stdout",
+      "sha256": "76c7f7c282bb3633aca25e5339b005ff007727b190a53c7ed65f6270003f65c4",
+      "text": "0 10\n"
+    },
+    {
+      "path": "debug/r09_source_body_once.compile.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/r09_source_body_once.compile.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/r09_source_body_once.run.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/r09_source_body_once.run.stdout",
+      "sha256": "17ce4452fac2b1df90a7595ee0d7d17d7937d306c27f7bf945f940b5d1449113",
+      "text": "7 1 1\n"
+    },
+    {
+      "path": "debug/r10_unit_tuple.compile.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/r10_unit_tuple.compile.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/r10_unit_tuple.run.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "debug/r10_unit_tuple.run.stdout",
+      "sha256": "10159baf262b43a92d95db59dae1f72c645127301661e0a3ce4e38b295a97c58",
+      "text": "7\n"
+    },
+    {
+      "path": "release/i01_nonexhaustive.compile.stderr",
+      "sha256": "8edd5493ca42a39d0cbfdb51a96ffd99c88e41144021b5d01da3915d0aab3f08"
+    },
+    {
+      "path": "release/i01_nonexhaustive.compile.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/i02_leaf_type.compile.stderr",
+      "sha256": "317559835af7524b8ae24045f4fa2608527a0af47aec4621a71d1e236178303c"
+    },
+    {
+      "path": "release/i02_leaf_type.compile.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/i03_tuple_shape.compile.stderr",
+      "sha256": "8568b16d1a63ef9254e57c0ba849a0da391cda8c3b9f48ed9816ccf60a7da76e"
+    },
+    {
+      "path": "release/i03_tuple_shape.compile.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/i04_literal_overflow.compile.stderr",
+      "sha256": "d28373d675143076a1ad091cccbee0be5ce24b866b83de5f5881d70ea679ef19"
+    },
+    {
+      "path": "release/i04_literal_overflow.compile.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/i05_unused_body_type.compile.stderr",
+      "sha256": "304691de376e88a9757cc7c7ca23b531d96ef3e29204196aebe99337e058ef13"
+    },
+    {
+      "path": "release/i05_unused_body_type.compile.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/i06_dead_body_name.compile.stderr",
+      "sha256": "0c632b296e3b6c8add52174fe8569231270ca2359924f15fdd0de1f92487ab31"
+    },
+    {
+      "path": "release/i06_dead_body_name.compile.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/i07_missing_qualified.compile.stderr",
+      "sha256": "7003f992df791d2f8213dfbe1af3c7794d0d254d9f2f57d9fdba660115c53e45"
+    },
+    {
+      "path": "release/i07_missing_qualified.compile.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/i08_missing_alternative.compile.stderr",
+      "sha256": "aa1f406bb1c440225eb4ff156b1b1a62d26685a47dfb30a3e307975a279f456f"
+    },
+    {
+      "path": "release/i08_missing_alternative.compile.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/i09_missing_alternative_spaced.compile.stderr",
+      "sha256": "29f1fea142b2652220479a047ade45b643eb907e7aec8e3143c414581883a653"
+    },
+    {
+      "path": "release/i09_missing_alternative_spaced.compile.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/p01_duplicate.compile.stderr",
+      "sha256": "0cce5839ded08e4fec6c973e6a369e269a7d3433d5f424a8d21e91bf145398c9"
+    },
+    {
+      "path": "release/p01_duplicate.compile.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/p01_duplicate.run.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/p01_duplicate.run.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/p02_subsumed.compile.stderr",
+      "sha256": "9251d4a9192da28d1122d454a63a08763db55f5fc0d3dc9d6ddc08115442d866"
+    },
+    {
+      "path": "release/p02_subsumed.compile.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/p02_subsumed.run.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/p02_subsumed.run.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/p03_nested.compile.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/p03_nested.compile.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/p03_nested.run.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/p03_nested.run.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/p04_binding.compile.stderr",
+      "sha256": "c2486812c38a99994c9f5226ece6c393c8694d0a19145cb3fdcc06793304b416"
+    },
+    {
+      "path": "release/p04_binding.compile.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/p04_binding.run.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/p04_binding.run.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/p05_match_guard.compile.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/p05_match_guard.compile.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/p05_match_guard.run.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/p05_match_guard.run.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/p06_matches_guard.compile.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/p06_matches_guard.compile.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/p06_matches_guard.run.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/p06_matches_guard.run.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/p07_reference.compile.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/p07_reference.compile.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/p07_reference.run.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/p07_reference.run.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/p08_noncopy.compile.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/p08_noncopy.compile.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/p08_noncopy.run.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/p08_noncopy.run.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/p09_parameter.compile.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/p09_parameter.compile.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/p09_parameter.run.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/p09_parameter.run.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/p10_let.compile.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/p10_let.compile.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/p10_let.run.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/p10_let.run.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/p11_for.compile.stderr",
+      "sha256": "8515507dd2b28c4f80e91ace97f272be3b8c0d5fe982238cf96310a4ed5fb358"
+    },
+    {
+      "path": "release/p11_for.compile.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/p11_for.run.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/p11_for.run.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/p12_generated_match.compile.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/p12_generated_match.compile.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/p12_generated_match.run.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/p12_generated_match.run.stdout",
+      "sha256": "10159baf262b43a92d95db59dae1f72c645127301661e0a3ce4e38b295a97c58"
+    },
+    {
+      "path": "release/p13_generated_matches.compile.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/p13_generated_matches.compile.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/p13_generated_matches.run.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/p13_generated_matches.run.stdout",
+      "sha256": "a17fcf0a2f50e2d495e4f90ce263410edc183add6c62699a2facbccf60410f74"
+    },
+    {
+      "path": "release/p14_at.compile.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/p14_at.compile.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/p14_at.run.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/p14_at.run.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/r01_integer.compile.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/r01_integer.compile.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/r01_integer.run.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/r01_integer.run.stdout",
+      "sha256": "10159baf262b43a92d95db59dae1f72c645127301661e0a3ce4e38b295a97c58"
+    },
+    {
+      "path": "release/r02_bool.compile.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/r02_bool.compile.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/r02_bool.run.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/r02_bool.run.stdout",
+      "sha256": "10159baf262b43a92d95db59dae1f72c645127301661e0a3ce4e38b295a97c58"
+    },
+    {
+      "path": "release/r03_char.compile.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/r03_char.compile.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/r03_char.run.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/r03_char.run.stdout",
+      "sha256": "10159baf262b43a92d95db59dae1f72c645127301661e0a3ce4e38b295a97c58"
+    },
+    {
+      "path": "release/r04_tuple.compile.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/r04_tuple.compile.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/r04_tuple.run.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/r04_tuple.run.stdout",
+      "sha256": "10159baf262b43a92d95db59dae1f72c645127301661e0a3ce4e38b295a97c58"
+    },
+    {
+      "path": "release/r05_tuple_partition.compile.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/r05_tuple_partition.compile.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/r05_tuple_partition.run.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/r05_tuple_partition.run.stdout",
+      "sha256": "10159baf262b43a92d95db59dae1f72c645127301661e0a3ce4e38b295a97c58"
+    },
+    {
+      "path": "release/r06_signed.compile.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/r06_signed.compile.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/r06_signed.run.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/r06_signed.run.stdout",
+      "sha256": "10159baf262b43a92d95db59dae1f72c645127301661e0a3ce4e38b295a97c58"
+    },
+    {
+      "path": "release/r07_matches.compile.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/r07_matches.compile.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/r07_matches.run.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/r07_matches.run.stdout",
+      "sha256": "a17fcf0a2f50e2d495e4f90ce263410edc183add6c62699a2facbccf60410f74"
+    },
+    {
+      "path": "release/r08_fallback_once.compile.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/r08_fallback_once.compile.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/r08_fallback_once.run.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/r08_fallback_once.run.stdout",
+      "sha256": "76c7f7c282bb3633aca25e5339b005ff007727b190a53c7ed65f6270003f65c4"
+    },
+    {
+      "path": "release/r09_source_body_once.compile.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/r09_source_body_once.compile.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/r09_source_body_once.run.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/r09_source_body_once.run.stdout",
+      "sha256": "17ce4452fac2b1df90a7595ee0d7d17d7937d306c27f7bf945f940b5d1449113"
+    },
+    {
+      "path": "release/r10_unit_tuple.compile.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/r10_unit_tuple.compile.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/r10_unit_tuple.run.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release/r10_unit_tuple.run.stdout",
+      "sha256": "10159baf262b43a92d95db59dae1f72c645127301661e0a3ce4e38b295a97c58"
+    }
+  ],
+  "profiles": {
+    "debug": {
+      "opt_level": 0
+    },
+    "release": {
+      "opt_level": 3
+    }
+  },
+  "flags": [
+    "--edition=2024",
+    "--target",
+    "x86_64-unknown-linux-gnu",
+    "-C",
+    "panic=abort"
+  ]
+}
