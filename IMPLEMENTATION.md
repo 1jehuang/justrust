@@ -516,6 +516,13 @@ host macro and compiles its generated target source.
 
 ### G6. Runtime, FFI, linking and target expansion
 
+- [x] Native primitive `{:?}` for integers/bool/unit and recursively Copy
+      tuples/fixed arrays, with immutable per-argument modes, shared place loans,
+      stock differential streams/evaluation and forged IR/CFG authority gates.
+      See `FORMAT-SCALARS.md`. This is not source `std::fmt` trait dispatch.
+      Char/string escaping, float conversion, nominal/user Debug and specifiers
+      remain open.
+
 - [x] Bounded debug assertion macros use an explicit native program setting,
       independent of the bootstrap profile, with checked disabled operands and
       zero disabled evaluation. Frozen 53-source enabled/disabled debug/release

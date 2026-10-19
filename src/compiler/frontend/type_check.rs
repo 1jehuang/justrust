@@ -8491,23 +8491,19 @@ impl<'a> Checker<'a> {
             Expr::Format {
                 pieces,
                 arguments,
+                modes,
                 stream,
                 newline,
             } => {
                 let mut ids = Vec::new();
                 let mut completion = ir::Completion::Returns;
-                for argument in arguments {
+                if pieces.len() != arguments.len() + 1 || modes.len() != arguments.len() {
+                    return Err("format argument count mismatch".into());
+                }
+                for (argument, &mode) in arguments.iter().zip(modes) {
                     let id = self.expr_expected(argument, None)?;
                     let flow = self.flow(id);
-                    if !matches!(
-                        flow.ty,
-                        ir::Ty::Int(_) | ir::Ty::Bool | ir::Ty::Char | ir::Ty::Never
-                    ) && !flow.ty.is_shared_str()
-                    {
-                        return Err(
-                            "format argument requires integer, bool, char or &str Display".into(),
-                        );
-                    }
+                    ir::validate_format_ty(mode, &flow.ty, Some(&self.signatures.plan()?.budget))?;
                     if !flow.completes {
                         completion = ir::Completion::Never;
                     }
@@ -8538,12 +8534,14 @@ impl<'a> Checker<'a> {
                 }
                 self.charge_node(
                     ids.len() * std::mem::size_of::<ir::ExprId>()
-                        + pieces.len() * std::mem::size_of::<String>(),
+                        + pieces.len() * std::mem::size_of::<String>()
+                        + modes.len() * std::mem::size_of::<ir::FormatMode>(),
                 )?;
                 (
                     ir::ExprKind::Format {
                         pieces: pieces.clone(),
                         arguments: ids,
+                        modes: modes.clone(),
                         stream: *stream,
                         newline: *newline,
                     },

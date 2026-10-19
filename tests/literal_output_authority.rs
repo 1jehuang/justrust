@@ -295,12 +295,9 @@ fn malformed_formats_and_nonliteral_inputs_do_not_gain_output_capability() {
         for (arguments, boundary) in [
             (
                 r#""{value}""#,
-                "only bare {} formatting placeholders are supported",
+                "only {} and {:?} formatting placeholders are supported",
             ),
-            (
-                r#""{:?}""#,
-                "only bare {} formatting placeholders are supported",
-            ),
+            (r#""{:?}""#, "format argument count mismatch"),
             (r#""{""#, "unmatched opening brace in format string"),
             (r#""}""#, "unmatched closing brace in format string"),
             ("1i32", "nonliteral arguments are unsupported"),
@@ -378,6 +375,7 @@ fn scalar_format_is_distinct_from_literal_output_and_matches_stock() {
                 let ir::ExprKind::Format {
                     pieces,
                     arguments,
+                    modes,
                     stream,
                     newline,
                 } = &expr.kind
@@ -386,6 +384,7 @@ fn scalar_format_is_distinct_from_literal_output_and_matches_stock() {
                 };
                 assert_eq!(expr.ty, ir::Ty::Unit);
                 assert_eq!(expr.completion, ir::Completion::Returns);
+                assert_eq!(modes, &[ir::FormatMode::Display]);
                 Some((pieces, arguments, *stream, *newline))
             })
             .collect();

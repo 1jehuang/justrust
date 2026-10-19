@@ -110,7 +110,7 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
             source_fingerprint: 1414309745764810560,
             source_sha256: r###"c3bd04b4e8319558d97ecb6cb55e1523587ef996db5143f29c0b7e01db9159fc"###,
             native: Native::Unsupported,
-            boundary: r###"only bare {} formatting placeholders are supported"###,
+            boundary: r###"only {} and {:?} formatting placeholders are supported"###,
             stock_compile_code: 0,
             stock_code: Some(0),
             stock_stdout: r###"42
@@ -130,7 +130,7 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
             source_fingerprint: 2899173439825184039,
             source_sha256: r###"0057f5f2956c3aeb3b1f30bec6d316b0a11228bbf6a09299ae396d55f39c65c1"###,
             native: Native::Unsupported,
-            boundary: r###"only bare {} formatting placeholders are supported"###,
+            boundary: r###"only {} and {:?} formatting placeholders are supported"###,
             stock_compile_code: 0,
             stock_code: Some(-6),
             stock_stdout: r###""###,
@@ -350,7 +350,7 @@ For more information about this error, try `rustc --explain E0308`.
             source_fingerprint: 13424131026726461316,
             source_sha256: r###"0e466991326ba820709d87c153af6f1d2741a01e774687fcd7440b7a26f691cf"###,
             native: Native::Unsupported,
-            boundary: r###"only bare {} formatting placeholders are supported"###,
+            boundary: r###"only {} and {:?} formatting placeholders are supported"###,
             stock_compile_code: 0,
             stock_code: Some(0),
             stock_stdout: r###"false true

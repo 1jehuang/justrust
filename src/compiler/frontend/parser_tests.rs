@@ -330,7 +330,7 @@ fn literal_output_empty_and_unsupported_arguments_are_explicit() {
         for (args, label) in [
             ("42", "nonliteral arguments"),
             ("\"{}\"", "argument count mismatch"),
-            ("\"{name}\"", "only bare {}"),
+            ("\"{name}\"", "only {} and {:?}"),
             ("\"literal\", 42", "argument count mismatch"),
             ("\"literal\",,", "expected"),
         ] {

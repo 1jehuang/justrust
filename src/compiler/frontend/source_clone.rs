@@ -177,13 +177,17 @@ pub(super) fn preflight_clone_node(
             Expr::Var(path) => clone_ast_path(path, budget)?,
             Expr::Println(text) => clone_text(text, budget)?,
             Expr::Format {
-                pieces, arguments, ..
+                pieces,
+                arguments,
+                modes,
+                ..
             } => {
                 clone_vector(pieces, budget)?;
                 for piece in pieces {
                     clone_text(piece, budget)?;
                 }
                 clone_vector(arguments, budget)?;
+                clone_vector(modes, budget)?;
             }
             Expr::Output(output) => {
                 budget.retain_bytes(std::mem::size_of::<SourceOutput>())?;

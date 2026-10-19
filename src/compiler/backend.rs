@@ -1723,15 +1723,21 @@ impl<'a> Emitter<'a> {
         &mut self,
         pieces: &[String],
         arguments: &[cfg::Operand],
+        modes: &[ir::FormatMode],
         stream: ir::OutputStream,
         newline: bool,
     ) -> Result<(), String> {
-        if pieces.len() != arguments.len() + 1 {
+        if pieces.len() != arguments.len() + 1 || modes.len() != arguments.len() {
             return Err("invalid format piece count".into());
         }
-        for (piece, argument) in pieces.iter().zip(arguments) {
+        for ((piece, argument), &mode) in pieces.iter().zip(arguments).zip(modes) {
             self.literal_output(piece, stream, false)?;
             let ty = self.function().operand_ty(argument)?;
+            ir::validate_format_ty(mode, &ty, Some(self.concrete.facts().budget()))?;
+            if mode == ir::FormatMode::Debug {
+                self.format_debug(argument, &ty, stream, 0)?;
+                continue;
+            }
             self.operand(argument)?;
             match ty {
                 ir::Ty::Int(integer) => self.format_integer(integer, stream)?,
@@ -1758,6 +1764,91 @@ impl<'a> Emitter<'a> {
             newline,
         )?;
         Ok(())
+    }
+
+    /// Structural Debug is a bounded native capability, not fmt trait dispatch.
+    /// Arguments already denote evaluated snapshots or live shared loans.
+    fn format_debug(
+        &mut self,
+        argument: &cfg::Operand,
+        ty: &ir::Ty,
+        stream: ir::OutputStream,
+        depth: usize,
+    ) -> Result<(), String> {
+        self.concrete.facts().budget().check_depth(depth)?;
+        self.concrete.facts().budget().charge_work(1)?;
+        match ty {
+            ir::Ty::Int(integer) => {
+                self.operand(argument)?;
+                self.format_integer(*integer, stream)?;
+            }
+            ir::Ty::Bool => {
+                self.operand(argument)?;
+                self.bytes(&[0x48, 0x85, 0xc0]);
+                let false_value = self.jump(&[0x0f, 0x84]);
+                self.literal_output("true", stream, false)?;
+                let done = self.jump(&[0xe9]);
+                self.patch(false_value, self.position())?;
+                self.literal_output("false", stream, false)?;
+                self.patch(done, self.position())?;
+            }
+            ir::Ty::Unit => self.literal_output("()", stream, false)?,
+            ir::Ty::Tuple(fields) => {
+                self.literal_output("(", stream, false)?;
+                for (index, field) in fields.iter().enumerate() {
+                    if index != 0 {
+                        self.literal_output(", ", stream, false)?;
+                    }
+                    let child = self.format_projection(argument, ir::Projection::Field(index))?;
+                    self.format_debug(&child, field, stream, depth + 1)?;
+                }
+                if fields.len() == 1 {
+                    self.literal_output(",", stream, false)?;
+                }
+                self.literal_output(")", stream, false)?;
+            }
+            ir::Ty::Array { element, len } => {
+                self.literal_output("[", stream, false)?;
+                for index in 0..*len {
+                    if index != 0 {
+                        self.literal_output(", ", stream, false)?;
+                    }
+                    let child =
+                        self.format_projection(argument, ir::Projection::ConstantIndex(index))?;
+                    self.format_debug(&child, element, stream, depth + 1)?;
+                }
+                self.literal_output("]", stream, false)?;
+            }
+            _ => return Err("unsupported native Debug argument".into()),
+        }
+        Ok(())
+    }
+
+    fn format_projection(
+        &self,
+        argument: &cfg::Operand,
+        projection: ir::Projection,
+    ) -> Result<cfg::Operand, String> {
+        let cfg::Operand::Copy(place) = argument else {
+            return Err("native Debug aggregate requires a Copy place".into());
+        };
+        let count = place.projection.len() + 1;
+        let budget = self.concrete.facts().budget();
+        budget.retain_bytes(count * std::mem::size_of::<ir::Projection>())?;
+        let mut projections = Vec::new();
+        projections
+            .try_reserve_exact(count)
+            .map_err(|_| "format projection allocation failed")?;
+        budget.retain_bytes(
+            (projections.capacity() - count) * std::mem::size_of::<ir::Projection>(),
+        )?;
+        projections.extend_from_slice(&place.projection);
+        projections.push(projection);
+        let child = ir::Place {
+            local: place.local,
+            projection: projections,
+        };
+        Ok(cfg::Operand::Copy(child))
     }
     /// A panic is terminal, not a value-producing print followed by a trap.
     /// Linux's kernel sigaction layout uses an eight-byte signal mask here.
@@ -2154,10 +2245,11 @@ impl<'a> Emitter<'a> {
             cfg::Rvalue::Format {
                 pieces,
                 arguments,
+                modes,
                 stream,
                 newline,
             } => {
-                self.format_output(pieces, arguments, *stream, *newline)?;
+                self.format_output(pieces, arguments, modes, *stream, *newline)?;
             }
             cfg::Rvalue::Output(output) => {
                 self.literal_output(&output.text, output.stream, output.newline)?;

@@ -6178,6 +6178,51 @@ pub enum OutputStream {
     Stderr,
 }
 
+/// Native formatting operations, not name-based std::fmt trait dispatch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FormatMode {
+    Display,
+    Debug,
+}
+
+/// One immutable admissibility contract shared by source, typed IR and CFG.
+/// Debug aggregates are structural and Copy: no nominal/user implementation
+/// or ownership permission is invented by selecting a format mode.
+pub fn validate_format_ty(
+    mode: FormatMode,
+    ty: &Ty,
+    budget: Option<&PlanBudget>,
+) -> Result<(), String> {
+    fn walk(
+        mode: FormatMode,
+        ty: &Ty,
+        budget: Option<&PlanBudget>,
+        depth: usize,
+    ) -> Result<(), String> {
+        if let Some(budget) = budget {
+            budget.check_depth(depth)?;
+            budget.charge_work(1)?;
+        }
+        if depth > 128 {
+            return Err("format type nesting limit exceeded".into());
+        }
+        match (mode, ty) {
+            (_, Ty::Int(_) | Ty::Bool | Ty::Never) => Ok(()),
+            (FormatMode::Display, Ty::Char) => Ok(()),
+            (FormatMode::Display, ty) if ty.is_shared_str() => Ok(()),
+            (FormatMode::Debug, Ty::Unit) => Ok(()),
+            (FormatMode::Debug, Ty::Tuple(fields)) => {
+                for field in fields.iter() { walk(mode, field, budget, depth + 1)?; }
+                Ok(())
+            }
+            (FormatMode::Debug, Ty::Array { element, len }) if *len <= MAX_ARRAY_LEN => walk(mode, element, budget, depth + 1),
+            (FormatMode::Display, _) => Err("format argument requires integer, bool, char or &str Display".into()),
+            (FormatMode::Debug, _) => Err("unsupported: native Debug requires bool, integer, unit, or recursive tuple/fixed array of those types".into()),
+        }
+    }
+    walk(mode, ty, budget, 0)
+}
+
 /// Decoded literal bytes and their exact output operation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LiteralOutput {
@@ -6342,6 +6387,7 @@ pub enum ExprKind {
     Format {
         pieces: Vec<String>,
         arguments: Vec<ExprId>,
+        modes: Vec<FormatMode>,
         stream: OutputStream,
         newline: bool,
     },
@@ -6901,13 +6947,17 @@ impl CheckedFunction {
                 }
                 ExprKind::Output(output) => storage(budget, output.text.len(), 1)?,
                 ExprKind::Format {
-                    pieces, arguments, ..
+                    pieces,
+                    arguments,
+                    modes,
+                    ..
                 } => {
                     storage(budget, pieces.len(), std::mem::size_of::<String>())?;
                     for piece in pieces {
                         storage(budget, piece.len(), 1)?;
                     }
                     storage(budget, arguments.len(), std::mem::size_of::<ExprId>())?;
+                    storage(budget, modes.len(), std::mem::size_of::<FormatMode>())?;
                 }
                 ExprKind::Str(text) => storage(budget, text.len(), 1)?,
                 ExprKind::Println(text) => storage(budget, text.len(), 1)?,
@@ -8177,13 +8227,16 @@ impl CheckedFunction {
                 }
                 ExprKind::Bool(_) | ExprKind::Println(_) => {}
                 ExprKind::Format {
-                    pieces, arguments, ..
+                    pieces,
+                    arguments,
+                    modes,
+                    ..
                 } => {
-                    if pieces.len() != arguments.len() + 1 {
+                    if pieces.len() != arguments.len() + 1 || modes.len() != arguments.len() {
                         return Err("format argument count mismatch".into());
                     }
                     let mut completion = Completion::Returns;
-                    for &id in arguments {
+                    for (&id, &mode) in arguments.iter().zip(modes) {
                         expr(id)?;
                         let argument = &self.exprs[id.0];
                         let ty = if matches!(
@@ -8200,14 +8253,11 @@ impl CheckedFunction {
                         } else {
                             &argument.ty
                         };
-                        if !matches!(ty, Ty::Int(_) | Ty::Bool | Ty::Char | Ty::Never)
-                            && !ty.is_shared_str()
-                        {
-                            return Err(
-                                "format argument requires integer, bool, char or &str Display"
-                                    .into(),
-                            );
-                        }
+                        validate_format_ty(
+                            mode,
+                            ty,
+                            facts.validated().map(|facts| facts.budget()),
+                        )?;
                         if argument.completion == Completion::Never {
                             completion = Completion::Never;
                         }

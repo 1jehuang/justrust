@@ -593,7 +593,9 @@ fn original_stock_valid_sources_keep_their_measured_phases() {
 }
 fn unsupported_boundary(case: &Case) -> &'static str {
     match case.name {
-        "02_same_self_distinct_argument" => "only bare {} formatting placeholders are supported",
+        "02_same_self_distinct_argument" => {
+            "only {} and {:?} formatting placeholders are supported"
+        }
         "14_generic_rigid_forward" => "associated type projections are unsupported",
         "20_copy_record" | "34_literal_copy_record" => "active attribute `derive` is unsupported",
         _ => panic!("unclassified Unsupported fixture: {}", case.name),

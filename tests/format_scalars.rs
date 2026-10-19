@@ -52,7 +52,7 @@ fn scalar_format_frozen_sources_match_stock() {
             let stock = scratch.join("stock");
             let _ = fs::remove_file(&native);
             let _ = fs::remove_file(&stock);
-            let expected_live = category == "positive" || name == "str_arg";
+            let expected_live = category == "positive" || matches!(name, "str_arg" | "debug");
             let stock_build = Command::new("rustc")
                 .args([
                     "--edition=2024",

@@ -529,6 +529,7 @@ pub enum Rvalue {
     Format {
         pieces: Vec<String>,
         arguments: Vec<Operand>,
+        modes: Vec<ir::FormatMode>,
         stream: ir::OutputStream,
         newline: bool,
     },
@@ -1075,8 +1076,17 @@ impl Function {
                                 add(&mut bytes, output.text.len(), 1, budget)?
                             }
                             Rvalue::Format {
-                                pieces, arguments, ..
+                                pieces,
+                                arguments,
+                                modes,
+                                ..
                             } => {
+                                add(
+                                    &mut bytes,
+                                    modes.len(),
+                                    std::mem::size_of::<ir::FormatMode>(),
+                                    budget,
+                                )?;
                                 add(
                                     &mut bytes,
                                     pieces.len(),
@@ -2195,20 +2205,21 @@ impl Function {
             }
             Rvalue::Println(_) | Rvalue::Output(_) => Ok(Ty::Unit),
             Rvalue::Format {
-                pieces, arguments, ..
+                pieces,
+                arguments,
+                modes,
+                ..
             } => {
-                if pieces.len() != arguments.len() + 1 {
+                if pieces.len() != arguments.len() + 1 || modes.len() != arguments.len() {
                     return Err("format argument count mismatch".into());
                 }
-                for argument in arguments {
+                for (argument, &mode) in arguments.iter().zip(modes) {
                     let ty = self.operand_ty_with_facts(argument, facts)?;
-                    if !matches!(ty, Ty::Int(_) | Ty::Bool | Ty::Char | Ty::Never)
-                        && !ty.is_shared_str()
-                    {
-                        return Err(
-                            "format argument requires integer, bool, char or &str Display".into(),
-                        );
-                    }
+                    ir::validate_format_ty(
+                        mode,
+                        &ty,
+                        facts.validated().map(|facts| facts.budget()),
+                    )?;
                 }
                 Ok(Ty::Unit)
             }
@@ -4188,6 +4199,7 @@ impl Lowerer<'_> {
             ir::ExprKind::Format {
                 pieces,
                 arguments,
+                modes,
                 stream,
                 newline,
             } => {
@@ -4195,6 +4207,7 @@ impl Lowerer<'_> {
                 if !self.allocate(
                     0,
                     arguments.len() * std::mem::size_of::<Operand>()
+                        + modes.len() * std::mem::size_of::<ir::FormatMode>()
                         + pieces.len() * std::mem::size_of::<String>(),
                 ) {
                     return Err(self.resource_error.clone().unwrap());
@@ -4227,6 +4240,7 @@ impl Lowerer<'_> {
                     Rvalue::Format {
                         pieces: pieces.clone(),
                         arguments: operands,
+                        modes: modes.clone(),
                         stream: *stream,
                         newline: *newline,
                     },

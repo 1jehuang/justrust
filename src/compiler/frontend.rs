@@ -5626,6 +5626,7 @@ pub enum Expr {
     Format {
         pieces: Vec<String>,
         arguments: Vec<Expr>,
+        modes: Vec<ir::FormatMode>,
         stream: ir::OutputStream,
         newline: bool,
     },
@@ -7083,6 +7084,7 @@ impl<'input, 'names> Parser<'input, 'names> {
         let text = self.string_literal_value(token.text)?;
         self.cursor.bump();
         let mut pieces = Vec::new();
+        let mut modes = Vec::new();
         let mut piece = String::new();
         let mut chars = text.chars();
         while let Some(c) = chars.next() {
@@ -7091,12 +7093,17 @@ impl<'input, 'names> Parser<'input, 'names> {
                     Some('{') => piece.push('{'),
                     Some('}') => {
                         pieces.push(std::mem::take(&mut piece));
+                        modes.push(ir::FormatMode::Display);
+                    }
+                    Some(':') if chars.next() == Some('?') && chars.next() == Some('}') => {
+                        pieces.push(std::mem::take(&mut piece));
+                        modes.push(ir::FormatMode::Debug);
                     }
                     None => return Err(self.error("unmatched opening brace in format string")),
                     _ => {
-                        return Err(
-                            self.unsupported("only bare {} formatting placeholders are supported")
-                        );
+                        return Err(self.unsupported(
+                            "only {} and {:?} formatting placeholders are supported",
+                        ));
                     }
                 },
                 '}' => {
@@ -7146,12 +7153,14 @@ impl<'input, 'names> Parser<'input, 'names> {
         self.names
             .retain_parser_text(
                 pieces.len() * std::mem::size_of::<String>()
-                    + arguments.len() * std::mem::size_of::<Expr>(),
+                    + arguments.len() * std::mem::size_of::<Expr>()
+                    + modes.len() * std::mem::size_of::<ir::FormatMode>(),
             )
             .map_err(native_adapter::name_error)?;
         Ok(Expr::Format {
             pieces,
             arguments,
+            modes,
             stream,
             newline,
         })
