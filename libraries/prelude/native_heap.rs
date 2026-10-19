@@ -121,3 +121,44 @@ fn deallocate(allocation: &mut Allocation) -> bool {
     };
     result == 0usize
 }
+
+// Non-owning raw allocation for library containers (Box, Vec, String).
+// Each block is one anonymous mapping with a 16-byte header holding the
+// mapping length, so `free_raw` needs no allocator state.
+pub fn alloc_raw(size: usize, align: usize) -> *mut u8 {
+    if align > 16usize || size > 9223372036854775807usize - 16usize {
+        return null::<u8>();
+    }
+    let total = size + 16usize;
+    let result = unsafe {
+        __justrust_linux_syscall6!(
+            9usize,
+            0usize,
+            total,
+            3usize,
+            34usize,
+            18446744073709551615usize,
+            0usize
+        )
+    };
+    if result >= 18446744073709547521usize {
+        return null::<u8>();
+    }
+    let header = result as *mut usize;
+    unsafe {
+        *header = total;
+    }
+    (result + 16usize) as *mut u8
+}
+
+pub fn free_raw(pointer: *mut u8) {
+    if is_null::<u8>(pointer as *const u8) {
+        return;
+    }
+    let base = pointer as usize - 16usize;
+    let header = base as *mut usize;
+    let total = unsafe { *header };
+    let _ = unsafe {
+        __justrust_linux_syscall6!(11usize, base, total, 0usize, 0usize, 0usize, 0usize)
+    };
+}

@@ -2760,7 +2760,13 @@ impl Transfer<'_> {
                 } else {
                     vec![]
                 };
-                if targets.is_empty() {
+                if targets.is_empty()
+                    && super::ir::raw_deref_index(
+                        &self.f.locals[source.local.0].ty,
+                        &source.projection,
+                    )
+                    .is_none()
+                {
                     self.problem(
                         Problem::Invalid("borrow issuance has no canonical provenance".into()),
                         source,

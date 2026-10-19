@@ -2328,6 +2328,16 @@ impl CarrierBuilder<'_, '_> {
         context: (BlockId, Option<usize>, bool),
     ) -> Result<(), Exhausted> {
         let (block, statement, diagnose) = context;
+        // Storage behind a raw pointer has no canonical cells; the unsafe
+        // contract delegates its validity to the programmer.
+        if ir::raw_deref_index(
+            &self.f.locals[destination.local.0].ty,
+            &destination.projection,
+        )
+        .is_some()
+        {
+            return Ok(());
+        }
         let ty = self.place_ty(self.f, destination)?.clone();
         for (location, origins) in value {
             let semantic = ir::carrier_at(&ty, location, &self.ledger)
@@ -4981,9 +4991,9 @@ impl Plan {
         let mut queue: Vec<_> = dependencies.members().collect();
         for origin in origins.members() {
             if self.targets[origin].is_empty() {
-                return Ok(Some(Problem::Unsupported(
-                    "reference result has no supported whole-input target".into(),
-                )));
+                // A reborrow through a raw pointer carries no tracked
+                // provenance: its lifetime is unbounded, as in Rust.
+                continue;
             }
             for target in &self.targets[origin] {
                 budget.spend(f.params.len() + target.place.projection.len() + 1)?;
