@@ -2,6 +2,8 @@
 use super::*;
 
 mod byte_strings;
+#[path = "type_check/callable_arguments.rs"]
+mod callable_arguments;
 #[path = "type_check/constructor_expectations.rs"]
 mod constructor_expectations;
 #[path = "format_lowering.rs"]
@@ -1046,8 +1048,8 @@ impl<'s> Checker<'s> {
                     .constant_value(expr)?;
                 self.infer_node(InferKind::Rigid(const_inputs::scalar_ir_type(value.ty())))?
             }
-            Expr::Var(name) => match self.lookup_optional(name)? {
-                Some(local) => self.infer_type_term(&self.locals[local.0].ty, None, depth + 1)?,
+            Expr::Var(name) => match self.callable_value_hint(name)? {
+                Some(ty) => self.infer_type_term(&ty, None, depth + 1)?,
                 None => self.infer_node(InferKind::Unknown(false))?,
             },
             Expr::Borrow { kind, place } => {
@@ -4577,9 +4579,7 @@ impl<'a> Checker<'a> {
                     .ty(),
             )),
             Expr::Tuple(fields) if fields.is_empty() => Some(ir::Ty::Unit),
-            Expr::Var(name) => self
-                .lookup_optional(name)?
-                .map(|id| self.locals[id.0].ty.clone()),
+            Expr::Var(name) => self.callable_value_hint(name)?,
             Expr::Call { name, args } => {
                 let key = self.path_key(name, Namespace::Value)?;
                 let plan = self
@@ -6922,6 +6922,7 @@ impl<'a> Checker<'a> {
         e: &Expr,
         expectation: Expectation<'_>,
     ) -> Result<ir::ExprId, String> {
+        self.prepare_callable_arguments(e, 0)?;
         if let Expr::Var(path) = e {
             let key = self.path_key(path, Namespace::Value)?;
             let signature = self.closure_signature_hints.get(&key).cloned();
