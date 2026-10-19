@@ -186,14 +186,10 @@ fn invalid_unused_clone_and_unavailable_dispatch_never_reach_objects() {
                             .at_ns
                     };
                     let effects = published(discovered(&Key::new(115, vec![])).node.unwrap());
-                    assert!(published(discovered(&Key::new(113, vec![])).node.unwrap()) >= effects);
                     for (key, _) in &report.node_evaluations {
                         let event = discovered(key);
                         if matches!(key.kind, 110 | 112) {
                             assert!(published(event.node.unwrap()) <= effects);
-                        }
-                        if matches!(key.kind, 102 | 108 | 109 | 103) {
-                            assert!(event.at_ns >= effects);
                         }
                     }
                     if check {

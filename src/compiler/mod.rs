@@ -522,8 +522,6 @@ impl Provider for CompilerProvider {
                 }
                 MONO_PLAN => {
                     let types = facts.types().await?;
-                    cx.read(cx.request(root(UNIVERSAL_EFFECTS_READY)).get(0))
-                        .await?;
                     let callable_count = types.callable_count();
                     let (mut sources, _sources_reservation) = this.scratch_vec(callable_count)?;
                     for index in 0..callable_count {
@@ -663,9 +661,40 @@ impl Provider for CompilerProvider {
                         .map_err(Error::new)?;
                     let closed = cfg::close(lowered, body.facts.clone(), &this.0.budget)
                         .map_err(Error::new)?;
-                    let effects: Arc<Arc<ownership::CarrierEffectTable>> =
-                        facts.get(root(UNIVERSAL_EFFECTS_READY)).await?;
-                    match ownership::analyze_closed_with_effects(closed, effects.as_ref()) {
+                    // Read only the universal proofs of this instance's own
+                    // direct callees, instead of a program-wide effects join.
+                    // A declaration absent from the table conservatively uses
+                    // its envelope, so every universal callee is included.
+                    let mut callee_indices = Vec::new();
+                    for block in &closed.function().blocks {
+                        this.0.budget.charge_work(1).map_err(Error::new)?;
+                        if let cfg::Terminator::Call {
+                            target: ir::Callee::Direct(target),
+                            ..
+                        } = &block.terminator.value
+                            && Self::universal_body(&types, target.declaration)?
+                        {
+                            let callee = types
+                                .callable_index(target.declaration)
+                                .map_err(Error::new)?;
+                            callee_indices.push(callee);
+                        }
+                    }
+                    callee_indices.sort_unstable();
+                    callee_indices.dedup();
+                    let handles: Vec<_> = callee_indices
+                        .iter()
+                        .map(|callee| cx.request(function(UNIVERSAL_ANALYZE, *callee)).get(0))
+                        .collect();
+                    let mut templates = Vec::with_capacity(handles.len());
+                    for handle in handles {
+                        let proof: Arc<UniversalProofFact> = cx.read_fact(handle).await?;
+                        templates.push(proof.verified.clone());
+                    }
+                    let effects =
+                        ownership::CarrierEffectTable::for_callees(&templates, &this.0.budget)
+                            .map_err(Error::new)?;
+                    match ownership::analyze_closed_with_effects(closed, &effects) {
                         Ok(concrete) => {
                             cx.publish_fact(ANALYSIS_OUTPUT, concrete.analysis().clone())?;
                             cx.publish_fact(0, ConcreteProofFact { concrete })
@@ -697,6 +726,14 @@ impl Provider for CompilerProvider {
                 }
                 CHECK | BUILD => {
                     let plan = facts.plan().await?;
+                    if key.kind == CHECK {
+                        // Program-wide universal admission (every body typed,
+                        // every universal proof, reference-actual call rule)
+                        // is a required check, not a prerequisite of
+                        // per-instance work.
+                        cx.read(cx.request(root(UNIVERSAL_EFFECTS_READY)).get(0))
+                            .await?;
+                    }
 
                     let kind = if key.kind == BUILD { OBJECT } else { ANALYZE };
                     let (mut handles, _handles_reservation) =

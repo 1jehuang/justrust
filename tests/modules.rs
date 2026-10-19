@@ -578,19 +578,12 @@ fn module_resolution_is_shared_and_check_never_demands_codegen() {
                         .at_ns
                 };
                 let effects = published(discovered(&Key::new(115, vec![])).node.unwrap());
-                assert!(published(discovered(&Key::new(113, vec![])).node.unwrap()) >= effects);
                 for (key, _) in &report.node_evaluations {
                     let event = discovered(key);
                     if matches!(key.kind, 110 | 112) {
                         assert!(
                             published(event.node.unwrap()) <= effects,
                             "effect publication preceded mandatory body proof: {key:?}"
-                        );
-                    }
-                    if matches!(key.kind, 102 | 108 | 109 | 103) {
-                        assert!(
-                            event.at_ns >= effects,
-                            "closed work preceded effects: {key:?}"
                         );
                     }
                 }

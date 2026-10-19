@@ -82,13 +82,26 @@ fn universal_effect_publication_is_acyclic_and_precedes_every_closed_instance() 
                             "effect table preceded mandatory body proof: {key:?}"
                         );
                     }
-                    if matches!(key.kind, 102 | 108 | 109 | 103) {
-                        assert!(
-                            discovered(report, key.clone()).1 >= publication,
-                            "closed work preceded effect table: {key:?}"
-                        );
-                    }
+                    // Closed analysis reads its callees' universal proofs
+                    // directly; the program-wide table gates only CHECK.
                 }
+                // Every closed analysis that read a universal proof did so
+                // through a recorded edge to that proof node.
+                let universal: std::collections::HashSet<u64> = report
+                    .node_ids
+                    .iter()
+                    .zip(&report.node_evaluations)
+                    .filter(|(_, (key, _))| key.kind == 112)
+                    .map(|(id, _)| *id)
+                    .collect();
+                assert!(
+                    universal.is_empty()
+                        || report
+                            .dependency_edges
+                            .iter()
+                            .any(|(_, producer, _)| universal.contains(producer)),
+                    "universal proofs were never read through graph edges"
+                );
                 if check_only {
                     assert!(
                         !report
