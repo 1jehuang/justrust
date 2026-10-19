@@ -356,6 +356,9 @@ pub struct Diagnostics {
     pub first_error: Option<String>,
     /// The build failed to compile (as opposed to tests failing).
     pub compile_failed: bool,
+    /// Why a compile failed with no compiler error, e.g. a full disk.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environment_fault: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -979,6 +982,11 @@ pub fn build(
     diagnostics.compile_failed = exit != 0
         && (units.iter().any(|u| u.exit != 0)
             || lines.iter().any(|l| l.l.contains("could not compile")));
+    // A compiler that dies on an environment fault (disk full, OOM) prints no
+    // `error:` line. Surface the fault instead of "0 errors".
+    if diagnostics.compile_failed && diagnostics.compile_errors == 0 {
+        diagnostics.environment_fault = lines.iter().find_map(|l| environment_fault(&l.l));
+    }
 
     let rebuild_reasons = lines
         .iter()
@@ -1033,6 +1041,24 @@ fn parse_dirty(line: &str) -> Option<RebuildReason> {
         package,
         reason: reason.to_owned(),
     })
+}
+
+/// A build-environment failure named in compiler output, not a code error.
+fn environment_fault(line: &str) -> Option<String> {
+    const FAULTS: &[(&str, &str)] = &[
+        ("No space left on device", "disk full"),
+        ("Disk quota exceeded", "disk quota exceeded"),
+        ("memory allocation of", "out of memory"),
+        ("Cannot allocate memory", "out of memory"),
+        (
+            "signal: 9, SIGKILL",
+            "compiler killed (SIGKILL, likely OOM)",
+        ),
+    ];
+    FAULTS
+        .iter()
+        .find(|(needle, _)| line.contains(needle))
+        .map(|(_, what)| (*what).to_string())
 }
 
 fn is_compile_error(t: &str) -> bool {
@@ -1117,7 +1143,12 @@ impl Summary {
     /// Compact status block printed after agent-mode runs.
     pub fn agent_footer(&self, hidden: &crate::agent_output::Hidden) -> String {
         let mut out = String::from("\n");
-        let verdict = if self.diagnostics.compile_failed {
+        let verdict = if let (true, Some(fault)) = (
+            self.diagnostics.compile_failed,
+            self.diagnostics.environment_fault.as_ref(),
+        ) {
+            format!("FAILED: build environment fault, not a code error ({fault})")
+        } else if self.diagnostics.compile_failed {
             format!(
                 "FAILED to compile ({} error{})",
                 self.diagnostics.compile_errors,
@@ -1513,6 +1544,42 @@ mod tests {
             assert!(footer.contains("ok: 397 tests passed"), "{footer}");
             assert!(!footer.contains("FAILED to compile"), "{footer}");
         }
+    }
+
+    #[test]
+    fn disk_full_compiler_crash_is_an_environment_fault_not_zero_errors() {
+        let units = vec![Unit {
+            crate_name: "justrust_engine".into(),
+            exit: 1,
+            ..Default::default()
+        }];
+        let lines = vec![OutputLine {
+            t: 0.5,
+            s: "e".into(),
+            l: "rustc-LLVM ERROR: IO failure on output stream: No space left on device".into(),
+        }];
+        let s = build(
+            &Meta::default(),
+            GitInfo::default(),
+            0.0,
+            1.0,
+            101,
+            0.0,
+            &lines,
+            &[],
+            &[],
+            &units,
+        );
+        assert!(s.diagnostics.compile_failed);
+        assert_eq!(s.diagnostics.compile_errors, 0);
+        assert_eq!(
+            s.diagnostics.environment_fault.as_deref(),
+            Some("disk full")
+        );
+        let footer = s.agent_footer(&crate::agent_output::Hidden::default());
+        assert!(footer.contains("build environment fault"), "{footer}");
+        assert!(footer.contains("disk full"), "{footer}");
+        assert!(!footer.contains("0 errors"), "{footer}");
     }
 
     #[test]
