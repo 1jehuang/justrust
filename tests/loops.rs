@@ -802,7 +802,7 @@ fn referenced_array_for_rejects_aliasing_mutability_and_escape() {
         "fn main(){let a=[1,2];for x in &a {} let n=*x;}",
         "fn main(){let mut a=[1,2];let r=&a;for x in &mut a {*x=3;} let n=(*r)[0];}",
         "fn main(){let mut a=[1,2];let r=&mut a;for x in r {*x=3;}for x in r {*x=4;}}",
-        "fn bad<'a>()->&'a i32{let a=[1,2];for x in &a {return x;}loop{}}fn main(){}",
+        "fn bad<'a>()->&'a i32{let a=[1,2];for x in &a {return x;}loop{};}fn main(){}",
         "fn main(){let a:[i32;0]=[];for x in &a {*x=3;}}",
         "fn main(){let a=[1,2];for x in &a {true}}",
     ] {
@@ -817,11 +817,82 @@ fn array_iteration_unsupported_boundaries_are_stock_valid_not_invalid_claims() {
         "struct Item{x:i32} fn main(){for item in [Item{x:1},Item{x:2}] {}}",
         "struct Item{x:i32} fn main(){let a=[Item{x:1},Item{x:2}];for x in &a {let n=x.x;}}",
         "fn main(){let a=[1,2];let mut last=&a[0];for x in &a {last=x;}let n=*last;}",
-        "fn scan(a:&[i32]){for x in a {let n=*x;}}fn main(){let a=[1,2];scan(&a);}",
+        "fn scan(a:&mut [i32]){for x in a {*x=3;}}fn main(){let mut a=[1,2];scan(&mut a);}",
         "fn main(){for x in [1,2].iter() {}}",
         "fn main(){for x in [1,2].into_iter() {}}",
+        "fn relay<'a>(s:&'a [i32])->&'a [i32]{s}fn main(){for x in relay(&[4,5]){let n=*x;}}",
     ] {
         stock(source, Some(""));
         rejects("explicit unsupported iterator boundary", source);
     }
+}
+
+#[test]
+fn shared_slice_for_matches_stock_origin_control_and_once_only_source() {
+    let source = r#"
+fn first<'a>(a:&'a [i32])->&'a i32 {for x in a {return x;}loop{};}
+fn sum(a:&[i32])->i32 {let mut n=0;for x in a {if *x==2 {continue;}n=n+*x;}n}
+fn main(){
+    let mut a=[1,2,3];
+    let s:&[i32]=&a;
+    let mut hits=0;
+    let mut n=0;
+    for x in ({hits=hits+1;s}) {n=n+*x;}
+    if hits==1 && n==6 && sum(s)==4 && *first(s)==1 {println!("slice origin once ok");}
+    let mut last=&a[0];
+    for x in s {last=x;break;}
+    if *last==1 {println!("slice captured ok");}
+    {let inner:&[i32]=&a;for x in inner {last=x;break;}}
+    if *last==1 {println!("slice descriptor scope ok");}
+    a[0]=9;
+    if a[0]==9 {println!("slice last use ok");}
+    let empty:[i32;0]=[];
+    let e:&[i32]=&empty;
+    for x in e {println!("bad");}
+    let units=[(),(),()];
+    let u:&[()]=&units;
+    let mut count=0;
+    for x in u {let unit=*x;count=count+1;}
+    if count==3 {println!("slice empty unit ok");}
+}
+"#;
+    let expected = "slice origin once ok\nslice captured ok\nslice descriptor scope ok\nslice last use ok\nslice empty unit ok\n";
+    stock(source, Some(expected));
+    runs(source, expected);
+}
+
+#[test]
+fn shared_slice_for_rejects_root_alias_mutation_and_escaping_elements() {
+    for source in [
+        "fn main(){let mut a=[1,2];let s:&[i32]=&a;for x in s {a[1]=4;let n=*x;}}",
+        "fn main(){let a=[1,2];let s:&[i32]=&a;for x in s {*x=4;}}",
+        "fn main(){let a:[i32;0]=[];let s:&[i32]=&a;for x in s {*x=4;}}",
+        "fn bad<'a>()->&'a i32{let a=[1,2];let s:&[i32]=&a;for x in s {return x;}loop{};}fn main(){}",
+        "fn main(){let a=[1,2];let mut last=&a[0];{let b=[3,4];let s:&[i32]=&b;for x in s {last=x;break;}}let n=*last;}",
+        "fn bad<'a,'b>(a:&'a [i32],b:&'b [i32])->&'a i32{for x in b {return x;}loop{};}fn main(){}",
+        "fn bad<'a>(a:&'a [i32])->&'a mut i32{for x in a {return x;}loop{};}fn main(){}",
+        "fn first<'a>(a:&'a [i32])->&'a i32{for x in a{return x;}loop{};}fn main(){let mut a=[1,2];let s:&[i32]=&a;let r=first(s);a[0]=8;let n=*r;}",
+        "fn bad()->&'static i32{let a=[1,2];let s:&[i32]=&a;for x in s{return x;}loop{};}fn main(){}",
+    ] {
+        stock(source, None);
+        rejects("invalid shared slice iteration loan", source);
+    }
+}
+
+#[test]
+fn shared_slice_for_temporary_argument_and_iterable_descriptor() {
+    let source = r#"
+fn scan(s:&[i32])->i32 {let mut n=0;for x in s {n=n+*x;}n}
+fn main(){
+    let mut n=scan(&[4,5]);
+    if n==9 {println!("slice temporary ok");}
+    let values=[6,7];
+    let mut calls=0;
+    for x in ({calls=calls+1;let s:&[i32]=&values;s}) {if *x==7 {break;}n=n+*x;}
+    if calls==1 && n==15 {println!("slice call once ok");}
+}
+"#;
+    let expected = "slice temporary ok\nslice call once ok\n";
+    stock(source, Some(expected));
+    runs(source, expected);
 }

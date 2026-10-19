@@ -7004,7 +7004,7 @@ impl<'a> Checker<'a> {
             let ForIterable::Value(value) = &source.iterable else {
                 unreachable!()
             };
-            return self.for_array_statement(label, pattern, value, body, item_hint);
+            return self.for_array_statement(label, pattern, source, value, body, item_hint);
         };
         let loop_depth = self.loops.len();
         let scope_depth = self.scopes.len();
@@ -7228,6 +7228,7 @@ impl<'a> Checker<'a> {
         &mut self,
         label: Option<AstIdent>,
         pattern: &Pattern,
+        for_source: &ForSource,
         source: &Expr,
         body: &Block,
         item_hint: Option<&ir::Ty>,
@@ -7259,13 +7260,14 @@ impl<'a> Checker<'a> {
                                 .into(),
                         );
                     }
-                    (element.as_ref().clone(), *len, None)
+                    (element.as_ref().clone(), Some(*len), None)
                 }
                 ir::Ty::Ref { kind, referent } => {
-                    let ir::Ty::Array { element, len } = referent.as_ref() else {
-                        return Err("unsupported: for iteration requires an array element-place authority; runtime slices are not supported".into());
-                    };
-                    (element.as_ref().clone(), *len, Some(*kind))
+                    match referent.as_ref() {
+                        ir::Ty::Array { element, len } => (element.as_ref().clone(), Some(*len), Some(*kind)),
+                        ir::Ty::Slice { element } if *kind == ir::BorrowKind::Shared => (element.as_ref().clone(), None, Some(*kind)),
+                        _ => return Err("unsupported: for iteration requires an array or shared scalar/unit slice element-place authority".into()),
+                    }
                 }
                 _ => return Err("for currently requires an integer range or an array".into()),
             };
@@ -7279,10 +7281,16 @@ impl<'a> Checker<'a> {
                 self.for_expr(index_ty.clone(), ir::ExprKind::Int(ir::IntValue::usize(0)))?;
             let saved_zero =
                 self.for_expr(index_ty.clone(), ir::ExprKind::Int(ir::IntValue::usize(0)))?;
-            let length = self.for_expr(
-                index_ty.clone(),
-                ir::ExprKind::Int(ir::IntValue::usize(len as u64)),
-            )?;
+            let length_kind = if let Some(len) = len {
+                ir::ExprKind::Int(ir::IntValue::usize(len as u64))
+            } else {
+                let slice = self.for_expr(flow.ty.clone(), ir::ExprKind::Local(array))?;
+                ir::ExprKind::SliceLen { slice }
+            };
+            let length = self.for_expr(index_ty.clone(), length_kind)?;
+            if let Some(cap) = self.canonical {
+                cap.record_for_len(for_source, length, value, &self.exprs)?;
+            }
             let one = self.for_expr(index_ty.clone(), ir::ExprKind::Int(ir::IntValue::usize(1)))?;
             let compare_index = self.for_expr(index_ty.clone(), ir::ExprKind::Local(index))?;
             let snapshot_index = self.for_expr(index_ty.clone(), ir::ExprKind::Local(index))?;
