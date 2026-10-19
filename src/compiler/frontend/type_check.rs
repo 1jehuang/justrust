@@ -6458,32 +6458,42 @@ impl<'a> Checker<'a> {
             }
             ReceiverKind::Borrowed { kind } => {
                 if matches!(selected.target, ir::Callee::Virtual(_)) {
-                    // The object carrier itself is the receiver: a reborrow
-                    // through `*d` would drop the vtable word.
-                    if !matches!(selected.adjustment, ReceiverAdjustment::Identity)
-                        || selected.depth != 0
+                    // Virtual dispatch keeps the complete object carrier.
+                    // A shared method on `&mut dyn P` is selected after one
+                    // dereference and shared autoref, and must create a real
+                    // loan of the object instead of moving its mutable carrier.
+                    let shared_reborrow = kind == ir::BorrowKind::Shared
+                        && selected.depth == 1
+                        && matches!(selected.adjustment, ReceiverAdjustment::SharedAutoref);
+                    if !(matches!(selected.adjustment, ReceiverAdjustment::Identity)
+                        && selected.depth == 0
+                        || shared_reborrow)
                     {
                         return Err(
                             "unsupported: autoref or autoderef of a trait object receiver".into(),
                         );
                     }
-                    if kind == ir::BorrowKind::Mut {
-                        // Implicit reborrow `&mut *d`, so `d` stays usable.
+                    if kind == ir::BorrowKind::Mut || shared_reborrow {
+                        // Whole-object reborrow preserves both carrier words.
                         let Expr::Var(name) = receiver else {
                             return Err(
-                                "unsupported: `&mut dyn` receiver that is not a local binding"
+                                "unsupported: reborrowed trait object receiver that is not a local binding"
                                     .into(),
                             );
                         };
                         let local = self.lookup(name)?;
                         let id = self.borrow_expression(
-                            ir::BorrowKind::Mut,
+                            kind,
                             ir::Place {
                                 local,
                                 projection: vec![ir::Projection::Deref],
                             },
                         )?;
-                        (id, Some(ir::ImplicitBorrowKind::MutableReceiver))
+                        (
+                            id,
+                            (kind == ir::BorrowKind::Mut)
+                                .then_some(ir::ImplicitBorrowKind::MutableReceiver),
+                        )
                     } else {
                         (self.expr(receiver)?, None)
                     }

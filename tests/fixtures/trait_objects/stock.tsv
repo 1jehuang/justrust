@@ -1,6 +1,7 @@
 # rustc 1.98.1 (48a229cea 2026-09-01) (Arch Linux rust 1:1.98.1-1) --edition 2024 -C panic=abort
 # path	stock	code
 positive/dyn_mut.rs	accept	-
+positive/dyn_shared_reborrow.rs	accept	-
 positive/dyn_shapes.rs	accept	-
 positive/dyn_super.rs	accept	-
 positive/dyn_values.rs	accept	-
@@ -15,6 +16,7 @@ negative/dyn_mut_through_shared.rs	reject	E0596
 negative/dyn_not_impl.rs	reject	E0277
 negative/dyn_self_param.rs	reject	E0038
 negative/dyn_self_return.rs	reject	E0038
+negative/dyn_shared_reborrow_conflict.rs	reject	E0502
 negative/dyn_shared_to_mut.rs	reject	E0308
 negative/dyn_sized_super.rs	reject	E0038
 negative/dyn_unused_wrong_type.rs	reject	E0308
