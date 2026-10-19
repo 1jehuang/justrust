@@ -623,6 +623,8 @@ fn kind_name(kind: u32) -> String {
         113 => "mono_plan",
         114 => "concrete_proofs",
         115 => "universal_admission",
+        116 => "body_lexical",
+        117 => "capture_environment",
         _ => return format!("kind{kind}"),
     }
     .to_string()

@@ -4,6 +4,7 @@ use super::super::module_identity::{CatalogModule, ModuleSegment};
 use super::super::semantic_name::BuiltinAtom;
 use super::super::semantic_scope::{BindingId, ScopeId, scope_diagnostic};
 use super::*;
+mod capture_resolution;
 
 #[derive(Clone, Debug)]
 enum ResolvedPath {
@@ -70,6 +71,10 @@ struct Resolver<'a> {
     /// Interpret `crate` as the user crate root even inside the prelude.
     user_crate_anchor: bool,
     anonymous_closure_body: bool,
+    active_closure: Option<closures::ClosureSource>,
+    resolved_closures: HashMap<PathKey, closures::ClosureSource>,
+    resolved_closure_owners: HashMap<PathKey, Vec<PathKey>>,
+    current_function_name: Option<AstPath>,
 }
 impl Resolver<'_> {
     fn with_source_owner<T>(
@@ -2390,6 +2395,31 @@ impl Resolver<'_> {
                 };
             }
             match stmt {
+                Stmt::Assign { name, .. } if self.anonymous_closure_body => {
+                    self.reject_mutable_capture(*name, locals)?;
+                    if let Stmt::Assign { value, .. } = stmt {
+                        self.expr(value, module, locals)?;
+                    }
+                }
+                Stmt::AssignOp { place, .. }
+                | Stmt::AssignPlace { place, .. }
+                | Stmt::AssignIndex { array: place, .. }
+                | Stmt::AssignIndexOp { array: place, .. }
+                    if self.anonymous_closure_body =>
+                {
+                    self.reject_mutable_capture(place.local, locals)?;
+                    match stmt {
+                        Stmt::AssignIndex { index, value, .. }
+                        | Stmt::AssignIndexOp { index, value, .. } => {
+                            self.expr(value, module, locals)?;
+                            self.expr(index, module, locals)?;
+                        }
+                        Stmt::AssignOp { value, .. } | Stmt::AssignPlace { value, .. } => {
+                            self.expr(value, module, locals)?
+                        }
+                        _ => unreachable!(),
+                    }
+                }
                 Stmt::Declare { name, ty, .. } => {
                     self.ty(ty, module)?;
                     if self.binding_constructor(*name, module)?.is_some() {
@@ -2639,9 +2669,10 @@ impl Resolver<'_> {
         if let Expr::Call { name, args } = expr
             && closures::anonymous_path(name, self.names())?
         {
-            for arg in args {
+            for arg in args.iter_mut() {
                 self.expr(arg, module, locals)?;
             }
+            self.closure_arguments(name, args, locals)?;
             return Ok(());
         }
         // Do not accidentally resolve a capture to a same-spelled module
@@ -2649,13 +2680,12 @@ impl Resolver<'_> {
         // environment capture resolution is implemented.
         if self.anonymous_closure_body
             && let Expr::Var(path) = expr
+            && path.anchor() == PathAnchor::Relative
             && path.single().is_some()
             && !self.local_contains(path, locals)?
         {
-            return Err(
-                "unsupported: closure capture environments require checked capture resolution"
-                    .into(),
-            );
+            *expr = self.capture_read(path)?;
+            return Ok(());
         }
         if let Expr::Var(path) | Expr::Call { name: path, .. } = expr
             && self.local_contains(path, locals)?
@@ -2848,6 +2878,18 @@ impl Resolver<'_> {
             | Expr::Index { base: value, .. }
             | Expr::Unary { value, .. } => self.expr(value, module, locals)?,
             Expr::Borrow { kind, place } => {
+                if self.anonymous_closure_body
+                    && let LocalName::Named(ident) = place.local
+                {
+                    let path = self.single_path(ident)?;
+                    if !self.local_contains(&path, locals)? {
+                        if *kind != ir::BorrowKind::Shared || !place.fields.is_empty() {
+                            return Err("unsupported: mutable or projected closure captures are not implemented".into());
+                        }
+                        *place = self.capture_place(&path)?;
+                        return Ok(());
+                    }
+                }
                 // A bare non-local root such as `&Marker` or an imported unit
                 // variant names a value constructor, not a place.
                 if let LocalName::Named(ident) = place.local
@@ -3198,6 +3240,10 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
         lexical_function: None,
         user_crate_anchor: false,
         anonymous_closure_body: false,
+        active_closure: None,
+        resolved_closures: HashMap::new(),
+        resolved_closure_owners: HashMap::new(),
+        current_function_name: None,
     };
     for (bucket, items) in &parsed.items {
         for item in items {
@@ -3478,12 +3524,22 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
             resolver.ty(&mut field.ty, structure.module)?;
         }
     }
-    for function in &mut program.functions {
+    let mut function_order = Vec::new();
+    for anonymous in [true, false] {
+        for (index, function) in program.functions.iter().enumerate() {
+            if closures::anonymous_path(&function.name, resolver.names())? == anonymous {
+                function_order.push(index);
+            }
+        }
+    }
+    for index in function_order {
+        let function = &mut program.functions[index];
         // Local/free declarations are collected separately by the frontend.
         // None may inherit a preceding trait/default/impl Self owner.
         resolver.with_source_owner(SourceOwnerContext::None, |resolver| {
             resolver.anonymous_closure_body =
                 closures::anonymous_path(&function.name, resolver.names())?;
+            resolver.begin_closure_function(function)?;
             resolver.type_params = function.type_params.clone();
             resolver.bounds(&mut function.bounds, function.module)?;
             resolver.ty(&mut function.result, function.module)?;
@@ -3508,9 +3564,18 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
                     resolver.display(&function.name)?
                 ));
             }
+            resolver.finish_closure_function(function)?;
             Ok(())
         })?;
     }
+    program.closure_sources = Arc::new(resolver.resolved_closures.clone());
+    program.closure_owners = Arc::new(
+        resolver
+            .resolved_closure_owners
+            .iter()
+            .map(|(key, children)| (key.clone(), children.clone().into()))
+            .collect(),
+    );
     for (source_index, block) in program.impls.iter_mut().enumerate() {
         let owner = if block.trait_path.is_some() {
             SourceOwnerContext::TraitImpl { source_index }

@@ -459,6 +459,28 @@ impl NameStoreBuilder {
         })
     }
 
+    pub(crate) fn anonymous_closure_environment(
+        &mut self,
+        origin: SpanId,
+        ordinal: usize,
+        field: usize,
+    ) -> Result<AstIdent, NameError> {
+        self.check_origin(origin)?;
+        let spelling = self
+            .store
+            .session
+            .intern_symbol(&format!("$closure_env${ordinal}${field}"))?;
+        self.append(NameData {
+            atom: NameAtomId(spelling),
+            spelling,
+            context: self.session().root_context(),
+            span: origin,
+            raw: false,
+            edition: self.edition(),
+            anonymous_closure: false,
+        })
+    }
+
     fn check_ascii(text: &str, budget: &ExpansionBudget) -> Result<(), NameError> {
         let work = (text.len() as u64)
             .checked_mul(2)

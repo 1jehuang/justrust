@@ -141,6 +141,8 @@ const UNIVERSAL_LOWER: u32 = 111;
 const UNIVERSAL_ANALYZE: u32 = 112;
 const MONO_PLAN: u32 = 113;
 const UNIVERSAL_EFFECTS_READY: u32 = 115;
+const BODY_LEXICAL: u32 = 116;
+const CAPTURE_ENV: u32 = 117;
 
 enum Input {
     Text(String),
@@ -157,6 +159,12 @@ enum Input {
 struct TemplateBodyFact {
     checked: Arc<ir::CheckedFunction>,
     publication: Option<Arc<source_replay::CanonicalSourcePublication>>,
+}
+struct BodyLexicalFact {
+    lexical: frontend::closures::graph_facts::LexicalBody,
+}
+struct CaptureEnvironmentFact {
+    environment: frontend::closures::graph_facts::CaptureEnvironment,
 }
 /// `UNIVERSAL_ANALYZE` output: the successful verified template proof.
 struct UniversalProofFact {
@@ -426,9 +434,106 @@ impl Provider for CompilerProvider {
                     .map_err(Error::new)?;
                     cx.publish_fact(0, context)
                 }
+                BODY_LEXICAL => {
+                    let index = item_index(&key, "missing lexical owner declaration")?;
+                    if key.params.len() != 1 {
+                        return Err(Error::new(
+                            "lexical body key must contain exactly one owner",
+                        ));
+                    }
+                    let types = facts.types().await?;
+                    let lexical = types
+                        .publish_closure_lexical(index, &this.0.budget)
+                        .map_err(Error::new)?;
+                    cx.publish_fact(0, BodyLexicalFact { lexical })
+                }
+                CAPTURE_ENV => {
+                    let index = usize::try_from(
+                        *key.params
+                            .first()
+                            .ok_or_else(|| Error::new("missing capture owner declaration"))?,
+                    )
+                    .map_err(|_| Error::new("invalid capture owner index"))?;
+                    let length = key
+                        .params
+                        .len()
+                        .checked_sub(1)
+                        .ok_or_else(|| Error::new("missing capture source path"))?;
+                    if length == 0 || length % 2 != 0 {
+                        return Err(Error::new(
+                            "capture source key must contain structural role/index pairs",
+                        ));
+                    }
+                    this.0.budget.check_depth(length / 2).map_err(Error::new)?;
+                    let (mut path, _reservation) = this.scratch_vec::<u32>(length)?;
+                    for component in &key.params[1..] {
+                        path.push(
+                            u32::try_from(*component)
+                                .map_err(|_| Error::new("capture source path overflow"))?,
+                        );
+                    }
+                    let lexical: Arc<BodyLexicalFact> =
+                        facts.get(function(BODY_LEXICAL, index)).await?;
+                    let types = facts.types().await?;
+                    let environment = types
+                        .publish_capture_environment(&lexical.lexical, &path, &this.0.budget)
+                        .map_err(Error::new)?;
+                    cx.publish_fact(0, CaptureEnvironmentFact { environment })
+                }
                 TEMPLATE_BODY => {
                     let index = item_index(&key, "missing declaration index")?;
                     let types = facts.types().await?;
+                    for owner in types
+                        .closure_graph_owners(index, &this.0.budget)
+                        .map_err(Error::new)?
+                    {
+                        let lexical: Arc<BodyLexicalFact> =
+                            facts.get(function(BODY_LEXICAL, owner)).await?;
+                        for site in lexical.lexical.sites.iter() {
+                            this.0.budget.charge_work(1).map_err(Error::new)?;
+                            if owner != index && site.declaration != index {
+                                continue;
+                            }
+                            let capacity = site
+                                .node
+                                .path
+                                .len()
+                                .checked_add(1)
+                                .ok_or_else(|| Error::new("capture key capacity overflow"))?;
+                            let (mut parameters, _reservation) =
+                                this.scratch_vec::<u64>(capacity)?;
+                            parameters.push(
+                                u64::try_from(owner)
+                                    .map_err(|_| Error::new("capture owner key overflow"))?,
+                            );
+                            parameters.extend(site.node.path.iter().map(|value| u64::from(*value)));
+                            let environment: Arc<CaptureEnvironmentFact> =
+                                facts.get(Key::new(CAPTURE_ENV, parameters)).await?;
+                            let environment = &environment.environment;
+                            if environment.parent != owner
+                                || environment.declaration != site.declaration
+                                || environment.site != site.node
+                                || environment.fields.len() != site.captures.len()
+                            {
+                                return Err(Error::new(
+                                    "capture environment handle changed original source site",
+                                ));
+                            }
+                            for (field, original) in
+                                environment.fields.iter().zip(site.captures.iter())
+                            {
+                                this.0.budget.charge_work(1).map_err(Error::new)?;
+                                if field.parameter != original.parameter
+                                    || field.binding != original.binding
+                                    || field.scalar != original.scalar
+                                {
+                                    return Err(Error::new(
+                                        "capture environment handle changed original binding",
+                                    ));
+                                }
+                            }
+                        }
+                    }
                     let declaration = types.callable_decl(index).map_err(Error::new)?;
                     let body = types
                         .publish_callable_body(declaration, &this.0.budget)

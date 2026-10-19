@@ -1,5 +1,29 @@
 //! Immediate closures are separate callable declarations, never substituted bodies.
 use super::*;
+pub(in crate::compiler) mod graph_facts;
+
+#[derive(Clone, Debug)]
+pub(super) struct ClosureParent {
+    pub name: AstPath,
+    pub params: Vec<(BindingName, Type)>,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct SourceCapture {
+    pub parameter: usize,
+    pub name: AstIdent,
+    pub environment: AstIdent,
+    pub ty: Type,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct ClosureSource {
+    pub name: AstPath,
+    pub environments: Vec<AstIdent>,
+    pub parent: Option<ClosureParent>,
+    pub by_move: bool,
+    pub captures: Vec<SourceCapture>,
+}
 
 pub(super) fn anonymous_path(path: &AstPath, names: &NameStore) -> Result<bool, String> {
     path.check(names).map_err(native_adapter::name_diagnostic)?;
@@ -14,9 +38,25 @@ pub(super) fn anonymous_path(path: &AstPath, names: &NameStore) -> Result<bool, 
 }
 
 impl Parser<'_, '_> {
-    /// The opening grouping parenthesis has already been consumed. This first
-    /// increment has an empty environment and explicit scalar result typing.
-    /// Stored closures and inferred signatures require genuine environment types.
+    pub(super) fn closure_path(&mut self, ident: AstIdent) -> Result<AstPath, ParseError> {
+        let mut segments = vec![ident];
+        let mut module = self.module;
+        while let Some(parent) = self.modules.parent(module).map_err(module_parse_error)? {
+            let name = self
+                .modules
+                .name(module)
+                .map_err(module_parse_error)?
+                .ok_or_else(|| self.error("closure outside a source module"))?;
+            self.reserve_parser_items(&mut segments, 1)?;
+            segments.push(name);
+            module = parent;
+        }
+        segments.reverse();
+        AstPath::new(self.names, PathAnchor::Crate, &segments).map_err(native_adapter::name_error)
+    }
+    /// The opening grouping parenthesis has already been consumed. Immediate
+    /// callables retain explicit scalar result typing and source capture sites.
+    /// Stored closures and inferred signatures remain unsupported.
     pub(super) fn immediate_closure(&mut self) -> Result<Expr, ParseError> {
         // A closure retains its complete signature while parsing a nested
         // callable. Bound that heavier recursive frame before entering it.
@@ -31,7 +71,7 @@ impl Parser<'_, '_> {
             return Err(self.unsupported("closures in generic bodies are unsupported"));
         }
         let origin = self.token().span;
-        self.eat("move");
+        let by_move = self.eat("move");
         let empty = self.eat("||");
         if !empty {
             self.expect("|")?;
@@ -77,21 +117,20 @@ impl Parser<'_, '_> {
             .names
             .anonymous_closure(origin, serial)
             .map_err(native_adapter::name_error)?;
-        let mut segments = vec![ident];
-        let mut module = self.module;
-        while let Some(parent) = self.modules.parent(module).map_err(module_parse_error)? {
-            let name = self
-                .modules
-                .name(module)
-                .map_err(module_parse_error)?
-                .ok_or_else(|| self.error("closure outside a source module"))?;
-            self.reserve_parser_items(&mut segments, 1)?;
-            segments.push(name);
-            module = parent;
+        let name = self.closure_path(ident)?;
+        let parent = self.lexical.closure_parent.replace(ClosureParent {
+            name: name.clone(),
+            params: params.clone(),
+        });
+        let mut environments = Vec::new();
+        for field in 0..parent.as_ref().map_or(0, |parent| parent.params.len()) {
+            let environment = self
+                .names
+                .anonymous_closure_environment(origin, serial, field)
+                .map_err(native_adapter::name_error)?;
+            self.reserve_parser_items(&mut environments, 1)?;
+            environments.push(environment);
         }
-        segments.reverse();
-        let name = AstPath::new(self.names, PathAnchor::Crate, &segments)
-            .map_err(native_adapter::name_error)?;
         // A closure's body cannot inherit its parent's return/loop/binding or
         // macro frontier. The ordinary independent checker owns all its locals.
         let previous = self.lexical.function.take();
@@ -99,6 +138,7 @@ impl Parser<'_, '_> {
         let body = self.function_body(&params);
         self.lexical.closure_depth -= 1;
         self.lexical.function = previous;
+        self.lexical.closure_parent = parent.clone();
         let (body, lexical_scope) = body?;
         self.expect(")")?;
         if !self.eat("(") {
@@ -135,6 +175,16 @@ impl Parser<'_, '_> {
         self.reserve_parser_items(&mut functions, 1)?;
         functions.push(function);
         self.lexical.closure_functions = functions;
+        let mut sources = std::mem::take(&mut self.lexical.closure_sources);
+        self.reserve_parser_items(&mut sources, 1)?;
+        sources.push(ClosureSource {
+            name: name.clone(),
+            environments,
+            parent,
+            by_move,
+            captures: Vec::new(),
+        });
+        self.lexical.closure_sources = sources;
         Ok(Expr::Call { name, args })
     }
 }
