@@ -9,7 +9,43 @@ const SEMANTICS: &[u8] =
 pub(super) struct InstanceIdentity {
     pub symbol: String,
     pub canonical: Arc<[u8]>,
-    _reservations: Vec<ir::PlanReservation>,
+    _reservations: Vec<ir::RetainedStorage>,
+}
+
+/// Seal paid leases only at publication. Account the new immutable receipt
+/// vector's actual capacity as well as the storage the input leases cover.
+fn retain_reservations(
+    reservations: Vec<ir::PlanReservation>,
+    budget: &ir::PlanBudget,
+) -> Result<Vec<ir::RetainedStorage>, String> {
+    if reservations.is_empty() {
+        return Ok(Vec::new());
+    }
+    let slots = reservations
+        .len()
+        .checked_add(1)
+        .ok_or("generic retained storage count overflow")?;
+    budget.charge_work(slots)?;
+    let mut retained = Vec::new();
+    retained
+        .try_reserve_exact(slots)
+        .map_err(|_| "generic retained storage allocation limit exceeded")?;
+    let bytes = retained
+        .capacity()
+        .checked_mul(std::mem::size_of::<ir::RetainedStorage>())
+        .ok_or("generic retained storage byte overflow")?;
+    // Nothing is published or promoted until the actual backing allocation
+    // has been admitted. On rejection, both temporary vectors are dropped.
+    let bookkeeping = budget.reserve_bytes(bytes)?;
+    for reservation in reservations {
+        let receipt = reservation.retain()?;
+        if !receipt.authority().same_authority(budget.authority()) {
+            return Err("generic retained storage authority mismatch".into());
+        }
+        retained.push(receipt);
+    }
+    retained.push(bookkeeping.retain()?);
+    Ok(retained)
 }
 
 struct Encoder<'a> {
@@ -474,7 +510,7 @@ pub(super) fn identity(
     Ok(InstanceIdentity {
         symbol,
         canonical: Arc::from(encoder.bytes),
-        _reservations: encoder.reservations,
+        _reservations: retain_reservations(encoder.reservations, budget)?,
     })
 }
 
@@ -531,7 +567,7 @@ pub(super) struct Plan {
     pub entries: Vec<Instance>,
     cleanup_targets: Vec<ir::CallTarget>,
     lookup: HashMap<ir::CallTarget, usize>,
-    _reservations: Vec<ir::PlanReservation>,
+    _reservations: Vec<ir::RetainedStorage>,
     budget: ir::PlanBudget,
 }
 
@@ -912,7 +948,7 @@ pub(super) fn build(
         entries,
         cleanup_targets,
         lookup,
-        _reservations: reservations,
+        _reservations: retain_reservations(reservations, budget)?,
         budget: budget.clone(),
     })
 }
@@ -920,6 +956,81 @@ pub(super) fn build(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retained_instance_storage_pays_actual_receipt_capacity_and_never_refunds() {
+        let bytes = 5 + 3 * std::mem::size_of::<ir::RetainedStorage>();
+        let budget = ir::PlanBudget::new(ir::PlanLimits {
+            bytes,
+            ..ir::PlanLimits::default()
+        });
+        let leases = vec![
+            budget.reserve_bytes(2).unwrap(),
+            budget.reserve_bytes(3).unwrap(),
+        ];
+        let receipts = retain_reservations(leases, &budget).unwrap();
+        let backing = receipts.capacity() * std::mem::size_of::<ir::RetainedStorage>();
+        assert_eq!(receipts.len(), 3);
+        assert_eq!(receipts[2].bytes(), backing);
+        assert_eq!(
+            receipts
+                .iter()
+                .map(ir::RetainedStorage::bytes)
+                .sum::<usize>(),
+            5 + backing
+        );
+        assert!(
+            receipts
+                .iter()
+                .all(|receipt| receipt.authority().same_authority(budget.authority()))
+        );
+        let usage = budget.usage_snapshot();
+        assert_eq!(usage.bytes, 5 + backing);
+        assert_eq!(usage.reservations.current_bytes, 5 + backing);
+        assert_eq!(usage.reservations.cumulative_bytes, 5 + backing);
+        assert_eq!(usage.reservations.current_reservations, 0);
+        assert_eq!(usage.reservations.retentions, 3);
+        assert_eq!(usage.work, 3);
+        drop(receipts);
+        assert_eq!(budget.usage_snapshot().reservations, usage.reservations);
+        assert!(budget.reserve_bytes(1).is_err());
+    }
+
+    #[test]
+    fn retained_instance_storage_rejects_foreign_paid_authority() {
+        let owner = ir::PlanBudget::default();
+        let foreign = ir::PlanBudget::default();
+        let leases = vec![foreign.reserve_bytes(7).unwrap()];
+        assert!(retain_reservations(leases, &owner).is_err());
+        // A failed publication never fabricates a same-owner receipt or
+        // refunds storage that was already conservatively promoted.
+        assert_eq!(owner.usage_snapshot().bytes, 0);
+        assert_eq!(foreign.usage_snapshot().bytes, 7);
+    }
+
+    #[test]
+    fn rejected_receipt_vector_storage_releases_unpromoted_scratch() {
+        let budget = ir::PlanBudget::new(ir::PlanLimits {
+            bytes: 5,
+            ..ir::PlanLimits::default()
+        });
+        assert!(retain_reservations(Vec::new(), &budget).unwrap().is_empty());
+        assert_eq!(budget.usage_snapshot().work, 0);
+        let leases = vec![
+            budget.reserve_bytes(2).unwrap(),
+            budget.reserve_bytes(3).unwrap(),
+        ];
+        assert!(retain_reservations(leases, &budget).is_err());
+        let usage = budget.usage_snapshot();
+        assert_eq!(usage.bytes, 0);
+        assert_eq!(usage.reservations.current_reservations, 0);
+        assert_eq!(usage.reservations.retentions, 0);
+        assert_eq!(usage.reservations.cumulative_bytes, 5);
+        assert_eq!(
+            usage.first_failure.unwrap().kind,
+            ir::ResourceBudgetKind::Bytes
+        );
+    }
 
     // Inventory selection only. Production resolution and entry selection use
     // checked typed APIs, never these persistence atom descriptors.
