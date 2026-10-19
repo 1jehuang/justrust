@@ -2441,6 +2441,9 @@ impl Emitter<'_> {
     }
     fn rvalue(&mut self, value: &cfg::Rvalue) -> Result<(), String> {
         match value {
+            cfg::Rvalue::TypeAlignment(_) => {
+                return Err("unresolved target alignment reached native code generation".into());
+            }
             cfg::Rvalue::RawSlice { kind, args } => {
                 if args.len() != 2 {
                     return Err("raw slice arity mismatch".into());

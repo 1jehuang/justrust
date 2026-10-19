@@ -281,6 +281,7 @@ fn same_rvalue_types(a: &Rvalue, b: &Rvalue, budget: &ir::PlanBudget) -> Result<
         return Ok(false);
     }
     match (a, b) {
+        (Rvalue::TypeAlignment(a), Rvalue::TypeAlignment(b)) => a.same_query(b, budget),
         (Rvalue::Repeat { ty: a, value: aa }, Rvalue::Repeat { ty: b, value: bb }) => {
             Ok(ir::identical_type(a, b, budget)? && same_operand_types(aa, bb, budget)?)
         }
@@ -491,6 +492,7 @@ pub enum Operand {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Rvalue {
+    TypeAlignment(ir::TypeAlignmentQuery),
     NativeSyscall(Vec<Operand>),
     RawSlice {
         kind: ir::BorrowKind,
@@ -689,7 +691,8 @@ impl Rvalue {
                 }
             }
             Self::IndexCopy { index, .. } => visit(index)?,
-            Self::Borrow(_)
+            Self::TypeAlignment(_)
+            | Self::Borrow(_)
             | Self::Discriminant(_)
             | Self::Println(_)
             | Self::Output(_)
@@ -1125,6 +1128,7 @@ impl Function {
                     Statement::Assign { destination, value } => {
                         path(&mut bytes, destination, budget)?;
                         match value {
+                            Rvalue::TypeAlignment(_) => {}
                             Rvalue::NativeSyscall(fields)
                             | Rvalue::RawSlice { args: fields, .. }
                             | Rvalue::Aggregate { fields, .. }
@@ -1775,6 +1779,7 @@ impl Function {
                                     operand(value, budget, facts)?;
                                 }
                             }
+                            Rvalue::TypeAlignment(query) => query.validate(facts, budget)?,
                             Rvalue::NativeSyscall(fields)
                             | Rvalue::RawSlice { args: fields, .. } => {
                                 for value in fields {
@@ -2354,6 +2359,14 @@ impl Function {
                 self.require_operand_with_facts(&args[1], &Ty::Int(IntTy::Usize), facts)?;
                 validate_slice_position(&ty, facts)?;
                 Ok(ty)
+            }
+            Rvalue::TypeAlignment(query) => {
+                let budget = facts
+                    .validated()
+                    .ok_or("alignment query requires source authority")?
+                    .budget();
+                query.validate(facts, budget)?;
+                Ok(Ty::Int(IntTy::Usize))
             }
             Rvalue::NativeSyscall(arguments) => {
                 if arguments.len() != 7 {
@@ -4410,6 +4423,23 @@ impl Lowerer<'_> {
                     Rvalue::RawSlice { kind: *kind, args },
                     origin,
                 );
+            }
+            ir::ExprKind::TypeAlignment(query) => {
+                let budget = self
+                    .budget
+                    .ok_or("target alignment requires a task budget")?;
+                query.validate(self.facts, budget)?;
+                let value = match super::memory_layout::alignment(
+                    query.queried_type(),
+                    self.facts,
+                    budget,
+                )? {
+                    Some(alignment) => Rvalue::Use(Operand::Constant(Constant::Int(
+                        IntValue::usize(alignment as u64),
+                    ))),
+                    None => Rvalue::TypeAlignment(query.clone()),
+                };
+                self.assign(destination.clone(), value, origin);
             }
             ir::ExprKind::NativeSyscall(arguments) => {
                 if !self.allocate(0, arguments.len() * std::mem::size_of::<Operand>()) {
@@ -11672,7 +11702,8 @@ mod tests {
                             Rvalue::Discriminant(place) => {
                                 assert!(live[place.local.0], "discriminant reads dead storage");
                             }
-                            Rvalue::Println(_)
+                            Rvalue::TypeAlignment(_)
+                            | Rvalue::Println(_)
                             | Rvalue::Output(_)
                             | Rvalue::Str(_)
                             | Rvalue::ByteStr(_) => {}

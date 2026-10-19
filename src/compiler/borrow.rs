@@ -4607,7 +4607,11 @@ fn visit_rvalue(f: &cfg::Function, value: &Rvalue, mut visit: impl FnMut(&Place,
             visit(array, false);
             visit_operand(index, &mut visit);
         }
-        Rvalue::Println(_) | Rvalue::Output(_) | Rvalue::Str(_) | Rvalue::ByteStr(_) => {}
+        Rvalue::TypeAlignment(_)
+        | Rvalue::Println(_)
+        | Rvalue::Output(_)
+        | Rvalue::Str(_)
+        | Rvalue::ByteStr(_) => {}
     }
 }
 

@@ -3051,6 +3051,9 @@ impl Resolver<'_> {
     ) -> Result<(), String> {
         // Keep recursive cast chains out of the constructor dispatch frame.
         // Resolve the operand before its target, preserving source validation order.
+        if let Expr::TypeAlignment(target) = expr {
+            return self.ty(target, module);
+        }
         if let Expr::Cast { value, target } = expr {
             self.expr(value, module, locals)?;
             return self.ty(target, module);
@@ -3331,8 +3334,14 @@ impl Resolver<'_> {
                     self.expr(arg, module, locals)?;
                 }
             }
+            Expr::TypeAlignment(_) => {
+                return Err("alignment query bypassed resolver expression dispatcher".into());
+            }
             Expr::NativeSyscall(elements)
-            | Expr::RawSlice { arguments: elements, .. }
+            | Expr::RawSlice {
+                arguments: elements,
+                ..
+            }
             | Expr::Array(elements)
             | Expr::Tuple(elements)
             | Expr::Format {

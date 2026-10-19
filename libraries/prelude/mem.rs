@@ -9,7 +9,7 @@ pub fn size_of<T>() -> usize {
 }
 
 pub fn align_of<T>() -> usize {
-    8usize
+    __justrust_align_of!(T)
 }
 
 pub fn swap<T>(a: &mut T, b: &mut T) {

@@ -331,6 +331,11 @@ missing-file changes invalidate only justified consumers without stale lookup.
       UNIT-STRUCTS.md and TUPLE-STRUCTS.md, not full aggregate compatibility.
       Positional-pattern inference now distinguishes canonical tuple-struct
       declarations from enum variant owners before propagating field types.
+      Canonical source `mem::align_of<T>` now retains sealed symbolic queries
+      until substitution and observes target scalar/array/tuple/struct alignment,
+      independently of private storage stride (TARGET-ALIGNMENT.md). Enum,
+      closure and unsized layouts fail explicitly; public size/niches and
+      over-alignment attributes remain open.
 - [x] General typed shared `&[T]` parameters/locals, exact array unsizing,
       element-count len and authoritative Copy reads, including rigid generic,
       wide and Copy aggregate elements, under TYPED-SLICES.md. Checked native

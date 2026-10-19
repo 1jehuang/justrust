@@ -44,6 +44,7 @@ mod pattern_usefulness;
 mod program_symbols;
 mod source_inventory_walk;
 mod source_schemas;
+mod type_alignment;
 use source_schemas::{SourceSchemas, SourceSchemasBuilder, StoredSchema};
 mod token_cursor;
 use char_literal::{parse_byte_literal, parse_char_literal};
@@ -2379,7 +2380,8 @@ impl SourceInventory {
                     budget,
                 )?;
             }
-            Expr::Integer(_)
+            Expr::TypeAlignment(_)
+            | Expr::Integer(_)
             | Expr::Float(_)
             | Expr::Char(_)
             | Expr::Str(_)
@@ -6107,6 +6109,7 @@ fn validate_source_site(
 
 #[derive(Clone, Debug)]
 pub enum Expr {
+    TypeAlignment(Type),
     /// Bootstrap-only Linux x86-64 ABI primitive, never an allocator policy.
     NativeSyscall(Vec<Expr>),
     RawSlice {
@@ -7649,6 +7652,9 @@ impl<'input, 'names> Parser<'input, 'names> {
             let path = self.path()?;
             self.expect("!")?;
             return Ok(Expr::UnexpandedMacro(self.inactive_invocation(path, span)?));
+        }
+        if self.builtin_macro_ahead("__justrust_align_of")? {
+            return self.type_alignment_expression();
         }
         if self.builtin_macro_ahead("__justrust_linux_syscall6")? {
             return self.native_syscall_expression();
@@ -14875,6 +14881,7 @@ fn walk_depth_inspecting(
                         }
                     }
                 }
+                Expr::TypeAlignment(ty) => push(DepthNode::Type(ty))?,
                 Expr::NativeSyscall(fields)
                 | Expr::RawSlice {
                     arguments: fields, ..

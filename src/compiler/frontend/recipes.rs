@@ -580,6 +580,7 @@ pub(super) fn inventory(
                 ty(target, ds, b, d + 1)?;
                 expr(value, ds, b, d + 1)?;
             }
+            Expr::TypeAlignment(target) => ty(target, ds, b, d + 1)?,
             Expr::Deref { value }
             | Expr::BorrowValue { value, .. }
             | Expr::Unary { value, .. }

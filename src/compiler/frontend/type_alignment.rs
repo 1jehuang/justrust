@@ -1,0 +1,84 @@
+//! Canonical source ingress for the target alignment observation.
+//! The public function stays an ordinary source call. Only its authenticated
+//! embedded body may contain the private typed operation, which remains
+//! symbolic until ordinary generic substitution supplies its queried type.
+use super::*;
+
+impl Parser<'_, '_> {
+    #[inline(never)]
+    pub(super) fn type_alignment_expression(&mut self) -> Result<Expr, ParseError> {
+        self.ident()?;
+        self.expect("!")?;
+        self.expect("(")?;
+        let queried = self.ty()?;
+        self.eat(",");
+        self.expect(")")?;
+        Ok(Expr::TypeAlignment(queried))
+    }
+}
+
+impl type_check::Checker<'_> {
+    pub(super) fn type_alignment(
+        &self,
+        queried: &Type,
+    ) -> Result<(ir::ExprKind, type_check::Flow), String> {
+        let plan = self
+            .signatures
+            .plan
+            .as_ref()
+            .ok_or("target alignment requires canonical source planning facts")?;
+        let facts = self
+            .facts()
+            .validated()
+            .ok_or("target alignment requires validated caller facts")?;
+        let declaration = plan.declaration(facts.declaration())?;
+        let root = plan
+            .program
+            .prelude_module
+            .ok_or("target alignment requires the embedded prelude")?;
+        if plan
+            .program
+            .modules
+            .parent(declaration.path.module)
+            .map_err(module_diagnostic)?
+            != Some(root)
+        {
+            return Err(
+                "private target alignment operation outside its canonical source body".into(),
+            );
+        }
+        let module = plan
+            .program
+            .modules
+            .name(declaration.path.module)
+            .map_err(module_diagnostic)?
+            .ok_or("target alignment declaration has no module name")?;
+        let DeclItemName::Source(item) = declaration.path.item else {
+            return Err("target alignment requires a source declaration".into());
+        };
+        if plan
+            .program
+            .names
+            .spelling(module)
+            .map_err(native_adapter::name_diagnostic)?
+            != "mem"
+            || plan
+                .program
+                .names
+                .spelling(item)
+                .map_err(native_adapter::name_diagnostic)?
+                != "align_of"
+            || declaration.owner.is_some()
+        {
+            return Err(
+                "private target alignment operation outside its canonical source body".into(),
+            );
+        }
+        let queried = type_check::checked_local_ty(queried, self.signatures)?;
+        super::super::memory_layout::alignment(&queried, self.facts(), &plan.budget)?;
+        Ok((
+            ir::ExprKind::TypeAlignment(ir::TypeAlignmentQuery::issue(queried, facts)?),
+            type_check::Flow::value(ir::Ty::Int(ir::IntTy::Usize)),
+        ))
+    }
+}

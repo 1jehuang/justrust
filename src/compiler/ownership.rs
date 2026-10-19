@@ -1626,6 +1626,9 @@ fn preflight_with_plan(
                             operand(field, &mut budget)?;
                         }
                     }
+                    Rvalue::TypeAlignment(query) => {
+                        preflight_ty(query.queried_type(), 0, &mut budget)?
+                    }
                     Rvalue::NativeSyscall(args)
                     | Rvalue::RawSlice { args, .. }
                     | Rvalue::Intrinsic { args, .. } => {
@@ -2941,7 +2944,11 @@ impl Transfer<'_> {
                     self.operand(state, field)?;
                 }
             }
-            Rvalue::Println(_) | Rvalue::Output(_) | Rvalue::Str(_) | Rvalue::ByteStr(_) => {}
+            Rvalue::TypeAlignment(_)
+            | Rvalue::Println(_)
+            | Rvalue::Output(_)
+            | Rvalue::Str(_)
+            | Rvalue::ByteStr(_) => {}
         }
         Ok(())
     }

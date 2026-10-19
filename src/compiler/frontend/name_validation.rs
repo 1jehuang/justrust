@@ -861,6 +861,7 @@ impl<'a> Validator<'a> {
                     self.push(Visit::Expr(value))?;
                     self.push(Visit::Type(target))?;
                 }
+                Expr::TypeAlignment(target) => self.push(Visit::Type(target))?,
                 Expr::Borrow { place, .. } => self.push(Visit::Place(place))?,
                 Expr::Deref { value }
                 | Expr::BorrowValue { value, .. }

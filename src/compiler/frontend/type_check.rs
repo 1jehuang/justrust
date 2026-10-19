@@ -994,7 +994,7 @@ impl<'s> Checker<'s> {
             .as_ref()
             .ok_or("inference requires planning context")?;
         let term = match expr {
-            Expr::NativeSyscall(_) => {
+            Expr::NativeSyscall(_) | Expr::TypeAlignment(_) => {
                 self.infer_node(InferKind::Rigid(ir::Ty::Int(ir::IntTy::Usize)))?
             }
             Expr::RawSlice { kind, arguments } => match self.raw_slice_hint(*kind, arguments)? {
@@ -4348,7 +4348,7 @@ impl<'a> Checker<'a> {
     }
     pub(super) fn scalar_hint(&self, e: &Expr) -> Result<Option<ir::Ty>, String> {
         Ok(match e {
-            Expr::NativeSyscall(_) => Some(ir::Ty::Int(ir::IntTy::Usize)),
+            Expr::NativeSyscall(_) | Expr::TypeAlignment(_) => Some(ir::Ty::Int(ir::IntTy::Usize)),
             Expr::RawSlice { kind, arguments } => self.raw_slice_hint(*kind, arguments)?,
             Expr::UnexpandedMacro(_) => return Err(UNEXPANDED_MACRO_CHECK_ERROR.into()),
             Expr::Output(output) => {
@@ -10179,6 +10179,7 @@ impl<'a> Checker<'a> {
                 )
             }
             Expr::RawSlice { kind, arguments } => self.raw_slice(*kind, arguments)?,
+            Expr::TypeAlignment(queried) => self.type_alignment(queried)?,
             Expr::NativeSyscall(arguments) => {
                 if self.unsafe_depth == 0 {
                     return Err("E0133: native syscall requires unsafe block".into());

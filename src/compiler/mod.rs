@@ -22,6 +22,7 @@ mod macro_fragments;
 mod macro_matcher;
 pub mod macro_rules;
 mod macro_transcribe;
+mod memory_layout;
 pub mod module_identity;
 pub mod owner_path;
 pub mod ownership;

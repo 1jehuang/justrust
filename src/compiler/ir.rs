@@ -26,6 +26,9 @@ mod call_value_types;
 #[path = "ir/closure.rs"]
 mod closure;
 pub use closure::{CaptureKind, CaptureSource, ClosureKind, ClosureTy};
+#[path = "ir/type_alignment.rs"]
+mod type_alignment;
+pub use type_alignment::TypeAlignmentQuery;
 #[path = "ir/intrinsics.rs"]
 mod intrinsics;
 #[cfg(test)]
@@ -2851,6 +2854,7 @@ pub fn instantiate_checked(
             ExprKind::Block(block)
             | ExprKind::Loop { body: block, .. }
             | ExprKind::LabeledBlock { body: block, .. } => visitor.block(block, 0)?,
+            ExprKind::TypeAlignment(query) => query.substitute(visitor.ty(query.queried_type())?),
             ExprKind::CharToInt { .. }
             | ExprKind::U8ToChar { .. }
             | ExprKind::PtrCast { .. }
@@ -7058,6 +7062,7 @@ pub struct LiteralOutput {
 pub enum ExprKind {
     /// Linux syscall number followed by its six usize ABI arguments.
     NativeSyscall(Vec<ExprId>),
+    TypeAlignment(TypeAlignmentQuery),
     /// Unsafe construction of a root slice descriptor from (pointer, length).
     RawSlice {
         kind: BorrowKind,
@@ -7853,6 +7858,7 @@ impl CheckedFunction {
                 ExprKind::Block(value)
                 | ExprKind::Loop { body: value, .. }
                 | ExprKind::LabeledBlock { body: value, .. } => block(value, facts, budget, 0)?,
+                ExprKind::TypeAlignment(query) => query.validate(facts, budget)?,
                 ExprKind::NativeSyscall(values)
                 | ExprKind::RawSlice { args: values, .. }
                 | ExprKind::Tuple(values)
@@ -8948,6 +8954,17 @@ impl CheckedFunction {
                         && length.completion == Completion::Returns;
                     if (value.completion == Completion::Returns) != completes {
                         return Err("raw slice completion mismatch".into());
+                    }
+                }
+                ExprKind::TypeAlignment(query) => {
+                    let budget = facts
+                        .validated()
+                        .ok_or("alignment query requires source authority")?
+                        .budget();
+                    query.validate(facts, budget)?;
+                    if value.ty != Ty::Int(IntTy::Usize) || value.completion != Completion::Returns
+                    {
+                        return Err("invalid target alignment query shape".into());
                     }
                 }
                 ExprKind::NativeSyscall(arguments) => {
