@@ -594,7 +594,13 @@ host macro and compiles its generated target source.
       not free twice. Raw-pointer scalar fields and ordinary owner borrows use
       normal authority/loan checks. Moves, early returns, conditional cleanup,
       replacement/loop flags, borrow escapes and panic-abort controls are tested.
-      Generic/aggregate Drop glue and Box<T> remain open.
+      Generic/aggregate owner Drop glue and Box<T> remain open.
+- [x] Generic functions carrying supported nongeneric Drop owners demand each
+      concrete canonical destructor and freshly lower/seal the closed cleanup
+      shape. Stock/native exact-once counter and mmap lifetime tests cover moves,
+      branch/early return, replacement and break transport. Missing cleanup,
+      stale universal CFG shape and missing destructor demand reject. Generic
+      owning structs, nested aggregate glue and typed drop-in-place remain open.
 - [ ] Provide debug/source information and runtime failure/exit diagnostics.
       Expand architectures/OSes only with target-specific executable evidence.
 

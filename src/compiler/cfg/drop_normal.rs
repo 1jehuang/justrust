@@ -59,8 +59,8 @@ pub(super) fn descriptor(
         .map_err(|e| e.into_legacy_diagnostic(facts.budget()))?
     {
         NormalDropPlan::Trivial => Ok(None),
-        // A universal template may defer cleanup only because every closed
-        // instantiation is admitted again and Drop-carrying generics rejected.
+        // Universal unresolved types defer to the demanded closed instance,
+        // which is freshly lowered and sealed with concrete cleanup evidence.
         NormalDropPlan::Unresolved
             if facts.phase() == crate::compiler::traits::FactsPhase::Universal =>
         {
@@ -104,9 +104,9 @@ pub(super) fn admit(source: &ir::CheckedFunction, facts: ir::FactsCtx<'_>) -> Re
         authority.budget().charge_work(1)?;
         enabled |= descriptor(ty, facts)?.is_some();
     }
-    if enabled && (authority.env().is_generic() || source.body_substitution.is_some()) {
-        return Err("unsupported: generic function carrying a normal Drop owner".into());
-    }
+    // Every demanded closed body is lowered again before its generated shape
+    // is sealed. The instance frontier separately demands each concrete cleanup
+    // target, so a universal unresolved type is never a no-drop executable proof.
     for expression in &source.exprs {
         authority.budget().charge_work(1)?;
         if let ir::ExprKind::Match { scrutinee, .. } = &expression.kind

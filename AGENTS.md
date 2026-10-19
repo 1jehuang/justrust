@@ -36,6 +36,89 @@ whole-program node kind, or loosen a ceiling without explicit user approval.
 Every feature milestone must also pass these gates; correctness against stock
 rustc alone is not sufficient.
 
+### Graph model primer (read before touching compiler code)
+
+Summarized from ARCHITECTURE.md sections 17-18, PROTOTYPE.md, ENGINE.md and
+GRAPH-INTEGRITY.md. Read those for detail. This is what every agent must know.
+
+**One graph, no phases.** Project discovery, parsing, resolution, checking,
+lowering, codegen, linking and tests are all producers and consumers in one
+demand-driven graph. There is no Cargo-like orchestrator and no global
+frontend/backend barrier. Work becomes ready when the facts it reads exist,
+not when a phase ends. Code generation for one function may overlap checking
+of unrelated functions. Success is still released only after every required
+check passes (the `check` root gates `build`).
+
+**Three units, not one.** A *fact* is an identifiable, immutable output. An
+*operation* (node) computes and publishes one or more facts, and may publish
+an output before its remaining work finishes. A *runnable segment* is what a
+worker executes before completing or suspending on a missing fact. A node
+keeps its identity when its result arrives.
+
+**Engine API (`src/engine.rs`).** A `Provider` maps a canonical `Key`
+(`kind: u32`, ordered `u64` params) to an output count and a `start` future.
+Inside a node: `cx.request(key)` demands a producer, `cx.read_fact::<T>(handle)`
+awaits a typed output (this records the dependency edge), `cx.publish_fact(i, v)`
+finalizes output `i`, `cx.fork(fut)` exposes an independent branch, `cx.fail`
+reports failure. In `src/compiler/mod.rs` reads go through the `Facts` helper
+(`facts.get(Key::new(KIND, params))`). Node kinds are the `const ...: u32`
+values there (100 `PARSE` through 115 `UNIVERSAL_EFFECTS_READY`). COMPILER.md
+"Graph operations" describes what each one does.
+
+**How to write a node.**
+- Key it per file, per item or per instance. A parameterless key is a
+  whole-program node and is forbidden except `check` and `build`.
+- Request all independent prerequisites before awaiting any of them. Never
+  block a worker thread. Missing inputs suspend only the branch that needs them.
+- Read only what you need. Reading every item in a loop is a disguised join and
+  the integrity gate will catch it. Recursive callers depend on declarations
+  (signatures), not on the callee body finishing.
+- Publish each output as soon as it is final. Never publish a placeholder and
+  stash the real result elsewhere.
+- Facts are immutable values. No `Mutex`, `OnceLock`, atomics or shared
+  budget handles inside a published fact, even indirectly through another type.
+- Resource limits are per task and scale with that task's input, never one
+  shared whole-compilation budget.
+- Recursive analysis uses explicit fixed-point or SCC protocols, and genuine
+  completeness needs (all impls for a lookup) are explicit facts.
+- Identities are canonical: equivalent computations share one node, and
+  differing inputs or authorization must never merge. Use resolved
+  declaration identities and ordered type arguments, never display names.
+- Local `Cell`/`RefCell`/loops inside one node's computation are fine.
+
+**Known debt, may only shrink.** `parse`, `resolve`, `signatures`,
+`effects_ready` and `mono_plan` are still whole-program nodes. `PlanCtx`,
+`ValidatedTraitWorld` and the budget types still carry mutable state reachable
+from facts. Do not copy these patterns into new code. Split or remove them when
+you are nearby. Current numbers live in GRAPH-INTEGRITY.md.
+
+**Correctness contract (RUST-COMPATIBILITY.md).** Edition 2024, Linux x86-64.
+Valid supported programs behave as stock rustc does. Invalid programs are
+rejected even when the bad item is unused. Unsupported constructs get an
+explicit diagnostic, never an approximate translation. CHECK must not demand
+codegen. Failure, unsupported input, resource limits and infrastructure faults
+stay distinct and never publish a successful executable.
+
+**Feature workflow.** Each language slice gets its own `FEATURE.md` (status,
+frozen contract, IR/CFG shape, acceptance gates) plus tests under `tests/`:
+`<feature>.rs` for stock-differential CHECK/BUILD/run acceptance at workers 1
+and 8, `<feature>_authority.rs` for forged-fact and invalid-input rejection,
+and `<feature>_graph.rs` for graph-shape checks. Update IMPLEMENTATION.md
+(gate G0-G12 status) and the feature doc in the same commit. Always run
+`justrust test --test graph_integrity` before committing compiler changes.
+
+**Where things are.**
+
+| Need | Read |
+|---|---|
+| Why the graph is shaped this way | ARCHITECTURE.md 17-18 |
+| Engine semantics, publication, cancellation | PROTOTYPE.md, ENGINE.md |
+| What each compiler node kind does, supported syntax | COMPILER.md |
+| Enforced structural rules and current debt | GRAPH-INTEGRITY.md |
+| Full Rust plan, gates, workstreams, open items | IMPLEMENTATION.md, RUST-COMPATIBILITY.md |
+| Optimizer and codegen direction (no LLVM) | OPTIMIZATION.md |
+| Per-feature contracts | the matching `FEATURE.md` at repo root |
+
 justrust is Rust compile as a service for coding agents. Every change should make
 the agent edit, check, and test loop faster or more informative, and be
 backed by measurements.

@@ -19,6 +19,31 @@
   required. This checkpoint is not full graph-integrity completion and makes
   no compile-time speed claim.
 
+## 2026-10-19: concrete cleanup for generic functions
+
+- Existing universal proof plus fresh closed lowering now admits generic
+  functions carrying supported nongeneric Drop owners. Every concrete cleanup
+  target remains in the sealed instance demand frontier. A dedicated mutation
+  test requires cleanup absent from the universal template, rejects deletion,
+  rejects stale universal lowering shape and rejects erased destructor demand
+  (`20261018-202318531-2567485`). No generic owning-type or Box claim follows.
+- Required local stock/native heap validation passes all 22 tests
+  (`20261018-202501834-2580767`). Exact count eight covers generic transfer,
+  conditional consumption, early return and replacement. Real mmap controls
+  cover generic parameter cleanup, return/break ownership and release disarming.
+  A follow-up mixed scalar/owner specialization test passes both generic cases
+  (`20261018-202746586-2599525`). Stock uses opt-level 0/2, edition2024,
+  panic=abort; native CHECK/BUILD use workers 1/8. Hosted has no stock rustc.
+- Full frozen 56-source corpus passes unchanged source hashes/stock receipts,
+  promoting generic_function.rs and dead_generic.rs to native-positive (29)
+  (`20261018-202718111-2594893`). Generic move/borrow errors remain semantic;
+  generic tuple/array owner containers still reject explicitly. All 1375 library
+  tests pass (`20261018-202509624-2583106`), check passes
+  (`20261018-202451878-2580095`), all seven unchanged graph gates pass
+  (`20261018-202804850-2602618`) and strict all-target lint passes
+  (`20261018-202811656-2594669`). Slim receipts:
+  `data/runs/xps14/2026-10-19-generic-cleanup.jsonl`.
+
 ## 2026-10-19: keep nonowning cleanup queries structural
 
 - Adding real source Allocation Drop exposed the adjacent program-size work

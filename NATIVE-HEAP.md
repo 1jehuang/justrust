@@ -101,8 +101,10 @@ check/build agreement. Positive differential programs exercise:
 
 A panic=abort native/stock control requires no destructor marker during abort.
 Escaping owner borrows and replacement with later-use loans reject in both
-compilers. Nested/partial-move owner shapes and Drop-carrying generic functions
-remain explicit unsupported boundaries, not silent no-op destruction.
+compilers. Generic functions carrying Allocation now use concrete canonical
+cleanup, tested with exact mmap lifetime and destructor-count controls. Generic
+owning structs, nested/partial-move owner shapes and aggregate Drop glue remain
+explicit unsupported boundaries, not silent no-op destruction.
 
 The stock oracle compiles the same Rust policy and program with a test-only
 inline-assembly syscall adapter, at stock opt-level 0 and 2. That adapter is
