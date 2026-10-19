@@ -75,7 +75,7 @@ fn names_imports_visibility_and_local_shadowing_use_value_namespace() {
         for source in [
             "static X:u8=1;fn main(){}",
             "static mut X:u8=1;fn main(){}",
-            "const X:usize=1;fn main(){}",
+            "const X:isize=1;fn main(){}",
             "const X:[u8;1]=[1];fn main(){}",
         ] {
             assert!(
@@ -140,6 +140,70 @@ fn constant_patterns_never_silently_become_local_bindings() {
                 !error.report.as_ref().unwrap().published_kind(103),
                 "unsupported constant pattern emitted object"
             );
+        }
+    }
+}
+#[test]
+fn usize_constants_match_frozen_stock_on_pinned_64bit_target() {
+    // tests/fixtures/const_usize: rustc 1.98.1 (48a229cea) oracle stdout.
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/const_usize");
+    let source = fs::read_to_string(dir.join("operators.rs")).unwrap();
+    let expected = fs::read(dir.join("operators.stdout")).unwrap();
+    for workers in [1, 8] {
+        compiler::compile_observed(source.clone(), workers, true)
+            .unwrap_or_else(|e| panic!("check workers{workers}: {e}"));
+        let compiled = compiler::compile_observed(source.clone(), workers, false)
+            .unwrap_or_else(|e| panic!("build workers{workers}: {e}"));
+        let scratch = std::env::temp_dir().join(format!(
+            "justrust-const-usize-{}-{workers}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&scratch).unwrap();
+        let binary = scratch.join("program");
+        fs::write(&binary, compiled.executable.unwrap()).unwrap();
+        fs::set_permissions(&binary, fs::Permissions::from_mode(0o700)).unwrap();
+        let output = Command::new(&binary).output().unwrap();
+        fs::remove_dir_all(&scratch).unwrap();
+        assert!(
+            output.status.success(),
+            "workers{workers}: {:?}",
+            output.status
+        );
+        assert_eq!(output.stdout, expected, "workers{workers}");
+    }
+}
+#[test]
+fn usize_constant_faults_match_stock_categories_even_when_unused() {
+    let cases = [
+        ("const X:usize=18446744073709551615+1;fn main(){}", "E0080"),
+        ("const X:usize=0-1;fn main(){}", "E0080"),
+        ("const X:usize=1<<64;fn main(){}", "E0080"),
+        ("const X:usize=5/0;fn main(){}", "E0080"),
+        ("const X:usize=5%0;fn main(){}", "E0080"),
+        ("const X:usize=2*9223372036854775808;fn main(){}", "E0080"),
+        ("const X:usize=3;const Y:u32=X;fn main(){}", "E0308"),
+        ("const X:u64=3;const Y:usize=X;fn main(){}", "E0308"),
+        ("const X:usize=3u32;fn main(){}", "E0308"),
+        ("const X:usize=-1;fn main(){}", "E0600"),
+        (
+            "const X:usize=18446744073709551616;fn main(){}",
+            "out of range",
+        ),
+        ("const X:usize=Y;const Y:usize=X;fn main(){}", "E0391"),
+        ("const X:isize=3;fn main(){}", "unsupported"),
+    ];
+    for workers in [1, 8] {
+        for (source, category) in cases {
+            for check in [true, false] {
+                let error = match compiler::compile_observed(source.into(), workers, check) {
+                    Ok(_) => panic!("accepted {source}"),
+                    Err(error) => error,
+                };
+                assert!(
+                    error.to_string().contains(category),
+                    "{source}: expected {category}, got {error}"
+                );
+            }
         }
     }
 }

@@ -12,15 +12,23 @@ pub enum ScalarTy {
 }
 impl ScalarTy {
     fn validate(self) -> Result<(), ConstError> {
-        if matches!(self, Self::Int(IntTy::Isize | IntTy::Usize)) {
+        // usize is admitted on the frozen x86_64-unknown-linux-gnu contract
+        // only (target_pointer_width = 64, see
+        // SourceCfg::native_x86_64_linux). isize remains a separate,
+        // unadmitted signed target-sized slice.
+        if matches!(self, Self::Int(IntTy::Isize)) {
             return Err(ConstError::new(
                 ErrorKind::Unsupported,
-                "target-sized constants are not supported yet",
+                "target-sized signed constants are not supported yet",
             ));
         }
         Ok(())
     }
 }
+/// The constant evaluator's usize width is the pinned native target pointer
+/// width, not the compiler host. A different target must change this.
+pub(super) const NATIVE_TARGET_POINTER_BITS: u32 = 64;
+const _: () = assert!(IntTy::Usize.bits() == NATIVE_TARGET_POINTER_BITS);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ScalarValue {
     Int(IntValue),

@@ -75,8 +75,8 @@ impl DeclarationFact {
 pub(super) fn scalar_type(ty: &frontend::Type) -> Result<scalar::ScalarTy, String> {
     match ty {
         frontend::Type::Bool => Ok(scalar::ScalarTy::Bool),
-        frontend::Type::Int(ir::IntTy::Isize | ir::IntTy::Usize) => {
-            Err("unsupported: target-sized source constants".into())
+        frontend::Type::Int(ir::IntTy::Isize) => {
+            Err("unsupported: target-sized signed source constants".into())
         }
         frontend::Type::Int(ty) => Ok(scalar::ScalarTy::Int(*ty)),
         _ => Err("unsupported: source constants require fixed-width integer or bool types".into()),

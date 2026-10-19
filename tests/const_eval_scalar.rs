@@ -388,7 +388,12 @@ fn malformed_arenas_and_cross_snapshot_refs_are_not_evaluation_errors() {
     );
     for kind in [
         ExprKind::UnsupportedConstCall,
-        ExprKind::Literal(ScalarValue::Int(IntValue::usize(1))),
+        // usize is admitted on the pinned 64-bit native target; isize is
+        // the remaining target-sized Unsupported boundary.
+        ExprKind::Literal(ScalarValue::Int(IntValue {
+            ty: IntTy::Isize,
+            bits: 1,
+        })),
     ] {
         let ty = match kind {
             ExprKind::Literal(v) => v.ty(),

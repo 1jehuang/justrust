@@ -367,8 +367,8 @@ fn integer_context(
         return Err("E0308: constant integer suffix mismatch".into());
     }
     let ty = suffix.or(expected).unwrap_or(ir::IntTy::I32);
-    if matches!(ty, ir::IntTy::Isize | ir::IntTy::Usize) {
-        return Err("unsupported: target-sized source constant".into());
+    if matches!(ty, ir::IntTy::Isize) {
+        return Err("unsupported: target-sized signed source constant".into());
     }
     Ok(ty)
 }

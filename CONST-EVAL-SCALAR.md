@@ -14,6 +14,12 @@ compiler module rather than a standalone `#[path]` copy.
 
 - Original-source free immutable `const NAME: TYPE = EXPR;` items only.
 - Explicit fixed-width signed/unsigned integers (8 through 128 bits) and bool.
+- `usize` with exact u64 semantics, pinned to the frozen native target
+  (`target_pointer_width = "64"`, `const_eval::NATIVE_TARGET_POINTER_BITS`,
+  compile-time asserted against `IntTy::Usize.bits()`). Not derived from the
+  compiler host. Stock oracle: `tests/fixtures/const_usize` (rustc 1.98.1
+  48a229cea, SHA256SUMS) for all operators plus E0080 overflow/shift/division,
+  E0308, E0600, out-of-range literal and E0391, CHECK and BUILD at workers 1/8.
 - Literals, resolved constant references, unary negation/not, integer arithmetic,
   comparisons, bitwise operations, shifts and logical short circuiting.
 - Contextual negative MIN literal admission is distinct from negating a value
@@ -28,7 +34,7 @@ compiler module rather than a standalone `#[path]` copy.
 - Runtime function calls preserve name/type/arity checking before E0015. Valid
   const-function execution remains explicitly Unsupported, not false E0015.
 
-Still unsupported: static/static mut, target-sized constant types, aggregate
+Still unsupported: static/static mut, `isize` constants, aggregate
 constants, casts, reference-valued constants, const blocks, general const fn
 execution, associated constants and const generics. Array lengths/repeats keep
 existing literal-only boundaries. Generated const declarations are not admitted

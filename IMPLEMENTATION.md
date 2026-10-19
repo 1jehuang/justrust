@@ -431,6 +431,9 @@ iteration and suspended-state destruction each have executable oracle cases.
 - [ ] Implement const/static/const-fn evaluation, promoted values, const generics,
       target-aware arithmetic/layout, allocation/provenance and diagnostic rules.
       The bounded shift evaluator is not general const evaluation.
+      Delivered: `usize` source constants with u64 semantics pinned to the
+      frozen 64-bit native target (CONST-EVAL-SCALAR.md); `isize` stays
+      Unsupported. Array lengths remain literal-only.
 - [ ] Make newly expanded/generated declarations explicit graph discoveries;
       track observed files/environment and conservatively disable reuse for
       uncontrolled effects. Enforce execution/resource/isolation policies.
