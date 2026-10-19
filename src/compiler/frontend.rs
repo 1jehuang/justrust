@@ -486,6 +486,7 @@ mod canonical_source_replay_tests {
             calls: Default::default(),
             builtin_leading_zeros: Default::default(),
             builtin_lens: Default::default(),
+            builtin_intrinsics: Default::default(),
             unsizes: Default::default(),
             bindings: Default::default(),
             narrow: Default::default(),
@@ -603,6 +604,8 @@ struct SourceCallSite {
     /// typed receiver, and replay requires typed evidence for every builtin row.
     len_candidate: bool,
     leading_zeros_candidate: bool,
+    /// Syntactic `receiver.name(args)` with an admitted primitive method name.
+    intrinsic_candidate: bool,
     ordinary: Option<AstPath>,
     application: Option<GenericPath>,
     argument_binding: Option<sr::SourceNode>,
@@ -1521,6 +1524,7 @@ impl SourceInventory {
                         node: node.clone(),
                         len_candidate: false,
                         leading_zeros_candidate: false,
+                        intrinsic_candidate: false,
                         ordinary: Some(name.clone()),
                         application: application
                             .map(|path| copy_source_path(path, budget, 0))
@@ -1560,6 +1564,8 @@ impl SourceInventory {
                         leading_zeros_candidate: leading_zeros_candidate(expr, &self.names)
                             .map_err(|e| source_error(budget, &e))?,
                         len_candidate: slice_len_candidate(expr, &self.names)
+                            .map_err(|e| source_error(budget, &e))?,
+                        intrinsic_candidate: intrinsic_candidate(expr, &self.names)
                             .map_err(|e| source_error(budget, &e))?,
                         ordinary: None,
                         application: None,
@@ -1831,6 +1837,33 @@ fn slice_len_candidate(expr: &Expr, names: &NameStore) -> Result<bool, String> {
     }
 }
 
+/// Syntax alone never grants primitive-method authority: the checker resolves
+/// the actual operation from the typed receiver.
+fn intrinsic_candidate(expr: &Expr, names: &NameStore) -> Result<bool, String> {
+    if let Expr::MethodCall {
+        name, type_args, ..
+    } = expr
+    {
+        Ok(type_args.is_empty()
+            && ir::IntrinsicOp::candidate_name(
+                names
+                    .spelling(*name)
+                    .map_err(native_adapter::name_diagnostic)?,
+            ))
+    } else {
+        Ok(false)
+    }
+}
+
+/// Typed primitive-method occurrence: source call index, the checked
+/// Intrinsic expression, and its exact checked receiver.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct BuiltinIntrinsicOccurrence {
+    pub(super) source_index: usize,
+    pub(super) expr: ir::ExprId,
+    pub(super) receiver: ir::ExprId,
+}
+
 /// Stock E0658: `X..` directly inside a slice or array pattern is feature-gated.
 fn reject_slice_half_open(pattern: &Pattern) -> Result<(), &'static str> {
     if let Pattern::Range {
@@ -1901,6 +1934,7 @@ pub(super) struct CanonicalSourceCapability {
     calls: std::cell::RefCell<Vec<(usize, ir::ExprId, ir::Callee)>>,
     builtin_leading_zeros: std::cell::RefCell<Vec<BuiltinLeadingZerosOccurrence>>,
     builtin_lens: std::cell::RefCell<Vec<BuiltinLenOccurrence>>,
+    builtin_intrinsics: std::cell::RefCell<Vec<BuiltinIntrinsicOccurrence>>,
     unsizes: std::cell::RefCell<Vec<UnsizeOccurrence>>,
     bindings: std::cell::RefCell<Vec<(usize, ir::LocalId)>>,
     narrow: std::cell::RefCell<Vec<RawSharedOccurrence>>,
@@ -1918,6 +1952,7 @@ pub(super) struct OriginalSource {
     call_mapping: Vec<(usize, ir::ExprId, ir::Callee)>,
     builtin_leading_zeros_mapping: Vec<BuiltinLeadingZerosOccurrence>,
     builtin_len_mapping: Vec<BuiltinLenOccurrence>,
+    builtin_intrinsic_mapping: Vec<BuiltinIntrinsicOccurrence>,
     unsize_mapping: Vec<UnsizeOccurrence>,
     binding_mapping: Vec<(usize, ir::LocalId)>,
     narrow: Vec<RawSharedOccurrence>,
@@ -1974,6 +2009,65 @@ impl CanonicalSourceCapability {
         sr::push(
             &mut self.calls.borrow_mut(),
             (index, id, target.clone()),
+            budget,
+        )
+        .map_err(|e| self.render(e))
+    }
+    /// Record a typed primitive method at its exact original source occurrence.
+    fn record_builtin_intrinsic(
+        &self,
+        expr: &Expr,
+        id: ir::ExprId,
+        checked: &[ir::TypedExpr],
+    ) -> Result<(), String> {
+        let budget = &self.plan.budget;
+        sr::work(budget, 1).map_err(|e| self.render(e))?;
+        let index = self
+            .inventory
+            .call_pointers
+            .get(&(expr as *const Expr as usize))
+            .copied()
+            .ok_or_else(|| {
+                self.render(FactsError::invalid(
+                    budget,
+                    "primitive method has no original occurrence",
+                ))
+            })?;
+        let Some(ir::TypedExpr {
+            kind: ir::ExprKind::Intrinsic { intrinsic, args },
+            ty,
+            ..
+        }) = checked.get(id.0)
+        else {
+            return Err(self.render(FactsError::invalid(
+                budget,
+                "primitive method occurrence did not produce Intrinsic",
+            )));
+        };
+        let receiver = *args.first().ok_or_else(|| {
+            self.render(FactsError::invalid(
+                budget,
+                "primitive method lost receiver",
+            ))
+        })?;
+        if !self.inventory.calls[index].intrinsic_candidate
+            || intrinsic.signature().map(|s| s.result).as_ref() != Some(ty)
+            || !checked
+                .get(receiver.0)
+                .is_some_and(|r| r.ty == intrinsic.receiver.ty() || r.ty == ir::Ty::Never)
+        {
+            return Err(self.render(FactsError::invalid(
+                budget,
+                "primitive method occurrence has wrong typed shape",
+            )));
+        }
+        sr::push(
+            &mut self.builtin_intrinsics.borrow_mut(),
+            BuiltinIntrinsicOccurrence {
+                source_index: index,
+                expr: id,
+                receiver,
+            },
             budget,
         )
         .map_err(|e| self.render(e))
@@ -2996,6 +3090,98 @@ fn replay_builtin_leading_zeros(
     Ok(sources)
 }
 
+/// Exact replay of typed primitive-method occurrences, including unused rows.
+fn replay_builtin_intrinsics(
+    original: &OriginalSource,
+    checked: &ir::CheckedFunction,
+    ordinary: &[Option<usize>],
+    seen: &mut [bool],
+    budget: &ir::PlanBudget,
+) -> Result<Vec<bool>, FactsError> {
+    sr::work(budget, original.calls.len())?;
+    sr::retain(budget, original.calls.len())?;
+    let mut sources = Vec::new();
+    sources
+        .try_reserve_exact(original.calls.len())
+        .map_err(|_| FactsError::resource(budget, "primitive method occurrence allocation"))?;
+    sources.resize(original.calls.len(), false);
+    let mut previous: Option<(usize, ir::ExprId)> = None;
+    for row in &original.builtin_intrinsic_mapping {
+        sr::work(budget, 1)?;
+        let site = original
+            .calls
+            .get(row.source_index)
+            .ok_or_else(|| FactsError::invalid(budget, "orphan primitive method occurrence"))?;
+        if !site.intrinsic_candidate || site.ordinary.is_some() || site.application.is_some() {
+            return Err(FactsError::invalid(
+                budget,
+                "primitive method mapped from a non-candidate source call",
+            ));
+        }
+        if std::mem::replace(&mut sources[row.source_index], true)
+            || ordinary.get(row.source_index).copied().flatten().is_some()
+        {
+            return Err(FactsError::invalid(
+                budget,
+                "duplicate primitive method correspondence",
+            ));
+        }
+        if let Some((index, expr)) = previous {
+            let prior = &original.calls[index].node.path;
+            let current = &site.node.path;
+            sr::work(budget, prior.len().saturating_add(current.len()))?;
+            // Inventory is preorder, emission is postorder: receiver and
+            // argument calls precede their enclosing method.
+            let encloses_prior = prior.len() > current.len() && prior.starts_with(current);
+            let prior_encloses = current.len() > prior.len() && current.starts_with(prior);
+            if row.expr.0 <= expr.0
+                || prior_encloses
+                || (row.source_index <= index && !encloses_prior)
+            {
+                return Err(FactsError::invalid(
+                    budget,
+                    "primitive method source order changed",
+                ));
+            }
+        }
+        previous = Some((row.source_index, row.expr));
+        let result = checked
+            .exprs
+            .get(row.expr.0)
+            .ok_or_else(|| FactsError::invalid(budget, "primitive method outside checked arena"))?;
+        let ir::ExprKind::Intrinsic { intrinsic, args } = &result.kind else {
+            return Err(FactsError::invalid(
+                budget,
+                "primitive method mapped to a different operation",
+            ));
+        };
+        if args.first() != Some(&row.receiver)
+            || intrinsic.signature().map(|s| s.result).as_ref() != Some(&result.ty)
+        {
+            return Err(FactsError::invalid(
+                budget,
+                "primitive method receiver or type changed",
+            ));
+        }
+        if std::mem::replace(&mut seen[row.expr.0], true) {
+            return Err(FactsError::invalid(
+                budget,
+                "checked primitive method mapped from two source occurrences",
+            ));
+        }
+    }
+    sr::work(budget, checked.exprs.len())?;
+    for (index, expr) in checked.exprs.iter().enumerate() {
+        if matches!(expr.kind, ir::ExprKind::Intrinsic { .. }) && !seen[index] {
+            return Err(FactsError::invalid(
+                budget,
+                "orphan checked primitive method lacks original occurrence",
+            ));
+        }
+    }
+    Ok(sources)
+}
+
 /// Exact replay of typed builtin `.len()` occurrences and their receivers.
 fn replay_builtin_lens(
     original: &OriginalSource,
@@ -3247,6 +3433,7 @@ pub(super) fn replay_source_body(
         if fresh.node != retained.node
             || fresh.leading_zeros_candidate != retained.leading_zeros_candidate
             || fresh.len_candidate != retained.len_candidate
+            || fresh.intrinsic_candidate != retained.intrinsic_candidate
             || !optional_source_path_equal(
                 &fresh.ordinary,
                 &retained.ordinary,
@@ -3376,10 +3563,12 @@ pub(super) fn replay_source_body(
     let leading_zero_sources =
         replay_builtin_leading_zeros(original, checked, &positions, &mut seen, budget)?;
     let builtin_sources = replay_builtin_lens(original, checked, &positions, &mut seen, budget)?;
+    let intrinsic_sources =
+        replay_builtin_intrinsics(original, checked, &positions, &mut seen, budget)?;
     replay_unsizes(original, checked, budget)?;
     for (index, site) in original.calls.iter().enumerate() {
         sr::work(budget, 1)?;
-        if builtin_sources[index] || leading_zero_sources[index] {
+        if builtin_sources[index] || leading_zero_sources[index] || intrinsic_sources[index] {
             continue;
         }
         let position = positions[index].ok_or_else(|| {
@@ -3742,6 +3931,7 @@ pub(super) fn replay_source_body(
         .call_mapping
         .len()
         .checked_add(original.builtin_len_mapping.len())
+        .and_then(|n| n.checked_add(original.builtin_intrinsic_mapping.len()))
         .and_then(|n| n.checked_add(original.builtin_leading_zeros_mapping.len()))
         != Some(original.calls.len())
     {
@@ -3836,6 +4026,7 @@ impl PlanCtx {
                     calls: Default::default(),
                     builtin_leading_zeros: Default::default(),
                     builtin_lens: Default::default(),
+                    builtin_intrinsics: Default::default(),
                     unsizes: Default::default(),
                     bindings: Default::default(),
                     narrow: Default::default(),
@@ -3877,6 +4068,7 @@ impl PlanCtx {
                     call_mapping: cap.calls.take(),
                     builtin_leading_zeros_mapping: cap.builtin_leading_zeros.take(),
                     builtin_len_mapping: cap.builtin_lens.take(),
+                    builtin_intrinsic_mapping: cap.builtin_intrinsics.take(),
                     unsize_mapping: cap.unsizes.take(),
                     binding_mapping: cap.bindings.take(),
                     narrow: cap.narrow.take(),

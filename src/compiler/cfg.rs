@@ -6,6 +6,7 @@
 use super::frontend::{BinaryOp, UnaryOp};
 use super::ir::{self, ExprId, IntTy, IntValue, LocalId, LoopId, Place, Projection, Ty};
 mod drop_normal;
+mod intrinsics;
 pub use drop_normal::ValidatedCleanupCall;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -280,6 +281,16 @@ fn same_rvalue_types(a: &Rvalue, b: &Rvalue, budget: &ir::PlanBudget) -> Result<
             Ok(ir::identical_type(a, b, budget)? && same_operand_list(aa, bb, budget)?)
         }
         (
+            Rvalue::Intrinsic {
+                intrinsic: a,
+                args: aa,
+            },
+            Rvalue::Intrinsic {
+                intrinsic: b,
+                args: bb,
+            },
+        ) => Ok(a == b && same_operand_list(aa, bb, budget)?),
+        (
             Rvalue::EnumVariant {
                 ty: a, fields: aa, ..
             },
@@ -448,6 +459,11 @@ pub enum Operand {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Rvalue {
+    /// Inherent primitive method over exact `intrinsic.signature()` operands.
+    Intrinsic {
+        intrinsic: ir::Intrinsic,
+        args: Vec<Operand>,
+    },
     CharToInt {
         value: Operand,
         to: IntTy,
@@ -587,7 +603,9 @@ impl Rvalue {
                 visit(left)?;
                 visit(right)?;
             }
-            Self::Aggregate { fields, .. } | Self::EnumVariant { fields, .. } => {
+            Self::Aggregate { fields, .. }
+            | Self::EnumVariant { fields, .. }
+            | Self::Intrinsic { args: fields, .. } => {
                 for value in fields {
                     visit(value)?;
                 }
@@ -1634,6 +1652,11 @@ impl Function {
                                     operand(value, budget, facts)?;
                                 }
                             }
+                            Rvalue::Intrinsic { args, .. } => {
+                                for value in args {
+                                    operand(value, budget, facts)?;
+                                }
+                            }
                             Rvalue::IndexCopy { array, index } => {
                                 path(array, budget)?;
                                 operand(index, budget, facts)?;
@@ -1913,6 +1936,18 @@ impl Function {
     }
     fn rvalue_ty_with_facts(&self, value: &Rvalue, facts: ir::FactsCtx<'_>) -> Result<Ty, String> {
         match value {
+            Rvalue::Intrinsic { intrinsic, args } => {
+                let signature = intrinsic
+                    .signature()
+                    .ok_or("CFG primitive method has no signature for its receiver")?;
+                if args.len() != signature.params.len() {
+                    return Err("CFG primitive method arity mismatch".into());
+                }
+                for (arg, param) in args.iter().zip(&signature.params) {
+                    self.require_operand_with_facts(arg, param, facts)?;
+                }
+                Ok(signature.result)
+            }
             Rvalue::CharToInt { value, to } => {
                 if self.operand_ty_with_facts(value, facts)? != Ty::Char {
                     return Err("CFG character cast requires char source".into());
@@ -3782,6 +3817,10 @@ impl Lowerer<'_> {
                 self.scopes.pop();
                 self.terminate(Terminator::Goto(join), origin)?;
                 self.current = join;
+            }
+            ir::ExprKind::Intrinsic { intrinsic, args } => {
+                // Receiver first, then arguments, each once into its own snapshot.
+                self.lower_intrinsic(&destination, *intrinsic, args, origin)?;
             }
             ir::ExprKind::Binary { op, left, right } => {
                 let left = self.expression(*left)?;
@@ -10564,7 +10603,8 @@ mod tests {
                                 live_operand(right, &live);
                             }
                             Rvalue::Aggregate { fields, .. }
-                            | Rvalue::EnumVariant { fields, .. } => {
+                            | Rvalue::EnumVariant { fields, .. }
+                            | Rvalue::Intrinsic { args: fields, .. } => {
                                 for value in fields {
                                     live_operand(value, &live);
                                 }
