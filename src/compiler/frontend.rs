@@ -42,6 +42,7 @@ mod token_cursor;
 use char_literal::{parse_byte_literal, parse_char_literal};
 mod deref_coercion;
 mod format_args;
+mod int_consts;
 mod format_spec;
 mod operators;
 mod panic_format;
@@ -11936,6 +11937,9 @@ impl<'input, 'names> Parser<'input, 'names> {
         Ok(expr)
     }
     fn named_expr(&mut self) -> Result<Expr, ParseError> {
+        if let Some(limit) = self.int_const_expr()? {
+            return Ok(limit);
+        }
         let println_syntax =
             self.is("println") && self.cursor.peek(1).is_some_and(|token| token.matches("!"));
         if !println_syntax && self.cursor.peek(1).is_some_and(|token| token.matches("!")) {
