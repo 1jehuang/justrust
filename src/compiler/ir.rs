@@ -4407,51 +4407,88 @@ impl Ty {
 /// True when `ty` stores application `id` by value (not behind a pointer):
 /// such a recursive type has infinite size.
 pub fn by_value_contains(ty: &Ty, id: NominalAppId, depth: usize) -> Result<bool, String> {
-    if depth > 256 {
-        return Err("type nesting resource limit exceeded".into());
-    }
-    Ok(match ty {
-        Ty::Struct(t) => {
-            if depth > 0 && t.id() == id {
-                return Ok(true);
-            }
-            if t.is_back_edge() {
-                return Ok(false);
-            }
-            for f in t.def().fields.iter() {
-                if by_value_contains(&f.ty, id, depth + 1)? {
-                    return Ok(true);
-                }
-            }
-            false
+    fn walk(
+        ty: &Ty,
+        id: NominalAppId,
+        depth: usize,
+        memo: &mut std::collections::HashMap<usize, usize>,
+        work: &mut usize,
+    ) -> Result<(bool, usize), String> {
+        if depth > 256 {
+            return Err("type nesting resource limit exceeded".into());
         }
-        Ty::Enum(t) => {
-            if depth > 0 && t.id() == id {
-                return Ok(true);
+        *work = work.checked_add(1).ok_or("type traversal work overflow")?;
+        if *work > MAX_PATTERN_PROJECTION_WORK {
+            return Err("type traversal work resource limit exceeded".into());
+        }
+        // The root itself is not a cycle. Check identity before consulting
+        // cached negative subtrees, including at cycle-closing weak edges.
+        let nominal = match ty {
+            Ty::Struct(value) => Some((value.id(), value.is_back_edge())),
+            Ty::Enum(value) => Some((value.id(), value.is_back_edge())),
+            _ => None,
+        };
+        if let Some((actual, back)) = nominal {
+            if depth > 0 && actual == id {
+                return Ok((true, 0));
             }
-            if t.is_back_edge() {
-                return Ok(false);
+            if back {
+                return Ok((false, 0));
             }
-            for v in t.def().variants.iter() {
-                for f in v.fields.iter() {
-                    if by_value_contains(&f.ty, id, depth + 1)? {
-                        return Ok(true);
+        }
+        // These addresses identify immutable nodes only during this walk.
+        // Cache height as well as absence, since the same subtree reached
+        // deeper must still fail the original nesting boundary.
+        let key = std::ptr::from_ref(ty) as usize;
+        if let Some(height) = memo.get(&key) {
+            if depth.saturating_add(*height) > 256 {
+                return Err("type nesting resource limit exceeded".into());
+            }
+            return Ok((false, *height));
+        }
+        let mut height = 0;
+        let mut child = |ty: &Ty| -> Result<bool, String> {
+            let (contains, child_height) = walk(ty, id, depth + 1, memo, work)?;
+            height = height.max(child_height + 1);
+            Ok(contains)
+        };
+        match ty {
+            Ty::Struct(value) => {
+                for field in value.def().fields.iter() {
+                    if child(&field.ty)? {
+                        return Ok((true, height));
                     }
                 }
             }
-            false
-        }
-        Ty::Tuple(fields) => {
-            for f in fields.iter() {
-                if by_value_contains(f, id, depth + 1)? {
-                    return Ok(true);
+            Ty::Enum(value) => {
+                for variant in value.def().variants.iter() {
+                    for field in variant.fields.iter() {
+                        if child(&field.ty)? {
+                            return Ok((true, height));
+                        }
+                    }
                 }
             }
-            false
+            Ty::Tuple(fields) => {
+                for field in fields.iter() {
+                    if child(field)? {
+                        return Ok((true, height));
+                    }
+                }
+            }
+            Ty::Array { element, .. } => {
+                if child(element)? {
+                    return Ok((true, height));
+                }
+            }
+            _ => {}
         }
-        Ty::Array { element, .. } => by_value_contains(element, id, depth + 1)?,
-        _ => false,
-    })
+        memo.try_reserve(1)
+            .map_err(|_| "type traversal memo allocation failed")?;
+        memo.insert(key, height);
+        Ok((false, height))
+    }
+    walk(ty, id, depth, &mut std::collections::HashMap::new(), &mut 0).map(|(contains, _)| contains)
 }
 
 #[derive(Clone, Debug)]
@@ -14733,6 +14770,105 @@ mod tests {
                 .collect::<Vec<_>>()
                 .into(),
         })
+    }
+
+    #[test]
+    fn by_value_cycle_walk_memoizes_shared_dags_and_preserves_depth() {
+        let modules = fixture_modules();
+        let snapshot = SnapshotId::allocate().unwrap();
+        let id = |index| NominalAppId {
+            snapshot,
+            index: NominalIndex::SourceSlot(index),
+        };
+        let mut ty = Ty::Int(IntTy::I32);
+        for index in 0..40 {
+            ty = Ty::Struct(nominal(&modules, id(index), "Shared", vec![ty.clone(), ty]));
+        }
+        assert!(!by_value_contains(&ty, id(39), 0).unwrap());
+        assert!(by_value_contains(&ty, id(39), 1).unwrap());
+        assert!(!by_value_contains(&ty, id(40), 0).unwrap());
+
+        // A shallow first visit must not hide a later over-depth path to
+        // the same allocation. Both array elements and tuple rows are shared.
+        let mut shared = Ty::Bool;
+        for _ in 0..8 {
+            shared = Ty::Array {
+                element: Arc::new(shared),
+                len: 1,
+            };
+        }
+        let mut deep = shared.clone();
+        for _ in 0..248 {
+            deep = Ty::Array {
+                element: Arc::new(deep),
+                len: 1,
+            };
+        }
+        let root = Ty::Tuple(vec![shared, deep].into());
+        assert!(
+            by_value_contains(&root, id(40), 0)
+                .unwrap_err()
+                .contains("nesting")
+        );
+        assert!(by_value_contains(&Ty::Unit, id(40), 256).is_ok());
+        assert!(by_value_contains(&Ty::Unit, id(40), 257).is_err());
+    }
+
+    #[test]
+    fn by_value_cycle_walk_keeps_back_edges_and_pointer_boundaries() {
+        let modules = fixture_modules();
+        let id = NominalAppId {
+            snapshot: SnapshotId::allocate().unwrap(),
+            index: NominalIndex::SourceSlot(0),
+        };
+        let definition = Arc::new_cyclic(|weak| {
+            nominal(
+                &modules,
+                id,
+                "Recursive",
+                vec![Ty::Struct(StructTy::from_ref(NominalRef::Back(
+                    weak.clone(),
+                    id,
+                )))],
+            )
+            .into_def()
+            .unwrap()
+        });
+        let ty = Ty::Struct(StructTy::from_ref(NominalRef::Strong(definition)));
+        assert!(by_value_contains(&ty, id, 0).unwrap());
+        assert!(
+            by_value_contains(
+                &Ty::Array {
+                    element: Arc::new(ty.clone()),
+                    len: 0
+                },
+                id,
+                0
+            )
+            .unwrap()
+        );
+        assert!(
+            !by_value_contains(
+                &Ty::RawPtr {
+                    kind: BorrowKind::Shared,
+                    pointee: Arc::new(ty.clone())
+                },
+                id,
+                0
+            )
+            .unwrap()
+        );
+        assert!(
+            !by_value_contains(
+                &Ty::Ref {
+                    kind: BorrowKind::Shared,
+                    referent: Arc::new(ty)
+                },
+                id,
+                0
+            )
+            .unwrap()
+        );
     }
 
     #[test]

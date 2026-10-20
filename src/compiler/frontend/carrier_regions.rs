@@ -23,6 +23,8 @@ pub(super) fn attach(
         budget,
         rows: Vec::new(),
         next_region: original.region_count,
+        empty_nominals: Vec::new(),
+        empty_nominal_storage: None,
     };
     let offset = usize::from(receiver != ReceiverKind::None);
     if let Some(block) = implementation {
@@ -83,6 +85,10 @@ struct Collector<'a> {
     budget: &'a ir::PlanBudget,
     rows: Vec<ir::SourceCarrierRegion>,
     next_region: u16,
+    // Completed, carrier-free source subtrees only. Depth remains part of the
+    // key so a deeper reuse cannot bypass any source traversal depth check.
+    empty_nominals: Vec<(ir::DeclId, usize, usize)>,
+    empty_nominal_storage: Option<ir::PlanReservation>,
 }
 impl Collector<'_> {
     fn lifetime_key(&self, name: AstIdent) -> Result<NameKey, String> {
@@ -382,6 +388,22 @@ impl Collector<'_> {
         if !region_args.is_empty() && region_args.len() != region_params.len() {
             return Err("nominal lifetime argument arity mismatch".into());
         }
+        let pointer = match semantic {
+            ir::Ty::Struct(value) => std::ptr::from_ref(value.def()) as usize,
+            ir::Ty::Enum(value) => std::ptr::from_ref(value.def()) as usize,
+            _ => unreachable!(),
+        };
+        let memo_key = (id, pointer, depth);
+        let cacheable = type_params.is_empty()
+            && region_params.is_empty()
+            && args.is_empty()
+            && region_args.is_empty();
+        if cacheable {
+            self.budget.charge_work(self.empty_nominals.len())?;
+            if self.empty_nominals.contains(&memo_key) {
+                return Ok(());
+            }
+        }
         let mut types = HashMap::new();
         for (binder, actual) in type_params.iter().zip(args) {
             types.insert(self.registry.parameter_key(*binder)?, actual);
@@ -405,6 +427,33 @@ impl Collector<'_> {
             path.push(step);
             self.walk(&field, actual, parameter, path, 0, depth + 1)?;
             path.pop();
+        }
+        // Preserve first-visit source validation. Only a complete traversal
+        // with no possible semantic carriers is independent of parameter,
+        // prefix and path. Never memoize reference-bearing region mappings.
+        if cacheable && ir::carrier_locations(semantic, self.budget)?.is_empty() {
+            if self.empty_nominals.len() == self.empty_nominals.capacity() {
+                let capacity = self
+                    .empty_nominals
+                    .len()
+                    .checked_mul(2)
+                    .ok_or("source carrier memo capacity overflow")?
+                    .max(4);
+                let storage = self.budget.reserve_bytes(
+                    capacity
+                        .checked_mul(std::mem::size_of::<(ir::DeclId, usize, usize)>())
+                        .ok_or("source carrier memo allocation overflow")?,
+                )?;
+                let mut grown = Vec::new();
+                grown
+                    .try_reserve_exact(capacity)
+                    .map_err(|_| "source carrier memo allocation failed")?;
+                self.budget.charge_work(self.empty_nominals.len())?;
+                grown.extend_from_slice(&self.empty_nominals);
+                self.empty_nominals = grown;
+                self.empty_nominal_storage = Some(storage);
+            }
+            self.empty_nominals.push(memo_key);
         }
         Ok(())
     }
@@ -483,6 +532,30 @@ fn substitute(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn empty_nominal_memo_keeps_reference_paths_and_source_arity() {
+        let source = parse("struct Empty{x:i32}struct Ref<'a>{r:&'a i32}fn f<'a>(a:Empty,b:Empty,c:Ref<'a>,d:Ref<'a>){}fn main(){}").unwrap();
+        let budget = ir::PlanBudget::default();
+        let plan = PlanCtx::from_program(&source, &budget).unwrap();
+        let declaration = plan.function_decl(0).unwrap();
+        let regions = plan.source_region_env(declaration).unwrap();
+        let paths = regions
+            .carriers
+            .iter()
+            .map(|row| (row.parameter, row.location.path.0.to_vec()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            paths,
+            vec![
+                (Some(2), vec![ir::CarrierStep::Field(0)]),
+                (Some(3), vec![ir::CarrierStep::Field(0)]),
+            ]
+        );
+        let invalid =
+            parse("struct Empty{x:i32}fn f(a:Empty,b:Empty<'static>){}fn main(){}").unwrap();
+        assert!(PlanCtx::from_program(&invalid, &ir::PlanBudget::default()).is_err());
+    }
 
     #[test]
     fn nominal_lifetime_order_survives_parse_copy_and_source_authority() {

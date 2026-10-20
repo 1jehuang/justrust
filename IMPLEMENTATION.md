@@ -13,6 +13,17 @@ obligations from nominal field recipes, removing internal metadata failures with
 claiming that the three affected full programs now compile. Final acceptance and
 graph-integrity evidence are recorded in the feature contracts. G0-G12 remain open.
 
+- [x] Nominal by-value cycle checks memoize completed immutable subtrees and
+      retain subtree heights, preserving recursion and depth rejection without
+      exponential shared-DAG expansion. Source carrier collection only reuses
+      completed, nongeneric, region-free, carrier-free subtrees at the same depth.
+      The unchanged 40-level binary nominal fixture, negative depth/back-edge
+      controls and all 14 graph-integrity gates pass. The earlier full-library
+      run was interrupted after its exponential traversal stalled, not counted
+      as a pass. Evidence is retained in
+      `data/runs/rust-support-followup-20261020/bounded-nominal-dag.jsonl`.
+      Full-library revalidation and G0-G12 remain open.
+
 - [x] Generic opaque return inference preserves defining owner, return site,
       ordered arguments and public bounds. Physical direct/bound calls replay
       their exact original occurrence before canonical specialization. Forty
