@@ -731,6 +731,7 @@ impl<'s> Solver<'_, '_, 's> {
         decl: ir::DeclId,
         args: &[Term],
         receiver: Option<Term>,
+        written_owner: Option<Term>,
         actuals: &[Term],
     ) -> Result<Term, String> {
         let plan = self.checker.signatures.plan()?;
@@ -746,15 +747,15 @@ impl<'s> Solver<'_, '_, 's> {
                 *actual,
             );
         }
-        if let Some(receiver) = receiver {
+        if let Some(owner_term) = written_owner.or(receiver) {
             let associated = info
                 .path
                 .associated
                 .as_ref()
                 .ok_or("method without owner")?;
             let owner = self.schema(&associated.self_pattern, &params, 0)?;
-            let receiver = self.peel_refs(receiver);
-            self.unify(receiver, owner)?;
+            let owner_term = self.peel_refs(owner_term);
+            self.unify(owner_term, owner)?;
         }
         let instantiated = self.projection_call_signature(decl, &schema, &params)?;
         let signature = instantiated.as_ref().unwrap_or(&schema.signature);
@@ -846,6 +847,7 @@ impl<'s> Solver<'_, '_, 's> {
                             candidate,
                             &method.args,
                             Some(receiver),
+                            None,
                             &method.actuals,
                         )?;
                         self.unify(result, method.result)?;
@@ -1460,7 +1462,7 @@ impl<'s> Solver<'_, '_, 's> {
                         .functions
                         .get(&self.checker.path_key(name, Namespace::Value)?)
                     {
-                        return self.callable(*decl, &args, None, &actuals);
+                        return self.callable(*decl, &args, None, None, &actuals);
                     }
                 }
                 let result = self.expr(value, depth + 1)?;
@@ -1528,7 +1530,7 @@ impl<'s> Solver<'_, '_, 's> {
                     .get(&self.checker.path_key(name, Namespace::Value)?)
                     .copied();
                 match declaration {
-                    Some(id) => self.callable(id, &args, None, &[]),
+                    Some(id) => self.callable(id, &args, None, None, &[]),
                     None => {
                         let callee = self.lookup(name)?;
                         match self.callable_application(callee, &args)? {
@@ -1555,17 +1557,7 @@ impl<'s> Solver<'_, '_, 's> {
                     .collect::<Result<Vec<_>, _>>()?;
                 if let Domain::Nominal(decl, _) = self.domain(owner) {
                     if let Some(candidate) = self.candidate(decl, *name)? {
-                        let result = self.callable(candidate, &args, None, &actuals)?;
-                        let plan = self.checker.signatures.plan()?;
-                        let info = plan.declaration(candidate)?;
-                        let schema = plan.function_schema(candidate)?;
-                        // Constructors normally return Self. Their result must agree
-                        // with the written owner's explicit or inferred arguments.
-                        if nominal_parts(&schema.signature.result).map(|p| p.0) == Some(decl) {
-                            self.unify(owner, result)?;
-                        }
-                        let _ = info;
-                        return Ok(result);
+                        return self.callable(candidate, &args, None, Some(owner), &actuals);
                     }
                 }
                 self.fresh()
@@ -1591,7 +1583,7 @@ impl<'s> Solver<'_, '_, 's> {
                 let owner = self.peel_refs(receiver);
                 if let Domain::Nominal(decl, _) = self.domain(owner) {
                     if let Some(candidate) = self.candidate(decl, *name)? {
-                        return self.callable(candidate, &args, Some(owner), &actuals);
+                        return self.callable(candidate, &args, Some(owner), None, &actuals);
                     }
                 }
                 let result = self.fresh()?;

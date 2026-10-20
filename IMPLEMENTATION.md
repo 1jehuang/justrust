@@ -387,6 +387,11 @@ missing-file changes invalidate only justified consumers without stale lookup.
 - [ ] Extend bidirectional/local inference, coercion sites, partial type holes,
       omitted method arguments and control-flow joins, preserving rigid universal
       parameters and diagnostics for unresolved constraints.
+      Static associated calls now constrain their canonical written owner before
+      nested return inference (`STATIC-OWNER-INFERENCE.md`): focused stock/native
+      acceptance and invalid controls at workers 1/8 plus CHECK frontier and graph
+      gates pass. The existing disjoint-inherent-candidate case remains a proven
+      parent failure, not a newly passing capability.
       Delivered source `_` holes in nested local annotations and explicit
       free/inherent method type arguments retain their concrete written constraints
       and canonical nominal identities (`tests/partial_annotations.rs`), while
