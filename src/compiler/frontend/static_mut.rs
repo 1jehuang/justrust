@@ -75,6 +75,7 @@ impl Parser<'_, '_> {
             })),
         };
         Ok(Function {
+            embedded_source: None,
             lexical_scope: None,
             module,
             constness: Constness::Runtime,

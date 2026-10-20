@@ -45,6 +45,7 @@ fn static_elided(ty: Type) -> Type {
 /// Unresolved hidden checker body; resolved with the ordinary functions.
 pub(super) fn checked_body(declaration: &ConstDecl) -> Function {
     Function {
+        embedded_source: None,
         lexical_scope: None,
         module: declaration.module,
         constness: Constness::Const,

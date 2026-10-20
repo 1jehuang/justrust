@@ -4236,15 +4236,36 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
             }
         }
     }
+    let function_issuers = program.embedded_issuers.clone();
     for index in function_order {
         resolver.current_callable = Some(CallableSource::Free(index));
         let function = &mut program.functions[index];
+        let embedded = function.embedded_source.clone();
+        if let Some(receipt) = &embedded {
+            receipt
+                .original()?
+                .replay_source(function, resolver.names(), &function_issuers)?;
+        }
         // Local/free declarations are collected separately by the frontend.
         // None may inherit a preceding trait/default/impl Self owner.
         resolver.with_source_owner(SourceOwnerContext::None, |resolver| {
             resolver.anonymous_closure_body =
                 closures::anonymous_path(&function.name, resolver.names())?;
             resolver.begin_closure_function(function)?;
+            let embedded_resolved = if let Some(receipt) = &embedded {
+                let names = resolver.program.names.clone();
+                receipt.resolve_calls(&names, |path| {
+                    let Some(target) = resolver.path(path, function.module, false, false)? else {
+                        return Ok(None);
+                    };
+                    if target.kind != ResolvedKind::Function {
+                        return Ok(None);
+                    }
+                    resolver.resolved_use(target.source()?, path).map(Some)
+                })?
+            } else {
+                None
+            };
             resolver.type_params = function.type_params.clone();
             resolver.bounds(&mut function.bounds, function.module)?;
             resolver.ty(&mut function.result, function.module)?;
@@ -4270,6 +4291,12 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
                 ));
             }
             resolver.finish_closure_function(function)?;
+            function.embedded_source = None;
+            if let Some(receipt) = embedded_resolved {
+                if receipt.matches_resolved(function, resolver.names())? {
+                    function.embedded_source = Some(receipt);
+                }
+            }
             Ok(())
         })?;
     }

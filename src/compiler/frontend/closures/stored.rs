@@ -123,6 +123,7 @@ impl Parser<'_, '_> {
         // The callable declaration describes the adapter ABI, never guessed
         // parameter/capture types. Parent checking supplies its exact actuals.
         let function = Function {
+            embedded_source: None,
             lexical_scope: None,
             module: self.module,
             constness: Constness::Runtime,

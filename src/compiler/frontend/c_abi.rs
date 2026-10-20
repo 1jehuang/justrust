@@ -140,7 +140,7 @@ impl Parser<'_, '_> {
                     ));
                 }
                 self.reserve_item_publication(parsed)?;
-                self.nonmodule_item(module, path, parsed, visibility, explicit)?;
+                self.nonmodule_item(module, path, parsed, visibility, explicit, None)?;
             }
             self.expect("}")
         })();

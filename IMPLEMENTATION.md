@@ -901,6 +901,16 @@ remain separate open work.
       pass unchanged. See PRIMITIVE-CONSTANTS.md and six authentic receipts in
       data/runs/xps14/2026-10-19-primitive-min.jsonl. Other primitive constants,
       general const evaluation and G0-G12 completion remain open.
+- [x] Embedded nongeneric free-function occurrence authority binds original
+      loader-issued source, complete supported header/body recipes, authenticated
+      resolver call correspondence and canonical declaration registration.
+      This is a G0/G1/G2/G9/G10/G12 prerequisite only, not completion of any gate.
+      Six focused authority filters pass across recorded checkpoints; the full
+      graph attempt passed 13 gates, then its sole new test-owner violation was
+      repaired and the affected authority control/scanner passed separately.
+      See EMBEDDED-FUNCTION-AUTHORITY.md and 12 authentic receipts under
+      data/runs/embedded-function-authority/. Packed-byte query admission remains
+      inactive; no allocation, native-memory, String/Vec or full-Rust claim follows.
 - [x] Ordinary source `Ord::max(self, other: Self) -> Self where Self: Sized`
       uses canonical trait/default selection and returns the second argument on
       equality, including non-Copy values. Direct method, UFCS, primitive alias

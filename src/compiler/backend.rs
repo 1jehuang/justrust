@@ -3821,6 +3821,7 @@ mod tests {
         builder: &mut frontend::ProgramBuilder,
     ) -> Function {
         Function {
+            embedded_source: None,
             constness: crate::compiler::frontend::Constness::Runtime,
             unsafety: false,
             static_mut: false,

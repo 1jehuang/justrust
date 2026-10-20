@@ -65,6 +65,7 @@ impl Parser<'_, '_> {
             },
             visibility: ir::Visibility::Restricted(declaration.module),
             function: Function {
+                embedded_source: None,
                 lexical_scope,
                 module: declaration.module,
                 constness: Constness::Runtime,

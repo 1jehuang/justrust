@@ -1436,6 +1436,7 @@ mod tests {
     }
     fn function(builder: &mut ProgramBuilder) -> Function {
         Function {
+            embedded_source: None,
             lexical_scope: None,
             module: builder.module_root().unwrap(),
             constness: Constness::Runtime,

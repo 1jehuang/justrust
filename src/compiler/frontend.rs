@@ -41,6 +41,7 @@ pub use closures::shape_seal::ClosureShapeSeal;
 mod trait_method_source_tests;
 
 mod function_qualifiers;
+mod function_source;
 mod generated_callables;
 mod generated_debug;
 mod generated_derive;
@@ -5460,6 +5461,7 @@ pub enum FieldName {
 }
 #[derive(Clone, Debug)]
 pub struct Function {
+    pub(super) embedded_source: Option<Arc<function_source::FunctionSource>>,
     pub lexical_scope: Option<super::semantic_scope::ScopeId>,
     pub module: ModuleId,
     pub constness: Constness,
@@ -7565,6 +7567,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                 &mut product,
                 visibility,
                 explicit_visibility,
+                None,
             )?;
             child.finish_generated_metadata(
                 &mut product.program,
@@ -10447,6 +10450,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                         .map_err(scope_parse_error)?,
                 );
             }
+            let function_source_start = self.cursor.index();
             self.c_attributes()?;
             let (visibility, explicit_visibility) = self.visibility(module)?;
             if self.is("macro_rules") && self.cursor.peek(1).is_some_and(|token| token.matches("!"))
@@ -10475,7 +10479,14 @@ impl<'input, 'names> Parser<'input, 'names> {
                 self.expect("}")?;
                 continue;
             }
-            self.nonmodule_item(module, module_path, parsed, visibility, explicit_visibility)?;
+            self.nonmodule_item(
+                module,
+                module_path,
+                parsed,
+                visibility,
+                explicit_visibility,
+                function_source_start,
+            )?;
         }
         self.module = previous_module;
         self.module_frontier = previous_frontier;
@@ -10492,6 +10503,7 @@ impl<'input, 'names> Parser<'input, 'names> {
         parsed: &mut ParsedDeclarations,
         visibility: ir::Visibility,
         explicit_visibility: bool,
+        function_source_start: Option<usize>,
     ) -> Result<(), ParseError> {
         if self.is("unsafe")
             && self.cursor.peek(1).is_some_and(|t| t.matches("extern"))
@@ -10678,6 +10690,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                     let (body, lexical_scope) =
                         self.emitted_callable_body(signature.name, &signature.params)?;
                     Some(Function {
+                        embedded_source: None,
                         lexical_scope,
                         module,
                         constness: signature.constness,
@@ -11078,6 +11091,13 @@ impl<'input, 'names> Parser<'input, 'names> {
             function.name = module_path
                 .push(self.names, name)
                 .map_err(native_adapter::name_error)?;
+            function.embedded_source = function_source::issue_parsed(
+                self,
+                function_source_start,
+                parsed.program.functions.len(),
+                &function,
+            )
+            .map_err(|message| self.error(&message))?;
             parsed.program.functions.push(function);
             (name, ItemKind::Function)
         } else if self.eat("type") {
@@ -11358,6 +11378,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             };
             Ok((
                 Function {
+                    embedded_source: None,
                     lexical_scope,
                     module: self.module,
                     constness: head.constness,
@@ -15817,6 +15838,7 @@ pub struct DeclSemanticPath {
 }
 #[derive(Clone, Debug)]
 pub struct DeclInfo {
+    pub(super) embedded_function: Option<Arc<function_source::BoundFunctionSource>>,
     pub receiver: ReceiverKind,
     pub owner: Option<ir::DeclId>,
     pub id: ir::DeclId,
@@ -17048,6 +17070,7 @@ impl PlanCtx {
                 budget,
             )?);
             registry.declarations.push(DeclInfo {
+                embedded_function: None,
                 receiver: ReceiverKind::None,
                 owner: None,
                 id,
@@ -17381,6 +17404,17 @@ impl PlanCtx {
             clone_visibility(&function.visibility, budget)?;
             let id = registry.function_ids[position];
             registry.declarations[id.index as usize].visibility = function.visibility.clone();
+            if let Some(receipt) = &function.embedded_source {
+                let bound = function_source::bind_registration(
+                    receipt,
+                    program,
+                    &registry.declarations[id.index as usize],
+                    index,
+                    id,
+                    budget,
+                )?;
+                registry.declarations[id.index as usize].embedded_function = Some(bound);
+            }
         }
         associated_constants::seal_registry_owners(&mut registry, program, budget)?;
         for (index, declaration) in program.traits.iter().enumerate() {
@@ -21606,6 +21640,7 @@ fn catalog_decl_info(entry: &tr::CatalogDecl, budget: &ir::PlanBudget) -> Result
         ir::ReceiverMode::Borrowed { kind } => ReceiverKind::Borrowed { kind },
     };
     Ok(DeclInfo {
+        embedded_function: None,
         receiver,
         owner: info.owner,
         id: entry.declaration,

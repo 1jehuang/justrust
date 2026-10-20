@@ -12674,6 +12674,7 @@ mod checked_identity_tests {
         let main = builder.path("crate::main").unwrap();
         let module = builder.module_root().unwrap();
         builder.functions.push(Function {
+            embedded_source: None,
             lexical_scope: None,
             module,
             constness: Constness::Runtime,
