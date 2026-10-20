@@ -625,12 +625,18 @@ fn gen_ord(input: &Input, partial: bool) -> String {
 
 fn gen_hash(input: &Input) -> String {
     let header = input.header("std::hash::Hash", Some("std::hash::Hash"));
+    // Fresh method binder for the hasher: never equal to any type, lifetime
+    // or const parameter of the input, so a user `H` cannot collide.
+    let mut hasher = String::from("__JrHasher");
+    while input.params.iter().any(|(_, name, _)| *name == hasher) {
+        hasher.push('_');
+    }
     let vs = variants(input);
     let mut body = String::new();
     if vs.len() > 1 {
         let _ = write!(
             body,
-            "let d: isize = {}; <std::hash::DefaultHasher as std::hash::Hasher>::write_u64(&mut *state, d as u64); ",
+            "let d: isize = {}; <{hasher} as std::hash::Hasher>::write_isize(&mut *state, d); ",
             variant_index(input, "self")
         );
     }
@@ -648,7 +654,9 @@ fn gen_hash(input: &Input) -> String {
     } else {
         let _ = write!(body, "match self {{ {arms} }}");
     }
-    format!("{header} {{ fn hash(&self, state: &mut std::hash::DefaultHasher) {{ {body} }} }}\n")
+    format!(
+        "{header} {{ fn hash<{hasher}: std::hash::Hasher>(&self, state: &mut {hasher}) {{ {body} }} }}\n"
+    )
 }
 
 fn gen_default(input: &Input) -> Result<String, String> {
@@ -795,6 +803,20 @@ mod tests {
         )
         .unwrap();
         assert!(e.contains("li < ri"), "{e}");
+        assert!(
+            e.contains("fn hash<__JrHasher: std::hash::Hasher>(&self, state: &mut __JrHasher)"),
+            "{e}"
+        );
+        assert!(
+            e.contains("<__JrHasher as std::hash::Hasher>::write_isize(&mut *state, d)"),
+            "{e}"
+        );
+        assert!(!e.contains("DefaultHasher"), "{e}");
+        let clash = expand("struct Q<__JrHasher> { x: __JrHasher }", &["Hash".into()]).unwrap();
+        assert!(
+            clash.contains("fn hash<__JrHasher_: std::hash::Hasher>"),
+            "{clash}"
+        );
         assert!(
             expand("enum E { A, #[default] B }", &["Default".into()])
                 .unwrap()

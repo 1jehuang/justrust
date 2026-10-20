@@ -6784,6 +6784,15 @@ impl ValidatedTraitWorld {
         }
         Ok(!walk.has_parameters && !walk.has_opaque)
     }
+    /// Same validation walk as `goal_is_closed`, over a call's ordered method
+    /// actuals. Open (parameter or opaque) actuals keep the call universal.
+    fn method_args_are_closed(&self, call: &TraitCall, env: &GenericEnv) -> Result<bool> {
+        let mut walk = TypeWalk::default();
+        for ty in call.method_args.iter() {
+            self.validate_ty_inner(ty, env, 0, TypeUse::Actual, &mut walk)?;
+        }
+        Ok(!walk.has_parameters && !walk.has_opaque)
+    }
     fn match_head(
         &self,
         pattern: &Ty,
@@ -6990,8 +6999,14 @@ impl TraitCx for ValidatedTraitWorld {
         }
         let (signature, caller_topology) = self.trait_signature_with_topology(call, caller)?;
         let predicate = Predicate::Implements(call.trait_ref.clone());
+        // Closedness covers the whole call: the trait goal AND the ordered
+        // method actuals. A concrete Self with an open method actual (a
+        // caller's own type parameter forwarded to a generic trait method)
+        // stays in the caller's environment and phase; only a genuinely
+        // closed instantiation is re-resolved in the empty closed world.
         if facts.phase() == FactsPhase::Universal
-            && !self.goal_is_closed(&call.trait_ref, facts.env())?
+            && (!self.goal_is_closed(&call.trait_ref, facts.env())?
+                || !self.method_args_are_closed(call, facts.env())?)
         {
             let evidence = self.require_in(&predicate, caller, &mut Vec::new())?;
             return Ok(ResolvedTraitCall {

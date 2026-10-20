@@ -592,6 +592,18 @@ cleanup failures.
       declaration and ordered actuals. Generic `IndexMut<I>: Index<I>` implementations
       normalize inherited `Output` using an independently proved superclass impl,
       with CHECK/BUILD/native-run tests at workers 1 and 8 (`inherited_associated`).
+- [x] std-shaped `Hash::hash<H: Hasher>` and `Hasher` (`write` plus provided
+      `write_*` matching core dispatch: one native-width `write` per unsigned
+      width, signed delegate to unsigned, isize to usize) in the prelude, with
+      `#[derive(Hash)]` generic over a fresh hasher binder (HASH-PROTOCOL.md).
+      `resolve_trait_call` now treats a concrete-Self trait call as closed only
+      when its ordered method actuals are closed too; forwarded caller type
+      parameters keep the caller environment and phase. `tests/hash_protocol.rs`
+      compares recorded byte streams and write-call dispatch with stock at
+      workers 1/8, plus missing-bound and non-std-form rejections; check
+      --tests and graph_integrity 14/14 on the committed tree. Runs:
+      `data/runs/xps14/2026-10-19-hash-protocol.jsonl`. No HashMap,
+      BuildHasher/RandomState, str/String/slice Hash or general std claim.
 - [x] Struct and enum type-parameter bounds and `where` clauses are retained and
       resolved in their declaration scope. Constructors and function signature
       applications prove user and builtin obligations, including nested nominal
