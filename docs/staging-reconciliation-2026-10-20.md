@@ -65,6 +65,23 @@ native CHECK at workers 1 with unresolved nominal source constraints, run
 This is recovered draft work, not an accepted NonNull support claim. Its patch
 and both actual logs are preserved in the persistent recovery directory.
 
+## Acceptance observations
+
+After reconciliation, the actual Git interfaces reported an empty staged diff
+(`git diff --cached --exit-code` returned 0), zero commits ahead/behind upstream,
+and identical local and actual remote HEAD. All 351 reconciled paths matched
+published HEAD; all 90 preserved modified files matched their original SHA-256
+fingerprints; all 18 untracked files matched the saved archive contents.
+
+The recovery patch was also exercised, not merely inspected: Git loaded the
+original published parent into a disposable index, applied the full binary
+working-tree patch with `git apply --cached`, and wrote exactly the original
+snapshot tree `c361d8efe6418d553e23b5aa839d2319754eeb0c`. No working files or
+shared index were changed by that recovery test. Two original trailing-blank-line
+warnings were retained, not silently fixed. These observations validate the
+staging/preservation/recovery outcome, not acceptance of the remaining draft
+compiler features. The preserved NonNull consumer failure remains open.
+
 ## Follow-through rules
 
 1. Preserve original content before reconciling old source with newer commits.
