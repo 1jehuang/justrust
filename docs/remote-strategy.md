@@ -148,6 +148,7 @@ Decision: open core, licensed by layer. The exact rules and file layout are in
 |---|---|---|
 | Client and local tool (today's crate) | MIT | Adoption. Companies avoid restrictive licenses on build tools, and it is already public under MIT |
 | Wire protocol and cache key format | MIT | Third-party clients and integrations (CI, sccache or Bazel bridges) make justrust the standard |
+| Clean-room compiler (`main` branch, whole repository) | FSL-1.1-ALv2, inbound Apache 2.0 | All new work and the core asset. Usable for anything except a competing service. Each release becomes Apache 2.0 after two years |
 | Self-hostable single-tenant server (`server/`, future) | FSL-1.1-ALv2 | Readable, self-hostable, modifiable. Nobody may sell it as a competing service. Each release becomes Apache 2.0 after two years |
 | Multi-tenant cloud: global shared cache, prebuild fleet, isolation, poisoning defenses, scheduling, billing | Closed, separate private repo | Unproven security surface, and it is the revenue layer. Revisit FSL once it is hardened |
 

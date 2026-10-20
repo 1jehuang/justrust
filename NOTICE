@@ -1,15 +1,18 @@
 justrust
 Copyright 2026 Jeremy Huang
 
+Licensed under the Functional Source License, Version 1.1, ALv2 Future License
+(FSL-1.1-ALv2). See LICENSE and LICENSING.md.
+
 This product includes contributions from the people listed below. Each
 contribution remains under its author's copyright and is licensed to the
-project as described in LICENSING.md: MIT for our client and tooling,
-Apache License 2.0 for contributions to server/, and applicable
-component/file licenses for imported toolchain code.
+project under the Apache License 2.0, as described in LICENSING.md and
+CONTRIBUTING.md. Third-party code keeps its original license.
 
-Keep this file in every copy of justrust, including the hosted service, as MIT
-and Apache 2.0 require. Update it when a pull request from a new contributor
-is merged: add their name, GitHub username, and the directories they changed.
+Keep this file in every copy of justrust, including the hosted service, as
+Apache 2.0 and the third-party licenses require. Update it when a pull request
+from a new contributor is merged: add their name, GitHub username, and the
+directories they changed.
 
 Contributors
 ------------
@@ -19,20 +22,19 @@ Jeremy Huang (@1jehuang): maintainer, all directories.
 Third-party code
 ----------------
 
-Rust compiler, standard libraries, and included tools: toolchain/rustc/,
-derived from the Rust Project through justrust's compiler development line.
-Cargo and included libraries: toolchain/cargo/, derived from the Cargo
-Project through justrust's Cargo development line. Backtrace sources are
-included at toolchain/rustc/library/backtrace/.
+libraries/probes/: source-locked original items from the Rust Project's core
+library, Copyright (c) The Rust Project Contributors, licensed MIT OR
+Apache-2.0. Each directory retains LICENSE-MIT, LICENSE-APACHE, and COPYRIGHT.
+libraries/source-lock.json records exact revisions and hashes.
 
-These sources retain their original copyrights, component licenses
-(including MIT and Apache License 2.0), and file-level/third-party notices.
-See the LICENSE*, COPYRIGHT, and other attribution files in the respective
-trees. toolchain/sources.json records exact import origins and revisions.
-Other dependencies are obtained under their own licenses.
+fixtures/adler2_adapted/: Adler2 2.0.1 by Jonas Schievink, licensed 0BSD OR
+MIT OR Apache-2.0, used under 0BSD. upstream/ holds unmodified sources and
+upstream/LICENSE-0BSD. The adapted fixtures keep their attribution headers.
 
 unicode-ident 1.0.24 supplies Unicode XID classification tables for the native
 lexical scanner. Its license is (MIT OR Apache-2.0) AND Unicode-3.0.
 This distribution uses the MIT alternative and retains both the upstream MIT
 and Unicode data notices in THIRD-PARTY-LICENSES.md. The utility is not a
 vendored compiler or parser implementation.
+
+Other dependencies are obtained under their own licenses.

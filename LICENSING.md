@@ -1,36 +1,36 @@
 # Licensing
 
-justrust is open core. Licenses are scoped by directory; imported components
-also retain their file-level licenses and third-party notices. The reasoning is in
-[docs/remote-strategy.md](docs/remote-strategy.md#open-source-and-licensing).
+The justrust compiler on `main` is source-available under the Functional
+Source License, FSL-1.1-ALv2 ([LICENSE](LICENSE)). Each release converts to the
+Apache License 2.0 two years after it is published. Contributions come in
+under Apache 2.0 (see [Contributing](#contributing)): permissive inbound, FSL
+outbound.
 
 | Path | License | Covers |
 |---|---|---|
-| Everything not listed below | [MIT](LICENSE) | The `justrust` CLI, local build tooling, shared dependency cache, remote machine management, docs |
-| `protocol/` (future) | MIT | Wire protocol and cache key format, so other tools can implement them |
-| `server/` | FSL-1.1-ALv2 ([server/LICENSE](server/LICENSE)) | Self-hostable single-tenant remote executor and artifact cache |
-| `toolchain/` imported sources | Component and file-level licenses retained in each tree, including MIT/Apache-2.0 and third-party notices | Owned compiler, Rust libraries, Cargo, and included tools; see `toolchain/sources.json` for import provenance |
+| Everything not listed below | [FSL-1.1-ALv2](LICENSE) | The compiler, engine, prelude library, tests, benchmarks, tooling, and docs |
+| `fixtures/adler2_adapted/upstream/` | 0BSD ([upstream/LICENSE-0BSD](fixtures/adler2_adapted/upstream/LICENSE-0BSD)), original copyright retained | Unmodified Adler2 sources used only as a stock-rustc oracle |
+| `libraries/probes/*/` | MIT OR Apache-2.0, Rust Project Contributors (`LICENSE-MIT`, `LICENSE-APACHE`, `COPYRIGHT` in each directory) | Source-locked original `core` items, pinned in `libraries/source-lock.json` |
+| Third-party crates (`unicode-ident`) | Their own licenses, see [THIRD-PARTY-LICENSES.md](THIRD-PARTY-LICENSES.md) | Utility dependencies |
 
-Vendoring does not relicense imported code. Preserve the component `LICENSE*`,
-`COPYRIGHT`, attribution, and third-party notices when changing or distributing
-these trees. The root MIT license is not a replacement for those notices.
-The client crate excludes `toolchain/` from its package.
+FSL does not relicense third-party code. Preserve the original `LICENSE*`,
+`COPYRIGHT`, attribution, and notice files when changing or distributing those
+paths. Files adapted from third-party sources keep their attribution header
+and remain available under the original terms for the adapted portions.
 
-The hosted multi-tenant service (global shared cache, prebuild fleet, tenant
-isolation, billing) is not in this repository and is not open source.
+Earlier history was published under MIT. Copies obtained under MIT before this
+change keep their MIT grant. The `stable` branch (the shipping justrust client)
+is licensed separately; see `LICENSING.md` on that branch.
 
 ## What FSL allows
 
-The Functional Source License (FSL-1.1-ALv2) applies only to `server/`. You
-may read, modify, and run it for any purpose, including running it for your
-own company, except offering it to others as a product or service that
-competes with justrust's hosted service. Each release converts to Apache 2.0
-two years after it is published. Full text: <https://fsl.software>.
-
-`server/` holds the official FSL-1.1-ALv2 text, unmodified. The root
-`Cargo.toml` excludes `server/` so FSL code never ships in the MIT crate. When
-the server crate is added, set `license-file = "LICENSE"` in its
-`Cargo.toml`.
+You may read, modify, and run the software for any purpose, including inside
+your own company, internal builds and CI, research, and non-commercial
+education. You may not offer it to others as a product or service that
+competes with justrust, such as a hosted or remote Rust compile service built
+on this code. Each release becomes Apache 2.0 two years after it is published.
+Full text: <https://fsl.software>. [LICENSE](LICENSE) holds the official
+FSL-1.1-ALv2 text, unmodified.
 
 ## Contributing
 
@@ -39,23 +39,23 @@ sign-off.
 
 | Contribution to | Licensed to the project under |
 |---|---|
-| Project code outside `server/` and imported `toolchain/` sources | MIT |
-| `server/` | Apache License 2.0 |
-| Imported component sources under `toolchain/` | The applicable component/file license terms |
+| Project code and docs | Apache License 2.0 |
+| Third-party paths listed above | Their applicable original license terms |
 
-`server/` contributions come in under Apache 2.0 even though `server/` goes
-out under FSL. Apache 2.0 lets the maintainer relicense that code, including
-for the hosted service, and carries a patent grant. Contributors keep their
-copyright. The terms are in [CONTRIBUTING.md](CONTRIBUTING.md) and repeated
-in the pull request template, so they appear in every pull request.
+Contributions come in under Apache 2.0 even though the project goes out under
+FSL. Apache 2.0 lets the maintainer distribute contributions under FSL, under
+the future Apache 2.0 conversion, and in the hosted service, and it carries a
+patent grant. Contributors keep their copyright. The terms are in
+[CONTRIBUTING.md](CONTRIBUTING.md) and repeated in the pull request template,
+so they appear in every pull request.
 
-If the server becomes commercially important, or legal review finds the
-notice insufficient, switch `server/` to a click-through CLA. That change
-applies only to new contributions.
+If the project becomes commercially important, or legal review finds the
+notice insufficient, switch to a click-through CLA. That change applies only
+to new contributions.
 
 ## Attribution
 
-[NOTICE](NOTICE) lists contributors and any third-party code. Add each new
+[NOTICE](NOTICE) lists contributors and third-party code. Add each new
 contributor when their first pull request is merged, and ship the file with
 every copy, including the hosted service.
 

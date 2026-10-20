@@ -9,8 +9,7 @@
 ---
 
 By submitting this pull request, I confirm I have the right to submit this
-contribution. I license project contributions under MIT, except changes to
-`server/`, which I license to the project under the Apache License 2.0.
-Changes to imported sources under `toolchain/` retain their applicable
-component and file-level license terms. See
+contribution and I license it to the project under the Apache License 2.0.
+The project is distributed under FSL-1.1-ALv2. Changes to third-party paths
+retain their original license terms. See
 [CONTRIBUTING.md](../CONTRIBUTING.md).

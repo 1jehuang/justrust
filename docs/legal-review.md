@@ -1,17 +1,18 @@
 # Legal review brief
 
-Questions for a lawyer before the hosted justrust service launches or
-`server/` accepts its first outside contribution. Nothing here has been
+Questions for a lawyer before the hosted justrust service launches or the
+compiler accepts its first outside contribution. Nothing here has been
 reviewed yet. Update the status column as items are answered.
 
 ## Setup to review
 
 | Part | License | Files |
 |---|---|---|
-| Client, local tooling, protocol, docs | MIT | `LICENSE` |
-| `server/` (self-hostable single-tenant server) | FSL-1.1-ALv2, unmodified official text | `server/LICENSE` |
+| Compiler on `main` (engine, prelude, tests, tooling, docs) | FSL-1.1-ALv2, unmodified official text (MIT before 2026-10-19) | `LICENSE` |
+| Client on `stable` | Per that branch's `LICENSING.md` | `stable:LICENSE` |
+| Third-party paths on `main` (`libraries/probes/`, Adler2 fixtures, `unicode-ident`) | Original licenses retained | `NOTICE`, `THIRD-PARTY-LICENSES.md` |
 | Hosted multi-tenant service | Proprietary, separate private repository | none here |
-| Inbound contributions | MIT outside `server/`, Apache 2.0 for `server/`, stated without a CLA | `CONTRIBUTING.md`, `.github/pull_request_template.md` |
+| Inbound contributions | Apache 2.0 for all project code, stated without a CLA | `CONTRIBUTING.md`, `.github/pull_request_template.md` |
 | Attribution | Contributor and third-party notices | `NOTICE` |
 
 ## Questions
@@ -19,10 +20,10 @@ reviewed yet. Update the status column as items are answered.
 | # | Question | Status |
 |---|---|---|
 | 1 | Is the inbound Apache 2.0 notice in `CONTRIBUTING.md` plus the pull request template enough to bind contributors, given GitHub's Terms of Service default that contributions are licensed under the repository license? Is a click-through CLA needed, and at what point? | Open |
-| 2 | Under that notice, may the maintainer use `server/` contributions in the closed hosted service and relicense them? | Open |
-| 3 | Does FSL's Competing Use definition clearly block a third party from offering hosted remote Rust builds built on `server/`? Does it also restrict our own MIT client in any way? | Open |
-| 4 | Is mixing MIT and FSL directories in one repository sound, and does `exclude = ["server/"]` in the root `Cargo.toml` keep FSL code out of the MIT crate published to crates.io? | Open |
-| 5 | Does the `NOTICE` file satisfy MIT and Apache 2.0 attribution for contributor code used in the hosted service? | Open |
+| 2 | Under that notice, may the maintainer distribute contributions under FSL, use them in the closed hosted service, and relicense them? | Open |
+| 3 | Does FSL's Competing Use definition clearly block a third party from offering hosted remote Rust builds built on the compiler? Does it unduly deter internal company and CI use? | Open |
+| 4 | Is relicensing `main` from MIT to FSL sound given that earlier MIT copies keep their grant, and are the third-party carve-outs (`libraries/probes/`, Adler2 fixtures) correctly scoped? | Open |
+| 5 | Does the `NOTICE` file satisfy Apache 2.0 and third-party attribution for contributor code used in the hosted service? | Open |
 | 6 | Should the licensor be an entity rather than an individual before launch, and how are the copyright notices and existing licenses transferred? | Open |
 | 7 | Is a trademark registration for "justrust" advisable before launch? | Open |
 | 8 | Hosted service terms: data handling for uploaded source code, liability for build output, and terms of service. | Open |
@@ -30,5 +31,5 @@ reviewed yet. Update the status column as items are answered.
 ## Decisions already made
 
 See [remote-strategy.md](remote-strategy.md#open-source-and-licensing) for
-the reasoning: open core, FSL for the server, inbound Apache 2.0 with no CLA
+the reasoning: FSL outbound for the whole compiler, inbound Apache 2.0 with no CLA
 to keep contributing frictionless, and a switch to a CLA if review requires.

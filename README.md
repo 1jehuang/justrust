@@ -125,6 +125,8 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) and [ENGINE.md](ENGINE.md) for details.
 
 ## Contributing and license
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). The client is MIT, and the self-hostable
-cache server in `server/` is FSL-1.1-ALv2. Vendored toolchain sources retain
-their component licenses and third-party notices. See [LICENSING.md](LICENSING.md).
+See [CONTRIBUTING.md](CONTRIBUTING.md). The compiler is source-available under
+FSL-1.1-ALv2: use it for anything except a competing product or service, and
+each release becomes Apache 2.0 after two years. Contributions are accepted
+under Apache 2.0. Third-party sources keep their original licenses. See
+[LICENSING.md](LICENSING.md).

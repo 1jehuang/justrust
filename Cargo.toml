@@ -2,7 +2,7 @@
 name = "justrust-engine"
 version = "0.1.0"
 edition = "2024"
-license = "MIT"
+license-file = "LICENSE"
 publish = false
 
 [dependencies]
