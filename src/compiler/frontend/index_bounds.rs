@@ -30,8 +30,18 @@ impl type_check::Checker<'_> {
                 }
                 _ => return Err("indexed assignment probe requires array or slice".into()),
             };
-        let saved_value =
-            self.temporary(&format!("$bv{}", self.locals.len()), element.clone(), false)?;
+        // The RHS is an independent value. In particular, a compound shift
+        // count need not have the element's integer type, so its owning
+        // snapshot and reload must retain the checked RHS type.
+        let value_ty = match &self.exprs[value.0].ty {
+            ir::Ty::Never => element,
+            ty => ty.clone(),
+        };
+        let saved_value = self.temporary(
+            &format!("$bv{}", self.locals.len()),
+            value_ty.clone(),
+            false,
+        )?;
         let saved_index = self.temporary(
             &format!("$bx{}", self.locals.len()),
             ir::Ty::Int(ir::IntTy::Usize),
@@ -50,7 +60,7 @@ impl type_check::Checker<'_> {
             ir::Ty::Int(ir::IntTy::Usize),
             ir::ExprKind::Local(saved_index),
         )?;
-        let value = self.for_expr(element, ir::ExprKind::Local(saved_value))?;
+        let value = self.for_expr(value_ty, ir::ExprKind::Local(saved_value))?;
         self.charge_node(array.projection.len() * std::mem::size_of::<ir::Projection>())?;
         let probe_index = self.for_expr(
             ir::Ty::Int(ir::IntTy::Usize),

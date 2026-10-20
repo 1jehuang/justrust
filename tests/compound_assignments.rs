@@ -3,6 +3,9 @@
 //! Primitive RHS precedes selection and read of the current destination.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
 
+#[path = "support/iterator_oracle.rs"]
+mod differential;
+
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -469,5 +472,41 @@ fn accepts_custom_trait_compound_matching_stock() {
         r#"struct S(i32);impl std::ops::AddAssign<i32> for S{fn add_assign(&mut self,r:i32){self.0=self.0+r;}}fn run()->i32{let mut s=S(3);s+=4;s.0}
 fn main(){if run()==7{println!("compound oracle ok");}}"#,
         "compound oracle ok\n",
+    );
+}
+
+#[test]
+fn indexed_compound_probe_snapshots_match_stock_distinct_integer_widths() {
+    differential::stock_native(
+        r#"fn main() {
+            let mut narrow=[12u8,7u8]; let i=0usize;
+            narrow[i]<<=1u128; narrow[i]>>=1i8;
+            let mut wide=[-8i128,16i128]; let j=1usize;
+            wide[j]>>=2u8; wide[j]<<=1i16;
+            println!("{} {} {} {}",narrow[0],narrow[1],wide[0],wide[1]);
+        }"#,
+    );
+}
+
+#[test]
+fn indexed_compound_probe_preserves_rhs_index_order_and_wide_counts() {
+    differential::stock_native(
+        r#"fn index()->usize { println!("index"); 1usize }
+        fn count()->u128 { println!("rhs"); 64u128 }
+        fn update(values:&mut [u128;2]) {
+            let mut selected=0usize;
+            values[selected] <<= { selected=1usize; println!("move rhs"); 64u128 };
+            values[index()] >>= count();
+        }
+        fn main() {
+            let mut values=[1u128,2u128]; update(&mut values);
+            let mut signed=[-8i128,-73786976294838206464i128];
+            let selected=1usize; signed[selected] >>= 65u128;
+            let mut narrow=[-8i32,-8i32];
+            narrow[selected] >>= 1i128; narrow[selected] <<= 1u128;
+            let mut flags=[true,false]; let mut trace=0;
+            flags[{trace=trace*10+1; 0usize}] &= {trace=trace*10+2; false};
+            println!("{} {} {} {} {} {}", values[0],values[1],signed[1],narrow[1],flags[0],trace);
+        }"#,
     );
 }

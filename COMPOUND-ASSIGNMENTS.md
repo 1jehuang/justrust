@@ -162,3 +162,18 @@ successful graphs. Twenty-six raw corpus/example receipts are retained under
 experiments/results/20261016-m8a-compound-assignments-*. The real example
 actually executed at96workers, not merely built. Full Rust and comprehensive
 performance acceptance remain open, with no experimental installation.
+
+## Indexed RHS snapshot typing (2026-10-20)
+
+Bounds-probe expansion preserves the checked RHS type in its temporary and
+reload, rather than using the destination element type. This retains independent
+shift-count widths, RHS-before-index evaluation, and existing operator and CFG
+authority checks. No graph node kinds or ratchets change.
+
+The existing backend all-width cases and frontend snapshot assertions pass.
+Two stock/native CHECK, BUILD and execution regressions at workers 1 and 8 cover
+heterogeneous counts, selected-cell effects and eager Bool order. The initial
+combined run `20261020-040705775-3846347` passed both positives but exposed an
+incorrect metadata-stage expectation in a new static-overflow negative oracle;
+that follow-up is not claimed as passing here. Graph integrity passes all 14
+checks in `20261020-035703220-3799231`. Full-suite and speed claims remain open.

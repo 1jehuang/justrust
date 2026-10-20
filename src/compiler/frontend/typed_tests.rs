@@ -1052,7 +1052,7 @@ fn indexed_compound_autodereferences_mutable_array_carriers() {
         "fn shift(a:&mut [u128;2],i:usize,n:u128){a[i]+=n;}fn main(){}",
         "fn main(){let mut a=[1u8,2u8];let r=&mut a;let i=0usize;r[i]<<=1u128;}",
     ] {
-        check(&parse(source).unwrap()).unwrap();
+        check(&parse(source).unwrap()).unwrap_or_else(|error| panic!("{source}: {error}"));
     }
     for source in [
         "fn shift(a:&[u8;2],i:usize,n:u128){a[i]<<=n;}fn main(){}",
@@ -1073,12 +1073,38 @@ fn indexed_compound_autodereferences_mutable_array_carriers() {
         index,
         value,
         ..
-    } = &f.body.statements[0]
+    } = f
+        .body
+        .statements
+        .iter()
+        .find(|statement| matches!(statement, ir::TypedStmt::AssignIndexOp { .. }))
+        .expect("expected indexed compound assignment")
     else {
-        panic!("expected indexed compound assignment")
+        unreachable!()
     };
     assert_eq!(array.projection, [ir::Projection::Deref]);
-    assert!(value.0 < index.0, "RHS must be typed before index");
+    assert_eq!(f.exprs[value.0].ty, ir::Ty::Int(ir::IntTy::U128));
+    assert_eq!(f.exprs[index.0].ty, ir::Ty::Int(ir::IntTy::Usize));
+    for statement in &f.body.statements {
+        if let ir::TypedStmt::Let { local, value } = statement {
+            assert_eq!(f.locals[local.0].ty, f.exprs[value.0].ty);
+        }
+    }
+    let rhs = f
+        .exprs
+        .iter()
+        .position(|e| {
+            matches!(e.kind, ir::ExprKind::Call { .. }) && e.ty == ir::Ty::Int(ir::IntTy::U128)
+        })
+        .unwrap();
+    let index_call = f
+        .exprs
+        .iter()
+        .position(|e| {
+            matches!(e.kind, ir::ExprKind::Call { .. }) && e.ty == ir::Ty::Int(ir::IntTy::Usize)
+        })
+        .unwrap();
+    assert!(rhs < index_call, "RHS must be typed before index");
     assert_eq!(
         f.exprs
             .iter()

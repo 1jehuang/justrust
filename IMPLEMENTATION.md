@@ -345,6 +345,10 @@ missing-file changes invalidate only justified consumers without stale lookup.
 
 ### G2. Typed values, patterns, inference and control flow
 
+- [x] Indexed compound bounds-probe expansion preserves independently typed
+      RHS snapshots, including heterogeneous and 128-bit shift counts, rather
+      than forcing the destination element type. Existing operator/CFG
+      validation remains unchanged (`COMPOUND-ASSIGNMENTS.md`).
 - [x] Cast/repeat source-inventory chains traverse without recursive large
       dispatch frames, retaining original occurrence authority and unchanged
       nesting/resource checks (INTEGER-CASTS.md).
