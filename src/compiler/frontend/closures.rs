@@ -7,6 +7,8 @@ mod capture_use;
 pub(in crate::compiler) mod check;
 mod fn_sugar;
 mod owner_source;
+#[cfg(test)]
+mod parameter_authority;
 mod prepare;
 pub(in crate::compiler) mod publication;
 pub(in crate::compiler) mod shape_seal;

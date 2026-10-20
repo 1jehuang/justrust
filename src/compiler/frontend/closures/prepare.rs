@@ -109,13 +109,49 @@ impl Checker<'_> {
         }
         child.scopes.push(HashMap::new());
         let mut prefix = Vec::new();
-        for (index, ((name, _), ty)) in syntax.params.iter().zip(parameter_types.iter()).enumerate()
+        let mut parameter_names = std::collections::HashSet::new();
+        for (index, ((pattern, _), ty)) in
+            syntax.params.iter().zip(parameter_types.iter()).enumerate()
         {
-            let local = child.bind(name, ty.clone())?;
-            child.locals[local.0].mutable = syntax.param_mut.get(index).copied().unwrap_or(false);
             let base = child.for_expr(arguments_ty.clone(), ir::ExprKind::Local(arguments))?;
             let value = child.for_expr(ty.clone(), ir::ExprKind::Field { base, index })?;
-            prefix.push(ir::TypedStmt::Let { local, value });
+            let domain = child.pattern_ty(pattern, ty)?;
+            child.require(&child.flow(value), &domain)?;
+            child.accessible(&domain)?;
+            child.prove_nominal_bounds(&domain)?;
+            let mut pending = Vec::new();
+            child.pattern_locals(
+                pattern,
+                &domain,
+                &mut Vec::new(),
+                &mut parameter_names,
+                &mut pending,
+                &mut 0usize,
+            )?;
+            let mut bindings = Vec::with_capacity(pending.len());
+            for binding in pending {
+                let local = child.local(binding.name, binding.ty, binding.mutable)?;
+                bindings.push(ir::PatternBinding {
+                    local,
+                    projection: binding.projection,
+                    borrow: binding.borrow,
+                });
+            }
+            if matches!(pattern, Pattern::Binding { by_ref: None, .. }) {
+                let [binding] = bindings.as_slice() else {
+                    return Err("closure parameter binding cardinality changed".into());
+                };
+                prefix.push(ir::TypedStmt::Let {
+                    local: binding.local,
+                    value,
+                });
+            } else {
+                prefix.push(ir::TypedStmt::LetPattern {
+                    value,
+                    ty: domain,
+                    bindings,
+                });
+            }
         }
         let expectation = match result_hint.as_ref() {
             Some(ty) if matches!(syntax.result, Type::Infer) => Expectation::Inferred(ty),

@@ -9102,6 +9102,13 @@ impl<'input, 'names> Parser<'input, 'names> {
         &mut self,
         params: &[(BindingName, Type)],
     ) -> Result<(Block, Option<super::semantic_scope::ScopeId>), ParseError> {
+        self.function_body_parameters(params, None)
+    }
+    fn function_body_parameters(
+        &mut self,
+        params: &[(BindingName, Type)],
+        patterns: Option<&[(Pattern, Type)]>,
+    ) -> Result<(Block, Option<super::semantic_scope::ScopeId>), ParseError> {
         let receiver = self.lexical.pending_receiver.take();
         if self.purpose == ParserPurpose::InactiveSyntax {
             return Ok((self.block()?, None));
@@ -9187,6 +9194,11 @@ impl<'input, 'names> Parser<'input, 'names> {
         for (name, _) in params {
             if let BindingName::Named(name) = name {
                 self.bind_lexical(*name)?;
+            }
+        }
+        if let Some(patterns) = patterns {
+            for (pattern, _) in patterns {
+                self.bind_pattern_lexical(pattern)?;
             }
         }
         let body = self.block();

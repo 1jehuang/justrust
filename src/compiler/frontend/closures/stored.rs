@@ -6,8 +6,7 @@ use super::*;
 #[derive(Clone, Debug)]
 pub(in crate::compiler::frontend) struct StoredClosureSyntax {
     pub site: u32,
-    pub params: Vec<(BindingName, Type)>,
-    pub param_mut: Vec<bool>,
+    pub params: Vec<(Pattern, Type)>,
     pub result: Type,
     pub body: Block,
     pub lexical_scope: Option<super::super::super::semantic_scope::ScopeId>,
@@ -39,23 +38,19 @@ impl Parser<'_, '_> {
             self.expect("|")?;
         }
         let mut params = Vec::new();
-        let mut param_mut = Vec::new();
         if !empty {
             while !self.is("|") {
                 if params.len() >= 64 {
                     return Err(self.limit("closure parameter limit 64"));
                 }
-                let mutable = self.eat("mut");
-                let name = self.binding()?;
+                let pattern = self.pattern_no_alternatives()?;
                 let ty = if self.eat(":") {
                     self.ty()?
                 } else {
                     Type::Infer
                 };
                 self.reserve_parser_items(&mut params, 1)?;
-                self.reserve_parser_items(&mut param_mut, 1)?;
-                params.push((name, ty));
-                param_mut.push(mutable);
+                params.push((pattern, ty));
                 if !self.eat(",") {
                     break;
                 }
@@ -80,14 +75,26 @@ impl Parser<'_, '_> {
             .anonymous_closure(origin, serial)
             .map_err(native_adapter::name_error)?;
         let name = self.closure_path(ident)?;
+        // Legacy immediate-closure parent metadata names only genuine whole
+        // bindings. Destructured parameters have no invented root source name.
+        let parent_params = params
+            .iter()
+            .map(|(pattern, ty)| {
+                let name = match pattern {
+                    Pattern::Binding { name, .. } => BindingName::Named(*name),
+                    _ => BindingName::Wildcard,
+                };
+                (name, ty.clone())
+            })
+            .collect();
         let parent = self.lexical.closure_parent.replace(ClosureParent {
             name: name.clone(),
-            params: params.clone(),
+            params: parent_params,
         });
         let previous = self.lexical.function.take();
         self.lexical.closure_depth += 1;
         let body = if self.is("{") {
-            self.function_body(&params)
+            self.function_body_parameters(&[], Some(&params))
         } else {
             self.nested_expr().map(|value| {
                 (
@@ -154,7 +161,6 @@ impl Parser<'_, '_> {
             stored: Some(StoredClosureSyntax {
                 site,
                 params,
-                param_mut,
                 result,
                 body,
                 lexical_scope,

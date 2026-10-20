@@ -653,6 +653,13 @@ cleanup failures.
       bindings before item/import lookup, preserving local/parameter shadowing
       and rejecting unused non-callable or invalid item calls
       (`tests/closure_lexical_calls.rs`, explicit worker-1/8 CHECK/BUILD/run).
+      Stored parameter patterns retain actual source binders and ordinary checked
+      entry destructuring. Three positives and seven unused invalid cases pass
+      explicit stock/native CHECK/BUILD at workers 1 and 8, with successful runs
+      for valid sources and CHECK no-codegen assertions. Source/binder/projection
+      forgery controls and all 14 graph gates pass
+      (`CLOSURE-PARAMETER-PATTERNS.md`). Unchanged corpus 11 advances to the
+      associated-equality admission boundary, not successful program execution.
       Unauthenticated cross-function macro capture occurrences remain unsupported.
       Generic-parent closures, opaque returns and iterator
       integration remain open.

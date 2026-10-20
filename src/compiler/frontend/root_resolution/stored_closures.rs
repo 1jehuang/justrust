@@ -29,13 +29,11 @@ impl Resolver<'_> {
         let previous_depth = locals.len();
         let result = (|| {
             let mut parameters = std::collections::HashSet::new();
-            for (name, ty) in &mut syntax.params {
+            for (pattern, ty) in &mut syntax.params {
                 if !matches!(ty, Type::Infer) {
                     self.ty(ty, module)?;
                 }
-                if let BindingName::Named(name) = name {
-                    self.local_insert(&mut parameters, *name)?;
-                }
+                self.pattern(pattern, module, &mut parameters)?;
             }
             if !matches!(syntax.result, Type::Infer) {
                 self.ty(&mut syntax.result, module)?;

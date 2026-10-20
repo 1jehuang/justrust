@@ -54,8 +54,8 @@ impl<'a: 's, 'b: 's, 's> Solver<'a, 'b, 's> {
         self.local_context = Some(syntax.lexical_scope);
         self.return_terms.push(result);
         self.scopes.push(HashMap::new());
-        for ((name, _), term) in syntax.params.iter().zip(&params) {
-            self.bind(name, *term)?;
+        for ((pattern, _), term) in syntax.params.iter().zip(&params) {
+            self.pattern(pattern, *term)?;
         }
         let body = self.block(&syntax.body, depth + 1)?;
         if syntax.body.tail.is_some() {
