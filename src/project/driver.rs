@@ -81,13 +81,7 @@ fn selected_packages(ws: &Workspace, sel: &Selection) -> Result<Vec<usize>, Mani
 /// Plan the units of `command` for the selection, in Cargo's order.
 pub fn plan(ws: &Workspace, command: Command, sel: &Selection) -> Result<Vec<Unit>, ManifestError> {
     let packages = selected_packages(ws, sel)?;
-    let explicit = sel.lib
-        || sel.all_bins
-        || !sel.bins.is_empty()
-        || sel.all_tests
-        || !sel.tests.is_empty()
-        || !sel.examples.is_empty()
-        || sel.all_targets;
+    let explicit = explicit_targets(sel);
     let mut units = Vec::new();
     for &index in &packages {
         let package = &ws.packages[index];
@@ -290,6 +284,20 @@ impl Driver {
         let profile = manifest::resolve_profile(&self.ws.profiles, &profile_name)?;
         let units = plan(&self.ws, command, &self.sel)?;
         let packages = selected_packages(&self.ws, &self.sel)?;
+        // Doctest discovery and execution are not implemented. A source scan
+        // cannot prove there are zero tests, and test=false only disables the
+        // unit harness. Reject the requested work before publishing success.
+        if command == Command::Test && !self.sel.no_run && !explicit_targets(&self.sel) {
+            for &index in &packages {
+                let package = &self.ws.packages[index];
+                if let Some(lib) = package.lib().filter(|lib| lib.doctest) {
+                    return Err(err(format!(
+                        "Unsupported: doc-tests for library `{}` cannot be executed by the native driver; use --lib or --tests to select only supported test targets",
+                        lib.name
+                    )));
+                }
+            }
+        }
         let roots: Vec<_> = packages
             .iter()
             .map(|&index| {
@@ -446,27 +454,6 @@ impl Driver {
                         );
                         return Ok(101);
                     }
-                    // Doc-tests follow a package's last test binary.
-                    let last = artifacts
-                        .iter()
-                        .rev()
-                        .find(|(u, _)| u.package == unit.package)
-                        .is_some_and(|(u, _)| std::ptr::eq(u, unit));
-                    if last
-                        && !explicit_targets(&self.sel)
-                        && let Some(lib) = self.ws.packages[unit.package].lib()
-                    {
-                        let package = &self.ws.packages[unit.package];
-                        eprintln!("{:>12} {}", "Doc-tests", lib.name);
-                        if has_doc_examples(lib.path.parent().unwrap_or(&package.root)) {
-                            eprintln!(
-                                "warning: doc-tests are unsupported by the native driver and were not run"
-                            );
-                        }
-                        println!(
-                            "\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n"
-                        );
-                    }
                 }
                 Ok(0)
             }
@@ -518,26 +505,7 @@ fn explicit_targets(sel: &Selection) -> bool {
         || sel.all_tests
         || !sel.tests.is_empty()
         || !sel.examples.is_empty()
-}
-
-/// Whether any source under `dir` has a fenced example in doc comments.
-fn has_doc_examples(dir: &Path) -> bool {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return false;
-    };
-    entries.flatten().any(|entry| {
-        let path = entry.path();
-        if path.is_dir() {
-            return has_doc_examples(&path);
-        }
-        path.extension().is_some_and(|e| e == "rs")
-            && std::fs::read_to_string(&path).is_ok_and(|text| {
-                text.lines().any(|line| {
-                    let line = line.trim_start();
-                    (line.starts_with("///") || line.starts_with("//!")) && line.contains("```")
-                })
-            })
-    })
+        || sel.all_targets
 }
 
 fn describe(unit: &Unit, package: &Package) -> String {

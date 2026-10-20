@@ -27,6 +27,8 @@ pub struct Target {
     pub path: PathBuf,
     /// `test = false` excludes the target from `test` runs.
     pub test: bool,
+    /// Whether default test selection requests library doctests.
+    pub doctest: bool,
     pub harness: bool,
 }
 
@@ -1030,6 +1032,7 @@ fn discover_targets(
                 .map(|p| dir.join(p))
                 .unwrap_or(lib_default),
             test: get_bool(&t, "test", "lib")?.unwrap_or(true),
+            doctest: get_bool(&t, "doctest", "lib")?.unwrap_or(true),
             harness: get_bool(&t, "harness", "lib")?.unwrap_or(true),
         });
     }
@@ -1067,6 +1070,7 @@ fn discover_targets(
                     name,
                     path,
                     test: get_bool(t, "test", key)?.unwrap_or(kind != TargetKind::Example),
+                    doctest: false,
                     harness: get_bool(t, "harness", key)?.unwrap_or(true),
                 });
             }
@@ -1100,6 +1104,7 @@ fn discover_targets(
                     name,
                     path,
                     test: kind != TargetKind::Example,
+                    doctest: false,
                     harness: true,
                 });
             }

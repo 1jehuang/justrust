@@ -6,6 +6,22 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+#[path = "support/stock_rustc.rs"]
+mod stock_rustc;
+
+fn stock_command() -> Command {
+    let rustc = stock_rustc::stock_rustc();
+    let rustdoc = Path::new(&rustc).with_file_name("rustdoc");
+    let mut command = Command::new("cargo");
+    command
+        .env("RUSTC", rustc)
+        .env("RUSTDOC", rustdoc)
+        .env_remove("RUSTC_WRAPPER")
+        .env_remove("RUSTC_WORKSPACE_WRAPPER")
+        .env_remove("RUSTC_BOOTSTRAP");
+    command
+}
+
 const CRATES_IO_CACHE_ID: &str = "index.crates.io-1949cf8c6b5b557f";
 
 fn fixture(name: &str) -> PathBuf {
@@ -40,7 +56,7 @@ fn jr_with(
 }
 
 fn stock(project: &str, args: &[&str]) -> Option<Output> {
-    Command::new("cargo")
+    stock_command()
         .args(args)
         .current_dir(fixture(project))
         .env("CARGO_TARGET_DIR", target_dir(&format!("{project}-stock")))
@@ -116,13 +132,14 @@ fn workspace_check_build_run_and_test_match_stock_cargo() {
     assert!(
         String::from_utf8_lossy(&ambiguous.stderr).contains("could not determine which binary")
     );
-    let test = jr("workspace", &["test"]);
+    let test = jr("workspace", &["test", "--tests"]);
     assert!(
         test.status.success(),
         "{}",
         String::from_utf8_lossy(&test.stderr)
     );
-    if let Some(expected) = stock("workspace", &["test"]).filter(|o| o.status.success()) {
+    if let Some(expected) = stock("workspace", &["test", "--tests"]).filter(|o| o.status.success())
+    {
         // Stock libtest reports parallel tests in completion order.
         let sorted = |text: String| {
             let mut lines: Vec<String> = text.lines().map(String::from).collect();
@@ -140,7 +157,7 @@ fn workspace_check_build_run_and_test_match_stock_cargo() {
 
 #[test]
 fn failing_tests_report_like_libtest_and_exit_101() {
-    let test = jr("failing", &["test"]);
+    let test = jr("failing", &["test", "--lib"]);
     assert_eq!(test.status.code(), Some(101));
     let stdout = String::from_utf8_lossy(&test.stdout);
     for line in [
@@ -159,16 +176,179 @@ fn failing_tests_report_like_libtest_and_exit_101() {
         String::from_utf8_lossy(&test.stderr).contains("error: test failed, to rerun pass `--lib`")
     );
     // Libtest filters are applied by the native harness.
-    let filtered = jr("failing", &["test", "halves"]);
+    let filtered = jr("failing", &["test", "--lib", "halves"]);
     assert!(filtered.status.success());
     assert!(
         String::from_utf8_lossy(&filtered.stdout)
             .contains("test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out")
     );
-    let ignored = jr("failing", &["test", "--", "--ignored"]);
+    let ignored = jr("failing", &["test", "--lib", "--", "--ignored"]);
     assert!(String::from_utf8_lossy(&ignored.stdout).contains("test tests::skipped ... ok"));
     // A plain build of the library ignores #[test] items entirely.
     assert!(jr("failing", &["check"]).status.success());
+}
+
+#[test]
+fn doctest_selection_is_explicit_and_never_reports_invented_success() {
+    let project = target_dir("doctest-selection");
+    std::fs::create_dir_all(project.join("src")).unwrap();
+    std::fs::create_dir_all(project.join("tests")).unwrap();
+    let manifest = "[package]\nname = \"doc_selection\"\nversion = \"0.1.0\"\nedition = \"2024\"\n";
+    std::fs::write(project.join("Cargo.toml"), manifest).unwrap();
+    // The doctest intentionally fails, while ordinary test targets pass.
+    // This makes accidental doctest execution observable in the stock oracle.
+    std::fs::write(
+        project.join("src/lib.rs"),
+        "/// ```\n/// assert!(false);\n/// ```\npub fn value() -> i32 { 7 }\n#[test]\nfn unit_passes() { assert_eq!(value(), 7); }\n",
+    )
+    .unwrap();
+    std::fs::write(project.join("src/main.rs"), "fn main() {}\n").unwrap();
+    std::fs::write(
+        project.join("tests/smoke.rs"),
+        "#[test]\nfn integration_passes() { assert_eq!(doc_selection::value(), 7); }\n",
+    )
+    .unwrap();
+    let invoke = |native: bool, args: &[&str]| {
+        let mut command = if native {
+            Command::new(env!("CARGO_BIN_EXE_jr-rust"))
+        } else {
+            stock_command()
+        };
+        command
+            .args(args)
+            .current_dir(&project)
+            .env(
+                "CARGO_TARGET_DIR",
+                project.join(if native { "native" } else { "stock" }),
+            )
+            .output()
+            .unwrap()
+    };
+    for args in [
+        vec!["test", "--lib"],
+        vec!["test", "--test", "smoke"],
+        vec!["test", "--tests"],
+        vec!["test", "--bin", "doc_selection"],
+        vec!["test", "--bins"],
+        vec!["test", "--all-targets"],
+        vec!["test", "--all-targets", "--lib"],
+        vec!["test", "--no-run"],
+    ] {
+        let expected = invoke(false, &args);
+        assert!(
+            expected.status.success(),
+            "stock {args:?}: {}",
+            String::from_utf8_lossy(&expected.stderr)
+        );
+        assert!(!String::from_utf8_lossy(&expected.stderr).contains("Doc-tests"));
+        for workers in ["1", "8"] {
+            let mut native_args = args.clone();
+            native_args.extend(["-j", workers]);
+            let actual = invoke(true, &native_args);
+            assert!(
+                actual.status.success(),
+                "native {native_args:?}: {}",
+                String::from_utf8_lossy(&actual.stderr)
+            );
+            assert!(!String::from_utf8_lossy(&actual.stderr).contains("Doc-tests"));
+            assert_eq!(
+                normalize(&actual.stdout).contains("unit_passes"),
+                normalize(&expected.stdout).contains("unit_passes")
+            );
+            assert_eq!(
+                normalize(&actual.stdout).contains("integration_passes"),
+                normalize(&expected.stdout).contains("integration_passes")
+            );
+        }
+    }
+    let expected = invoke(false, &["test"]);
+    assert_eq!(expected.status.code(), Some(101));
+    assert!(String::from_utf8_lossy(&expected.stderr).contains("Doc-tests"));
+    for args in [
+        vec!["test"],
+        vec!["test", "unit_passes"],
+        vec!["test", "--workspace"],
+        vec!["test", "-p", "doc_selection"],
+    ] {
+        for workers in ["1", "8"] {
+            let mut args = args.clone();
+            args.extend(["-j", workers]);
+            let actual = invoke(true, &args);
+            assert_eq!(actual.status.code(), Some(101));
+            let stderr = String::from_utf8_lossy(&actual.stderr);
+            assert!(
+                stderr.contains("Unsupported: doc-tests"),
+                "{args:?}: {stderr}"
+            );
+            assert!(!stderr.contains("Finished"), "{stderr}");
+            assert!(
+                actual.stdout.is_empty(),
+                "must not report successful test results"
+            );
+        }
+    }
+    // A real manifest opt-out requests no doctests, even when documentation
+    // contains a failing Rust example. Ordinary unit/integration tests still run.
+    std::fs::write(
+        project.join("Cargo.toml"),
+        format!("{manifest}[lib]\ndoctest = false\n"),
+    )
+    .unwrap();
+    let expected = invoke(false, &["test"]);
+    assert!(
+        expected.status.success(),
+        "{}",
+        String::from_utf8_lossy(&expected.stderr)
+    );
+    assert!(!String::from_utf8_lossy(&expected.stderr).contains("Doc-tests"));
+    for workers in ["1", "8"] {
+        let actual = invoke(true, &["test", "-j", workers]);
+        assert!(
+            actual.status.success(),
+            "{}",
+            String::from_utf8_lossy(&actual.stderr)
+        );
+        assert!(!String::from_utf8_lossy(&actual.stderr).contains("Doc-tests"));
+        assert!(String::from_utf8_lossy(&actual.stdout).contains("unit_passes"));
+        assert!(String::from_utf8_lossy(&actual.stdout).contains("integration_passes"));
+    }
+    for value in ["\"false\"", "0", "[]"] {
+        std::fs::write(
+            project.join("Cargo.toml"),
+            format!("{manifest}[lib]\ndoctest = {value}\n"),
+        )
+        .unwrap();
+        assert!(!invoke(false, &["test", "--lib"]).status.success());
+        let actual = invoke(true, &["test", "--lib"]);
+        assert_eq!(actual.status.code(), Some(101));
+        assert!(
+            String::from_utf8_lossy(&actual.stderr).contains("lib.doctest: expected a boolean")
+        );
+        assert!(actual.stdout.is_empty());
+    }
+    // Disabling unit tests does not disable doctests, and cannot hide the
+    // unsupported request merely because there are no test executables.
+    let no_units = manifest.replace(
+        "edition = \"2024\"\n",
+        "edition = \"2024\"\nautobins = false\nautotests = false\n[lib]\ntest = false\n",
+    );
+    std::fs::write(project.join("Cargo.toml"), &no_units).unwrap();
+    let expected = invoke(false, &["test"]);
+    assert_eq!(expected.status.code(), Some(101));
+    assert!(String::from_utf8_lossy(&expected.stderr).contains("Doc-tests"));
+    for workers in ["1", "8"] {
+        let actual = invoke(true, &["test", "-j", workers]);
+        assert_eq!(actual.status.code(), Some(101));
+        assert!(String::from_utf8_lossy(&actual.stderr).contains("Unsupported: doc-tests"));
+        assert!(actual.stdout.is_empty());
+    }
+    // Even an apparently empty source cannot justify claiming that rustdoc
+    // discovered zero tests when native doctest discovery is unavailable.
+    std::fs::write(project.join("src/lib.rs"), "pub fn value() -> i32 { 7 }\n").unwrap();
+    let actual = invoke(true, &["test"]);
+    assert_eq!(actual.status.code(), Some(101));
+    assert!(String::from_utf8_lossy(&actual.stderr).contains("Unsupported: doc-tests"));
+    assert!(actual.stdout.is_empty());
 }
 
 #[test]
