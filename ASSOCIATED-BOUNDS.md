@@ -31,6 +31,34 @@ counts. Source-backed authority controls reject foreign worlds/items, wrong orde
 arguments and cyclic reductions, and replay exact caller obligations. `?Sized`, GATs,
 associated defaults and closure result-carrier extensions are separate work.
 
+## Closed call-selection replay repair (2026-10-20)
+
+Closed calls whose original receiver is an associated projection now replay raw
+substitution before separately normalizing under the empty closed environment.
+The structural validator still rejects a projection replaced directly by its
+normal form. Normalization uses the exact source item and ordered trait arguments,
+replays its dependency evidence, and compares the result with the selected call.
+Projection-free selection replay is unchanged.
+
+Hosted `associated_declaration_bounds` passes all four tests, including stock
+CHECK/BUILD/run at workers 1 and 8 for the original applied/inherited bounds and
+an added same-Self/different-argument selection. Its four unused invalid assignment
+controls still reject. A private replay test rejects wrong outputs, trait arguments
+and associated items, and confirms raw structural replay cannot erase projections.
+Hosted graph integrity passes all 14 checks without validator or ratchet changes
+(run `20261020-035437685-3791131`); private control run:
+`20261020-035430326-3791254`. This is a focused debug compatibility repair, not a
+full-suite, release-profile, performance or full Rust compatibility claim.
+
+Nearby authority suites passed 29/31 tests in `20261020-040000793-3811981`.
+Two older capability-boundary expectations failed before closed call replay:
+`catalog_identity_not_user_trait_spelling_grants_copy` expects source parsing to
+reject a user-trait bound, and
+`rigid_projection_remains_unsupported_and_required_method_schema_is_admitted`
+expects a rigid projection to remain unsupported. They were not changed by this
+repair. Strict hosted `clippy --lib --tests -- -D warnings` passed in
+`20261020-040002660-3811980`; full-suite and release validation remain unclaimed.
+
 ## Historical catalog-only milestone
 
 Status: delivered as a bounded milestone, verified on 2026-10-18. Builds on `458253eb5` and PARAMETER-EQUALITY.md. Full Rust remains open.

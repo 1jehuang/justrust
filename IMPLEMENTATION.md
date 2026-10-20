@@ -623,7 +623,12 @@ cleanup failures.
       RHS reduction and closed predicate normalization replay support the standard
       `IntoIter: Iterator<Item = Self::Item>` generic loop, matching stock native
       CHECK/BUILD/run at workers 1/8. This does not invent Copy for equality-bound U;
-      `?Sized`, GATs and associated defaults remain separate work.
+      `?Sized`, GATs and associated defaults remain separate work. Closed call
+      selection now separately replays raw substitution and exact closed projection
+      normalization, fixing applied/inherited associated-bound BUILD failures.
+      Four focused stock-differential tests (workers 1/8), forged replay controls,
+      and all 14 graph-integrity checks pass on hosted (2026-10-20,
+      `20261020-035437685-3791131`), without relaxing structural validation.
 - [x] Inherited associated type lookup through supertraits canonicalizes the owning
       declaration and ordered actuals. Generic `IndexMut<I>: Index<I>` implementations
       normalize inherited `Output` using an independently proved superclass impl,

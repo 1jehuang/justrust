@@ -48,3 +48,23 @@ fn unused_assignments_cannot_evade_declared_membership_or_equalities() {
         oracle::stock_and_native_reject(source);
     }
 }
+
+#[test]
+fn closed_declared_projection_keeps_same_self_trait_arguments_distinct() {
+    oracle::stock_native(
+        r#"
+trait Read { fn read(self) -> i32; }
+trait Factory<A> { type Output: Read; fn make(self) -> Self::Output; }
+struct First;
+struct Second;
+impl Read for First { fn read(self) -> i32 { 19 } }
+impl Read for Second { fn read(self) -> i32 { 23 } }
+struct Source;
+impl Factory<i32> for Source { type Output = First; fn make(self) -> First { First } }
+impl Factory<bool> for Source { type Output = Second; fn make(self) -> Second { Second } }
+fn first<F: Factory<i32>>(factory: F) -> i32 { factory.make().read() }
+fn second<F: Factory<bool>>(factory: F) -> i32 { factory.make().read() }
+fn main() { println!("{}", first(Source) + second(Source)); }
+"#,
+    );
+}

@@ -45,7 +45,42 @@ impl ValidatedTraitWorld {
             ));
         }
         for (raw, actual) in original.metadata_types().zip(selected.metadata_types()) {
-            self.validate_rhs_substitution(raw, actual, env, arguments, 0)?;
+            if !self.type_contains_projection(raw, 0)? {
+                self.validate_rhs_substitution(raw, actual, env, arguments, 0)?;
+                continue;
+            }
+            // Closed call selection has already normalized associated projections.
+            // Replay raw substitution first, without treating normalization as a
+            // structural substitution or granting it authority over source terms.
+            let schema = GenericSchema {
+                env: Arc::new(env.clone()),
+                signature: Signature {
+                    params: Vec::new(),
+                    result: raw.clone(),
+                    ref_contract: Arc::new(ir::RefContract::default()),
+                },
+                predicates: Arc::from([]),
+            };
+            let substituted =
+                self.substitute_projected_schema(&schema, arguments, &self.empty.env)?;
+            let context = ProofContext {
+                predicates: &self.empty,
+                phase: FactsPhase::Closed,
+            };
+            let (normalized, dependencies) = self.normalize_closed_projected_type(
+                &substituted.signature.result,
+                context,
+                false,
+            )?;
+            for dependency in &dependencies {
+                self.validate_projected_dependency(dependency, context)?;
+            }
+            if !self.eq_ty(&normalized, actual, 0)? {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "closed call selection changed substituted normalized source type",
+                ));
+            }
         }
         Ok(())
     }
@@ -644,6 +679,84 @@ impl ValidatedTraitWorld {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn closed_selection_normalizes_only_the_exact_substituted_projection() {
+        let source = crate::compiler::frontend::parse(
+            "struct S;trait Has<A>{type Out;type Other;}impl Has<i32> for S{type Out=i32;type Other=bool;}fn caller<T:Has<i32>>(x:T){}fn main(){}",
+        ).unwrap();
+        let plan =
+            crate::compiler::frontend::PlanCtx::from_program(&source, &ir::PlanBudget::default())
+                .unwrap();
+        let world = plan.trait_world().unwrap();
+        let caller = world
+            .headers
+            .callables
+            .iter()
+            .find(|h| h.schema.env.is_generic())
+            .unwrap();
+        let implementation = &world.headers.impls[0];
+        let parameter = caller.schema.env.ordered_params().next().unwrap();
+        let projection = ir::AssociatedTypeProjection {
+            trait_ref: TraitRef {
+                declaration: implementation.trait_ref.declaration,
+                self_ty: Ty::Param(parameter),
+                args: Arc::from([Ty::Int(ir::IntTy::I32)]),
+            },
+            item: implementation.associated_types[0].associated,
+        };
+        let raw = Ty::AssociatedType(Arc::new(projection.clone()));
+        let target = |ty| {
+            ir::Callee::Direct(ir::CallTarget {
+                declaration: caller.declaration,
+                type_args: Arc::from([ty]),
+            })
+        };
+        let arguments = [implementation.trait_ref.self_ty.clone()];
+        let expected = implementation.associated_types[0].rhs.clone();
+        world
+            .replay_nominal_call_selection(
+                &target(raw.clone()),
+                &target(expected.clone()),
+                &caller.schema.env,
+                &arguments,
+            )
+            .unwrap();
+        // Structural substitution itself still cannot erase a projection.
+        assert!(
+            world
+                .validate_rhs_substitution(&raw, &expected, &caller.schema.env, &arguments, 0,)
+                .is_err()
+        );
+        for forged in [Ty::Unit, Ty::Int(ir::IntTy::U64)] {
+            assert!(
+                world
+                    .replay_nominal_call_selection(
+                        &target(raw.clone()),
+                        &target(forged),
+                        &caller.schema.env,
+                        &arguments,
+                    )
+                    .is_err()
+            );
+        }
+        let mut wrong_argument = projection.clone();
+        wrong_argument.trait_ref.args = Arc::from([Ty::Bool]);
+        let mut wrong_item = projection;
+        wrong_item.item = implementation.associated_types[1].associated;
+        for forged in [wrong_argument, wrong_item] {
+            assert!(
+                world
+                    .replay_nominal_call_selection(
+                        &target(Ty::AssociatedType(Arc::new(forged))),
+                        &target(expected.clone()),
+                        &caller.schema.env,
+                        &arguments,
+                    )
+                    .is_err()
+            );
+        }
+    }
 
     fn plan() -> crate::compiler::frontend::PlanCtx {
         let source = crate::compiler::frontend::parse("trait It{type Item;}impl It for i32{type Item=i32;}struct Peek<I:It>{value:I::Item}fn main(){}")
