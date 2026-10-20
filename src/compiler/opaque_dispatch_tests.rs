@@ -22,10 +22,18 @@ fn opaque_bound_dispatch_reads_exact_representation_before_physical_body() {
                     facts.get(Facts::item(TEMPLATE_BODY, source_index)).await?;
                 let caller = ir::CallTarget {
                     declaration: types.callable_decl(source_index).map_err(Error::new)?,
-                    type_args: Arc::from([]),
+                    type_args: if types
+                        .callable_env(types.callable_decl(source_index).map_err(Error::new)?)
+                        .map_err(Error::new)?
+                        .is_generic()
+                    {
+                        Arc::from([ir::Ty::Int(ir::IntTy::U8)])
+                    } else {
+                        Arc::from([])
+                    },
                 };
                 let source = provider.validated_body(&types, source_index, &template)?;
-                let (occurrence, call) = source
+                let occurrence = source
                     .exprs
                     .iter()
                     .enumerate()
@@ -34,12 +42,31 @@ fn opaque_bound_dispatch_reads_exact_representation_before_physical_body() {
                             target: ir::Callee::TraitItem(call),
                             ..
                         } if matches!(call.trait_ref.self_ty, ir::Ty::Opaque(_)) => {
-                            Some((ir::ExprId(i), call.clone()))
+                            Some(ir::ExprId(i))
                         }
                         _ => None,
                     })
                     .ok_or_else(|| Error::new("fixture has no original opaque bound call"))?;
-                let key = opaque_dispatch::key(&caller, occurrence, &call, &provider.0.budget)?;
+                let publication = template.publication.as_ref().unwrap();
+                let mut specialization = opaque_specialization::Specialization::new(
+                    publication,
+                    &caller,
+                    &types,
+                    &provider.0.budget,
+                )?;
+                let (ir::Callee::TraitItem(specialized_call), _) =
+                    specialization.call(occurrence)?
+                else {
+                    return Err(Error::new(
+                        "test lost original trait call after substitution",
+                    ));
+                };
+                let key = opaque_dispatch::key(
+                    &caller,
+                    occurrence,
+                    &specialized_call,
+                    &provider.0.budget,
+                )?;
                 let request = cx.request(key);
                 let authorization_handle = request.get(0);
                 let ready_handle = request.get(1);
@@ -49,7 +76,7 @@ fn opaque_bound_dispatch_reads_exact_representation_before_physical_body() {
                     cx.read_fact(ready_handle).await?;
                 let representations = opaque_instances::read(
                     &facts,
-                    std::slice::from_ref(&call.trait_ref.self_ty),
+                    std::slice::from_ref(&specialized_call.trait_ref.self_ty),
                     &provider.0.budget,
                 )
                 .await?;
@@ -133,6 +160,36 @@ fn opaque_bound_dispatch_reads_exact_representation_before_physical_body() {
                         )
                         .is_err()
                 );
+                if !caller.type_args.is_empty() {
+                    let changed_caller = ir::CallTarget {
+                        declaration: caller.declaration,
+                        type_args: Arc::from([ir::Ty::Int(ir::IntTy::U16)]),
+                    };
+                    assert!(
+                        authorization
+                            .replay(
+                                publication,
+                                &changed_caller,
+                                occurrence,
+                                &representations,
+                                &types,
+                                &provider.0.budget,
+                            )
+                            .is_err()
+                    );
+                    assert!(
+                        opaque_physical::normalize(
+                            publication,
+                            &changed_caller,
+                            lowered.function(),
+                            &representations,
+                            std::slice::from_ref(&authorization),
+                            &types,
+                            &provider.0.budget,
+                        )
+                        .is_err()
+                    );
+                }
                 assert!(
                     authorization
                         .replay(
@@ -269,7 +326,7 @@ fn opaque_bound_dispatch_reads_exact_representation_before_physical_body() {
                 let defining: Arc<TemplateBodyFact> =
                     facts.get(Facts::item(TEMPLATE_BODY, 0)).await?;
                 let defining_publication = defining.publication.as_ref().unwrap();
-                let ir::Ty::Opaque(defining_opaque) = &call.trait_ref.self_ty else {
+                let ir::Ty::Opaque(defining_opaque) = &specialized_call.trait_ref.self_ty else {
                     return Err(Error::new("fixture lost its original opaque call identity"));
                 };
                 let defining_target = ir::CallTarget {
@@ -392,6 +449,7 @@ fn opaque_bound_dispatch_reads_exact_representation_before_physical_body() {
         for source in [
             "trait Read { fn read(&self)->i32; } struct Number { value:i32 } impl Read for Number { fn read(&self)->i32 { self.value } } fn make()->impl Read { Number {value:42} } fn use_value()->i32 { let value=make(); value.read() } fn main(){assert!(use_value()==42);}",
             "trait Read { fn read(&self)->i32; } struct Number { value:i32 } impl Read for Number { fn read(&self)->i32 { self.value } } fn make<A:Copy,B:Copy>(a:A,b:B)->impl Read { let copied=a; let other=b; Number {value:42} } fn use_value()->i32 { let value=make::<u8,u16>(1u8,2u16); value.read() } fn main(){assert!(use_value()==42);}",
+            "trait Read { fn read(&self)->i32; } struct Number { value:i32 } impl Read for Number { fn read(&self)->i32 { self.value } } fn make<A:Copy,B:Copy>(a:A,b:B)->impl Read { let copied=a; let other=b; Number {value:42} } fn use_value<T:Copy>(input:T)->i32 { let value=make::<T,u16>(input,2u16); value.read() } fn main(){assert!(use_value::<u8>(1u8)==42);}",
         ] {
             let snapshot = Arc::new(Snapshot {
                 input: Input::Text(source.into()),

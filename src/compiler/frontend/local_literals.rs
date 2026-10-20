@@ -29,6 +29,9 @@ mod associated_projection;
 
 #[path = "local_literals/control_flow.rs"]
 mod control_flow;
+#[path = "local_literals/opaque.rs"]
+mod opaque;
+
 #[path = "local_literals/operators.rs"]
 mod operators;
 
@@ -39,6 +42,7 @@ enum Domain {
     Integer,
     Float,
     Fixed(ir::Ty),
+    Opaque(Arc<ir::OpaqueTy>, Vec<Term>),
     Nominal(ir::DeclId, Vec<Term>),
     Tuple(Vec<Term>),
     Ref(ir::BorrowKind, Term),
@@ -290,6 +294,9 @@ impl<'s> Solver<'_, '_, 's> {
         {
             return Ok(*term);
         }
+        if let ir::Ty::Opaque(opaque) = ty {
+            return self.opaque_schema(opaque, params, depth + 1);
+        }
         if let ir::Ty::AssociatedType(projection) = ty {
             return self.associated_projection(projection, params, depth + 1);
         }
@@ -462,7 +469,7 @@ impl<'s> Solver<'_, '_, 's> {
             return Ok(true);
         }
         match &self.variables[term].domain {
-            Domain::Nominal(_, args) | Domain::Tuple(args) => {
+            Domain::Nominal(_, args) | Domain::Tuple(args) | Domain::Opaque(_, args) => {
                 for arg in args {
                     if self.occurs(needle, *arg, depth + 1)? {
                         return Ok(true);
@@ -544,6 +551,14 @@ impl<'s> Solver<'_, '_, 's> {
             | (Domain::Float, Domain::Fixed(ty @ ir::Ty::Float(_)))
             | (Domain::Fixed(ty @ ir::Ty::Float(_)), Domain::Float) => Domain::Fixed(ty.clone()),
             (Domain::Fixed(x), Domain::Fixed(y)) if x == y => Domain::Fixed(x.clone()),
+            (Domain::Opaque(a, x), Domain::Opaque(b, y))
+                if x.len() == y.len() && self.opaque_identity_matches(a, b, depth + 1)? =>
+            {
+                for (x, y) in x.iter().zip(y) {
+                    self.unify_at(*x, *y, depth + 1)?;
+                }
+                Domain::Opaque(a.clone(), x.clone())
+            }
             (Domain::Nominal(d, x), Domain::Nominal(e, y)) if d == e && x.len() == y.len() => {
                 for (x, y) in x.iter().zip(y) {
                     self.unify_at(*x, *y, depth + 1)?;
@@ -602,7 +617,7 @@ impl<'s> Solver<'_, '_, 's> {
         self.checker.infer_work(depth)?;
         Ok(match self.domain(term) {
             Domain::Callable(_) => true,
-            Domain::Nominal(_, args) | Domain::Tuple(args) => {
+            Domain::Nominal(_, args) | Domain::Tuple(args) | Domain::Opaque(_, args) => {
                 for arg in args {
                     if self.contains_callable(arg, depth + 1)? {
                         return Ok(true);
@@ -624,6 +639,12 @@ impl<'s> Solver<'_, '_, 's> {
             Domain::Integer => ir::Ty::Int(ir::IntTy::I32),
             Domain::Float => ir::Ty::Float(ir::FloatTy::F64),
             Domain::Fixed(ty) => ty,
+            Domain::Opaque(descriptor, children) => {
+                let Some(ty) = self.resolve_opaque(&descriptor, &children, depth + 1)? else {
+                    return Ok(None);
+                };
+                ty
+            }
             Domain::AssociatedProjection(projection) => {
                 let Some(ty) = self.resolve_associated_projection(&projection, depth + 1)? else {
                     return Ok(None);

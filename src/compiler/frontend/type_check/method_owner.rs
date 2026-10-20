@@ -36,6 +36,16 @@ impl Checker<'_> {
                         .into(),
                 )
             }
+            InferKind::Opaque(descriptor, args) => {
+                self.infer_storage(args.len())?;
+                InferKind::Opaque(
+                    descriptor.clone(),
+                    args.iter()
+                        .map(|arg| self.method_owner_term(arg, bindings, depth + 1))
+                        .collect::<Result<Vec<_>, _>>()?
+                        .into(),
+                )
+            }
             InferKind::Ref(kind, referent) => InferKind::Ref(
                 *kind,
                 self.method_owner_term(referent, bindings, depth + 1)?,

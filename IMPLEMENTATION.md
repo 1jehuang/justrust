@@ -13,6 +13,19 @@ obligations from nominal field recipes, removing internal metadata failures with
 claiming that the three affected full programs now compile. Final acceptance and
 graph-integrity evidence are recorded in the feature contracts. G0-G12 remain open.
 
+- [x] Generic opaque return inference preserves defining owner, return site,
+      ordered arguments and public bounds. Physical direct/bound calls replay
+      their exact original occurrence before canonical specialization. Forty
+      focused tests and unchanged graph-integrity gates pass
+      (`OPAQUE-RETURNS.md`); closure-backed, carrier-bearing and general opaque
+      runtime support remain open.
+
+- [x] Empty braced record declarations retain exact nominal constructor shape,
+      immutable source-field authority and normal ownership. The pinned stock
+      extension covers 21 sources / 84 native CHECK/BUILD cells, including unused
+      generic/lifetime rejection and explicit empty C ABI boundaries
+      (`UNIT-STRUCTS.md`). Public zero-sized layout and G0-G12 remain open.
+
 - [x] Connect body-local primitive method inference to canonical exact signatures,
       including typed-call `.leading_zeros()` results. Fixed scalar receivers,
       ordinary nominal/trait method precedence and exact invalid-input rejection

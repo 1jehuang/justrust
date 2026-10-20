@@ -69,7 +69,9 @@ impl Inference<'_, '_> {
                     .infer_type_term(&normal, None, depth + 1)
                     .map(Some);
             }
-            InferKind::Tuple(fields) | InferKind::Nominal(_, fields) => {
+            InferKind::Tuple(fields)
+            | InferKind::Nominal(_, fields)
+            | InferKind::Opaque(_, fields) => {
                 self.checker.infer_storage(fields.len())?;
                 let mut mapped = Vec::new();
                 for field in fields.iter() {
@@ -83,6 +85,9 @@ impl Inference<'_, '_> {
                 match term.as_ref() {
                     InferKind::Nominal(declaration, _) => {
                         InferKind::Nominal(*declaration, mapped.into())
+                    }
+                    InferKind::Opaque(descriptor, _) => {
+                        InferKind::Opaque(descriptor.clone(), mapped.into())
                     }
                     _ => InferKind::Tuple(mapped.into()),
                 }
@@ -132,7 +137,9 @@ impl Inference<'_, '_> {
         }
         let map = |child: &InferTerm| self.resolve_projection_input(child, depth + 1, defaults);
         let ty = match term.as_ref() {
-            InferKind::Tuple(fields) | InferKind::Nominal(_, fields) => {
+            InferKind::Tuple(fields)
+            | InferKind::Nominal(_, fields)
+            | InferKind::Opaque(_, fields) => {
                 self.checker.infer_storage(fields.len())?;
                 let mut mapped = Vec::new();
                 for field in fields.iter() {
@@ -147,6 +154,19 @@ impl Inference<'_, '_> {
                         .materialize(*declaration, &mapped)
                         .map(Some)
                         .map_err(|error| error.into_legacy_diagnostic(&plan.budget));
+                }
+                if let InferKind::Opaque(descriptor, _) = term.as_ref() {
+                    let mut mapped = mapped.into_iter();
+                    let descriptor = descriptor.try_map(|_| {
+                        self.checker.infer_work(depth + 1)?;
+                        mapped
+                            .next()
+                            .ok_or_else(|| "opaque projection lost a child".to_string())
+                    })?;
+                    if mapped.next().is_some() {
+                        return Err("opaque projection retained extra children".into());
+                    }
+                    return Ok(Some(ir::Ty::Opaque(Arc::new(descriptor))));
                 }
                 ir::Ty::Tuple(mapped.into())
             }

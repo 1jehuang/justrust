@@ -1,3 +1,4 @@
+use super::stock_rustc;
 use super::*;
 
 fn source_check(source: &str, workers: usize) -> Result<(), String> {
@@ -9,6 +10,7 @@ fn source_check(source: &str, workers: usize) -> Result<(), String> {
     let engine = Engine::new(CompilerProvider(snapshot));
     let check = engine.request(Key::new(CHECK, vec![]));
     let report = engine.run(workers).unwrap();
+    assert!(report.capture_complete);
     assert!(
         !report.node_evaluations.iter().any(|(key, _)| {
             matches!(
@@ -109,11 +111,84 @@ fn opaque_closed_generic_producers_match_stock_workers1_8() {
         fn main() {
             let first = make::<u8>(1u8);
             let second = make::<u16>(2u16);
+            let mut third = make::<u8>(3u8);
+            third = make::<u8>(4u8);
+            assert!(third.read() == 42);
             assert!(first.read() == 42);
             assert!(second.read() == 42);
         }
     "#,
     );
+    native_matches_stock(
+        r#"
+        trait Read { fn read(&self) -> i32; }
+        struct Number { value: i32 }
+        impl Read for Number { fn read(&self) -> i32 { self.value } }
+        fn make<A: Copy, B: Copy>(a: A, b: B) -> impl Read {
+            let copied = a;
+            let other = b;
+            Number { value: 42 }
+        }
+        fn read_generic<T: Copy>(input: T) -> i32 {
+            let value = make(input, 2u16);
+            value.read()
+        }
+        fn main() {
+            let first = make(1u8, 2u16);
+            let second = make(2u16, 1u8);
+            assert!(first.read() == 42);
+            assert!(second.read() == 42);
+            assert!(read_generic(3u32) == 42);
+        }
+    "#,
+    );
+}
+
+#[test]
+fn opaque_generic_results_do_not_merge_distinct_owner_arguments() {
+    use std::process::Command;
+    let prefix = "trait Read { fn read(&self)->i32; } struct Number { value:i32 } impl Read for Number { fn read(&self)->i32 { self.value } } fn make<A:Copy,B:Copy>(a:A,b:B)->impl Read { Number { value:42 } }";
+    for tail in [
+        "fn main(){let mut value=make(1u8,2u16);value=make(2u16,1u8);}",
+        "fn other<A:Copy,B:Copy>(a:A,b:B)->impl Read {Number{value:42}} fn main(){let mut value=make(1u8,2u16);value=other(1u8,2u16);}",
+    ] {
+        let source = format!("{prefix}{tail}");
+        let directory = std::env::temp_dir().join(format!(
+            "opaque-invalid-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        let input = directory.join("main.rs");
+        std::fs::write(&input, &source).unwrap();
+        let stock = Command::new(stock_rustc::stock_rustc())
+            .env_remove("RUSTC_BOOTSTRAP")
+            .args(["--edition=2024", "--emit=metadata"])
+            .arg(&input)
+            .arg("-o")
+            .arg(directory.join("out.rmeta"))
+            .output()
+            .unwrap();
+        assert!(!stock.status.success(), "stock accepted {source}");
+        for workers in [1, 8] {
+            assert!(source_check(&source, workers).is_err());
+            let snapshot = Arc::new(Snapshot {
+                input: Input::Text(source.clone()),
+                source_options: source::SourceOptions::default(),
+                budget: ir::PlanBudget::default(),
+            });
+            let engine = Engine::new(CompilerProvider(snapshot));
+            let key = Key::new(BUILD, vec![]);
+            let build = engine.request(key.clone());
+            engine.run(workers).unwrap();
+            assert!(build.completion().is_err(), "built invalid {source}");
+            assert!(engine.fact_of::<Vec<u8>>(&key, 0).is_none());
+        }
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 }
 
 #[test]
@@ -168,6 +243,10 @@ fn opaque_fn_output_shorthand_is_a_declaration_bound() {
 }
 
 fn native_matches_stock(source: &str) {
+    native_matches_stock_with_dispatch(source, true);
+}
+
+fn native_matches_stock_with_dispatch(source: &str, requires_dispatch: bool) {
     use std::os::unix::fs::PermissionsExt;
     use std::process::Command;
     let directory = std::env::temp_dir().join(format!(
@@ -182,7 +261,7 @@ fn native_matches_stock(source: &str) {
     let input = directory.join("main.rs");
     let stock_image = directory.join("stock");
     std::fs::write(&input, source).unwrap();
-    let compiler = std::env::var_os("JUSTRUST_REAL_RUSTC").unwrap_or_else(|| "rustc".into());
+    let compiler = stock_rustc::stock_rustc();
     let version = Command::new(&compiler)
         .env_remove("RUSTC_BOOTSTRAP")
         .arg("-vV")
@@ -224,15 +303,18 @@ fn native_matches_stock(source: &str) {
         let key = Key::new(BUILD, vec![]);
         let build = engine.request(key.clone());
         let report = engine.run(workers).unwrap();
+        assert!(report.capture_complete);
         build
             .completion()
             .unwrap_or_else(|error| panic!("opaque BUILD workers={workers}: {error:?}"));
-        assert!(
-            report
-                .node_evaluations
-                .iter()
-                .any(|(key, _)| key.kind == OPAQUE_CALL_DISPATCH)
-        );
+        if requires_dispatch {
+            assert!(
+                report
+                    .node_evaluations
+                    .iter()
+                    .any(|(key, _)| key.kind == OPAQUE_CALL_DISPATCH)
+            );
+        }
         let image = engine
             .fact_of::<Vec<u8>>(&key, 0)
             .expect("successful BUILD must publish image");
@@ -308,6 +390,10 @@ fn opaque_source_check_rejects_invalid_unused_declarations() {
 
 #[test]
 fn opaque_source_check_preserves_unused_associated_constant_admission() {
+    native_matches_stock_with_dispatch(
+        "struct Number {} impl Number { const GOOD: i32 = 42; } fn main() { assert!(Number::GOOD == 42); }",
+        false,
+    );
     for workers in [1, 8] {
         source_check(
             "struct Number {} impl Number { const GOOD: i32 = 42; } fn main() {}",

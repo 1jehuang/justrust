@@ -2,7 +2,7 @@
 //! No hidden representation is read while source CHECK is being admitted.
 use super::*;
 
-const VERSION: u64 = 1;
+const VERSION: u64 = 2;
 
 /// A physical target is usable only together with this original occurrence.
 /// This payload deliberately retains no publication, facts, world or CFG.
@@ -52,10 +52,7 @@ impl OpaqueCallAuthorization {
         }
         let source = publication.source();
         let (call, signature) = original_occurrence(source, occurrence)?;
-        if call != &self.public
-            || signature != &self.public_signature
-            || call.trait_ref.self_ty != ir::Ty::Opaque(self.opaque.clone())
-        {
+        if call != &self.public || signature != &self.public_signature {
             return Err(Error::new(
                 "opaque dispatch public goal or source signature was replaced",
             ));
@@ -66,7 +63,19 @@ impl OpaqueCallAuthorization {
             ir::FactsCtx::from_validated(publication.facts()),
         )
         .map_err(Error::new)?;
-        let hidden = representations.normalize(&call.trait_ref.self_ty, budget)?;
+        let mut specialization =
+            opaque_specialization::Specialization::new(publication, caller, context, budget)?;
+        let (ir::Callee::TraitItem(specialized), specialized_signature) =
+            specialization.call(occurrence)?
+        else {
+            return Err(Error::new("opaque dispatch substituted another call kind"));
+        };
+        if specialized.trait_ref.self_ty != ir::Ty::Opaque(self.opaque.clone()) {
+            return Err(Error::new(
+                "opaque dispatch changed exact specialized receiver",
+            ));
+        }
+        let hidden = representations.normalize(&specialized.trait_ref.self_ty, budget)?;
         if !ir::identical_type(&hidden, &self.hidden, budget).map_err(Error::new)? {
             return Err(Error::new(
                 "opaque dispatch hidden representation was replaced",
@@ -85,10 +94,10 @@ impl OpaqueCallAuthorization {
         let physical_call = ir::TraitCall {
             trait_ref: ir::TraitRef {
                 self_ty: hidden,
-                ..call.trait_ref.clone()
+                ..specialized.trait_ref.clone()
             },
-            item: call.item,
-            method_args: call.method_args.clone(),
+            item: specialized.item,
+            method_args: specialized.method_args.clone(),
         };
         let resolved = closed
             .service()
@@ -99,6 +108,28 @@ impl OpaqueCallAuthorization {
         {
             return Err(Error::new(
                 "opaque physical target or signature failed canonical replay",
+            ));
+        }
+        let params = specialized_signature
+            .params
+            .iter()
+            .map(|ty| representations.normalize(ty, budget))
+            .collect::<Result<Vec<_>, _>>()?;
+        let result = representations.normalize(&specialized_signature.result, budget)?;
+        if !closed
+            .world()
+            .types_equal(&params, &self.physical_signature.params)
+            .map_err(|error| source_fact_error(error, budget))?
+            || !closed
+                .world()
+                .types_equal(
+                    &[result],
+                    std::slice::from_ref(&self.physical_signature.result),
+                )
+                .map_err(|error| source_fact_error(error, budget))?
+        {
+            return Err(Error::new(
+                "opaque dispatch signature lost exact occurrence substitution",
             ));
         }
         Ok(())
@@ -205,11 +236,6 @@ pub(super) async fn produce(
         )
         .map_err(|_| Error::new("opaque occurrence exceeds address space"))?,
     );
-    if !caller.type_args.is_empty() {
-        return Err(Error::new(
-            "unsupported: generic caller opaque dispatch requires source substitution replay",
-        ));
-    }
     let index = types
         .callable_index(caller.declaration)
         .map_err(Error::new)?;
@@ -223,7 +249,20 @@ pub(super) async fn produce(
         .as_ref()
         .ok_or_else(|| Error::new("opaque dispatch has no canonical original publication"))?;
     let (public, signature) = original_occurrence(&source, occurrence)?;
-    if key(&caller, occurrence, public, &provider.0.budget)? != *requested {
+    let mut specialization = opaque_specialization::Specialization::new(
+        publication,
+        &caller,
+        &types,
+        &provider.0.budget,
+    )?;
+    let (ir::Callee::TraitItem(specialized), specialized_signature) =
+        specialization.call(occurrence)?
+    else {
+        return Err(Error::new(
+            "opaque dispatch original call changed kind after substitution",
+        ));
+    };
+    if key(&caller, occurrence, &specialized, &provider.0.budget)? != *requested {
         return Err(Error::new(
             "opaque dispatch authorization does not match original call metadata",
         ));
@@ -234,16 +273,16 @@ pub(super) async fn produce(
         ir::FactsCtx::from_validated(publication.facts()),
     )
     .map_err(|error| Error::new(error.to_string()))?;
-    let ir::Ty::Opaque(opaque) = &public.trait_ref.self_ty else {
+    let ir::Ty::Opaque(opaque) = &specialized.trait_ref.self_ty else {
         unreachable!()
     };
     let representations = opaque_instances::read(
         &facts,
-        std::slice::from_ref(&public.trait_ref.self_ty),
+        std::slice::from_ref(&specialized.trait_ref.self_ty),
         &provider.0.budget,
     )
     .await?;
-    let hidden = representations.normalize(&public.trait_ref.self_ty, &provider.0.budget)?;
+    let hidden = representations.normalize(&specialized.trait_ref.self_ty, &provider.0.budget)?;
     if !ir::carrier_locations(&hidden, &provider.0.budget)
         .map_err(Error::new)?
         .is_empty()
@@ -254,12 +293,12 @@ pub(super) async fn produce(
     }
     let physical_call = ir::TraitCall {
         trait_ref: ir::TraitRef {
-            declaration: public.trait_ref.declaration,
+            declaration: specialized.trait_ref.declaration,
             self_ty: hidden.clone(),
-            args: public.trait_ref.args.clone(),
+            args: specialized.trait_ref.args.clone(),
         },
-        item: public.item,
-        method_args: public.method_args.clone(),
+        item: specialized.item,
+        method_args: specialized.method_args.clone(),
     };
     let closed = types.instance_facts(&caller).map_err(Error::new)?;
     let resolved = closed
@@ -276,12 +315,12 @@ pub(super) async fn produce(
             "unsupported: recursive opaque physical dispatch",
         ));
     }
-    let params = signature
+    let params = specialized_signature
         .params
         .iter()
         .map(|ty| representations.normalize(ty, &provider.0.budget))
         .collect::<Result<Vec<_>, _>>()?;
-    let result = representations.normalize(&signature.result, &provider.0.budget)?;
+    let result = representations.normalize(&specialized_signature.result, &provider.0.budget)?;
     let world = types.trait_world().map_err(Error::new)?;
     if !world
         .types_equal(&params, &resolved.signature().params)

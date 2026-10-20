@@ -716,7 +716,7 @@ impl<'s> Solver<'_, '_, 's> {
                 }
                 Domain::Integer | Domain::Float => self.projection_defaults,
                 Domain::Fixed(_) => true,
-                Domain::Nominal(_, terms) | Domain::Tuple(terms) => {
+                Domain::Nominal(_, terms) | Domain::Tuple(terms) | Domain::Opaque(_, terms) => {
                     self.manifest_ready(&terms, depth + 1)?
                 }
                 Domain::Ref(_, inner)
@@ -799,6 +799,11 @@ impl<'s> Solver<'_, '_, 's> {
             Domain::Callable(_) => {
                 return Err(
                     "unsupported: nominal realization requires finalized closure metadata".into(),
+                );
+            }
+            Domain::Opaque(_, _) => {
+                return Err(
+                    "unsupported: opaque nominal actual needs an explicit manifest recipe".into(),
                 );
             }
             Domain::Integer => Shape::Leaf(ir::Ty::Int(ir::IntTy::I32)),

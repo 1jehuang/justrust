@@ -1533,7 +1533,9 @@ impl<'s> Checker<'s> {
             InferKind::Slot(_) => {
                 return Err("contract: constructor schema slot escaped into evidence".into());
             }
-            InferKind::Tuple(fields) | InferKind::Nominal(_, fields) => {
+            InferKind::Tuple(fields)
+            | InferKind::Nominal(_, fields)
+            | InferKind::Opaque(_, fields) => {
                 for field in fields.iter() {
                     self.check_slot_free_evidence(field, depth + 1)?;
                 }

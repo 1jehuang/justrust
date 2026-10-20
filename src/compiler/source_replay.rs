@@ -20,6 +20,7 @@ pub(super) enum InferKind {
     Ref(ir::BorrowKind, InferTerm),
     RawPtr(ir::BorrowKind, InferTerm),
     Nominal(ir::DeclId, Arc<[InferTerm]>),
+    Opaque(Arc<ir::OpaqueTy>, Arc<[InferTerm]>),
 }
 
 pub(super) struct CallInferenceState {
@@ -61,6 +62,30 @@ impl CallInferenceState {
         self.work(depth)?;
         Ok(match term.as_ref() {
             InferKind::Rigid(ty) => Some(ty.clone()),
+            InferKind::Opaque(descriptor, terms) => {
+                self.storage(terms.len())?;
+                let mut actuals = Vec::with_capacity(terms.len());
+                for term in terms.iter() {
+                    let Some(actual) = self.resolve(term, fallback, depth + 1, materialize)? else {
+                        return Ok(None);
+                    };
+                    actuals.push(actual);
+                }
+                let mut actuals = actuals.into_iter();
+                let mapped = descriptor.try_map(|_| {
+                    self.work(depth + 1)?;
+                    actuals.next().ok_or_else(|| {
+                        FactsError::invalid(&self.budget, "opaque inference lost a child")
+                    })
+                })?;
+                if actuals.next().is_some() {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "opaque inference retained extra children",
+                    ));
+                }
+                Some(ir::Ty::Opaque(Arc::new(mapped)))
+            }
             InferKind::Integer if fallback => Some(ir::Ty::Int(ir::IntTy::I32)),
             InferKind::Float if fallback => Some(ir::Ty::Float(ir::FloatTy::F64)),
             InferKind::Integer
@@ -271,6 +296,13 @@ impl CallInferenceState {
                     self.collect_terms(args.len(), args.iter().map(|a| self.taint(a, depth + 1)))?,
                 )
             }
+            InferKind::Opaque(descriptor, args) => {
+                self.storage(args.len())?;
+                InferKind::Opaque(
+                    descriptor.clone(),
+                    self.collect_terms(args.len(), args.iter().map(|a| self.taint(a, depth + 1)))?,
+                )
+            }
             _ => return Ok(term.clone()),
         };
         self.node(kind)
@@ -364,6 +396,20 @@ impl CallInferenceState {
                     )?,
                 ))
             }
+            (InferKind::Opaque(a, x), InferKind::Opaque(b, y))
+                if x.len() == y.len() && opaque_shape_equal(a, b, &self.budget, depth + 1)? =>
+            {
+                self.storage(x.len())?;
+                self.node(InferKind::Opaque(
+                    a.clone(),
+                    self.collect_terms(
+                        x.len(),
+                        x.iter()
+                            .zip(y.iter())
+                            .map(|(x, y)| self.merge(x, y, depth + 1)),
+                    )?,
+                ))
+            }
             _ => Err(FactsError::invalid(
                 &self.budget,
                 "conflicting generic inference constraints",
@@ -379,7 +425,9 @@ impl CallInferenceState {
                     "cyclic generic inference constraint",
                 ));
             }
-            InferKind::Tuple(fields) | InferKind::Nominal(_, fields) => {
+            InferKind::Tuple(fields)
+            | InferKind::Nominal(_, fields)
+            | InferKind::Opaque(_, fields) => {
                 for f in fields.iter() {
                     self.occurs(slot, f, depth + 1)?;
                 }
@@ -493,6 +541,27 @@ impl CallInferenceState {
                     "generic nominal inference identity mismatch",
                 )),
             },
+            InferKind::Opaque(descriptor, args) => match evidence.as_ref() {
+                InferKind::Opaque(actual, values)
+                    if args.len() == values.len()
+                        && opaque_shape_equal(descriptor, actual, &self.budget, depth + 1)? =>
+                {
+                    for (formal, actual) in args.iter().zip(values.iter()) {
+                        self.constrain(formal, actual, depth + 1)?;
+                    }
+                    Ok(())
+                }
+                InferKind::Unknown(_) => {
+                    for formal in args.iter() {
+                        self.constrain(formal, evidence, depth + 1)?;
+                    }
+                    Ok(())
+                }
+                _ => Err(FactsError::invalid(
+                    &self.budget,
+                    "generic opaque inference identity mismatch",
+                )),
+            },
             InferKind::Slice(element) => match evidence.as_ref() {
                 InferKind::Slice(actual) => self.constrain(element, actual, depth + 1),
                 InferKind::Unknown(_) => Ok(()),
@@ -522,6 +591,18 @@ impl CallInferenceState {
     ) -> Result<InferTerm, FactsError> {
         self.work(depth)?;
         let kind = match ty {
+            ir::Ty::Opaque(descriptor) => {
+                let count = descriptor.types().count();
+                self.storage(count)?;
+                let mut children = Vec::new();
+                children.try_reserve_exact(count).map_err(|_| {
+                    FactsError::resource(&self.budget, "opaque inference child allocation")
+                })?;
+                for ty in descriptor.types() {
+                    children.push(self.type_term(ty, schema, depth + 1)?);
+                }
+                InferKind::Opaque(descriptor.clone(), children.into())
+            }
             ir::Ty::Param(param) if schema == Some(param.owner) => {
                 InferKind::Slot(param.index as usize)
             }
@@ -936,6 +1017,28 @@ pub(super) struct SharedIdentityTrace {
     after: InferTerm,
     actual: ir::Ty,
 }
+fn opaque_shape_equal(
+    left: &ir::OpaqueTy,
+    right: &ir::OpaqueTy,
+    budget: &ir::PlanBudget,
+    at: usize,
+) -> Result<bool, FactsError> {
+    depth(budget, at)?;
+    for _ in left
+        .captured_regions()
+        .iter()
+        .chain(right.captured_regions())
+    {
+        work(budget, 1)?;
+    }
+    for bound in left.bounds().iter().chain(right.bounds()) {
+        work(budget, 1 + bound.args().len() + bound.equalities().len())?;
+    }
+    left.try_eq(right, |_, _| {
+        work(budget, 1)?;
+        Ok(true)
+    })
+}
 fn terms_equal(
     left: &InferTerm,
     right: &InferTerm,
@@ -959,6 +1062,17 @@ fn terms_equal(
             a == b && terms_equal(x, y, budget, at + 1)?
         }
         (InferKind::Slice(x), InferKind::Slice(y)) => terms_equal(x, y, budget, at + 1)?,
+        (InferKind::Opaque(a, x), InferKind::Opaque(b, y)) => {
+            if x.len() != y.len() || !opaque_shape_equal(a, b, budget, at + 1)? {
+                return Ok(false);
+            }
+            for (a, b) in x.iter().zip(y.iter()) {
+                if !terms_equal(a, b, budget, at + 1)? {
+                    return Ok(false);
+                }
+            }
+            true
+        }
         (InferKind::Tuple(x), InferKind::Tuple(y))
         | (InferKind::Nominal(_, x), InferKind::Nominal(_, y)) => {
             if let (InferKind::Nominal(a, _), InferKind::Nominal(b, _)) =

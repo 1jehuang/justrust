@@ -38,7 +38,7 @@ impl<'s> Solver<'_, '_, 's> {
         Ok(match self.domain(term) {
             Domain::Unknown | Domain::Callable(_) => false,
             Domain::Integer | Domain::Float => self.projection_defaults,
-            Domain::Nominal(_, terms) | Domain::Tuple(terms) => {
+            Domain::Nominal(_, terms) | Domain::Tuple(terms) | Domain::Opaque(_, terms) => {
                 for term in terms {
                     if !self.projection_input_ready(term, depth + 1)? {
                         return Ok(false);
@@ -69,7 +69,7 @@ impl<'s> Solver<'_, '_, 's> {
         self.checker.infer_work(depth)?;
         Ok(match self.domain(term) {
             Domain::Fixed(ir::Ty::Param(_) | ir::Ty::AssociatedType(_)) => true,
-            Domain::Nominal(_, terms) | Domain::Tuple(terms) => {
+            Domain::Nominal(_, terms) | Domain::Tuple(terms) | Domain::Opaque(_, terms) => {
                 for term in terms {
                     if self.projection_input_symbolic(term, depth + 1)? {
                         return Ok(true);

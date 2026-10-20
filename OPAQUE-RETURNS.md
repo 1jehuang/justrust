@@ -42,7 +42,7 @@ The first CFG pack protocol admits only an independently validated carrier-empty
 
 ## Bounded native vertical slice
 
-The first native slice supports an original-source owner returning one concrete carrier-empty nominal value behind a declared trait bound, plus a bound method with a scalar result. A bounded extension admits a closed generic defining owner with a call-free body: every original type is substituted through its exact declaration environment and ordered actuals before representation normalization. Generic callers containing opaque bound calls, generic defining bodies containing calls, generic physical trait callees, hidden nested opaque values, closure-backed opaque values, representation-bearing nominal/closure descriptor rebuilding, reference-carrying hidden values, nonempty body-boundary carriers, declared physical lifetime constraints, and hidden owning cleanup requiring a destructor remain explicitly unsupported. Existing valid declaration-owned receiver carrier rows are replayed, not erased.
+The native slice supports an original-source owner returning one concrete carrier-empty nominal value behind a declared trait bound, plus a bound method with a scalar result. Closed generic owners and callers substitute every original type through the exact declaration environment and ordered actuals before representation normalization. Direct and declared-bound calls inside these bodies now replay their original occurrence and declaration-owned signature before specialization. Generic physical trait callees, hidden nested opaque values, closure-backed opaque values, representation-bearing nominal/closure descriptor rebuilding, reference-carrying hidden values, nonempty body-boundary carriers, declared physical lifetime constraints, and hidden owning cleanup requiring a destructor remain explicitly unsupported. Existing valid declaration-owned receiver carrier rows are replayed, not erased.
 
 An original typed TraitItem call remains the deferred edge. MONO_PLAN does not resolve it, copy a hidden-type inventory, or queue a guessed concrete target. Operation 140 OPAQUE_CALL_DISPATCH is keyed by the complete canonical caller, exact original ExprId, trait/item goal, opaque identity and dispatch mode. It independently requests declaration admission and original publication, reads only encountered exact operation-127 representation facts, and replays the defining-body witness before publishing its final physical target authorization. Only then is the canonical concrete body demanded. The separate readiness output proves that exact body signature.
 
@@ -51,6 +51,26 @@ OBJECT handles an encountered opaque source owner through a separate physical mo
 Physical ownership runs the existing initialization, move, loan and effect algorithms. Its proof wrapper and borrowed PhysicalValidation remain local to OBJECT, never published facts. The same machine emitter accepts this separately validated wrapper. Only immutable Object bytes leave the producer. Physical callees can use an existing declaration-owned nongeneric root slot only after operation-140 exact-target replay. BUILD retains its CHECK gate before linking or publishing an image. No closed-facts relabel, unchecked pack copy, original-source rewrite, new whole-program node or hidden MONO map is introduced.
 
 Frozen tree `2ecbda85872f8f8fb7c9ab5804cee6c58d38bd0f` passed actual hosted all-test compilation and a real BUILD/link/run fixture at workers 1 and 8. The unchanged source returns `Number { value: 42 }` as `impl Read` and asserts `value.read() == 42`. Exit status, stdout and stderr match the logged hosted stock oracle `rustc 1.101.0-nightly (1d81eb4ad 2026-10-07)`, commit `1d81eb4ad9cd207e3e638bd32b17ec4fce8412a6`, via its exact executable. Receipts: `20261019-152803339-814019` and `20261019-152821138-814018`. This is one bounded executable acceptance case, not evidence for the unsupported extensions above. On parent `d8ad850ef99e062d5b47506705309928a4bddac6`, frozen source tree `a12f6fa5efb6303f2848cd90fad325cbbb9500b4` passes all-test compilation (`20261019-153815559-856167`), actual representation authority three tests (`20261019-154007024-874147`), physical consumer/publication/world/occurrence/type/direct-ABI rejection controls (`20261019-154050221-876465`), unused associated-constant admission with zero physical CHECK demands (`20261019-154314226-889627`), unchanged graph-integrity 14/14 (`20261019-154411147-892311`) and the same real stock-differential native image fixture workers 1 and 8 (`20261019-154641379-899185`). No stack size, graph ceiling, fixture size or ratchet changed. Two interrupted orchestration jobs were not counted as completed gates. Full-lib limitations remain classified separately below.
+
+## Generic caller replay follow-up (2026-10-20)
+
+Body-local and source replay inference retain an opaque descriptor's defining owner,
+return site, ordered arguments, captured regions and bounds while solving its type
+children. Distinct owners or argument order cannot unify. A physical call first
+validates the original occurrence, substitutes only its enclosing caller's actuals,
+and checks the resulting signature against the canonical declaration service.
+Dispatch keys use that exact specialized goal. Replay retains both original and
+specialized identities and rejects foreign callers, occurrences or representations.
+Allocation for new replay argument buffers is checked and charged before reserve.
+
+The pinned stock oracle is Rust 1.98.1. The independently repeated 40-test opaque
+filter passes (`20261020-055855507-4077765`), including generic callers, ordered
+two-argument families, same-family assignment, wrong-owner/argument rejection and
+dispatch forgery controls at workers 1 and 8. Both CHECK and BUILD require complete
+graph capture. Graph integrity remains 14/14 with unchanged ratchets
+(`20261020-060036728-4077764`) and the earlier strict lint passes
+(`20261020-054521184-4054595`). The complete library run is separate and unfinished.
+These are scoped compatibility repairs, not general opaque or full Rust support.
 
 ## Closed generic defining owners
 

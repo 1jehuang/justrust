@@ -10,6 +10,7 @@ pub(super) use carriers::PhysicalCarrierIdentity;
 struct DirectPhysicalCall {
     publication: source_replay::OriginalBodyId,
     occurrence: ir::ExprId,
+    source_target: ir::CallTarget,
     target: ir::CallTarget,
     public_signature: ir::Signature,
     physical_signature: ir::Signature,
@@ -17,8 +18,10 @@ struct DirectPhysicalCall {
 impl DirectPhysicalCall {
     fn seal(
         publication: &Arc<source_replay::CanonicalSourcePublication>,
+        caller: &ir::CallTarget,
         occurrence: ir::ExprId,
         representations: &opaque_instances::Representations,
+        context: &frontend::PlanCtx,
         budget: &ir::PlanBudget,
     ) -> Result<Self, Error> {
         let expression = publication
@@ -42,6 +45,16 @@ impl DirectPhysicalCall {
             ir::FactsCtx::from_validated(publication.facts()),
         )
         .map_err(Error::new)?;
+        let source_target = target.clone();
+        let mut specialization =
+            opaque_specialization::Specialization::new(publication, caller, context, budget)?;
+        let (ir::Callee::Direct(target), specialized_signature) =
+            specialization.call(occurrence)?
+        else {
+            return Err(Error::new(
+                "physical direct call changed its original callee kind",
+            ));
+        };
         for actual in target.type_args.iter() {
             if representations.normalize(actual, budget)? != *actual {
                 return Err(Error::new(
@@ -49,37 +62,39 @@ impl DirectPhysicalCall {
                 ));
             }
         }
-        let params = signature
+        let params = specialized_signature
             .params
             .iter()
             .map(|ty| representations.normalize(ty, budget))
             .collect::<Result<Vec<_>, _>>()?;
-        let result = representations.normalize(&signature.result, budget)?;
-        let physical_signature = if params == signature.params && result == signature.result {
-            signature.clone()
-        } else {
-            for ty in params.iter().chain(std::iter::once(&result)) {
-                if !ir::carrier_locations(ty, budget)
-                    .map_err(Error::new)?
-                    .is_empty()
-                {
-                    return Err(Error::new(
-                        "unsupported: direct physical ABI has reference carriers",
-                    ));
+        let result = representations.normalize(&specialized_signature.result, budget)?;
+        let physical_signature =
+            if params == specialized_signature.params && result == specialized_signature.result {
+                specialized_signature
+            } else {
+                for ty in params.iter().chain(std::iter::once(&result)) {
+                    if !ir::carrier_locations(ty, budget)
+                        .map_err(Error::new)?
+                        .is_empty()
+                    {
+                        return Err(Error::new(
+                            "unsupported: direct physical ABI has reference carriers",
+                        ));
+                    }
                 }
-            }
-            let contract = ir::RefContract::default();
-            contract.validate(&params, &result).map_err(Error::new)?;
-            ir::Signature {
-                params,
-                result,
-                ref_contract: Arc::new(contract),
-            }
-        };
+                let contract = ir::RefContract::default();
+                contract.validate(&params, &result).map_err(Error::new)?;
+                ir::Signature {
+                    params,
+                    result,
+                    ref_contract: Arc::new(contract),
+                }
+            };
         Ok(Self {
             publication: publication.identity().clone(),
             occurrence,
-            target: target.clone(),
+            source_target,
+            target,
             public_signature: signature.clone(),
             physical_signature,
         })
@@ -218,6 +233,7 @@ impl PhysicalValidation<'_> {
         {
             if call.publication != other.publication
                 || call.occurrence != other.occurrence
+                || call.source_target != other.source_target
                 || call.target != other.target
                 || call.public_signature != other.public_signature
                 || call.physical_signature != other.physical_signature
@@ -275,9 +291,15 @@ impl PhysicalValidation<'_> {
             .iter()
             .any(|call| call.occurrence == site)
         {
-            let expected =
-                DirectPhysicalCall::seal(self.publication, site, self.representations, self.budget)
-                    .map_err(|e| e.to_string())?;
+            let expected = DirectPhysicalCall::seal(
+                self.publication,
+                &self.proof.target,
+                site,
+                self.representations,
+                self.context,
+                self.budget,
+            )
+            .map_err(|e| e.to_string())?;
             if callee == &ir::Callee::Direct(expected.target)
                 && signature == &expected.physical_signature
             {
@@ -318,17 +340,6 @@ pub(super) fn normalize(
     if publication.facts().declaration() != target.declaration {
         return Err(Error::new(
             "physical normalization changed exact original source owner",
-        ));
-    }
-    if !target.type_args.is_empty()
-        && publication
-            .source()
-            .exprs
-            .iter()
-            .any(|expression| matches!(expression.kind, ir::ExprKind::Call { .. }))
-    {
-        return Err(Error::new(
-            "unsupported: generic physical calls require occurrence-specific substitution replay",
         ));
     }
     let mut specialization =
@@ -481,15 +492,22 @@ pub(super) fn normalize(
                     *signature = authorization.signature().clone();
                 }
                 ir::Callee::Direct(_) => {
-                    let direct =
-                        DirectPhysicalCall::seal(publication, occurrence, representations, budget)?;
-                    if callee != &ir::Callee::Direct(direct.target.clone())
+                    let direct = DirectPhysicalCall::seal(
+                        publication,
+                        target,
+                        occurrence,
+                        representations,
+                        context,
+                        budget,
+                    )?;
+                    if callee != &ir::Callee::Direct(direct.source_target.clone())
                         || signature != &direct.public_signature
                     {
                         return Err(Error::new(
                             "physical direct call differs from original occurrence",
                         ));
                     }
+                    *callee = ir::Callee::Direct(direct.target.clone());
                     *signature = direct.physical_signature.clone();
                     direct_calls.push(direct);
                 }

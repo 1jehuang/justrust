@@ -33,16 +33,6 @@ pub(super) async fn produce(
             "unsupported: physical opaque closure owner requires parent specialization replay",
         ));
     }
-    if !target.type_args.is_empty()
-        && source
-            .exprs
-            .iter()
-            .any(|expression| matches!(expression.kind, ir::ExprKind::Call { .. }))
-    {
-        return Err(Error::new(
-            "unsupported: generic opaque defining calls require occurrence-specific substitution replay",
-        ));
-    }
     let publication = template
         .publication
         .as_ref()
@@ -81,10 +71,15 @@ pub(super) async fn produce(
             && matches!(call.trait_ref.self_ty, ir::Ty::Opaque(_))
         {
             let site = ir::ExprId(index);
+            let (ir::Callee::TraitItem(specialized), _) = specialization.call(site)? else {
+                return Err(Error::new(
+                    "opaque dispatch specialization changed original call kind",
+                ));
+            };
             let request = cx.request(opaque_dispatch::key(
                 &target,
                 site,
-                call,
+                &specialized,
                 &provider.0.budget,
             )?);
             requests.push((site, request.get(0), request.get(1)));
