@@ -66,7 +66,12 @@ impl Solver<'_, '_, '_> {
         if let Some(index) = self.control_target(label, false)? {
             let result = self.control_targets[index].result;
             self.coerce(value, result)?;
-            self.control_targets[index].has_break = true;
+            // Evaluating the operand precedes the transfer. A diverging
+            // operand never reaches this target and supplies no result type.
+            // Still visit it above so nested breaks retain their own targets.
+            if !matches!(self.domain(value), Domain::Fixed(ir::Ty::Never)) {
+                self.control_targets[index].has_break = true;
+            }
         }
         self.fixed(ir::Ty::Never)
     }

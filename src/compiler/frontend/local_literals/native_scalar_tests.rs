@@ -1,6 +1,51 @@
 //! Real parser/body-solver controls. These tests grant no unsafe or memory authority.
 use super::*;
 
+#[test]
+fn loop_result_terms_preserve_values_and_divergence() {
+    let (_, types) = inspect(
+        "fn probe(){let result=loop{break 7;};let wide:u64=result;}fn main(){}",
+        false,
+    )
+    .unwrap();
+    assert!(!types.is_empty());
+    assert!(types.iter().all(|ty| *ty == ir::Ty::Int(ir::IntTy::U64)));
+    for body in [
+        "loop{}",
+        "loop{continue;}",
+        "loop{break loop{};}",
+        "loop{break ('inner:{loop{}});}",
+    ] {
+        let source = format!("fn probe(){{let result={body};}}fn main(){{}}");
+        let (_, types) = inspect(&source, false).unwrap();
+        assert!(types.contains(&ir::Ty::Never), "{source}: {types:?}");
+    }
+}
+
+#[test]
+fn loop_result_terms_select_lexical_targets() {
+    for source in [
+        "fn probe(){let x='outer:loop{let y=loop{if false{break 'outer 7;}break 3;};let small:u8=y;break 9;};let wide:u64=x;}fn main(){}",
+        "fn probe(){let x='same:loop{let y='same:loop{break 'same 3;};let small:u8=y;break 'same 9;};let wide:u64=x;}fn main(){}",
+        "fn probe(){let x=loop{let f=||->u8{let small:u8=loop{break 3;};small};let copied=f;break 9;};let wide:u64=x;}fn main(){}",
+    ] {
+        let (_, types) = inspect(source, false).unwrap();
+        assert!(
+            types.contains(&ir::Ty::Int(ir::IntTy::U8)),
+            "{source}: {types:?}"
+        );
+        assert!(
+            types.contains(&ir::Ty::Int(ir::IntTy::U64)),
+            "{source}: {types:?}"
+        );
+    }
+    // The hint collector must not merge an invalid cross-closure break into
+    // the outer loop. Ordinary checking, not hints, rejects the transfer.
+    let source = "fn probe(){let x='outer:loop{let f=||->bool{break 'outer true;};let ignored=f;break 7;};let wide:u64=x;}fn main(){}";
+    let (_, types) = inspect(source, false).unwrap();
+    assert!(types.contains(&ir::Ty::Int(ir::IntTy::U64)));
+}
+
 fn inspect(source: &str, malformed_arity: bool) -> Result<(usize, Vec<ir::Ty>), String> {
     let program = parse(source)?;
     let signatures = signature_table(&program)?;

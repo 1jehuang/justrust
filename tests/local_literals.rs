@@ -34,11 +34,129 @@ fn loop_break_results_retain_later_type_constraints() {
             source: "fn unused(){let _x=loop{if true{break 1u8;}break 2u16;};}fn main(){}",
             expect: Expect::Invalid("E0308"),
         },
+        Case {
+            name: "shadowed_labels",
+            source: "fn main(){let x='same:loop{let y='same:loop{break 'same 3;};let narrow:u8=y;break 'same 1000+narrow as u64;};let wide:u64=x;println!(\"{}\",wide);}",
+            expect: Expect::Run("1003\n"),
+        },
+        Case {
+            name: "closure_loop_does_not_constrain_outer",
+            source: "fn main(){let x=loop{let f=||->u8{loop{break 3;}};let y=f();break 1000+y as u64;};let wide:u64=x;println!(\"{}\",wide);}",
+            expect: Expect::Run("1003\n"),
+        },
+        Case {
+            name: "outer_break_through_while",
+            source: "fn main(){let x='outer:loop{while true{break 'outer 7;}break 9;};let wide:u64=x;println!(\"{}\",wide);}",
+            expect: Expect::Run("7\n"),
+        },
+        Case {
+            name: "outer_break_through_for",
+            source: "fn main(){let x='outer:loop{for n in 0..3{if n==1{break 'outer 7;}}break 9;};let wide:u64=x;println!(\"{}\",wide);}",
+            expect: Expect::Run("7\n"),
+        },
+        Case {
+            name: "outer_break_through_while_let",
+            source: "fn main(){let x='outer:loop{while let true=true{break 'outer 7;}break 9;};let wide:u64=x;println!(\"{}\",wide);}",
+            expect: Expect::Run("7\n"),
+        },
+        Case {
+            name: "nested_operand_breaks_outer",
+            source: "fn main(){let x='outer:loop{break loop{break 'outer 7;};};let wide:u64=x;println!(\"{}\",wide);}",
+            expect: Expect::Run("7\n"),
+        },
+        Case {
+            name: "labeled_block_unit_break",
+            source: "fn main(){let x='block:{break 'block;};let unit:()=x;println!(\"{}\",7);}",
+            expect: Expect::Run("7\n"),
+        },
+        Case {
+            name: "continue_does_not_supply_result",
+            source: "fn main(){let mut first=true;let x='outer:loop{if first{first=false;continue 'outer;}break 7;};let wide:u64=x;println!(\"{}\",wide);}",
+            expect: Expect::Run("7\n"),
+        },
+        Case {
+            name: "no_break_diverges",
+            source: "fn unused()->u64{let x=loop{};x}fn main(){let x=if true{7}else{loop{continue;}};let wide:u64=x;println!(\"{}\",wide);}",
+            expect: Expect::Run("7\n"),
+        },
+        Case {
+            name: "diverging_break_operand",
+            source: "fn unused()->u64{loop{break loop{};}}fn nested()->u64{loop{break ('inner:{loop{}});}}fn main(){println!(\"{}\",7);}",
+            expect: Expect::Run("7\n"),
+        },
+        Case {
+            name: "closure_cannot_break_outer",
+            source: "fn unused(){'outer:loop{let f=||{break 'outer 1;};f();}}fn main(){}",
+            expect: Expect::Invalid("E0767"),
+        },
+        Case {
+            name: "closure_cannot_continue_outer",
+            source: "fn unused(){'outer:loop{let f=||{continue 'outer;};f();}}fn main(){}",
+            expect: Expect::Invalid("E0767"),
+        },
+        Case {
+            name: "while_cannot_break_value",
+            source: "fn unused(){while true{break 1;}}fn main(){}",
+            expect: Expect::Invalid("E0571"),
+        },
+        Case {
+            name: "for_cannot_break_value",
+            source: "fn unused(){for n in 0..3{break 1;}}fn main(){}",
+            expect: Expect::Invalid("E0571"),
+        },
+        Case {
+            name: "block_cannot_continue",
+            source: "fn unused(){'block:{continue 'block;}}fn main(){}",
+            expect: Expect::Invalid("E0696"),
+        },
+        Case {
+            name: "block_tail_conflicts_with_break",
+            source: "fn unused(){let x='block:{if true{break 'block 1u8;}2u16};}fn main(){}",
+            expect: Expect::Invalid("E0308"),
+        },
+        Case {
+            name: "unlabeled_break_does_not_skip_block",
+            source: "fn unused(){loop{'block:{break;}}}fn main(){}",
+            expect: Expect::Invalid("E0695"),
+        },
     ];
     for case in cases {
+        eprintln!("loop inference case: {}", case.name);
         match case.expect {
             Expect::Run(_) => differential::stock_native(case.source),
-            Expect::Invalid(_) => differential::stock_and_native_reject(case.source),
+            Expect::Invalid(_) => {
+                differential::stock_and_native_reject_observed(
+                    case.source,
+                    |workers, check, failure| {
+                        assert!(
+                            failure
+                                .report
+                                .as_ref()
+                                .is_some_and(|report| report.capture_complete),
+                            "{} workers={workers} check={check}: incomplete failure capture: {failure}",
+                            case.name,
+                        );
+                        let diagnostic = failure.error.to_string().to_lowercase();
+                        for infrastructure in [
+                            "invalidmetadata",
+                            "invalid metadata",
+                            "resource limit",
+                            "work limit",
+                            "work-limit",
+                            "limit exceeded",
+                            "limit-exceeded",
+                            "exceeded limit",
+                            "budget",
+                        ] {
+                            assert!(
+                                !diagnostic.contains(infrastructure),
+                                "{} workers={workers} check={check}: not a source rejection: {failure}",
+                                case.name,
+                            );
+                        }
+                    },
+                );
+            }
         }
     }
 }

@@ -506,6 +506,11 @@ missing-file changes invalidate only justified consumers without stale lookup.
       result carriers have explicit early Unsupported admission with no image;
       reference-parameter invocation, result transport, direct generic closure
       arguments and general iterator-item projections remain open.
+      Loop and labeled-block result terms now preserve later numeric evidence,
+      lexical break targets and diverging operands. Fourteen valid and eight
+      invalid stock-differential cases pass CHECK/BUILD at workers 1/8, with
+      native execution for finite cases and complete failure graph capture
+      (`LOCAL-LITERALS.md`, run `20261020-044246688-3961792`).
 
 **Next:** enumerate remaining type/pattern forms and freeze one end-to-end slice,
 such as general slice metadata or nested patterns, with resource accounting.

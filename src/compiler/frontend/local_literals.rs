@@ -1859,8 +1859,12 @@ impl<'s> Solver<'_, '_, 's> {
                 self.enter_control(Some(*label), result, true)?;
                 let tail = self.block(body, depth + 1)?;
                 self.coerce(tail, result)?;
-                self.leave_control()?;
-                Ok(result)
+                let has_break = self.leave_control()?;
+                if !has_break && matches!(self.domain(tail), Domain::Fixed(ir::Ty::Never)) {
+                    Ok(tail)
+                } else {
+                    Ok(result)
+                }
             }
             Expr::Break { label, value } => {
                 let value = match value {

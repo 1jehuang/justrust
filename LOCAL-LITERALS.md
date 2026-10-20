@@ -125,9 +125,43 @@ The local solver has no individual expression span inventory, so this change
 does not invent source spans or metadata authority.
 
 This does not add general structured inference, future-use reference inference,
-method/generic-call constraint solving, match-pattern inference, loop-break
-inference, or new iterator forms. Unsupported expression forms contribute no
+method/generic-call constraint solving, match-pattern inference,
+or new iterator forms. Unsupported expression forms contribute no
 speculative evidence and remain the ordinary checker's responsibility. A valid
 Rust program depending on an unimplemented evidence path can still be rejected.
 Full Rust support and the remainder of the corpus remain open. No speed claim is
 made.
+
+## Loop and labeled-block result constraints
+
+The body-local solver retains one result term per loop or labeled block.
+Break operands constrain their lexically selected target, so later numeric
+uses can constrain nested break values and tuple projections before fallback.
+Labeled blocks also constrain their written tail. While, while-let and for
+targets have unit results, rather than contributing to an enclosing loop.
+Nearest matching labels win, and closure return-context depth prevents an
+inner closure's transfers from supplying evidence to an enclosing loop.
+
+Loops without a value-producing break contribute the never type. Continue
+contributes no result constraint, and a break whose operand diverges cannot
+make its target produce a value. This is syntactic constraint collection, not
+constant-condition reachability analysis: unreachable written value breaks
+still participate in type checking. Missing local target context provides no
+authority. Ordinary checking remains responsible for invalid labels, crossing
+closure boundaries, illegal value breaks, and unlabeled transfers through
+labeled blocks, including in unused functions.
+
+The loop-specific stock differential matrix in `tests/local_literals.rs` has
+14 valid and eight invalid sources. It checks native CHECK and BUILD at workers
+1 and 8 and compares finite executable stdout, stderr and exit status with
+stock. Negative cases additionally require complete observed graph capture and
+exclude metadata, resource-limit and work-budget failures. Infinite loops are
+validated in unused functions or unexecuted branches, never run by the oracle.
+Direct solver tests additionally inspect the retained never type, later u64
+evidence, lexical label selection and closure boundaries.
+No graph operation, shared state, integrity exemption or compiler fallback is
+introduced. The 22-source matrix passes on hosted in
+`20261020-044246688-3961792`; direct solver controls pass in
+`20261020-044135850-3958210`. The integrated loop/array snapshot passed all
+14 graph-integrity gates in `20261020-043905042-3955130` before the next
+shared-slice carrier workstream began. Full Rust compatibility remains open.
