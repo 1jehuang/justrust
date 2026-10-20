@@ -493,6 +493,14 @@ fn closed_requires_carrier_proof(closed: &cfg::ClosedCfg) -> Result<bool, FactsE
 // lossy error summary or a second allocation on the failure path.
 #[allow(clippy::result_large_err)]
 pub fn verify_template(template: cfg::TemplateCfg) -> Result<VerifiedTemplateCfg, Analysis> {
+    verify_template_in_const_context(template, false)
+}
+
+#[allow(clippy::result_large_err)]
+pub fn verify_template_in_const_context(
+    template: cfg::TemplateCfg,
+    const_context: bool,
+) -> Result<VerifiedTemplateCfg, Analysis> {
     if template.facts().phase() != FactsPhase::Universal {
         return Err(invalid_facts_analysis(
             template.function(),
@@ -510,6 +518,7 @@ pub fn verify_template(template: cfg::TemplateCfg) -> Result<VerifiedTemplateCfg
         AnalysisEffects {
             table: None,
             output: &mut candidate_effects,
+            const_context,
         },
         None,
     );
@@ -578,9 +587,10 @@ pub fn verify_template(template: cfg::TemplateCfg) -> Result<VerifiedTemplateCfg
 }
 
 #[allow(clippy::result_large_err)]
-pub(super) fn analyze_closed_with_effects(
+pub(super) fn analyze_closed_with_effects_in_const_context(
     closed: cfg::ClosedCfg,
     effects: &Arc<CarrierEffectTable>,
+    const_context: bool,
 ) -> Result<ConcreteCfg, Analysis> {
     if !closed.budget().same_authority(&effects.budget) {
         return Err(invalid_facts_analysis(
@@ -591,17 +601,26 @@ pub(super) fn analyze_closed_with_effects(
     }
     // The table is not permission to omit the ordinary closed analysis. The
     // SAME Plan consumes only exact, occurrence-bound entries during transfer.
-    analyze_closed_context(closed, Some(effects))
+    analyze_closed_context(closed, Some(effects), const_context)
 }
 
 #[allow(clippy::result_large_err)]
 pub fn analyze_closed(closed: cfg::ClosedCfg) -> Result<ConcreteCfg, Analysis> {
-    analyze_closed_context(closed, None)
+    analyze_closed_context(closed, None, false)
+}
+
+#[allow(clippy::result_large_err)]
+pub fn analyze_closed_in_const_context(
+    closed: cfg::ClosedCfg,
+    const_context: bool,
+) -> Result<ConcreteCfg, Analysis> {
+    analyze_closed_context(closed, None, const_context)
 }
 #[allow(clippy::result_large_err)]
 fn analyze_closed_context(
     closed: cfg::ClosedCfg,
     effects: Option<&Arc<CarrierEffectTable>>,
+    const_context: bool,
 ) -> Result<ConcreteCfg, Analysis> {
     if closed.facts().phase() != FactsPhase::Closed {
         return Err(invalid_facts_analysis(
@@ -620,6 +639,7 @@ fn analyze_closed_context(
         AnalysisEffects {
             table: effects,
             output: &mut candidate_effects,
+            const_context,
         },
         None,
     );
@@ -2332,6 +2352,7 @@ struct Transfer<'a> {
     diagnostic_limit: usize,
     loans: Option<&'a borrow::Plan>,
     phase: Phase,
+    const_context: bool,
 }
 struct Report {
     stats: AnalysisStats,
@@ -2995,6 +3016,89 @@ impl Transfer<'_> {
             Err(_) => Err(Exhausted),
         }
     }
+    fn const_drop_node(
+        &mut self,
+        state: &State,
+        node: usize,
+        ty: &Ty,
+        depth: usize,
+    ) -> Result<bool, Exhausted> {
+        self.budget.spend(1)?;
+        if depth > 128 {
+            return Err(Exhausted);
+        }
+        if !state.may_init.get(node) || self.facts.must_copy(ty).map_err(|_| Exhausted)? {
+            return Ok(false);
+        }
+        let facts = self.facts.validated().ok_or(Exhausted)?;
+        match facts.normal_drop_plan(ty).map_err(|_| Exhausted)? {
+            super::traits::NormalDropPlan::Trivial => return Ok(false),
+            super::traits::NormalDropPlan::Destructor(d) if d.own_target().is_some() => {
+                return Ok(true);
+            }
+            _ => {}
+        }
+        // Inspect the same move-path children used by definite initialization.
+        // A moved-out field must not be mistaken for a remaining destructor.
+        match MoveShape::of(ty, self.facts, self.budget)? {
+            MoveShape::Product { ty, fields } => {
+                for index in 0..fields {
+                    let child = self.paths.nodes[node].children[index];
+                    if self.const_drop_node(
+                        state,
+                        child,
+                        ty.field_ty(index).ok_or(Exhausted)?,
+                        depth + 1,
+                    )? {
+                        return Ok(true);
+                    }
+                }
+                Ok(false)
+            }
+            MoveShape::Array { element, len } => {
+                for index in 0..len {
+                    let child = self.paths.nodes[node].children[index];
+                    if self.const_drop_node(state, child, element, depth + 1)? {
+                        return Ok(true);
+                    }
+                }
+                Ok(false)
+            }
+            MoveShape::Sum(definition) => {
+                let selected = state.selected[node];
+                for (variant, fields) in definition.variants.iter().enumerate() {
+                    if selected != usize::MAX && selected != variant {
+                        continue;
+                    }
+                    let offset = self.paths.nodes[node].variant_offsets[variant];
+                    for (index, field) in fields.fields.iter().enumerate() {
+                        let child = self.paths.nodes[node].children[offset + index];
+                        if self.const_drop_node(state, child, &field.ty, depth + 1)? {
+                            return Ok(true);
+                        }
+                    }
+                }
+                Ok(false)
+            }
+            MoveShape::OpaqueParam | MoveShape::Scalar | MoveShape::Never => Ok(true),
+        }
+    }
+    fn qualify_const_drop(&mut self, state: &State, place: &Place) -> Result<(), Exhausted> {
+        if !self.const_context || self.report.is_none() {
+            return Ok(());
+        }
+        let ty = self.f.place_ty(place).map_err(|_| Exhausted)?;
+        let node = self.paths.resolve(place);
+        if self.const_drop_node(state, node, ty, 0)? {
+            self.diagnostic(
+                ErrorKind::InvalidCfg(
+                    "E0493: destructor cannot be evaluated in constant context".into(),
+                ),
+                place.clone(),
+            );
+        }
+        Ok(())
+    }
     fn block(&mut self, state: &mut State) -> Result<(), Exhausted> {
         for (index, item) in self.f.blocks[self.block.0].statements.iter().enumerate() {
             self.budget.spend(1)?;
@@ -3058,6 +3162,7 @@ impl Transfer<'_> {
                     )?;
                 }
                 Statement::StorageDead(local) => {
+                    self.qualify_const_drop(state, &root_place(*local))?;
                     if self.normal_drop_root(*local)?
                         && state.may_init.get(self.paths.roots[local.0])
                     {
@@ -3088,6 +3193,7 @@ impl Transfer<'_> {
                 }
                 Statement::Assign { destination, value } => {
                     self.rvalue(state, value)?;
+                    self.qualify_const_drop(state, destination)?;
                     if destination.projection.is_empty()
                         && self.normal_drop_root(destination.local)?
                         && state.may_init.get(self.paths.roots[destination.local.0])
@@ -3128,6 +3234,7 @@ impl Transfer<'_> {
                 }
             }
             Terminator::Drop { cleanup, .. } if !cleanup.owner().projection.is_empty() => {
+                self.qualify_const_drop(state, cleanup.owner())?;
                 // Replacement of a projected place: the old value is dropped
                 // in place. It must be initialized (reads it fully) and the
                 // access requires the same authority as a write.
@@ -3153,6 +3260,7 @@ impl Transfer<'_> {
                 }
             }
             Terminator::Drop { cleanup, .. } => {
+                self.qualify_const_drop(state, cleanup.owner())?;
                 let place = cleanup.owner();
                 let node = self.paths.roots[place.local.0];
                 // The runtime flag guards the read. A may-initialized root is
@@ -3330,6 +3438,7 @@ fn analyze_with_facts(
         AnalysisEffects {
             table: None,
             output: &mut None,
+            const_context: false,
         },
         None,
     )
@@ -3337,6 +3446,7 @@ fn analyze_with_facts(
 struct AnalysisEffects<'a> {
     table: Option<&'a Arc<CarrierEffectTable>>,
     output: &'a mut Option<Arc<borrow::CarrierEffects>>,
+    const_context: bool,
 }
 
 fn analyze_with_context(
@@ -3351,6 +3461,7 @@ fn analyze_with_context(
     let AnalysisEffects {
         table: effect_table,
         output: effect_output,
+        const_context,
     } = effects;
     let (exact_function, exact_facts) = exact;
     if let FactsCtx::Validated(authority) = facts {
@@ -3535,6 +3646,7 @@ fn analyze_with_context(
                 diagnostic_limit: limits.diagnostics,
                 loans: loans.as_ref(),
                 phase: Phase::Read,
+                const_context,
             }
             .block(&mut output)?;
             for target in successors(&f.blocks[block.0].terminator.value)
@@ -3603,6 +3715,7 @@ fn analyze_with_context(
                     diagnostic_limit: limits.diagnostics,
                     loans: loans.as_ref(),
                     phase: Phase::Read,
+                    const_context,
                 }
                 .block(&mut state)?;
                 if matches!(
@@ -6671,6 +6784,7 @@ mod tests {
                 diagnostic_limit: 10,
                 loans: Some(&plan),
                 phase: Phase::Write,
+                const_context: false,
             }
             .write(&mut state, &destination)
             .unwrap();
@@ -7680,6 +7794,7 @@ mod tests {
                 diagnostic_limit: 10,
                 loans: None,
                 phase: Phase::Read,
+                const_context: false,
             }
             .block(&mut state)
             .unwrap();
@@ -8038,6 +8153,7 @@ mod tests {
             diagnostic_limit: 10,
             loans: None,
             phase: Phase::Read,
+            const_context: false,
         }
         .index_write(&mut state, &place(1))
         .unwrap();
@@ -9357,6 +9473,7 @@ mod tests {
             diagnostic_limit: 10,
             loans: None,
             phase: Phase::Read,
+            const_context: false,
         };
         transfer.initialize(&mut state, sibling, true).unwrap();
         assert_eq!(state.selected[outer_node], 0);

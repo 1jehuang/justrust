@@ -1177,9 +1177,19 @@ impl Provider for CompilerProvider {
                 UNIVERSAL_ANALYZE => {
                     let (index, _) = closure_body_index(&key)?;
                     let lower_key = Key::new(UNIVERSAL_LOWER, key.params.clone());
-                    let lowered: Arc<cfg::TemplateCfg> = facts.get(lower_key).await?;
+                    let lowered_handle = cx.request(lower_key).get(0);
+                    let types_handle = cx.request(Facts::root(SIGNATURES)).get(0);
+                    let lowered: Arc<cfg::TemplateCfg> = cx.read_fact(lowered_handle).await?;
                     let template_name = lowered.source().name.clone();
-                    match ownership::verify_template(lowered.as_ref().clone()) {
+                    let types: Arc<frontend::PlanCtx> = cx.read_fact(types_handle).await?;
+                    let declaration = types.callable_decl(index).map_err(Error::new)?;
+                    let const_context = key.params.len() == 1
+                        && types.callable_constness(declaration).map_err(Error::new)?
+                            == frontend::Constness::Const;
+                    match ownership::verify_template_in_const_context(
+                        lowered.as_ref().clone(),
+                        const_context,
+                    ) {
                         Ok(verified) => {
                             cx.publish_fact(ANALYSIS_OUTPUT, verified.analysis().clone())?;
                             cx.publish_fact(0, UniversalProofFact { verified })
@@ -1581,7 +1591,15 @@ impl Provider for CompilerProvider {
                     let effects =
                         ownership::CarrierEffectTable::for_callees(&templates, &this.0.budget)
                             .map_err(Error::new)?;
-                    match ownership::analyze_closed_with_effects(closed, &effects) {
+                    let const_context = types
+                        .callable_constness(instance_target.declaration)
+                        .map_err(Error::new)?
+                        == frontend::Constness::Const;
+                    match ownership::analyze_closed_with_effects_in_const_context(
+                        closed,
+                        &effects,
+                        const_context,
+                    ) {
                         Ok(concrete) => {
                             cx.publish_fact(ANALYSIS_OUTPUT, concrete.analysis().clone())?;
                             cx.publish_fact(0, ConcreteProofFact { concrete })
@@ -1890,16 +1908,22 @@ impl Provider for CompilerProvider {
                         let effects =
                             ownership::CarrierEffectTable::for_callees(&proofs, &this.0.budget)
                                 .map_err(Error::new)?;
-                        ownership::analyze_closed_with_effects(closed, &effects).map_err(
-                            |analysis| {
-                                Error::new(analysis_diagnostic(
-                                    &this.0.budget,
-                                    "source declaration",
-                                    index,
-                                    &analysis,
-                                ))
-                            },
-                        )?;
+                        let const_context =
+                            types.callable_constness(declaration).map_err(Error::new)?
+                                == frontend::Constness::Const;
+                        ownership::analyze_closed_with_effects_in_const_context(
+                            closed,
+                            &effects,
+                            const_context,
+                        )
+                        .map_err(|analysis| {
+                            Error::new(analysis_diagnostic(
+                                &this.0.budget,
+                                "source declaration",
+                                index,
+                                &analysis,
+                            ))
+                        })?;
                     }
                     cx.publish(0, 1)
                 }

@@ -10869,16 +10869,14 @@ pub fn check_function_with_signatures(
             let facts = plan.callable_facts(declaration)?;
             super::super::cfg::lower_template(Arc::new(typed), facts, &plan.budget)?
         };
-        return super::super::ownership::verify_template(template)
-            .map(|_| ())
-            .map_err(|analysis| {
-                super::super::analysis_diagnostic(
-                    &plan.budget,
-                    "universal callable",
-                    index,
-                    &analysis,
-                )
-            });
+        return super::super::ownership::verify_template_in_const_context(
+            template,
+            plan.callable_constness(declaration)? == Constness::Const,
+        )
+        .map(|_| ())
+        .map_err(|analysis| {
+            super::super::analysis_diagnostic(&plan.budget, "universal callable", index, &analysis)
+        });
     }
     // Source ownership (including implicit Drop) requires its canonical replay
     // publication. Raw typed lowering omits that proof for call-free bodies.
@@ -10887,7 +10885,10 @@ pub fn check_function_with_signatures(
     let lowered = super::super::cfg::lower_source_closed(&publication, &plan.budget)
         .map_err(|error| error.into_legacy_diagnostic(&plan.budget))?;
     let closed = super::super::cfg::close(Arc::new(lowered), facts, &plan.budget)?;
-    let analysis = match super::super::ownership::analyze_closed(closed) {
+    let analysis = match super::super::ownership::analyze_closed_in_const_context(
+        closed,
+        plan.callable_constness(declaration)? == Constness::Const,
+    ) {
         Ok(_) => return Ok(()),
         Err(analysis) => analysis,
     };
@@ -11271,7 +11272,7 @@ fn type_callable_source_and_closures_inner(
             );
         }
     }
-    validate_const_forwarding(&program.names, f, budget)?;
+    validate_const_forwarding(&plan.registry, f, budget)?;
     let mut signatures = plan.environment(Some(declaration))?;
     if let Some(cap) = canonical {
         signatures.facts = Some(cap.facts.clone());
@@ -11387,6 +11388,7 @@ fn type_callable_source_and_closures_inner(
         body_substitution: None,
         body,
     };
+    validate_const_typed_calls(&plan.registry, f, &checked, budget)?;
     let closures = c.checked_closures;
     let hidden = c.opaque_hidden;
     if canonical.is_some() {

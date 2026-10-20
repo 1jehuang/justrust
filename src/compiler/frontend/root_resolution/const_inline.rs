@@ -110,7 +110,8 @@ impl Resolver<'_> {
         locals.pop();
         self.type_params = previous_params;
         result?;
-        self.const_calls(&value, 0)?;
+        // The hidden const checker body is qualified with every other const
+        // declaration before signature publication, including unused items.
         // Built after resolution: the binding is a fresh local whose name
         // must not re-resolve to the constant item it implements.
         *expr = Expr::Block(Block {
@@ -123,58 +124,5 @@ impl Resolver<'_> {
             tail: Some(Box::new(Expr::Var(local))),
         });
         Ok(true)
-    }
-
-    /// E0015: constant initializers may only call `const fn`s.
-    fn const_calls(&self, expr: &Expr, depth: usize) -> Result<(), String> {
-        if depth > 256 {
-            return Err("constant initializer nesting exceeds limit 256".into());
-        }
-        let mut children: Vec<&Expr> = Vec::new();
-        match expr {
-            Expr::Call { name, args } => {
-                let key = name_scope::path_key(self.names(), name, Namespace::Value)?;
-                for function in &self.program.functions {
-                    if name_scope::path_key(self.names(), &function.name, Namespace::Value)? == key
-                        && function.constness == Constness::Runtime
-                    {
-                        return Err(
-                            "E0015: cannot call non-const function in constant initializer".into(),
-                        );
-                    }
-                }
-                children.extend(args);
-            }
-            Expr::MethodCall { .. } | Expr::AssociatedCall { .. } | Expr::TraitCall { .. } => {
-                return Err(
-                    "unsupported: method calls in constant initializers are not yet evaluated"
-                        .into(),
-                );
-            }
-            Expr::Unary { value, .. }
-            | Expr::Cast { value, .. }
-            | Expr::Deref { value }
-            | Expr::BorrowValue { value, .. }
-            | Expr::Repeat { value, .. } => children.push(value),
-            Expr::Binary { left, right, .. } => {
-                children.push(left);
-                children.push(right);
-            }
-            Expr::Array(values)
-            | Expr::Tuple(values)
-            | Expr::TupleStruct { fields: values, .. } => children.extend(values),
-            Expr::Struct { fields, .. } => children.extend(fields.iter().map(|(_, v)| v)),
-            Expr::Field { base, .. } => children.push(base),
-            Expr::Block(block) => {
-                if let Some(tail) = &block.tail {
-                    children.push(tail);
-                }
-            }
-            _ => {}
-        }
-        for child in children {
-            self.const_calls(child, depth + 1)?;
-        }
-        Ok(())
     }
 }

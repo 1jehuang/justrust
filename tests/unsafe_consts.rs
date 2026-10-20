@@ -1,5 +1,6 @@
-//! static mut, unsafe fn/blocks (E0133), constant patterns, raw pointers:
-//! native run output matches stock rustc.
+//! Unsafe fn/blocks (E0133), constant patterns, and raw pointers retain their
+//! native controls. Mutable statics are an explicit unsupported boundary:
+//! the old fixed-address accessor was an unsound approximation, not support.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
 use justrust_engine::compiler;
 use std::fs;
@@ -51,6 +52,21 @@ const CASES: &[(&str, &str, &str)] = &[
 fn unsafe_and_const_programs_match_stock_output() {
     for workers in [1, 8] {
         for (tag, source, expected) in CASES {
+            if *tag == "static_mut" {
+                // This unchanged source has pinned-stock CHECK/BUILD/run coverage
+                // in const_source; native admission must not invent storage.
+                for check in [true, false] {
+                    let error = compiler::compile_observed((*source).into(), workers, check)
+                        .err()
+                        .expect("mutable statics must not publish a successful compilation");
+                    assert!(error.to_string().contains("unsupported"), "{error}");
+                    assert!(
+                        error.to_string().contains("mutable static storage"),
+                        "{error}"
+                    );
+                }
+                continue;
+            }
             assert_eq!(run(source, workers, tag), *expected, "{tag}");
         }
     }
@@ -66,6 +82,17 @@ fn unsafe_operations_outside_unsafe_are_rejected() {
         let error = compiler::compile_observed(source.into(), 1, true)
             .err()
             .unwrap_or_else(|| panic!("accepted {source}"));
-        assert!(error.to_string().contains("E0133"), "{source}: {error}");
+        if source.starts_with("static mut") {
+            assert!(
+                error.to_string().contains("unsupported"),
+                "{source}: {error}"
+            );
+            assert!(
+                error.to_string().contains("mutable static storage"),
+                "{source}: {error}"
+            );
+        } else {
+            assert!(error.to_string().contains("E0133"), "{source}: {error}");
+        }
     }
 }

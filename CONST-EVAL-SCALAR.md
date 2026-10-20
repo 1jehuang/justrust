@@ -43,6 +43,22 @@ unqualified nonlocal lookup remains fail-closed because parent-parameter
 absence is not proof against a shadowing parent local. Explicit module/crate
 constant paths do not bypass lexical capture precedence.
 
+Const function declarations now qualify direct calls against sealed callable
+identities even when unused. Typed calls and ordinary ownership analysis also
+check const legality, including possibly initialized generic values whose drop
+cannot run in a constant context. Generic forwarding and Copy controls retain
+their stock behavior. This does not implement indirect const calls or complete
+constant evaluation, which remain explicit unsupported boundaries.
+
+Mutable static declarations are explicitly Unsupported at source admission,
+including unused declarations. The earlier synthetic accessor using a truncated
+name hash, fixed-address mapping and first-use initialization has been withdrawn:
+it did not establish canonical storage identity or Rust constant initialization.
+This is a correctness boundary, not newly implemented mutable-static support.
+The existing source suite distinguishes stock-valid declarations from a
+stock-invalid runtime initializer, while requiring native CHECK and BUILD to
+reject both before publishing an accessor or demanding object code.
+
 ## Per-item graph contract
 
 - **118 CONST_DECL** uses one canonical declaration index. Its factory checks

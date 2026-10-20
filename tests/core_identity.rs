@@ -13,6 +13,9 @@ use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+#[path = "support/stock_rustc.rs"]
+mod stock_rustc;
+
 const PROVIDER: &[u8] = include_bytes!("../libraries/probes/identity/convert.rs");
 const LOCK: &str = include_str!("../libraries/source-lock.json");
 const START: usize = 2258;
@@ -146,7 +149,7 @@ fn runtime(path: &Path, scratch: &Scratch, name: &str) {
     );
 }
 fn stock_command(scratch: &Scratch, source: &Path, output: &Path) -> Command {
-    let mut command = Command::new("rustc");
+    let mut command = Command::new(stock_rustc::stock_rustc());
     command
         .current_dir(&scratch.0)
         .env_remove("RUSTC_BOOTSTRAP")
@@ -241,8 +244,7 @@ fn stock_original_policy_rejections() {
 enum Outcome {
     Runtime,
     Invalid,
-    ConstInvalidUnsupported,
-    ConstRequiredUnsupported,
+    ConstInvalid,
 }
 struct Fixture {
     name: &'static str,
@@ -286,8 +288,8 @@ fn fixtures() -> Vec<Fixture> {
         invalid("generic_use_after_move", "fn invalid<T>(value:T)->T{let moved=identity(value);value} fn main(){}", "E0382"),
         invalid("conflicting_mutable_loans", "fn main(){let mut value=1i32;let first=&mut value;let second=identity(&mut value);*first=*second;}", "E0499"),
         invalid("shared_loan_mutation", "fn main(){let mut value=1i32;let reference=identity(&value);value=2;let observed=*reference;}", "E0506"),
-        Fixture { name: "unused_const_calls_runtime", client: "fn runtime()->i32{7} const fn invalid()->i32{runtime()} fn main(){}".into(), outcome: Outcome::ConstInvalidUnsupported, diagnostic: "E0015" },
-        Fixture { name: "const_required_boundary", client: "const ANSWER:i32=identity(42i32); fn main(){if ANSWER==42i32{println!(\"identity ok\");}}".into(), outcome: Outcome::ConstRequiredUnsupported, diagnostic: "" },
+        Fixture { name: "unused_const_calls_runtime", client: "fn runtime()->i32{7} const fn invalid()->i32{runtime()} fn main(){}".into(), outcome: Outcome::ConstInvalid, diagnostic: "E0015" },
+        Fixture { name: "const_required_boundary", client: "const ANSWER:i32=identity(42i32); fn main(){if ANSWER==42i32{println!(\"identity ok\");}}".into(), outcome: Outcome::Runtime, diagnostic: "" },
     ];
     let mut names = BTreeSet::new();
     for fixture in &cases {
@@ -310,10 +312,7 @@ fn stock(fixture: &Fixture) {
         Duration::from_secs(20),
     );
     let diagnostic = String::from_utf8_lossy(&result.stderr);
-    let stock_invalid = matches!(
-        fixture.outcome,
-        Outcome::Invalid | Outcome::ConstInvalidUnsupported
-    );
+    let stock_invalid = matches!(fixture.outcome, Outcome::Invalid | Outcome::ConstInvalid);
     assert_eq!(
         result.code,
         if stock_invalid { 1 } else { 0 },
@@ -340,7 +339,7 @@ fn stock(fixture: &Fixture) {
 fn oracle_all(cases: &[Fixture]) {
     let scratch = Scratch::new();
     let version = capture(
-        Command::new("rustc").arg("-Vv"),
+        Command::new(stock_rustc::stock_rustc()).arg("-Vv"),
         &scratch,
         Duration::from_secs(20),
     );
@@ -354,7 +353,7 @@ fn oracle_all(cases: &[Fixture]) {
         stock(fixture);
     }
     eprintln!(
-        "identity behavioral corpus: 18 = 10 runtime + 6 ownership/unused invalid + 1 stock-invalid const-body native-unsupported boundary + 1 stock-valid const-required native-unsupported boundary; exact-source stock policy rejections are separate"
+        "identity behavioral corpus: 18 = 11 runtime (including const identity execution) + 6 ownership/unused invalid + 1 stock-invalid const-body rejection; exact-source stock policy rejections are separate"
     );
 }
 fn native_command(scratch: &Scratch, workers: usize, check: bool) -> Command {
@@ -391,6 +390,35 @@ fn no_artifact(scratch: &Scratch) {
 fn stock_oracle() {
     oracle_all(&fixtures());
 }
+
+#[test]
+fn const_required_identity_executes_with_exact_locked_provider() {
+    let fixture = fixtures()
+        .into_iter()
+        .find(|fixture| fixture.name == "const_required_boundary")
+        .unwrap();
+    stock(&fixture);
+    for workers in [1, 8] {
+        for check in [true, false] {
+            let scratch = Scratch::new();
+            scratch.probe_files(&fixture.client, LOCK, PROVIDER);
+            let mut command = native_command(&scratch, workers, check);
+            add_probe(&mut command, &scratch);
+            let result = capture(&mut command, &scratch, Duration::from_secs(20));
+            assert_eq!(
+                result.code,
+                0,
+                "workers={workers} check={check}: {}",
+                String::from_utf8_lossy(&result.stderr)
+            );
+            if check {
+                no_artifact(&scratch);
+            } else {
+                runtime(&scratch.path("native"), &scratch, fixture.name);
+            }
+        }
+    }
+}
 #[test]
 fn native_exact_locked_source_after_complete_stock_oracle() {
     let cases = fixtures();
@@ -424,17 +452,28 @@ fn native_exact_locked_source_after_complete_stock_oracle() {
                 if rejects && diagnostic.is_empty() {
                     errors.push("missing diagnostic".into());
                 }
-                if matches!(
-                    fixture.outcome,
-                    Outcome::ConstInvalidUnsupported | Outcome::ConstRequiredUnsupported
-                ) && !diagnostic.contains("unsupported")
-                {
-                    errors.push("const boundary lacks explicit unsupported".into());
+                if fixture.outcome == Outcome::ConstInvalid && !diagnostic.contains("E0015") {
+                    errors.push("const-invalid body lacks E0015 diagnostic".into());
                 }
-                if fixture.outcome == Outcome::Invalid && diagnostic.contains("unsupported") {
+                if matches!(fixture.outcome, Outcome::Invalid | Outcome::ConstInvalid)
+                    && diagnostic.contains("unsupported")
+                {
                     errors.push("stock-invalid client misclassified unsupported".into());
                 }
                 if check || rejects || result.code != 0 {
+                    if ["native", "client", "a.out"]
+                        .iter()
+                        .any(|name| scratch.path(name).exists())
+                    {
+                        eprintln!(
+                            "unexpected artifact: fixture={} outcome={:?} workers={workers} check={check} exit={} scratch={}\nstdout={}\nstderr={diagnostic}",
+                            fixture.name,
+                            fixture.outcome,
+                            result.code,
+                            scratch.0.display(),
+                            String::from_utf8_lossy(&result.stdout),
+                        );
+                    }
                     no_artifact(&scratch);
                 } else if scratch.path("native").exists() {
                     runtime(&scratch.path("native"), &scratch, fixture.name);

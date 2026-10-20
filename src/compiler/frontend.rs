@@ -17015,49 +17015,97 @@ fn schema_fields_storage(fields: &[FieldDecl], budget: &ir::PlanBudget) -> Resul
     }
     Ok(bytes)
 }
-/// A deliberately narrow const-valid body envelope, not constant evaluation.
-/// The ordinary type, region and universal move proofs remain mandatory. Moving
-/// the sole argument directly into the result has no discarded value to drop,
-/// called function to qualify, or executed effect to pretend is const-valid.
+/// Qualify one complete const body against the sealed declaration identities.
+/// This is shared by signature publication and public per-callable checking.
 fn validate_const_forwarding(
-    names: &NameStore,
+    registry: &DeclRegistry,
     function: &Function,
     budget: &ir::PlanBudget,
 ) -> Result<(), String> {
     budget.charge_work(1)?;
-    // const fn bodies are now ordinary checked bodies (see const_inline).
-    if function.constness == Constness::Runtime || function.constness == Constness::Const {
+    if function.constness == Constness::Runtime {
         return Ok(());
     }
-    let [(parameter, ty)] = function.params.as_slice() else {
-        return Err("unsupported: const fn requires exactly one forwarded parameter".into());
-    };
-    budget.charge_work(1)?;
-    let forwarded = match (parameter, function.body.tail.as_deref()) {
-        (BindingName::Named(parameter), Some(Expr::Var(path)))
-            if path.anchor() == PathAnchor::Relative =>
-        {
-            path.check(names).map_err(native_adapter::name_diagnostic)?;
-            if let Some(name) = path.single() {
-                name_scope::ident_eq(names, *parameter, name, LookupClass::Local)?
-            } else {
-                false
+    let names = registry.program.names.as_ref();
+    let owner = function
+        .name
+        .display(names)
+        .map_err(native_adapter::name_diagnostic)?;
+    walk_depth_inspecting(
+        DepthNode::Block(&function.body),
+        None,
+        Some(names),
+        Some(&mut |node, _| {
+            budget.charge_work(1)?;
+            match node {
+                DepthNode::Expr(Expr::Call { name, .. }) => {
+                    let key = name_scope::path_key(names, name, Namespace::Value)?;
+                    let declaration = registry.functions.get(&key).ok_or_else(|| {
+                        format!(
+                            "in const function {owner}: unresolved callable in constant context"
+                        )
+                    })?;
+                    let callee = registry.source_callable(*declaration)
+                        .ok_or_else(|| format!("unsupported: in const function {owner}: callable has no const-qualified source body"))?;
+                    if callee.constness != Constness::Const {
+                        return Err(format!(
+                            "E0015: in const function {owner}: cannot call non-const function in constant context"
+                        ));
+                    }
+                }
+                DepthNode::Expr(
+                    Expr::Println(_)
+                    | Expr::Format { .. }
+                    | Expr::Output(_)
+                    | Expr::FormatInto(_)
+                    | Expr::NativeSyscall(_),
+                ) => {
+                    return Err(format!(
+                        "E0015: in const function {owner}: cannot call non-const operation in constant context"
+                    ));
+                }
+                DepthNode::Expr(
+                    Expr::MethodCall { .. }
+                    | Expr::AssociatedCall { .. }
+                    | Expr::TraitCall { .. }
+                    | Expr::Invoke { .. },
+                ) => {
+                    return Err(format!(
+                        "unsupported: in const function {owner}: indirect or method calls in constant contexts"
+                    ));
+                }
+                _ => {}
+            }
+            Ok(())
+        }),
+    )
+}
+fn validate_const_typed_calls(
+    registry: &DeclRegistry,
+    function: &Function,
+    checked: &ir::CheckedFunction,
+    budget: &ir::PlanBudget,
+) -> Result<(), String> {
+    if function.constness == Constness::Runtime {
+        return Ok(());
+    }
+    for expression in &checked.exprs {
+        budget.charge_work(1)?;
+        if let ir::ExprKind::Call { target, .. } = &expression.kind {
+            match target {
+                ir::Callee::Direct(target) => {
+                    let source = registry
+                        .source_callable(target.declaration)
+                        .ok_or("unsupported: const call has no qualified source declaration")?;
+                    if source.constness != Constness::Const {
+                        return Err("E0015: non-const call in typed constant body".into());
+                    }
+                }
+                ir::Callee::TraitItem(_) | ir::Callee::Virtual(_) => {
+                    return Err("E0015: non-const trait call in typed constant body".into());
+                }
             }
         }
-        _ => false,
-    };
-    if !forwarded || !function.body.statements.is_empty() {
-        return Err(
-            "unsupported: const fn body must only forward its parameter as the tail expression"
-                .into(),
-        );
-    }
-    // Charge and depth-check both source types before their structural equality
-    // comparison, including callers constructing public ASTs without parsing.
-    budget.charge_work(source_type_storage(ty, budget, 0)?)?;
-    budget.charge_work(source_type_storage(&function.result, budget, 0)?)?;
-    if !ty.semantic_eq(&function.result, names)? {
-        return Err("unsupported: const fn forwarding result must match its parameter type".into());
     }
     Ok(())
 }
@@ -17150,11 +17198,6 @@ impl PlanCtx {
                     StructShape::Record | StructShape::Tuple => {}
                 }
             }
-        }
-        // Signature construction sees all source declarations, not just demanded
-        // instances. Unsupported unused const bodies cannot escape publication.
-        for function in &program.functions {
-            validate_const_forwarding(program.names.as_ref(), function, budget)?;
         }
         for implementation in &program.impls {
             for item in &implementation.items {
@@ -18539,6 +18582,11 @@ impl PlanCtx {
         }
         registry_mut.function_positions = positions;
         registry_mut.function_positions_sealed = true;
+        // Qualify every declaration before graph-facing publication. The sealed
+        // callable index resolves each call without scanning other bodies.
+        for function in &program.functions {
+            validate_const_forwarding(&registry, function, budget)?;
+        }
         // Consume construction authority once before graph-facing adapters.
         source_schemas.complete_closure_predicates(&registry, budget)?;
         let source_schemas = source_schemas.seal_from_registry(&registry, budget)?;
@@ -18962,6 +19010,13 @@ impl PlanCtx {
     }
     pub fn declaration(&self, id: ir::DeclId) -> Result<&DeclInfo, String> {
         self.registry.declaration(id)
+    }
+    pub fn callable_constness(&self, declaration: ir::DeclId) -> Result<Constness, String> {
+        self.declaration(declaration)?;
+        Ok(self
+            .registry
+            .source_callable(declaration)
+            .map_or(Constness::Runtime, |function| function.constness))
     }
     pub fn callable_count(&self) -> usize {
         self.registry.function_ids.len()

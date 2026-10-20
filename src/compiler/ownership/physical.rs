@@ -44,6 +44,7 @@ pub(in crate::compiler) fn analyze_physical<'a>(
         AnalysisEffects {
             table: None,
             output: &mut effects,
+            const_context: false,
         },
         Some(validation),
     );
