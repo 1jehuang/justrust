@@ -28,7 +28,11 @@ impl ValidatedTraitWorld {
         let Ty::AssociatedType(projection) = &goal.self_ty else {
             return Ok(None);
         };
-        if !self.goal_is_closed(&projection.trait_ref, context.env())? {
+        if !self.goal_is_closed(&projection.trait_ref, context.env())?
+            && self
+                .opaque_associated_binding(projection, context.env())?
+                .is_none()
+        {
             if goal.declaration == self.catalog.id(CatalogItem::Sized) {
                 self.validate_universal_projection(projection, context.env())?;
                 return Ok(None);

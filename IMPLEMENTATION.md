@@ -410,6 +410,12 @@ missing-file changes invalidate only justified consumers without stale lookup.
       CHECK/BUILD/link/run at workers 1 and 8 with distinct `u8`/`u16` actuals:
       exact declaration-owned substitution precedes hidden representation and
       physical ABI mapping while CHECK remains representation/codegen-free.
+      Public associated assignments and `impl Fn(...) -> ...` bounds now support
+      source CHECK through authenticated candidate discovery and a dedicated
+      declaration-bound normalization origin. Worker-1/8 provider tests retain
+      zero representation/dispatch/MONO/codegen demands; foreign owner/site/capture,
+      Output and caller world/env/phase replay controls reject. This does not add
+      executable closure-backed opaque support or complete the closure corpus.
       Generic opaque callers with bound calls, generic defining bodies with calls,
       closure-backed opaque values, reference-bearing hidden representations and
       realized destructor dependencies remain unsupported, not approximated.

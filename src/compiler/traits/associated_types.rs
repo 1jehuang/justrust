@@ -62,6 +62,7 @@ struct NormalizationKey {
 enum NormalizationOrigin {
     Implementation(DeclId),
     Dynamic(Arc<ir::DynTy>),
+    Opaque(Arc<ir::OpaqueTy>),
 }
 
 #[derive(Clone, Debug)]
@@ -1268,6 +1269,47 @@ impl ValidatedTraitWorld {
             self.validate_normalization_evidence(&evidence, context)?;
             return Ok(evidence);
         }
+        if let Some(raw_rhs) = self.opaque_associated_binding(
+            &ir::AssociatedTypeProjection {
+                trait_ref: selected_goal.clone(),
+                item: projection.item,
+            },
+            context.proof.env(),
+        )? {
+            let Ty::Opaque(opaque) = &selected_goal.self_ty else {
+                unreachable!()
+            };
+            let opaque = opaque.clone();
+            let membership = self.require_in(
+                &Predicate::Implements(selected_goal.clone()),
+                context.proof,
+                &mut stack.obligations,
+            )?;
+            push(
+                &self.budget,
+                &mut stack.active,
+                (key.clone(), opaque.owner()),
+            )?;
+            let normalized =
+                self.normalize_type_in(&raw_rhs, context, stack, &mut child_dependencies, 0);
+            stack.active.pop();
+            let normal = normalized?;
+            self.validate_ty(&normal, context.proof.env(), None, true, 0)?;
+            retain::<NormalizationEvidence>(&self.budget, 1)?;
+            let evidence = Arc::new(NormalizationEvidence {
+                world: self.id,
+                key,
+                membership,
+                selected_goal,
+                implementation: NormalizationOrigin::Opaque(opaque),
+                arguments: Arc::from([]),
+                raw_rhs,
+                normal,
+                dependencies: child_dependencies.into(),
+            });
+            self.validate_normalization_evidence(&evidence, context)?;
+            return Ok(evidence);
+        }
         let closed_goal = self.goal_is_closed(&selected_goal, context.proof.env())?;
         let builtin_closure = self.checked_closure_projection(
             &ir::AssociatedTypeProjection {
@@ -1669,8 +1711,11 @@ impl ValidatedTraitWorld {
     ) -> Result<()> {
         self.check_normalization_budget()?;
         charged(&self.budget, self.budget.charge_work(1))?;
-        let caller_membership = matches!(&evidence.implementation, NormalizationOrigin::Dynamic(_))
-            || (matches!(&evidence.membership.0.origin, ProofOrigin::Closure { .. })
+        let caller_membership =
+            matches!(
+                &evidence.implementation,
+                NormalizationOrigin::Dynamic(_) | NormalizationOrigin::Opaque(_)
+            ) || (matches!(&evidence.membership.0.origin, ProofOrigin::Closure { .. })
                 && !self.goal_is_closed(&evidence.selected_goal, context.proof.env())?);
         if evidence.world != self.id
             || evidence.key.environment != context.proof.predicates.index
@@ -1731,6 +1776,75 @@ impl ValidatedTraitWorld {
         }
         let implementation = match &evidence.implementation {
             NormalizationOrigin::Implementation(declaration) => *declaration,
+            NormalizationOrigin::Opaque(opaque) => {
+                if !matches!(evidence.membership.0.origin, ProofOrigin::OpaqueDeclared)
+                    || !self.eq_ty(
+                        &evidence.selected_goal.self_ty,
+                        &Ty::Opaque(opaque.clone()),
+                        0,
+                    )?
+                    || !evidence.arguments.is_empty()
+                    || !self.same_projection(
+                        &evidence.key.projection,
+                        &ir::AssociatedTypeProjection {
+                            trait_ref: evidence.selected_goal.clone(),
+                            item: evidence.key.projection.item,
+                        },
+                    )?
+                {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "opaque normalization lost exact declared membership",
+                    ));
+                }
+                let expected = self
+                    .opaque_associated_binding(&evidence.key.projection, context.proof.env())?
+                    .ok_or_else(|| {
+                        FactsError::invalid(
+                            &self.budget,
+                            "opaque normalization lost public associated binding",
+                        )
+                    })?;
+                if !self.eq_ty(&expected, &evidence.raw_rhs, 0)? {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "opaque normalization changed its declaration-owned RHS",
+                    ));
+                }
+                for dependency in evidence.dependencies.iter() {
+                    self.validate_normalization_evidence(dependency, context)?;
+                }
+                let mut replay_stack = NormalizationStack::default();
+                push(
+                    &self.budget,
+                    &mut replay_stack.active,
+                    (evidence.key.clone(), opaque.owner()),
+                )?;
+                let mut replay_dependencies = Vec::new();
+                let normal = self.normalize_type_in(
+                    &expected,
+                    context,
+                    &mut replay_stack,
+                    &mut replay_dependencies,
+                    0,
+                )?;
+                if !self.eq_ty(&normal, &evidence.normal, 0)?
+                    || replay_dependencies.len() != evidence.dependencies.len()
+                {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "opaque normalization output changed its public equality",
+                    ));
+                }
+                self.require_associated_assignment_bounds(
+                    evidence.key.projection.item,
+                    &evidence.key.projection.trait_ref,
+                    &evidence.normal,
+                    context.proof,
+                    &mut Vec::new(),
+                )?;
+                return Ok(());
+            }
             NormalizationOrigin::Dynamic(object) => {
                 if !matches!(evidence.membership.0.origin, ProofOrigin::TraitObject)
                     || !self.eq_ty(&evidence.selected_goal.self_ty, &Ty::Dyn(object.clone()), 0)?
@@ -2006,6 +2120,123 @@ mod tests {
         let mut wrong_world = (*normalized.0).clone();
         wrong_world.world = fixture().id;
         for forged in [wrong_phase, wrong_environment, wrong_result, wrong_world] {
+            assert!(
+                NormalizedAssociatedType(Arc::new(forged))
+                    .validate_for(&projection, &facts)
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn opaque_bound_normalization_replays_declaration_and_caller_authority() {
+        let program = frontend::parse(
+            "trait Has{type Output;}struct Number{value:i32}impl Has for Number{type Output=i32;}fn make<T>(arg:T)->impl Has<Output=i32>{Number{value:42}}fn other()->impl Has<Output=i32>{Number{value:42}}fn main(){}",
+        ).unwrap();
+        let plan = PlanCtx::from_program(&program, &PlanBudget::default()).unwrap();
+        let world = plan.trait_world().unwrap();
+        let opaque = world
+            .headers
+            .callables
+            .iter()
+            .find_map(|header| match &header.schema.signature.result {
+                Ty::Opaque(opaque) if !opaque.owner_args().is_empty() => Some(opaque.clone()),
+                _ => None,
+            })
+            .unwrap();
+        let foreign = world
+            .headers
+            .callables
+            .iter()
+            .find_map(|header| match &header.schema.signature.result {
+                Ty::Opaque(other) if other.owner() != opaque.owner() => Some(other.clone()),
+                _ => None,
+            })
+            .unwrap();
+        let facts = world.callable_facts(opaque.owner()).unwrap();
+        let bound = &opaque.bounds()[0];
+        let projection = ir::AssociatedTypeProjection {
+            trait_ref: bound.application(Ty::Opaque(opaque.clone())),
+            item: bound.equalities()[0].0,
+        };
+        let normalized = world
+            .normalize_associated_type(&projection, &facts)
+            .unwrap();
+        normalized.validate_for(&projection, &facts).unwrap();
+        assert!(matches!(normalized.ty(), Ty::Int(ir::IntTy::I32)));
+        assert!(matches!(
+            &normalized.0.implementation,
+            NormalizationOrigin::Opaque(_)
+        ));
+        let foreign_projection = ir::AssociatedTypeProjection {
+            trait_ref: foreign.bounds()[0].application(Ty::Opaque(foreign.clone())),
+            item: foreign.bounds()[0].equalities()[0].0,
+        };
+        assert!(
+            normalized
+                .validate_for(&foreign_projection, &facts)
+                .is_err()
+        );
+        let changed_bound = ir::OpaqueBound::new(
+            bound.declaration(),
+            bound.args().into(),
+            Arc::from([(projection.item, Ty::Bool)]),
+        );
+        for forged in [
+            ir::OpaqueTy::new(
+                opaque.owner(),
+                opaque.owner_args().into(),
+                opaque.site() + 1,
+                opaque.bounds().into(),
+                opaque.captured_regions().into(),
+            ),
+            ir::OpaqueTy::new(
+                opaque.owner(),
+                opaque.owner_args().into(),
+                opaque.site(),
+                opaque.bounds().into(),
+                Arc::from([ir::SourceRegionId {
+                    declaration: opaque.owner(),
+                    index: 0,
+                }]),
+            ),
+            ir::OpaqueTy::new(
+                opaque.owner(),
+                opaque.owner_args().into(),
+                opaque.site(),
+                Arc::from([changed_bound]),
+                opaque.captured_regions().into(),
+            ),
+        ] {
+            let forged = Arc::new(forged);
+            let altered = ir::AssociatedTypeProjection {
+                trait_ref: forged.bounds()[0].application(Ty::Opaque(forged.clone())),
+                item: projection.item,
+            };
+            assert!(world.normalize_associated_type(&altered, &facts).is_err());
+            assert!(normalized.validate_for(&altered, &facts).is_err());
+        }
+        let mut wrong_owner = (*normalized.0).clone();
+        wrong_owner.implementation = NormalizationOrigin::Opaque(foreign);
+        let mut wrong_output = (*normalized.0).clone();
+        wrong_output.raw_rhs = Ty::Bool;
+        let mut wrong_phase = (*normalized.0).clone();
+        wrong_phase.key.phase = FactsPhase::Closed;
+        let mut wrong_environment = (*normalized.0).clone();
+        wrong_environment.membership = ProofEvidence(Arc::new({
+            let mut proof = (*wrong_environment.membership.0).clone();
+            proof.environment = world.empty.index;
+            proof
+        }));
+        let mut wrong_world = (*normalized.0).clone();
+        wrong_world.world = fixture().id;
+        for forged in [
+            wrong_owner,
+            wrong_output,
+            wrong_phase,
+            wrong_environment,
+            wrong_world,
+        ] {
             assert!(
                 NormalizedAssociatedType(Arc::new(forged))
                     .validate_for(&projection, &facts)

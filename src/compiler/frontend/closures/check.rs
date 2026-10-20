@@ -83,12 +83,18 @@ impl PlanCtx {
         let ir::FactsCtx::Validated(facts) = caller else {
             return Ok(None);
         };
+        let opaque_bounds = self.opaque_callable_bound_candidates(receiver, caller)?;
         for mode in [
             ir::ClosureKind::Fn,
             ir::ClosureKind::FnMut,
             ir::ClosureKind::FnOnce,
         ] {
-            for predicate in facts.predicates().predicates() {
+            for predicate in facts
+                .predicates()
+                .predicates()
+                .iter()
+                .chain(opaque_bounds.iter())
+            {
                 let ir::Predicate::Implements(bound) = predicate else {
                     continue;
                 };

@@ -2118,7 +2118,10 @@ impl Resolver<'_> {
         match ty {
             Type::Opaque(opaque) => {
                 for bound in &mut opaque.bounds {
-                    self.trait_path(bound, module)?;
+                    // Opaque result bounds are retained declaration bounds, not
+                    // ordinary trait paths. Preserve and validate their exact
+                    // associated bindings, including Fn's Output shorthand.
+                    self.trait_application(bound, module, true)?;
                 }
             }
             Type::Projection(projection) => self.projection(projection, module)?,

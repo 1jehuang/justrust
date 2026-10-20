@@ -2,6 +2,34 @@
 use super::*;
 
 impl PlanCtx {
+    /// Candidate discovery is not trait evidence. Validate the exact retained
+    /// opaque descriptor first, then let select_trait/prove_goal authorize each
+    /// application in the original caller context. No hidden body is read.
+    pub(super) fn opaque_callable_bound_candidates(
+        &self,
+        receiver: &ir::Ty,
+        caller: ir::FactsCtx<'_>,
+    ) -> Result<Vec<ir::Predicate>, String> {
+        let ir::Ty::Opaque(opaque) = receiver else {
+            return Ok(Vec::new());
+        };
+        caller.validate_ty_with_budget(receiver, &self.budget)?;
+        self.budget.retain_bytes(
+            opaque
+                .bounds()
+                .len()
+                .saturating_mul(std::mem::size_of::<ir::Predicate>()),
+        )?;
+        let mut candidates = Vec::with_capacity(opaque.bounds().len());
+        for bound in opaque.bounds() {
+            self.budget.charge_work(1)?;
+            candidates.push(ir::Predicate::Implements(
+                bound.application(receiver.clone()),
+            ));
+        }
+        Ok(candidates)
+    }
+
     /// This reads declaration schemas only. In particular, inspecting a call's
     /// opaque result never demands that callee's body or hidden representation.
     pub(super) fn source_inventory_uses_opaque(

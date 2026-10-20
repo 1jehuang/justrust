@@ -807,6 +807,9 @@ impl ValidatedTraitWorld {
         facts: &ValidatedFacts,
     ) -> Result<ProjectionReduction> {
         if self.checked_closure_projection(projection, facts.env())?
+            || self
+                .opaque_associated_binding(projection, facts.env())?
+                .is_some()
             || self.goal_is_closed(&projection.trait_ref, facts.env())?
         {
             Ok(ProjectionReduction::Implementation(

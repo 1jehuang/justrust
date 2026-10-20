@@ -3,6 +3,52 @@
 use super::*;
 
 impl ValidatedTraitWorld {
+    /// Public associated assignments are authenticated declaration metadata,
+    /// never a query for the defining body's hidden representation.
+    pub(super) fn opaque_associated_binding(
+        &self,
+        projection: &ir::AssociatedTypeProjection,
+        env: &GenericEnv,
+    ) -> Result<Option<Ty>> {
+        let Ty::Opaque(opaque) = &projection.trait_ref.self_ty else {
+            return Ok(None);
+        };
+        self.validate_opaque_metadata(opaque, env)?;
+        if self.associated_header(projection.item)?.trait_decl != projection.trait_ref.declaration {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "opaque projection changed its associated owner",
+            ));
+        }
+        let mut result = None;
+        for bound in opaque.bounds() {
+            charged(&self.budget, self.budget.charge_work(1))?;
+            let application = bound.application(projection.trait_ref.self_ty.clone());
+            if !self.eq_predicate(
+                &Predicate::Implements(application),
+                &Predicate::Implements(projection.trait_ref.clone()),
+            )? {
+                continue;
+            }
+            for (item, rhs) in bound.equalities() {
+                charged(&self.budget, self.budget.charge_work(1))?;
+                if *item != projection.item {
+                    continue;
+                }
+                self.validate_ty_metadata_in(rhs, env, 0)?;
+                if let Some(previous) = &result
+                    && !self.eq_ty(previous, rhs, 0)?
+                {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "opaque associated assignments conflict",
+                    ));
+                }
+                result = Some(rhs.clone());
+            }
+        }
+        Ok(result)
+    }
     pub(super) fn realize_opaque_family(
         &self,
         opaque: &Arc<ir::OpaqueTy>,

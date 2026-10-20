@@ -93,6 +93,57 @@ fn opaque_closed_generic_producers_match_stock_workers1_8() {
     );
 }
 
+#[test]
+fn opaque_associated_equality_bounds_preserve_declaration_authority() {
+    let valid = r#"
+        trait HasOutput { type Output; }
+        struct Number { value: i32 }
+        impl HasOutput for Number { type Output = i32; }
+        fn make() -> impl HasOutput<Output = i32> { Number { value: 42 } }
+        fn main() { let value = make(); }
+    "#;
+    for workers in [1, 8] {
+        source_check(valid, workers).unwrap();
+        let repeated = valid.replace(
+            "impl HasOutput<Output = i32>",
+            "impl HasOutput<Output = i32, Output = i32>",
+        );
+        source_check(&repeated, workers).unwrap();
+        for invalid in [
+            valid.replace(
+                "impl HasOutput<Output = i32>",
+                "impl HasOutput<Output = bool>",
+            ),
+            valid.replace(
+                "impl HasOutput<Output = i32>",
+                "impl HasOutput<Missing = i32>",
+            ),
+            valid.replace(
+                "impl HasOutput<Output = i32>",
+                "impl HasOutput<Output = i32, Output = bool>",
+            ),
+        ] {
+            assert!(
+                source_check(&invalid, workers).is_err(),
+                "opaque declaration equality lost its original authority: {invalid}"
+            );
+        }
+    }
+}
+
+#[test]
+fn opaque_fn_output_shorthand_is_a_declaration_bound() {
+    let source = r#"
+        fn make() -> impl Fn(i32) -> i32 { |x| x + 1 }
+        fn main() { let value = make(); assert!(value(41) == 42); }
+    "#;
+    for workers in [1, 8] {
+        source_check(source, workers).unwrap();
+        let invalid = source.replace("impl Fn(i32) -> i32", "impl Fn(i32) -> bool");
+        assert!(source_check(&invalid, workers).is_err());
+    }
+}
+
 fn native_matches_stock(source: &str) {
     use std::os::unix::fs::PermissionsExt;
     use std::process::Command;

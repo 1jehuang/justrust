@@ -474,6 +474,9 @@ impl ValidatedTraitWorld {
         let mut dependencies = Vec::new();
         let mut reduce = |projection: &ir::AssociatedTypeProjection| -> Result<Ty> {
             if self.checked_closure_projection(projection, facts.env())?
+                || self
+                    .opaque_associated_binding(projection, facts.env())?
+                    .is_some()
                 || self.goal_is_closed(&projection.trait_ref, facts.env())?
                 || self
                     .declared_equality_rhs(projection, &facts.predicates.predicates, facts.env())?
@@ -662,6 +665,9 @@ impl ValidatedTraitWorld {
         Ok(match (&left.0.origin, &right.0.origin) {
             (ProofOrigin::Assumption, ProofOrigin::Assumption)
             | (ProofOrigin::TraitObject, ProofOrigin::TraitObject) => true,
+            (ProofOrigin::OpaqueDeclared, ProofOrigin::OpaqueDeclared) => {
+                self.eq_predicate(&left.0.goal, &right.0.goal)?
+            }
             (ProofOrigin::Builtin { item: a }, ProofOrigin::Builtin { item: b }) => a == b,
             (ProofOrigin::Closure { kind: a }, ProofOrigin::Closure { kind: b }) => {
                 a == b && self.eq_predicate(&left.0.goal, &right.0.goal)?
