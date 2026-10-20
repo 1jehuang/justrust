@@ -22,10 +22,15 @@ graph-integrity evidence are recorded in the feature contracts. G0-G12 remain op
       run was interrupted after its exponential traversal stalled, not counted
       as a pass. Evidence is retained in
       `data/runs/rust-support-followup-20261020/bounded-nominal-dag.jsonl`.
-      The full-library rerun now terminates, but reports 53 failing tests in the
-      main partition, including obsolete fixture identities and genuine inference
-      failures (`20261020-062040239-4112197`). It is not a green compatibility gate.
-      Full-library revalidation and G0-G12 remain open.
+      The full-library rerun now terminates. The first completed replay reported
+      53 failures (`20261020-062040239-4112197`). After the exact iterator/nominal
+      identity and constructor-demand repairs, a frozen replay reports 1,737
+      passing tests, 20 failures and one ignored test
+      (`20261020-064450881-4149572`). Remaining failures include lexical adapter
+      contracts, local-call diagnostics, projection/carrier assertions and one
+      invalid self-glob import acceptance. It is not a green compatibility gate.
+      The unchanged full-program corpus remains 6/20
+      (`20261020-064454678-4149689`). Full-library revalidation and G0-G12 remain open.
 
 - [x] Const declarations reject non-const calls and possibly initialized generic
       destructors even when unused, using sealed callable identities and ordinary
