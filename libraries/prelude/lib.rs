@@ -43,6 +43,7 @@ pub mod hash;
 pub mod string;
 pub mod fmt;
 pub mod primitive;
+pub mod primitive_constants;
 pub mod ptr;
 pub mod slice;
 pub mod test;

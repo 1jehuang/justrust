@@ -78,6 +78,30 @@ fn check(tag: &str, cases: &[Case]) {
 }
 
 #[test]
+fn primitive_i32_min_source_and_alias_match_stock() {
+    check(
+        "primitive-i32-min",
+        &[
+            Case {
+                name: "direct_and_alias_use_same_primitive_declaration",
+                source: "type Number=i32;fn main(){let direct:i32=i32::MIN;let alias:i32=Number::MIN;println!(\"{} {}\",direct,alias);}",
+                expect: Expect::Run("-2147483648 -2147483648\n"),
+            },
+            Case {
+                name: "user_primitive_impl_has_no_loader_issuer",
+                source: "impl i32{const MIN:i32=0;}fn main(){}",
+                expect: Expect::Invalid("E0390"),
+            },
+            Case {
+                name: "unused_bad_body_is_not_hidden_by_min_selection",
+                source: "fn unused()->u8{true}fn main(){let value:i32=i32::MIN;}",
+                expect: Expect::Invalid("E0308"),
+            },
+        ],
+    );
+}
+
+#[test]
 fn associated_initializer_member_dependencies_match_stock() {
     check(
         "associated-initializer-dependencies",

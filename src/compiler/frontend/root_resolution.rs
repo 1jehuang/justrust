@@ -4273,6 +4273,7 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
             Ok(())
         })?;
     }
+    let primitive_issuers = program.embedded_issuers.clone();
     for (source_index, block) in program.impls.iter_mut().enumerate() {
         let owner = if block.trait_path.is_some() {
             SourceOwnerContext::TraitImpl { source_index }
@@ -4295,7 +4296,12 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
                 // Trait impls may target any type (primitives, references,
                 // tuples, slices); `Self` then has no nominal namespace.
                 _ if block.trait_path.is_some() => None,
-                _ => return Err("impl requires a nominal self pattern".into()),
+                _ => {
+                    let receipt = block.primitive_source.as_ref()
+                        .ok_or("E0390: cannot define inherent impl for primitive types outside their authenticated source issuer")?;
+                    receipt.replay_source(block, source_index, resolver.names(), &primitive_issuers)?;
+                    None
+                },
             };
             resolver.self_allowed = true;
             for associated in &mut block.associated_types {

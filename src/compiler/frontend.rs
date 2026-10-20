@@ -4988,6 +4988,7 @@ mod mutable_range_source_tests;
 #[cfg(test)]
 mod name_tests;
 mod or_patterns;
+mod primitive_constants;
 mod range_expr;
 mod raw_slices;
 mod receiver_authority;
@@ -4999,6 +5000,7 @@ pub use tr::CallableProvider;
 
 #[derive(Clone, Debug)]
 pub struct Program {
+    embedded_issuers: Arc<[super::source::EmbeddedOriginalFile]>,
     no_std_roots: Arc<[super::token_session::SourceFileHandle]>,
     core_prelude_scope: Option<ModuleId>,
     core_library_module: Option<ModuleId>,
@@ -5094,6 +5096,7 @@ impl ProgramDeclarations {
         scopes: Option<Arc<super::semantic_scope::ScopeArena>>,
     ) -> Program {
         Program {
+            embedded_issuers: Arc::from([]),
             no_std_roots: self.no_std_roots,
             core_prelude_scope: self.core_prelude_scope,
             core_library_module: self.core_library_module,
@@ -5488,6 +5491,8 @@ pub enum ReceiverKind {
 }
 #[derive(Clone, Debug)]
 pub struct ImplDecl {
+    pub(super) original_source: Option<super::token_session::OriginalSpan>,
+    primitive_source: Option<Arc<primitive_constants::SourceImpl>>,
     pub trait_path: Option<TraitPath>,
     pub bounds: Vec<TypeBound>,
     pub module: ModuleId,
@@ -7287,6 +7292,7 @@ enum ConditionPurpose {
 }
 
 struct Parser<'input, 'names> {
+    embedded_issuers: Arc<[super::source::EmbeddedOriginalFile]>,
     no_std_roots: Arc<[super::token_session::SourceFileHandle]>,
     c_abi: c_abi::Declarations,
     pending_c_abi: bool,
@@ -7476,6 +7482,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             &proof,
         )?;
         let mut child = Parser {
+            embedded_issuers: self.embedded_issuers.clone(),
             no_std_roots: self.no_std_roots.clone(),
             c_abi: c_abi::Declarations::default(),
             pending_c_abi: false,
@@ -8846,6 +8853,7 @@ impl<'input, 'names> Parser<'input, 'names> {
         expansion_depth: u32,
     ) -> Result<Expr, ParseError> {
         let mut child = Parser {
+            embedded_issuers: self.embedded_issuers.clone(),
             no_std_roots: self.no_std_roots.clone(),
             c_abi: c_abi::Declarations::default(),
             pending_c_abi: false,
@@ -9250,6 +9258,7 @@ impl<'input, 'names> Parser<'input, 'names> {
         }
         let lexical = ParserState::owned(state, names.budget())?;
         Ok(Self {
+            embedded_issuers: Arc::from([]),
             no_std_roots: Arc::from([]),
             debug_assertions: super::source::CfgSet::DEFAULT_DEBUG_ASSERTIONS,
             c_abi: c_abi::Declarations::default(),
@@ -10898,7 +10907,9 @@ impl<'input, 'names> Parser<'input, 'names> {
                 fields,
             });
             (name, ItemKind::Struct)
-        } else if self.eat("impl") {
+        } else if self.is("impl") {
+            let original_start = primitive_constants::original_token(self);
+            self.expect("impl")?;
             if explicit_visibility {
                 return Err(self.error("pub impl is invalid"));
             }
@@ -10990,8 +11001,11 @@ impl<'input, 'names> Parser<'input, 'names> {
                     visibility,
                 });
             }
+            let original_source = primitive_constants::original_impl_range(self, original_start);
             self.expect("}")?;
-            parsed.program.impls.push(ImplDecl {
+            let mut block = ImplDecl {
+                original_source,
+                primitive_source: None,
                 trait_path,
                 bounds,
                 module,
@@ -11000,7 +11014,16 @@ impl<'input, 'names> Parser<'input, 'names> {
                 items,
                 associated_types,
                 associated_constants,
-            });
+            };
+            block.primitive_source = primitive_constants::capture(
+                &block,
+                parsed.program.impls.len(),
+                &self.embedded_issuers,
+                self.names.session().sources(),
+                self.names.budget(),
+            )
+            .map_err(|message| self.error(&message))?;
+            parsed.program.impls.push(block);
             self.type_params.clear();
             self.visible_bounds.clear();
             self.impl_regions = RegionDecls::default();
@@ -13663,23 +13686,26 @@ fn parse_syntax_tokens_configured(
     tokens: NativeParserInput,
     debug_assertions: bool,
 ) -> Result<ParsedProgram, ParseError> {
-    parse_syntax_tokens_policy(tokens, debug_assertions, Arc::from([]))
+    parse_syntax_tokens_policy(tokens, debug_assertions, Arc::from([]), Arc::from([]))
 }
 fn parse_syntax_tokens_policy(
     tokens: NativeParserInput,
     debug_assertions: bool,
     no_std_roots: Arc<[super::token_session::SourceFileHandle]>,
+    embedded_issuers: Arc<[super::source::EmbeddedOriginalFile]>,
 ) -> Result<ParsedProgram, ParseError> {
     let unit = parse_syntax_unit(
         tokens,
         ParserPurpose::Active,
         debug_assertions,
         no_std_roots,
+        embedded_issuers.clone(),
     )?;
     let mut program =
         unit.parsed
             .program
             .publish(unit.names, unit.modules, unit.symbols, unit.scopes);
+    program.embedded_issuers = embedded_issuers;
     program.generated_owners =
         generated_owners::capture(&program).map_err(|message| ParseError {
             kind: super::source::SourceErrorKind::Contract,
@@ -13703,6 +13729,7 @@ fn parse_syntax_unit(
     purpose: ParserPurpose,
     debug_assertions: bool,
     no_std_roots: Arc<[super::token_session::SourceFileHandle]>,
+    embedded_issuers: Arc<[super::source::EmbeddedOriginalFile]>,
 ) -> Result<ParsedSyntaxUnit, ParseError> {
     let (tokens, session, cap) = tokens.into_parts();
     let mut names = NameStoreBuilder::new(session, cap, super::token::Edition::E2024)
@@ -13712,6 +13739,7 @@ fn parse_syntax_unit(
         ParserPurpose::Active => Parser::new(&tokens, &mut names)?,
         ParserPurpose::InactiveSyntax => Parser::with_purpose(&tokens, &mut names, purpose)?,
     };
+    parser.embedded_issuers = embedded_issuers;
     parser.no_std_roots = no_std_roots;
     parser.debug_assertions = debug_assertions;
     let mut parsed = ParsedDeclarations {
@@ -13850,6 +13878,7 @@ pub(super) fn validate_inactive_syntax(
             input,
             ParserPurpose::InactiveSyntax,
             super::source::CfgSet::DEFAULT_DEBUG_ASSERTIONS,
+            Arc::from([]),
             Arc::from([]),
         )?,
     })
@@ -14714,9 +14743,15 @@ pub fn parse_prepared_owned(
             );
         }
     }
+    let issuers = source.embedded_issuers(projection.snapshot(), &budget)?;
     let tokens = native_input(&projection, budget, owner).map_err(mapped)?;
-    parse_syntax_tokens_policy(tokens, source.debug_assertions(), no_std_roots.into())
-        .map_err(mapped)
+    parse_syntax_tokens_policy(
+        tokens,
+        source.debug_assertions(),
+        no_std_roots.into(),
+        issuers.into(),
+    )
+    .map_err(mapped)
 }
 
 /// Parse syntax with the same preparation policy as file inputs, retaining the
@@ -17549,7 +17584,18 @@ impl PlanCtx {
                 // Trait impls on structural/primitive types: the impl itself is
                 // the owning identity. Selection goes through trait headers.
                 _ if block.trait_path.is_some() => impl_id,
-                _ => return Err("inherent impl requires a local nominal self type".into()),
+                _ => {
+                    let receipt = block.primitive_source.as_ref().ok_or("E0390: cannot define inherent impl for primitive types outside their authenticated source issuer")?;
+                    receipt.replay_registration(
+                        program,
+                        &registry,
+                        implementation,
+                        impl_id,
+                        &self_ty,
+                        budget,
+                    )?;
+                    impl_id
+                }
             };
             let mut used = std::collections::HashSet::new();
             collect_source_params(program.names.as_ref(), &block.self_ty, &mut used, budget, 0)?;

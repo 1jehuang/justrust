@@ -20,6 +20,9 @@ pub use source_cfg::CfgSet;
 pub use source_lex::{PreparedLexInput, PreparedMode, PreparedViewId, ProjectedSpan};
 pub use source_map::{FileId, OriginSegment, SourceMap, SourceSpan};
 pub use source_probe::{SourceProbeRecord, SourceProbeRequest, attach_probe, prepare_probe_file};
+#[path = "source_embedded.rs"]
+mod source_embedded;
+pub(super) use source_embedded::EmbeddedOriginalFile;
 #[path = "source_prelude.rs"]
 pub mod source_prelude;
 const MAX_FILE_DEPTH: usize = 64;
@@ -224,7 +227,7 @@ impl std::fmt::Display for SourceError {
     }
 }
 impl std::error::Error for SourceError {}
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PreparedAttribute {
     pub span: SourceSpan,
     pub name: String,
@@ -260,6 +263,8 @@ impl CratePolicy {
 }
 #[derive(Clone, Debug)]
 pub struct PreparedSource {
+    embedded_files: Vec<source_embedded::EmbeddedFile>,
+    embedded_transport: Option<source_embedded::AssemblyTransport>,
     debug_assertions: bool,
     /// Assembly-owned crate root for each original file. Empty only for raw
     /// caller-built maps, whose files all belong to the single input crate.
@@ -277,6 +282,8 @@ pub struct PreparedSource {
 impl Default for PreparedSource {
     fn default() -> Self {
         Self {
+            embedded_files: Vec::new(),
+            embedded_transport: None,
             debug_assertions: CfgSet::DEFAULT_DEBUG_ASSERTIONS,
             crate_roots: Vec::new(),
             crate_policies: Vec::new(),
@@ -291,6 +298,35 @@ impl Default for PreparedSource {
     }
 }
 impl PreparedSource {
+    pub(super) fn embedded_issuers(
+        &self,
+        snapshot: &super::token_session::SourceSnapshot,
+        budget: &super::expansion_budget::ExpansionBudget,
+    ) -> Result<Vec<EmbeddedOriginalFile>, SourceError> {
+        if !self.embedded_files.is_empty() {
+            self.embedded_transport
+                .as_ref()
+                .ok_or_else(|| {
+                    Loader::error(
+                        SourceErrorKind::Contract,
+                        None,
+                        "embedded source assembly transport is missing",
+                    )
+                })?
+                .validate(self)?;
+        }
+        budget
+            .charge(
+                super::expansion_budget::Counter::Work,
+                self.embedded_files.len() as u64,
+            )
+            .map_err(|error| SourceError::from_token(error.into()))?;
+        self.embedded_files
+            .iter()
+            .map(|attachment| EmbeddedOriginalFile::import(attachment, self, snapshot))
+            .collect()
+    }
+
     /// Immutable native profile fact captured when source options were validated.
     pub fn debug_assertions(&self) -> bool {
         self.debug_assertions
@@ -428,7 +464,7 @@ pub fn prepare_text(
 const LOCAL_FILE: FileId = FileId(0);
 
 /// One `mod name;` declaration found in a file, resolved to the child path.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ChildModule {
     /// Offset in the unit's prepared text where the child's text is spliced.
     pub at: usize,
@@ -448,6 +484,7 @@ pub struct ChildModule {
 /// Spans use [`LOCAL_FILE`] for this file.
 #[derive(Debug)]
 pub struct FileUnit {
+    embedded: Option<source_embedded::EmbeddedUnit>,
     no_std: bool,
     pub path: PathBuf,
     pub contents: Arc<str>,
@@ -511,13 +548,32 @@ pub fn prepare_child_unit(
     budget: &super::expansion_budget::ExpansionBudget,
 ) -> UnitResult {
     if parent.path.starts_with(source_prelude::PRELUDE_DIR) {
-        return child_unit_with(
+        if let Some(issuer) = &parent.embedded {
+            issuer.validate(parent).map_err(|error| UnitFailure {
+                error,
+                anchored: false,
+            })?;
+        }
+        let mut child = child_unit_with(
             parent,
             index,
             options,
             &mut source_prelude::PreludeReader,
             budget,
-        );
+        )?;
+        // Reading through the embedded table alone is insufficient: a user
+        // parent with a spoofed virtual path has no loader-issued capability.
+        if parent.embedded.is_some() {
+            child.embedded = Some(
+                source_embedded::EmbeddedUnit::issue(&child, budget).map_err(|error| {
+                    UnitFailure {
+                        error,
+                        anchored: false,
+                    }
+                })?,
+            );
+        }
+        return Ok(child);
     }
     child_unit_with(parent, index, options, &mut FsReader, budget)
 }
@@ -529,7 +585,7 @@ pub fn prepare_prelude_unit(
     budget: &super::expansion_budget::ExpansionBudget,
 ) -> UnitResult {
     let path = Path::new(source_prelude::PRELUDE_ROOT);
-    file_unit(
+    let mut unit = file_unit(
         Vec::new(),
         path,
         Path::new(source_prelude::PRELUDE_DIR),
@@ -538,7 +594,14 @@ pub fn prepare_prelude_unit(
         options,
         Some(&mut source_prelude::PreludeReader),
         budget,
-    )
+    )?;
+    unit.embedded = Some(
+        source_embedded::EmbeddedUnit::issue(&unit, budget).map_err(|error| UnitFailure {
+            error,
+            anchored: false,
+        })?,
+    );
+    Ok(unit)
 }
 fn child_unit_with(
     parent: &FileUnit,
@@ -691,6 +754,7 @@ fn snapshot_unit<'a>(
     builder.lexical_budget = budget.clone();
     let terminal = builder.snapshot(directory, depth).err();
     Ok(FileUnit {
+        embedded: None,
         no_std: builder.no_std,
         path,
         contents,
@@ -854,6 +918,9 @@ impl SourceAssembler {
             .prepared
             .sources
             .add(unit.path.clone(), unit.contents.clone());
+        if let Some(attachment) = source_embedded::EmbeddedFile::attach(id, &unit)? {
+            self.prepared.embedded_files.push(attachment);
+        }
         // Each attachment starts a separate crate, regardless of its mounted
         // module spelling or filesystem path. Descendant files inherit it.
         let crate_root = self.frames.first().map_or(id, |frame| frame.id);
@@ -905,6 +972,7 @@ impl SourceAssembler {
                     unreachable!("failures are handled before take")
                 };
                 FileUnit {
+                    embedded: unit.embedded.clone(),
                     no_std: unit.no_std,
                     path: unit.path.clone(),
                     contents: unit.contents.clone(),
@@ -964,6 +1032,10 @@ impl SourceAssembler {
                         parent: None,
                         index: 0,
                     }));
+                }
+                if !self.prepared.embedded_files.is_empty() {
+                    self.prepared.embedded_transport =
+                        Some(source_embedded::AssemblyTransport::issue(&self.prepared)?);
                 }
                 return Ok(AssemblyStep::Done(Box::new(std::mem::take(
                     &mut self.prepared,

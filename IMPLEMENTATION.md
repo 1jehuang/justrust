@@ -874,6 +874,15 @@ remain separate open work.
       formatting. See CONST-EVAL-SCALAR.md and data/runs/const-source/. Target-sized
       types, array lengths/repeats, const patterns, generated/associated consts,
       statics and general const-fn execution remain unsupported; corpus stays 3/20.
+- [x] Source-backed `i32::MIN` and primitive aliases use loader-issued immutable
+      source/assembly seals, exact original impl occurrences and canonical owner
+      registration before ordinary associated-constant facts (134/135/136).
+      Native stock differential CHECK/BUILD/run passes at workers 1 and 8;
+      user primitive impls reject E0390 and unused invalid bodies reject E0308.
+      Transport/issuer forgery controls, CHECK without codegen and graph 14/14
+      pass unchanged. See PRIMITIVE-CONSTANTS.md and six authentic receipts in
+      data/runs/xps14/2026-10-19-primitive-min.jsonl. Other primitive constants,
+      general const evaluation and G0-G12 completion remain open.
 - [ ] Complete associated constant evaluation and lookup (ASSOCIATED-CONSTANTS.md).
       The scalar draft supports trait defaults/overrides, inherent generic owners,
       qualified and bound-authorized symbolic uses, and exact initializer member
