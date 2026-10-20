@@ -7274,9 +7274,10 @@ mod local_macro_parser_tests {
         let budget = ExpansionBudget::new(limits);
         let result = syntax_with_budget("fn main(){macro_rules! leaf{()=>{1};}macro_rules! pass{()=>{leaf!()};}let a:i32=pass!();let b:i32=pass!();}", &budget).unwrap();
         assert!(budget.snapshot().failure.is_none());
-        let receipt = super::super::owner_path::published_owner_receipt(&result.program.names);
+        let receipt = super::super::owner_path::published_owner_receipt(&result.program.names)
+            + result.program.struct_sources.receipt_bytes();
         drop(result);
-        // Only the published owner receipt stays (permanent by design).
+        // Only the exact immutable name and struct authority receipts remain.
         assert_eq!(budget.snapshot().retained_bytes, receipt);
         assert_eq!(budget.snapshot().temporary_bytes, 0);
 
@@ -7357,12 +7358,13 @@ mod local_macro_parser_tests {
         drop(text);
         assert_eq!(budget.snapshot().retained_bytes - before, charged);
         let program = builder.finish().unwrap();
-        let receipt = super::super::owner_path::published_owner_receipt(&program.names);
+        let receipt = super::super::owner_path::published_owner_receipt(&program.names)
+            + program.struct_sources.receipt_bytes();
         let owner = program.names.clone();
         drop(program);
         assert!(budget.snapshot().retained_bytes >= charged);
         drop(owner);
-        // Format storage returns to the permanent owner-receipt baseline.
+        // Format storage returns to the exact immutable authority receipts.
         assert_eq!(budget.snapshot().retained_bytes, receipt);
         assert_eq!(budget.snapshot().temporary_bytes, 0);
     }
@@ -9794,13 +9796,107 @@ impl<'input, 'names> Parser<'input, 'names> {
             .then_some(name))
     }
     fn ty(&mut self) -> Result<Type, ParseError> {
+        self.ty_at_position(self.opaque_return_sites.is_some())
+    }
+    pub(super) fn ty_at_return(&mut self) -> Result<Type, ParseError> {
+        self.ty_at_position(true)
+    }
+    fn ty_at_position(&mut self, direct_return: bool) -> Result<Type, ParseError> {
         if self.nesting >= 128 {
             return Err(self.limit("type nesting exceeds limit 128"));
         }
+        let start = self.token();
         self.nesting += 1;
         let result = self.ty_inner();
         self.nesting -= 1;
-        result
+        let result = result?;
+        // Stable Rust permits a directly written return type `!`, but not a
+        // parenthesized type, parameter, field, argument or nested return
+        // type containing it. Internal Never values do not pass this parser.
+        if direct_return && start.text == "!" && matches!(result, Type::Never) {
+            return Ok(result);
+        }
+        use super::expansion_budget::{Counter, Storage};
+        let budget = self.names.budget();
+        let mut pending = super::token_session::BudgetVec::new(budget, Storage::Temporary)
+            .map_err(native_adapter::transport_error)?;
+        pending
+            .push((&result, 0usize))
+            .map_err(native_adapter::transport_error)?;
+        while let Some((ty, depth)) = pending.pop() {
+            budget
+                .charge(Counter::Work, 1)
+                .map_err(|error| native_adapter::transport_error(error.into()))?;
+            if depth > 128 {
+                return Err(self.limit("type nesting exceeds limit 128"));
+            }
+            let mut push = |child| {
+                pending
+                    .push((child, depth + 1))
+                    .map_err(native_adapter::transport_error)
+            };
+            let path =
+                match ty {
+                    Type::Never => return Err(self.error_at(
+                        &start,
+                        "E0658: the never type is experimental outside function return position",
+                    )),
+                    Type::Ref { referent, .. }
+                    | Type::RawPtr {
+                        pointee: referent, ..
+                    }
+                    | Type::Array(referent, _)
+                    | Type::Slice(referent) => {
+                        push(referent.as_ref())?;
+                        None
+                    }
+                    Type::Tuple(fields) => {
+                        for field in fields {
+                            push(field)?;
+                        }
+                        None
+                    }
+                    Type::Opaque(opaque) => {
+                        for child in opaque.types() {
+                            push(child)?;
+                        }
+                        None
+                    }
+                    Type::Apply(path) => Some(path),
+                    Type::Dyn(trait_path) => match trait_path.as_ref() {
+                        TraitPath::Source(path) => Some(path),
+                        _ => None,
+                    },
+                    Type::Projection(projection) => match projection.as_ref() {
+                        SourceProjection::Qualified {
+                            self_ty,
+                            trait_path,
+                            ..
+                        } => {
+                            push(self_ty)?;
+                            match trait_path {
+                                TraitPath::Source(path) => Some(path),
+                                _ => None,
+                            }
+                        }
+                        SourceProjection::SelfItem { .. } => None,
+                    },
+                    _ => None,
+                };
+            if let Some(path) = path {
+                for segment in &path.segments {
+                    for child in segment.args.iter().chain(
+                        segment
+                            .associated_types
+                            .iter()
+                            .map(|binding| &binding.value),
+                    ) {
+                        push(child)?;
+                    }
+                }
+            }
+        }
+        Ok(result)
     }
     fn ty_inner(&mut self) -> Result<Type, ParseError> {
         if self.is("fn") {
@@ -14262,6 +14358,63 @@ pub(super) fn validate_inactive_syntax(
 mod inactive_item_syntax_tests {
     use super::*;
 
+    fn client_main(program: &Program) -> &Function {
+        let root = program.modules.source_root().unwrap();
+        let mut matches = program.functions.iter().filter(|function| {
+            function.module == root
+                && function.name.anchor() == PathAnchor::Crate
+                && function.name.len() == 1
+                && program.names.spelling(function.name.segments()[0]).unwrap() == "main"
+        });
+        let main = matches.next().expect("client root main");
+        assert!(matches.next().is_none(), "duplicate client root main");
+        main
+    }
+
+    fn exact_call_inventory(inventory: &SourceInventory, references: &[&Expr], calls: &[&Expr]) {
+        let mut expected = std::collections::HashSet::new();
+        for expression in references {
+            assert!(deref_coercion::candidate(expression));
+            let mut source_node = None;
+            for step in 1..=deref_coercion::MAX_DEREF_STEPS {
+                let pointer = deref_coercion::site(*expression as *const Expr as usize, step);
+                assert!(expected.insert(pointer));
+                let site = &inventory.calls[*inventory.call_pointers.get(&pointer).unwrap()];
+                assert!(site.operator_candidate);
+                assert!(site.ordinary.is_none());
+                assert_eq!(site.node.owner, inventory.owner);
+                if let Some(node) = &source_node {
+                    assert_eq!(&site.node, node);
+                } else {
+                    source_node = Some(site.node.clone());
+                }
+            }
+        }
+        for expression in calls {
+            let Expr::Call { name, .. } = expression else {
+                panic!("expected written call")
+            };
+            let pointer = *expression as *const Expr as usize;
+            assert!(expected.insert(pointer));
+            let site = &inventory.calls[*inventory.call_pointers.get(&pointer).unwrap()];
+            assert!(!site.operator_candidate);
+            assert_eq!(
+                site.ordinary.as_ref().unwrap().key(Namespace::Value),
+                name.key(Namespace::Value)
+            );
+            assert_eq!(site.node.owner, inventory.owner);
+        }
+        assert_eq!(inventory.calls.len(), expected.len());
+        assert_eq!(
+            inventory
+                .call_pointers
+                .keys()
+                .copied()
+                .collect::<std::collections::HashSet<_>>(),
+            expected
+        );
+    }
+
     #[test]
     fn keyword_prefix_negation_is_not_an_identifier_macro_invocation() {
         for source in [
@@ -14759,7 +14912,7 @@ mod inactive_item_syntax_tests {
     #[test]
     fn while_let_scope_inventory_keeps_outer_scrutinee_and_one_real_callsite() {
         let program = parse("fn probe()->bool{false}fn main(){macro_rules! marker{()=>{42}}let x=40;while let x=x{let y=x;break;}let z=x;while let true=probe(){break;}}").unwrap();
-        let function = &program.functions[1];
+        let function = client_main(&program);
         let scopes = program.scopes.as_ref().unwrap();
         let Stmt::Let {
             name: BindingName::Named(outer),
@@ -14796,20 +14949,31 @@ mod inactive_item_syntax_tests {
                 .unwrap()
         };
         assert_eq!(reference(scrutinee), Some(outer_id));
-        let Stmt::Let { value, .. } = &body.statements[0] else {
+        let Stmt::Let {
+            value: body_value, ..
+        } = &body.statements[0]
+        else {
             panic!("body binding")
         };
-        assert_eq!(reference(value), Some(inner_id));
-        let Stmt::Let { value, .. } = &function.body.statements[2] else {
+        assert_eq!(reference(body_value), Some(inner_id));
+        let Stmt::Let {
+            value: after_value, ..
+        } = &function.body.statements[2]
+        else {
             panic!("after binding")
         };
-        assert_eq!(reference(value), Some(outer_id));
+        assert_eq!(reference(after_value), Some(outer_id));
         let budget = ir::PlanBudget::default();
         let identity = sr::OriginalBodyId::new(&budget).unwrap();
         let inventory = SourceInventory::build(&program, function, identity, &budget).unwrap();
         assert_eq!(inventory.bindings.len(), 4);
-        assert_eq!(inventory.calls.len(), 1);
-        assert!(inventory.calls[0].ordinary.is_some());
+        let Stmt::WhileLet {
+            scrutinee: probe, ..
+        } = &function.body.statements[3]
+        else {
+            panic!("probe")
+        };
+        exact_call_inventory(&inventory, &[scrutinee, body_value, after_value], &[probe]);
         assert_ne!(inventory.bindings[0].node, inventory.bindings[1].node);
     }
 
@@ -14864,19 +15028,47 @@ mod inactive_item_syntax_tests {
             parse_unresolved(source).unwrap_or_else(|error| panic!("{source}: {error}"));
         }
         let source = "enum E{A(i32),B(i32)}fn main(){let (E::A(x)|E::B(x))=E::A(42)else{return;};}";
-        let error = parse_syntax_unprepared(source).unwrap_err();
-        assert_eq!(
-            error.kind,
-            super::super::source::SourceErrorKind::Unsupported
+        let parsed = parse_syntax_unprepared(source).unwrap();
+        let Stmt::LetElse { pattern, .. } = &parsed.program.functions[0].body.statements[0] else {
+            panic!("let-else")
+        };
+        assert!(matches!(pattern.as_ref(), Pattern::Alternatives(rows) if rows.len() == 2));
+        let stock =
+            super::parser_tests::stock_compile(source, std::path::Path::new("unused"), true);
+        assert!(
+            stock.status.success(),
+            "{}",
+            String::from_utf8_lossy(&stock.stderr)
         );
-        let at = source.find('|').unwrap();
-        assert_eq!(error.bytes, at..at + 1);
+        // Preserve the syntax without claiming unsupported semantic lowering.
+        for workers in [1, 8] {
+            for check in [true, false] {
+                let failure = super::super::compile(source.into(), workers, check)
+                    .err()
+                    .expect("unsupported let-else alternatives accepted");
+                assert!(
+                    failure
+                        .to_string()
+                        .contains("or-patterns are only admitted at match arm roots"),
+                    "{failure}"
+                );
+            }
+        }
+        let invalid =
+            "enum E{A(i32),B(i32)}fn main(){let (E::A(x)|E::B(_))=E::A(42)else{return;};}";
+        let stock =
+            super::parser_tests::stock_compile(invalid, std::path::Path::new("unused"), true);
+        assert!(!stock.status.success());
+        assert!(String::from_utf8_lossy(&stock.stderr).contains("E0408"));
+        for workers in [1, 8] {
+            assert!(super::super::compile(invalid.into(), workers, true).is_err());
+        }
     }
 
     #[test]
     fn let_else_binding_escapes_only_after_old_frontier_else_and_initializer() {
         let program = parse("fn probe()->bool{false}fn main(){macro_rules! marker{()=>{42}}let x=40;let x=x else{let y=x;return;};let z=x;let true=probe()else{return;};}").unwrap();
-        let function = &program.functions[1];
+        let function = client_main(&program);
         assert!(function.lexical_scope.is_some());
         let scopes = program.scopes.as_ref().unwrap();
         let Stmt::Let {
@@ -14914,27 +15106,35 @@ mod inactive_item_syntax_tests {
                 .unwrap()
         };
         assert_eq!(reference(value), Some(outer_id));
-        let Stmt::Let { value, .. } = &else_block.statements[0] else {
+        let Stmt::Let {
+            value: else_value, ..
+        } = &else_block.statements[0]
+        else {
             panic!("else binding")
         };
-        assert_eq!(reference(value), Some(outer_id));
-        let Stmt::Let { value, .. } = &function.body.statements[2] else {
+        assert_eq!(reference(else_value), Some(outer_id));
+        let Stmt::Let {
+            value: after_value, ..
+        } = &function.body.statements[2]
+        else {
             panic!("after binding")
         };
-        assert_eq!(reference(value), Some(inner_id));
+        assert_eq!(reference(after_value), Some(inner_id));
         let budget = ir::PlanBudget::default();
         let identity = sr::OriginalBodyId::new(&budget).unwrap();
         let inventory = SourceInventory::build(&program, function, identity, &budget).unwrap();
         assert_eq!(inventory.bindings.len(), 4);
-        assert_eq!(inventory.calls.len(), 1);
-        assert!(inventory.calls[0].ordinary.is_some());
+        let Stmt::LetElse { value: probe, .. } = &function.body.statements[3] else {
+            panic!("probe")
+        };
+        exact_call_inventory(&inventory, &[value, else_value, after_value], &[probe]);
         assert_ne!(inventory.bindings[0].node, inventory.bindings[2].node);
     }
 
     #[test]
     fn if_let_scrutinee_and_else_keep_outer_binding_and_inventory_identity() {
         let program = parse("fn main(){macro_rules! marker{()=>{42}}let x=40;if let x=x {let y=x;} else {let z=x;}let w=x;}").unwrap();
-        let function = &program.functions[0];
+        let function = client_main(&program);
         let scope = function.lexical_scope.unwrap();
         let scopes = program.scopes.as_ref().unwrap();
         let Stmt::Let {
@@ -14973,26 +15173,39 @@ mod inactive_item_syntax_tests {
                 .unwrap()
         };
         assert_eq!(reference(scrutinee), Some(outer_id));
-        let Stmt::Let { value, .. } = &then_block.statements[0] else {
+        let Stmt::Let {
+            value: then_value, ..
+        } = &then_block.statements[0]
+        else {
             panic!("then binding")
         };
-        assert_eq!(reference(value), Some(inner_id));
+        assert_eq!(reference(then_value), Some(inner_id));
         let Expr::Block(block) = else_branch.as_deref().unwrap() else {
             panic!("else block")
         };
-        let Stmt::Let { value, .. } = &block.statements[0] else {
+        let Stmt::Let {
+            value: else_value, ..
+        } = &block.statements[0]
+        else {
             panic!("else binding")
         };
-        assert_eq!(reference(value), Some(outer_id));
-        let Stmt::Let { value, .. } = &function.body.statements[2] else {
+        assert_eq!(reference(else_value), Some(outer_id));
+        let Stmt::Let {
+            value: after_value, ..
+        } = &function.body.statements[2]
+        else {
             panic!("after binding")
         };
-        assert_eq!(reference(value), Some(outer_id));
+        assert_eq!(reference(after_value), Some(outer_id));
         let budget = ir::PlanBudget::default();
         let identity = sr::OriginalBodyId::new(&budget).unwrap();
         let inventory = SourceInventory::build(&program, function, identity, &budget).unwrap();
         assert_eq!(inventory.bindings.len(), 5);
-        assert!(inventory.calls.is_empty());
+        exact_call_inventory(
+            &inventory,
+            &[scrutinee, then_value, else_value, after_value],
+            &[],
+        );
         assert_ne!(inventory.bindings[0].node, inventory.bindings[1].node);
     }
 
@@ -21789,14 +22002,23 @@ mod const_declaration_tests {
         for source in [
             "fn main(){let x=[0u8;id(1u8)];}",
             "fn main(){let x:[u8;id(1u8)]=[0u8];}",
-            "fn main(){let x=[0u8;1+2];}",
-            "fn main(){let x:[u8;1+2]=[0u8];}",
         ] {
             assert_eq!(
                 parse_syntax_unprepared(source).unwrap_err().kind,
                 SourceErrorKind::Unsupported,
                 "{source}"
             );
+        }
+        super::parser_tests::stock_native_run(
+            "fn main(){let x=[14u8;1+2];let y:[u8;1+2]=[14u8;3];println!(\"{} {}\",x[2]*3,y[2]*3);}",
+        );
+        let mismatch = "fn main(){let x:[u8;1+2]=[0u8];}";
+        let stock =
+            super::parser_tests::stock_compile(mismatch, std::path::Path::new("unused"), true);
+        assert!(!stock.status.success());
+        assert!(String::from_utf8_lossy(&stock.stderr).contains("E0308"));
+        for workers in [1, 8] {
+            assert!(super::super::compile(mismatch.into(), workers, true).is_err());
         }
         for source in [
             "fn main(){let x=[0u8;0x];}",
@@ -21993,7 +22215,6 @@ mod prepared_location_tests {
     fn cursor_array_count_rewind_preserves_categories_spans_and_counters() {
         use super::super::source::SourceErrorKind;
         for (text, kind, bytes) in [
-            ("1+2]", SourceErrorKind::Unsupported, 3..4),
             ("1+]", SourceErrorKind::Syntax, 2..3),
             ("1+2", SourceErrorKind::Syntax, 3..3),
         ] {
@@ -22008,6 +22229,16 @@ mod prepared_location_tests {
             assert_eq!(parser.use_expansions, 7);
             assert_eq!(parser.use_expansion_bytes, 19);
         }
+        let tokens = lex("1+2]").unwrap();
+        let (tokens, mut names) = parser_parts(tokens);
+        let mut parser = Parser::new(&tokens, &mut names).unwrap();
+        parser.use_expansions = 7;
+        parser.use_expansion_bytes = 19;
+        assert_eq!(parser.array_number("array length").unwrap(), 3);
+        assert_eq!(parser.token().bytes, 3..4);
+        assert_eq!(parser.token().text, "]");
+        assert_eq!(parser.use_expansions, 7);
+        assert_eq!(parser.use_expansion_bytes, 19);
     }
 
     #[test]
@@ -22075,7 +22306,7 @@ mod prepared_location_tests {
         );
         assert_eq!(
             parse_unresolved("fn f() { let = 1; }").err().unwrap(),
-            error.to_string(),
+            format!("<text>:{}", error),
         );
     }
 
@@ -22086,18 +22317,77 @@ mod prepared_location_tests {
             .err()
             .unwrap();
         assert_eq!(syntax.kind, SourceErrorKind::Syntax);
-        let unsupported = parse_syntax_unprepared("fn f(x: !) {}").err().unwrap();
-        assert_eq!(unsupported.kind, SourceErrorKind::Unsupported);
-        for text in [
-            "async fn unused() {}",
-            "fn unused() { let value = r\"raw\"; }",
+        for never in [
+            "fn f(x: !) {}fn main(){}",
+            "fn f(x: &!) {}fn main(){}",
+            "struct S{x:!}fn main(){}",
+            "struct S<T>{x:T}fn f(x:S<!>){}fn main(){}",
+            "fn f()->&'static !{loop{}}fn main(){}",
+            "fn f()->(!){loop{}}fn main(){}",
+            "fn main(){let f=||->(!){loop{}};}",
+            "fn f(){let x:! = loop{};}fn main(){}",
         ] {
+            let syntax = parse_syntax_unprepared(never).unwrap_err();
+            assert_eq!(syntax.kind, SourceErrorKind::Syntax);
+            assert!(syntax.message.contains("E0658"));
+            let stock =
+                super::parser_tests::stock_compile(never, std::path::Path::new("unused"), true);
+            assert!(!stock.status.success());
+            assert!(String::from_utf8_lossy(&stock.stderr).contains("E0658"));
+            for workers in [1, 8] {
+                for check in [true, false] {
+                    let failure = super::super::compile(never.into(), workers, check)
+                        .err()
+                        .expect("unstable never type accepted");
+                    assert!(failure.to_string().contains("E0658"), "{failure}");
+                }
+            }
+        }
+        super::parser_tests::stock_native_run(
+            "fn never()->!{loop{}}fn main(){println!(\"{}\",42);}",
+        );
+        let closure = "fn main(){let f=||->!{loop{}};}";
+        parse_syntax_unprepared(closure).expect("stored closure preserves direct never return");
+        let immediate = "fn main(){let f=(||->!{loop{}})();}";
+        let stock =
+            super::parser_tests::stock_compile(immediate, std::path::Path::new("unused"), true);
+        assert!(
+            stock.status.success(),
+            "{}",
+            String::from_utf8_lossy(&stock.stderr)
+        );
+        let raw = parse_syntax_unprepared(immediate).unwrap_err();
+        assert_eq!(raw.kind, SourceErrorKind::Unsupported);
+        assert!(
+            raw.message
+                .contains("non-scalar closure return types are unsupported")
+        );
+        // Stored closures preserve their direct never return through preparation.
+        super::parser_tests::stock_native_run(
+            "fn main(){let f=||->!{loop{}};println!(\"{}\",42);}",
+        );
+        let unsupported = parse_syntax_unprepared("fn f<const N:usize>() {}")
+            .err()
+            .unwrap();
+        assert_eq!(unsupported.kind, SourceErrorKind::Unsupported);
+        {
+            let text = "async fn unused() {}fn main(){}";
+            let stock =
+                super::parser_tests::stock_compile(text, std::path::Path::new("unused"), true);
+            assert!(
+                stock.status.success(),
+                "{}",
+                String::from_utf8_lossy(&stock.stderr)
+            );
             assert_eq!(
                 parse_syntax_unprepared(text).err().unwrap().kind,
                 SourceErrorKind::Unsupported,
                 "{text}",
             );
         }
+        super::parser_tests::stock_native_run(
+            "fn main(){let value=r\"raw\";println!(\"{}\",value);}",
+        );
         let invalid = lex("`").unwrap_err();
         assert_eq!(invalid.kind, SourceErrorKind::Syntax);
         assert!(!invalid.message.contains("unsupported"));

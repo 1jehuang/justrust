@@ -20,6 +20,24 @@ pub(super) struct StructSources {
     fields: Vec<StructFieldSource>,
     _storage: [crate::compiler::expansion_budget::RetainedBytes; 3],
 }
+#[cfg(test)]
+impl StructSources {
+    pub(super) fn receipt_bytes(&self) -> u64 {
+        assert_eq!(
+            self._storage[0].bytes(),
+            (self.rows.capacity() * std::mem::size_of::<StructSource>()) as u64
+        );
+        assert_eq!(
+            self._storage[1].bytes(),
+            (self.fields.capacity() * std::mem::size_of::<StructFieldSource>()) as u64
+        );
+        assert_eq!(
+            self._storage[2].bytes(),
+            (std::mem::size_of::<Self>() + 2 * std::mem::size_of::<usize>()) as u64
+        );
+        self._storage.iter().map(|receipt| receipt.bytes()).sum()
+    }
+}
 #[derive(Debug)]
 struct StructSource {
     module: ModuleId,

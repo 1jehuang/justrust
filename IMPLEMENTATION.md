@@ -484,6 +484,12 @@ missing-file changes invalidate only justified consumers without stale lookup.
       item-signature holes get E0121. Named generic arguments coexist with inferred
       anonymous argument-position `impl Trait` parameters. Source never types
       retain their distinct semantic representation under the pinned stock oracle.
+      Direct `-> !` function/closure returns remain admitted, while unstable never
+      types in parameters, fields, locals, generic arguments and nested or
+      parenthesized returns are rejected with E0658, including unused items.
+      Eight stock-pinned negative sources pass CHECK/BUILD at workers 1/8;
+      direct-return execution controls, 78 focused tests and graph14 pass
+      (`data/runs/rust-support-followup-20261020/never-source-boundary.jsonl`).
       Deferred written annotation holes reuse solved declaration facts; anonymous
       `impl Trait` parameter identities cannot collide with source-spellable names.
       Return-position opaque identities, declared-bound source calls and defining

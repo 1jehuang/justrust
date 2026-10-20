@@ -121,7 +121,7 @@ impl Parser<'_, '_> {
         if !self.eat("->") {
             return Err(self.unsupported("closure return inference is unsupported"));
         }
-        let result = self.ty()?;
+        let result = self.ty_at_return()?;
         if !matches!(
             result,
             Type::Unit | Type::Bool | Type::Char | Type::Int(_) | Type::Float(_)

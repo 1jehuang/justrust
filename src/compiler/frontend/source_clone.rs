@@ -998,10 +998,11 @@ mod tests {
             .unwrap()
             .finish()
             .unwrap();
-        let receipt = crate::compiler::owner_path::published_owner_receipt(&program.names);
+        let receipt = crate::compiler::owner_path::published_owner_receipt(&program.names)
+            + program.struct_sources.receipt_bytes();
         let baseline = source_budget.snapshot().retained_bytes;
-        // The live program holds name, module and symbol storage beyond the
-        // permanent owner receipt; all of it except the receipt is refundable.
+        // The live program holds refundable name, module and symbol storage
+        // beyond its exact permanent name and struct authority receipts.
         assert!(baseline > receipt);
         let mut scopes =
             crate::compiler::semantic_scope::ScopeArenaBuilder::for_names(program.names.as_ref())
@@ -1021,7 +1022,7 @@ mod tests {
             .check_names(copied.names.as_ref())
             .unwrap();
         drop(copied);
-        // Scope storage returns to the permanent owner-receipt baseline.
+        // Every refundable scope allocation returns to the exact receipt sum.
         assert_eq!(source_budget.snapshot().retained_bytes, receipt);
     }
 }
