@@ -851,7 +851,9 @@ impl ValidatedTraitWorld {
                 ProofOrigin::ReflexiveEquality { membership },
             );
         }
-        if self.goal_is_closed(&projection.trait_ref, context.env())? {
+        if self.checked_closure_projection(projection, context.env())?
+            || self.goal_is_closed(&projection.trait_ref, context.env())?
+        {
             let normalization =
                 self.normalize_closed_equality_projection(projection, context, active)?;
             let normal = normalization.ty();

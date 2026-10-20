@@ -1,15 +1,23 @@
 use super::*;
 
 fn fixture() -> (PlanCtx, super::super::check::CheckedClosure, ir::PlanBudget) {
+    fixture_source(
+        "fn compose<A,B,C>(f:impl Fn(A)->B,g:impl Fn(B)->C){let composed=move |x:A|g(f(x));}fn main(){}",
+    )
+}
+
+fn fixture_source(text: &str) -> (PlanCtx, super::super::check::CheckedClosure, ir::PlanBudget) {
     use crate::compiler::source;
     let options = source::SourceOptions::default();
     let expansion = crate::compiler::expansion_budget::ExpansionBudget::default();
     let mut assembler = source::SourceAssembler::new(&options);
-    let mut step = assembler.provide(Arc::new(source::prepare_text_unit(
-        "closure-symbolic-result.rs",
-        "fn compose<A,B,C>(f:impl Fn(A)->B,g:impl Fn(B)->C){let composed=move |x:A|g(f(x));}fn main(){}",
-        &options,
-    ))).unwrap();
+    let mut step = assembler
+        .provide(Arc::new(source::prepare_text_unit(
+            "closure-symbolic-result.rs",
+            text,
+            &options,
+        )))
+        .unwrap();
     let prepared = loop {
         match step {
             source::AssemblyStep::Done(prepared) => break prepared,
@@ -46,6 +54,106 @@ fn fixture() -> (PlanCtx, super::super::check::CheckedClosure, ir::PlanBudget) {
         .unwrap()
         .clone();
     (plan, checked, budget)
+}
+
+#[test]
+fn symbolic_closure_output_proves_defining_opaque_return_bound() {
+    let (plan, checked, _) = fixture_source(
+        "fn compose<A,B,C>(f:impl Fn(A)->B,g:impl Fn(B)->C)->impl Fn(A)->C{move |x:A|g(f(x))}fn main(){}",
+    );
+    assert!(checked.ty.result_receipt().is_some());
+    assert!(matches!(checked.ty.result(), ir::Ty::Param(_)));
+    assert_eq!(checked.ty.owner_args().len(), 5);
+    let world = plan.trait_world().unwrap();
+    for mode in [
+        ir::ClosureKind::Fn,
+        ir::ClosureKind::FnMut,
+        ir::ClosureKind::FnOnce,
+    ] {
+        let facts = world
+            .closure_callable_facts_for(checked.ty.clone(), mode)
+            .unwrap();
+        validate_source(
+            checked.ty.result_receipt().unwrap(),
+            &checked.body_for(mode).unwrap(),
+            &facts,
+        )
+        .unwrap();
+    }
+}
+
+#[test]
+fn symbolic_closure_output_equality_rejects_foreign_context_and_rhs() {
+    let (plan, checked, _) = fixture_source(
+        "fn compose<A,B,C>(f:impl Fn(A)->B,g:impl Fn(B)->C)->impl Fn(A)->C{move |x:A|g(f(x))}fn main(){}",
+    );
+    let world = plan.trait_world().unwrap();
+    let facts = world.callable_facts(checked.ty.owner()).unwrap();
+    let schema = world
+        .normalized_callable_schema(checked.ty.owner())
+        .unwrap();
+    let ir::Ty::Opaque(opaque) = schema.signature.result else {
+        panic!("expected opaque result")
+    };
+    let bound = &opaque.bounds()[0];
+    let (item, rhs) = &bound.equalities()[0];
+    let projection = ir::AssociatedTypeProjection {
+        trait_ref: bound.application(ir::Ty::Closure(checked.ty.clone())),
+        item: *item,
+    };
+    let goal = ir::Predicate::ProjectionEq {
+        projection: projection.clone(),
+        ty: rhs.clone(),
+    };
+    assert!(matches!(
+        facts.service().prove_goal(&goal, &facts).unwrap(),
+        tr::ProofOutcome::Proved(_)
+    ));
+    let normal = world
+        .normalize_associated_type(&projection, &facts)
+        .unwrap();
+    assert_eq!(normal.ty(), rhs);
+    normal.validate_for(&projection, &facts).unwrap();
+    assert!(matches!(
+        facts
+            .service()
+            .prove_goal(
+                &ir::Predicate::ProjectionEq {
+                    projection: projection.clone(),
+                    ty: ir::Ty::Bool,
+                },
+                &facts
+            )
+            .unwrap(),
+        tr::ProofOutcome::NotProven
+    ));
+    let foreign_owner = world
+        .closure_callable_facts_for(checked.ty.clone(), ir::ClosureKind::Fn)
+        .unwrap();
+    assert!(normal.validate_for(&projection, &foreign_owner).is_err());
+    let body = checked.body_for(ir::ClosureKind::Fn).unwrap();
+    let ir::ExprKind::Call {
+        target: ir::Callee::TraitItem(call),
+        ..
+    } = &body.exprs[checked.ty.result_receipt().unwrap().tail().0].kind
+    else {
+        panic!("expected required source call")
+    };
+    let schema_phase = world.schema_facts(call.item).unwrap();
+    assert!(normal.validate_for(&projection, &schema_phase).is_err());
+    let (other_plan, other_checked, _) = fixture();
+    let other_world = other_plan.trait_world().unwrap();
+    assert!(
+        normal
+            .validate_for(
+                &projection,
+                &other_world.callable_facts(other_checked.ty.owner()).unwrap()
+            )
+            .is_err()
+    );
+    let mut changed = projection.clone();
+    changed.item = checked.ty.provider();
+    assert!(normal.validate_for(&changed, &facts).is_err());
 }
 
 #[test]

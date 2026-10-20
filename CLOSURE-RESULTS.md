@@ -35,6 +35,27 @@ returns, loops and unknown result producers reject explicitly. No default-empty
 provider contract can authorize a result, and no union of arbitrary inputs may
 stand in for actual result-flow proof.
 
+## Symbolic Output equality in defining opaque returns
+
+A genuine prelude `compose<A,B,C>(f: impl Fn(A)->B, g: impl Fn(B)->C)
+-> impl Fn(A)->C` now checks its actual returned closure, not only a local
+nonopaque closure value. Equality proof dispatch admits only the existing
+`checked_closure_projection` case alongside closed goals. The canonical
+normalizer retains the genuine caller world, environment and phase, replays
+sealed owner/provider/site and ordered actuals, and compares its exact normalized
+Output with declared C. General open projections still require declared equality
+rows. No hidden representation or body read is added.
+
+Focused LOCAL nightly-2026-10-08 evidence:
+- `20261019-194407131-1647342`: genuine returning-opaque source consumer passed.
+- Dedicated equality replay rejects a changed member/RHS, provider environment,
+  schema phase and independently authenticated foreign-world context.
+- `20261019-194731263-1661719`: mandatory graph integrity passed 14/14 with
+  unchanged ratchets and stack limits.
+
+This is source-check proof support only. Fixed/nested reference substitutions,
+physical opaque composition and corpus 11 acceptance are not claimed.
+
 ## Graph and payload requirements
 
 No new graph operation, global inventory, mutable fact or shared budget.

@@ -649,6 +649,11 @@ cleanup failures.
       each actual owner substitution and equality-result certificate is replayed.
       This is a source-validation prerequisite, not engine worker-1/8, native
       opaque composition, reference-result support or successful corpus 11.
+      Genuine prelude compose returning `impl Fn(A)->C` now also discharges
+      its hidden closure's symbolic Output equality through existing checked-
+      closure normalization, preserving actual caller world/environment/phase.
+      Wrong RHS/member and foreign provider/schema/world replay controls reject;
+      this remains source proof support, not executable opaque composition.
       Ordinary callable membership additionally requires a parent-minted source
       recipe/final-shape seal. Finalized parent correspondence replays every
       receiver mode's immutable typed payload before child execution, rejecting
