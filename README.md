@@ -7,9 +7,10 @@
 
 # justrust
 
-**Rust compile as a service.**
+**Ultra fast Rust compile for coding agents.**
 
-A faster, vertically integrated Rust build toolchain optimized for agents.
+Rebuilding every step of the Rust build toolchain from scratch to be faster,
+more parallelizable, and more cacheable.
 
 [Website](https://jcode.sh/rust) · [Install](#install) · [Use](#use) · [Remote builds](#remote-builds) · [Goal](#goal) · [Findings](FINDINGS.md) · [Changelog](CHANGELOG.md)
 
@@ -22,9 +23,13 @@ A faster, vertically integrated Rust build toolchain optimized for agents.
 > service described below are released from the
 > [`stable`](https://github.com/1jehuang/justrust/tree/stable) branch.
 
-justrust vertically integrates and optimizes the Rust build toolchain to make
-the entire edit, check, and test loop faster. Use it locally or with our remote
-build service.
+justrust is rebuilding every step of the Rust build toolchain from scratch,
+with a goal of **100–1,000× faster builds** through more parallelism, finer-grained
+caching, and less redundant work. This is an ambition for the new toolchain,
+not a measured speedup or a claim about today's released client.
+
+The released client makes the edit, check, and test loop faster locally or with
+our remote build service while the new toolchain takes shape.
 
 Your coding agents spend valuable time waiting for Rust checks, builds, and
 tests. Running those operations locally can slow down your machine, drive up
@@ -88,10 +93,13 @@ More setup details: [remote builds](docs/remote.md).
 
 **The shortest possible path from a source edit to a trustworthy test result.**
 
-justrust is building one integrated system across the entire Rust build stack:
-compilation, code generation, linking, and test execution, backed by shared
-artifact caches and our own build infrastructure. We optimize the whole loop,
-not just individual compiler stages.
+justrust is rebuilding every step of the Rust build stack from scratch:
+project discovery, dependency handling, compilation, code generation, linking,
+and test execution. Each step is designed to be faster, more parallelizable,
+and more cacheable, backed by shared artifact caches and our own build
+infrastructure. We optimize the whole loop, not just individual compiler stages.
+Our target is **100–1,000× faster builds**, to be demonstrated with representative
+end-to-end measurements as the new toolchain matures.
 
 The goal is for agents to spend their time editing and reasoning, not waiting
 for builds. We are rewriting the internals from scratch, rather than embedding
