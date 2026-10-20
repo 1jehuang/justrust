@@ -97,9 +97,17 @@ pub trait PartialOrd: PartialEq {
     }
 }
 
-// TODO(Sized defaults): max/min default methods.
+// TODO(Sized defaults): min and clamp remain separate source-library slices.
 pub trait Ord: Eq + PartialOrd {
     fn cmp(&self, other: &Self) -> Ordering;
+
+    /// Return the greater value, choosing `other` when the values are equal.
+    fn max(self, other: Self) -> Self
+    where
+        Self: Sized,
+    {
+        if other < self { self } else { other }
+    }
 }
 
 impl PartialEq for Ordering {

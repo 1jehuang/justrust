@@ -21388,6 +21388,9 @@ mod const_declaration_tests {
 mod typed_tests;
 
 #[cfg(test)]
+mod ord_max_tests;
+
+#[cfg(test)]
 mod prepared_location_tests {
     use super::*;
 

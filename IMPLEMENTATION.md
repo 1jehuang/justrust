@@ -883,6 +883,16 @@ remain separate open work.
       pass unchanged. See PRIMITIVE-CONSTANTS.md and six authentic receipts in
       data/runs/xps14/2026-10-19-primitive-min.jsonl. Other primitive constants,
       general const evaluation and G0-G12 completion remain open.
+- [x] Ordinary source `Ord::max(self, other: Self) -> Self where Self: Sized`
+      uses canonical trait/default selection and returns the second argument on
+      equality, including non-Copy values. Direct method, UFCS, primitive alias
+      and generic calls pass stock/native CHECK/BUILD/run at workers 1 and 8;
+      user overrides remain canonical. Membership/type/unused-body/move and
+      unrelated-member controls reject; genuine selected-signature, retained
+      Sized-predicate and foreign-member/world replay units pass. Graph 14/14
+      remains unchanged. See ORD-MAX.md and eight authentic receipts in
+      data/runs/xps14/2026-10-19-ord-max.jsonl. First-class function-item values,
+      Ord::min/clamp and unchanged corpus-11 acceptance are not delivered here.
 - [ ] Complete associated constant evaluation and lookup (ASSOCIATED-CONSTANTS.md).
       The scalar draft supports trait defaults/overrides, inherent generic owners,
       qualified and bound-authorized symbolic uses, and exact initializer member
