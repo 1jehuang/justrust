@@ -4919,7 +4919,11 @@ mod tests {
         )
         .unwrap();
         let output = run(&program);
-        assert_eq!(output.status.code(), Some(101), "{output:?}");
+        assert_eq!(output.status.signal(), Some(6), "{output:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("index out of bounds"),
+            "{output:?}"
+        );
         assert_eq!(output.stdout, b"rhs\nindex\n");
     }
 
@@ -7408,10 +7412,12 @@ mod tests {
         ].into_iter().enumerate() {
             let p = frontend::parse(source).unwrap();
             let output = run(&p);
-            if case < 5 {
-                assert_eq!(output.status.signal(), Some(6), "{source}: {output:?}");
-            } else {
-                assert_eq!(output.status.code(), Some(101), "{source}: {output:?}");
+            assert_eq!(output.status.signal(), Some(6), "{source}: {output:?}");
+            if case >= 5 {
+                assert!(
+                    String::from_utf8_lossy(&output.stderr).contains("index out of bounds"),
+                    "{source}: {output:?}"
+                );
             }
         }
     }

@@ -9326,6 +9326,12 @@ impl<'a> Checker<'a> {
         arms: impl ExactSizeIterator<Item = BorrowedMatchArm<'source>> + Clone,
         expectation: Expectation<'_>,
     ) -> Result<(ir::ExprKind, Flow), String> {
+        // A cast may guide a literal operand, but its destination is not an
+        // expected type for match arms. Infer their common source type first.
+        let expectation = match expectation {
+            Expectation::CastableToInt(_) => Expectation::None,
+            other => other,
+        };
         if arms.len() > 4096 {
             return Err("match arm count exceeds limit 4096".into());
         }
