@@ -667,6 +667,15 @@ cleanup failures.
       bindings before item/import lookup, preserving local/parameter shadowing
       and rejecting unused non-callable or invalid item calls
       (`tests/closure_lexical_calls.rs`, explicit worker-1/8 CHECK/BUILD/run).
+      Unique canonical trait-method bounds now constrain closure input/result
+      inference before checked metadata exists, including exact owning associated
+      input projections. Required predicate rows and outer equalities remain
+      obligations; executable ABI projections still reject. Concrete/associated
+      positives and unused ambiguous/wrong-result calls have explicit stock/native
+      worker-1/8 acceptance (`closure_trait_method_inference`), with owner/binder
+      replay controls. A cyclic assignment control rejects at the earlier closed
+      projection boundary, not a cycle-specific proof. Unchanged matrix corpus
+      E0282 remains open at its iterator-map closure (`CLOSURES.md`).
       Stored parameter patterns retain actual source binders and ordinary checked
       entry destructuring. Three positives and seven unused invalid cases pass
       explicit stock/native CHECK/BUILD at workers 1 and 8, with successful runs

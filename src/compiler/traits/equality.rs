@@ -7,6 +7,8 @@ use reduction_rows::ReductionRows;
 
 #[cfg(test)]
 mod freeze_tests;
+#[cfg(test)]
+mod owner_requirements_tests;
 
 impl ValidatedFacts {
     /// True only for finalized rigid projected calls using a required equality view.
@@ -1102,6 +1104,55 @@ impl ValidatedTraitWorld {
             _ => ty.clone(),
         })
     }
+    /// Alpha-renaming may close an owning associated type inside a method
+    /// bound. Reduce only that exact staged owner's assignment before the
+    /// ordinary predicate validator sees it. This grants no new membership.
+    pub(super) fn normalize_required_owner_predicates(
+        &self,
+        declaration: DeclId,
+        predicates: &[Predicate],
+    ) -> Result<Arc<[Predicate]>> {
+        let mut rows = Vec::new();
+        for predicate in predicates {
+            charged(&self.budget, self.budget.charge_work(1))?;
+            let mut reduce = |projection: &ir::AssociatedTypeProjection| match self
+                .normalize_exact_owner_projection(declaration, projection)?
+            {
+                Some(normal) => Ok(normal),
+                None => self.projection_type(projection),
+            };
+            let application = predicate.trait_ref();
+            let self_ty = self.map_equality_type(&application.self_ty, 0, &mut reduce)?;
+            let mut args = Vec::new();
+            for argument in application.args.iter() {
+                push(
+                    &self.budget,
+                    &mut args,
+                    self.map_equality_type(argument, 0, &mut reduce)?,
+                )?;
+            }
+            let application = TraitRef {
+                declaration: application.declaration,
+                self_ty,
+                args: args.into(),
+            };
+            let row = match predicate {
+                Predicate::Implements(_) => Predicate::Implements(application),
+                Predicate::ProjectionEq { projection, ty } => Predicate::ProjectionEq {
+                    // Normalize operands, never discharge this outer equality.
+                    // Its original associated item and obligation remain.
+                    projection: ir::AssociatedTypeProjection {
+                        trait_ref: application,
+                        item: projection.item,
+                    },
+                    ty: self.map_equality_type(ty, 0, &mut reduce)?,
+                },
+            };
+            push(&self.budget, &mut rows, row)?;
+        }
+        super::parameter_equality::result_slice(&self.budget, rows)
+    }
+
     pub(super) fn normalize_equality_type(&self, ty: &Ty, facts: &ValidatedFacts) -> Result<Ty> {
         self.check_facts(facts, false)?;
         self.validate_ty_metadata_in(ty, facts.env(), 0)?;

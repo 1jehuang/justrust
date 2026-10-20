@@ -1,0 +1,168 @@
+//! Authority controls for exact owner predicate and method binder replay.
+use super::*;
+use crate::compiler::frontend::{self, PlanCtx};
+
+#[test]
+fn predicate_projection_support_does_not_admit_projected_executable_abi() {
+    let world =
+        source_world("trait Required{type Item;fn run<F>(self,value:Self::Item,f:F);}fn main(){}");
+    let items: Vec<_> = world
+        .headers
+        .items
+        .iter()
+        .filter(|item| {
+            world.catalog.declaration(item.declaration).is_none()
+                && world.info(item.declaration).unwrap().owner == Some(item.trait_decl)
+                && world.info(item.declaration).unwrap().own_env.arity() == 1
+                && world
+                    .signature_contains_projection(&item.schema.signature)
+                    .unwrap()
+        })
+        .collect();
+    assert_eq!(
+        items.len(),
+        1,
+        "fixture must identify its unique projected generic source method"
+    );
+    let item = items[0];
+    let goal = TraitRef {
+        declaration: item.trait_decl,
+        self_ty: Ty::Int(ir::IntTy::I32),
+        args: Arc::from([]),
+    };
+    let error = world
+        .instantiate_generic_method(
+            item,
+            &goal,
+            &[Ty::Int(ir::IntTy::U8)],
+            ProofContext {
+                predicates: &world.empty,
+                phase: FactsPhase::Closed,
+            },
+        )
+        .unwrap_err();
+    assert_eq!(
+        error.kind,
+        FactsErrorKind::Unsupported,
+        "actual ABI rejection: {error:?}"
+    );
+    assert!(
+        format!("{error:?}").contains("generic projected trait method signature"),
+        "actual ABI rejection: {error:?}"
+    );
+}
+
+fn source_world(source: &str) -> Arc<ValidatedTraitWorld> {
+    let program = frontend::parse(source).unwrap();
+    PlanCtx::from_program(&program, &PlanBudget::default())
+        .unwrap()
+        .trait_world()
+        .unwrap()
+}
+
+#[test]
+fn required_owner_predicates_preserve_reordered_foreign_application() {
+    let world = source_world(
+        "trait Bound<A>{}trait Required<A,B>{type Item;fn run<F:Bound<Self::Item>>(self,f:F);}struct Seed;impl Required<i32,u8> for Seed{type Item=i32;fn run<F:Bound<i32>>(self,f:F){}}impl Required<u8,i32> for Seed{type Item=u8;fn run<F:Bound<u8>>(self,f:F){}}fn main(){}",
+    );
+    let owners: Vec<_> = world
+        .headers
+        .impls
+        .iter()
+        .filter(|owner| !owner.associated_types.is_empty())
+        .collect();
+    assert_eq!(owners.len(), 2);
+    let first = owners[0];
+    let target = world.callable_header(first.items[0].1).unwrap();
+    let item = world.item_header(first.items[0].0).unwrap();
+    let raw = world
+        .alpha_rename_method_schema(
+            item,
+            &first.trait_ref,
+            &world.method_arguments(target.declaration).unwrap(),
+            &target.schema.env,
+        )
+        .unwrap();
+    let normalized = world
+        .normalize_required_owner_predicates(target.declaration, &raw.predicates)
+        .unwrap();
+    assert_eq!(raw.predicates.len(), normalized.len());
+    let foreign = world
+        .normalize_required_owner_predicates(owners[1].items[0].1, &raw.predicates)
+        .unwrap();
+    world
+        .compare_predicate_rows(&raw.predicates, &foreign)
+        .unwrap();
+    assert!(world.compare_predicate_rows(&normalized, &foreign).is_err());
+    for (raw, actual) in raw.predicates.iter().zip(normalized.iter()) {
+        assert_eq!(raw.trait_ref().declaration, actual.trait_ref().declaration);
+    }
+}
+
+#[test]
+fn required_owner_predicates_do_not_authorize_stronger_method_bound() {
+    let source = frontend::parse("trait Bound<A>{}trait Required{type Item;fn run<F:Bound<Self::Item>>(self,f:F);}struct Seed;impl Required for Seed{type Item=i32;fn run<F:Bound<u8>>(self,f:F){}}fn main(){}").unwrap();
+    let result = PlanCtx::from_program(&source, &PlanBudget::default());
+    assert!(matches!(result, Err(error) if error.contains("strengthens required predicates")));
+}
+
+#[test]
+fn cyclic_assignment_is_rejected_at_closed_projection_boundary() {
+    let source = frontend::parse("trait Bound<A>{}trait Required{type Item;fn run<F:Bound<Self::Item>>(self,f:F);}struct Seed;impl Required for Seed{type Item=Self::Item;fn run<F:Bound<Self::Item>>(self,f:F){}}fn main(){}").unwrap();
+    let result = PlanCtx::from_program(&source, &PlanBudget::default());
+    // The rigid closed-projection guard rejects this cycle before a cycle-specific
+    // normalization proof can be produced. Preserve that precise boundary.
+    match result {
+        Err(error) => assert_eq!(
+            error,
+            "closed associated projection must normalize before execution"
+        ),
+        Ok(_) => panic!("cyclic associated assignment was admitted"),
+    }
+}
+
+#[test]
+fn owner_callable_replay_distinguishes_implementation_and_method_actuals() {
+    let world = source_world(
+        "struct Wrap<T>{value:T}trait Bound<A>{}impl Bound<u8> for u32{}trait Required{type Item;fn run<F:Bound<Self::Item>>(self,f:F)->i32;}impl<T> Required for Wrap<T>{type Item=T;fn run<F:Bound<T>>(self,f:F)->i32{7}}fn main(){}",
+    );
+    let owner = world
+        .headers
+        .impls
+        .iter()
+        .find(|owner| !owner.associated_types.is_empty())
+        .unwrap();
+    let declaration = owner.items[0].1;
+    let u8_ty = Ty::Int(ir::IntTy::U8);
+    let u32_ty = Ty::Int(ir::IntTy::U32);
+    world
+        .instance_facts(&CallTarget {
+            declaration,
+            type_args: Arc::from([u8_ty.clone(), u32_ty.clone()]),
+        })
+        .unwrap();
+    for arguments in [
+        Arc::<[Ty]>::from([u8_ty.clone()]),
+        Arc::<[Ty]>::from([u32_ty.clone(), u8_ty.clone()]),
+        Arc::<[Ty]>::from([u8_ty.clone(), u32_ty.clone(), u8_ty.clone()]),
+    ] {
+        assert!(
+            world
+                .instance_facts(&CallTarget {
+                    declaration,
+                    type_args: arguments
+                })
+                .is_err()
+        );
+    }
+    let raw = world.callable_header(declaration).unwrap();
+    let foreign_method_parameter = raw.schema.env.ordered_params().last().unwrap();
+    assert!(
+        world
+            .instance_facts(&CallTarget {
+                declaration,
+                type_args: Arc::from([u8_ty, Ty::Param(foreign_method_parameter)])
+            })
+            .is_err()
+    );
+}

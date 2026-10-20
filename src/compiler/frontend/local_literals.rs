@@ -10,6 +10,9 @@ mod iteration;
 #[path = "local_literals/callable.rs"]
 mod callable;
 
+#[path = "local_literals/trait_methods.rs"]
+mod trait_methods;
+
 #[path = "local_literals/positional_pattern.rs"]
 mod positional_pattern;
 #[path = "local_literals/projection_call.rs"]
@@ -658,6 +661,16 @@ impl<'s> Solver<'_, '_, 's> {
                 }
                 // A concrete receiver can also select trait or primitive methods.
                 if let Some(ty) = self.resolve(receiver, 0)? {
+                    if let Some(result) = self.trait_method_constraints(
+                        &ty,
+                        method.name,
+                        &method.args,
+                        &method.actuals,
+                    )? {
+                        self.unify(result, method.result)?;
+                        progress = true;
+                        continue;
+                    }
                     let plan = self.checker.signatures.plan()?;
                     if method.actuals.is_empty() {
                         if let Ok(selected) = plan.select_method(

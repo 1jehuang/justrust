@@ -3287,7 +3287,7 @@ impl ValidatedTraitWorld {
                 predicates: &env,
                 phase: FactsPhase::Universal,
             };
-            let expected = if !method_arguments.is_empty() {
+            let mut expected = if !method_arguments.is_empty() {
                 self.alpha_rename_method_schema(
                     item,
                     &h.trait_ref,
@@ -3299,6 +3299,8 @@ impl ValidatedTraitWorld {
             } else {
                 self.instantiate_item(item, &h.trait_ref, context)?.0
             };
+            expected.predicates =
+                self.normalize_required_owner_predicates(*callable_id, &expected.predicates)?;
             self.validate_signature_shape(&expected.signature, &target.schema.env, None)?;
             self.validate_predicates(&expected.predicates, &target.schema.env, None)?;
             if !self.eq_types(

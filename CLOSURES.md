@@ -81,6 +81,33 @@ This bounded milestone does not admit reference-bearing results, generic
 closure-backed opaque returns, or closure layout before the parent-solved graph
 frontier. Full Iterator adapter execution and all closure modes remain open.
 
+## Trait-method closure input inference
+
+Before a checked closure type exists, a unique canonical in-scope trait-method
+candidate can constrain its parameter and result terms from the declaration's
+retained generic bounds. Receiver selection, source occurrences, ordered trait
+and method binders and caller predicates remain authoritative. Ambiguous
+candidates are not resolved by choosing the first, and inference hints cannot
+mint callable metadata or source-written coercion authority.
+
+Required method predicates normalize only nested projections owned by the exact
+selected implementation after authenticated binder renaming. All predicate rows,
+trait identities and outer associated equality obligations remain present.
+Executable method signatures must remain projection-free, and every instantiated
+predicate is discharged before a signature escapes. Implementation selection and
+associated assignments consume only canonical owner actuals, while original
+method signature replay retains the full owner-plus-method environment.
+
+`tests/closure_trait_method_inference.rs` checks concrete and associated input
+bounds against stock CHECK/BUILD/run at workers 1 and 8, plus unused ambiguous and
+wrong-result calls. Private authority controls reject foreign/reordered owners,
+stronger requirements and truncated/swapped/foreign method actuals. A projected
+executable ABI remains explicitly unsupported. A cyclic associated assignment
+fixture is rejected by the earlier closed-projection guard, not evidence of a
+cycle-specific reduction proof. The unchanged matrix corpus still reports E0282
+at `print_matrix`'s iterator-map closure; this slice does not establish its
+missing iterator source constraints or complete Iterator support.
+
 ## Canonical method source owners
 
 Stored closures in implementation bodies retain their exact implementation/item

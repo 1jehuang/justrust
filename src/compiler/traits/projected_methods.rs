@@ -850,11 +850,40 @@ impl ValidatedTraitWorld {
                 FactsError::invalid(&self.budget, "owning callable lost its original schema")
             })?;
             self.validate_declaration_schema(target.declaration, raw)?;
-            if !self.same_parameters(&raw.env, &implementation.schema_env)? {
+            let callable_info = self.info(target.declaration)?;
+            if target.type_args.len() != raw.env.total_arity()
+                || (!self.same_parameters(&raw.env, &implementation.schema_env)?
+                    && !self.method_environment_matches(
+                        &raw.env,
+                        &implementation.schema_env,
+                        &callable_info.own_env,
+                    )?)
+            {
                 return Err(FactsError::invalid(
                     &self.budget,
                     "owning callable instantiation changed implementation binders",
                 ));
+            }
+            // The source-authorized environment above establishes the owner
+            // prefix. Replay each ParamId, not merely its width: a method's
+            // own actuals are not implementation selection/RHS arguments.
+            let mut ordered = raw.env.ordered_params().zip(target.type_args.iter());
+            let mut owner_arguments = Vec::new();
+            for parameter in implementation.schema_env.ordered_params() {
+                charged(&self.budget, self.budget.charge_work(1))?;
+                let Some((actual_parameter, argument)) = ordered.next() else {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "owning callable omitted an implementation parameter",
+                    ));
+                };
+                if actual_parameter != parameter {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "owning callable reordered implementation parameters",
+                    ));
+                }
+                push(&self.budget, &mut owner_arguments, argument.clone())?;
             }
             let mut arguments = Vec::new();
             for argument in implementation.trait_ref.args.iter() {
@@ -870,7 +899,7 @@ impl ValidatedTraitWorld {
                 },
                 predicates: Arc::from([]),
             };
-            let head = self.substitute_projected_schema(&head, &target.type_args, context.env())?;
+            let head = self.substitute_projected_schema(&head, &owner_arguments, context.env())?;
             let goal = TraitRef {
                 declaration: implementation.trait_ref.declaration,
                 self_ty: head.signature.result,
@@ -890,7 +919,7 @@ impl ValidatedTraitWorld {
                 if !matches!(&selection.0.origin,
                     ProofOrigin::Implementation { declaration, arguments }
                         if *declaration == owner_id
-                            && self.eq_types(arguments, &target.type_args, 0)?)
+                            && self.eq_types(arguments, &owner_arguments, 0)?)
                 {
                     return Err(FactsError::invalid(
                         &self.budget,
@@ -907,7 +936,8 @@ impl ValidatedTraitWorld {
                 let normal = self.instantiate_owner_projected_type(
                     &projection,
                     &owner,
-                    &target.type_args,
+                    &implementation.schema_env,
+                    &owner_arguments,
                     context,
                     closed,
                 )?;
@@ -934,6 +964,7 @@ impl ValidatedTraitWorld {
                 let normal = self.instantiate_owner_projected_type(
                     original,
                     &owner,
+                    &raw.env,
                     &target.type_args,
                     context,
                     closed,
@@ -954,6 +985,7 @@ impl ValidatedTraitWorld {
         &self,
         ty: &Ty,
         owner: &OwnerNormalizationContext<'_>,
+        source_env: &Arc<GenericEnv>,
         arguments: &[Ty],
         context: ProofContext<'_>,
         closed: bool,
@@ -967,7 +999,7 @@ impl ValidatedTraitWorld {
         };
         retain::<ir::RefContract>(&self.budget, 1)?;
         let schema = GenericSchema {
-            env: owner.implementation.schema_env.clone(),
+            env: source_env.clone(),
             signature: Signature {
                 params: Vec::new(),
                 result: original,

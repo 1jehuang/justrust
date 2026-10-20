@@ -117,7 +117,10 @@ impl ValidatedTraitWorld {
                 "generic trait method owner or argument arity mismatch",
             ));
         }
-        if self.schema_contains_projection(&item.schema)? {
+        // Predicate projections are normalized by instantiate_in under this
+        // exact caller context, then discharged by trait_signature_with_topology.
+        // Projected executable ABI support remains a separate capability.
+        if self.signature_contains_projection(&item.schema.signature)? {
             return Err(FactsError::unsupported(
                 &self.budget,
                 "unsupported: generic projected trait method signature",
@@ -129,6 +132,12 @@ impl ValidatedTraitWorld {
         }
         let result =
             self.instantiate_in(&item.schema, &arguments, context, Some(item.declaration))?;
+        if self.signature_contains_projection(&result.signature)? {
+            return Err(FactsError::unsupported(
+                &self.budget,
+                "unsupported: generic projected trait method executable ABI",
+            ));
+        }
         if item.schema.signature.params.len() != result.signature.params.len() {
             return Err(FactsError::invalid(
                 &self.budget,

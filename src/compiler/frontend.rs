@@ -37,6 +37,9 @@ mod carrier_regions;
 mod char_literal;
 pub(super) mod closures;
 pub use closures::shape_seal::ClosureShapeSeal;
+#[cfg(test)]
+mod trait_method_source_tests;
+
 mod function_qualifiers;
 mod generated_callables;
 mod generated_debug;
@@ -16049,6 +16052,18 @@ impl DeclRegistry {
         };
         match info.kind {
             ir::DeclKind::Trait => inspect_bounds(&self.program.traits[info.source_index].bounds)?,
+            ir::DeclKind::TraitItem => {
+                let owner =
+                    self.declaration(info.owner.ok_or("trait source item missing owner")?)?;
+                let head = &self
+                    .program
+                    .traits
+                    .get(owner.source_index)
+                    .and_then(|retained| retained.items.get(info.source_index))
+                    .ok_or("missing retained trait bound projection item")?
+                    .signature;
+                inspect_bounds(&head.bounds)?;
+            }
             ir::DeclKind::TraitImpl => {
                 inspect_bounds(&self.program.impls[info.source_index].bounds)?
             }

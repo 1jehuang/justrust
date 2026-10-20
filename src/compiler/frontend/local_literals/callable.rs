@@ -76,9 +76,18 @@ impl<'a: 's, 'b: 's, 's> Solver<'a, 'b, 's> {
                 continue;
             };
             let mut params = Vec::new();
-            for param in callable.params {
+            for (index, param) in callable.params.into_iter().enumerate() {
                 params.push(self.resolve(param, 0)?.ok_or_else(|| {
-                    self.user_error("E0282: type annotations needed for closure parameter")
+                    let owner = self.checker.declaration.and_then(|declaration| {
+                        let plan = self.checker.signatures.plan().ok()?;
+                        let item = plan.declaration(declaration).ok()?.path.item;
+                        let DeclItemName::Source(name) = item else { return None; };
+                        plan.program.names.spelling(name).ok().map(str::to_owned)
+                    });
+                    self.user_error(&format!(
+                        "E0282: type annotations needed for closure parameter {index} in {} at {key:?}",
+                        owner.as_deref().unwrap_or("source body"),
+                    ))
                 })?);
             }
             let result = self.resolve(callable.result, 0)?.ok_or_else(|| {
@@ -182,10 +191,19 @@ impl<'a: 's, 'b: 's, 's> Solver<'a, 'b, 's> {
     ) -> Result<(), String> {
         let plan = self.checker.signatures.plan()?;
         let facts = plan.callable_facts(declaration)?;
-        for predicate in facts.predicates().predicates() {
+        self.callable_predicates(facts.predicates().predicates(), params)
+    }
+
+    pub(super) fn callable_predicates(
+        &mut self,
+        predicates: &[ir::Predicate],
+        params: &HashMap<ir::ParamId, Term>,
+    ) -> Result<(), String> {
+        let plan = self.checker.signatures.plan()?;
+        let world = plan.trait_world()?;
+        for predicate in predicates {
             let trait_ref = predicate.trait_ref();
-            if facts
-                .world()
+            if world
                 .closure_trait_kind(trait_ref.declaration)
                 .map_err(|e| e.into_legacy_diagnostic(&plan.budget))?
                 .is_none()
