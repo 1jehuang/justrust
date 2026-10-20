@@ -69,6 +69,14 @@ pub(super) struct AssociatedConstantValueFact {
     pub(super) value: Arc<const_check::ValueFact>,
 }
 
+fn same_caller_computation(
+    left: &ir::CallTarget,
+    right: &ir::CallTarget,
+    budget: &ir::PlanBudget,
+) -> Result<bool, String> {
+    Ok(instances::graph_key::encode(left, budget)? == instances::graph_key::encode(right, budget)?)
+}
+
 impl AssociatedConstantValueFact {
     pub(super) fn closed_scalar(
         &self,
@@ -79,7 +87,7 @@ impl AssociatedConstantValueFact {
         let target = caller
             .target()
             .ok_or("associated constant value requires closed caller")?;
-        if target != self.authorization.caller()
+        if !same_caller_computation(target, self.authorization.caller(), budget)?
             || operand.caller() != target.declaration
             || operand.path() != self.authorization.path()
             || operand.member() != self.authorization.selected().member()
@@ -111,7 +119,13 @@ impl AssociatedConstantValueFact {
         path: &[u32],
         budget: &ir::PlanBudget,
     ) -> Result<(), Error> {
-        if self.authorization.caller() != caller || self.authorization.path() != path {
+        // Nominal application IDs belong to one realization. A graph-key
+        // round trip can reconstruct the same declaration and ordered arguments
+        // with different local IDs, so compare the exact canonical computation.
+        if !same_caller_computation(self.authorization.caller(), caller, budget)
+            .map_err(Error::new)?
+            || self.authorization.path() != path
+        {
             return Err(Error::new(
                 "associated constant value belongs to another caller occurrence",
             ));
@@ -515,5 +529,57 @@ impl CompilerProvider {
                 qualification: Some(qualification),
             },
         )
+    }
+}
+
+#[cfg(test)]
+mod caller_tests {
+    use super::*;
+
+    #[test]
+    fn canonical_caller_keeps_nominal_arguments_order_and_declaration() {
+        let program = frontend::parse(
+            "struct A;struct B;fn types(a:A,b:B){}fn first<T,U>(){}fn second<T,U>(){}fn main(){}",
+        )
+        .unwrap();
+        let budget = ir::PlanBudget::default();
+        let plan = frontend::PlanCtx::from_program(&program, &budget).unwrap();
+        let named = |name: &str| {
+            (0..plan.callable_count())
+                .map(|index| plan.callable_decl(index).unwrap())
+                .find(|declaration| {
+                    matches!(
+                        plan.persistent_decl_path(*declaration).unwrap().item(),
+                        frontend::PersistentDeclItem::Name(found) if found == name
+                    )
+                })
+                .unwrap()
+        };
+        let arguments = plan
+            .signature(named("types"))
+            .unwrap()
+            .signature
+            .params
+            .clone();
+        let original = ir::CallTarget {
+            declaration: named("first"),
+            type_args: arguments.clone().into(),
+        };
+        let key = instances::graph_key::encode(&original, &budget).unwrap();
+        let decoded = instances::graph_key::decode(&key, &plan, &budget).unwrap();
+        assert!(same_caller_computation(&original, &decoded, &budget).unwrap());
+        let reordered = ir::CallTarget {
+            declaration: original.declaration,
+            type_args: Arc::from([arguments[1].clone(), arguments[0].clone()]),
+        };
+        assert!(!same_caller_computation(&original, &reordered, &budget).unwrap());
+        let different = ir::CallTarget {
+            declaration: named("second"),
+            type_args: arguments.into(),
+        };
+        assert!(!same_caller_computation(&original, &different, &budget).unwrap());
+        let mut foreign = original.clone();
+        foreign.declaration.snapshot = ir::SnapshotId::allocate().unwrap();
+        assert!(!same_caller_computation(&original, &foreign, &budget).unwrap());
     }
 }
