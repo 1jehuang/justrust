@@ -21,6 +21,26 @@ branch-dispatch frame. The existing 120-cast acceptance and 140-cast nesting
 rejection remain unchanged. A nested repeat/cast call regression also checks
 canonical source validation and rejects a forged cast target.
 
+## CFG unary/cast stack regression repair (2026-10-20)
+
+At baseline `c5d75a98e`, the existing
+`casts_validate_all_integer_pairs_dead_operands_and_evaluate_source_once` test
+aborted on hosted with stack overflow and `RUST_MIN_STACK` unset
+(`20261020-035028673-3777055`). Cast operands already used a small recursive
+lowering path, but a mixed unary/cast cycle retained the large
+`materialize_expression_inner` frame for every unary operand before reaching
+the unchanged depth guard. Unary materialization now uses a separate non-inlined
+helper, preserving operand evaluation, storage events, source origins and
+runtime-site accounting. No stack override, depth/work limit change or graph
+ratchet relaxation is involved.
+
+The unchanged focused test passes (`20261020-035055752-3779218`). A new admitted
+120-unary chain regression checks all 120 operations, storage paths and ownership.
+All 103 CFG unit tests pass (`20261020-035110230-3780342`), as do all 14 graph
+integrity tests (`20261020-035119030-3780339`), on hosted at the default stack.
+This is a scoped lowering repair, not proof of stack safety for every recursive
+expression shape or completion of any full-Rust gate.
+
 ## Scope and exact shared API
 
 Support `as` between all ten existing IntTy primitives, all 100 type pairs.

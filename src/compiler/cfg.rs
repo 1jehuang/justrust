@@ -4249,9 +4249,10 @@ impl Lowerer<'_> {
     /// snapshot. Projection can address it before selecting a field to consume.
     fn materialize_expression(&mut self, id: ExprId) -> Result<Place, String> {
         self.enter_lowering()?;
-        // Keep long admitted cast chains out of the large aggregate/control
-        // lowering frame. The same depth/work guard still covers every cast.
+        // Keep long admitted cast/unary chains out of the large aggregate/control
+        // lowering frame. The same depth/work guard still covers every operand.
         let result = match self.source.exprs.get(id.0).map(|expr| &expr.kind) {
+            Some(ir::ExprKind::Unary { op, value }) => self.materialize_unary(id, *value, *op),
             Some(ir::ExprKind::CharToInt { value, to }) => {
                 self.materialize_cast(id, *value, |value| Rvalue::CharToInt { value, to: *to })
             }
@@ -4275,6 +4276,28 @@ impl Lowerer<'_> {
         };
         self.lowering_depth -= 1;
         result
+    }
+
+    // Unary chains must not retain the aggregate/control lowering frame while
+    // recursively evaluating their operand. Keep runtime-site accounting identical
+    // to other checked arithmetic operations.
+    #[inline(never)]
+    fn materialize_unary(
+        &mut self,
+        id: ExprId,
+        value: ExprId,
+        op: UnaryOp,
+    ) -> Result<Place, String> {
+        let destination = place(
+            *self
+                .expressions
+                .get(id.0)
+                .ok_or("missing expression local")?,
+        );
+        self.live(destination.local, Some(id));
+        let value = self.expression(value)?;
+        self.assign_source_runtime(destination.clone(), Rvalue::Unary { op, value }, Some(id));
+        Ok(destination)
     }
 
     fn materialize_cast(
@@ -8930,6 +8953,49 @@ mod tests {
         )
         .unwrap();
         super::super::backend::emit_checked_function(&chain, facts).unwrap();
+    }
+
+    #[test]
+    fn deep_unary_chain_preserves_operations_at_default_stack() {
+        let mut expressions = vec![expr(
+            Ty::Int(IntTy::I32),
+            ir::ExprKind::Int(IntValue::i32(1)),
+        )];
+        for index in 0..120 {
+            expressions.push(expr(
+                Ty::Int(IntTy::I32),
+                ir::ExprKind::Unary {
+                    op: UnaryOp::Not,
+                    value: ExprId(index),
+                },
+            ));
+        }
+        let source = with_root(
+            Ty::Unit,
+            expressions,
+            vec![ir::TypedStmt::Expr(ExprId(120))],
+        );
+        let lowered = nominal_lowered(&source);
+        assert_eq!(
+            lowered
+                .blocks
+                .iter()
+                .flat_map(|block| &block.statements)
+                .filter(|statement| matches!(
+                    statement.value,
+                    Statement::Assign {
+                        value: Rvalue::Unary {
+                            op: UnaryOp::Not,
+                            ..
+                        },
+                        ..
+                    }
+                ))
+                .count(),
+            120
+        );
+        assert_storage_paths(&lowered);
+        assert!(super::super::ownership::analyze(&lowered).passed());
     }
 
     #[test]

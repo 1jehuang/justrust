@@ -13,6 +13,13 @@ obligations from nominal field recipes, removing internal metadata failures with
 claiming that the three affected full programs now compile. Final acceptance and
 graph-integrity evidence are recorded in the feature contracts. G0-G12 remain open.
 
+- [x] Repair the default-stack CFG unary/cast recursion regression without
+      raising stack size or lowering resource limits. Separate unary materialization
+      keeps recursive operands out of the large aggregate/control frame. The original
+      cast/cycle test, a new 120-unary chain, all 103 CFG tests and all 14 graph-integrity
+      gates pass on hosted (`INTEGER-CASTS.md`). This bounded G2/G9/G10 robustness
+      repair does not close any full-Rust gate.
+
 - [x] Keep validated closed-call nominal conversion inventories occurrence-local.
       Enclosing body substitutions remain single-valued and reject conflicting
       targets. The unchanged format-macro fixture now matches live stock
