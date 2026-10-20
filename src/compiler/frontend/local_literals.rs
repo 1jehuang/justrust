@@ -842,7 +842,51 @@ impl<'s> Solver<'_, '_, 's> {
                     progress = true;
                     continue;
                 }
+                // Primitive result/argument constraints come from the same exact
+                // signatures as checked lowering, never from the expected result.
+                let leading_signature = match self.domain(method.receiver) {
+                    Domain::Fixed(ty) => leading_zeros_signature(
+                        &ty,
+                        method.name,
+                        method.actuals.len(),
+                        method.args.len(),
+                        self.checker.names()?,
+                    )?,
+                    _ => None,
+                };
                 let receiver = self.peel_refs(method.receiver);
+                let primitive_signature = if leading_signature.is_some() {
+                    leading_signature
+                } else if method.actuals.is_empty()
+                    && let Domain::Fixed(ty) = self.domain(receiver)
+                    && let Some(scalar) = ir::ScalarTy::of(&ty)
+                {
+                    let name = self
+                        .checker
+                        .names()?
+                        .spelling(method.name)
+                        .map_err(native_adapter::name_diagnostic)?;
+                    ir::Intrinsic::resolve(scalar, name).and_then(ir::Intrinsic::signature)
+                } else {
+                    None
+                };
+                if let Some(signature) = primitive_signature {
+                    if method.args.len() + 1 != signature.params.len() {
+                        return Err(format!(
+                            "E0061: primitive method takes {} argument(s) but {} were supplied",
+                            signature.params.len() - 1,
+                            method.args.len()
+                        ));
+                    }
+                    for (arg, param) in method.args.iter().zip(&signature.params[1..]) {
+                        let param = self.fixed(param.clone())?;
+                        self.coerce(*arg, param)?;
+                    }
+                    let result = self.fixed(signature.result)?;
+                    self.unify(result, method.result)?;
+                    progress = true;
+                    continue;
+                }
                 if let Domain::Nominal(decl, _) = self.domain(receiver)
                     && let Some(candidate) = self.candidate(decl, method.name)?
                 {
@@ -870,28 +914,55 @@ impl<'s> Solver<'_, '_, 's> {
                         continue;
                     }
                     let plan = self.checker.signatures.plan()?;
-                    if method.actuals.is_empty()
-                        && let Ok(selected) = plan.select_method(
+                    if method.actuals.is_empty() {
+                        match plan.select_method(
                             &ty,
                             &method.name,
                             &[],
                             self.checker.facts(),
                             &self.checker.module,
                             &plan.budget,
-                        )
-                    {
-                        for (arg, param) in method
-                            .args
-                            .iter()
-                            .zip(selected.signature.params.iter().skip(1))
-                        {
-                            let param = self.fixed(param.clone())?;
-                            self.coerce(*arg, param)?;
+                        ) {
+                            Ok(selected) => {
+                                for (arg, param) in method
+                                    .args
+                                    .iter()
+                                    .zip(selected.signature.params.iter().skip(1))
+                                {
+                                    let param = self.fixed(param.clone())?;
+                                    self.coerce(*arg, param)?;
+                                }
+                                let result = self.fixed(selected.signature.result)?;
+                                self.unify(result, method.result)?;
+                                progress = true;
+                                continue;
+                            }
+                            Err(error) => {
+                                // Once an exact scalar's ordinary method lookup
+                                // has failed, a known primitive name is not an
+                                // unresolved nominal dependency. Preserve the
+                                // resolver's diagnostic rather than parking it.
+                                if let Domain::Fixed(fixed) = self.domain(receiver)
+                                    && ir::ScalarTy::of(&fixed).is_some()
+                                {
+                                    let name = self
+                                        .checker
+                                        .names()?
+                                        .spelling(method.name)
+                                        .map_err(native_adapter::name_diagnostic)?;
+                                    if ir::IntrinsicOp::candidate_name(name)
+                                        || leading_zeros_method_candidate(
+                                            method.name,
+                                            0,
+                                            0,
+                                            self.checker.names()?,
+                                        )?
+                                    {
+                                        return Err(error);
+                                    }
+                                }
+                            }
                         }
-                        let result = self.fixed(selected.signature.result)?;
-                        self.unify(result, method.result)?;
-                        progress = true;
-                        continue;
                     }
                 }
                 pending.push(method);

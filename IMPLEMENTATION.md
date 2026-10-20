@@ -13,6 +13,13 @@ obligations from nominal field recipes, removing internal metadata failures with
 claiming that the three affected full programs now compile. Final acceptance and
 graph-integrity evidence are recorded in the feature contracts. G0-G12 remain open.
 
+- [x] Connect body-local primitive method inference to canonical exact signatures,
+      including typed-call `.leading_zeros()` results. Fixed scalar receivers,
+      ordinary nominal/trait method precedence and exact invalid-input rejection
+      are retained. Ten stock/native sources pass CHECK/BUILD at workers 1/8
+      (`LEADING-ZEROS.md`, `PRIMITIVE-METHODS.md`); generic/reference receiver
+      expansion and full Rust compatibility remain open.
+
 - [x] Repair the default-stack CFG unary/cast recursion regression without
       raising stack size or lowering resource limits. Separate unary materialization
       keeps recursive operands out of the large aggregate/control frame. The original

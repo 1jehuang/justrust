@@ -2570,15 +2570,48 @@ fn leading_zeros_candidate(expr: &Expr, names: &NameStore) -> Result<bool, Strin
         ..
     } = expr
     {
-        Ok(names
-            .spelling(*name)
-            .map_err(native_adapter::name_diagnostic)?
-            == "leading_zeros"
-            && type_args.is_empty()
-            && args.is_empty())
+        leading_zeros_method_candidate(*name, type_args.len(), args.len(), names)
     } else {
         Ok(false)
     }
+}
+
+fn leading_zeros_method_candidate(
+    name: AstIdent,
+    type_arguments: usize,
+    arguments: usize,
+    names: &NameStore,
+) -> Result<bool, String> {
+    Ok(names
+        .spelling(name)
+        .map_err(native_adapter::name_diagnostic)?
+        == "leading_zeros"
+        && type_arguments == 0
+        && arguments == 0)
+}
+
+/// Exact builtin signature shared by body inference and checked lowering.
+/// Neither the method spelling nor an expected result grants receiver authority.
+fn leading_zeros_signature(
+    receiver: &ir::Ty,
+    name: AstIdent,
+    type_arguments: usize,
+    arguments: usize,
+    names: &NameStore,
+) -> Result<Option<ir::IntrinsicSignature>, String> {
+    if !matches!(receiver, ir::Ty::Int(_)) || !leading_zeros_method_candidate(name, 0, 0, names)? {
+        return Ok(None);
+    }
+    if type_arguments != 0 {
+        return Err("E0107: leading_zeros takes no type arguments".into());
+    }
+    if arguments != 0 {
+        return Err("E0061: leading_zeros takes no arguments".into());
+    }
+    Ok(Some(ir::IntrinsicSignature {
+        params: vec![receiver.clone()],
+        result: ir::Ty::Int(ir::IntTy::U32),
+    }))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

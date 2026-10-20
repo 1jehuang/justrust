@@ -4,6 +4,37 @@ Status: native semantic and exact-source debug/release acceptance passed on
 2026-10-18. Full regression and integrated-worktree validation are recorded below.
 Full Rust remains open.
 
+## Body-local result inference repair (2026-10-20)
+
+The local constraint solver now uses the shared exact leading-zero signature
+and the existing `Intrinsic::resolve` / `Intrinsic::signature` table for primitive
+method parameters and results. Leading-zero checked lowering consumes the same
+signature. Only independently fixed scalar receiver types qualify; unresolved
+integer/float terms are not defaulted to invent method authority. Nominal and
+in-scope trait methods retain ordinary resolution, including user methods named
+`leading_zeros` on noninteger receivers.
+
+A fixed scalar's failed ordinary lookup for a known primitive candidate retains
+the resolver's diagnostic instead of becoming a stalled nominal constraint.
+Integer leading-zero calls with arguments or generic arguments are rejected from
+the canonical method contract, not assigned an approximate result.
+
+`primitive_result_inference_matches_stock_at_both_worker_counts` in the existing
+primitive-method suite passes on hosted (`20261020-040423033-3828582`): ten
+identical stock/native sources, four valid and six invalid, compared with pinned
+stock rustc at native workers 1 and 8. The 40 native CHECK/BUILD cells include once-only typed
+u128 receiver calls, unannotated and nested primitive results, nominal and scalar
+trait same-name methods, wrong result/argument types, arity/type arguments,
+noninteger receivers and unused invalid code. All eight native executions match
+stock stdout and exit status. The original backend regression is retained;
+24 leading-zero authority/unit controls pass (`20261020-040511703-3833832`).
+All 14 graph-integrity gates pass (`20261020-040702873-3846141`), as does strict
+library/primitive-test Clippy (`20261020-040748609-3848468`). Scoped receipts,
+including the original failure and the invalid-receiver diagnostic repair, are
+retained in `data/runs/xps14/2026-10-20-primitive-inference.jsonl`.
+This repairs inference plumbing, not the broader generic/reference receiver
+boundaries or full Rust compatibility.
+
 ## Native semantic slice
 
 Admit zero-argument `.leading_zeros()` on exactly typed by-value primitive integer

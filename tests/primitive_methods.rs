@@ -2,6 +2,8 @@
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[path = "support/oracle.rs"]
 mod oracle;
+#[path = "support/stock_rustc.rs"]
+mod stock_rustc;
 use oracle::{Case, Expect};
 
 #[test]
@@ -159,6 +161,221 @@ fn primitive_methods_match_stock() {
             },
         ],
     );
+}
+
+#[test]
+fn primitive_result_inference_matches_stock_at_both_worker_counts() {
+    use std::{fs, process::Command};
+    let root = std::env::var_os("JCODE_SCRATCH_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join(format!("jr-primitive-inference-{}", std::process::id()));
+    fs::create_dir(&root).unwrap();
+    struct Cleanup(std::path::PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+    let _cleanup = Cleanup(root.clone());
+    fn capture(
+        command: &mut Command,
+        context: &str,
+        root: &std::path::Path,
+    ) -> std::process::Output {
+        use std::time::{Duration, Instant};
+        let stdout = root.join("command.stdout");
+        let stderr = root.join("command.stderr");
+        command
+            .stdout(fs::File::create(&stdout).unwrap())
+            .stderr(fs::File::create(&stderr).unwrap());
+        let mut child = command.spawn().unwrap();
+        let start = Instant::now();
+        let status = loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                break status;
+            }
+            if start.elapsed() > Duration::from_secs(30) {
+                child.kill().unwrap();
+                child.wait().unwrap();
+                panic!("timed out {context}: {command:?}");
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        std::process::Output {
+            status,
+            stdout: fs::read(stdout).unwrap(),
+            stderr: fs::read(stderr).unwrap(),
+        }
+    }
+    let cases = [
+        (
+            "once",
+            r#"
+            fn next(calls: &mut u32) -> u128 {
+                *calls += 1u32;
+                18446744073709551616u128
+            }
+            fn main() {
+                let mut calls = 0u32;
+                let count = next(&mut calls).leading_zeros();
+                let ones = next(&mut calls).count_ones();
+                assert_eq!(calls, 2u32);
+                assert_eq!(count, 63u32);
+                assert_eq!(ones, 1u32);
+                println!("ok");
+            }"#,
+            None,
+        ),
+        (
+            "primitive_signatures",
+            r#"
+            fn main() {
+                let absolute = (-4i32).abs();
+                let character = 'a'.to_ascii_uppercase();
+                let root = 9.0f64.sqrt();
+                let power = 2i32.pow(3);
+                let zeros = 8u32.trailing_zeros();
+                let nested = 1u64.leading_zeros().count_ones();
+                assert_eq!(absolute, 4i32);
+                assert_eq!(character, 'A');
+                assert_eq!(root, 3.0f64);
+                assert_eq!(power, 8i32);
+                assert_eq!(zeros, 3u32);
+                assert_eq!(nested, 6u32);
+                println!("ok");
+            }"#,
+            None,
+        ),
+        (
+            "ordinary_method",
+            r#"
+            struct S { value: bool }
+            impl S { fn leading_zeros(self) -> bool { self.value } }
+            fn main() {
+                let result = S { value: true }.leading_zeros();
+                assert!(result);
+                println!("ok");
+            }"#,
+            None,
+        ),
+        (
+            "ordinary_scalar_trait_method",
+            r#"
+            trait UserCount { fn leading_zeros(self) -> bool; }
+            impl UserCount for f32 { fn leading_zeros(self) -> bool { self == 1.0f32 } }
+            fn main() {
+                let result = 1.0f32.leading_zeros();
+                assert!(result);
+                println!("ok");
+            }"#,
+            None,
+        ),
+        (
+            "wrong_result",
+            "fn main(){let count: bool = 1u128.leading_zeros();}",
+            Some("E0308"),
+        ),
+        (
+            "wrong_argument",
+            "fn main(){let result = 1i32.wrapping_add(1u32);}",
+            Some("E0308"),
+        ),
+        (
+            "wrong_arity",
+            "fn main(){let count = 1u128.leading_zeros(1u32);}",
+            Some("E0061"),
+        ),
+        (
+            "wrong_type_arguments",
+            "fn main(){let count = 1u128.leading_zeros::<u8>();}",
+            Some("E0107"),
+        ),
+        (
+            "noninteger",
+            "fn main(){let count = 1.0f32.leading_zeros();}",
+            Some("E0599"),
+        ),
+        (
+            "unused_wrong_result",
+            "fn unused(){let count: bool = 1u128.leading_zeros();} fn main(){}",
+            Some("E0308"),
+        ),
+    ];
+    std::thread::scope(|scope| {
+        let mut jobs = Vec::new();
+        for (name, source, invalid) in cases {
+            let root = root.join(name);
+            jobs.push(scope.spawn(move || {
+                fs::create_dir(&root).unwrap();
+                let source_path = root.join(format!("{name}.rs"));
+                fs::write(&source_path, source).unwrap();
+                for workers in [None, Some(1), Some(8)] {
+                    for check in [true, false] {
+                        let image = root.join(format!("{name}-{workers:?}-{check}"));
+                        let mut command = if let Some(workers) = workers {
+                            let mut command = Command::new(env!("CARGO_BIN_EXE_jr-rust"));
+                            command.args(["--workers", &workers.to_string()]);
+                            if check {
+                                command.arg("--check");
+                            }
+                            command
+                        } else {
+                            let mut command = Command::new(stock_rustc::stock_rustc());
+                            command.args(["--edition=2024", "--crate-name=oracle", "-Awarnings"]);
+                            if check {
+                                command.arg("--emit=metadata");
+                            }
+                            command
+                        };
+                        command.arg(&source_path);
+                        if workers.is_none() || !check {
+                            command.arg("-o").arg(&image);
+                        }
+                        let context = format!("{name} workers={workers:?} check={check}");
+                        let output = capture(&mut command, &context, &root);
+                        let error = String::from_utf8_lossy(&output.stderr);
+                        if let Some(code) = invalid {
+                            assert!(
+                                !output.status.success(),
+                                "{name} {workers:?}: accepted invalid source"
+                            );
+                            assert!(
+                                output.status.code().is_some(),
+                                "{name} {workers:?}: {error}"
+                            );
+                            assert!(!image.exists(), "{name}: invalid input published output");
+                            if workers.is_none() {
+                                assert!(error.contains(code), "{name}: {error}");
+                            } else {
+                                for forbidden in
+                                    ["panicked at", "resource limit", "cannot progress"]
+                                {
+                                    assert!(!error.contains(forbidden), "{name}: {error}");
+                                }
+                            }
+                        } else {
+                            assert!(
+                                output.status.success(),
+                                "{name} {workers:?} check={check}: {error}"
+                            );
+                            if !check {
+                                let ran = capture(&mut Command::new(&image), &context, &root);
+                                assert!(ran.status.success(), "{name} {workers:?}: {ran:?}");
+                                assert_eq!(ran.stdout, b"ok\n", "{name} {workers:?}");
+                                assert!(ran.stderr.is_empty(), "{name} {workers:?}: {ran:?}");
+                            } else if workers.is_some() {
+                                assert!(!image.exists(), "CHECK published executable");
+                            }
+                        }
+                    }
+                }
+            }));
+        }
+        for job in jobs {
+            job.join().unwrap();
+        }
+    });
 }
 
 #[test]

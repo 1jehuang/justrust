@@ -9,6 +9,16 @@ outputs and source-authority replay. CFG expansion uses existing typed arithmeti
 comparisons and branches. Only float sqrt, abs and sign-bit queries need native
 backend kernels. No graph node kinds, side state or ratchets are added.
 
+The body-local solver also consumes this exact signature table (2026-10-20),
+including primitive method arguments and unannotated results, instead of trying
+ordinary trait selection alone. Fixed receiver types are required; this does not
+infer a scalar receiver from a method's name or expected result. The separate
+leading-zero operation now shares its exact signature between inference and
+checked lowering. `LEADING-ZEROS.md` records the hosted ten-source stock
+CHECK/BUILD/run matrix at workers 1/8, including ordinary same-name trait methods.
+The new matrix uses the verified pinned stock-rustc helper on hosted builds;
+the older full-suite local-oracle instructions below remain historical.
+
 Supported methods:
 
 - Integers: signed abs/signum/is_positive/is_negative, pow with u32 exponent,

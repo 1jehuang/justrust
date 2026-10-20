@@ -7204,7 +7204,13 @@ impl<'a> Checker<'a> {
     /// Admit only an exactly typed by-value integer and zero method arguments.
     /// Other receiver kinds and signatures keep ordinary method resolution.
     pub(super) fn builtin_leading_zeros(&mut self, e: &Expr) -> Result<Option<ir::ExprId>, String> {
-        let Expr::MethodCall { receiver, .. } = e else {
+        let Expr::MethodCall {
+            receiver,
+            name,
+            type_args,
+            args,
+        } = e
+        else {
             return Ok(None);
         };
         if !leading_zeros_candidate(e, self.names()?)?
@@ -7214,14 +7220,19 @@ impl<'a> Checker<'a> {
         }
         // The hint grants no type authority. Check and evaluate the receiver once.
         let value = self.expr(receiver)?;
-        if !matches!(self.exprs[value.0].ty, ir::Ty::Int(_)) {
-            return Err("leading_zeros receiver must be an exactly typed by-value integer".into());
-        }
+        let signature = leading_zeros_signature(
+            &self.exprs[value.0].ty,
+            *name,
+            type_args.len(),
+            args.len(),
+            self.names()?,
+        )?
+        .ok_or("leading_zeros receiver must be an exactly typed by-value integer")?;
         let completion = self.exprs[value.0].completion;
         let id = ir::ExprId(self.exprs.len());
         self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
         self.exprs.push(ir::TypedExpr {
-            ty: ir::Ty::Int(ir::IntTy::U32),
+            ty: signature.result,
             kind: ir::ExprKind::LeadingZeros { value },
             completion,
         });
