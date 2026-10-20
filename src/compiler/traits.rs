@@ -1542,6 +1542,12 @@ impl ValidatedTraitWorld {
         &self.headers.impls
     }
 
+    /// Every immutable header of this validated world, including the core
+    /// catalog. Read-only: consumed by the semantic core adapter.
+    pub fn all_headers(&self) -> &HeaderSet {
+        &self.headers
+    }
+
     pub fn build(
         mut headers: HeaderSet,
         schema: Arc<dyn SchemaCx + Send + Sync>,

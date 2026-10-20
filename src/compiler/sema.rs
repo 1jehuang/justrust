@@ -1,6 +1,7 @@
 //! General semantic core: inference, trait solving and body checking.
 //! Pure library. See SEMANTIC-CORE.md.
 
+pub mod adapter;
 pub mod check;
 pub mod hir;
 pub mod infer;

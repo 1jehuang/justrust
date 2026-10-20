@@ -4790,6 +4790,27 @@ pub(super) fn replay_source_body(
 }
 
 impl PlanCtx {
+    /// Read-only declaration listing for the semantic core adapter.
+    pub fn sema_declarations(&self) -> &[DeclInfo] {
+        &self.registry.declarations
+    }
+    /// Read-only resolved program for the semantic core adapter.
+    pub fn sema_program(&self) -> &Arc<Program> {
+        &self.program
+    }
+    /// Validated generic schema of a callable, if it has one.
+    pub fn sema_schema(&self, id: ir::DeclId) -> Option<&ir::GenericSignature> {
+        self.validated.get(&id)
+    }
+    /// Spelling of a declaration's own item name, if it has one.
+    pub fn sema_item_name(&self, info: &DeclInfo) -> Option<String> {
+        match info.path.item {
+            DeclItemName::Source(ident) => {
+                self.program.names.spelling(ident).ok().map(str::to_owned)
+            }
+            _ => Some(info.name.rsplit("::").next().unwrap_or(&info.name).to_owned()),
+        }
+    }
     pub(super) fn publish_callable_body(
         &self,
         declaration: ir::DeclId,

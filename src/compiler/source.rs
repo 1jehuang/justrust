@@ -429,9 +429,27 @@ pub fn prepare_text(
     text: &str,
     options: &SourceOptions,
 ) -> Result<PreparedSource, SourceError> {
+    prepare_text_with(SourceAssembler::user_only(options), name, text, options)
+}
+
+/// Like [`prepare_text`], but attaches the embedded prelude when
+/// `options.prelude` is set, exactly as graph compilation does.
+pub fn prepare_text_with_prelude(
+    name: impl Into<PathBuf>,
+    text: &str,
+    options: &SourceOptions,
+) -> Result<PreparedSource, SourceError> {
+    prepare_text_with(SourceAssembler::new(options), name, text, options)
+}
+
+fn prepare_text_with(
+    mut assembler: SourceAssembler,
+    name: impl Into<PathBuf>,
+    text: &str,
+    options: &SourceOptions,
+) -> Result<PreparedSource, SourceError> {
     let unit = Arc::new(prepare_text_unit(name, text, options));
     let budget = super::expansion_budget::ExpansionBudget::default();
-    let mut assembler = SourceAssembler::user_only(options);
     let mut step = assembler.provide(unit)?;
     loop {
         match step {
