@@ -143,7 +143,9 @@ pub(super) fn hints(
     for (site, term) in solver.sites.clone() {
         if let Some(ty) = solver.resolve(term, 0)? {
             hints.insert(site, ty);
-        } else if matches!(solver.domain(term), Domain::Nominal(..)) {
+        } else if matches!(solver.domain(term), Domain::Nominal(..))
+            && !solver.contains_callable(term, 0)?
+        {
             return Err(solver.user_error(
                 "E0282: type annotations needed: cannot infer the type of this binding",
             ));
@@ -436,6 +438,28 @@ impl<'s> Solver<'_, '_, 's> {
         }
         self.variables[a].domain = domain;
         Ok(())
+    }
+    /// Whether a term's solved structure holds a closure type. Closure types
+    /// have no source-spellable resolution here; like a bare closure local,
+    /// such bindings are left to ordinary checking rather than rejected.
+    fn contains_callable(&self, term: Term, depth: usize) -> Result<bool, String> {
+        self.checker.infer_work(depth)?;
+        Ok(match self.domain(term) {
+            Domain::Callable(_) => true,
+            Domain::Nominal(_, args) | Domain::Tuple(args) => {
+                for arg in args {
+                    if self.contains_callable(arg, depth + 1)? {
+                        return Ok(true);
+                    }
+                }
+                false
+            }
+            Domain::Ref(_, inner)
+            | Domain::RawPtr(_, inner)
+            | Domain::Array(inner, _)
+            | Domain::Slice(inner) => self.contains_callable(inner, depth + 1)?,
+            _ => false,
+        })
     }
     fn resolve(&self, term: Term, depth: usize) -> Result<Option<ir::Ty>, String> {
         self.checker.infer_work(depth)?;

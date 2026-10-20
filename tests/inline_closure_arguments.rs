@@ -34,3 +34,27 @@ fn inline_closure_arguments_to_generic_functions() {
         ],
     );
 }
+
+#[test]
+fn closures_stored_in_generic_structs_through_let_bindings() {
+    oracle::check(
+        "closure_struct_bindings",
+        &[
+            Case {
+                name: "field_call",
+                source: "struct W<F>{f:F}fn wrap<F:Fn(u32)->u32>(f:F)->W<F>{W{f}}fn main(){let w=wrap(|x|x*2);println!(\"{}\",(w.f)(3));}",
+                expect: Expect::Run("6\n"),
+            },
+            Case {
+                name: "method_call",
+                source: "struct W<F>{f:F}impl<F:Fn(u32)->u32>W<F>{fn call(&self,x:u32)->u32{(self.f)(x)}}fn wrap<F:Fn(u32)->u32>(f:F)->W<F>{W{f}}fn main(){let w=wrap(|x:u32|x*2);println!(\"{}\",w.call(3));}",
+                expect: Expect::Run("6\n"),
+            },
+            Case {
+                name: "unconstrained_still_rejected",
+                source: "struct W<T>{t:T}fn mk<T>()->W<T>{loop{}}fn main(){let w=mk();}",
+                expect: Expect::Invalid("E0282"),
+            },
+        ],
+    );
+}
