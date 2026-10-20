@@ -22,7 +22,18 @@ graph-integrity evidence are recorded in the feature contracts. G0-G12 remain op
       run was interrupted after its exponential traversal stalled, not counted
       as a pass. Evidence is retained in
       `data/runs/rust-support-followup-20261020/bounded-nominal-dag.jsonl`.
+      The full-library rerun now terminates, but reports 53 failing tests in the
+      main partition, including obsolete fixture identities and genuine inference
+      failures (`20261020-062040239-4112197`). It is not a green compatibility gate.
       Full-library revalidation and G0-G12 remain open.
+
+- [x] Const declarations reject non-const calls and possibly initialized generic
+      destructors even when unused, using sealed callable identities and ordinary
+      ownership analysis. Full const/core identity and scalar-source suites pass
+      (26 and 8 tests). Approximate lazy fixed-address mutable-static lowering is
+      withdrawn and explicitly Unsupported pending real storage and constant
+      initialization semantics (`CONST-EVAL-SCALAR.md`). This closes correctness
+      holes, not general const or static support.
 
 - [x] Generic opaque return inference preserves defining owner, return site,
       ordered arguments and public bounds. Physical direct/bound calls replay
