@@ -74,7 +74,7 @@ struct Solver<'a: 's, 'b: 's, 's> {
     projections: Vec<Projection>,
     delayed_results: Vec<Term>,
     coercions: Vec<(Term, Term)>,
-    iterator_items: Vec<(Term, Term)>,
+    iterator_items: Vec<iteration::Pending>,
     patterns: Vec<(&'s Pattern, Term, HashMap<LocalKey, Term>)>,
     pattern_bindings: Option<HashMap<LocalKey, Term>>,
     replaying_pattern: bool,

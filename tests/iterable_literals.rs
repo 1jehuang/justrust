@@ -3,6 +3,61 @@
 #[path = "support/oracle.rs"]
 mod oracle;
 use oracle::{Case, Expect};
+#[path = "support/iterator_oracle.rs"]
+mod iterator_oracle;
+
+#[test]
+fn array_iterator_nominal_items_match_stock() {
+    iterator_oracle::stock_native(
+        "enum Event{Timer,Reset} fn value(e:&Event)->u32{match e{Event::Timer=>1,Event::Reset=>2}} fn main(){let events=[Event::Timer,Event::Reset];let mut total=0;for e in events.iter(){total+=value(e);}println!(\"{}\",total);}",
+    );
+}
+
+#[test]
+fn unchanged_enum_state_machine_matches_stock() {
+    iterator_oracle::stock_native(include_str!(
+        "fixtures/full_programs/08_enum_state_machine.rs"
+    ));
+}
+
+#[test]
+fn array_iterator_reference_receivers_preserve_shared_items() {
+    iterator_oracle::stock_native(
+        "fn main(){let mut a=[1u32,2];let r=&a;for x in r.iter(){println!(\"{}\",*x);}let r=&mut a;for x in r.iter(){println!(\"{}\",*x);}for x in (&mut a).iter(){println!(\"{}\",*x);}}",
+    );
+}
+
+#[test]
+fn array_iterator_temporary_receiver_evaluates_once_and_lives_through_loop() {
+    iterator_oracle::stock_native(
+        "fn make()->[u32;2]{println!(\"make\");[4,5]} fn main(){for x in make().iter(){println!(\"{}\",*x);}println!(\"done\");}",
+    );
+}
+
+#[test]
+fn array_iterator_preserves_real_method_priority() {
+    iterator_oracle::stock_native(
+        "trait Custom{fn iter(&self)->[u32;2];} impl Custom for [i32;2]{fn iter(&self)->[u32;2]{[7,8]}} fn main(){let a=[1i32,2];for x in a.iter(){println!(\"{}\",x);}}",
+    );
+}
+
+#[test]
+fn array_iterator_rejects_shared_mutation_and_conflicting_loans() {
+    for source in [
+        "fn main(){let mut a=[1,2];for x in a.iter(){*x=3;}}",
+        "fn main(){let mut a=[1,2];for x in a.iter(){a[0]=3;println!(\"{}\",*x);}}",
+        "fn main(){let a=[1,2];for x in a.iter(1){println!(\"{}\",x);}}",
+    ] {
+        iterator_oracle::stock_and_native_reject(source);
+    }
+}
+
+#[test]
+fn array_iterator_temporary_item_cannot_escape() {
+    iterator_oracle::stock_and_native_reject(
+        "fn make()->[u32;2]{[4,5]} fn main(){let mut found:&u32=&0;for x in make().iter(){found=x;break;}println!(\"{}\",*found);}",
+    );
+}
 
 #[test]
 fn iterable_item_constraints_match_stock() {

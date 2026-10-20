@@ -486,8 +486,14 @@ missing-file changes invalidate only justified consumers without stale lookup.
       shared and mutable slice signatures and raw-pointer forwarding. Array-loop
       constraints preserve owned, shared and
       mutable binding modes, and resolved non-array receivers request the canonical
-      IntoIterator::Item projection. Adapter execution and full-program 08 still
-      depend on the ordinary iterator lowering/library activation. Scalar/unit
+      IntoIterator::Item projection. Immediate-for fixed-array `.iter()` now
+      defers item inference until the exact receiver can be selected, preserves
+      real method priority, and lowers through existing shared element loans with
+      replayed original method/loop/borrow correspondence. Unchanged full-program
+      08 passes stock-differential CHECK/BUILD/run at workers 1/8, alongside all
+      14 graph-integrity gates (`tests/iterable_literals.rs`, `FOR-LOANS.md`).
+      First-class array iterator values, `.iter_mut()` and general adapter
+      activation remain separate work. Scalar/unit
       stored callable parameters and results now share body-local constraints from
       later calls, expected results and canonical callable bounds, with lexical
       binding identities preserved through nested blocks and shadowing. Solved
@@ -1191,6 +1197,13 @@ and runs the declared tests. No stock-compiled library artifacts may conceal
 missing native compilation. Catalog Copy/Clone support is not core acceptance.
 
 ### G8. Existing Cargo projects and source-to-test workflows
+
+**Test-outcome correction (2026-10-20):** default library test requests now
+fail explicitly as Unsupported while native doctest discovery/execution is
+unimplemented, rather than reporting invented successful zero-test results.
+Explicit unit/integration/binary/all-target selections and `--no-run` exclude
+doctest execution. `[lib] doctest = false` is honored and nonboolean values
+reject. This closes a false-success path, not the doctest compatibility gate.
 
 **In progress (2026-10-20):** `TARGET-DEPENDENCIES.md` defines native-target
 conditional dependency admission, inactive-edge filtering and feature propagation

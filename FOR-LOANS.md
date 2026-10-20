@@ -30,6 +30,26 @@ as genuine for occurrences, not fabricated `.len()` calls. Replay rejects
 missing/duplicate rows, changed receivers/operations, forged source kinds and
 orphan lengths. Existing `.len()` source-call obligations remain unchanged.
 
+### Immediate fixed-array `.iter()` (2026-10-20)
+
+`for item in array.iter()` now uses the same shared element-place loop for an
+exactly typed fixed array, including non-Copy nominal enum elements. Ordinary
+method selection runs first: a real in-scope array `iter` method retains its
+own return type and source-call evidence. The builtin candidate requires exactly
+`.iter()` with no arguments or type arguments. Owned arrays, shared/mutable
+array references, and the existing checked temporary-borrow transport retain
+their normal initialization, authority and lifetime checks. A mutable array
+reference still yields shared items, never mutable ones.
+
+The immediate loop consumes this builtin operation directly rather than
+inventing a first-class iterator type. It evaluates the receiver once, keeps
+temporary storage alive through the loop, and cannot extend an escaping item
+loan. Its original method occurrence remains inventoried and is bound to the
+exact loop length receiver and retained shared-borrow shape. Replay rejects
+omitted/duplicate rows, changed loop or source identity, and replaced borrows.
+First-class array iterator values, `.iter_mut()`, slice `.iter()` and arbitrary
+adapter chains are not added by this slice.
+
 ## Runtime place authority
 
 `Projection::DynamicIndex(LocalId)` is a typed compiler Place projection. Its
@@ -78,12 +98,13 @@ turn their source bodies into unchecked dead syntax.
 ## Explicit open boundaries
 
 - Mutable slice descriptors and slice descriptor return types.
-- Structured, enum, reference-carrier and Drop-bearing referenced elements.
+- General structured, reference-carrier and Drop-bearing referenced elements
+  beyond the ordinary place/borrow paths exercised by the nominal enum slice.
 - Existing SCC-born loan values retained across a loop backedge. Such Rust-valid
   cases remain explicitly Unsupported rather than relaxing the borrow solver.
   An item can escape via a terminating break when ordinary lifetime checks prove
   it valid, and last use can release the array for mutation afterward.
-- General source IntoIterator desugaring and iterator adapters.
+- Full source-library IntoIterator activation and general iterator adapters.
 - Non-Copy by-value arrays and expression-position for.
 
 ## Validation
@@ -109,3 +130,12 @@ input lifetimes, owned-local escapes, temporary slice call arguments, once-only
 descriptor evaluation, and bounds on empty/scalar/unit slice descriptors.
 Graph-integrity ratchets are unchanged. No performance claim follows from this
 milestone.
+
+`tests/iterable_literals.rs` additionally compares unchanged
+`08_enum_state_machine.rs` and its minimized nominal-array loop with stock at
+workers 1 and 8, including CHECK without codegen, BUILD and actual execution.
+Focused controls cover custom method precedence, shared/mutable array reference
+receivers, once-only temporary evaluation, illegal shared mutation, conflicting
+owner writes and escaping temporary element loans. Internal iterator-source
+tests mutate original source correspondence and borrow receipts. All 14 graph
+integrity gates remain mandatory and passed for this integration.

@@ -6,6 +6,7 @@ mod associated_hint;
 #[path = "type_check/binary_expression.rs"]
 mod binary_expression;
 
+mod array_iterator;
 mod byte_strings;
 #[path = "type_check/callable_arguments.rs"]
 mod callable_arguments;
@@ -8573,6 +8574,9 @@ impl<'a> Checker<'a> {
             let ForIterable::Value(value) = &source.iterable else {
                 unreachable!()
             };
+            if self.builtin_array_iter_receiver(value)?.is_some() {
+                return self.for_array_statement(label, pattern, source, value, body, item_hint);
+            }
             if self.signatures.plan()?.into_iterator_trait_id()?.is_some() {
                 return self.for_iterator_statement(label, pattern, source, value, body);
             }
@@ -8871,7 +8875,10 @@ impl<'a> Checker<'a> {
                     len,
                 })
             });
-            let value = self.expr_expected(source, expected.as_ref())?;
+            let value = match self.for_array_iter_value(for_source, source)? {
+                Some(value) => value,
+                None => self.expr_expected(source, expected.as_ref())?,
+            };
             let flow = self.flow(value);
             let (element, len, borrowed) = match &flow.ty {
                 ir::Ty::Array { element, len } => {

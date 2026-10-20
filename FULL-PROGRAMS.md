@@ -21,34 +21,38 @@ milestone, not full Rust support (see RUST-COMPATIBILITY.md).
 - `justrust test --test full_programs -- --nocapture` prints per-program
   `PASS` or the first native diagnostic.
 
-## Status (2026-10-19)
+## Status (2026-10-20)
 
 The pass count below is current through the manifest ratchet. The original blocker matrix further below is a historical inventory,
 not a fresh measurement of today's diagnostics. Subsequent source-prelude,
 formatting, pointer, pattern, closure and borrowed-iteration slices are tracked
 in `IMPLEMENTATION.md` and their scoped feature documents.
 
-5/20 pass: `01_hello`, `02_fizzbuzz`, `03_collatz`, `05_gcd_fib` and
-`07_bank_account` check, build and execute with exact frozen stock stdout
-(manifest ratchet). This is not full formatting or full Rust support.
+6/20 pass: `01_hello`, `02_fizzbuzz`, `03_collatz`, `05_gcd_fib`,
+`07_bank_account` and `08_enum_state_machine` check, build and execute with
+exact stock stdout (manifest ratchet). The unchanged 08 was additionally
+stock-differential CHECKed, BUILT and run at workers 1 and 8 by
+`justrust test --test iterable_literals unchanged_enum_state_machine_matches_stock`.
+Its immediate-for fixed-array `.iter()` path preserves real method priority,
+shared element loans and exact original source-call correspondence. A full
+hosted replay (`20261020-044008690-3957300`) verifies all 20 entries, with six
+successful executions and 14 explicit rejections. This is not general Iterator,
+full formatting or full Rust support.
 
 ## Current first rejection boundaries
 
-Refreshed 2026-10-19 on `34b38d596` by `justrust test --test full_programs`
-(full CHECK/BUILD/run ratchet, workers 1). Later commits (`265356c2b`,
-`93868e558`) were not rerun across the corpus. 16 and 18 hit the 60 s check
-timeout once under machine contention; alone they check in 12-14 s and report
-the boundaries below.
+Refreshed 2026-10-20 by `justrust test --test full_programs -- --nocapture`
+on the integrated array-iterator snapshot. The earlier local debug replay
+timed out under contention, including hello, and is not a compatibility result.
+The hosted replay completed without timeouts or wrong-output executables.
 
 | Programs | First reported boundary |
 |---|---|
-| 04, 18 | method call on a receiver whose type is not yet resolved |
-| 06, 10, 12, 19 | E0282 closure parameter type (iterator adapter closures) |
-| 08, 09, 16 | no applicable method (Iterator/adapter methods not active) |
-| 11 | opaque `impl Trait` pack needs explicit captured carrier mapping |
+| 04, 06, 09, 10, 14, 16, 18, 19 | unresolved nominal source constraints from the available graph inputs |
+| 11 | implicit associated constant lookup requires a retained caller trait bound |
+| 12 | recursive nominal field realization requires an explicit recursive layout protocol |
 | 13 | trait object types only admitted directly behind a reference (`Box<dyn>`) |
-| 14 | slice generic arguments unsupported |
-| 15 | slice elements containing references or slices |
+| 15 | slice elements containing references/slices or nested slice carriers |
 | 17, 20 | unresolved import `HashMap` (no `std::collections`) |
 
 Most of these trace to the inactive source Iterator library (adapters,
@@ -62,13 +66,13 @@ that fixing one diagnostic makes the program pass. In particular, most remaining
 programs still need reusable library types, trait dispatch and iterator machinery.
 Only stock-matching CHECK, BUILD and execution can promote a manifest entry.
 
-A scoped follow-up on `af5c06a69` after scalar source constants rechecked the
+An older scoped follow-up on `af5c06a69` after scalar source constants rechecked the
 unchanged `06_matrix` at workers 1 and 8. Both CHECK requests reject at line 3,
 column 23: `const-expression array length is unsupported; use an integer literal`.
 This replaces the earlier const-item boundary for this one program, not the
 other rows above. The exact source and binary hashes and exit codes are recorded
 in `data/runs/const-source/matrix-boundary.json`. No BUILD, execution or stock
-oracle rerun was performed for this follow-up, and the manifest remains 3/20.
+oracle rerun was performed for this follow-up, and the manifest then remained 3/20.
 
 ## Historical feature-demand matrix
 

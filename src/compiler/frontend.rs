@@ -616,6 +616,7 @@ mod canonical_source_replay_tests {
             nominal_call_realizations: Default::default(),
             builtin_leading_zeros: Default::default(),
             builtin_lens: Default::default(),
+            array_iters: Default::default(),
             builtin_intrinsics: Default::default(),
             unsizes: Default::default(),
             bindings: Default::default(),
@@ -734,6 +735,9 @@ struct SourceCallSite {
     /// typed receiver, and replay requires typed evidence for every builtin row.
     len_candidate: bool,
     for_iterable: bool,
+    /// Exact direct `.iter()` occurrence of this for iterable, never a
+    /// name-only grant of builtin method authority.
+    array_iter_source: Option<usize>,
     leading_zeros_candidate: bool,
     /// Syntactic `receiver.name(args)` with an admitted primitive method name.
     intrinsic_candidate: bool,
@@ -1573,6 +1577,7 @@ impl SourceInventory {
                 node: node.clone(),
                 len_candidate: false,
                 for_iterable: false,
+                array_iter_source: None,
                 leading_zeros_candidate: false,
                 intrinsic_candidate: false,
                 operator_candidate: true,
@@ -1887,6 +1892,19 @@ impl SourceInventory {
                                 node: here.child(24, 4, budget)?,
                                 len_candidate: false,
                                 for_iterable: true,
+                                array_iter_source: if iterator_source::array_iter_candidate(
+                                    first,
+                                    &self.names,
+                                )
+                                .map_err(|e| source_error(budget, &e))?
+                                .is_some()
+                                {
+                                    self.call_pointers
+                                        .get(&(first as *const Expr as usize))
+                                        .copied()
+                                } else {
+                                    None
+                                },
                                 leading_zeros_candidate: false,
                                 intrinsic_candidate: false,
                                 operator_candidate: true,
@@ -2080,6 +2098,7 @@ impl SourceInventory {
                         node: node.clone(),
                         len_candidate: false,
                         for_iterable: false,
+                        array_iter_source: None,
                         leading_zeros_candidate: false,
                         intrinsic_candidate: false,
                         operator_candidate: false,
@@ -2125,6 +2144,7 @@ impl SourceInventory {
                         len_candidate: slice_len_candidate(expr, &self.names)
                             .map_err(|e| source_error(budget, &e))?,
                         for_iterable: false,
+                        array_iter_source: None,
                         intrinsic_candidate: intrinsic_candidate(expr, &self.names)
                             .map_err(|e| source_error(budget, &e))?,
                         operator_candidate: false,
@@ -2657,6 +2677,7 @@ pub(super) struct CanonicalSourceCapability {
     nominal_call_realizations: std::cell::RefCell<Option<Vec<nominal_call_receipts::Receipt>>>,
     builtin_leading_zeros: std::cell::RefCell<Vec<BuiltinLeadingZerosOccurrence>>,
     builtin_lens: std::cell::RefCell<Vec<BuiltinLenOccurrence>>,
+    array_iters: std::cell::RefCell<Vec<iterator_source::ArrayIterOccurrence>>,
     builtin_intrinsics: std::cell::RefCell<Vec<BuiltinIntrinsicOccurrence>>,
     unsizes: std::cell::RefCell<Vec<UnsizeOccurrence>>,
     bindings: std::cell::RefCell<Vec<(usize, ir::LocalId)>>,
@@ -2680,6 +2701,7 @@ pub(super) struct OriginalSource {
     nominal_call_realizations: Option<Vec<nominal_call_receipts::Receipt>>,
     builtin_leading_zeros_mapping: Vec<BuiltinLeadingZerosOccurrence>,
     builtin_len_mapping: Vec<BuiltinLenOccurrence>,
+    array_iter_mapping: Vec<iterator_source::ArrayIterOccurrence>,
     builtin_intrinsic_mapping: Vec<BuiltinIntrinsicOccurrence>,
     unsize_mapping: Vec<UnsizeOccurrence>,
     binding_mapping: Vec<(usize, ir::LocalId)>,
@@ -4240,6 +4262,7 @@ pub(super) fn replay_source_body(
             || fresh.leading_zeros_candidate != retained.leading_zeros_candidate
             || fresh.len_candidate != retained.len_candidate
             || fresh.for_iterable != retained.for_iterable
+            || fresh.array_iter_source != retained.array_iter_source
             || fresh.intrinsic_candidate != retained.intrinsic_candidate
             || fresh.operator_candidate != retained.operator_candidate
             || !optional_source_path_equal(
@@ -4372,6 +4395,8 @@ pub(super) fn replay_source_body(
     let leading_zero_sources =
         replay_builtin_leading_zeros(original, checked, &positions, &mut seen, budget)?;
     let builtin_sources = replay_builtin_lens(original, checked, &positions, &mut seen, budget)?;
+    let array_iter_sources =
+        iterator_source::replay_array_iters(original, checked, &positions, budget)?;
     iterator_source::validate_for_alternatives(
         original,
         &positions,
@@ -4384,7 +4409,11 @@ pub(super) fn replay_source_body(
     replay_unsizes(original, checked, budget)?;
     for (index, site) in original.calls.iter().enumerate() {
         sr::work(budget, 1)?;
-        if builtin_sources[index] || leading_zero_sources[index] || intrinsic_sources[index] {
+        if builtin_sources[index]
+            || leading_zero_sources[index]
+            || intrinsic_sources[index]
+            || array_iter_sources[index]
+        {
             continue;
         }
         if site.operator_candidate && positions[index].is_none() {
@@ -4807,6 +4836,7 @@ pub(super) fn replay_source_body(
         .checked_add(original.builtin_len_mapping.len())
         .and_then(|n| n.checked_add(original.builtin_intrinsic_mapping.len()))
         .and_then(|n| n.checked_add(original.builtin_leading_zeros_mapping.len()))
+        .and_then(|n| n.checked_add(original.array_iter_mapping.len()))
         .and_then(|n| n.checked_add(primitive_operators))
         != Some(original.calls.len())
     {
@@ -5019,6 +5049,7 @@ impl PlanCtx {
                     nominal_call_realizations: Default::default(),
                     builtin_leading_zeros: Default::default(),
                     builtin_lens: Default::default(),
+                    array_iters: Default::default(),
                     builtin_intrinsics: Default::default(),
                     unsizes: Default::default(),
                     bindings: Default::default(),
@@ -5103,6 +5134,7 @@ impl PlanCtx {
                     nominal_call_realizations: cap.nominal_call_realizations.borrow().clone(),
                     builtin_leading_zeros_mapping: cap.builtin_leading_zeros.take(),
                     builtin_len_mapping: cap.builtin_lens.take(),
+                    array_iter_mapping: cap.array_iters.take(),
                     builtin_intrinsic_mapping: cap.builtin_intrinsics.take(),
                     unsize_mapping: cap.unsizes.take(),
                     binding_mapping: cap.bindings.take(),

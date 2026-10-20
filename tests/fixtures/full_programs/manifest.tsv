@@ -21,7 +21,7 @@
 05_gcd_fib	pass
 06_matrix	fail	fmt-display,for,autoderef,vec,iter,closure,string
 07_bank_account	pass
-08_enum_state_machine	fail	fmt-display,fmt-debug,derive,for,iter,match-ergonomics
+08_enum_state_machine	pass
 09_vec_stack	fail	fmt-display,fmt-debug,str,vec,option-result,for,iter,or-pat,array-iter
 10_string_processing	fail	fmt-display,fmt-debug,str,string,for,vec,iter,closure,prim-methods,byte-lit,array-iter
 11_closures_iterators	fail	fmt-display,fmt-debug,vec,iter,closure,fn-traits,impl-trait,prim-methods,prim-consts,option-result,slice,ref-ops
