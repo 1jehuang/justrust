@@ -302,6 +302,24 @@ Independent cumulative candidate validation is a separate subsequent gate.
 This is bounded inherent value dispatch, not traits, borrowed receiver lookup,
 full Rust/project compatibility or evidence of a performance improvement.
 
+## Disjoint inherent candidates (2026-10-20)
+
+Body-local inference now disambiguates same-named inherent methods using the
+receiver's known ordered type arguments and each candidate's exact impl binder.
+It reuses canonical impl-pattern matching without selecting from an expected
+result. Unique candidates retain their old path; unresolved or closure-bearing
+arguments do not acquire a guessed candidate. Ordinary method checking still
+proves applicability and authorizes the final call.
+
+The unchanged backend receiver-order/symbol test now passes, and the complete
+109-test backend suite passes (`20261020-041052020-3860517`). Added differential
+controls cover concrete disjoint heads, rigid generic tuple arguments, native
+receiver/argument evaluation order, and wrong/unknown receiver rejection at
+workers 1/8 (all three tests pass in `20261020-041111206-3861165`). Graph integrity
+passes all 14 unchanged checks (`20261020-041107061-3861003`), and strict focused
+Clippy passes (`20261020-041151787-3862661`). This repairs the narrow inference
+regression; full Rust and broader method-inference completeness remain open.
+
 ## Independent28-corpus candidate verification
 
 Tracked campaign `compiler-associated-items-20261016-1306` validates exact

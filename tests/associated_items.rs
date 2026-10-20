@@ -8,6 +8,60 @@ use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+#[path = "support/iterator_oracle.rs"]
+mod disjoint_oracle;
+
+#[test]
+fn disjoint_inherent_receiver_arguments_preserve_native_selection_and_order() {
+    disjoint_oracle::stock_native(
+        r#"
+struct Token<T> { value: T }
+impl Token<u8> { fn get(self) -> u8 { self.value } }
+impl Token<u64> {
+    fn get(self) -> u64 { self.value }
+    fn with(self, extra: u64) -> u64 {
+        println!("callee");
+        self.value + extra
+    }
+}
+fn receiver() -> Token<u64> {
+    println!("receiver");
+    Token::<u64> { value: 40u64 }
+}
+fn argument() -> u64 { println!("argument"); 2u64 }
+fn main() {
+    println!("{}", (Token::<u8> { value: 255u8 }).get());
+    println!("{}", (Token::<u64> { value: 18446744073709551615u64 }).get());
+    println!("{}", receiver().with(argument()));
+}
+"#,
+    );
+}
+
+#[test]
+fn disjoint_inherent_receiver_filter_keeps_rigid_generic_arguments() {
+    disjoint_oracle::stock_native(
+        r#"
+struct Token<T> { value: T }
+impl<T> Token<(T, u8)> { fn get(self) -> T { self.value.0 } }
+impl<T> Token<(T, u64)> { fn get(self) -> T { self.value.0 } }
+fn first<T>(value: T) -> T { Token::<(T, u8)> { value: (value, 1u8) }.get() }
+fn second<T>(value: T) -> T { Token::<(T, u64)> { value: (value, 2u64) }.get() }
+fn main() { println!("{}", first(19i32) + second(23i32)); }
+"#,
+    );
+}
+
+#[test]
+fn disjoint_inherent_receiver_filter_cannot_select_wrong_or_unknown_arguments() {
+    for source in [
+        "struct Token<T>{value:T}impl Token<u8>{fn get(self)->u8{self.value}}impl Token<u64>{fn get(self)->u64{self.value}}fn main(){let x=Token::<bool>{value:true}.get();}",
+        "struct Token<T>{value:T}impl Token<u8>{fn get(self)->u8{self.value}}impl Token<u64>{fn get(self)->u64{self.value}}fn bad<T>(value:T){Token::<T>{value:value}.get();}fn main(){}",
+    ] {
+        disjoint_oracle::stock_and_native_reject(source);
+    }
+}
+
 static NEXT_ID: AtomicU64 = AtomicU64::new(0);
 struct Scratch(PathBuf);
 impl Scratch {

@@ -428,8 +428,11 @@ missing-file changes invalidate only justified consumers without stale lookup.
       Static associated calls now constrain their canonical written owner before
       nested return inference (`STATIC-OWNER-INFERENCE.md`): focused stock/native
       acceptance and invalid controls at workers 1/8 plus CHECK frontier and graph
-      gates pass. The existing disjoint-inherent-candidate case remains a proven
-      parent failure, not a newly passing capability.
+      gates pass. The disjoint-inherent-candidate regression is now repaired:
+      known ordered receiver arguments filter candidate impl patterns without
+      guessing unresolved arguments. The unchanged receiver-order/symbol test,
+      all 109 backend tests, focused stock differential workers1/8 controls and
+      all 14 graph-integrity tests pass (ASSOCIATED-ITEMS.md, 2026-10-20).
       Delivered source `_` holes in nested local annotations and explicit
       free/inherent method type arguments retain their concrete written constraints
       and canonical nominal identities (`tests/partial_annotations.rs`), while

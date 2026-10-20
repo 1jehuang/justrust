@@ -810,7 +810,40 @@ impl<'s> Solver<'_, '_, 's> {
         }
         term
     }
+    fn candidate_for_receiver(
+        &self,
+        receiver: Term,
+        name: AstIdent,
+    ) -> Result<Option<ir::DeclId>, String> {
+        let Domain::Nominal(nominal, arguments) = self.domain(receiver) else {
+            return Ok(None);
+        };
+        let unfiltered = self.candidate(nominal, name)?;
+        if unfiltered.is_some() || self.contains_callable(receiver, 0)? {
+            return Ok(unfiltered);
+        }
+        // Disambiguate only with known argument types. An unresolved literal or
+        // generic receiver must not choose a convenient inherent impl.
+        let actuals = if self.manifest_ready(&arguments, 0)? {
+            self.checker.infer_storage(arguments.len())?;
+            arguments
+                .iter()
+                .map(|argument| self.resolve(*argument, 0))
+                .collect::<Result<Option<Vec<_>>, _>>()?
+        } else {
+            None
+        };
+        self.candidate_with_actuals(nominal, name, actuals.as_deref())
+    }
     fn candidate(&self, nominal: ir::DeclId, name: AstIdent) -> Result<Option<ir::DeclId>, String> {
+        self.candidate_with_actuals(nominal, name, None)
+    }
+    fn candidate_with_actuals(
+        &self,
+        nominal: ir::DeclId,
+        name: AstIdent,
+        actuals: Option<&[ir::Ty]>,
+    ) -> Result<Option<ir::DeclId>, String> {
         let plan = self.checker.signatures.plan()?;
         let mut found = None;
         for id in &plan.registry.function_ids {
@@ -820,9 +853,33 @@ impl<'s> Solver<'_, '_, 's> {
                 && owner.trait_decl.is_none()
                 && owner.nominal == nominal
                 && plan.registry.source_member_equal(info.path.item, name)?
-                && found.replace(*id).is_some()
             {
-                return Ok(None);
+                if let Some(actuals) = actuals {
+                    let (_, patterns) = nominal_parts(&owner.self_pattern)
+                        .ok_or("inherent candidate lost its nominal self pattern")?;
+                    if patterns.len() != actuals.len() {
+                        return Err("inherent candidate changed nominal argument arity".into());
+                    }
+                    let environment = plan.param_env(owner.impl_decl)?;
+                    let mut bindings = HashMap::new();
+                    let mut matches = true;
+                    for (pattern, actual) in patterns.iter().zip(actuals) {
+                        matches &= match_impl_type(
+                            pattern,
+                            actual,
+                            &environment,
+                            &mut bindings,
+                            &plan.budget,
+                            0,
+                        )?;
+                    }
+                    if !matches {
+                        continue;
+                    }
+                }
+                if found.replace(*id).is_some() {
+                    return Ok(None);
+                }
             }
         }
         Ok(found)
@@ -887,9 +944,7 @@ impl<'s> Solver<'_, '_, 's> {
                     progress = true;
                     continue;
                 }
-                if let Domain::Nominal(decl, _) = self.domain(receiver)
-                    && let Some(candidate) = self.candidate(decl, method.name)?
-                {
+                if let Some(candidate) = self.candidate_for_receiver(receiver, method.name)? {
                     let result = self.callable(
                         candidate,
                         &method.args,
@@ -1639,9 +1694,7 @@ impl<'s> Solver<'_, '_, 's> {
                     .iter()
                     .map(|a| self.source_ty(a))
                     .collect::<Result<Vec<_>, _>>()?;
-                if let Domain::Nominal(decl, _) = self.domain(owner)
-                    && let Some(candidate) = self.candidate(decl, *name)?
-                {
+                if let Some(candidate) = self.candidate_for_receiver(owner, *name)? {
                     return self.callable(candidate, &args, None, Some(owner), &actuals);
                 }
                 self.fresh()
@@ -1665,9 +1718,7 @@ impl<'s> Solver<'_, '_, 's> {
                     return Ok(result);
                 }
                 let owner = self.peel_refs(receiver);
-                if let Domain::Nominal(decl, _) = self.domain(owner)
-                    && let Some(candidate) = self.candidate(decl, *name)?
-                {
+                if let Some(candidate) = self.candidate_for_receiver(owner, *name)? {
                     return self.callable(candidate, &args, Some(owner), None, &actuals);
                 }
                 let result = self.fresh()?;
