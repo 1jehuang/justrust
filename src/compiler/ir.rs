@@ -28,7 +28,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 mod call_value_types;
 #[path = "ir/closure.rs"]
 mod closure;
+mod closure_result;
 pub use closure::{CaptureKind, CaptureSource, ClosureKind, ClosureRecipeId, ClosureTy};
+pub use closure_result::ClosureResultReceipt;
 #[path = "ir/type_alignment.rs"]
 mod type_alignment;
 pub use type_alignment::TypeAlignmentQuery;

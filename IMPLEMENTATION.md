@@ -641,6 +641,14 @@ cleanup failures.
       (`tests/closure_borrows.rs`, `tests/closure_capture_places.rs`). Inferred
       signature hints do not grant written coercion authority. Reference-bearing
       closure results explicitly reject pending exact carrier-origin contracts.
+      A bounded symbolic root result now retains an immutable source witness for
+      its exact required-call equality origin (`CLOSURE-RESULTS.md`). Authentic
+      compose-shaped source checks, lowers and ownership-validates in Fn/FnMut/
+      FnOnce modes, with foreign source/context and reference-substitution controls.
+      Witnesses retain only canonical IDs and finite parameter/tuple recipes;
+      each actual owner substitution and equality-result certificate is replayed.
+      This is a source-validation prerequisite, not engine worker-1/8, native
+      opaque composition, reference-result support or successful corpus 11.
       Ordinary callable membership additionally requires a parent-minted source
       recipe/final-shape seal. Finalized parent correspondence replays every
       receiver mode's immutable typed payload before child execution, rejecting

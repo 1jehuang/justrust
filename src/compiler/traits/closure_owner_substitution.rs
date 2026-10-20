@@ -33,6 +33,7 @@ impl ValidatedTraitWorld {
             || raw.site() != actual.site()
             || raw.kind() != actual.kind()
             || raw.sources() != actual.sources()
+            || !raw.same_result_receipt_shape(actual)
             || raw.owner_args().len() != actual.owner_args().len()
             || raw.params().len() != actual.params().len()
             || raw.captures().len() != actual.captures().len()
@@ -79,6 +80,7 @@ impl ValidatedTraitWorld {
             || template.site() != closure.site()
             || template.kind() != closure.kind()
             || template.sources() != closure.sources()
+            || !template.same_result_receipt_shape(closure)
             || template.params().len() != closure.params().len()
             || template.captures().len() != closure.captures().len()
         {

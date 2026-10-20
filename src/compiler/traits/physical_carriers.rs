@@ -71,6 +71,7 @@ impl CarrierContractView {
             || self.projected_subject != expected.projected_subject
             || !same_result_subject(&self.result_subject, &expected.result_subject)
             || self.projected.is_some()
+            || self.closure_result.is_some()
             || self.equality_required.is_some()
             || self.equality_results.is_some()
             || !facts

@@ -160,12 +160,8 @@ impl Checker<'_> {
         };
         let (mut body, flow) = child.block_with_expectation(&syntax.body, expectation)?;
         let result = result_hint.unwrap_or(flow.ty.clone());
-        if !ir::carrier_locations(&result, &plan.budget)?.is_empty() {
-            return Err(
-                "unsupported: closure reference results require checked capture carrier contracts"
-                    .into(),
-            );
-        }
+        let result_receipt =
+            child.restricted_closure_result(owner, provider, syntax.site, &body, &result)?;
         child.require(&flow, &result)?;
         prefix.append(&mut body.statements);
         body.statements = prefix;
@@ -242,7 +238,8 @@ impl Checker<'_> {
                     capture_types.into(),
                     kind,
                 )
-                .with_sources(sources.into()),
+                .with_sources(sources.into())
+                .with_result_receipt(result_receipt),
             )?,
         );
         let mut modes = Vec::new();

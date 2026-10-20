@@ -53,6 +53,12 @@ impl ValidatedFacts {
                 ref_contract: source.ref_contract.clone(),
             },
         )?;
+        if let Some(receipt) = closure.result_receipt() {
+            super::super::frontend::closures::result_contract::validate_source(
+                receipt, source, self,
+            )
+            .map_err(|message| FactsError::invalid(self.budget(), &message))?;
+        }
         charged(
             self.budget(),
             source.validate_with_facts(ir::FactsCtx::from_validated(self)),
@@ -129,6 +135,32 @@ impl ValidatedTraitWorld {
         }
         for ty in closure.types() {
             self.validate_ty_metadata_in(ty, env, 0)?;
+        }
+        if let Some(receipt) = closure.result_receipt() {
+            if receipt.owner() != closure.owner()
+                || receipt.provider() != closure.provider()
+                || receipt.site() != closure.site()
+                || !self.eq_ty(
+                    &self.realize_closure_result_witness(closure, receipt)?.1,
+                    closure.result(),
+                    0,
+                )?
+            {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "closure result receipt changed its source shape",
+                ));
+            }
+            let result_channels = charged(
+                &self.budget,
+                ir::carrier_locations(closure.result(), &self.budget),
+            )?;
+            if !result_channels.is_empty() && !matches!(closure.result(), Ty::Param(_)) {
+                return Err(FactsError::unsupported(
+                    &self.budget,
+                    "closure restricted result cannot admit reference-bearing executable substitution",
+                ));
+            }
         }
         Ok(())
     }

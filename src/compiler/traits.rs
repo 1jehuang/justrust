@@ -21,6 +21,7 @@ mod closure_dispatch;
 mod closure_owner_substitution;
 mod closure_projections;
 mod closure_provider_domain;
+mod closure_results;
 mod closures;
 mod constant_members;
 mod dynamic_objects;
@@ -1193,6 +1194,7 @@ struct SignatureTopologyProof {
 /// region solutions belong to the borrow plan, never this world-owned view.
 #[derive(Clone, Debug)]
 pub struct CarrierContractView {
+    closure_result: Option<(Arc<ir::ClosureTy>, ir::ClosureKind)>,
     physical: Option<super::opaque_physical::PhysicalCarrierIdentity>,
     world: WorldId,
     registry: SnapshotId,
@@ -1279,6 +1281,11 @@ impl CarrierContractView {
                 facts.budget(),
                 "carrier view has foreign context authority",
             ));
+        }
+        if let Some((closure, mode)) = &self.closure_result {
+            return facts
+                .world
+                .validate_closure_result_carrier(self, closure, *mode, facts);
         }
         if let Some(evidence) = &self.projected {
             facts
@@ -3493,6 +3500,9 @@ impl ValidatedTraitWorld {
     ) -> Result<Arc<CarrierContractView>> {
         self.check_facts(facts, true)?;
         self.check_context(ProofContext::from_facts(facts))?;
+        if let Some(view) = self.closure_result_carrier_contract(subject, facts)? {
+            return Ok(view);
+        }
         if let SignatureSubject::Call(
             Callee::TraitItem(call) | Callee::Virtual(ir::VirtualCall { call }),
         ) = subject
@@ -3931,6 +3941,7 @@ impl ValidatedTraitWorld {
         let fixed = signature.ref_contract.clone();
         let view = CarrierContractView {
             physical: None,
+            closure_result: None,
             result_signature: signature,
             result_subject,
             equality_results: None,

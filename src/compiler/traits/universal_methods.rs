@@ -576,6 +576,7 @@ impl ValidatedTraitWorld {
         retain::<CarrierContractView>(&self.budget, 1)?;
         Ok(CarrierContractView {
             physical: None,
+            closure_result: None,
             world: self.id,
             registry: self.registry,
             environment: facts.predicates.index,

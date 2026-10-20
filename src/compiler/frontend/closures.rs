@@ -11,6 +11,7 @@ mod owner_source;
 mod parameter_authority;
 mod prepare;
 pub(in crate::compiler) mod publication;
+pub(in crate::compiler) mod result_contract;
 pub(in crate::compiler) mod shape_seal;
 pub(super) mod stored;
 mod trait_source;

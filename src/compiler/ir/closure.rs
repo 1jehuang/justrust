@@ -65,6 +65,7 @@ pub struct ClosureTy {
     sources: Arc<[CaptureSource]>,
     kind: ClosureKind,
     seal: Option<Arc<ClosureShapeSeal>>,
+    result_receipt: Option<Arc<ClosureResultReceipt>>,
 }
 
 impl ClosureTy {
@@ -90,7 +91,18 @@ impl ClosureTy {
             sources: Arc::from([]),
             kind,
             seal: None,
+            result_receipt: None,
         }
+    }
+    pub(in crate::compiler) fn with_result_receipt(
+        mut self,
+        receipt: Option<Arc<ClosureResultReceipt>>,
+    ) -> Self {
+        self.result_receipt = receipt;
+        self
+    }
+    pub fn result_receipt(&self) -> Option<&Arc<ClosureResultReceipt>> {
+        self.result_receipt.as_ref()
     }
     pub(in crate::compiler) fn with_sources(mut self, sources: Arc<[CaptureSource]>) -> Self {
         self.sources = sources;
@@ -136,6 +148,7 @@ impl ClosureTy {
             self.kind,
         )
         .with_sources(self.sources.clone())
+        .with_result_receipt(self.result_receipt.clone())
         .with_shape_seal(self.seal.clone()))
     }
     pub(in crate::compiler) fn try_eq<'a, E>(
@@ -149,6 +162,7 @@ impl ClosureTy {
             || self.kind != other.kind
             || self.sources != other.sources
             || self.seal != other.seal
+            || !self.same_result_receipt_shape(other)
             || self.owner_args.len() != other.owner_args.len()
             || self.params.len() != other.params.len()
             || self.captures.len() != other.captures.len()
@@ -193,6 +207,13 @@ impl ClosureTy {
                 | (ClosureKind::FnMut, ClosureKind::FnMut | ClosureKind::FnOnce)
                 | (ClosureKind::FnOnce, ClosureKind::FnOnce)
         )
+    }
+    pub fn same_result_receipt_shape(&self, other: &Self) -> bool {
+        match (&self.result_receipt, &other.result_receipt) {
+            (None, None) => true,
+            (Some(left), Some(right)) => left.same_source_shape(right),
+            _ => false,
+        }
     }
     /// All semantic children, including the erased runtime signature. Runtime
     /// carrier/layout walks must visit captures only instead.

@@ -120,6 +120,39 @@ pub(super) struct EqualityResultAuthority {
 }
 
 impl CarrierContractView {
+    /// A restricted result receipt must retain a real equality-dependent
+    /// certificate, never infer authority from an empty source union.
+    pub(in crate::compiler) fn validate_restricted_result(
+        &self,
+        facts: &ValidatedFacts,
+        subject: ir::SignatureSubject<'_>,
+        signature: &ir::Signature,
+        location: &ir::CarrierLocation,
+    ) -> Result<()> {
+        self.validate_result_flow(facts, subject, signature, location)?;
+        let Some(authority) = &self.equality_results else {
+            return Err(FactsError::invalid(
+                facts.budget(),
+                "closure result lacks equality-origin authority",
+            ));
+        };
+        if !authority
+            .certificates
+            .iter()
+            .any(|certificate| certificate.result == *location)
+            || !self
+                .contract
+                .results
+                .iter()
+                .any(|row| row.location == *location && row.sources.is_empty())
+        {
+            return Err(FactsError::invalid(
+                facts.budget(),
+                "closure result is not an exact restricted equality-dependent result",
+            ));
+        }
+        Ok(())
+    }
     /// Consumer-side guard. Coverage is rederived from immutable declarations,
     /// never inferred from the presence of an optional certificate or an empty
     /// source union. Ordinary, non-equality result rows retain their old rules.
