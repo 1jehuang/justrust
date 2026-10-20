@@ -551,8 +551,20 @@ mod tests {
         let mut prepared =
             prepare_probe_file(&client, &SourceOptions::default(), &request).unwrap();
         assert_eq!(prepared.origins[0].prepared, 0..0);
+        assert_eq!(prepared.crate_roots, [FileId(0), FileId(1)]);
         let budget = ExpansionBudget::default();
         let input = PreparedLexInput::prepared(&prepared, &budget).unwrap();
+        let client_root = input.snapshot().file(0).unwrap();
+        let provider_root = input.snapshot().file(1).unwrap();
+        assert_eq!(
+            input.snapshot().source_crate_root(client_root).unwrap(),
+            client_root
+        );
+        assert_eq!(
+            input.snapshot().source_crate_root(provider_root).unwrap(),
+            provider_root
+        );
+        assert_ne!(client_root, provider_root);
         let start = input.text().find("identity").unwrap();
         let projected = input.projected(start..start + 8).unwrap();
         assert!(!projected.synthetic);
@@ -570,6 +582,24 @@ mod tests {
             FileId(1)
         );
         drop(input);
+        prepared.crate_roots.pop();
+        assert_eq!(
+            PreparedLexInput::prepared(&prepared, &budget)
+                .err()
+                .unwrap()
+                .kind,
+            SourceErrorKind::Contract
+        );
+        prepared.crate_roots.push(FileId(1));
+        prepared.crate_roots[0] = FileId(1);
+        assert_eq!(
+            PreparedLexInput::prepared(&prepared, &budget)
+                .err()
+                .unwrap()
+                .kind,
+            SourceErrorKind::Contract
+        );
+        prepared.crate_roots[0] = FileId(0);
         prepared.origins[1].prepared.start += 1;
         let input = PreparedLexInput::prepared(&prepared, &budget).unwrap();
         assert_eq!(

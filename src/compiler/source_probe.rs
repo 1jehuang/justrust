@@ -136,6 +136,17 @@ fn attach_verified(
     verified: VerifiedProvider,
     lexical_budget: crate::compiler::expansion_budget::ExpansionBudget,
 ) -> Result<super::PreparedSource, SourceError> {
+    // A verified addition must not re-authorize changes to previously sealed
+    // embedded sources. Validate the old assembly before extending it.
+    if let Some(transport) = &prepared.embedded_transport {
+        transport.validate(&prepared)?;
+    } else if !prepared.embedded_files.is_empty() {
+        return Err(super::Loader::error(
+            SourceErrorKind::Contract,
+            None,
+            "embedded source assembly transport is missing",
+        ));
+    }
     if verified.full_text.len() > super::MAX_BYTES - prepared.source_bytes
         || prepared.files >= super::MAX_FILES
     {
@@ -148,6 +159,10 @@ fn attach_verified(
     let id = prepared
         .sources
         .add(verified.path, verified.full_text.clone());
+    // The verified provider is a separate original-source attachment, not a
+    // child of the client crate. Keep the per-file ownership map complete so
+    // lexical sealing cannot conflate its provenance with the client.
+    prepared.crate_roots.push(id);
     prepared.source_bytes += verified.full_text.len();
     prepared.files += 1;
     let mut loader = super::Loader::new(
@@ -229,6 +244,10 @@ fn attach_verified(
         let primary = e.primary.map(|span| super::remap_span(span, id));
         super::SourceError { primary, ..e }.with_sources(&prepared.sources)
     })?;
+    if prepared.embedded_transport.is_some() {
+        prepared.embedded_transport =
+            Some(super::source_embedded::AssemblyTransport::issue(&prepared)?);
+    }
     Ok(prepared)
 }
 
@@ -708,6 +727,66 @@ mod tests {
     impl Drop for Fixture {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
+
+    #[test]
+    fn verified_probe_extends_sealed_prelude_without_reauthorizing_mutations() {
+        use crate::compiler::source::{
+            AssemblyStep, PreparedLexInput, SourceAssembler, prepare_child_unit,
+            prepare_prelude_unit, prepare_text_unit,
+        };
+        let fixture = Fixture::new();
+        let options = SourceOptions::default();
+        let budget = crate::compiler::expansion_budget::ExpansionBudget::default();
+        let mut assembler = SourceAssembler::new(&options);
+        let mut step = assembler
+            .provide(Arc::new(prepare_text_unit(
+                "client.rs",
+                "fn main(){}",
+                &options,
+            )))
+            .unwrap();
+        let prepared = loop {
+            match step {
+                AssemblyStep::Done(source) => break *source,
+                AssemblyStep::Need(need) => {
+                    let unit = match need.parent.as_deref() {
+                        None => prepare_prelude_unit(&options, &budget),
+                        Some(parent) => prepare_child_unit(parent, need.index, &options, &budget),
+                    };
+                    step = assembler.provide(Arc::new(unit)).unwrap();
+                }
+            }
+        };
+        assert!(!prepared.embedded_files.is_empty());
+        let extended = attach_probe(prepared.clone(), &options, &fixture.request()).unwrap();
+        extended
+            .embedded_transport
+            .as_ref()
+            .unwrap()
+            .validate(&extended)
+            .unwrap();
+        let projection = PreparedLexInput::prepared(&extended, &budget).unwrap();
+        let provider = extended.probes.last().unwrap().span.file;
+        let file = projection.snapshot().file(provider.0 as usize).unwrap();
+        assert_eq!(projection.snapshot().source_crate_root(file).unwrap(), file);
+        assert_eq!(extended.embedded_files.len(), prepared.embedded_files.len());
+        crate::compiler::frontend::parse_prepared(&extended).unwrap();
+        for mutation in 0..3 {
+            let mut forged = prepared.clone();
+            match mutation {
+                0 => forged.text.push(' '),
+                1 => forged.crate_roots[0] = *forged.crate_roots.last().unwrap(),
+                2 => forged.embedded_transport = None,
+                _ => unreachable!(),
+            }
+            let failure = attach_probe(forged, &options, &fixture.request()).unwrap_err();
+            assert_eq!(
+                failure.kind,
+                SourceErrorKind::Contract,
+                "{mutation}: {failure}"
+            );
         }
     }
 

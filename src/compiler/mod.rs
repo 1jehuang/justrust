@@ -59,6 +59,10 @@ mod token_session;
 mod token_tree;
 pub mod traits;
 
+#[cfg(test)]
+#[path = "../../tests/support/stock_rustc.rs"]
+mod stock_rustc;
+
 use crate::{Context, Engine, Error, Key, Provider, Report, TaskFuture};
 use std::path::PathBuf;
 use std::sync::Arc;

@@ -1592,6 +1592,9 @@ fn scan(text: &str) -> Result<Vec<Token>, AttributeError> {
 }
 
 #[cfg(test)]
+use crate::compiler::stock_rustc;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     fn prep(s: &str) -> Result<AttributeOutput, AttributeError> {
@@ -1887,7 +1890,6 @@ mod tests {
             "impl S{#[inline]const N:u8=1;}",
             "trait T{#[inline]type A;}",
             "impl S{#![inline]fn f(){}}",
-            "impl S{#[inline]extern \"C\" fn f(){}}",
             "trait T{#[inline]fn f()->Foo<{1}>;}",
             "trait T{#[inline]fn f()->ty!{u8};}",
             "impl S{#[inline]fn f<T>(x:T)->T{x}}",
@@ -1899,8 +1901,121 @@ mod tests {
                 "{text}"
             );
         }
+        // ABI source preparation now recognizes extern function headers. It
+        // may remove an inert hint, but must retain the original ABI spelling.
+        let text = "impl S{/// docs\n#[inline]extern \"C\" fn f(){}}";
+        let out = prep(text).unwrap();
+        assert_eq!(out.text.len(), text.len());
+        assert!(out.text.contains("extern \"C\" fn f(){}"));
+        assert_eq!(out.attributes.len(), 2);
+        assert!(out.attributes.iter().all(|attribute| attribute.effective));
+        assert_eq!(out.attributes[0].name, "doc");
+        assert_eq!(out.attributes[1].name, "inline");
         // The new body proof must not narrow the already admitted A1 docs.
         assert!(prep("trait T{#[doc=\"required\"]fn f()->Foo<{1}>;}").is_ok());
+    }
+    #[test]
+    fn retained_abi_headers_and_attributes_are_checked_not_erased() {
+        use std::{fs, os::unix::fs::PermissionsExt, process::Command};
+        struct Scratch(std::path::PathBuf);
+        impl Drop for Scratch {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+        let scratch = Scratch(
+            std::env::var_os("JCODE_SCRATCH_DIR")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(std::env::temp_dir)
+                .join(format!(
+                    "jr-retained-abi-{}-{}",
+                    std::process::id(),
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_nanos()
+                )),
+        );
+        fs::create_dir(&scratch.0).unwrap();
+        let positive = "/// original export\n#[inline]\n#[unsafe(no_mangle)] extern \"C\" fn exported(x:i32)->i32{x+1} fn main(){assert_eq!(exported(41),42);}";
+        let input = scratch.0.join("source.rs");
+        fs::write(&input, positive).unwrap();
+        let stock = scratch.0.join("stock");
+        let output = Command::new(super::stock_rustc::stock_rustc())
+            .env_remove("RUSTC_BOOTSTRAP")
+            .args(["--edition=2024", "-Awarnings"])
+            .arg(&input)
+            .arg("-o")
+            .arg(&stock)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(Command::new(&stock).status().unwrap().success());
+        for workers in [1, 8] {
+            for check in [true, false] {
+                let compiled =
+                    crate::compiler::compile_observed(positive.into(), workers, check).unwrap();
+                assert!(compiled.report.capture_complete);
+                if check {
+                    assert!(compiled.executable.is_none());
+                    assert!(!compiled.report.published_kind(103));
+                    assert!(!compiled.report.published_kind(105));
+                } else {
+                    let native = scratch.0.join(format!("native-{workers}"));
+                    fs::write(&native, compiled.executable.unwrap()).unwrap();
+                    fs::set_permissions(&native, fs::Permissions::from_mode(0o755)).unwrap();
+                    assert!(Command::new(&native).status().unwrap().success());
+                }
+            }
+        }
+        // Preparation cannot authorize a Rust-ABI export or reinterpret an
+        // associated C declaration as an ordinary Rust method.
+        for (source, diagnostic) in [
+            (
+                "#[unsafe(no_mangle)] fn exported(){} fn main(){}",
+                "no_mangle currently requires extern C",
+            ),
+            (
+                "struct S{x:i32} impl S{#[inline]extern \"C\" fn f(){}} fn main(){}",
+                "associated extern C functions are unsupported",
+            ),
+        ] {
+            assert!(prep(source).is_ok());
+            fs::write(&input, source).unwrap();
+            let output = Command::new(super::stock_rustc::stock_rustc())
+                .env_remove("RUSTC_BOOTSTRAP")
+                .args(["--edition=2024", "--emit=metadata", "-Awarnings"])
+                .arg(&input)
+                .arg("-o")
+                .arg(scratch.0.join("valid.rmeta"))
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            for workers in [1, 8] {
+                for check in [true, false] {
+                    let failure = crate::compiler::compile_observed(source.into(), workers, check)
+                        .err()
+                        .expect("unsupported ABI declaration must not compile");
+                    assert!(
+                        failure.to_string().contains(diagnostic),
+                        "{source}: {failure}"
+                    );
+                    if let Some(report) = failure.report {
+                        assert!(report.capture_complete);
+                        assert!(!report.published_kind(103));
+                        assert!(!report.published_kind(105));
+                    }
+                }
+            }
+        }
     }
     #[test]
     fn associated_inline_never_activates_semantic_attributes_or_nested_owners() {
@@ -2072,10 +2187,14 @@ mod tests {
                 );
             }
         }
-        assert_eq!(
-            prep("#[unsafe(no_mangle)] fn f(){}").unwrap_err().kind,
-            AttributeErrorKind::Unsupported
-        );
+        // ABI attributes are retained, not silently treated as inert. Whether
+        // the function has a supported ABI is checked by the native parser.
+        let source = "#[unsafe(no_mangle)] fn f(){}";
+        let prepared = prep(source).unwrap();
+        assert_eq!(prepared.text, source);
+        assert_eq!(prepared.attributes.len(), 1);
+        assert_eq!(prepared.attributes[0].name, "unsafe");
+        assert!(prepared.attributes[0].effective);
     }
     #[test]
     fn inactive_attribute_numeric_grammar_is_fail_closed() {

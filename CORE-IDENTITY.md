@@ -37,6 +37,14 @@ lowering. The function's name does not select an implementation. The current
 probe concatenates an explicitly selected declaration with the authored client,
 not a separately compiled library crate with cross-crate namespace or ABI facts.
 
+Each attached provider nevertheless has its own original-source ownership root,
+separate from the client, including when the client is empty. Appending a verified
+provider to an assembly containing embedded prelude sources first validates the
+existing transport, then issues a new immutable receipt for the extended source.
+Changed prior text, forged ownership roots and missing transport are rejected
+rather than reauthorized by the new attachment. These are provenance guarantees,
+not independent crate compilation or broader const-evaluation support.
+
 ## Const declaration boundary
 
 Constness is retained in parsed and resolved declarations. The initial admitted
