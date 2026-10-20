@@ -1,0 +1,29 @@
+{
+  "schema": 1,
+  "date": "2026-10-20",
+  "assessed_report_commit": "639839c2832259c8164322b79da986658cc91764",
+  "checks": {
+    "all_five_exported_run_ids_are_cited_in_report": true,
+    "check_success_matches_receipt": true,
+    "selected_25_test_success_matches_receipt": true,
+    "strict_lint_failure_matches_receipt": true,
+    "self_host_failure_matches_receipt": true,
+    "fresh_corpus_log_has_exactly_5_passes_and_15_rejections": true,
+    "fresh_corpus_log_has_exactly_3_internal_metadata_rejections": true,
+    "all_fresh_corpus_failure_groups_appear_in_report": true,
+    "report_identifies_original_source_revision": true,
+    "assessed_report_commit_matched_remote_main": true,
+    "working_tree_was_clean_at_delivery": true,
+    "overflow_mismatch_reproduced_again_from_preserved_binaries": true,
+    "native_binary_hash_matches_original_probe": true
+  },
+  "repeat_overflow_observation": {
+    "native_exit": 134,
+    "native_diagnostic": "attempt to add with overflow",
+    "stock_exit": 0,
+    "stock_stdout": "0\n",
+    "native_binary_sha256": "5edbf31e23cad6ed827e2be84408220d6668290ec22b8522f26ebf53caddbdba"
+  },
+  "outcome": "The assessment satisfies the request by separating reproduced bugs from missing support, replacing historical corpus diagnostics with current observations, and supplying a prioritized implementation order. The compiler itself was not changed and its bugs are not claimed fixed.",
+  "limits": "Selected acceptance tests and two focused bugs only. No full Rust conformance, complete all-target suite, performance improvement, or completion percentage is established."
+}
