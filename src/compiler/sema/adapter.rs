@@ -272,6 +272,51 @@ impl WorldDb {
             note(&mut db, id, u);
         }
 
+        // Trait items: signatures come from the validated item headers.
+        let mut names: HashMap<DefId, String> = HashMap::new();
+        for info in plan.sema_declarations() {
+            if info.kind == ir::DeclKind::TraitItem {
+                names.insert(def(info.id), plan.sema_item_name(info).unwrap_or_default());
+            }
+        }
+        for h in headers.items.iter() {
+            let id = def(h.declaration);
+            let s = &h.schema;
+            let map = TyMap {
+                env: &s.env,
+                extra: &[],
+            };
+            let mut u = None;
+            let inputs = s
+                .signature
+                .params
+                .iter()
+                .map(|t| map.ty(t, &mut u))
+                .collect();
+            let output = map.ty(&s.signature.result, &mut u);
+            let predicates = s.predicates.iter().map(|p| map.pred(p, &mut u)).collect();
+            let total = s.env.total_arity() as u32;
+            let parent = s.env.scopes().first().map_or(0, |p| p.arity() as u32);
+            let t = def(h.trait_decl);
+            let name = names.get(&id).cloned().unwrap_or_default();
+            if let Some(td) = db.traits.get_mut(&t) {
+                td.methods.push((name, id));
+            }
+            db.fns.insert(
+                id,
+                FnSig {
+                    generics: total,
+                    parent_generics: parent,
+                    inputs,
+                    output,
+                    predicates,
+                    owner: Some(Owner::Trait(t)),
+                    has_self: !matches!(h.receiver, ir::ReceiverMode::None),
+                },
+            );
+            note(&mut db, id, u);
+        }
+
         // Callables: free functions, inherent and trait methods, trait items.
         for info in plan.sema_declarations() {
             let is_callable = matches!(
@@ -567,6 +612,21 @@ mod tests {
         assert!(
             names.contains(&"push") && names.contains(&"new"),
             "{names:?}"
+        );
+        let with_methods = db.traits.values().filter(|t| !t.methods.is_empty()).count();
+        let trait_items = plan
+            .sema_declarations()
+            .iter()
+            .filter(|i| i.kind == ir::DeclKind::TraitItem)
+            .count();
+        let with_schema = plan
+            .sema_declarations()
+            .iter()
+            .filter(|i| i.kind == ir::DeclKind::TraitItem && plan.sema_schema(i.id).is_some())
+            .count();
+        println!(
+            "traits with methods {with_methods}/{}; trait items {trait_items}, with schema {with_schema}",
+            db.traits.len()
         );
     }
 
