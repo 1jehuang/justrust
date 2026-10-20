@@ -2282,6 +2282,19 @@ impl PlanBudget {
             ResourceBudgetKind::Work => self.limits.work,
             _ => self.limits.nodes,
         };
+        // A budget built with a tighter limit than the default bounds one
+        // local sub-computation (for example one contract validation). Its
+        // limit applies to that computation alone, so it keeps its own ledger.
+        // Routing it to the task meter would compare a local bound against the
+        // enclosing task's cumulative work and fail spuriously in large tasks.
+        let defaults = PlanLimits::default();
+        let default_limit = match kind {
+            ResourceBudgetKind::Work => defaults.work,
+            _ => defaults.nodes,
+        };
+        if limit < default_limit {
+            return None;
+        }
         crate::engine::with_current_meter(|meter| {
             let meter = meter?;
             let counter = match kind {

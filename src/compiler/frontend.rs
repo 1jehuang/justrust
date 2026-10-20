@@ -780,6 +780,13 @@ fn borrow_place(mut expr: &Expr) -> Option<Place> {
         }
     }
 }
+/// A path that can name a local binding: one relative segment or bare `self`.
+fn is_local_shaped_path(path: &AstPath) -> bool {
+    matches!(
+        (path.anchor(), path.segments().len()),
+        (PathAnchor::Relative, 1) | (PathAnchor::SelfModule, 0)
+    )
+}
 fn source_local_name(path: &AstPath, names: &NameStore) -> Result<LocalName, String> {
     path.check(names).map_err(native_adapter::name_diagnostic)?;
     match (path.anchor(), path.segments()) {
@@ -2036,7 +2043,12 @@ impl SourceInventory {
                     retain_source_path(path, budget, 0)?;
                 }
                 let (binding, argument_borrow) = match args.as_slice() {
-                    [Expr::Var(name)] => (self.lookup(name, budget)?, None),
+                    // Only local-shaped paths name bindings. Generated item
+                    // paths (an inline closure lowered to a crate item) are
+                    // not local references.
+                    [Expr::Var(name)] if is_local_shaped_path(name) => {
+                        (self.lookup(name, budget)?, None)
+                    }
                     [Expr::Borrow { kind, place }] if place.fields.is_empty() => {
                         (self.lookup(place.local, budget)?, Some(*kind))
                     }
@@ -2989,7 +3001,9 @@ impl CanonicalSourceCapability {
             return Ok(None);
         }
         let (name, fresh_borrow) = match args {
-            [Expr::Var(name)] => (source_local_name(name, &self.plan.program.names)?, None),
+            [Expr::Var(name)] if is_local_shaped_path(name) => {
+                (source_local_name(name, &self.plan.program.names)?, None)
+            }
             [Expr::Borrow { kind, place }] if place.fields.is_empty() => (place.local, Some(*kind)),
             _ => return Ok(None),
         };
