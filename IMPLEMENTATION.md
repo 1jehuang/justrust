@@ -658,6 +658,14 @@ cleanup failures.
       closure normalization, preserving actual caller world/environment/phase.
       Wrong RHS/member and foreign provider/schema/world replay controls reject;
       this remains source proof support, not executable opaque composition.
+      Defining opaque packs now replay exact declaration-owned formal capture
+      eligibility and complete ordered by-value ParamTail fields, transporting
+      actual ownership origins into the public OpaqueTail. Genuine compose
+      returning impl Fn passes engine CHECK at workers 1 and 8 without hidden
+      representation or codegen demand. Publication/occurrence/row forgeries
+      reject; repeated-family fields, fixed/nested reference substitutions and
+      native captured opaque composition remain explicitly unsupported
+      (`CLOSURE-RESULTS.md`). No full corpus-11 or full Rust claim follows.
       Ordinary callable membership additionally requires a parent-minted source
       recipe/final-shape seal. Finalized parent correspondence replays every
       receiver mode's immutable typed payload before child execution, rejecting

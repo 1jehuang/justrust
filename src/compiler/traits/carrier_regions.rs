@@ -111,6 +111,35 @@ impl ValidatedTraitWorld {
             // A symbolic generic tail remains governed by its family schema.
             return Ok(Some(false));
         };
+        if let (
+            ir::CarrierRegionTerm::OpaqueFamily { opaque },
+            ir::CarrierRegionTerm::Family { parameter },
+            ir::CarrierChannel::OpaqueTail {
+                opaque: destination_opaque,
+                prefix: 0,
+            },
+            ir::CarrierChannel::ParamTail {
+                parameter: input_parameter,
+                prefix: 0,
+            },
+        ) = (
+            &output.region,
+            &incoming.region,
+            &destination.channel,
+            &input.location.channel,
+        ) {
+            if opaque != destination_opaque || parameter != input_parameter {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "opaque capture region row changed its exact channel family",
+                ));
+            }
+            // Declaration capture eligibility is not a named-region outlives
+            // assertion and cannot authorize hidden-operand transport.
+            return self
+                .carrier_source_eligible(signature, destination, &signature.result, input, None)
+                .map(Some);
+        }
         Ok(Some(self.source_carrier_outlives(
             source,
             signature,

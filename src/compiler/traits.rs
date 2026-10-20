@@ -4022,6 +4022,25 @@ impl ValidatedTraitWorld {
         for source in sources {
             for expanded in self.expand_carrier(&source.location, env, args, nominals, facts)? {
                 let matches = match (component, expanded.component.as_ref()) {
+                    (
+                        Some(ir::CarrierLocation {
+                            path: destination_path,
+                            channel: ir::CarrierChannel::OpaqueTail { opaque, prefix: 0 },
+                        }),
+                        Some(ir::CarrierLocation {
+                            path: source_path,
+                            channel:
+                                ir::CarrierChannel::ParamTail {
+                                    parameter,
+                                    prefix: 0,
+                                },
+                        }),
+                    ) if destination_path.0.is_empty() && source_path.0.is_empty() => {
+                        // A public opaque envelope deliberately changes the
+                        // family identity. Its retained source edge is valid
+                        // only through exact declaration capture substitution.
+                        self.opaque_captures_parameter(opaque, *parameter)?
+                    }
                     (Some(a), Some(b)) => self.same_location(a, b)?,
                     (None, None) => true,
                     _ => false,
@@ -4742,6 +4761,22 @@ impl ValidatedTraitWorld {
             ),
         )?;
         match (&destination.channel, &input.location.channel) {
+            (
+                ir::CarrierChannel::OpaqueTail { opaque, prefix: 0 },
+                ir::CarrierChannel::ParamTail {
+                    parameter,
+                    prefix: 0,
+                },
+            ) if write.is_none() => {
+                // The public envelope derives solely from the defining schema.
+                // Actual hidden-value transport needs a separate pack witness.
+                if !matches!(a, Ty::Opaque(actual) if actual.as_ref() == opaque.as_ref())
+                    || b != &Ty::Param(*parameter)
+                {
+                    return Ok(false);
+                }
+                self.opaque_captures_parameter(opaque, *parameter)
+            }
             (
                 ir::CarrierChannel::ProjectionTail { projection: a, .. },
                 ir::CarrierChannel::ProjectionTail { projection: b, .. },

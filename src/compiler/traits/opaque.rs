@@ -2,6 +2,135 @@
 //! This module never reads a defining body or its hidden representation.
 use super::*;
 
+#[cfg(test)]
+mod capture_declaration_tests {
+    use super::*;
+    use crate::compiler as c;
+
+    #[test]
+    fn opaque_capture_envelope_replays_raw_formals_not_arbitrary_parameters() {
+        let snapshot = Arc::new(c::Snapshot {
+            input: c::Input::Text("fn compose<A,B,C>(f:impl Fn(A)->B,g:impl Fn(B)->C)->impl Fn(A)->C{move |x:A|g(f(x))}fn main(){}".into()),
+            source_options: c::source::SourceOptions::default(),
+            budget: ir::PlanBudget::default(),
+        });
+        let engine = c::Engine::new(c::CompilerProvider(snapshot));
+        let key = c::Facts::item(c::TEMPLATE_BODY, 0);
+        let requested = engine.request(key.clone());
+        engine.run(1).unwrap();
+        requested.completion().unwrap();
+        let body = engine.fact_of::<c::TemplateBodyFact>(&key, 0).unwrap();
+        let types = engine
+            .fact_of::<c::frontend::PlanCtx>(&c::Facts::root(c::SIGNATURES), 0)
+            .unwrap();
+        let world = types.trait_world().unwrap();
+        let (opaque, hidden) = body
+            .checked
+            .exprs
+            .iter()
+            .find_map(|expression| {
+                let ir::ExprKind::OpaqueWrap { opaque, value } = &expression.kind else {
+                    return None;
+                };
+                Some((opaque.clone(), body.checked.exprs[value.0].ty.clone()))
+            })
+            .unwrap();
+        let Ty::Closure(closure) = hidden else {
+            panic!("expected captured closure")
+        };
+        let Ty::Param(parameter) = closure.captures()[0] else {
+            panic!("expected captured family")
+        };
+        assert!(world.opaque_captures_parameter(&opaque, parameter).unwrap());
+        let mut foreign = parameter;
+        foreign.index = u16::MAX;
+        assert!(!world.opaque_captures_parameter(&opaque, foreign).unwrap());
+        foreign = parameter;
+        foreign.owner.declaration = types.callable_decl(1).unwrap();
+        assert!(!world.opaque_captures_parameter(&opaque, foreign).unwrap());
+        let signature = world
+            .normalized_callable_schema(opaque.owner())
+            .unwrap()
+            .signature;
+        let input = ir::InputCarrier {
+            param: 0,
+            location: ir::CarrierLocation {
+                path: ir::CarrierPath::default(),
+                channel: ir::CarrierChannel::ParamTail {
+                    parameter,
+                    prefix: 0,
+                },
+            },
+        };
+        let bad_destination = ir::CarrierLocation {
+            path: ir::CarrierPath::default(),
+            channel: ir::CarrierChannel::OpaqueTail {
+                opaque: opaque.clone(),
+                prefix: 1,
+            },
+        };
+        assert!(
+            world
+                .carrier_source_eligible(
+                    &signature,
+                    &bad_destination,
+                    &signature.result,
+                    &input,
+                    None
+                )
+                .is_err()
+        );
+        let mut args = opaque.owner_args().to_vec();
+        args.swap(0, 1);
+        for changed in [
+            ir::OpaqueTy::new(
+                types.callable_decl(1).unwrap(),
+                opaque.owner_args().into(),
+                opaque.site(),
+                opaque.bounds().into(),
+                opaque.captured_regions().into(),
+            ),
+            ir::OpaqueTy::new(
+                opaque.owner(),
+                args.into(),
+                opaque.site(),
+                opaque.bounds().into(),
+                opaque.captured_regions().into(),
+            ),
+            ir::OpaqueTy::new(
+                opaque.owner(),
+                Arc::from([]),
+                opaque.site(),
+                opaque.bounds().into(),
+                opaque.captured_regions().into(),
+            ),
+            ir::OpaqueTy::new(
+                opaque.owner(),
+                opaque.owner_args().into(),
+                opaque.site() + 1,
+                opaque.bounds().into(),
+                opaque.captured_regions().into(),
+            ),
+            ir::OpaqueTy::new(
+                opaque.owner(),
+                opaque.owner_args().into(),
+                opaque.site(),
+                opaque.bounds().into(),
+                Arc::from([ir::SourceRegionId {
+                    declaration: opaque.owner(),
+                    index: u16::MAX,
+                }]),
+            ),
+        ] {
+            assert!(
+                world
+                    .opaque_captures_parameter(&changed, parameter)
+                    .is_err()
+            );
+        }
+    }
+}
+
 impl ValidatedTraitWorld {
     /// Public associated assignments are authenticated declaration metadata,
     /// never a query for the defining body's hidden representation.
@@ -170,6 +299,63 @@ impl ValidatedTraitWorld {
         // Revalidating a complete bound application here would revisit its
         // opaque Self and recurse into this same declaration check.
         Ok(())
+    }
+
+    /// Declaration-only eligibility. This reads no defining body or hidden type.
+    /// The current edition-2024 registry captures its complete ordered generic
+    /// environment. A substituted argument is eligible only through its original
+    /// declaration-owned parameter and exact schema substitution correspondence.
+    pub(super) fn opaque_captures_parameter(
+        &self,
+        opaque: &ir::OpaqueTy,
+        parameter: ir::ParamId,
+    ) -> Result<bool> {
+        let owner = self.info(opaque.owner())?;
+        if !matches!(
+            owner.kind,
+            DeclKind::Function | DeclKind::AssociatedFunction
+        ) || owner.env.total_arity() != opaque.owner_args().len()
+        {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "opaque capture owner or argument arity changed",
+            ));
+        }
+        let schema = self.schema.declaration_schema(opaque.owner())?;
+        let original = self
+            .opaque_occurrence(&schema.signature.result, opaque.owner(), opaque.site(), 0)?
+            .ok_or_else(|| {
+                FactsError::invalid(
+                    &self.budget,
+                    "opaque capture occurrence is absent from its declaration",
+                )
+            })?;
+        if !original.try_eq(opaque, |raw, actual| {
+            self.validate_rhs_substitution(raw, actual, &owner.env, opaque.owner_args(), 0)?;
+            Ok::<_, FactsError>(true)
+        })? {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "opaque capture descriptor changed its declared bounds or regions",
+            ));
+        }
+        let mut eligible = false;
+        for ((formal, raw), actual) in owner
+            .env
+            .ordered_params()
+            .zip(original.owner_args())
+            .zip(opaque.owner_args())
+        {
+            charged(&self.budget, self.budget.charge_work(1))?;
+            if raw != &Ty::Param(formal) {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "opaque capture registry changed its ordered formal identity",
+                ));
+            }
+            eligible |= actual == &Ty::Param(parameter);
+        }
+        Ok(eligible)
     }
 
     fn opaque_occurrence<'a>(

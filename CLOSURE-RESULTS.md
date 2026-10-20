@@ -56,6 +56,67 @@ Focused LOCAL nightly-2026-10-08 evidence:
 This is source-check proof support only. Fixed/nested reference substitutions,
 physical opaque composition and corpus 11 acceptance are not claimed.
 
+## Captured-carrier opaque pack source contract (bounded support)
+
+Public return eligibility is independent of the hidden body. The current
+edition-2024 source registry captures its complete canonical generic environment:
+raw schema opaque arguments must match the declaration's ordered formal ParamIds.
+Eligibility replays the original result occurrence, bounds, captured regions and
+exact ordered substitution before admitting a genuine formal ParamTail input.
+It never infers permission from an arbitrary root Parameter, a guessed capture
+list or the fact that a hidden operand happens to have a carrier. Named-region
+rows retain their existing precedence. Nonzero reference prefixes remain outside
+this first slice. Public eligibility alone cannot mint a defining pack proof.
+
+The bounded source contract covers only a defining `OpaqueWrap` whose
+canonical hidden closure has direct by-value captures of distinct defining-owner
+parameter families. Two different fields of the same family are valid source,
+but remain explicitly Unsupported in this bounded slice, not InvalidMetadata.
+Ordered hidden locations are exact field paths ending in a root
+`ParamTail`; each is mapped to the public identity's root `OpaqueTail` without
+erasing the input family. Duplicate, reordered, missing, nested and fixed-reference
+channels reject. Unknown or unsupported capture shapes never become empty.
+
+`OpaquePackProof` must retain only its existing immutable publication identity,
+original wrapper ExprId, exact hidden/public types and an immutable ordered list
+of source locations plus destination location. Sealing and occurrence replay
+independently reconstruct every row from the graph-read original publication and
+its sealed closure capture metadata. A raw list or a bound proof cannot authorize
+packing. New payloads must retain no publication, world, facts, CFG or budget.
+
+Ownership first evaluates the actual operand once, including its move effects.
+It requires exact complete correspondence between actual operand carrier rows and
+the sealed source list. It then unions each source row's real reference origins
+and loans into the one public destination row. An omission is invalid even if
+that row currently has no loans. No empty result may replace symbolic families.
+
+Closed realization independently replays the source occurrence and ordered owner
+substitution against exact published hidden representation. A physical pack may
+be erased only after all instantiated input/destination channels are independently
+proven empty and operand/representation types match. Fixed or nested reference
+substitutions stay explicitly unsupported in this slice. Existing public opaque
+region/capture authority and result-flow checks remain mandatory.
+
+Acceptance requires a real compose-shaped defining-source lower/ownership path,
+forged row order/omission/family/publication/occurrence controls, real origin/loan
+transport, and rejection of fixed/nested reference substitutions. This bounded
+source contract claims neither corpus 11 success nor native captured opaque execution.
+
+Verified LOCAL nightly-2026-10-08 receipts:
+- `20261019-202859549-1893797`: genuine compose returning `impl Fn(A)->C`
+  passes engine CHECK and ownership at workers 1 and 8, without representation,
+  dispatch, mono or codegen demand.
+- `20261019-203842753-1945175`: declaration capture-envelope authority control.
+- `20261019-203938536-1948622`: pack publication/occurrence/ordered-row forgeries.
+- `20261019-203940260-1948749`: closed fixed/nested reference-channel refusal.
+- `20261019-203940327-1948787`: genuine repeated-family fields remain explicitly
+  Unsupported rather than being classified as forged metadata.
+- `20261019-203953392-1949673`: combined-parent graph integrity, 14/14 passed,
+  unchanged stack limits and ratchets.
+- `20261019-205409850-2013894`: final combined graph integrity on parent
+  `265356c2bb220cafce8642c4ae68526da2c0fb28`, 14/14 passed after its dual
+  local/task budget-accounting repair; no earlier consumer or authority replay.
+
 ## Graph and payload requirements
 
 No new graph operation, global inventory, mutable fact or shared budget.

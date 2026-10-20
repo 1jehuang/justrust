@@ -2711,21 +2711,36 @@ impl CarrierBuilder<'_, '_> {
                     origins,
                 )])
             }
-            Rvalue::OpaquePack { value, .. } => {
-                // CFG validation replays the defining-owner proof and checks
-                // that this exact operand has no carriers. Still evaluate the
-                // operand's move/read effects rather than erasing its use.
+            Rvalue::OpaquePack { value, proof } => {
+                // The CFG gate has replayed the exact original publication and
+                // wrapper. Read the actual operand once, then require complete
+                // ordered correspondence before merging any of its origins.
                 let carriers = self.operand_value(state, value)?;
-                if !carriers.is_empty() {
+                let sources = proof.captured_sources();
+                self.budget.spend(carriers.len() + sources.len() + 1)?;
+                if carriers.len() != sources.len()
+                    || carriers
+                        .iter()
+                        .zip(sources)
+                        .any(|((actual, _), expected)| actual != expected)
+                {
                     self.problem(
                         block,
                         Some(statement),
                         Problem::Invalid(
-                            "opaque carrier-empty pack received carrier origins".into(),
+                            "opaque pack changed its complete ordered capture rows".into(),
                         ),
                     )?;
+                    return Ok(Vec::new());
                 }
-                Ok(Vec::new())
+                if sources.is_empty() {
+                    return Ok(Vec::new());
+                }
+                let mut merged = self.empty_origins()?;
+                for (_, origins) in carriers {
+                    merged.union(&origins, &mut self.budget)?;
+                }
+                Ok(vec![(proof.captured_destination(), merged)])
             }
             Rvalue::Use(operand) => self.operand_value(state, operand),
             // The slice handle carries exactly the input reference's origins

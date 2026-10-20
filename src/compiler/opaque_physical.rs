@@ -291,6 +291,45 @@ impl PhysicalValidation<'_> {
     }
 }
 
+// Shape preflight only. The caller must first replay the original pack and
+// obtain this actual family through authenticated instance substitution.
+fn require_empty_physical_capture(actual: &ir::Ty, budget: &ir::PlanBudget) -> Result<(), Error> {
+    if !ir::carrier_locations(actual, budget)
+        .map_err(Error::new)?
+        .is_empty()
+    {
+        return Err(Error::new(
+            "unsupported: physical captured family requires an explicit reference contract",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod captured_family_tests {
+    use super::*;
+
+    #[test]
+    fn closed_capture_family_refuses_fixed_and_nested_reference_carriers() {
+        let budget = ir::PlanBudget::default();
+        require_empty_physical_capture(&ir::Ty::Int(ir::IntTy::I32), &budget).unwrap();
+        let reference = ir::Ty::Ref {
+            kind: ir::BorrowKind::Shared,
+            referent: Arc::new(ir::Ty::Int(ir::IntTy::I32)),
+        };
+        for actual in [
+            reference.clone(),
+            ir::Ty::Tuple(Arc::from([ir::Ty::Bool, reference.clone()])),
+            ir::Ty::Array {
+                element: Arc::new(reference),
+                len: 2,
+            },
+        ] {
+            assert!(require_empty_physical_capture(&actual, &budget).is_err());
+        }
+    }
+}
+
 /// Materialize the first carrier-empty boundary slice from the exact canonical
 /// lowering. CFG blocks, argument snapshots, loans and evaluation order are
 /// copied intact. Only types and independently authorized call/pack operations
@@ -390,6 +429,19 @@ pub(super) fn normalize(
                         ));
                     };
                     let record = representations.get(&opaque)?;
+                    for source in proof.captured_sources() {
+                        let ir::CarrierChannel::ParamTail {
+                            parameter,
+                            prefix: 0,
+                        } = &source.channel
+                        else {
+                            return Err(Error::new(
+                                "physical pack has an unsupported original capture channel",
+                            ));
+                        };
+                        let actual_family = specialization.ty(&ir::Ty::Param(*parameter))?;
+                        require_empty_physical_capture(&actual_family, budget)?;
+                    }
                     if !ir::carrier_locations(record.hidden(), budget)
                         .map_err(Error::new)?
                         .is_empty()

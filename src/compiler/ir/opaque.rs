@@ -195,7 +195,60 @@ impl OpaqueTy {
     }
 }
 
-/// A defining-body pack whose exact hidden value has no reference carriers.
+fn pack_capture_sources(
+    opaque: &OpaqueTy,
+    hidden: &Ty,
+    budget: &PlanBudget,
+) -> Result<Arc<[CarrierLocation]>, String> {
+    let locations = carrier_locations(hidden, budget)?;
+    if locations.is_empty() {
+        return Ok(locations);
+    }
+    let Ty::Closure(closure) = hidden else {
+        return Err("unsupported: opaque pack requires explicit captured carrier mapping for non-closure hidden types".into());
+    };
+    if closure.owner() != opaque.owner() || closure.owner_args() != opaque.owner_args() {
+        return Err(
+            "opaque capture mapping changed its canonical owner or ordered arguments".into(),
+        );
+    }
+    for (index, location) in locations.iter().enumerate() {
+        budget.charge_work(
+            index
+                .saturating_add(opaque.owner_args().len())
+                .saturating_add(1),
+        )?;
+        let [CarrierStep::Field(field)] = location.path.0.as_ref() else {
+            return Err("unsupported: opaque pack requires explicit captured carrier mapping for nested capture channels".into());
+        };
+        let CarrierChannel::ParamTail {
+            parameter,
+            prefix: 0,
+        } = &location.channel
+        else {
+            return Err("unsupported: opaque pack requires explicit captured carrier mapping for fixed or nested references".into());
+        };
+        if parameter.owner.declaration != opaque.owner()
+            || !opaque.owner_args().contains(&Ty::Param(*parameter))
+            || closure.captures().get(*field) != Some(&Ty::Param(*parameter))
+            || !closure
+                .sources()
+                .get(*field)
+                .is_some_and(|source| source.kind == CaptureKind::Value)
+        {
+            return Err("opaque capture mapping changed its defining parameter, field or value-capture authority".into());
+        }
+        if locations[..index]
+            .iter()
+            .any(|prior| prior.channel == location.channel)
+        {
+            return Err("unsupported: opaque repeated-family capture fields require a complete multi-field capture contract".into());
+        }
+    }
+    Ok(locations)
+}
+
+/// A defining-body pack retaining exact ordered symbolic capture origins.
 /// An arbitrary public opaque value still retains its abstract carrier family.
 #[derive(Clone, Debug)]
 pub struct OpaquePackProof {
@@ -203,6 +256,7 @@ pub struct OpaquePackProof {
     hidden: Ty,
     publication: super::super::source_replay::OriginalBodyId,
     occurrence: ExprId,
+    sources: Arc<[CarrierLocation]>,
 }
 impl PartialEq for OpaquePackProof {
     fn eq(&self, other: &Self) -> bool {
@@ -210,6 +264,7 @@ impl PartialEq for OpaquePackProof {
             && self.occurrence == other.occurrence
             && self.opaque == other.opaque
             && self.hidden == other.hidden
+            && self.sources == other.sources
     }
 }
 impl Eq for OpaquePackProof {}
@@ -241,16 +296,13 @@ impl OpaquePackProof {
         if !identical_type(&expression.ty, &Ty::Opaque(opaque.clone()), budget)? {
             return Err("opaque wrapper changed its defining result identity".into());
         }
-        if !carrier_locations(&hidden, budget)?.is_empty() {
-            return Err(
-                "unsupported: opaque pack requires explicit captured carrier mapping".into(),
-            );
-        }
+        let sources = pack_capture_sources(opaque, &hidden, budget)?;
         Ok(Self {
             opaque: opaque.clone(),
             hidden,
             publication: publication.identity().clone(),
             occurrence,
+            sources,
         })
     }
     pub(in crate::compiler) fn validate_occurrence(
@@ -293,12 +345,166 @@ impl OpaquePackProof {
             return Err("opaque pack changed its checked hidden operand type".into());
         }
         validate_wrap(&self.opaque, hidden, facts)?;
-        if !carrier_locations(hidden, budget)?.is_empty() {
-            return Err(
-                "unsupported: opaque pack requires explicit captured carrier mapping".into(),
-            );
+        if pack_capture_sources(&self.opaque, hidden, budget)? != self.sources {
+            return Err("opaque pack changed its exact ordered captured carrier mapping".into());
         }
         Ok(())
+    }
+    pub(in crate::compiler) fn captured_sources(&self) -> &[CarrierLocation] {
+        &self.sources
+    }
+    pub(in crate::compiler) fn captured_destination(&self) -> CarrierLocation {
+        CarrierLocation {
+            path: CarrierPath::default(),
+            channel: CarrierChannel::OpaqueTail {
+                opaque: self.opaque.clone(),
+                prefix: 0,
+            },
+        }
+    }
+}
+
+#[cfg(test)]
+mod captured_pack_tests {
+    use super::*;
+    use crate::compiler as c;
+
+    #[test]
+    fn captured_pack_rejects_order_omission_foreign_occurrence_and_family() {
+        let snapshot = Arc::new(c::Snapshot {
+            input: c::Input::Text("fn compose<A,B,C>(f:impl Fn(A)->B,g:impl Fn(B)->C)->impl Fn(A)->C{move |x:A|g(f(x))}fn main(){}".into()),
+            source_options: c::source::SourceOptions::default(),
+            budget: PlanBudget::default(),
+        });
+        let budget = snapshot.budget.clone();
+        let engine = c::Engine::new(c::CompilerProvider(snapshot));
+        let key = c::Facts::item(c::TEMPLATE_BODY, 0);
+        let requested = engine.request(key.clone());
+        let other_key = c::Facts::item(c::TEMPLATE_BODY, 1);
+        let other_requested = engine.request(other_key.clone());
+        engine.run(1).unwrap();
+        requested.completion().unwrap();
+        other_requested.completion().unwrap();
+        let other_body = engine
+            .fact_of::<c::TemplateBodyFact>(&other_key, 0)
+            .unwrap();
+        let body = engine.fact_of::<c::TemplateBodyFact>(&key, 0).unwrap();
+        let publication = body.publication.as_ref().unwrap();
+        let occurrence = body
+            .checked
+            .exprs
+            .iter()
+            .position(|expr| matches!(expr.kind, ExprKind::OpaqueWrap { .. }))
+            .unwrap();
+        let proof =
+            OpaquePackProof::seal(publication.clone(), ExprId(occurrence), &budget).unwrap();
+        assert_eq!(proof.sources.len(), 2);
+        proof
+            .validate_occurrence(publication, Some(ExprId(occurrence)), &budget)
+            .unwrap();
+        let facts = FactsCtx::from_validated(publication.facts());
+        assert!(
+            proof
+                .validate_occurrence(
+                    other_body.publication.as_ref().unwrap(),
+                    Some(ExprId(occurrence)),
+                    &budget
+                )
+                .is_err()
+        );
+        let mut changed = proof.clone();
+        let mut rows = changed.sources.to_vec();
+        rows.reverse();
+        changed.sources = rows.into();
+        assert!(
+            changed
+                .validate_occurrence(publication, Some(ExprId(occurrence)), &budget)
+                .is_err()
+        );
+        let mut changed = proof.clone();
+        changed.sources = Arc::from([proof.sources[0].clone()]);
+        assert!(
+            changed
+                .validate_shape(&proof.hidden, facts, &budget)
+                .is_err()
+        );
+        let mut changed = proof.clone();
+        changed.publication = c::source_replay::OriginalBodyId::new(&budget).unwrap();
+        assert!(
+            changed
+                .validate_occurrence(publication, Some(ExprId(occurrence)), &budget)
+                .is_err()
+        );
+        assert!(
+            proof
+                .validate_occurrence(publication, Some(ExprId(occurrence + 1)), &budget)
+                .is_err()
+        );
+        let mut changed = proof.clone();
+        let mut rows = changed.sources.to_vec();
+        let CarrierChannel::ParamTail { parameter, .. } = &mut rows[0].channel else {
+            panic!("expected symbolic family")
+        };
+        parameter.index = u16::MAX;
+        changed.sources = rows.into();
+        assert!(
+            changed
+                .validate_shape(&proof.hidden, facts, &budget)
+                .is_err()
+        );
+        for rows in [
+            Arc::from([proof.sources[0].clone(), proof.sources[0].clone()]),
+            {
+                let mut rows = proof.sources.to_vec();
+                let CarrierChannel::ParamTail { prefix, .. } = &mut rows[0].channel else {
+                    unreachable!()
+                };
+                *prefix = 1;
+                Arc::from(rows)
+            },
+            {
+                let mut rows = proof.sources.to_vec();
+                rows[0].path = CarrierPath(Arc::from([CarrierStep::Field(usize::MAX)]));
+                Arc::from(rows)
+            },
+        ] {
+            let mut changed = proof.clone();
+            changed.sources = rows;
+            assert!(
+                changed
+                    .validate_occurrence(publication, Some(ExprId(occurrence)), &budget)
+                    .is_err()
+            );
+        }
+        for opaque in [
+            OpaqueTy::new(
+                proof.opaque.owner(),
+                proof.opaque.owner_args().into(),
+                proof.opaque.site() + 1,
+                proof.opaque.bounds().into(),
+                proof.opaque.captured_regions().into(),
+            ),
+            OpaqueTy::new(
+                proof.opaque.owner(),
+                proof.opaque.owner_args().into(),
+                proof.opaque.site(),
+                proof.opaque.bounds().into(),
+                Arc::from([SourceRegionId {
+                    declaration: proof.opaque.owner(),
+                    index: u16::MAX,
+                }]),
+            ),
+        ] {
+            let mut changed = proof.clone();
+            changed.opaque = Arc::new(opaque);
+            assert!(
+                changed
+                    .validate_occurrence(publication, Some(ExprId(occurrence)), &budget)
+                    .is_err()
+            );
+        }
+        let template = c::cfg::lower_source_template(publication, &budget).unwrap();
+        c::ownership::verify_template(template).unwrap();
     }
 }
 

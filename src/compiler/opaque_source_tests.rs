@@ -61,6 +61,29 @@ fn opaque_source_check_validates_unused_associated_constants_without_physical_de
 }
 
 #[test]
+fn opaque_captured_compose_pack_preserves_source_ownership() {
+    let source = r#"
+        fn compose<A,B,C>(f:impl Fn(A)->B,g:impl Fn(B)->C)->impl Fn(A)->C {
+            move |x:A|g(f(x))
+        }
+        fn main() {}
+    "#;
+    for workers in [1, 8] {
+        source_check(source, workers).unwrap();
+    }
+}
+
+#[test]
+fn opaque_captured_pack_repeated_family_is_explicitly_unsupported() {
+    let source = "fn same<F:Fn(i32)->i32>(first:F,second:F)->impl Fn(i32)->i32{move |x:i32|first(second(x))}fn main(){}";
+    let error = source_check(source, 1).unwrap_err();
+    assert!(
+        error.contains("unsupported: opaque repeated-family capture fields"),
+        "unexpected boundary: {error}"
+    );
+}
+
+#[test]
 fn opaque_native_object_build_matches_stock_workers1_8() {
     let source = r#"
         trait Read { fn read(&self) -> i32; }
