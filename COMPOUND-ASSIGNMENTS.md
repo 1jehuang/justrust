@@ -177,3 +177,15 @@ combined run `20261020-040705775-3846347` passed both positives but exposed an
 incorrect metadata-stage expectation in a new static-overflow negative oracle;
 that follow-up is not claimed as passing here. Graph integrity passes all 14
 checks in `20261020-035703220-3799231`. Full-suite and speed claims remain open.
+
+The follow-up oracle distinguishes stock metadata rejection from stock
+code-generation lints: out-of-range static shift counts must pass stock metadata
+checking and fail its full build with an arithmetic-overflow diagnostic. Native
+CHECK and BUILD both reject these counts without requiring codegen during CHECK.
+Separate invalid-source cases retain mixed-width nonshift rejection, integer-only
+counts, mutable-place authority and exact `usize` indices. A further executable
+case checks heterogeneous mutable-slice shifts and that a diverging, explicitly
+typed RHS does not evaluate the index or mutate the destination.
+All five focused tests pass on hosted in `20261020-044004737-3957161`,
+covering three executable cases and eight invalid controls at workers 1 and 8.
+The compact receipt retains the earlier failed oracle run rather than hiding it.

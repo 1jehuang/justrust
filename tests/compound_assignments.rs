@@ -510,3 +510,52 @@ fn indexed_compound_probe_preserves_rhs_index_order_and_wide_counts() {
         }"#,
     );
 }
+
+#[test]
+fn indexed_compound_probe_retains_slice_counts_and_divergent_rhs_order() {
+    differential::stock_native(
+        r#"fn update(values: &mut [u16], count: u128) {
+            let index=1usize;
+            values[index] <<= count;
+            values[index] >>= 1i8;
+        }
+        fn index()->usize { println!("unexpected index"); 99usize }
+        fn stop(values: &mut [u8; 2]) {
+            values[index()] <<= { println!("rhs returns"); return; 1u128 };
+        }
+        fn main() {
+            let mut values=[3u16,5u16];
+            update(&mut values,2u128);
+            let mut bytes=[1u8,2u8];
+            stop(&mut bytes);
+            println!("{} {} {} {}",values[0],values[1],bytes[0],bytes[1]);
+        }"#,
+    );
+}
+
+#[test]
+fn indexed_compound_probe_does_not_relax_invalid_operands_or_authority() {
+    for source in [
+        "fn bad(a:&mut [u8;2],i:usize){a[i]+=1u128;}fn main(){}",
+        "fn bad(a:&mut [u8;2],i:usize){a[i]<<=true;}fn main(){}",
+        "fn bad(a:&mut [u8;2],i:usize){a[i]>>=1.0f64;}fn main(){}",
+        "fn bad(a:&mut [bool;2],i:usize){a[i]+=false;}fn main(){}",
+        "fn bad(a:&[u8;2],i:usize){a[i]<<=1u128;}fn main(){}",
+        "fn bad(a:&mut [u8;2],i:u128){a[i]<<=1u128;}fn main(){}",
+    ] {
+        differential::stock_and_native_reject(source);
+    }
+}
+
+#[test]
+fn indexed_compound_probe_rejects_static_counts_at_stock_build_stage() {
+    // Stock runs this deny-by-default arithmetic-overflow lint during full
+    // compilation, not --emit=metadata. Native diagnoses the same invalid
+    // static count earlier, in CHECK, including for an unused function.
+    for source in [
+        "fn bad(a:&mut [u8;2],i:usize){a[i]<<=8u128;}fn main(){}",
+        "fn bad(a:&mut [u8;2],i:usize){a[i]>>=-1i128;}fn main(){}",
+    ] {
+        differential::stock_and_native_reject_at_build(source);
+    }
+}

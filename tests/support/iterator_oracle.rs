@@ -96,28 +96,83 @@ pub fn stock_native_with_args(source: &str, args: &[&str]) {
     fs::remove_dir_all(root).unwrap();
 }
 
+#[allow(dead_code)]
 pub fn stock_and_native_reject(source: &str) {
+    stock_and_native_reject_at_stage(source, false, |_, _, _| {});
+}
+
+/// Inspect the same native failures that establish stock/native rejection.
+/// This avoids compiling every invalid source again just to inspect capture
+/// completeness or the diagnostic category.
+#[allow(dead_code)]
+pub fn stock_and_native_reject_observed(
+    source: &str,
+    observe: impl FnMut(usize, bool, &compiler::Failure),
+) {
+    stock_and_native_reject_at_stage(source, false, observe);
+}
+
+/// Some stock lints, notably arithmetic overflow in unused functions, run
+/// after metadata checking. Keep these separate from semantic rejection cases.
+#[allow(dead_code)]
+pub fn stock_and_native_reject_at_build(source: &str) {
+    stock_and_native_reject_at_stage(source, true, |_, _, _| {});
+}
+
+fn stock_and_native_reject_at_stage(
+    source: &str,
+    build: bool,
+    mut observe: impl FnMut(usize, bool, &compiler::Failure),
+) {
     let root = root();
     fs::create_dir_all(&root).unwrap();
     let input = root.join("main.rs");
     fs::write(&input, source).unwrap();
+    if build {
+        let metadata = Command::new(stock_rustc::stock_rustc())
+            .args(["--edition=2024", "--emit=metadata"])
+            .arg(&input)
+            .arg("-o")
+            .arg(root.join("out.rmeta"))
+            .output()
+            .unwrap();
+        assert!(
+            metadata.status.success(),
+            "codegen-lint control unexpectedly rejected by stock metadata: {}",
+            String::from_utf8_lossy(&metadata.stderr)
+        );
+    }
     let stock = Command::new(stock_rustc::stock_rustc())
-        .args(["--edition=2024", "--emit=metadata"])
+        .args([
+            "--edition=2024",
+            if build {
+                "--emit=link"
+            } else {
+                "--emit=metadata"
+            },
+        ])
         .arg(&input)
         .arg("-o")
-        .arg(root.join("out.rmeta"))
+        .arg(root.join(if build { "stock" } else { "out.rmeta" }))
         .output()
         .unwrap();
     assert!(
         !stock.status.success(),
-        "invalid control accepted by stock: {source}"
+        "invalid control accepted by stock (build={build}): {source}"
     );
+    if build {
+        assert!(
+            String::from_utf8_lossy(&stock.stderr).contains("arithmetic operation will overflow"),
+            "expected stock arithmetic-overflow lint: {}",
+            String::from_utf8_lossy(&stock.stderr)
+        );
+    }
     for workers in [1, 8] {
         for check in [true, false] {
-            assert!(
-                compiler::compile(source.into(), workers, check).is_err(),
-                "invalid control accepted: {source}"
-            );
+            let failure = compiler::compile_observed(source.into(), workers, check)
+                .err()
+                .unwrap_or_else(|| panic!("invalid control accepted: {source}"));
+            observe(workers, check, &failure);
         }
     }
     fs::remove_dir_all(root).unwrap();
