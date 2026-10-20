@@ -14911,6 +14911,7 @@ pub fn parse(source: &str) -> Result<Program, String> {
 mod provider_source_context;
 mod provider_source_domain;
 mod root_resolution;
+pub mod sema_lower;
 pub use root_resolution::resolve;
 #[cfg(test)]
 mod generic_trait_source_tests {

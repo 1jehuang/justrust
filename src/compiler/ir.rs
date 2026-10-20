@@ -160,7 +160,7 @@ pub struct GenericEnv {
     total_arity: usize,
 }
 impl GenericEnv {
-    pub(super) fn new(scopes: &[Arc<ParamEnv>], budget: &PlanBudget) -> Result<Self, String> {
+    pub(crate) fn new(scopes: &[Arc<ParamEnv>], budget: &PlanBudget) -> Result<Self, String> {
         if scopes.len() > 32 {
             return Err("generic scope limit exceeded".into());
         }

@@ -100,7 +100,7 @@ pub struct Typeck {
 
 struct Checker<'a> {
     db: &'a dyn ItemDb,
-    body: &'a Body,
+    body: &'a HirBody,
     cx: InferCtxt,
     env: &'a ParamEnv,
     traits_in_scope: &'a [DefId],
@@ -118,7 +118,7 @@ pub fn check_body(
     db: &dyn ItemDb,
     env: &ParamEnv,
     traits_in_scope: &[DefId],
-    body: &Body,
+    body: &HirBody,
     limit: u64,
 ) -> Typeck {
     let mut cx = InferCtxt::new(limit);
@@ -359,10 +359,10 @@ impl<'a> Checker<'a> {
         t
     }
 
-    fn lit(&mut self, l: &Lit, expected: Option<&Ty>) -> Ty {
+    fn lit(&mut self, l: &HirLit, expected: Option<&Ty>) -> Ty {
         match l {
-            Lit::Int(_, Some(i)) => int(*i),
-            Lit::Int(_, None) => {
+            HirLit::Int(_, Some(i)) => int(*i),
+            HirLit::Int(_, None) => {
                 if let Some(x) = expected {
                     let x = self.cx.shallow(x);
                     if matches!(x.as_ref(), TyKind::Int(_)) {
@@ -371,21 +371,21 @@ impl<'a> Checker<'a> {
                 }
                 self.cx.new_int_var()
             }
-            Lit::Float(Some(f)) => mk(TyKind::Float(*f)),
-            Lit::Float(None) => self.cx.new_float_var(),
-            Lit::Bool => bool_ty(),
-            Lit::Char => mk(TyKind::Char),
-            Lit::Str => reference(Mutbl::Not, mk(TyKind::Str)),
+            HirLit::Float(Some(f)) => mk(TyKind::Float(*f)),
+            HirLit::Float(None) => self.cx.new_float_var(),
+            HirLit::Bool => bool_ty(),
+            HirLit::Char => mk(TyKind::Char),
+            HirLit::Str => reference(Mutbl::Not, mk(TyKind::Str)),
         }
     }
 
     fn expr_inner(&mut self, e: ExprId, expected: Option<&Ty>) -> Ty {
         let body = self.body;
         match &body.exprs[e as usize] {
-            Expr::Lit(l) => self.lit(l, expected),
-            Expr::Local(l) => self.locals[*l as usize].clone(),
-            Expr::Fn { def, self_ty, args } => self.fn_item(e, *def, self_ty.as_ref(), args).0,
-            Expr::AssocFn { self_ty, name } => {
+            HirExpr::Lit(l) => self.lit(l, expected),
+            HirExpr::Local(l) => self.locals[*l as usize].clone(),
+            HirExpr::Fn { def, self_ty, args } => self.fn_item(e, *def, self_ty.as_ref(), args).0,
+            HirExpr::AssocFn { self_ty, name } => {
                 let self_ty = self.cx.fill_holes(self_ty);
                 match self.resolve_assoc(e, &self_ty, name) {
                     Some(t) => t,
@@ -395,16 +395,16 @@ impl<'a> Checker<'a> {
                     }
                 }
             }
-            Expr::Ctor { adt: a, variant } => self.ctor(*a, *variant),
-            Expr::Call { callee, args } => self.call(e, *callee, args, expected),
-            Expr::MethodCall {
+            HirExpr::Ctor { adt: a, variant } => self.ctor(*a, *variant),
+            HirExpr::Call { callee, args } => self.call(e, *callee, args, expected),
+            HirExpr::MethodCall {
                 receiver,
                 name,
                 turbofish,
                 args,
             } => self.method_call(e, *receiver, name, turbofish, args),
-            Expr::Field { base, name } => self.field(e, *base, name),
-            Expr::TupleField { base, index } => {
+            HirExpr::Field { base, name } => self.field(e, *base, name),
+            HirExpr::TupleField { base, index } => {
                 let bt = self.expr(*base, None);
                 let mut cur = self.structurally_resolve(&bt);
                 for _ in 0..8 {
@@ -430,8 +430,8 @@ impl<'a> Checker<'a> {
                 self.err(Some(e), CheckErrorKind::NoField(index.to_string()));
                 error()
             }
-            Expr::Index { base, index } => self.index(e, *base, *index),
-            Expr::Struct {
+            HirExpr::Index { base, index } => self.index(e, *base, *index),
+            HirExpr::Struct {
                 adt: a,
                 variant,
                 fields,
@@ -458,7 +458,7 @@ impl<'a> Checker<'a> {
                 }
                 t
             }
-            Expr::Tuple(v) => {
+            HirExpr::Tuple(v) => {
                 let exp: Vec<Option<Ty>> = match expected.map(|x| self.cx.shallow(x)) {
                     Some(x) => match x.as_ref() {
                         TyKind::Tuple(xs) if xs.len() == v.len() => {
@@ -481,7 +481,7 @@ impl<'a> Checker<'a> {
                     .collect();
                 mk(TyKind::Tuple(tys))
             }
-            Expr::Array(v) => {
+            HirExpr::Array(v) => {
                 let elem = match expected.map(|x| self.cx.shallow(x)) {
                     Some(x) => match x.as_ref() {
                         TyKind::Array(t, _) | TyKind::Slice(t) => t.clone(),
@@ -494,7 +494,7 @@ impl<'a> Checker<'a> {
                 }
                 mk(TyKind::Array(elem, v.len() as u64))
             }
-            Expr::Repeat { value, count } => {
+            HirExpr::Repeat { value, count } => {
                 let elem = match expected.map(|x| self.cx.shallow(x)) {
                     Some(x) => match x.as_ref() {
                         TyKind::Array(t, _) => t.clone(),
@@ -505,9 +505,9 @@ impl<'a> Checker<'a> {
                 self.expr_coerce(*value, &elem);
                 mk(TyKind::Array(elem, *count))
             }
-            Expr::Unary(op, x) => self.unary(e, *op, *x, expected),
-            Expr::Binary(op, l, r) => self.binary(e, *op, *l, *r, expected),
-            Expr::AssignOp(op, l, r) => {
+            HirExpr::Unary(op, x) => self.unary(e, *op, *x, expected),
+            HirExpr::Binary(op, l, r) => self.binary(e, *op, *l, *r, expected),
+            HirExpr::AssignOp(op, l, r) => {
                 let lt = self.expr(*l, None);
                 let lt_r = self.structurally_resolve(&lt);
                 if is_scalar(&self.cx, &lt_r) {
@@ -527,12 +527,12 @@ impl<'a> Checker<'a> {
                 }
                 unit()
             }
-            Expr::Assign(l, r) => {
+            HirExpr::Assign(l, r) => {
                 let lt = self.expr(*l, None);
                 self.expr_coerce(*r, &lt);
                 unit()
             }
-            Expr::Ref(m, x) => {
+            HirExpr::Ref(m, x) => {
                 let inner_exp = expected.and_then(|x| match self.cx.shallow(x).as_ref() {
                     TyKind::Ref(_, i) => Some(i.clone()),
                     _ => None,
@@ -540,7 +540,7 @@ impl<'a> Checker<'a> {
                 let t = self.expr(*x, inner_exp.as_ref());
                 reference(*m, t)
             }
-            Expr::Cast(x, t) => {
+            HirExpr::Cast(x, t) => {
                 let t = self.cx.fill_holes(t);
                 let src = self.expr(*x, None);
                 let s = self.structurally_resolve(&src);
@@ -552,11 +552,11 @@ impl<'a> Checker<'a> {
                 }
                 t
             }
-            Expr::Block { stmts, tail } => {
+            HirExpr::Block { stmts, tail } => {
                 let mut diverges = false;
                 for s in stmts {
                     match s {
-                        Stmt::Let {
+                        HirStmt::Let {
                             pat,
                             ty,
                             init,
@@ -573,7 +573,7 @@ impl<'a> Checker<'a> {
                             }
                             self.pat(pat, &ty, None);
                         }
-                        Stmt::Expr(x) => {
+                        HirStmt::Expr(x) => {
                             let t = self.expr(*x, None);
                             if matches!(self.cx.shallow(&t).as_ref(), TyKind::Never) {
                                 diverges = true;
@@ -587,7 +587,7 @@ impl<'a> Checker<'a> {
                     None => unit(),
                 }
             }
-            Expr::If { cond, then, els } => {
+            HirExpr::If { cond, then, els } => {
                 self.expr_coerce(*cond, &bool_ty());
                 match els {
                     Some(el) => {
@@ -602,7 +602,7 @@ impl<'a> Checker<'a> {
                     }
                 }
             }
-            Expr::Match { scrutinee, arms } => {
+            HirExpr::Match { scrutinee, arms } => {
                 let st = self.expr(*scrutinee, None);
                 let mut result: Option<Ty> = expected.cloned().filter(|_| false);
                 for arm in arms {
@@ -618,7 +618,7 @@ impl<'a> Checker<'a> {
                 }
                 result.unwrap_or_else(|| mk(TyKind::Never))
             }
-            Expr::Loop { body: b, label } => {
+            HirExpr::Loop { body: b, label } => {
                 let t = self.cx.new_var();
                 self.loops.push((*label, t.clone()));
                 self.expr(*b, None);
@@ -630,7 +630,7 @@ impl<'a> Checker<'a> {
                     t
                 }
             }
-            Expr::While {
+            HirExpr::While {
                 cond,
                 body: b,
                 label,
@@ -641,7 +641,7 @@ impl<'a> Checker<'a> {
                 self.loops.pop();
                 unit()
             }
-            Expr::For {
+            HirExpr::For {
                 pat,
                 iter,
                 body: b,
@@ -655,7 +655,7 @@ impl<'a> Checker<'a> {
                 self.loops.pop();
                 unit()
             }
-            Expr::Break { label, value } => {
+            HirExpr::Break { label, value } => {
                 let target = self
                     .loops
                     .iter()
@@ -676,8 +676,8 @@ impl<'a> Checker<'a> {
                 }
                 mk(TyKind::Never)
             }
-            Expr::Continue => mk(TyKind::Never),
-            Expr::Return(v) => {
+            HirExpr::Continue => mk(TyKind::Never),
+            HirExpr::Return(v) => {
                 let r = self
                     .closure_ret
                     .last()
@@ -691,13 +691,13 @@ impl<'a> Checker<'a> {
                 }
                 mk(TyKind::Never)
             }
-            Expr::Closure {
+            HirExpr::Closure {
                 params,
                 ret,
                 body: b,
                 id,
             } => self.closure(e, params, ret, *b, *id, expected),
-            Expr::Range {
+            HirExpr::Range {
                 start,
                 end,
                 inclusive,
@@ -731,7 +731,7 @@ impl<'a> Checker<'a> {
         self.body
             .exprs
             .iter()
-            .any(|x| matches!(x, Expr::Break { label, .. } if *label == _label))
+            .any(|x| matches!(x, HirExpr::Break { label, .. } if *label == _label))
     }
 
     /// Least upper bound for branches: coerce each into the other.
@@ -921,7 +921,7 @@ impl<'a> Checker<'a> {
     fn check_args(&mut self, args: &[ExprId], inputs: &[Ty]) {
         for pass in 0..2 {
             for (a, t) in args.iter().zip(inputs) {
-                let is_closure = matches!(self.body.exprs[*a as usize], Expr::Closure { .. });
+                let is_closure = matches!(self.body.exprs[*a as usize], HirExpr::Closure { .. });
                 if (pass == 0) == is_closure {
                     continue;
                 }
@@ -936,7 +936,7 @@ impl<'a> Checker<'a> {
     fn closure(
         &mut self,
         _e: ExprId,
-        params: &[(Pat, Ty)],
+        params: &[(HirPat, Ty)],
         ret: &Ty,
         body: ExprId,
         id: u32,
@@ -1367,11 +1367,7 @@ impl<'a> Checker<'a> {
     fn into_iter_item(&mut self, e: ExprId, it: &Ty) -> Ty {
         let l = self.db.lang().clone();
         let (Some(ii), Some(item)) = (l.into_iterator, l.into_iter_item) else {
-            self.err(
-                Some(e),
-                CheckErrorKind::Unsupported("for loop without IntoIterator"),
-            );
-            return error();
+            return self.builtin_iter_item(e, it);
         };
         let tr = TraitRef {
             trait_id: ii,
@@ -1394,13 +1390,46 @@ impl<'a> Checker<'a> {
         v
     }
 
+    /// Without an `IntoIterator` lang item (the bootstrap prelude has none),
+    /// `for` admits exactly the native iteration forms: integer ranges,
+    /// arrays, slices and references to them.
+    fn builtin_iter_item(&mut self, e: ExprId, it: &Ty) -> Ty {
+        let t = self.structurally_resolve(it);
+        let range = self.db.check_lang().range;
+        let range_incl = self.db.check_lang().range_inclusive;
+        match t.as_ref() {
+            TyKind::Adt(d, args) if Some(*d) == range || Some(*d) == range_incl => args[0].clone(),
+            TyKind::Array(el, _) | TyKind::Slice(el) => el.clone(),
+            TyKind::Ref(m, inner) => {
+                let inner = self.structurally_resolve(inner);
+                match inner.as_ref() {
+                    TyKind::Array(el, _) | TyKind::Slice(el) => reference(*m, el.clone()),
+                    _ => {
+                        self.err(
+                            Some(e),
+                            CheckErrorKind::Unsupported("for loop over this type"),
+                        );
+                        error()
+                    }
+                }
+            }
+            _ => {
+                self.err(
+                    Some(e),
+                    CheckErrorKind::Unsupported("for loop over this type"),
+                );
+                error()
+            }
+        }
+    }
+
     // ---------------------------------------------------------------- patterns
 
-    fn pat(&mut self, p: &Pat, ty: &Ty, cause: Option<ExprId>) {
+    fn pat(&mut self, p: &HirPat, ty: &Ty, cause: Option<ExprId>) {
         let cause_e = cause.unwrap_or(self.body.root);
         match p {
-            Pat::Wild => {}
-            Pat::Binding { local, by_ref } => {
+            HirPat::Wild => {}
+            HirPat::Binding { local, by_ref } => {
                 let t = match by_ref {
                     Some(m) => reference(*m, ty.clone()),
                     None => ty.clone(),
@@ -1408,7 +1437,7 @@ impl<'a> Checker<'a> {
                 let l = self.locals[*local as usize].clone();
                 self.unify_at(cause_e, &l, &t);
             }
-            Pat::Tuple(ps) => {
+            HirPat::Tuple(ps) => {
                 let t = self.peel_for_pattern(ty);
                 let elems: Vec<Ty> = match self.cx.shallow(&t).as_ref() {
                     TyKind::Tuple(v) if v.len() == ps.len() => v.clone(),
@@ -1427,7 +1456,7 @@ impl<'a> Checker<'a> {
                     self.pat(p, &t, cause);
                 }
             }
-            Pat::Adt {
+            HirPat::Adt {
                 adt: a,
                 variant,
                 fields,
@@ -1451,12 +1480,12 @@ impl<'a> Checker<'a> {
                     self.pat(fp, &ft, cause);
                 }
             }
-            Pat::Ref(m, inner) => {
+            HirPat::Ref(m, inner) => {
                 let i = self.cx.new_var();
                 self.unify_at(cause_e, ty, &reference(*m, i.clone()));
                 self.pat(inner, &i, cause);
             }
-            Pat::Lit(l) => {
+            HirPat::Lit(l) => {
                 let lt = self.lit(l, Some(ty));
                 let t = self.peel_for_pattern(ty);
                 self.unify_at(cause_e, &t, &lt);

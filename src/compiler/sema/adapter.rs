@@ -212,8 +212,12 @@ impl WorldDb {
             }
         };
 
+        let mut item_owner: HashMap<DefId, DefId> = HashMap::new();
         for h in headers.traits.iter() {
             let id = def(h.declaration);
+            for it in h.items.iter() {
+                item_owner.insert(def(*it), id);
+            }
             let map = TyMap {
                 env: &h.env,
                 extra: &[],
@@ -302,8 +306,8 @@ impl WorldDb {
             let has_self = !matches!(info.receiver, crate::compiler::frontend::ReceiverKind::None);
             let name = plan.sema_item_name(info).unwrap_or_default();
             let owner = match &info.path.associated {
-                Some(a) if info.kind == ir::DeclKind::TraitItem => {
-                    Some(Owner::Trait(def(a.trait_decl.unwrap_or(a.impl_decl))))
+                _ if info.kind == ir::DeclKind::TraitItem => {
+                    item_owner.get(&id).map(|t| Owner::Trait(*t))
                 }
                 Some(a) => {
                     let impl_id = def(a.impl_decl);
@@ -355,6 +359,42 @@ impl WorldDb {
         }
 
         db.discover_lang(plan);
+        // Field tables for every nominal, from its symbolic schema.
+        for info in plan.sema_declarations() {
+            if !matches!(info.kind, ir::DeclKind::Struct | ir::DeclKind::Enum) {
+                continue;
+            }
+            let Ok((penv, schema)) = plan.nominal_schema(info.id, &plan.budget) else {
+                db.unsupported
+                    .push((def(info.id), "nominal schema unavailable"));
+                continue;
+            };
+            let Ok(env) = ir::GenericEnv::new(&[penv], &plan.budget) else {
+                continue;
+            };
+            let variants = match &schema {
+                ir::Ty::Struct(s) => vec![
+                    s.def()
+                        .fields
+                        .iter()
+                        .map(|f| (f.name.clone(), f.ty.clone()))
+                        .collect(),
+                ],
+                ir::Ty::Enum(e) => e
+                    .def()
+                    .variants
+                    .iter()
+                    .map(|v| {
+                        v.fields
+                            .iter()
+                            .map(|f| (f.name.clone(), f.ty.clone()))
+                            .collect()
+                    })
+                    .collect(),
+                _ => continue,
+            };
+            db.add_adt(info.id, &env, variants);
+        }
         Ok(db)
     }
 
@@ -530,6 +570,76 @@ mod tests {
         );
     }
 
+    /// Check every user (non-prelude) source callable with the semantic core.
+    fn shadow(plan: &PlanCtx, db: &WorldDb) -> (usize, usize, Vec<String>) {
+        let program = plan.sema_program();
+        let prelude = program.prelude_module;
+        let traits: Vec<DefId> = db.trait_names.keys().copied().collect();
+        let (mut ok, mut total, mut notes) = (0, 0, Vec::new());
+        for info in plan.sema_declarations() {
+            if !matches!(
+                info.kind,
+                ir::DeclKind::Function | ir::DeclKind::AssociatedFunction
+            ) {
+                continue;
+            }
+            if let Some(p) = prelude {
+                if program
+                    .modules
+                    .is_descendant(info.path.module, p)
+                    .unwrap_or(true)
+                {
+                    continue;
+                }
+            }
+            let name = info.name.clone();
+            if name.contains("$closure") {
+                continue;
+            }
+            let lowered = match plan.sema_lower_body(info.id) {
+                Ok(l) => l,
+                Err(e) if e.0 == "no source body" || e.0 == "no validated schema" => continue,
+                Err(e) => {
+                    total += 1;
+                    notes.push(format!("  {name}: lower: {}", e.0));
+                    continue;
+                }
+            };
+            total += 1;
+            let env = crate::compiler::sema::solve::ParamEnv {
+                predicates: plan
+                    .sema_schema(info.id)
+                    .map(|s| {
+                        let map = TyMap {
+                            env: &s.env,
+                            extra: &[],
+                        };
+                        let mut u = None;
+                        s.predicates
+                            .predicates()
+                            .iter()
+                            .map(|p| map.pred(p, &mut u))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+            };
+            let r = crate::compiler::sema::check::check_body(
+                db,
+                &env,
+                &traits,
+                &lowered.body,
+                2_000_000,
+            );
+            if r.errors.is_empty() {
+                ok += 1;
+            } else {
+                let e = format!("{:?}", r.errors[0].kind);
+                notes.push(format!("  {name}: check: {}", &e[..e.len().min(160)]));
+            }
+        }
+        (ok, total, notes)
+    }
+
     #[test]
     #[ignore = "diagnostic probe: run with --ignored --nocapture"]
     fn corpus_plan_stage() {
@@ -547,16 +657,20 @@ mod tests {
                 Err(e) => format!("PLAN: {}", e.lines().next().unwrap_or("")),
                 Ok(plan) => match WorldDb::build(&plan) {
                     Err(e) => format!("DB: {e}"),
-                    Ok(db) => format!(
-                        "db ok: {} fns {} impls {} traits, {} unsupported",
-                        db.fn_count(),
-                        db.impl_count(),
-                        db.trait_count(),
-                        db.unsupported.len()
-                    ),
+                    Ok(db) => {
+                        let t = std::time::Instant::now();
+                        let (ok, total, notes) = shadow(&plan, &db);
+                        let ms = t.elapsed().as_secs_f64() * 1e3;
+                        let mut s = format!("bodies {ok}/{total} ok ({ms:.1} ms)");
+                        for n in notes.iter().take(12) {
+                            s.push('\n');
+                            s.push_str(n);
+                        }
+                        s
+                    }
                 },
             };
-            println!("{name}: {}", &stage[..stage.len().min(200)]);
+            println!("{name}: {stage}");
         }
     }
 }

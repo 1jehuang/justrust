@@ -251,7 +251,7 @@ impl<'a> Solver<'a> {
                 }
             }
         }
-        if self.builtin_applies(cx, tr) {
+        if self.builtin_applies(cx, tr) && !cands.iter().any(|c| matches!(c, Candidate::Param(_))) {
             cands.push(Candidate::Builtin);
         }
         // Inference variables cannot match an impl head for a rigid param

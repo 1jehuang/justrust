@@ -718,11 +718,11 @@ const SCOPE: &[DefId] = &[ITERATOR, INTO_ITER, CLONE];
 /// Tiny body builder.
 #[derive(Default)]
 struct B {
-    exprs: Vec<Expr>,
+    exprs: Vec<HirExpr>,
     locals: u32,
 }
 impl B {
-    fn e(&mut self, x: Expr) -> ExprId {
+    fn e(&mut self, x: HirExpr) -> ExprId {
         self.exprs.push(x);
         (self.exprs.len() - 1) as ExprId
     }
@@ -731,29 +731,29 @@ impl B {
         self.locals - 1
     }
     fn int(&mut self, v: u128) -> ExprId {
-        self.e(Expr::Lit(Lit::Int(v, None)))
+        self.e(HirExpr::Lit(HirLit::Int(v, None)))
     }
     fn var(&mut self, l: LocalId) -> ExprId {
-        self.e(Expr::Local(l))
+        self.e(HirExpr::Local(l))
     }
     fn mcall(&mut self, r: ExprId, name: &str, args: Vec<ExprId>) -> ExprId {
-        self.e(Expr::MethodCall {
+        self.e(HirExpr::MethodCall {
             receiver: r,
             name: name.into(),
             turbofish: vec![],
             args,
         })
     }
-    fn bind(l: LocalId) -> Pat {
-        Pat::Binding {
+    fn bind(l: LocalId) -> HirPat {
+        HirPat::Binding {
             local: l,
             by_ref: None,
         }
     }
-    fn body(self, stmts: Vec<Stmt>, tail: Option<ExprId>, ret: Ty) -> Body {
+    fn body(self, stmts: Vec<HirStmt>, tail: Option<ExprId>, ret: Ty) -> HirBody {
         let mut b = self;
-        let root = b.e(Expr::Block { stmts, tail });
-        Body {
+        let root = b.e(HirExpr::Block { stmts, tail });
+        HirBody {
             exprs: b.exprs,
             locals: b.locals,
             params: vec![],
@@ -763,13 +763,13 @@ impl B {
     }
 }
 
-fn run(body: &Body) -> Typeck {
+fn run(body: &HirBody) -> Typeck {
     let db = Db::mini_std();
     let env = ParamEnv::default();
     check_body(&db, &env, SCOPE, body, 1_000_000)
 }
 
-fn ok(body: &Body) -> Typeck {
+fn ok(body: &HirBody) -> Typeck {
     let r = run(body);
     assert!(r.errors.is_empty(), "unexpected errors: {:?}", r.errors);
     r
@@ -780,28 +780,28 @@ fn ok(body: &Body) -> Typeck {
 fn vec_new_inferred_from_later_push() {
     let mut b = B::default();
     let v = b.local();
-    let new = b.e(Expr::AssocFn {
+    let new = b.e(HirExpr::AssocFn {
         self_ty: adt(VEC, vec![hole()]),
         name: "new".into(),
     });
-    let call = b.e(Expr::Call {
+    let call = b.e(HirExpr::Call {
         callee: new,
         args: vec![],
     });
     let vr = b.var(v);
-    let three = b.e(Expr::Lit(Lit::Int(3, Some(IntTy::Usize))));
+    let three = b.e(HirExpr::Lit(HirLit::Int(3, Some(IntTy::Usize))));
     let push = b.mcall(vr, "push", vec![three]);
     let vr2 = b.var(v);
     let len = b.mcall(vr2, "len", vec![]);
     let body = b.body(
         vec![
-            Stmt::Let {
+            HirStmt::Let {
                 pat: B::bind(v),
                 ty: hole(),
                 init: Some(call),
                 else_block: None,
             },
-            Stmt::Expr(push),
+            HirStmt::Expr(push),
         ],
         Some(len),
         usize_t(),
@@ -821,30 +821,30 @@ fn literal_type_flows_backwards_from_later_use() {
     let one = b.int(1);
     let two_ = b.int(2);
     let three_ = b.int(3);
-    let arr = b.e(Expr::Array(vec![one, two_, three_]));
+    let arr = b.e(HirExpr::Array(vec![one, two_, three_]));
     let zero = b.int(0);
     let lo = b.int(0);
     let hi = b.int(3);
-    let range = b.e(Expr::Range {
+    let range = b.e(HirExpr::Range {
         start: Some(lo),
         end: Some(hi),
         inclusive: false,
     });
     let ar = b.var(a);
     let kr = b.var(k);
-    let idx = b.e(Expr::Index {
+    let idx = b.e(HirExpr::Index {
         base: ar,
         index: kr,
     });
     let two = b.int(2);
-    let mul = b.e(Expr::Binary(BinOp::Mul, idx, two));
+    let mul = b.e(HirExpr::Binary(BinOp::Mul, idx, two));
     let sr = b.var(sum);
-    let add = b.e(Expr::AssignOp(BinOp::Add, sr, mul));
-    let loop_body = b.e(Expr::Block {
-        stmts: vec![Stmt::Expr(add)],
+    let add = b.e(HirExpr::AssignOp(BinOp::Add, sr, mul));
+    let loop_body = b.e(HirExpr::Block {
+        stmts: vec![HirStmt::Expr(add)],
         tail: None,
     });
-    let f = b.e(Expr::For {
+    let f = b.e(HirExpr::For {
         pat: B::bind(k),
         iter: range,
         body: loop_body,
@@ -852,19 +852,19 @@ fn literal_type_flows_backwards_from_later_use() {
     });
     let body = b.body(
         vec![
-            Stmt::Let {
+            HirStmt::Let {
                 pat: B::bind(a),
                 ty: mk(TyKind::Array(int(IntTy::I64), 3)),
                 init: Some(arr),
                 else_block: None,
             },
-            Stmt::Let {
+            HirStmt::Let {
                 pat: B::bind(sum),
                 ty: hole(),
                 init: Some(zero),
                 else_block: None,
             },
-            Stmt::Expr(f),
+            HirStmt::Expr(f),
         ],
         None,
         unit(),
@@ -887,8 +887,8 @@ fn closure_param_inferred_through_map_and_collect() {
     let xr = b.var(x);
     let one = b.int(1);
     // `x + 1` with x: &i32 -> scalar add through the reference.
-    let add = b.e(Expr::Binary(BinOp::Add, xr, one));
-    let clo = b.e(Expr::Closure {
+    let add = b.e(HirExpr::Binary(BinOp::Add, xr, one));
+    let clo = b.e(HirExpr::Closure {
         params: vec![(B::bind(x), hole())],
         ret: hole(),
         body: add,
@@ -897,7 +897,7 @@ fn closure_param_inferred_through_map_and_collect() {
     let map = b.mcall(it, "map", vec![clo]);
     let col = b.mcall(map, "collect", vec![]);
     let mut body = b.body(
-        vec![Stmt::Let {
+        vec![HirStmt::Let {
             pat: B::bind(w),
             ty: adt(VEC, vec![int(IntTy::I32)]),
             init: Some(col),
@@ -922,30 +922,30 @@ fn enumerate_pattern_destructures_projection_item() {
     let it = b.mcall(vr, "iter", vec![]);
     let en = b.mcall(it, "enumerate", vec![]);
     let pr = b.var(pl);
-    let then = b.e(Expr::Block {
+    let then = b.e(HirExpr::Block {
         stmts: vec![],
         tail: None,
     });
-    let iff = b.e(Expr::If {
+    let iff = b.e(HirExpr::If {
         cond: pr,
         then,
         els: None,
     });
-    let lb = b.e(Expr::Block {
-        stmts: vec![Stmt::Expr(iff)],
+    let lb = b.e(HirExpr::Block {
+        stmts: vec![HirStmt::Expr(iff)],
         tail: None,
     });
-    let pat = Pat::Tuple(vec![
+    let pat = HirPat::Tuple(vec![
         B::bind(n),
-        Pat::Ref(Mutbl::Not, Box::new(B::bind(pl))),
+        HirPat::Ref(Mutbl::Not, Box::new(B::bind(pl))),
     ]);
-    let f = b.e(Expr::For {
+    let f = b.e(HirExpr::For {
         pat,
         iter: en,
         body: lb,
         label: 0,
     });
-    let mut body = b.body(vec![Stmt::Expr(f)], None, unit());
+    let mut body = b.body(vec![HirStmt::Expr(f)], None, unit());
     body.params = vec![(B::bind(v), adt(VEC, vec![bool_ty()]))];
     let r = ok(&body);
     assert_eq!(r.local_tys[n as usize], usize_t());
@@ -959,11 +959,11 @@ fn index_through_trait_and_compare_with_len() {
     let mut b = B::default();
     let v = b.local();
     let i = b.local();
-    let new = b.e(Expr::AssocFn {
+    let new = b.e(HirExpr::AssocFn {
         self_ty: adt(VEC, vec![hole()]),
         name: "new".into(),
     });
-    let call = b.e(Expr::Call {
+    let call = b.e(HirExpr::Call {
         callee: new,
         args: vec![],
     });
@@ -974,43 +974,43 @@ fn index_through_trait_and_compare_with_len() {
     let ir = b.var(i);
     let vr2 = b.var(v);
     let len = b.mcall(vr2, "len", vec![]);
-    let cond = b.e(Expr::Binary(BinOp::Lt, ir, len));
+    let cond = b.e(HirExpr::Binary(BinOp::Lt, ir, len));
     let vr3 = b.var(v);
     let ir2 = b.var(i);
-    let idx = b.e(Expr::Index {
+    let idx = b.e(HirExpr::Index {
         base: vr3,
         index: ir2,
     });
     let one = b.int(1);
-    let inc_v = b.e(Expr::AssignOp(BinOp::Add, idx, one));
+    let inc_v = b.e(HirExpr::AssignOp(BinOp::Add, idx, one));
     let ir3 = b.var(i);
     let one2 = b.int(1);
-    let inc_i = b.e(Expr::AssignOp(BinOp::Add, ir3, one2));
-    let wb = b.e(Expr::Block {
-        stmts: vec![Stmt::Expr(inc_v), Stmt::Expr(inc_i)],
+    let inc_i = b.e(HirExpr::AssignOp(BinOp::Add, ir3, one2));
+    let wb = b.e(HirExpr::Block {
+        stmts: vec![HirStmt::Expr(inc_v), HirStmt::Expr(inc_i)],
         tail: None,
     });
-    let wh = b.e(Expr::While {
+    let wh = b.e(HirExpr::While {
         cond,
         body: wb,
         label: 0,
     });
     let body = b.body(
         vec![
-            Stmt::Let {
+            HirStmt::Let {
                 pat: B::bind(v),
                 ty: hole(),
                 init: Some(call),
                 else_block: None,
             },
-            Stmt::Expr(push),
-            Stmt::Let {
+            HirStmt::Expr(push),
+            HirStmt::Let {
                 pat: B::bind(i),
                 ty: hole(),
                 init: Some(zero),
                 else_block: None,
             },
-            Stmt::Expr(wh),
+            HirStmt::Expr(wh),
         ],
         None,
         unit(),
@@ -1027,11 +1027,11 @@ fn generic_struct_inferred_from_later_method() {
     let mut b = B::default();
     let w = b.local();
     let x = b.local();
-    let new = b.e(Expr::AssocFn {
+    let new = b.e(HirExpr::AssocFn {
         self_ty: adt(WRAP, vec![hole()]),
         name: "new".into(),
     });
-    let call = b.e(Expr::Call {
+    let call = b.e(HirExpr::Call {
         callee: new,
         args: vec![],
     });
@@ -1044,14 +1044,14 @@ fn generic_struct_inferred_from_later_method() {
     let un = b.mcall(first, "unwrap_or", vec![zero]);
     let body = b.body(
         vec![
-            Stmt::Let {
+            HirStmt::Let {
                 pat: B::bind(w),
                 ty: hole(),
                 init: Some(call),
                 else_block: None,
             },
-            Stmt::Expr(add),
-            Stmt::Let {
+            HirStmt::Expr(add),
+            HirStmt::Let {
                 pat: B::bind(x),
                 ty: hole(),
                 init: Some(un),
@@ -1070,16 +1070,16 @@ fn generic_struct_inferred_from_later_method() {
 fn unconstrained_vec_is_annotations_needed() {
     let mut b = B::default();
     let v = b.local();
-    let new = b.e(Expr::AssocFn {
+    let new = b.e(HirExpr::AssocFn {
         self_ty: adt(VEC, vec![hole()]),
         name: "new".into(),
     });
-    let call = b.e(Expr::Call {
+    let call = b.e(HirExpr::Call {
         callee: new,
         args: vec![],
     });
     let body = b.body(
-        vec![Stmt::Let {
+        vec![HirStmt::Let {
             pat: B::bind(v),
             ty: hole(),
             init: Some(call),
@@ -1105,7 +1105,7 @@ fn integer_literal_into_bool_is_mismatch() {
     let x = b.local();
     let one = b.int(1);
     let body = b.body(
-        vec![Stmt::Let {
+        vec![HirStmt::Let {
             pat: B::bind(x),
             ty: bool_ty(),
             init: Some(one),
@@ -1131,11 +1131,11 @@ fn integer_literal_into_bool_is_mismatch() {
 fn unsatisfied_impl_bound_is_error() {
     let mut b = B::default();
     let w = b.local();
-    let new = b.e(Expr::AssocFn {
+    let new = b.e(HirExpr::AssocFn {
         self_ty: adt(WRAP, vec![hole()]),
         name: "new".into(),
     });
-    let call = b.e(Expr::Call {
+    let call = b.e(HirExpr::Call {
         callee: new,
         args: vec![],
     });
@@ -1146,13 +1146,13 @@ fn unsatisfied_impl_bound_is_error() {
     let add = b.mcall(wr, "add", vec![pr]);
     let mut body = b.body(
         vec![
-            Stmt::Let {
+            HirStmt::Let {
                 pat: B::bind(w),
                 ty: hole(),
                 init: Some(call),
                 else_block: None,
             },
-            Stmt::Expr(add),
+            HirStmt::Expr(add),
         ],
         None,
         unit(),
@@ -1177,8 +1177,8 @@ fn closure_output_mismatch_is_rejected() {
     let x = b.local();
     let vr = b.var(v);
     let it = b.mcall(vr, "iter", vec![]);
-    let t = b.e(Expr::Lit(Lit::Bool));
-    let clo = b.e(Expr::Closure {
+    let t = b.e(HirExpr::Lit(HirLit::Bool));
+    let clo = b.e(HirExpr::Closure {
         params: vec![(B::bind(x), hole())],
         ret: hole(),
         body: t,
@@ -1187,7 +1187,7 @@ fn closure_output_mismatch_is_rejected() {
     let map = b.mcall(it, "map", vec![clo]);
     let col = b.mcall(map, "collect", vec![]);
     let mut body = b.body(
-        vec![Stmt::Let {
+        vec![HirStmt::Let {
             pat: B::bind(w),
             ty: adt(VEC, vec![int(IntTy::I32)]),
             init: Some(col),
@@ -1208,15 +1208,15 @@ fn work_scales_linearly_with_body() {
     fn chain(n: usize) -> u64 {
         let mut b = B::default();
         let v = b.local();
-        let new = b.e(Expr::AssocFn {
+        let new = b.e(HirExpr::AssocFn {
             self_ty: adt(VEC, vec![hole()]),
             name: "new".into(),
         });
-        let call = b.e(Expr::Call {
+        let call = b.e(HirExpr::Call {
             callee: new,
             args: vec![],
         });
-        let mut stmts = vec![Stmt::Let {
+        let mut stmts = vec![HirStmt::Let {
             pat: B::bind(v),
             ty: hole(),
             init: Some(call),
@@ -1225,7 +1225,7 @@ fn work_scales_linearly_with_body() {
         for _ in 0..n {
             let vr = b.var(v);
             let one = b.int(1);
-            stmts.push(Stmt::Expr(b.mcall(vr, "push", vec![one])));
+            stmts.push(HirStmt::Expr(b.mcall(vr, "push", vec![one])));
         }
         let body = b.body(stmts, None, unit());
         let db = Db::mini_std();

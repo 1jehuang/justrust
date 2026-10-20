@@ -11,7 +11,7 @@ pub type ExprId = u32;
 pub type LocalId = u32;
 
 #[derive(Clone, Debug)]
-pub enum Lit {
+pub enum HirLit {
     /// Integer literal with optional suffix type.
     Int(u128, Option<super::ty::IntTy>),
     Float(Option<super::ty::FloatTy>),
@@ -50,27 +50,27 @@ pub enum UnOp {
 }
 
 #[derive(Clone, Debug)]
-pub enum Pat {
+pub enum HirPat {
     Wild,
     Binding {
         local: LocalId,
         by_ref: Option<Mutbl>,
     },
-    Tuple(Vec<Pat>),
+    Tuple(Vec<HirPat>),
     /// Struct/variant pattern: adt, variant index, (field index, pattern).
     Adt {
         adt: DefId,
         variant: u32,
-        fields: Vec<(u32, Pat)>,
+        fields: Vec<(u32, HirPat)>,
     },
-    Ref(Mutbl, Box<Pat>),
-    Lit(Lit),
+    Ref(Mutbl, Box<HirPat>),
+    Lit(HirLit),
 }
 
 #[derive(Clone, Debug)]
-pub enum Stmt {
+pub enum HirStmt {
     Let {
-        pat: Pat,
+        pat: HirPat,
         ty: Ty,
         init: Option<ExprId>,
         else_block: Option<ExprId>,
@@ -79,15 +79,15 @@ pub enum Stmt {
 }
 
 #[derive(Clone, Debug)]
-pub struct Arm {
-    pub pat: Pat,
+pub struct HirArm {
+    pub pat: HirPat,
     pub guard: Option<ExprId>,
     pub body: ExprId,
 }
 
 #[derive(Clone, Debug)]
-pub enum Expr {
-    Lit(Lit),
+pub enum HirExpr {
+    Lit(HirLit),
     Local(LocalId),
     /// Path to a function or associated function, with written type
     /// arguments (`Hole` where omitted). `self_ty` is the written owner for
@@ -148,7 +148,7 @@ pub enum Expr {
     Ref(Mutbl, ExprId),
     Cast(ExprId, Ty),
     Block {
-        stmts: Vec<Stmt>,
+        stmts: Vec<HirStmt>,
         tail: Option<ExprId>,
     },
     If {
@@ -159,7 +159,7 @@ pub enum Expr {
     /// `if let`/`while let` lower to `Match`.
     Match {
         scrutinee: ExprId,
-        arms: Vec<Arm>,
+        arms: Vec<HirArm>,
     },
     Loop {
         body: ExprId,
@@ -171,7 +171,7 @@ pub enum Expr {
         label: u32,
     },
     For {
-        pat: Pat,
+        pat: HirPat,
         iter: ExprId,
         body: ExprId,
         label: u32,
@@ -183,7 +183,7 @@ pub enum Expr {
     Continue,
     Return(Option<ExprId>),
     Closure {
-        params: Vec<(Pat, Ty)>,
+        params: Vec<(HirPat, Ty)>,
         ret: Ty,
         body: ExprId,
         id: u32,
@@ -196,11 +196,11 @@ pub enum Expr {
 }
 
 #[derive(Clone, Debug)]
-pub struct Body {
-    pub exprs: Vec<Expr>,
+pub struct HirBody {
+    pub exprs: Vec<HirExpr>,
     pub locals: u32,
     /// Parameter patterns with their declared types.
-    pub params: Vec<(Pat, Ty)>,
+    pub params: Vec<(HirPat, Ty)>,
     pub ret: Ty,
     pub root: ExprId,
 }
