@@ -2,6 +2,76 @@
 //! The collection is frozen into TEMPLATE_BODY output 2 before publication.
 use super::*;
 
+fn opaque_bound_diagnostic(owner: Option<ir::DeclId>, goal: &ir::Predicate) -> String {
+    let (application, requirement) = match goal {
+        ir::Predicate::Implements(application) => (application, "membership".to_owned()),
+        ir::Predicate::ProjectionEq { projection, .. } => (
+            &projection.trait_ref,
+            format!("associated Output/equality item={:?}", projection.item),
+        ),
+    };
+    let hidden = match &application.self_ty {
+        ir::Ty::Closure(closure) => format!(
+            "closure owner={:?} provider={:?} site={} kind={:?}",
+            closure.owner(),
+            closure.provider(),
+            closure.site(),
+            closure.kind()
+        ),
+        _ => "hidden type is not a closure".into(),
+    };
+    format!(
+        "E0277: hidden return type does not satisfy its declared opaque bounds; defining owner={owner:?}; {hidden}; required {requirement}; trait={:?}; ordered argument count={}",
+        application.declaration,
+        application.args.len()
+    )
+}
+
+#[cfg(test)]
+mod diagnostic_tests {
+    use super::*;
+
+    #[test]
+    fn opaque_bound_diagnostic_distinguishes_membership_and_output() {
+        let declaration = ir::DeclId {
+            snapshot: ir::SnapshotId::allocate().unwrap(),
+            index: 7,
+        };
+        let application = ir::TraitRef {
+            declaration,
+            self_ty: ir::Ty::Unit,
+            args: vec![ir::Ty::Unit].into(),
+        };
+        let membership = opaque_bound_diagnostic(
+            Some(declaration),
+            &ir::Predicate::Implements(application.clone()),
+        );
+        let output = opaque_bound_diagnostic(
+            Some(declaration),
+            &ir::Predicate::ProjectionEq {
+                projection: ir::AssociatedTypeProjection {
+                    trait_ref: application,
+                    item: declaration,
+                },
+                ty: ir::Ty::Unit,
+            },
+        );
+        for diagnostic in [&membership, &output] {
+            assert!(diagnostic.starts_with(
+                "E0277: hidden return type does not satisfy its declared opaque bounds;"
+            ));
+            assert!(diagnostic.contains("defining owner=Some(DeclId"));
+            assert!(diagnostic.contains("trait=DeclId"));
+            assert!(diagnostic.len() < 600);
+            assert!(!diagnostic.contains("self_ty:"));
+        }
+        assert!(membership.contains("required membership;"));
+        assert!(!membership.contains("required associated"));
+        assert!(output.contains("required associated Output/equality item=DeclId"));
+        assert!(!output.contains("required membership;"));
+    }
+}
+
 fn hidden_contains_opaque(
     ty: &ir::Ty,
     budget: &ir::PlanBudget,
@@ -141,9 +211,7 @@ impl Checker<'_> {
             .map_err(|error| error.into_legacy_diagnostic(facts.budget()))?
         {
             tr::ProofOutcome::Proved(_) => Ok(()),
-            tr::ProofOutcome::NotProven => {
-                Err("E0277: hidden return type does not satisfy its declared opaque bounds".into())
-            }
+            tr::ProofOutcome::NotProven => Err(opaque_bound_diagnostic(self.declaration, goal)),
         }
     }
 }
