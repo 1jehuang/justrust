@@ -12,11 +12,141 @@ fn transport(error: TokenError) -> String {
     super::super::source::SourceError::from_token(error).to_string()
 }
 
+/// Construction-final syntax authority. Empty records and units share storage,
+/// but never a source constructor. Only trusted publication can mint these rows.
+#[derive(Debug)]
+pub(super) struct StructSources {
+    rows: Vec<StructSource>,
+    fields: Vec<StructFieldSource>,
+    _storage: [crate::compiler::expansion_budget::RetainedBytes; 3],
+}
+#[derive(Debug)]
+struct StructSource {
+    module: ModuleId,
+    name: PathKey,
+    shape: StructShape,
+    fields: std::ops::Range<usize>,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StructFieldSource {
+    Named(NameKey),
+    Tuple(usize),
+}
+fn field_source(
+    names: &NameStore,
+    field: FieldName,
+) -> Result<StructFieldSource, super::super::semantic_name::NameError> {
+    Ok(match field {
+        FieldName::Named(name) => StructFieldSource::Named(names.key(name, LookupClass::Member)?),
+        FieldName::Tuple(index) => StructFieldSource::Tuple(index),
+    })
+}
+pub(super) fn capture_struct_sources(
+    names: &NameStore,
+    declarations: &[StructDecl],
+) -> Result<Arc<StructSources>, ParseError> {
+    let budget = names.budget();
+    budget
+        .charge(Counter::Work, declarations.len() as u64)
+        .map_err(|error| native_adapter::transport_error(error.into()))?;
+    let count = declarations
+        .iter()
+        .try_fold(0usize, |count, declaration| {
+            count
+                .checked_add(declaration.fields.len())
+                .ok_or(TokenError::IdExhausted)
+        })
+        .map_err(native_adapter::transport_error)?;
+    budget
+        .charge(Counter::Work, count as u64)
+        .map_err(|error| native_adapter::transport_error(error.into()))?;
+    let mut row_lease = budget
+        .reserve_array(
+            Storage::Retained,
+            declarations.len() as u64,
+            std::mem::size_of::<StructSource>() as u64,
+        )
+        .map_err(|error| native_adapter::transport_error(error.into()))?;
+    let mut field_lease = budget
+        .reserve_array(
+            Storage::Retained,
+            count as u64,
+            std::mem::size_of::<StructFieldSource>() as u64,
+        )
+        .map_err(|error| native_adapter::transport_error(error.into()))?;
+    let owner_lease = budget
+        .reserve(
+            Storage::Retained,
+            (std::mem::size_of::<StructSources>() + 2 * std::mem::size_of::<usize>()) as u64,
+        )
+        .map_err(|error| native_adapter::transport_error(error.into()))?;
+    let mut rows = Vec::new();
+    let mut fields = Vec::new();
+    rows.try_reserve_exact(declarations.len())
+        .map_err(|_| native_adapter::transport_error(budget.poison_allocation().into()))?;
+    fields
+        .try_reserve_exact(count)
+        .map_err(|_| native_adapter::transport_error(budget.poison_allocation().into()))?;
+    if let Err(error) = row_lease.resize_array(
+        rows.capacity() as u64,
+        std::mem::size_of::<StructSource>() as u64,
+        0,
+    ) {
+        drop(rows);
+        return Err(native_adapter::transport_error(error.into()));
+    }
+    if let Err(error) = field_lease.resize_array(
+        fields.capacity() as u64,
+        std::mem::size_of::<StructFieldSource>() as u64,
+        0,
+    ) {
+        drop(fields);
+        return Err(native_adapter::transport_error(error.into()));
+    }
+    for declaration in declarations {
+        let start = fields.len();
+        for field in &declaration.fields {
+            fields.push(field_source(names, field.name).map_err(native_adapter::name_error)?);
+        }
+        declaration
+            .name
+            .check(names)
+            .map_err(native_adapter::name_error)?;
+        budget
+            .charge(Counter::Work, declaration.name.len() as u64)
+            .map_err(|error| native_adapter::transport_error(error.into()))?;
+        rows.push(StructSource {
+            module: declaration.module,
+            name: declaration.name.key(Namespace::Type),
+            shape: declaration.shape,
+            fields: start..fields.len(),
+        });
+    }
+    Ok(Arc::new(StructSources {
+        rows,
+        fields,
+        _storage: [
+            row_lease
+                .retain()
+                .map_err(|error| native_adapter::transport_error(error.into()))?,
+            field_lease
+                .retain()
+                .map_err(|error| native_adapter::transport_error(error.into()))?,
+            owner_lease
+                .retain()
+                .map_err(|error| native_adapter::transport_error(error.into()))?,
+        ],
+    }))
+}
+
 /// Every child is visited, including unused declarations, unreachable bodies,
 /// unmatched patterns, public fields, and unselected generic arguments.
 /// No recursion or unaccounted traversal storage is used here. Existing source
 /// depth validation remains a separate gate, with its existing policy unchanged.
 pub(super) fn validate_program_names(program: &Program) -> Result<(), String> {
+    if program.struct_sources.rows.len() != program.structs.len() {
+        return Err("contract: original struct declaration count changed".into());
+    }
     generated_owners::validate(program)?;
     generated_metadata::validate(program)?;
     let mut validator = Validator::new(program)?;
@@ -34,7 +164,28 @@ pub(super) fn validate_program_names(program: &Program) -> Result<(), String> {
     }
     validator.many(&program.functions, |value| Visit::Function(value, None))?;
     validator.many(&program.constants, Visit::Const)?;
-    validator.many(&program.structs, Visit::Struct)?;
+    for (declaration, original) in program.structs.iter().zip(&program.struct_sources.rows) {
+        validator.work(declaration.fields.len() + declaration.name.len() + 1)?;
+        if declaration.module != original.module
+            || declaration.shape != original.shape
+            || declaration.name.key(Namespace::Type) != original.name
+            || declaration.fields.len() != original.fields.len()
+        {
+            return Err("contract: original struct source shape changed".into());
+        }
+        for (field, expected) in declaration
+            .fields
+            .iter()
+            .zip(&program.struct_sources.fields[original.fields.clone()])
+        {
+            if field_source(&program.names, field.name).map_err(native_adapter::name_diagnostic)?
+                != *expected
+            {
+                return Err("contract: original struct field identity changed".into());
+            }
+        }
+        validator.push(Visit::Struct(declaration))?;
+    }
     validator.many(&program.enums, Visit::Enum)?;
     validator.many(&program.impls, Visit::Impl)?;
     validator.many(&program.traits, Visit::Trait)?;
@@ -543,8 +694,7 @@ impl<'a> Validator<'a> {
                 let valid = match declaration.shape {
                     StructShape::Unit => declaration.fields.is_empty(),
                     StructShape::Record => {
-                        !declaration.fields.is_empty()
-                            && declaration.fields.iter().all(|field| matches!(field.name, FieldName::Named(_)))
+                        declaration.fields.iter().all(|field| matches!(field.name, FieldName::Named(_)))
                     }
                     StructShape::Tuple => {
                         !declaration.fields.is_empty()

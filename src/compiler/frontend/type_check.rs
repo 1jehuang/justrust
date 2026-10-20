@@ -2517,10 +2517,12 @@ impl<'a> Checker<'a> {
                 }
                 Ok(StructShape::Unit)
             }
-            StructShape::Record if source.fields.is_empty() => {
-                Err("unsupported: empty record structs".into())
+            StructShape::Record => {
+                if source.fields.len() != ty.def().fields.len() {
+                    return Err("contract: record struct field schema length mismatch".into());
+                }
+                Ok(StructShape::Record)
             }
-            StructShape::Record => Ok(StructShape::Record),
             StructShape::Tuple => {
                 if source.fields.is_empty() {
                     return Err("unsupported: zero-field tuple structs".into());

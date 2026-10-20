@@ -5353,6 +5353,7 @@ pub use tr::CallableProvider;
 
 #[derive(Clone, Debug)]
 pub struct Program {
+    struct_sources: Arc<name_validation::StructSources>,
     embedded_issuers: Arc<[super::source::EmbeddedOriginalFile]>,
     no_std_roots: Arc<[super::token_session::SourceFileHandle]>,
     core_prelude_scope: Option<ModuleId>,
@@ -5447,8 +5448,10 @@ impl ProgramDeclarations {
         modules: Arc<ModuleArena>,
         symbols: Arc<ProgramSymbols>,
         scopes: Option<Arc<super::semantic_scope::ScopeArena>>,
-    ) -> Program {
-        Program {
+    ) -> Result<Program, ParseError> {
+        let struct_sources = name_validation::capture_struct_sources(&names, &self.structs)?;
+        Ok(Program {
+            struct_sources,
             embedded_issuers: Arc::from([]),
             no_std_roots: self.no_std_roots,
             core_prelude_scope: self.core_prelude_scope,
@@ -5473,7 +5476,7 @@ impl ProgramDeclarations {
             associated_bound_sources: Arc::from([]),
             closure_sources: Arc::new(self.closure_sources),
             closure_owners: Arc::new(HashMap::new()),
-        }
+        })
     }
 }
 /// Explicit structural construction for fixtures and native AST producers. All
@@ -5618,7 +5621,8 @@ impl ProgramBuilder {
             closure_sources: HashMap::new(),
             generated_metadata: Vec::new(),
         }
-        .publish(names, modules, self.symbols, None);
+        .publish(names, modules, self.symbols, None)
+        .map_err(|error| error.to_string())?;
         program.validate_name_handles()?;
         Ok(program)
     }
@@ -11252,9 +11256,8 @@ impl<'input, 'names> Parser<'input, 'names> {
                     }
                 }
                 self.expect("}")?;
-                if fields.is_empty() {
-                    return Err(self.unsupported("empty structs are unsupported"));
-                }
+                // Empty braced declarations remain records, never unit
+                // constructors. Source-shape authority is retained separately.
                 StructShape::Record
             };
             parsed.program.structs.push(StructDecl {
@@ -14075,7 +14078,7 @@ fn parse_syntax_tokens_policy(
     let mut program =
         unit.parsed
             .program
-            .publish(unit.names, unit.modules, unit.symbols, unit.scopes);
+            .publish(unit.names, unit.modules, unit.symbols, unit.scopes)?;
     program.embedded_issuers = embedded_issuers;
     program.generated_owners =
         generated_owners::capture(&program).map_err(|message| ParseError {
@@ -14324,10 +14327,13 @@ mod inactive_item_syntax_tests {
             error.contains("type alias is not a value constructor"),
             "{error}"
         );
+        let record = parse_unresolved("struct S{}fn main(){}").unwrap();
+        assert_eq!(record.program.structs[0].shape, StructShape::Record);
+        assert!(record.program.structs[0].fields.is_empty());
         assert!(
-            parse_unresolved("struct S{}fn main(){}")
+            parse_unresolved("struct S();fn main(){}")
                 .unwrap_err()
-                .contains("empty structs are unsupported")
+                .contains("empty tuple structs are unsupported")
         );
     }
 
@@ -15044,10 +15050,11 @@ mod inactive_item_syntax_tests {
             Stmt::Expr(Expr::UnexpandedMacro(_))
         ));
         let unit = certificate._unit;
-        let program =
-            unit.parsed
-                .program
-                .publish(unit.names, unit.modules, unit.symbols, unit.scopes);
+        let program = unit
+            .parsed
+            .program
+            .publish(unit.names, unit.modules, unit.symbols, unit.scopes)
+            .unwrap();
         assert!(
             PlanCtx::from_program(&program, &ir::PlanBudget::default())
                 .unwrap_err()

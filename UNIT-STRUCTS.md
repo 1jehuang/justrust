@@ -14,7 +14,8 @@ constructors, import aliases, ordinary let/match unit patterns and existing
 aggregate composition must resolve through the exact retained source schema and
 DeclId. An empty runtime field list is not constructor authority. A type alias
 is a type, not a bare value constructor. `Marker()` is not a function call.
-Empty record declarations remain a separate Unsupported boundary.
+Empty braced record declarations are also admitted by the bounded October 20
+extension below; empty tuple declarations remain Unsupported.
 
 Resolved types remain `Ty::Struct` with their nominal application and declaration
 identity, never primitive `Ty::Unit`. Unit structs are not implicitly Copy.
@@ -46,11 +47,54 @@ reject that ambiguous bare unit pattern with typed Unsupported before publicatio
 Qualified and braced unit patterns can use their genuine nonbinding syntax.
 General declaration-aware binder candidate finalization remains open work.
 
-Generic unit declarations, empty record declarations, public layout/FFI claims
-and general pattern or borrow semantics remain outside this bounded milestone.
+Generic unit declarations, public layout/FFI claims and general pattern or borrow
+semantics remain outside this bounded milestone.
 Constructor patterns in function parameter positions retain the existing
 Unsupported boundary rather than being silently normalized into bindings.
 No resource limits, stack environment or existing source corpus may be weakened.
+
+## Empty braced records (October 20, 2026)
+
+`struct Marker {}` retains `StructShape::Record`, not unit constructor authority.
+`Marker {}` construction and braced patterns use the existing nominal record
+checker and the same initialized private empty carrier. Bare `Marker` and
+`Marker()` remain invalid. Distinct empty declarations have distinct nominal
+identities, and zero fields do not grant Copy: ordinary moves, explicit valid
+Copy implementations, references and bindingless patterns retain their existing
+checked behavior. Empty records with unused type or lifetime parameters are
+ordinary invalid declarations, including when unused; lifetime bounds cannot
+make a fieldless record's lifetime used. Empty tuples and empty-record C ABI
+transport remain outside this extension.
+
+A construction-final immutable source receipt retains each declaration's module,
+canonical path, exact shape and ordered field identities. Public AST clones
+cannot change a unit into a record, erase nonempty fields or change nominal
+identity and acquire planning authority. Capture charges its traversal and actual
+storage before publication; no new graph node, shared mutable state or graph
+ceiling is introduced. Existing IR/CFG validation and initialized native dummy
+storage are reused rather than bypassed.
+
+The final release-bootstrap oracle verifies stock rustc 1.98.1, commit
+`48a229ceaefd4985c50990b14116b6d856af0985`, before compiling any source. The
+extension matrix passes 21 stock-first cases and 84 native workers-1/8
+CHECK/BUILD cells, with 12 executed ELF images: six runtime cases, ten ordinary
+invalid cases (including unused bodies and E0392 type/lifetime parameters), and
+five explicit boundaries (empty tuple plus active/unused direct/nested C ABI).
+The original 26-source matrix also passes all 104 cells and 40 ELF executions
+after promoting its unchanged empty-record source: 188 cells and 52 native ELF
+executions in total. Seven source-shape authority controls pass, including
+empty-record-to-unit/tuple forgeries. CHECK graph evidence requires no demanded
+OBJECT, BUILD or MONO_PLAN, not merely no published output. CHECK and BUILD
+capture must be complete, and BUILD analyses must be complete and pass.
+
+Pinned matrix receipt: `20261020-054624710-4059683`. Final graph-demand and
+source-authority receipts: `20261020-055058021-4066720` and
+`20261020-055115541-4067125`. Graph integrity passes 14/14 with unchanged ceilings
+(`20261020-054617323-4059725`), and strict all-target lint passes
+(`20261020-055116132-4066619`). Earlier real failures are retained: an incorrectly
+accepted empty C ABI layout (`20261020-053254268-4039575`) and an incorrectly
+accepted unused lifetime (`20261020-054600759-4059226`). Their production fixes
+preserve invalid/boundary classifications rather than weakening expectations.
 
 ## Executed real gates
 

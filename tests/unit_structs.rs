@@ -1,8 +1,11 @@
 //! Nongeneric nominal unit structs, ownership and private native carrier behavior.
 //! Not Rust layout/FFI/size_of compatibility or implicit Copy for zero-size types.
-//! Empty record and generic units retain explicit Unsupported boundaries.
+//! Empty records retain distinct syntax despite sharing the private carrier.
+//! Generic units and empty tuple structs retain Unsupported boundaries.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
 use justrust_engine::compiler::{frontend, source};
+#[path = "support/stock_rustc.rs"]
+mod stock_rustc;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -176,11 +179,11 @@ fn cases() -> Vec<Case> {
             outcome: Outcome::Runtime,
         },
         Case {
-            name: "empty_record_boundary",
+            name: "empty_record_constructor",
             source: r#"struct Empty{}fn main(){let value=Empty{};println!("ok");}"#,
             stdout: Some("ok\n"),
             stock_diagnostic: None,
-            outcome: Outcome::Unsupported,
+            outcome: Outcome::Runtime,
         },
         Case {
             name: "generic_unit_boundary",
@@ -322,9 +325,13 @@ fn runtime(path: &Path, expected: &str, scratch: &Scratch) {
     assert_eq!(result.stdout, expected.as_bytes());
     assert!(result.stderr.is_empty(), "{result:?}");
 }
-fn stock_all() {
+fn stock_cases(
+    cases: Vec<Case>,
+    expected_counts: (usize, usize),
+    expected_partition: (usize, usize, usize),
+) {
     let scratch = Scratch::new();
-    let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
+    let rustc = stock_rustc::stock_rustc();
     let version = capture(Command::new(&rustc).arg("-vV"), &scratch, 10);
     assert_eq!(version.code, 0);
     eprintln!(
@@ -333,7 +340,7 @@ fn stock_all() {
     );
     let mut counts = (0, 0);
     let mut partition = (0, 0, 0);
-    for case in cases() {
+    for case in cases {
         match case.outcome {
             Outcome::Runtime => partition.0 += 1,
             Outcome::Invalid => partition.1 += 1,
@@ -375,8 +382,11 @@ fn stock_all() {
             assert!(!image.exists());
         }
     }
-    assert_eq!(counts, (22, 4));
-    assert_eq!(partition, (19, 4, 3));
+    assert_eq!(counts, expected_counts);
+    assert_eq!(partition, expected_partition);
+}
+fn stock_all() {
+    stock_cases(cases(), (22, 4), (20, 4, 2));
 }
 #[test]
 fn stock_unit_struct_constructor_pattern_move_and_abi_oracle_edition2024() {
@@ -427,12 +437,17 @@ fn unit_source_shape_and_parser_boundaries_keep_nominal_unit_distinct_from_empty
             let program = parsed
                 .unwrap_or_else(|e| panic!("{} supported unit syntax must parse:{e}", case.name))
                 .program;
+            let expected_shape = if case.name == "empty_record_constructor" {
+                frontend::StructShape::Record
+            } else {
+                frontend::StructShape::Unit
+            };
             assert!(
                 program
                     .structs
                     .iter()
-                    .any(|decl| decl.shape == frontend::StructShape::Unit),
-                "{} unit source shape lost",
+                    .any(|decl| decl.shape == expected_shape),
+                "{} source shape lost",
                 case.name
             );
             for decl in program
@@ -446,7 +461,7 @@ fn unit_source_shape_and_parser_boundaries_keep_nominal_unit_distinct_from_empty
             counts.0 += 1;
         }
     }
-    assert_eq!(counts, (19, 3));
+    assert_eq!(counts, (20, 2));
 }
 #[test]
 fn native_unit_structs_workers1_8_check_build_no_compiler_fallback() {
@@ -454,9 +469,13 @@ fn native_unit_structs_workers1_8_check_build_no_compiler_fallback() {
     // this same target under debug and release BOOTSTRAP compiler profiles.
     // Neither run asserts a nonexistent optimized native code-generation mode.
     stock_all();
+    native_cases(cases(), (40, 40, 8, 8, 4, 4));
+}
+fn native_cases(cases: Vec<Case>, expected_modes: (usize, usize, usize, usize, usize, usize)) {
+    let expected_gates = cases.len() * 4;
     let mut gates = 0;
     let mut modes = (0, 0, 0, 0, 0, 0);
-    for case in cases() {
+    for case in cases {
         for workers in [1, 8] {
             for check in [true, false] {
                 let scratch = Scratch::new();
@@ -532,9 +551,171 @@ fn native_unit_structs_workers1_8_check_build_no_compiler_fallback() {
             }
         }
     }
-    assert_eq!(gates, 104);
-    assert_eq!(modes, (38, 38, 8, 8, 6, 6));
+    assert_eq!(gates, expected_gates);
+    assert_eq!(modes, expected_modes);
     eprintln!(
-        "NATIVE UNIT STRUCTS:104 cells, modes{modes:?};38 executed native images;12 Unsupported cells are boundaries, not Rust-invalid parity or native layout/FFI proof"
+        "NATIVE NOMINAL STRUCTS:{gates} cells, modes{modes:?};{} executed native images;{} Unsupported cells are boundaries, not Rust-invalid parity or native layout/FFI proof",
+        modes.1,
+        modes.4 + modes.5
     );
+}
+
+fn empty_record_cases() -> Vec<Case> {
+    let valid = [
+        (
+            "patterns_nonmoving",
+            r#"struct E{}fn main(){let e=E{};let E{}=e;match e{E{}=>{}}let moved=e;println!("ok");}"#,
+        ),
+        (
+            "alias_and_modules",
+            r#"mod a{pub struct E{}}mod b{pub struct E{}}type A=a::E;fn main(){let a=A{};let a::E{}=a;let b=b::E{};println!("ok");}"#,
+        ),
+        (
+            "nested_array_return",
+            r#"struct E{}struct Packet{a:E,n:i32,b:E}fn pass(e:E)->E{e}fn main(){let p=Packet{a:pass(E{}),n:42,b:E{}};let a=[p.a,p.b];let E{}=a[0];let E{}=a[1];if p.n==42{println!("ok");}}"#,
+        ),
+        (
+            "borrowed_carriers",
+            r#"struct E{}fn shared(e:&E)->i32{42}fn replace(e:&mut E){*e=E{};}fn main(){let mut e=E{};let n=shared(&e);replace(&mut e);if n==42{println!("ok");}}"#,
+        ),
+        (
+            "explicit_copy",
+            r#"struct E{}impl Clone for E{fn clone(&self)->Self{E{}}}impl Copy for E{}fn take(e:E){}fn main(){let e=E{};take(e);take(e);println!("ok");}"#,
+        ),
+        (
+            "interleaved_return",
+            r#"struct E{}fn f(a:i32,e:E,b:i32)->E{if a+b==42{println!("ok");}e}fn main(){let e=f(20,E{},22);let E{}=e;}"#,
+        ),
+    ];
+    let invalid = [
+        (
+            "unused_generic_parameter",
+            "struct E<T>{}fn main(){}",
+            "error[E0392]",
+        ),
+        (
+            "unused_lifetime_parameter",
+            "struct E<'a>{}fn main(){}",
+            "error[E0392]",
+        ),
+        (
+            "unused_bare_constructor",
+            "struct E{}fn bad(){let e=E;}fn main(){}",
+            "error[E0423]",
+        ),
+        (
+            "unused_tuple_constructor",
+            "struct E{}fn bad(){let e=E();}fn main(){}",
+            "error[E0423]",
+        ),
+        (
+            "unused_extra_field",
+            "struct E{}fn bad(){let e=E{x:1};}fn main(){}",
+            "error[E0560]",
+        ),
+        (
+            "unused_field_read",
+            "struct E{}fn bad(e:E)->i32{e.x}fn main(){}",
+            "error[E0609]",
+        ),
+        (
+            "unused_nominal_mismatch",
+            "struct E{}struct F{}fn take(e:E){}fn bad(){take(F{});}fn main(){}",
+            "error[E0308]",
+        ),
+        (
+            "unused_move_twice",
+            "struct E{}fn take(e:E){}fn bad(){let e=E{};take(e);take(e);}fn main(){}",
+            "error[E0382]",
+        ),
+        (
+            "unused_pattern_field",
+            "struct E{}fn bad(e:E){let E{x}=e;}fn main(){}",
+            "error[E0026]",
+        ),
+        (
+            "unused_pattern_nominal",
+            "struct E{}struct F{}fn bad(e:E){let F{}=e;}fn main(){}",
+            "error[E0308]",
+        ),
+    ];
+    let mut cases = Vec::new();
+    cases.extend(valid.into_iter().map(|(name, source)| Case {
+        name,
+        source,
+        stdout: Some("ok\n"),
+        stock_diagnostic: None,
+        outcome: Outcome::Runtime,
+    }));
+    cases.extend(invalid.into_iter().map(|(name, source, diagnostic)| Case {
+        name,
+        source,
+        stdout: None,
+        stock_diagnostic: Some(diagnostic),
+        outcome: Outcome::Invalid,
+    }));
+    cases.push(Case {
+        name: "empty_tuple_boundary",
+        source: r#"struct E();fn main(){let e=E();println!("ok");}"#,
+        stdout: Some("ok\n"),
+        stock_diagnostic: None,
+        outcome: Outcome::Unsupported,
+    });
+    cases.push(Case {
+        name: "empty_record_extern_boundary",
+        source: r#"#[repr(C)]struct E{}unsafe extern "C"{fn external(e:E);}fn main(){println!("ok");}"#,
+        stdout: Some("ok\n"), stock_diagnostic: None, outcome: Outcome::Unsupported,
+    });
+    cases.push(Case {
+        name: "nested_empty_record_extern_boundary",
+        source: r#"#[repr(C)]struct E{}#[repr(C)]struct Outer{e:E,n:i32}unsafe extern "C"{fn external(e:Outer);}fn main(){println!("ok");}"#,
+        stdout: Some("ok\n"), stock_diagnostic: None, outcome: Outcome::Unsupported,
+    });
+    cases.push(Case {
+        name: "active_empty_record_extern_boundary",
+        source: r#"#[repr(C)]struct E{}#[unsafe(no_mangle)]extern "C" fn external(e:E){}fn main(){external(E{});println!("ok");}"#,
+        stdout: Some("ok\n"), stock_diagnostic: None, outcome: Outcome::Unsupported,
+    });
+    cases.push(Case {
+        name: "active_nested_empty_record_extern_boundary",
+        source: r#"#[repr(C)]struct E{}#[repr(C)]struct Outer{e:E,n:i32}#[unsafe(no_mangle)]extern "C" fn external(e:Outer){}fn main(){external(Outer{e:E{},n:42});println!("ok");}"#,
+        stdout: Some("ok\n"), stock_diagnostic: None, outcome: Outcome::Unsupported,
+    });
+    cases
+}
+
+#[test]
+fn empty_records_stock_native_workers1_8() {
+    stock_cases(empty_record_cases(), (11, 10), (6, 10, 5));
+    native_cases(empty_record_cases(), (12, 12, 20, 20, 10, 10));
+}
+
+#[test]
+fn empty_record_check_has_no_codegen_and_build_retains_nominal_shape() {
+    use justrust_engine::compiler::{self, ir};
+    let source = "struct E{}fn main(){let e=E{};let E{}=e;}";
+    for workers in [1, 8] {
+        let checked = compiler::compile(source.into(), workers, true).unwrap();
+        assert!(checked.report.capture_complete);
+        assert!(checked.executable.is_none());
+        assert!(checked.control_flow.is_empty());
+        assert!(
+            !checked
+                .report
+                .node_evaluations
+                .iter()
+                .any(|(key, _)| matches!(key.kind, 103 | 105 | 113)),
+            "CHECK must not demand OBJECT, BUILD or MONO_PLAN"
+        );
+        let built = compiler::compile(source.into(), workers, false).unwrap();
+        assert!(built.executable.is_some());
+        assert!(built.report.capture_complete);
+        assert!(
+            built
+                .analyses
+                .iter()
+                .all(|analysis| analysis.complete && analysis.passed())
+        );
+        assert!(built.control_flow.iter().flat_map(|body| &body.locals).any(|local| matches!(&local.ty, ir::Ty::Struct(ty) if ty.def().fields.is_empty() && !local.ty.is_copy())));
+    }
 }

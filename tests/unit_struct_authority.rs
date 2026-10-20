@@ -45,8 +45,8 @@ fn reject_shape_before_authority(program: Program) {
         Err(error) => error,
         Ok(_) => panic!("contradictory source struct schema acquired planning authority"),
     };
-    // A caller-mutated public AST is a contract violation. This differs from
-    // valid but unadmitted empty-record source, whose parser policy is Unsupported.
+    // A caller-mutated public AST is a contract violation, even when its new
+    // field list is otherwise a valid empty-record shape.
     let diagnostic = error.to_ascii_lowercase();
     assert!(diagnostic.contains("contract"), "wrong rejection: {error}");
     assert!(
@@ -108,4 +108,36 @@ fn removing_record_fields_cannot_silently_promote_it_to_unit_schema() {
     program.structs[record].fields.clear();
     assert_eq!(program.structs[record].shape, StructShape::Record);
     reject_shape_before_authority(program);
+}
+
+#[test]
+fn genuine_empty_record_retains_distinct_shape_and_same_owner_clone() {
+    let original = frontend::parse("struct Unit;struct Empty{}fn main(){let e=Empty{};}").unwrap();
+    let cloned = original.clone();
+    let unit = structure(&cloned, "Unit");
+    let empty = structure(&cloned, "Empty");
+    assert_eq!(cloned.structs[unit].shape, StructShape::Unit);
+    assert_eq!(cloned.structs[empty].shape, StructShape::Record);
+    assert!(cloned.structs[unit].fields.is_empty());
+    assert!(cloned.structs[empty].fields.is_empty());
+    PlanCtx::from_shared_program(Arc::new(cloned), &PlanBudget::default()).unwrap();
+    for shape in [StructShape::Unit, StructShape::Tuple] {
+        let mut forged = original.clone();
+        forged.structs[empty].shape = shape;
+        reject_shape_before_authority(forged);
+    }
+}
+
+#[test]
+fn empty_record_cannot_gain_foreign_fields_or_nominal_identity() {
+    let original = frontend::parse("struct E{}struct F{}struct R{x:i32}fn main(){}").unwrap();
+    let empty = structure(&original, "E");
+    let record = structure(&original, "R");
+    let mut fields = original.clone();
+    fields.structs[empty].fields = fields.structs[record].fields.clone();
+    reject_shape_before_authority(fields);
+    let mut identity = original;
+    let other = structure(&identity, "F");
+    identity.structs[empty].name = identity.structs[other].name.clone();
+    reject_shape_before_authority(identity);
 }

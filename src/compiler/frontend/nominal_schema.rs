@@ -705,11 +705,6 @@ impl PlanState {
                             self.schema_identity(registry, decl, &d.name, d.module, &d.visibility)?;
                             clone_visibility(&d.visibility, budget)?;
                             match d.shape {
-                                StructShape::Record if d.fields.is_empty() => {
-                                    return Err(
-                                        "unsupported: empty record structs are unsupported".into(),
-                                    );
-                                }
                                 StructShape::Unit => {
                                     if !d.fields.is_empty() {
                                         return Err("unit struct source schema has fields".into());
@@ -740,7 +735,17 @@ impl PlanState {
                                         }
                                     }
                                 }
-                                StructShape::Record => {}
+                                StructShape::Record => {
+                                    // With no fields, no declared lifetime can
+                                    // constrain owned data. Bounds alone do not
+                                    // make an empty record's lifetime used.
+                                    if d.fields.is_empty() && !d.region_params.is_empty() {
+                                        return Err(
+                                            "unused lifetime parameter in empty record struct"
+                                                .into(),
+                                        );
+                                    }
+                                }
                             }
                             let fields = make_fields(self, &d.fields, d.module)?;
                             let display = d

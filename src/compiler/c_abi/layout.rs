@@ -125,6 +125,9 @@ fn build(
     let mut parts = Vec::new();
     match ty {
         ir::Ty::Struct(s) if repr_c(s.def().source_decl) => {
+            if s.def().fields.is_empty() {
+                return Err("unsupported: empty nominal structs have only a private carrier, not a C ABI layout".into());
+            }
             budget.retain_bytes(s.def().fields.len() * std::mem::size_of::<Layout>())?;
             for field in s.def().fields.iter() {
                 parts.push(build(&field.ty, repr_c, budget, depth + 1)?);
