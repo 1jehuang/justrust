@@ -23,41 +23,39 @@ milestone, not full Rust support (see RUST-COMPATIBILITY.md).
 
 ## Status (2026-10-19)
 
-The pass count below is current through the integrated numeric inference
-milestones. The original blocker matrix further below is a historical inventory,
+The pass count below is current through the manifest ratchet. The original blocker matrix further below is a historical inventory,
 not a fresh measurement of today's diagnostics. Subsequent source-prelude,
 formatting, pointer, pattern, closure and borrowed-iteration slices are tracked
 in `IMPLEMENTATION.md` and their scoped feature documents.
 
-3/20 pass: `01_hello`, unchanged `03_collatz`, and unchanged `05_gcd_fib`
-check, build and execute with exact frozen stock stdout. The numeric programs
-combine native scalar formatting, loops and scoped future-use numeric literal
-constraints, including bidirectional range/array item evidence
-(`LOCAL-LITERALS.md`). Other programs retain explicit rejection diagnostics
-until their remaining features land. This is not full formatting or full Rust
-support. See `FORMAT-SCALARS.md`.
+5/20 pass: `01_hello`, `02_fizzbuzz`, `03_collatz`, `05_gcd_fib` and
+`07_bank_account` check, build and execute with exact frozen stock stdout
+(manifest ratchet). This is not full formatting or full Rust support.
 
 ## Current first rejection boundaries
 
-Refreshed on compiler source `af5c06a69` through 40 direct native CLI CHECK
-requests (20 unchanged sources, workers 1 and 8). Both worker counts agree:
-01, 03 and 05 check successfully; the other 17 reject explicitly as below.
-`data/runs/const-source/corpus-check-boundaries.json` records source/binary hashes,
-exit codes and exact diagnostics. This refresh does not rerun BUILD, execution or
-the stock oracle. The earlier complete corpus gate on `40feb23c8`, run
-`20261018-204121969-2792890`, remains historical execution evidence.
+Refreshed 2026-10-19 on `34b38d596` by `justrust test --test full_programs`
+(full CHECK/BUILD/run ratchet, workers 1). Later commits (`265356c2b`,
+`93868e558`) were not rerun across the corpus. 16 and 18 hit the 60 s check
+timeout once under machine contention; alone they check in 12-14 s and report
+the boundaries below.
 
 | Programs | First reported boundary |
 |---|---|
-| 02, 07 | unresolved type |
-| 04, 13 | unknown local macro invocation |
-| 06 | const-expression array length |
-| 08, 12, 14, 15, 18, 19, 20 | unsupported `derive` attribute |
-| 09 | or-pattern / `@` pattern support |
-| 10 | stored closure / capture-environment form |
-| 11 | generic-argument parsing at a function-trait bound |
-| 16 | range indexing / subslice support |
-| 17 | local-rooted assignment restriction |
+| 04, 18 | method call on a receiver whose type is not yet resolved |
+| 06, 10, 12, 19 | E0282 closure parameter type (iterator adapter closures) |
+| 08, 09, 16 | no applicable method (Iterator/adapter methods not active) |
+| 11 | opaque `impl Trait` pack needs explicit captured carrier mapping |
+| 13 | trait object types only admitted directly behind a reference (`Box<dyn>`) |
+| 14 | slice generic arguments unsupported |
+| 15 | slice elements containing references or slices |
+| 17, 20 | unresolved import `HashMap` (no `std::collections`) |
+
+Most of these trace to the inactive source Iterator library (adapters,
+closure parameter inference through `FnMut(Self::Item)` bounds) and missing
+`std::collections`. See HASHMAP.md work in progress for the latter's
+prerequisites (generic `Hash<H: Hasher>`, `BuildHasher`, `Hash`/`Eq` for
+`str`/`String`).
 
 These are the first diagnostics, not an exhaustive feature inventory or evidence
 that fixing one diagnostic makes the program pass. In particular, most remaining
