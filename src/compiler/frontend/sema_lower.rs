@@ -36,6 +36,8 @@ pub struct Lower<'a> {
     receiver: Option<h::LocalId>,
     labels: Vec<(Option<NameKey>, u32)>,
     next_label: u32,
+    /// Inside a later or-pattern alternative: bindings reuse earlier locals.
+    rebinding: bool,
 }
 
 impl PlanCtx {
@@ -81,6 +83,7 @@ impl PlanCtx {
             receiver: None,
             labels: Vec::new(),
             next_label: 0,
+            rebinding: false,
         };
         let mut u = None;
         let sig_params: Vec<st::Ty> = schema
@@ -150,6 +153,11 @@ impl<'a> Lower<'a> {
         self.locals - 1
     }
     fn bind(&mut self, n: AstIdent) -> R<h::LocalId> {
+        if self.rebinding {
+            return self
+                .lookup(n)?
+                .ok_or_else(|| Unsupported("or-pattern alternatives bind different names".into()));
+        }
         let k = self.key(n, LookupClass::Local)?;
         let id = self.fresh_local();
         self.scopes.last_mut().unwrap().push((k, id));
@@ -609,6 +617,13 @@ impl<'a> Lower<'a> {
 
     // ---------------------------------------------------------------- patterns
 
+    fn pat_rebind(&mut self, p: &Pattern) -> R<h::HirPat> {
+        let saved = std::mem::replace(&mut self.rebinding, true);
+        let r = self.pat(p);
+        self.rebinding = saved;
+        r
+    }
+
     fn pat(&mut self, p: &Pattern) -> R<h::HirPat> {
         Ok(match p {
             Pattern::Wildcard => h::HirPat::Wild,
@@ -663,9 +678,32 @@ impl<'a> Lower<'a> {
                     fields: out,
                 }
             }
-            Pattern::Alternatives(_) => return un("or-pattern"),
+            Pattern::Alternatives(alts) => {
+                // Alternatives bind the same names. Bind them once from the
+                // first alternative, then resolve later alternatives to the
+                // same locals by looking names up rather than rebinding.
+                let mut out = Vec::new();
+                for (i, a) in alts.iter().enumerate() {
+                    if i == 0 {
+                        out.push(self.pat(a)?);
+                    } else {
+                        out.push(self.pat_rebind(a)?);
+                    }
+                }
+                h::HirPat::Or(out)
+            }
             Pattern::At { .. } => return un("@ pattern"),
-            Pattern::Range { .. } => return un("range pattern"),
+            Pattern::Range { lo, hi, .. } => {
+                let b = lo.as_ref().or(hi.as_ref());
+                h::HirPat::Range(match b {
+                    Some(RangeBound::Char(_)) => h::HirLit::Char,
+                    Some(RangeBound::Int { literal, .. }) => {
+                        h::HirLit::Int(literal.magnitude, literal.suffix)
+                    }
+                    Some(RangeBound::IntLimit { ty, .. }) => h::HirLit::Int(0, Some(*ty)),
+                    None => return un("empty range pattern"),
+                })
+            }
             Pattern::Array(_) | Pattern::ArrayRest(_) => return un("array pattern"),
             Pattern::TupleRest(_) | Pattern::VariantRest { .. } => return un("rest pattern"),
             Pattern::Apply { .. } => return un("generic pattern path"),
@@ -1074,10 +1112,58 @@ impl<'a> Lower<'a> {
                     label: u32::MAX,
                 })
             }
-            Expr::Try(_) => return un("? operator"),
+            Expr::Try(v) => {
+                let x = self.expr(v)?;
+                self.push(h::HirExpr::Try(x))
+            }
             Expr::Output(_) | Expr::FormatInto(_) => return un("formatted output form"),
-            Expr::ConstItem(_) | Expr::AssociatedConst(_) => return un("constant item"),
-            Expr::TraitCall { .. } => return un("qualified trait call"),
+            Expr::ConstItem(path) => {
+                let decl = *self
+                    .plan
+                    .registry
+                    .constants
+                    .get(&path.key(Namespace::Value))
+                    .ok_or_else(|| Unsupported("unresolved constant".into()))?;
+                let info = self.plan.declaration(decl).map_err(Unsupported)?;
+                let ty = self
+                    .plan
+                    .program
+                    .constants
+                    .get(info.source_index)
+                    .map(|c| c.ty.clone())
+                    .ok_or_else(|| Unsupported("constant source".into()))?;
+                let t = self.ty(&ty)?;
+                self.push(h::HirExpr::Const(t))
+            }
+            Expr::AssociatedConst(_) => return un("associated constant"),
+            Expr::TraitCall {
+                owner,
+                trait_path,
+                name,
+                type_args,
+                args,
+            } => {
+                if !type_args.is_empty() {
+                    return un("turbofish on qualified trait call");
+                }
+                let trait_decl = self
+                    .plan
+                    .resolve_trait_path(trait_path)
+                    .map_err(Unsupported)?;
+                let self_ty = self.ty(owner)?;
+                let name = self
+                    .names()
+                    .spelling(*name)
+                    .map_err(|e| Unsupported(format!("{e:?}")))?
+                    .to_owned();
+                let a = self.exprs(args)?;
+                self.push(h::HirExpr::TraitCall {
+                    trait_id: def(trait_decl),
+                    self_ty,
+                    name,
+                    args: a,
+                })
+            }
             Expr::Invoke { .. } => return un("callee expression invocation"),
             Expr::ByteStr(_) => return un("byte string"),
             Expr::TypeAlignment(_) | Expr::NativeSyscall(_) | Expr::RawSlice { .. } => {

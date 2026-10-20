@@ -522,6 +522,8 @@ impl WorldDb {
             range: adt_by.get("Range").copied(),
             range_inclusive: adt_by.get("RangeInclusive").copied(),
             string: adt_by.get("String").copied(),
+            option: adt_by.get("Option").copied(),
+            result: adt_by.get("Result").copied(),
         };
     }
 

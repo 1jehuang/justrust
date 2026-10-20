@@ -267,6 +267,8 @@ impl Db {
             range: Some(RANGE),
             range_inclusive: Some(RANGE_INCL),
             string: None,
+            option: Some(OPTION),
+            result: None,
         };
         for t in [SIZED, COPY] {
             d.tr(t, 0, vec![], vec![]);

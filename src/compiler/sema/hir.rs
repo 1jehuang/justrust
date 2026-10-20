@@ -65,6 +65,10 @@ pub enum HirPat {
     },
     Ref(Mutbl, Box<HirPat>),
     Lit(HirLit),
+    /// `p | q`: every alternative binds the same locals.
+    Or(Vec<HirPat>),
+    /// Inclusive or exclusive scalar range pattern.
+    Range(HirLit),
 }
 
 #[derive(Clone, Debug)]
@@ -88,6 +92,17 @@ pub struct HirArm {
 #[derive(Clone, Debug)]
 pub enum HirExpr {
     Lit(HirLit),
+    /// A constant item or associated constant of the given declared type.
+    Const(Ty),
+    /// `e?`: early return of the residual through the enclosing fn.
+    Try(ExprId),
+    /// `<Self as Trait>::item(args)` or `Trait::item(args)`.
+    TraitCall {
+        trait_id: DefId,
+        self_ty: Ty,
+        name: String,
+        args: Vec<ExprId>,
+    },
     Local(LocalId),
     /// Path to a function or associated function, with written type
     /// arguments (`Hole` where omitted). `self_ty` is the written owner for

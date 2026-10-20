@@ -50,6 +50,9 @@ pub struct CheckLang {
     pub range: Option<DefId>,
     pub range_inclusive: Option<DefId>,
     pub string: Option<DefId>,
+    /// `Option` and `Result` for the `?` operator.
+    pub option: Option<DefId>,
+    pub result: Option<DefId>,
 }
 
 pub trait ItemDb: TraitDb {
@@ -383,6 +386,47 @@ impl<'a> Checker<'a> {
         let body = self.body;
         match &body.exprs[e as usize] {
             HirExpr::Lit(l) => self.lit(l, expected),
+            HirExpr::Const(t) => {
+                let t = self.cx.fill_holes(t);
+                self.normalize(&t)
+            }
+            HirExpr::Try(x) => self.try_expr(e, *x),
+            HirExpr::TraitCall {
+                trait_id,
+                self_ty,
+                name,
+                args,
+            } => {
+                let self_ty = self.cx.fill_holes(self_ty);
+                let found = self
+                    .db
+                    .trait_data(*trait_id)
+                    .methods
+                    .iter()
+                    .find(|(n, _)| n == name)
+                    .map(|(_, f)| *f);
+                let Some(f) = found else {
+                    self.err(Some(e), CheckErrorKind::NoMethod(name.clone()));
+                    for a in args {
+                        self.expr(*a, None);
+                    }
+                    return error();
+                };
+                let (ft, _) = self.fn_item(e, f, Some(&self_ty), &[]);
+                let TyKind::FnPtr(inputs, output) = ft.as_ref() else {
+                    return error();
+                };
+                if inputs.len() != args.len() {
+                    self.err(
+                        Some(e),
+                        CheckErrorKind::Unsupported("wrong number of arguments"),
+                    );
+                    return output.clone();
+                }
+                let (inputs, output) = (inputs.clone(), output.clone());
+                self.check_args(args, &inputs);
+                output
+            }
             HirExpr::Local(l) => self.locals[*l as usize].clone(),
             HirExpr::Fn { def, self_ty, args } => self.fn_item(e, *def, self_ty.as_ref(), args).0,
             HirExpr::AssocFn { self_ty, name } => {
@@ -1364,6 +1408,56 @@ impl<'a> Checker<'a> {
         o
     }
 
+    /// `x?` on `Option<T>` or `Result<T, E>`: yields `T`; the enclosing
+    /// function (or closure) must return the same family. `Result` errors
+    /// convert through `From` in Rust; this checker requires equal error
+    /// types and reports anything else as unsupported, never accepting it.
+    fn try_expr(&mut self, e: ExprId, x: ExprId) -> Ty {
+        let t = self.expr(x, None);
+        let t = self.structurally_resolve(&t);
+        let l = self.db.check_lang().clone();
+        let ret = self
+            .closure_ret
+            .last()
+            .cloned()
+            .unwrap_or_else(|| self.ret.clone());
+        let ret = self.structurally_resolve(&ret);
+        match t.as_ref() {
+            TyKind::Adt(d, args) if Some(*d) == l.option => {
+                let inner = args[0].clone();
+                let want = adt(*d, vec![self.cx.new_var()]);
+                if self.cx.try_unify(&ret, &want).is_err() {
+                    self.err(
+                        Some(e),
+                        CheckErrorKind::Unsupported(
+                            "? on Option in a function not returning Option",
+                        ),
+                    );
+                }
+                inner
+            }
+            TyKind::Adt(d, args) if Some(*d) == l.result => {
+                let (ok, er) = (args[0].clone(), args[1].clone());
+                let want = adt(*d, vec![self.cx.new_var(), er]);
+                if self.cx.try_unify(&ret, &want).is_err() {
+                    self.err(
+                        Some(e),
+                        CheckErrorKind::Unsupported("? with error conversion"),
+                    );
+                }
+                ok
+            }
+            TyKind::Error => error(),
+            _ => {
+                self.err(
+                    Some(e),
+                    CheckErrorKind::Unsupported("? on a type that is not Option or Result"),
+                );
+                error()
+            }
+        }
+    }
+
     fn into_iter_item(&mut self, e: ExprId, it: &Ty) -> Ty {
         let l = self.db.lang().clone();
         let (Some(ii), Some(item)) = (l.into_iterator, l.into_iter_item) else {
@@ -1485,10 +1579,15 @@ impl<'a> Checker<'a> {
                 self.unify_at(cause_e, ty, &reference(*m, i.clone()));
                 self.pat(inner, &i, cause);
             }
-            HirPat::Lit(l) => {
+            HirPat::Lit(l) | HirPat::Range(l) => {
                 let lt = self.lit(l, Some(ty));
                 let t = self.peel_for_pattern(ty);
                 self.unify_at(cause_e, &t, &lt);
+            }
+            HirPat::Or(alts) => {
+                for a in alts {
+                    self.pat(a, ty, cause);
+                }
             }
         }
     }
