@@ -9,7 +9,10 @@ pub struct Error;
 
 pub type Result = super::result::Result<(), Error>;
 
-pub struct Formatter {
+pub struct Formatter<'a> {
+    // std's Formatter borrows its output sink for 'a. This one owns its
+    // buffer, so the marker only carries 'a for source compatibility
+    // (`fmt::Formatter<'_>` in user signatures).
     buf: String,
     fill: char,
     // 0 none, 1 left, 2 right, 3 center
@@ -48,8 +51,8 @@ pub struct Spec {
     flags: u32,
 }
 
-impl Formatter {
-    pub fn new() -> Formatter {
+impl<'a> Formatter<'a> {
+    pub fn new() -> Formatter<'a> {
         Formatter {
             buf: String::new(),
             fill: ' ',
