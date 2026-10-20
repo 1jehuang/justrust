@@ -46,6 +46,7 @@ mod root_cleanup;
 pub mod semantic_name;
 pub mod semantic_path;
 pub mod semantic_scope;
+pub mod sema;
 pub mod source;
 mod source_item_macro;
 mod source_macro;
