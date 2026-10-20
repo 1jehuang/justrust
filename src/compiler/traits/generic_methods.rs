@@ -58,6 +58,17 @@ impl ValidatedTraitWorld {
         for (raw, actual) in item.schema.predicates.iter().zip(result.predicates.iter()) {
             self.validate_predicate_substitution(raw, actual, &item.schema.env, &arguments)?;
         }
+        // All substitution checks above ran against the raw contract. Realize
+        // reference topology for the full ordered actuals with the same kernel
+        // ordinary instantiation uses, so a reference-bearing Self (or method
+        // actual) gets its per-layer rows from the item's own origin tails.
+        let mut result = result;
+        result.signature.ref_contract = self.realize_ref_contract(
+            &item.schema,
+            &arguments,
+            &result.signature,
+            Some(item.declaration),
+        )?;
         Ok(result)
     }
 

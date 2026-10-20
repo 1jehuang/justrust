@@ -604,6 +604,24 @@ cleanup failures.
       --tests and graph_integrity 14/14 on the committed tree. Runs:
       `data/runs/xps14/2026-10-19-hash-protocol.jsonl`. No HashMap,
       BuildHasher/RandomState, str/String/slice Hash or general std claim.
+- [x] Generic trait methods (own method binder) implemented for a
+      reference-typed Self (`impl<T: Tr> Tr for &T`) with SIZED ordinary
+      actuals: the impl's expected signature from `alpha_rename_method_schema`
+      now realizes per-layer reference topology with the existing
+      `realize_ref_contract` kernel after all owner/arity/raw-contract/RHS/
+      predicate checks, as ordinary call instantiation already did.
+      `tests/reference_self_generic_methods.rs` (contract: REFERENCE-SELF-GENERIC-METHODS.md)
+      covers `&T`/`&&T` forwarding for a sized T, unchanged zero-layer Self and
+      a reference method actual through a typed-local receiver;
+      `tests/reference_self_generic_method_authority.rs` rejects forged
+      contract rows on the real validated-facts path. Observed rejections kept
+      as explicit tests, not support: unsized `T := str` ("slice generic
+      arguments are unsupported"), methods returning `&Self` with Self = `&T`
+      (source-contract result-elision debt) and borrow-expression receivers
+      `(&r).m()` ("unsupported unresolved receiver type"). No str/String Hash
+      or unsized support. Validated on nightly-2026-10-08; the
+      `trait_ref_self` dyn-array case fails on the unpatched parent too
+      (baseline, see the feature doc).
 - [x] Struct and enum type-parameter bounds and `where` clauses are retained and
       resolved in their declaration scope. Constructors and function signature
       applications prove user and builtin obligations, including nested nominal
