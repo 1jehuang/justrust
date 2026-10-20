@@ -1406,7 +1406,9 @@ and full Rust compatibility remain open.
 
 Full-program target corpus (FULL-PROGRAMS.md, `tests/full_programs.rs`): 20
 realistic std-only programs with stock oracle stdout and a pass/fail ratchet
-manifest. Currently 0/20 pass. FULL-PROGRAMS.md ranks the blocking features.
+manifest. The committed manifest ratchet records 5/20 passing programs, as
+reported in FULL-PROGRAMS.md. This is not a fresh corpus measurement after the
+latest scoped changes. FULL-PROGRAMS.md ranks the recorded blocking features.
 
 The source-type-alias checkpoint passes all 1,649 hosted tests in 86 binaries
 (`20261017-043356389-4183342`), all-target checking
