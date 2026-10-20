@@ -1,8 +1,15 @@
 //! Immutable authority for one canonical source alignment query.
 use super::{DeclId, FactsCtx, ParamId, PlanBudget, Ty};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TypeQueryKind {
+    Alignment,
+    PrivateStorageStride,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TypeAlignmentQuery {
+    kind: TypeQueryKind,
     owner: DeclId,
     parameter: ParamId,
     queried: Ty,
@@ -13,6 +20,14 @@ impl TypeAlignmentQuery {
     pub(in crate::compiler) fn issue(
         queried: Ty,
         facts: &crate::compiler::traits::ValidatedFacts,
+    ) -> Result<Self, String> {
+        Self::issue_kind(queried, facts, TypeQueryKind::Alignment)
+    }
+
+    pub(in crate::compiler) fn issue_kind(
+        queried: Ty,
+        facts: &crate::compiler::traits::ValidatedFacts,
+        kind: TypeQueryKind,
     ) -> Result<Self, String> {
         let mut parameters = facts.env().ordered_params();
         let parameter = parameters
@@ -28,10 +43,15 @@ impl TypeAlignmentQuery {
             );
         }
         Ok(Self {
+            kind,
             owner: facts.declaration(),
             parameter,
             queried,
         })
+    }
+
+    pub fn is_private_storage_stride(&self) -> bool {
+        self.kind == TypeQueryKind::PrivateStorageStride
     }
 
     pub fn queried_type(&self) -> &Ty {
@@ -48,7 +68,8 @@ impl TypeAlignmentQuery {
         budget: &PlanBudget,
     ) -> Result<bool, String> {
         budget.charge_work(1)?;
-        Ok(self.owner == other.owner
+        Ok(self.kind == other.kind
+            && self.owner == other.owner
             && self.parameter == other.parameter
             && super::identical_type(&self.queried, &other.queried, budget)?)
     }
@@ -90,6 +111,46 @@ mod tests {
     use super::*;
     use crate::compiler::{frontend, ir};
     use std::sync::Arc;
+
+    #[test]
+    fn private_stride_query_rejects_kind_owner_and_type_tampering() {
+        let program =
+            frontend::parse("fn f<T>()->usize{0usize} fn g<T>()->usize{0usize} fn main(){}")
+                .unwrap();
+        let budget = PlanBudget::default();
+        let plan = frontend::PlanCtx::from_program(&program, &budget).unwrap();
+        let facts = plan.callable_facts(plan.function_decl(0).unwrap()).unwrap();
+        let other = plan.callable_facts(plan.function_decl(1).unwrap()).unwrap();
+        let parameter = facts.env().ordered_params().next().unwrap();
+        // Internal issuance tests the sealed replay relation. Source ingress
+        // separately requires the original embedded mem::storage_stride body.
+        let query = TypeAlignmentQuery::issue_kind(
+            Ty::Param(parameter),
+            &facts,
+            TypeQueryKind::PrivateStorageStride,
+        )
+        .unwrap();
+        query
+            .validate(FactsCtx::Validated(&facts), &budget)
+            .unwrap();
+        assert!(query.same_query(&query.clone(), &budget).unwrap());
+        assert!(
+            query
+                .validate(FactsCtx::Validated(&other), &budget)
+                .is_err()
+        );
+        let mut changed = query.clone();
+        changed.kind = TypeQueryKind::Alignment;
+        assert!(!query.same_query(&changed, &budget).unwrap());
+        changed = query.clone();
+        changed.queried = Ty::Int(ir::IntTy::U64);
+        assert!(!query.same_query(&changed, &budget).unwrap());
+        assert!(
+            changed
+                .validate(FactsCtx::Validated(&facts), &budget)
+                .is_err()
+        );
+    }
 
     #[test]
     fn alignment_query_rejects_foreign_owner_and_changed_queried_type() {

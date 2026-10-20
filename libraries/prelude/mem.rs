@@ -8,6 +8,11 @@ pub fn size_of<T>() -> usize {
     second as usize - 4096usize
 }
 
+// Compiler-owned value carrier extent, not Rust's public size_of.
+pub(super) fn storage_stride<T>() -> usize {
+    __justrust_storage_stride!(T)
+}
+
 pub fn align_of<T>() -> usize {
     __justrust_align_of!(T)
 }

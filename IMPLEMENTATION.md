@@ -961,6 +961,12 @@ host macro and compiles its generated target source.
       carriers. See NATIVE-HEAP.md. This does not close allocation compatibility:
       general layouts, pointer methods, full Box/Vec/String behavior
       and full alloc/core/std remain open.
+- [x] Standalone private storage stride extraction: authenticated typed carrier
+      extent replaces fake public-size pointer arithmetic in ordinary source
+      Box allocation/free, with existing raw allocator and entry graph unchanged.
+      Standalone stock/native workers1/8, source/query authority and graph14 passed
+      (582233krek); see PRIVATE-STORAGE-STRIDE-FEATURE.md.
+      Public size/layout/niche, native pointer compatibility and full Box remain open.
 - [x] Bootstrap raw mapping realloc uses Linux mremap with relocation allowed,
       preserves old storage on failure, and drives Vec/String capacity growth.
       Stock-differential page-crossing scalar and owning-element growth runs at

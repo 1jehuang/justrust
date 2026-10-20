@@ -3,6 +3,26 @@
 //! against their own immutable caller facts before admitting a query.
 use super::ir;
 
+/// Compiler-private carrier extent. This does not authorize public native
+/// pointer offsets, Rust size_of, external ABI layout, or allocation effects.
+pub(super) fn query_value(
+    query: &ir::TypeAlignmentQuery,
+    facts: ir::FactsCtx<'_>,
+    budget: &ir::PlanBudget,
+) -> Result<Option<usize>, String> {
+    query.validate(facts, budget)?;
+    if !query.is_private_storage_stride() {
+        return alignment(query.queried_type(), facts, budget);
+    }
+    if matches!(query.queried_type(), ir::Ty::Param(_)) {
+        return Ok(None);
+    }
+    budget.charge_work(1)?;
+    usize::try_from(super::backend::value_size(query.queried_type())?)
+        .map(Some)
+        .map_err(|_| "private storage stride is negative".into())
+}
+
 /// `None` retains a genuinely symbolic generic query until ordinary instance
 /// substitution. It is never a guessed alignment or a published placeholder.
 pub(super) fn alignment(

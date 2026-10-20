@@ -56,18 +56,22 @@ impl type_check::Checker<'_> {
         let DeclItemName::Source(item) = declaration.path.item else {
             return Err("target alignment requires a source declaration".into());
         };
+        let kind = match plan
+            .program
+            .names
+            .spelling(item)
+            .map_err(native_adapter::name_diagnostic)?
+        {
+            "align_of" => ir::TypeQueryKind::Alignment,
+            "storage_stride" => ir::TypeQueryKind::PrivateStorageStride,
+            _ => return Err("private type query outside its canonical source body".into()),
+        };
         if plan
             .program
             .names
             .spelling(module)
             .map_err(native_adapter::name_diagnostic)?
             != "mem"
-            || plan
-                .program
-                .names
-                .spelling(item)
-                .map_err(native_adapter::name_diagnostic)?
-                != "align_of"
             || declaration.owner.is_some()
         {
             return Err(
@@ -75,9 +79,14 @@ impl type_check::Checker<'_> {
             );
         }
         let queried = type_check::checked_local_ty(queried, self.signatures)?;
-        super::super::memory_layout::alignment(&queried, self.facts(), &plan.budget)?;
+        let query = if kind == ir::TypeQueryKind::Alignment {
+            ir::TypeAlignmentQuery::issue(queried, facts)?
+        } else {
+            ir::TypeAlignmentQuery::issue_kind(queried, facts, kind)?
+        };
+        super::super::memory_layout::query_value(&query, self.facts(), &plan.budget)?;
         Ok((
-            ir::ExprKind::TypeAlignment(ir::TypeAlignmentQuery::issue(queried, facts)?),
+            ir::ExprKind::TypeAlignment(query),
             type_check::Flow::value(ir::Ty::Int(ir::IntTy::Usize)),
         ))
     }

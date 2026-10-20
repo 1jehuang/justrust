@@ -33,7 +33,7 @@ pub use closure::{CaptureKind, CaptureSource, ClosureKind, ClosureRecipeId, Clos
 pub use closure_result::ClosureResultReceipt;
 #[path = "ir/type_alignment.rs"]
 mod type_alignment;
-pub use type_alignment::TypeAlignmentQuery;
+pub use type_alignment::{TypeAlignmentQuery, TypeQueryKind};
 #[path = "ir/opaque.rs"]
 mod opaque;
 pub use opaque::{

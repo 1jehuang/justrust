@@ -1,6 +1,6 @@
 // Box<T>: a single owning heap pointer, as ordinary Rust source.
 // Layout is exactly one `*mut T` word (unsized Box<dyn T> becomes data+vtable).
-use super::mem::{raw_alloc, raw_free, size_of};
+use super::mem::{raw_alloc, raw_free, storage_stride};
 
 pub struct Box<T> {
     ptr: *mut T,
@@ -8,7 +8,7 @@ pub struct Box<T> {
 
 impl<T> Box<T> {
     pub fn new(value: T) -> Box<T> {
-        let bytes = size_of::<T>();
+        let bytes = storage_stride::<T>();
         let p = raw_alloc(if bytes == 0usize { 8usize } else { bytes }) as *mut T;
         if p as usize == 0usize {
             panic!("memory allocation failed");
@@ -30,7 +30,7 @@ impl<T> Box<T> {
     pub fn into_inner(b: Box<T>) -> T {
         let p = b.ptr;
         let value = unsafe { *p };
-        let bytes = size_of::<T>();
+        let bytes = storage_stride::<T>();
         raw_free(p as usize, if bytes == 0usize { 8usize } else { bytes });
         // The value moved out; skip the destructor's pointee drop.
         let mut b = b;
@@ -46,7 +46,7 @@ impl<T> Drop for Box<T> {
             return;
         }
         let _value = unsafe { *p };
-        let bytes = size_of::<T>();
+        let bytes = storage_stride::<T>();
         raw_free(p as usize, if bytes == 0usize { 8usize } else { bytes });
     }
 }

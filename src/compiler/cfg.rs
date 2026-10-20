@@ -4622,11 +4622,7 @@ impl Lowerer<'_> {
                     .budget
                     .ok_or("target alignment requires a task budget")?;
                 query.validate(self.facts, budget)?;
-                let value = match super::memory_layout::alignment(
-                    query.queried_type(),
-                    self.facts,
-                    budget,
-                )? {
+                let value = match super::memory_layout::query_value(query, self.facts, budget)? {
                     Some(alignment) => Rvalue::Use(Operand::Constant(Constant::Int(
                         IntValue::usize(alignment as u64),
                     ))),

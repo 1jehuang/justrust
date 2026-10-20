@@ -7869,7 +7869,9 @@ impl<'input, 'names> Parser<'input, 'names> {
             self.expect("!")?;
             return Ok(Expr::UnexpandedMacro(self.inactive_invocation(path, span)?));
         }
-        if self.builtin_macro_ahead("__justrust_align_of")? {
+        if self.builtin_macro_ahead("__justrust_align_of")?
+            || self.builtin_macro_ahead("__justrust_storage_stride")?
+        {
             return self.type_alignment_expression();
         }
         if self.builtin_macro_ahead("__justrust_linux_syscall6")? {
