@@ -106,12 +106,16 @@ explicit diagnostic, never an approximate translation. CHECK must not demand
 codegen. Failure, unsupported input, resource limits and infrastructure faults
 stay distinct and never publish a successful executable.
 
-**Feature workflow.** Each language slice gets its own `FEATURE.md` (status,
-frozen contract, IR/CFG shape, acceptance gates) plus tests under `tests/`:
-`<feature>.rs` for stock-differential CHECK/BUILD/run acceptance at workers 1
-and 8, `<feature>_authority.rs` for forged-fact and invalid-input rejection,
-and `<feature>_graph.rs` for graph-shape checks. Update IMPLEMENTATION.md
-(gate G0-G12 status) and the feature doc in the same commit. Always run
+**Feature workflow.** Prioritize unchanged real programs compiling and running,
+not feature counts, lines changed, or documents produced. Every language change
+needs stock-differential CHECK/BUILD/run acceptance at workers 1 and 8, relevant
+forged-fact and invalid-input rejection, and graph-shape coverage. Extend existing
+suites and feature contracts by default; do not create a new Markdown file or
+three new test files for each small fix. A new feature document is warranted only
+for a substantial contract not already covered by an existing one. Keep contract,
+IR/CFG shape and acceptance evidence concise and update IMPLEMENTATION.md when
+actual gate status or a tracked blocker changes. Do not substitute planning,
+audits or test-expectation changes for production integration. Always run
 `justrust test --test graph_integrity` before committing compiler changes.
 
 **Where things are.**
