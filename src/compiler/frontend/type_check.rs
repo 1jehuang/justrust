@@ -1872,7 +1872,11 @@ pub(super) fn source_region_mode(
         && params.iter().all(|(_, ty)| match ty {
             Type::Ref {
                 region, referent, ..
-            } => region.is_none() && !matches!(referent.as_ref(), Type::Ref { .. }),
+            } => {
+                region.is_none()
+                    && !matches!(referent.as_ref(), Type::Ref { .. })
+                    && !matches!(referent.as_ref(), Type::Slice(element) if matches!(element.as_ref(), Type::Ref { .. }))
+            }
             _ => true,
         });
     Ok(if legacy {
@@ -2177,6 +2181,27 @@ pub(super) fn canonical_ref_contract(
             ty = referent;
         }
     }
+    // Slice-element occurrences participate in output elision, but repeated
+    // uses of the same explicit named lifetime are one lifetime. Retain these
+    // ids only for elision: their carrier authority lives in SourceRegionEnv.
+    let mut slice_element_regions = Vec::new();
+    for (_, ty) in source_params {
+        let Type::Ref { referent, .. } = ty else {
+            continue;
+        };
+        let Type::Slice(element) = referent.as_ref() else {
+            continue;
+        };
+        let Type::Ref { region, .. } = element.as_ref() else {
+            continue;
+        };
+        budget.charge_work(1)?;
+        budget.retain_bytes(std::mem::size_of::<ir::RegionParamId>())?;
+        slice_element_regions
+            .try_reserve_exact(1)
+            .map_err(|_| "slice lifetime elision allocation failed")?;
+        slice_element_regions.push(fresh(region.as_ref())?);
+    }
     let mut results = Vec::with_capacity(2);
     let mut ty = source_result;
     let mut previous = None;
@@ -2199,7 +2224,11 @@ pub(super) fn canonical_ref_contract(
         } else if let Some(region) = receiver_region {
             region
         } else {
-            if inputs.len() != 1 {
+            if inputs.len() != 1
+                || slice_element_regions
+                    .iter()
+                    .any(|region| *region != inputs[0].region)
+            {
                 return Err("missing lifetime specifier: elided reference output requires exactly one input reference lifetime position".into());
             }
             inputs[0].region
@@ -9791,13 +9820,31 @@ impl<'a> Checker<'a> {
                     depth += 1;
                     root = value;
                 }
-                if !matches!(root, Expr::Var(_)) && !genuine_call(root) {
+                let value = self.expr(value)?;
+                let mut carrier = value;
+                for _ in 0..depth {
+                    match self.exprs[carrier.0].kind {
+                        ir::ExprKind::Deref { value } => carrier = value,
+                        _ => break,
+                    }
+                }
+                let slice_carrier =
+                    matches!(self.exprs[carrier.0].kind, ir::ExprKind::SliceIndex { .. })
+                        && matches!(
+                            self.exprs[value.0].ty,
+                            ir::Ty::Ref {
+                                kind: ir::BorrowKind::Shared,
+                                ..
+                            }
+                        );
+                if !matches!(root, Expr::Var(_)) && !genuine_call(root) && !slice_carrier {
                     // Static component carriers use the same checked projection
-                    // authority as field receivers, without an invented temporary.
+                    // authority as field receivers. SliceIndex already yields
+                    // a checked value carrying the selected element's origins,
+                    // so it must not be reinterpreted as a static array place.
                     let source = static_source_place(e)?;
                     self.checked_place(&source)?;
                 }
-                let value = self.expr(value)?;
                 let flow = self.flow(value);
                 let referent = match &flow.ty {
                     ir::Ty::Ref { referent, .. } => referent,

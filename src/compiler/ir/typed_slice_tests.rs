@@ -34,6 +34,48 @@ fn typed_shapes_preserve_exact_element_and_byte_only_helpers() {
 }
 
 #[test]
+fn shared_slice_carrier_domain_is_typed_and_cannot_be_forged_into_an_array() {
+    let budget = PlanBudget::default();
+    let element = shared(Ty::Int(IntTy::I32));
+    let slice = shared(Ty::Slice {
+        element: Arc::new(element.clone()),
+    });
+    let locations = carrier_locations(&slice, &budget).unwrap();
+    assert_eq!(locations.len(), 2);
+    assert!(locations[0].path.0.is_empty());
+    assert_eq!(
+        locations[1].path.0.as_ref(),
+        &[CarrierStep::Referent, CarrierStep::SliceElement]
+    );
+    assert_eq!(
+        carrier_at(&slice, &locations[1], &budget).unwrap(),
+        &element
+    );
+    let array = shared(Ty::Array {
+        element: Arc::new(element),
+        len: 1,
+    });
+    assert!(carrier_at(&array, &locations[1], &budget).is_err());
+    let mut forged = locations[1].clone();
+    forged.path = CarrierPath(Arc::from([CarrierStep::SliceElement]));
+    assert!(carrier_at(&slice, &forged, &budget).is_err());
+    forged.path = locations[1].path.clone();
+    forged.channel = CarrierChannel::Fixed(ReferencePosition { depth: 1 });
+    assert!(carrier_at(&slice, &forged, &budget).is_err());
+    let mutable = Ty::Ref {
+        kind: BorrowKind::Mut,
+        referent: Arc::new(Ty::Slice {
+            element: Arc::new(shared(Ty::Bool)),
+        }),
+    };
+    assert!(
+        validate_slice_carrier_with_facts(&mutable, FactsCtx::Concrete)
+            .unwrap_err()
+            .contains("mutable slices")
+    );
+}
+
+#[test]
 fn metadata_errors_precede_the_reference_element_boundary() {
     let program = frontend::parse("fn opaque<T>(x:T){}fn main(){}").unwrap();
     let budget = PlanBudget::default();
@@ -56,7 +98,7 @@ fn metadata_errors_precede_the_reference_element_boundary() {
 }
 
 #[test]
-fn universal_element_permission_is_not_a_concrete_reference_certificate() {
+fn universal_element_permission_is_rechecked_at_the_shared_reference_boundary() {
     let program = frontend::parse("fn opaque<T>(x:T){}fn main(){}").unwrap();
     let budget = PlanBudget::default();
     let plan = frontend::PlanCtx::from_program(&program, &budget).unwrap();
@@ -64,7 +106,15 @@ fn universal_element_permission_is_not_a_concrete_reference_certificate() {
     let parameter = Ty::Param(facts.env().ordered_params().next().unwrap());
     validate_shared_slice_element(&parameter, FactsCtx::from_validated(&facts), &budget).unwrap();
     assert!(validate_shared_slice_element(&parameter, FactsCtx::Concrete, &budget).is_err());
-    for concrete in [shared(Ty::Bool), Ty::Tuple(vec![shared(Ty::Bool)].into())] {
+    validate_shared_slice_element(&shared(Ty::Bool), FactsCtx::Concrete, &budget).unwrap();
+    for concrete in [
+        Ty::Ref {
+            kind: BorrowKind::Mut,
+            referent: Arc::new(Ty::Bool),
+        },
+        shared(shared(Ty::Bool)),
+        Ty::Tuple(vec![shared(Ty::Bool)].into()),
+    ] {
         let error =
             validate_shared_slice_element(&concrete, FactsCtx::Concrete, &budget).unwrap_err();
         assert!(

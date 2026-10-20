@@ -22,6 +22,7 @@ pub(super) fn attach(
         declaration: original.declaration,
         budget,
         rows: Vec::new(),
+        next_region: original.region_count,
     };
     let offset = usize::from(receiver != ReceiverKind::None);
     if let Some(block) = implementation {
@@ -55,9 +56,20 @@ pub(super) fn attach(
         )?;
     }
     collector.walk(result, &signature.result, None, &mut Vec::new(), 0, 0)?;
-    budget.retain_bytes(std::mem::size_of::<ir::SourceRegionEnv>())?;
+    budget.retain_bytes(
+        std::mem::size_of::<ir::SourceRegionEnv>()
+            + usize::from(collector.next_region) * std::mem::size_of::<Option<ir::RegionParamId>>(),
+    )?;
+    let mut normalized = Vec::new();
+    normalized
+        .try_reserve_exact(usize::from(collector.next_region))
+        .map_err(|_| "source slice carrier region allocation failed")?;
+    normalized.extend_from_slice(&original.normalized);
+    normalized.resize(usize::from(collector.next_region), None);
     Ok(Arc::new(ir::SourceRegionEnv {
         carriers: collector.rows.into(),
+        region_count: collector.next_region,
+        normalized: normalized.into(),
         ..original.as_ref().clone()
     }))
 }
@@ -70,6 +82,7 @@ struct Collector<'a> {
     declaration: ir::DeclId,
     budget: &'a ir::PlanBudget,
     rows: Vec<ir::SourceCarrierRegion>,
+    next_region: u16,
 }
 impl Collector<'_> {
     fn lifetime_key(&self, name: AstIdent) -> Result<NameKey, String> {
@@ -79,7 +92,7 @@ impl Collector<'_> {
             .map_err(native_adapter::name_diagnostic)
     }
     fn term(
-        &self,
+        &mut self,
         region: Option<RegionName>,
         parameter: Option<usize>,
         path: &[ir::CarrierStep],
@@ -97,6 +110,22 @@ impl Collector<'_> {
                 }
             }
             return Err("undeclared source carrier lifetime".into());
+        }
+        if path.contains(&ir::CarrierStep::SliceElement)
+            && matches!(region, Some(RegionName::Static))
+        {
+            return Err("unsupported: explicit 'static slice element references require static input authority".into());
+        }
+        if parameter.is_some() && path.contains(&ir::CarrierStep::SliceElement) {
+            if self.next_region as usize >= ir::MAX_REGION_PARAMS {
+                return Err("combined source carrier lifetime limit exceeded".into());
+            }
+            let index = self.next_region;
+            self.next_region += 1;
+            return Ok(Some(ir::CarrierRegionTerm::Named(ir::SourceRegionId {
+                declaration: self.declaration,
+                index,
+            })));
         }
         if path.is_empty() {
             let fixed = if let Some(parameter) = parameter {
@@ -248,6 +277,13 @@ impl Collector<'_> {
                             self.walk(field, element, parameter, path, 0, depth + 1)?;
                             path.pop();
                         }
+                    }
+                    (Type::Slice(field), ir::Ty::Slice { element })
+                        if matches!(element.as_ref(), ir::Ty::Ref { .. }) =>
+                    {
+                        path.push(ir::CarrierStep::SliceElement);
+                        self.walk(field, element, parameter, path, 0, depth + 1)?;
+                        path.pop();
                     }
                     (Type::Named(_) | Type::Apply(_), ir::Ty::Struct(_) | ir::Ty::Enum(_)) => {
                         self.nominal(source, semantic, parameter, path, depth + 1)?

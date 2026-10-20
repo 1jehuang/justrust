@@ -222,7 +222,7 @@ fn cases() -> Vec<Case> {
             source: r###"fn read(s:&[&i32])->i32{*s[0]}fn main(){let x=42;let a=[&x];if read(&a)==42{println!("ok");}}"###,
             stdout: Some("ok\n"),
             stock_diagnostic: None,
-            outcome: Outcome::Unsupported,
+            outcome: Outcome::Runtime,
         },
         Case {
             name: "slice_return",
@@ -437,8 +437,261 @@ fn stock_all() {
             }
         }
     }
-    assert_eq!(counts, [21, 3, 5, 3]);
+    assert_eq!(counts, [22, 3, 5, 2]);
 }
+#[test]
+fn shared_reference_elements_stock_native_workers1_8() {
+    let cases = [
+        (
+            "reference_elements",
+            "fn read(s:&[&i32])->i32{*s[0]}fn main(){let x=42;let a=[&x];if read(&a)==42{println!(\"ok\");}}",
+            true,
+        ),
+        (
+            "strings",
+            "fn read(items:&[&str]) {println!(\"{}\",items[1usize]);} fn main(){let a=[\"x\",\"ok\"];read(&a);}",
+            true,
+        ),
+        (
+            "borrowed",
+            "fn read<'a,'b>(items:&'a [&'b i32])->&'b i32 {items[0usize]} fn main(){let n=42i32;let a=[&n];let r=read(&a);if *r==42i32{println!(\"ok\");}}",
+            true,
+        ),
+        (
+            "for_shared_elements",
+            "fn show(s:&str){println!(\"{}\",s);} fn read(items:&[&str]){for it in items {show(it);}} fn main(){let a=[\"ok\"];read(&a);}",
+            true,
+        ),
+        (
+            "scope_snapshot",
+            "fn read<'a,'b>(items:&'a [&'b i32])->&'b i32{items[0usize]} fn main(){let n=42i32;let r;{let a=[&n];r=read(&a);}if *r==42i32{println!(\"ok\");}}",
+            true,
+        ),
+        (
+            "rebind_snapshot",
+            "fn read<'a,'b>(items:&'a [&'b i32])->&'b i32{items[0usize]} fn main(){let x=42i32;let y=7i32;let mut a=[&x];let r=read(&a);a=[&y];if *r==42i32{println!(\"ok\");}}",
+            true,
+        ),
+        (
+            "forward_inner",
+            "fn read<'a,'b>(items:&'a [&'b i32])->&'b i32{items[0usize]} fn forward<'a,'b>(items:&'a [&'b i32])->&'b i32{read(items)} fn main(){let n=42i32;let a=[&n];if *forward(&a)==42i32{println!(\"ok\");}}",
+            true,
+        ),
+        (
+            "same_named_elision",
+            "fn read<'a>(items:&'a [&'a i32])->&i32{items[0usize]} fn main(){let n=42i32;let a=[&n];if *read(&a)==42i32{println!(\"ok\");}}",
+            true,
+        ),
+        (
+            "coercion_wrong_referent",
+            "fn need(x:&u32){} fn bad(items:&[&i32]){for it in items{need(it);}} fn main(){}",
+            false,
+        ),
+        (
+            "unrelated_region",
+            "fn bad<'a,'b,'c>(items:&'a [&'b i32],other:&'c i32)->&'c i32{items[0usize]} fn main(){}",
+            false,
+        ),
+        (
+            "elided_result",
+            "fn bad(items:&[&i32])->&i32{items[0usize]} fn main(){}",
+            false,
+        ),
+        (
+            "local_escape",
+            "fn bad<'a>()->&'a i32 {let n=42i32;let a=[&n];let s:&[&i32]=&a;s[0usize]} fn main(){}",
+            false,
+        ),
+        (
+            "alias",
+            "fn read<'a,'b>(items:&'a [&'b i32])->&'b i32 {items[0usize]} fn main(){let mut n=42i32;let a=[&n];let r=read(&a);n=7i32;println!(\"{}\",*r);}",
+            false,
+        ),
+    ];
+    let mut failures = Vec::new();
+    for (name, source, valid) in cases {
+        eprintln!("shared-reference slice case: {name}");
+        let result = std::panic::catch_unwind(|| {
+            let scratch = Scratch::new();
+            scratch.write("client.rs", source.as_bytes());
+            let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
+            for check in [true, false] {
+                let output = scratch.path(if check { "stock.rmeta" } else { "stock" });
+                let mut command = Command::new(&rustc);
+                command
+                    .env_remove("RUSTC_BOOTSTRAP")
+                    .args([
+                        "--edition=2024",
+                        "--crate-name=slice_carriers",
+                        "--color=never",
+                    ])
+                    .arg(scratch.path("client.rs"))
+                    .arg("-o")
+                    .arg(&output);
+                if check {
+                    command.arg("--emit=metadata");
+                }
+                let result = capture(&mut command, &scratch, 20);
+                assert_eq!(
+                    result.code,
+                    i32::from(!valid),
+                    "stock {name} check={check}: {result:?}"
+                );
+                if valid && !check {
+                    runtime(&output, "ok\n", &scratch);
+                }
+            }
+            for workers in [1, 8] {
+                for check in [true, false] {
+                    let output = scratch.path(&format!("native-{workers}-{check}"));
+                    let mut command = Command::new(env!("CARGO_BIN_EXE_jr-rust"));
+                    command
+                        .current_dir(&scratch.0)
+                        .env_remove("RUSTC_BOOTSTRAP")
+                        .env("RUSTC", scratch.path("no-rustc"))
+                        .env("PATH", scratch.path("no-tools"))
+                        .arg(scratch.path("client.rs"))
+                        .args(["--workers", &workers.to_string()]);
+                    if check {
+                        command.arg("--check");
+                    } else {
+                        command.arg("-o").arg(&output);
+                    }
+                    let result = capture(&mut command, &scratch, 20);
+                    assert_eq!(
+                        result.code,
+                        i32::from(!valid),
+                        "native {name} workers={workers} check={check}: {}",
+                        String::from_utf8_lossy(&result.stderr)
+                    );
+                    if valid && !check {
+                        runtime(&output, "ok\n", &scratch);
+                    } else {
+                        assert!(!output.exists());
+                    }
+                    if !valid {
+                        let diagnostic = String::from_utf8_lossy(&result.stderr);
+                        assert!(!diagnostic.contains("panicked at"));
+                        assert!(!diagnostic.contains("unsupported:"), "{name}: {diagnostic}");
+                    }
+                }
+            }
+        });
+        if result.is_err() {
+            failures.push(name);
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "shared-reference slice cases failed: {failures:?}"
+    );
+}
+
+#[test]
+fn shared_slice_static_and_mutable_reference_boundaries_remain_explicit() {
+    let cases = [
+        (
+            "static_borrow",
+            "fn need(x:&[&'static i32]){} fn main(){let n=1;let a=[&n];need(&a);}",
+            false,
+        ),
+        (
+            "static_literal",
+            "fn need(x:&[&'static str]){} fn main(){let a=[\"ok\"];need(&a);println!(\"ok\");}",
+            true,
+        ),
+        (
+            "static_elision",
+            "fn bad(x:&[&'static i32])->&i32{x[0]} fn main(){}",
+            false,
+        ),
+        (
+            "mutable_outer",
+            "fn need(x:&mut[&i32]){} fn main(){let n=1;let mut a=[&n];need(&mut a);println!(\"ok\");}",
+            true,
+        ),
+        (
+            "mutable_inner",
+            "fn need(x:&[&mut i32]){} fn main(){let mut n=1;let a=[&mut n];need(&a);println!(\"ok\");}",
+            true,
+        ),
+    ];
+    for (name, source, stock_valid) in cases {
+        let scratch = Scratch::new();
+        scratch.write("client.rs", source.as_bytes());
+        let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
+        for check in [true, false] {
+            let output = scratch.path(if check { "stock.rmeta" } else { "stock" });
+            let mut command = Command::new(&rustc);
+            command
+                .env_remove("RUSTC_BOOTSTRAP")
+                .args([
+                    "--edition=2024",
+                    "--crate-name=slice_boundaries",
+                    "--color=never",
+                ])
+                .arg(scratch.path("client.rs"))
+                .arg("-o")
+                .arg(&output);
+            if check {
+                command.arg("--emit=metadata");
+            }
+            let result = capture(&mut command, &scratch, 20);
+            assert_eq!(
+                result.code,
+                i32::from(!stock_valid),
+                "stock {name}: {}",
+                String::from_utf8_lossy(&result.stderr)
+            );
+            if stock_valid && !check {
+                runtime(&output, "ok\n", &scratch);
+            }
+        }
+        for workers in [1, 8] {
+            for check in [true, false] {
+                let result = compiler::compile_observed(source.into(), workers, check)
+                    .err()
+                    .expect("unimplemented static/mutable carrier boundary accepted");
+                let error = result.to_string();
+                assert!(error.contains("unsupported:"), "{name}: {error}");
+                assert!(error.contains("slice"), "{name}: {error}");
+                assert!(!result.resource_usage.poisoned, "{name}: {error}");
+            }
+        }
+    }
+}
+
+#[test]
+fn shared_reference_slice_check_graph_keeps_typed_carriers_without_codegen() {
+    let source = "fn read<'a,'b>(items:&'a [&'b i32])->&'b i32{items[0usize]} fn main(){let n=42i32;let a=[&n];let r=read(&a);if *r==42i32{println!(\"ok\");}}";
+    for workers in [1, 8] {
+        let result = compiler::compile(source.into(), workers, true).unwrap();
+        assert!(result.executable.is_none());
+        assert!(result.report.capture_complete);
+        assert!(result.analyses.iter().all(|analysis| analysis.passed()));
+        assert!(!result.report.published_kind(103));
+        assert!(result.control_flow.is_empty());
+        let result = compiler::compile(source.into(), workers, false).unwrap();
+        assert!(result.executable.is_some());
+        assert!(
+            result
+                .control_flow
+                .iter()
+                .any(|function| function.locals.iter().any(|local| {
+                    local.ty.shared_slice_element().is_some_and(|element| {
+                        matches!(
+                            element,
+                            ir::Ty::Ref {
+                                kind: ir::BorrowKind::Shared,
+                                ..
+                            }
+                        )
+                    })
+                }))
+        );
+    }
+}
+
 #[test]
 fn stock_typed_slices_edition2024_actual_toolchain() {
     stock_all();
@@ -569,7 +822,7 @@ fn every_admitted_function_checks_universally_and_slice_ir_keeps_exact_element()
         }
         count += 1;
     }
-    assert_eq!(count, 24);
+    assert_eq!(count, 25);
     assert_eq!(generic, 3);
     assert!(indices >= 20);
     assert!(coercions >= 21);
@@ -599,8 +852,7 @@ fn wrong_elements_index_types_copy_obligations_and_live_loans_are_ordinary_inval
     assert_eq!(count, 5);
 }
 #[test]
-fn valid_borrowed_projection_reference_elements_returns_mutability_and_ranges_stay_explicit_boundaries()
- {
+fn valid_borrowed_projection_and_generic_reference_elements_stay_explicit_boundaries() {
     let mut count = 0;
     for case in cases()
         .into_iter()
@@ -614,9 +866,6 @@ fn valid_borrowed_projection_reference_elements_returns_mutability_and_ranges_st
         };
         let message = error.to_string();
         let expected = match case.name {
-            "reference_elements" => {
-                "slice elements containing references or slices, or nested slice carriers"
-            }
             // Reference generic arguments are admitted (G3), so concrete
             // substitution now reaches the reference-element slice boundary.
             "generic_reference_substitution" => {
@@ -631,7 +880,7 @@ fn valid_borrowed_projection_reference_elements_returns_mutability_and_ranges_st
         );
         count += 1;
     }
-    assert_eq!(count, 3);
+    assert_eq!(count, 2);
 }
 #[test]
 fn native_typed_slices_workers1_8_check_build_no_compiler_fallback() {
@@ -675,9 +924,7 @@ fn native_typed_slices_workers1_8_check_build_no_compiler_fallback() {
                 if !accepted {
                     assert!(result.stdout.is_empty());
                     assert!(!diagnostic.is_empty());
-                    if case.name == "reference_elements"
-                        || case.name == "generic_reference_substitution"
-                    {
+                    if case.name == "generic_reference_substitution" {
                         assert_eq!(case.outcome, Outcome::Unsupported);
                         assert!(
                             diagnostic.contains(
@@ -731,9 +978,9 @@ fn native_typed_slices_workers1_8_check_build_no_compiler_fallback() {
         }
     }
     assert_eq!(gates, 128);
-    assert_eq!(modes, [42, 42, 6, 6, 10, 10, 6, 6]);
-    assert_eq!(images, 48);
+    assert_eq!(modes, [44, 44, 6, 6, 10, 10, 4, 4]);
+    assert_eq!(images, 50);
     eprintln!(
-        "TYPED SLICES native128cells/48ELF executions/profile, modes{modes:?};3stock-validUnsupported capabilities are not ordinary-invalid parity, general borrowing or full Rust"
+        "TYPED SLICES native128cells/50ELF executions/profile, modes{modes:?};2stock-validUnsupported capabilities are not ordinary-invalid parity, general borrowing or full Rust"
     );
 }

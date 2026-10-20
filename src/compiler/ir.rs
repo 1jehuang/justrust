@@ -497,7 +497,13 @@ impl CarrierChannel {
 pub enum CarrierStep {
     Field(usize),
     ConstantIndex(usize),
-    VariantField { variant: VariantId, field: usize },
+    /// All elements of a shared slice, as one conservative read-only carrier.
+    /// This is a type-level domain, not a runtime index or a disjoint place.
+    SliceElement,
+    VariantField {
+        variant: VariantId,
+        field: usize,
+    },
     Referent,
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
@@ -549,12 +555,10 @@ pub fn carrier_locations(ty: &Ty, budget: &PlanBudget) -> Result<Arc<[CarrierLoc
             } => child(referent)?,
             Ty::Str => {}
             Ty::Slice { element } => {
-                // A slice descriptor carries its outer loan, not channels
-                // hidden inside an element. Concrete element references are
-                // rejected again after substitution, never given a fake tail.
                 child(element)?;
-                reject_references(element, budget)?;
-                has = false;
+                // Opaque generic elements acquire no invented carrier schema.
+                // Concrete reference elements have one conservative domain.
+                has = matches!(element.as_ref(), Ty::Ref { .. });
             }
             Ty::Tuple(fields) => {
                 for ty in fields.iter() {
@@ -730,9 +734,8 @@ pub fn carrier_locations(ty: &Ty, budget: &PlanBudget) -> Result<Arc<[CarrierLoc
                             child(CarrierStep::ConstantIndex(index), element)?;
                         }
                     }
-                    Ty::Slice { .. } => {
-                        // Reached only when the element type carries references.
-                        return Err("reference-carrying slice elements are unsupported".into());
+                    Ty::Slice { element } => {
+                        child(CarrierStep::SliceElement, element)?;
                     }
                     Ty::Struct(value) => {
                         for (index, field) in value.def().fields.iter().enumerate() {
@@ -797,6 +800,7 @@ pub fn carrier_at<'a>(
             (CarrierStep::ConstantIndex(index), Ty::Array { element, len }) if index < len => {
                 element
             }
+            (CarrierStep::SliceElement, Ty::Slice { element }) => element,
             (CarrierStep::VariantField { variant, field }, Ty::Enum(value))
                 if variant.owner == value.def().id =>
             {
@@ -2880,16 +2884,12 @@ fn substitute_ty_walk(
         }
         Ty::Slice { element } => {
             budget.retain_bytes(std::mem::size_of::<Ty>() + std::mem::size_of::<usize>())?;
+            let actual = substitute_ty_walk(element, env, args, caller, cx, budget, depth + 1)?;
+            if !matches!(element.as_ref(), Ty::Ref { .. }) && matches!(actual, Ty::Ref { .. }) {
+                return Err("unsupported: slice elements containing references or slices, or nested slice carriers introduced through generic substitution".into());
+            }
             Ty::Slice {
-                element: Arc::new(substitute_ty_walk(
-                    element,
-                    env,
-                    args,
-                    caller,
-                    cx,
-                    budget,
-                    depth + 1,
-                )?),
+                element: Arc::new(actual),
             }
         }
         Ty::RawPtr { kind, pointee } => {
@@ -5676,8 +5676,15 @@ fn validate_shared_slice_element_inner(
     } else {
         facts.validate_value_ty(element)?;
     }
+    let inner = match element {
+        Ty::Ref {
+            kind: BorrowKind::Shared,
+            referent,
+        } => referent.as_ref(),
+        _ => element,
+    };
     slice_boundary_walk(
-        element,
+        inner,
         false,
         facts
             .validated()
@@ -5688,8 +5695,10 @@ fn validate_shared_slice_element_inner(
     )
 }
 
-/// Validate exact element metadata, Sized obligations and the current
-/// reference-free slice boundary. Re-run after every concrete substitution.
+/// Validate exact element metadata and Sized obligations. Admit reference-free
+/// values or one shared reference to a reference-free value (including str).
+/// Nested references and reference-bearing aggregates remain unsupported.
+/// Re-run after every concrete substitution.
 pub fn validate_shared_slice_element(
     element: &Ty,
     facts: FactsCtx<'_>,
@@ -5707,8 +5716,14 @@ pub fn validate_shared_slice_element_with_facts(
     validate_shared_slice_element_inner(element, facts, facts.validated().map(|f| f.budget()))
 }
 
-fn validate_slice_carrier_with_facts(ty: &Ty, facts: FactsCtx<'_>) -> Result<(), String> {
-    if let Some((_, element)) = ty.slice_ref_element() {
+pub(super) fn validate_slice_carrier_with_facts(
+    ty: &Ty,
+    facts: FactsCtx<'_>,
+) -> Result<(), String> {
+    if let Some((kind, element)) = ty.slice_ref_element() {
+        if kind == BorrowKind::Mut && matches!(element, Ty::Ref { .. }) {
+            return Err("unsupported: mutable slices with reference-carrying elements".into());
+        }
         validate_shared_slice_element_with_facts(element, facts)
     } else {
         slice_boundary_walk(

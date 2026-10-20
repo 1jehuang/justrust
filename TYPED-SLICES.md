@@ -37,6 +37,45 @@ reference-containing slice aggregates and slice returns remain outside this
 milestone. Existing source names, builtin len occurrence certificates, facts
 phases, ownership seals and canonical source replay remain authoritative.
 
+## Shared-reference element prerequisite (October 20, 2026)
+
+The element boundary above now also admits one shared reference to an otherwise
+admitted reference-free referent, including `str`: `&[&str]` and `&[&i32]` are
+examples. The new typed `CarrierStep::SliceElement` denotes the conservative
+all-elements domain, never an alias-disjoint runtime index. Known backing arrays
+expand to their actual element cells; abstract input slices retain one summary
+cell. Loading an element copies its stored inner carrier, rather than replacing
+its lifetime with the lifetime of the slice handle. Independent source regions
+and the implied inner-outlives-outer relationship remain explicit declaration
+facts. Loaded references survive destruction or rebinding of the handle only
+when their original referents remain valid.
+
+Checked IR, CFG, ownership and native layout validation share this boundary.
+Exact shared-reference argument autoderef and explicit `*items[index]` operate
+on the loaded carrier. Neither path invents a fresh borrow or drops the selected
+reference's origins. Within one input parameter, nested occurrences of the
+same explicit named lifetime permit that lifetime to supply an elided output.
+This does not deduplicate separate input parameters: their existing output
+elision ambiguity rules still apply.
+
+Mutable reference-carrying slice cases, deeper or aggregate reference-bearing
+elements, and new reference topology introduced through generic substitution
+remain explicitly unsupported. Explicit `'static` annotations on slice element
+references are also unsupported until static input authority is represented;
+they are never treated as anonymous input lifetimes.
+
+The existing slice suites contain stock differential CHECK/BUILD/run witnesses
+at workers 1 and 8, including the unchanged `*s[0]` and `for it in items` cases,
+loaded-reference lifetime and alias controls, forged result/element/carrier
+facts, and CHECK graph coverage without code generation. Focused release gates
+and unchanged graph-integrity ceilings pass. Broader slice-suite failures remain
+reported separately: builtin `.len()` result constraints, typed empty-array
+inference (`let a: [i32; 0] = []`, corpus `bounds_empty`), and subslice inference
+(`&a[1..]`, corpus `slice_range`). Their existing success/trap expectations are
+unchanged, not reclassified as unsupported to make the suite pass. This is a
+prerequisite for error-handling programs, not a claim that unchanged
+`full_programs/15_error_handling.rs` or full Rust now compiles.
+
 ## Native descriptor and memory contract
 
 Keep the existing private two-word data/length descriptor and two-word argument

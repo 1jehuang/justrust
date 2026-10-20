@@ -312,6 +312,7 @@ impl ValidatedTraitWorld {
                     {
                         Some(element)
                     }
+                    (ir::CarrierStep::SliceElement, Ty::Slice { element }) => Some(element),
                     (ir::CarrierStep::VariantField { variant, field }, Ty::Enum(value))
                         if variant.owner == value.def().id =>
                     {
@@ -371,7 +372,7 @@ impl ValidatedTraitWorld {
         Ok(result)
     }
 }
-fn enclosing(parent: &ir::CarrierLocation, child: &ir::CarrierLocation) -> bool {
+pub(super) fn enclosing(parent: &ir::CarrierLocation, child: &ir::CarrierLocation) -> bool {
     let ir::CarrierChannel::Fixed(parent_depth) = parent.channel else {
         return false;
     };

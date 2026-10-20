@@ -35,24 +35,23 @@ stock-differential CHECKed, BUILT and run at workers 1 and 8 by
 `justrust test --test iterable_literals unchanged_enum_state_machine_matches_stock`.
 Its immediate-for fixed-array `.iter()` path preserves real method priority,
 shared element loans and exact original source-call correspondence. A full
-hosted replay (`20261020-044008690-3957300`) verifies all 20 entries, with six
+hosted replay (`20261020-050209562-3991979`) verifies all 20 entries, with six
 successful executions and 14 explicit rejections. This is not general Iterator,
 full formatting or full Rust support.
 
 ## Current first rejection boundaries
 
 Refreshed 2026-10-20 by `justrust test --test full_programs -- --nocapture`
-on the integrated array-iterator snapshot. The earlier local debug replay
+on the integrated shared-reference slice snapshot. The earlier local debug replay
 timed out under contention, including hello, and is not a compatibility result.
 The hosted replay completed without timeouts or wrong-output executables.
 
 | Programs | First reported boundary |
 |---|---|
-| 04, 06, 09, 10, 14, 16, 18, 19 | unresolved nominal source constraints from the available graph inputs |
+| 04, 06, 09, 10, 14, 15, 16, 18, 19 | unresolved nominal source constraints from the available graph inputs |
 | 11 | implicit associated constant lookup requires a retained caller trait bound |
 | 12 | recursive nominal field realization requires an explicit recursive layout protocol |
 | 13 | trait object types only admitted directly behind a reference (`Box<dyn>`) |
-| 15 | slice elements containing references/slices or nested slice carriers |
 | 17, 20 | unresolved import `HashMap` (no `std::collections`) |
 
 Most of these trace to the inactive source Iterator library (adapters,

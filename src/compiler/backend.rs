@@ -3277,9 +3277,10 @@ fn emit_native_cfg(
     let function = concrete.function().as_ref();
     let validate_slice = |ty: &ir::Ty| -> Result<(), String> {
         if let Some((_, element)) = ty.slice_ref_element() {
-            // Universal reference-free admission is not a concrete layout
-            // certificate. Recheck the fully substituted type and its exact
-            // sealed facts before emitting any descriptor or memory access.
+            // Admission includes the exact borrow kind and carrier boundary.
+            ir::validate_slice_carrier_with_facts(ty, ir::FactsCtx::Validated(concrete.facts()))?;
+            // Universal admission is not a concrete layout certificate.
+            // Recheck the fully substituted element and its sealed facts.
             ir::validate_shared_slice_element(
                 element,
                 ir::FactsCtx::Validated(concrete.facts()),

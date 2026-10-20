@@ -5221,8 +5221,8 @@ pub(super) const SLICE_UNSUPPORTED: &str =
     "unsupported: slice type outside root shared slice locals is not supported by CFG lowering";
 
 fn validate_slice_position(ty: &Ty, facts: ir::FactsCtx<'_>) -> Result<(), String> {
-    if let Some((_, element)) = ty.slice_ref_element() {
-        ir::validate_shared_slice_element_with_facts(element, facts)?;
+    if ty.slice_ref_element().is_some() {
+        ir::validate_slice_carrier_with_facts(ty, facts)?;
     } else if ty.contains_slice() {
         return Err(SLICE_UNSUPPORTED.into());
     }

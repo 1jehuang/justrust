@@ -179,6 +179,43 @@ fn observed_unsupported(source: &str) {
     }
 }
 #[test]
+fn shared_reference_slice_rejects_forged_result_and_mutable_carrier() {
+    let program = frontend::parse("fn references<'a,'b>(values:&'a [&'b i32],index:usize)->&'b i32{values[index]} fn main(){}").unwrap();
+    let budget = ir::PlanBudget::default();
+    let plan = PlanCtx::from_program(&program, &budget).unwrap();
+    let (checked, facts) = typed(&program, &plan, &budget, "references");
+    let mut forged = checked.clone();
+    forged.result = Ty::Ref {
+        kind: BorrowKind::Mut,
+        referent: Arc::new(Ty::Int(ir::IntTy::I32)),
+    };
+    reject_ir(&forged, &facts);
+    let mut forged = checked.clone();
+    let mut contract = forged.ref_contract.as_ref().clone();
+    let mut results = contract.results.to_vec();
+    results[0].region = contract.input_regions[0].region;
+    contract.results = results.into();
+    forged.ref_contract = Arc::new(contract);
+    reject_ir(&forged, &facts);
+    let mut forged = checked.clone();
+    let param = forged.params[0];
+    let Ty::Ref { kind, .. } = &mut forged.locals[param.0].ty else {
+        panic!("slice parameter")
+    };
+    *kind = BorrowKind::Mut;
+    reject_ir(&forged, &facts);
+    let mut forged = checked;
+    let expression = forged.exprs.iter_mut().find(|expr| {
+        matches!(&expr.ty, Ty::Ref { referent, .. } if matches!(referent.as_ref(), Ty::Int(ir::IntTy::I32)))
+    }).expect("genuine loaded reference expression");
+    expression.ty = Ty::Ref {
+        kind: BorrowKind::Shared,
+        referent: Arc::new(Ty::Int(ir::IntTy::U32)),
+    };
+    reject_ir(&forged, &facts);
+}
+
+#[test]
 fn real_scalar_wide_float_copy_aggregate_and_generic_slice_baselines() {
     let program = parsed();
     let budget = ir::PlanBudget::default();

@@ -4547,6 +4547,11 @@ impl ValidatedTraitWorld {
                 {
                     element
                 }
+                (ir::CarrierStep::SliceElement, Ty::Slice { element }) => {
+                    // A summary of shared elements never grants write authority.
+                    all_mutable = false;
+                    element
+                }
                 (ir::CarrierStep::VariantField { variant, field }, Ty::Enum(value))
                     if variant.owner == value.def().id =>
                 {
@@ -4726,6 +4731,35 @@ impl ValidatedTraitWorld {
             }
         }
         let mut constraints = Vec::new();
+        // A reference stored behind a shared slice borrow must outlive that
+        // borrow. Keep the independent source regions, recording implication
+        // rather than identifying the inner lifetime with the outer one.
+        for child in source.carriers.iter().filter(|row| {
+            row.parameter.is_some() && row.location.path.0.contains(&ir::CarrierStep::SliceElement)
+        }) {
+            for parent in source
+                .carriers
+                .iter()
+                .filter(|row| row.parameter == child.parameter)
+            {
+                charged(
+                    &self.budget,
+                    self.budget.charge_work(
+                        child.location.path.0.len() + parent.location.path.0.len() + 1,
+                    ),
+                )?;
+                if carrier_regions::enclosing(&parent.location, &child.location) {
+                    push(
+                        &self.budget,
+                        &mut constraints,
+                        ir::CarrierRegionConstraint {
+                            longer: child.region.clone(),
+                            shorter: parent.region.clone(),
+                        },
+                    )?;
+                }
+            }
+        }
         for &(longer, shorter) in source.outlives.iter() {
             push(
                 &self.budget,

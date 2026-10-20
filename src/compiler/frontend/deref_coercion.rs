@@ -36,6 +36,49 @@ impl type_check::Checker<'_> {
         else {
             return Ok(None);
         };
+        // Built-in reference dereferencing copies the inner shared carrier,
+        // not a fresh borrow of its pointee. The ordinary Deref expression
+        // carries the original nested provenance into CFG ownership analysis.
+        let mut builtin = value;
+        for _ in 0..MAX_DEREF_STEPS {
+            let ir::Ty::Ref {
+                kind: ir::BorrowKind::Shared,
+                referent,
+            } = &self.exprs[builtin.0].ty
+            else {
+                break;
+            };
+            if referent.as_ref() == expected {
+                let completion = self.exprs[builtin.0].completion;
+                self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
+                let id = ir::ExprId(self.exprs.len());
+                self.exprs.push(ir::TypedExpr {
+                    ty: expected.clone(),
+                    kind: ir::ExprKind::Deref { value: builtin },
+                    completion,
+                });
+                return Ok(Some(id));
+            }
+            // This bounded prerequisite does not invent mutable reborrows
+            // or a different referent type through a shared carrier.
+            let ir::Ty::Ref {
+                kind: ir::BorrowKind::Shared,
+                ..
+            } = referent.as_ref()
+            else {
+                break;
+            };
+            let ty = referent.as_ref().clone();
+            let completion = self.exprs[builtin.0].completion;
+            self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
+            let id = ir::ExprId(self.exprs.len());
+            self.exprs.push(ir::TypedExpr {
+                ty,
+                kind: ir::ExprKind::Deref { value: builtin },
+                completion,
+            });
+            builtin = id;
+        }
         let ir::Ty::Ref { referent: have, .. } = &self.exprs[value.0].ty else {
             return Ok(None);
         };

@@ -795,6 +795,14 @@ impl<'s> Solver<'_, '_, 's> {
                 // A reference coercion may run an authoritative Deref chain.
                 // Only equal outer constructors imply equality of type arguments.
                 // The ordinary checker proves differing-referent coercions later.
+                // Built-in shared-reference deref coercions preserve the
+                // original carrier. Do not equate its extra reference layer
+                // with a concrete expected referent during inference.
+                if matches!(self.domain(a), Domain::Ref(ir::BorrowKind::Shared, _))
+                    && !matches!(self.domain(b), Domain::Ref(_, _) | Domain::Unknown)
+                {
+                    return Ok(());
+                }
                 if let Domain::Nominal(actual, _) = self.domain(a) {
                     match self.domain(b) {
                         Domain::Nominal(expected, _) if actual == expected => {}

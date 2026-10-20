@@ -191,6 +191,7 @@ fn value_projection(location: &CarrierLocation) -> Vec<Projection> {
             CarrierStep::Referent => path.push(Projection::Deref),
             CarrierStep::Field(index) => path.push(Projection::Field(*index)),
             CarrierStep::ConstantIndex(index) => path.push(Projection::ConstantIndex(*index)),
+            CarrierStep::SliceElement => path.push(Projection::DynamicIndex(LocalId(usize::MAX))),
             CarrierStep::VariantField { variant, field } => {
                 path.push(Projection::Downcast(*variant));
                 path.push(Projection::Field(*field));
@@ -580,6 +581,85 @@ fn resolve_cells<'a>(
     let mut failure = None;
     let mut static_referent = false;
     for step in &place.projection {
+        if matches!(step, Projection::DynamicIndex(_)) {
+            // A runtime index cannot select a more precise provenance row.
+            // Expand a known array's complete domain, or select the single
+            // summary cell of an abstract shared slice. Never use the index
+            // local as an alias-disjointness certificate.
+            let mut expanded = Vec::new();
+            for candidate in candidates {
+                if candidate.precision == TargetPrecision::Subtree {
+                    checked_vec_growth(&mut expanded, budget)?;
+                    expanded.push(candidate);
+                    continue;
+                }
+                let (local, location) = match &candidate.place.root {
+                    CanonicalRoot::Owned(local) => (*local, None),
+                    CanonicalRoot::ParameterReferent(local, location) => (*local, Some(location)),
+                };
+                let Some(mut ty) = original_locals.get(local.0) else {
+                    return Err(Exhausted);
+                };
+                if let Some(location) = location {
+                    budget.spend(location.path.0.len() + 1)?;
+                    budget.reserve_bytes(
+                        location
+                            .path
+                            .0
+                            .len()
+                            .checked_mul(2 * size_of::<Projection>())
+                            .ok_or(Exhausted)?,
+                    )?;
+                    let path = value_projection(location);
+                    ty = match ir::projected_ty(ty, &path) {
+                        Ok(Ty::Ref { referent, .. }) => referent,
+                        _ => return Err(Exhausted),
+                    };
+                }
+                ty = ir::projected_ty(ty, &candidate.place.projection).map_err(|_| Exhausted)?;
+                if matches!(ty, Ty::Array { element, .. } if !matches!(element.as_ref(), Ty::Ref { kind: BorrowKind::Shared, .. }))
+                    && *step != Projection::DynamicIndex(LocalId(usize::MAX))
+                {
+                    let mut selected = candidate;
+                    selected.place.projection.push(*step);
+                    checked_vec_growth(&mut expanded, budget)?;
+                    expanded.push(selected);
+                    continue;
+                }
+                let count = match ty {
+                    Ty::Array { len, .. } => *len,
+                    Ty::Slice { .. } => 1,
+                    _ => return Err(Exhausted),
+                };
+                if count > ir::MAX_ARRAY_LEN
+                    || expanded.len().checked_add(count).ok_or(Exhausted)? > MAX_MEMBERSHIPS
+                {
+                    return Err(Exhausted);
+                }
+                for index in 0..count {
+                    budget.spend(1)?;
+                    budget.reserve_bytes(target_payload_bytes(
+                        1,
+                        candidate.place.projection.len() + 1,
+                        candidate.authority.len(),
+                        3,
+                    )?)?;
+                    let mut selected = candidate.clone();
+                    selected
+                        .place
+                        .projection
+                        .push(if matches!(ty, Ty::Slice { .. }) {
+                            Projection::DynamicIndex(LocalId(usize::MAX))
+                        } else {
+                            Projection::ConstantIndex(index)
+                        });
+                    checked_vec_growth(&mut expanded, budget)?;
+                    expanded.push(selected);
+                }
+            }
+            candidates = expanded;
+            continue;
+        }
         if *step != Projection::Deref {
             for target in &mut candidates {
                 if target.precision == TargetPrecision::Exact {
@@ -1633,6 +1713,18 @@ impl CarrierBuilder<'_, '_> {
                 ));
                 self.family_regions
                     .push((family.clone(), mapping.original.clone(), region));
+            }
+        }
+        for row in source.carriers.iter().filter(|row| {
+            row.parameter.is_some() && row.location.path.0.contains(&CarrierStep::SliceElement)
+        }) {
+            let input = InputCarrier {
+                param: row.parameter.ok_or(Exhausted)?,
+                location: row.location.clone(),
+            };
+            for (_, region) in self.body_term_regions(&row.region)? {
+                self.retain(4 * size_of::<(InputCarrier, AnalysisRegionId)>(), 1)?;
+                self.input_regions.push((input.clone(), region));
             }
         }
         for constraint in body.region_schema().constraints.iter() {
@@ -2878,6 +2970,30 @@ impl CarrierBuilder<'_, '_> {
                     }
                 }
                 Ok(output)
+            }
+            Rvalue::SliceIndex { slice, index: _ } => {
+                let (Operand::Copy(place) | Operand::Move(place)) = slice else {
+                    return Err(Exhausted);
+                };
+                let ty = self.place_ty(self.f, place)?.clone();
+                let Some(element) = ty.shared_slice_element() else {
+                    return Err(Exhausted);
+                };
+                self.retain(
+                    place
+                        .projection
+                        .len()
+                        .checked_add(2)
+                        .and_then(|len| len.checked_mul(3 * size_of::<Projection>()))
+                        .ok_or(Exhausted)?,
+                    1,
+                )?;
+                let mut selected = place.clone();
+                selected.projection.push(Projection::Deref);
+                selected
+                    .projection
+                    .push(Projection::DynamicIndex(LocalId(usize::MAX)));
+                self.read_value(state, &selected, element)
             }
             Rvalue::IndexCopy { array, index } => {
                 let Ty::Array { len, .. } = self.place_ty(self.f, array)? else {
@@ -5330,6 +5446,14 @@ impl Plan {
                 "body result has no validated declaration view".into(),
             )));
         }
+        let mut slice_carriers = false;
+        if let Some(body) = &self.body {
+            for row in body.source_region_env().carriers.iter() {
+                budget.spend(row.location.path.0.len() + 1)?;
+                slice_carriers |= row.parameter.is_some()
+                    && row.location.path.0.contains(&CarrierStep::SliceElement);
+            }
+        }
         if let Some(body) = &self.body {
             let Some(signature) = &self.body_signature else {
                 return Ok(Some(Problem::Invalid(
@@ -5438,9 +5562,10 @@ impl Plan {
                 if body.source_region_env().carriers.iter().any(|source| {
                     source.parameter.is_none()
                         && source.location == row.location
-                        && matches!(source.region, ir::CarrierRegionTerm::Named(_))
+                        && (matches!(source.region, ir::CarrierRegionTerm::Named(_))
+                            || slice_carriers)
                 }) {
-                    // Named carrier rows authenticate the complete dependency
+                    // Source carrier rows authenticate the complete dependency
                     // closure, not merely the immediate returned address.
                     let mut seen = origins.references.0.clone();
                     let mut pending: Vec<_> = seen.members().collect();
@@ -5478,10 +5603,11 @@ impl Plan {
                 body.source_region_env().carriers.iter().any(|source| {
                     source.parameter.is_none()
                         && source.location == fixed_location(result.position)
-                        && matches!(source.region, ir::CarrierRegionTerm::Named(_))
+                        && (matches!(source.region, ir::CarrierRegionTerm::Named(_))
+                            || (slice_carriers && result.position.depth == 0))
                 })
             }) {
-                // The generalized carrier check above already proved the named
+                // The generalized carrier check above already proved the source
                 // lifetime against exact declaration-owned source occurrences.
                 continue;
             }
