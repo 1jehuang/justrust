@@ -1380,6 +1380,30 @@ and measured integration throughput after each accepted slice.
 
 ## Active work and evidence limits
 
+Closed nominal field realization (`NOMINAL-PROJECTIONS.md`): the unchanged
+nested closed `Peek<I: It>` struct and closed enum consumers pass stock/native
+CHECK, BUILD and execution at workers 1 and 8. Typed graph reads preserve source
+declaration/ordered actuals separately from engine-issued representation identity.
+Unused-invalid, typed-capability, source-call omission and constructor-ingress
+source/snapshot/actual/foreign-engine controls pass. Closed generic BODY consumers
+now independently require proof/engine mode from authenticated schema arity and
+target/provider authority. Whole-proof/engine-plus-inventory removal and changed
+source-application bypasses are rejected by preserved real-consumer controls.
+Closed call receipts replay the complete original/current occurrence inventories,
+ordered substitution, selection, resolved target, contract and current-engine
+conversion evidence. The unchanged forwarded Hash consumer passes stock/native
+CHECK/BUILD/run at workers 1 and 8 (`20261019-231256541-2703029`), with strict call,
+borrow and contract-identity guards unchanged. The final receipt mutation control,
+341-target check and all 14 graph gates pass (`20261019-232217144-2733864`,
+`20261019-232315842-2737020`, `20261019-232409929-2742857`) without ratchet or stack
+changes. After exact embedded-function authority parent carry, 341-target checking
+and its genuine helper/mutation integration control pass (`20261019-233202311-2762780`,
+`20261019-233242152-2767358`); the feature doc retains the earlier graph/Hash frozen
+provenance rather than claiming those were rerun on that later parent. This is a
+bounded closed acyclic non-closure slice, not full G0-G12 completion. Full Iterator
+activation, recursive or closure realization, reference-carrier/result admission
+and full Rust compatibility remain open.
+
 Full-program target corpus (FULL-PROGRAMS.md, `tests/full_programs.rs`): 20
 realistic std-only programs with stock oracle stdout and a pass/fail ratchet
 manifest. Currently 0/20 pass. FULL-PROGRAMS.md ranks the blocking features.

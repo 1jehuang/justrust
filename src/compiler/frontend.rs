@@ -106,6 +106,20 @@ pub(super) enum PublishedCallableBody {
     Recipe(Arc<ir::CheckedFunction>),
 }
 
+/// Node-local publication attempt. A suspension returns the original sealed
+/// constant inputs intact, not a partially published body or reconstructed proof.
+pub(super) enum NominalCallablePublication {
+    Ready(
+        PublishedCallableBody,
+        Vec<closures::check::CheckedClosure>,
+        Vec<ir::OpaqueHiddenType>,
+    ),
+    Blocked {
+        preparation: NominalPreparation,
+        constants: const_inputs::SealedBodyConstants,
+    },
+}
+
 #[cfg(test)]
 mod canonical_source_replay_tests {
     use super::*;
@@ -596,6 +610,7 @@ mod canonical_source_replay_tests {
             symbolic_constant_emissions: Default::default(),
             constant_emissions: Default::default(),
             calls: Default::default(),
+            nominal_call_realizations: Default::default(),
             builtin_leading_zeros: Default::default(),
             builtin_lens: Default::default(),
             builtin_intrinsics: Default::default(),
@@ -2603,6 +2618,7 @@ pub(super) struct CanonicalSourceCapability {
     constant_emissions: std::cell::RefCell<Vec<(usize, ir::ExprId)>>,
     symbolic_constant_emissions: std::cell::RefCell<Vec<(usize, ir::ExprId)>>,
     calls: std::cell::RefCell<Vec<(usize, ir::ExprId, ir::Callee)>>,
+    nominal_call_realizations: std::cell::RefCell<Option<Vec<nominal_call_receipts::Receipt>>>,
     builtin_leading_zeros: std::cell::RefCell<Vec<BuiltinLeadingZerosOccurrence>>,
     builtin_lens: std::cell::RefCell<Vec<BuiltinLenOccurrence>>,
     builtin_intrinsics: std::cell::RefCell<Vec<BuiltinIntrinsicOccurrence>>,
@@ -2625,6 +2641,7 @@ pub(super) struct OriginalSource {
     calls: Vec<SourceCallSite>,
     bindings: Vec<SourceBindingSite>,
     call_mapping: Vec<(usize, ir::ExprId, ir::Callee)>,
+    nominal_call_realizations: Option<Vec<nominal_call_receipts::Receipt>>,
     builtin_leading_zeros_mapping: Vec<BuiltinLeadingZerosOccurrence>,
     builtin_len_mapping: Vec<BuiltinLenOccurrence>,
     builtin_intrinsic_mapping: Vec<BuiltinIntrinsicOccurrence>,
@@ -4253,6 +4270,7 @@ pub(super) fn replay_source_body(
         .map_err(|_| FactsError::resource(budget, "source call coverage allocation"))?;
     seen.resize(checked.exprs.len(), false);
     validate_binding_coverage(original, checked, budget)?;
+    nominal_call_receipts::replay(original, checked, facts, budget)?;
     let mut decisions = Vec::new();
     let mut signatures = original
         .plan
@@ -4807,7 +4825,7 @@ impl PlanCtx {
     pub(super) fn publish_callable_body_outputs(
         &self,
         declaration: ir::DeclId,
-        mut constants: const_inputs::SealedBodyConstants,
+        constants: const_inputs::SealedBodyConstants,
         budget: &ir::PlanBudget,
     ) -> Result<
         (
@@ -4817,6 +4835,33 @@ impl PlanCtx {
         ),
         FactsError,
     > {
+        match self.publish_callable_body_inner(declaration, constants, budget, None)? {
+            NominalCallablePublication::Ready(body, closures, hidden) => {
+                Ok((body, closures, hidden))
+            }
+            NominalCallablePublication::Blocked { .. } => Err(FactsError::invalid(
+                budget,
+                "ordinary publication suspended without nominal graph inputs",
+            )),
+        }
+    }
+    pub(super) fn publish_callable_body_with_nominal_inputs(
+        &self,
+        declaration: ir::DeclId,
+        constants: const_inputs::SealedBodyConstants,
+        budget: &ir::PlanBudget,
+        receiver: Option<&NominalShape>,
+        inputs: &NominalPreparationInputs<'_>,
+    ) -> Result<NominalCallablePublication, FactsError> {
+        self.publish_callable_body_inner(declaration, constants, budget, Some((receiver, inputs)))
+    }
+    fn publish_callable_body_inner(
+        &self,
+        declaration: ir::DeclId,
+        mut constants: const_inputs::SealedBodyConstants,
+        budget: &ir::PlanBudget,
+        nominal: Option<(Option<&NominalShape>, &NominalPreparationInputs<'_>)>,
+    ) -> Result<NominalCallablePublication, FactsError> {
         if constants.declaration != declaration {
             return Err(FactsError::invalid(
                 budget,
@@ -4833,6 +4878,12 @@ impl PlanCtx {
             .map_err(|e| source_error(budget, &e))?
         {
             CallableProvider::Recipe { .. } => {
+                if nominal.is_some() {
+                    return Err(FactsError::unsupported(
+                        budget,
+                        "nominal source publication requires a source provider",
+                    ));
+                }
                 let count = env.total_arity();
                 budget
                     .charge_nodes(count)
@@ -4864,7 +4915,7 @@ impl PlanCtx {
                     .checked_body(&target, &facts, budget)
                     .map_err(|e| source_error(budget, &e))?;
                 sr::retain(budget, std::mem::size_of::<ir::CheckedFunction>() + 32)?;
-                Ok((
+                Ok(NominalCallablePublication::Ready(
                     PublishedCallableBody::Recipe(Arc::new(checked)),
                     Vec::new(),
                     Vec::new(),
@@ -4902,6 +4953,7 @@ impl PlanCtx {
                     symbolic_constant_emissions: Default::default(),
                     constant_emissions: Default::default(),
                     calls: Default::default(),
+                    nominal_call_realizations: Default::default(),
                     builtin_leading_zeros: Default::default(),
                     builtin_lens: Default::default(),
                     builtin_intrinsics: Default::default(),
@@ -4911,14 +4963,51 @@ impl PlanCtx {
                     emissions: Default::default(),
                     error: Default::default(),
                 };
-                let (checked, closures, hidden) = match type_check::type_callable_source_outputs(
-                    &self.program,
-                    declaration,
-                    self,
-                    budget,
-                    Some(&cap),
-                ) {
-                    Ok(checked) => checked,
+                if nominal.is_some() {
+                    *cap.nominal_call_realizations.borrow_mut() = Some(Vec::new());
+                }
+                let checked = match nominal {
+                    Some((receiver, inputs)) => {
+                        type_check::type_callable_source_with_nominal_inputs(
+                            &self.program,
+                            declaration,
+                            self,
+                            budget,
+                            Some(&cap),
+                            receiver,
+                            inputs,
+                        )
+                    }
+                    None => type_check::type_callable_source_outputs(
+                        &self.program,
+                        declaration,
+                        self,
+                        budget,
+                        Some(&cap),
+                    )
+                    .map(|(body, closures, hidden)| {
+                        NominalCallableOutput::Ready(body, closures, hidden)
+                    }),
+                };
+                let (checked, closures, hidden) = match checked {
+                    Ok(NominalCallableOutput::Ready(body, closures, hidden)) => {
+                        (body, closures, hidden)
+                    }
+                    Ok(NominalCallableOutput::Blocked(preparation)) => {
+                        // The immutable inventory and typed constant facts are
+                        // returned with their original owner/body identity.
+                        // Partial local emissions are discarded, never sealed.
+                        let constants = const_inputs::SealedBodyConstants {
+                            declaration,
+                            inventory: Some(cap.inventory),
+                            uses: cap.constants,
+                            symbolic: cap.symbolic_constants,
+                        };
+                        return Ok(NominalCallablePublication::Blocked {
+                            preparation,
+                            constants,
+                        });
+                    }
                     Err(message) => {
                         return Err(if budget.has_resource_failure() {
                             source_error(budget, &message)
@@ -4948,6 +5037,7 @@ impl PlanCtx {
                     calls,
                     bindings: std::mem::take(&mut cap.inventory.bindings),
                     call_mapping: cap.calls.take(),
+                    nominal_call_realizations: cap.nominal_call_realizations.borrow().clone(),
                     builtin_leading_zeros_mapping: cap.builtin_leading_zeros.take(),
                     builtin_len_mapping: cap.builtin_lens.take(),
                     builtin_intrinsic_mapping: cap.builtin_intrinsics.take(),
@@ -4964,7 +5054,11 @@ impl PlanCtx {
                 let source = Arc::new(final_payload);
                 let publication =
                     sr::publish_canonical_source(cap, source, original, facts, budget)?;
-                Ok((PublishedCallableBody::Source(publication), closures, hidden))
+                Ok(NominalCallablePublication::Ready(
+                    PublishedCallableBody::Source(publication),
+                    closures,
+                    hidden,
+                ))
             }
         }
     }
@@ -4976,6 +5070,8 @@ mod array_len_receiver;
 mod associated_bounds;
 mod associated_declarations;
 mod const_inputs;
+pub(super) mod nominal_call_receipts;
+pub(in crate::compiler) use const_inputs::SealedBodyConstants;
 mod const_items;
 #[cfg(test)]
 mod const_source_tests;
@@ -16029,6 +16125,40 @@ impl DeclRegistry {
         let info = self.declaration(context.declaration)?;
         let names = self.names.as_ref();
         let mut found = match info.kind {
+            ir::DeclKind::Struct => {
+                let declaration = self
+                    .program
+                    .structs
+                    .get(info.source_index)
+                    .ok_or("missing retained struct projection source")?;
+                if declaration.module != context.module {
+                    return Err("nominal projection retained module changed".into());
+                }
+                let mut found = false;
+                for field in &declaration.fields {
+                    budget.charge_work(1)?;
+                    found |= retained_type_projection(names, &field.ty, projection, budget)?;
+                }
+                found
+            }
+            ir::DeclKind::Enum => {
+                let declaration = self
+                    .program
+                    .enums
+                    .get(info.source_index)
+                    .ok_or("missing retained enum projection source")?;
+                if declaration.module != context.module {
+                    return Err("nominal projection retained module changed".into());
+                }
+                let mut found = false;
+                for variant in &declaration.variants {
+                    for field in &variant.fields {
+                        budget.charge_work(1)?;
+                        found |= retained_type_projection(names, &field.ty, projection, budget)?;
+                    }
+                }
+                found
+            }
             ir::DeclKind::AssociatedType => {
                 associated_declarations::contains_projection(self, info.id, projection, budget)?
             }
@@ -16124,6 +16254,10 @@ impl DeclRegistry {
             Ok(())
         };
         match info.kind {
+            ir::DeclKind::Struct => {
+                inspect_bounds(&self.program.structs[info.source_index].bounds)?
+            }
+            ir::DeclKind::Enum => inspect_bounds(&self.program.enums[info.source_index].bounds)?,
             ir::DeclKind::Trait => inspect_bounds(&self.program.traits[info.source_index].bounds)?,
             ir::DeclKind::TraitItem => {
                 let owner =
@@ -16193,6 +16327,8 @@ impl DeclRegistry {
         };
         let info = self.declaration(context.declaration)?;
         match info.kind {
+            ir::DeclKind::Struct => inspect(&self.program.structs[info.source_index].bounds)?,
+            ir::DeclKind::Enum => inspect(&self.program.enums[info.source_index].bounds)?,
             ir::DeclKind::Trait => inspect(&self.program.traits[info.source_index].bounds)?,
             ir::DeclKind::TraitImpl => inspect(&self.program.impls[info.source_index].bounds)?,
             ir::DeclKind::Function | ir::DeclKind::AssociatedFunction => {
@@ -19071,7 +19207,12 @@ impl ir::SubstitutionCx for PlanCtx {
         let ty = state
             .nominals
             .ordered
-            .get(id.index)
+            .get(id.index.source_slot().map_err(|error| {
+                format!(
+                    "{error}; nominal_application id={id:?}, requested_at={}",
+                    std::panic::Location::caller()
+                )
+            })?)
             .ok_or("unknown nominal application")?;
         match ty {
             ir::Ty::Struct(t) if t.def().id == id => Ok(ir::NominalAppInfo {
@@ -19115,7 +19256,7 @@ impl ir::SubstitutionCx for PlanCtx {
         let original = state
             .nominals
             .ordered
-            .get(request.original().index)
+            .get(request.original().index.source_slot()?)
             .ok_or("substitution request names unknown nominal")?;
         let declaration = match original {
             ir::Ty::Struct(ty) if ty.def().id == request.original() => ty.def().source_decl,
@@ -19853,6 +19994,13 @@ impl tr::SchemaCx for SchemaAdapter {
             .intern(&self.registry, declaration, arguments, caller, budget, 0)
             .map_err(|e| self.error(e))
     }
+    fn nominal_declaration_schema(
+        &self,
+        declaration: ir::DeclId,
+    ) -> Result<tr::NominalDeclarationSchema, tr::FactsError> {
+        self.nominal_source_schema(declaration)
+            .map_err(|error| self.error(error))
+    }
     fn validate_nominal(
         &self,
         ty: &ir::Ty,
@@ -19885,20 +20033,35 @@ impl tr::SchemaCx for SchemaAdapter {
                 _ => None,
             };
             if let Some((id, pointer)) = nominal {
-                let state = cx.state.lock().map_err(|_| "schema interner poisoned")?;
-                let canonical = match state.nominals.ordered.get(id.index) {
-                    Some(ir::Ty::Struct(t)) if matches!(ty, ir::Ty::Struct(_)) => {
-                        t.def() as *const _ as usize
+                if matches!(id.index, ir::NominalIndex::GraphRealization(_)) {
+                    let capability = match ty {
+                        ir::Ty::Struct(n) => n.realization(),
+                        ir::Ty::Enum(n) => n.realization(),
+                        _ => None,
                     }
-                    Some(ir::Ty::Enum(t)) if matches!(ty, ir::Ty::Enum(_)) => {
-                        t.def() as *const _ as usize
+                    .ok_or("graph nominal lacks its typed read capability")?;
+                    capability.check_definition(ty).map_err(|e| e.to_string())?;
+                    if id.snapshot != cx.registry.declarations[0].id.snapshot {
+                        return Err("foreign graph nominal source snapshot".into());
                     }
-                    _ => return Err("noncanonical nominal application".into()),
-                };
-                if canonical != pointer || id.snapshot != cx.registry.declarations[0].id.snapshot {
-                    return Err("noncanonical nominal application".into());
+                } else {
+                    let state = cx.state.lock().map_err(|_| "schema interner poisoned")?;
+                    let canonical = match state.nominals.ordered.get(id.index.source_slot()?) {
+                        Some(ir::Ty::Struct(t)) if matches!(ty, ir::Ty::Struct(_)) => {
+                            t.def() as *const _ as usize
+                        }
+                        Some(ir::Ty::Enum(t)) if matches!(ty, ir::Ty::Enum(_)) => {
+                            t.def() as *const _ as usize
+                        }
+                        _ => return Err("noncanonical nominal application".into()),
+                    };
+                    if canonical != pointer
+                        || id.snapshot != cx.registry.declarations[0].id.snapshot
+                    {
+                        return Err("noncanonical nominal application".into());
+                    }
+                    drop(state);
                 }
-                drop(state);
                 if let Some(height) = memo.get(&id) {
                     b.check_depth(depth + height)?;
                     return Ok(*height);
@@ -20440,13 +20603,19 @@ impl PlanCtx {
         module: &ModuleId,
         budget: &ir::PlanBudget,
     ) -> Result<MethodSelection, String> {
-        if let Some(selected) =
-            self.select_method_with_arguments(receiver, name, caller, module, budget, |_, _, _| {
+        if let Some(selected) = self.select_method_with_arguments(
+            receiver,
+            name,
+            caller,
+            module,
+            budget,
+            |_, _, _| {
                 Ok(method_argument_selection::MethodArguments::Ready(
                     std::borrow::Cow::Borrowed(args),
                 ))
-            })?
-        {
+            },
+            |_, _| Ok(None),
+        )? {
             return Ok(selected);
         }
         Err(format!(
@@ -20758,10 +20927,17 @@ fn collect_source_params(
     Ok(())
 }
 mod dynamic_objects;
+mod nominal_declarations;
+mod nominal_realization;
 mod nominal_schema;
+mod nominal_source_shapes;
 /// One immutable per-body view with a shared canonical application service.
 mod type_check;
 use type_check::*;
+pub(in crate::compiler) use type_check::{
+    NominalCallableOutput, NominalDeclarationFields, NominalDeclarationRecipe, NominalDemand,
+    NominalPreparation, NominalPreparationInputs, NominalShape,
+};
 pub use type_check::{
     Signatures, TypeEnv, check, check_function, check_function_with_signatures, check_signatures,
     signature_table, type_callable_with_plan, type_env, type_function_with_env,
@@ -21674,6 +21850,9 @@ enum ReceiverAdjustment {
 struct MethodSelection {
     target: ir::Callee,
     signature: ir::Signature,
+    // Selection uses the realized signature, but final call publication must
+    // authenticate and retain the original declaration-owned signature too.
+    original_signature: Option<ir::Signature>,
     mode: ReceiverKind,
     depth: usize,
     adjustment: ReceiverAdjustment,

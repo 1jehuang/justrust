@@ -7146,7 +7146,10 @@ mod tests {
     ) -> Ty {
         let snapshot = SnapshotId::allocate().unwrap();
         Ty::Struct(StructTy::new(StructDef {
-            id: NominalAppId { snapshot, index: 0 },
+            id: NominalAppId {
+                snapshot,
+                index: crate::compiler::ir::NominalIndex::SourceSlot(0),
+            },
             source_decl: source_decl(snapshot, 0, &super::super::ir::PlanBudget::default())
                 .unwrap(),
             type_args: Arc::from([]),
@@ -7198,7 +7201,10 @@ mod tests {
     fn unit_enum(modules: &std::sync::Arc<super::super::module_identity::ModuleArena>) -> EnumTy {
         let snapshot = SnapshotId::allocate().unwrap();
         EnumTy::new(EnumDef {
-            id: NominalAppId { snapshot, index: 0 },
+            id: NominalAppId {
+                snapshot,
+                index: crate::compiler::ir::NominalIndex::SourceSlot(0),
+            },
             source_decl: source_decl(snapshot, 0, &super::super::ir::PlanBudget::default())
                 .unwrap(),
             type_args: Arc::from([]),
@@ -7245,7 +7251,10 @@ mod tests {
     ) -> EnumTy {
         let snapshot = SnapshotId::allocate().unwrap();
         EnumTy::new(EnumDef {
-            id: NominalAppId { snapshot, index: 0 },
+            id: NominalAppId {
+                snapshot,
+                index: crate::compiler::ir::NominalIndex::SourceSlot(0),
+            },
             source_decl: source_decl(snapshot, 0, &super::super::ir::PlanBudget::default())
                 .unwrap(),
             type_args: Arc::from([]),

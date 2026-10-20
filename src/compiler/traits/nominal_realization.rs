@@ -1,0 +1,712 @@
+//! Private nominal139 closed header/projection replay draft.
+//! No callable subject, fake function or retained mutable world is introduced.
+use super::*;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn plan() -> crate::compiler::frontend::PlanCtx {
+        let source = crate::compiler::frontend::parse("trait It{type Item;}impl It for i32{type Item=i32;}struct Peek<I:It>{value:I::Item}fn main(){}")
+            .unwrap();
+        crate::compiler::frontend::PlanCtx::from_program(&source, &ir::PlanBudget::default())
+            .unwrap()
+    }
+
+    #[test]
+    fn closed_nominal_input_replays_real_bounds_and_source_projection() {
+        let plan = plan();
+        let declaration = plan.nominal_declaration(0).unwrap();
+        let world = plan.trait_world().unwrap();
+        let source = world.nominal_declaration_wellformed(declaration).unwrap();
+        let input = world
+            .close_nominal_input(declaration, &source, &[Ty::Int(ir::IntTy::I32)])
+            .unwrap();
+        let projection = &source.schema().projections[0];
+        let (normalized, receipts) = world
+            .normalize_nominal_field_projection(&input, projection)
+            .unwrap();
+        assert_eq!(normalized, Ty::Int(ir::IntTy::I32));
+        assert!(!receipts.is_empty());
+        let template = plan.nominal_realization_template(declaration).unwrap();
+        world
+            .replay_nominal_normalizations(&input, &template, &receipts)
+            .unwrap();
+        assert!(
+            world
+                .replay_nominal_normalizations(&input, &template, &[])
+                .is_err()
+        );
+        let mut duplicated = receipts.clone();
+        duplicated.extend(receipts.iter().cloned());
+        assert!(
+            world
+                .replay_nominal_normalizations(&input, &template, &duplicated)
+                .is_err()
+        );
+        assert!(
+            world
+                .close_nominal_input(declaration, &source, &[])
+                .is_err()
+        );
+        assert!(
+            world
+                .close_nominal_input(declaration, &source, &[Ty::Bool])
+                .is_err()
+        );
+        let foreign = self::plan();
+        assert!(
+            foreign
+                .trait_world()
+                .unwrap()
+                .normalize_nominal_field_projection(&input, projection)
+                .is_err()
+        );
+        let mut absent = projection.clone();
+        absent.item = declaration;
+        assert!(
+            world
+                .normalize_nominal_field_projection(&input, &absent)
+                .is_err()
+        );
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(in crate::compiler) struct ClosedNominalInput {
+    world: WorldId,
+    declaration: DeclId,
+    source: NominalDeclarationProof,
+    actuals: Arc<[Ty]>,
+    obligations: Arc<[Predicate]>,
+}
+
+impl ValidatedTraitWorld {
+    pub(in crate::compiler) fn replay_nominal_call_selection(
+        &self,
+        original: &ir::Callee,
+        selected: &ir::Callee,
+        env: &GenericEnv,
+        arguments: &[Ty],
+    ) -> Result<()> {
+        let same_role = match (original, selected) {
+            (ir::Callee::Direct(a), ir::Callee::Direct(b)) => {
+                a.declaration == b.declaration && a.type_args.len() == b.type_args.len()
+            }
+            (ir::Callee::TraitItem(a), ir::Callee::TraitItem(b))
+            | (
+                ir::Callee::Virtual(ir::VirtualCall { call: a }),
+                ir::Callee::Virtual(ir::VirtualCall { call: b }),
+            ) => {
+                a.item == b.item
+                    && a.trait_ref.declaration == b.trait_ref.declaration
+                    && a.trait_ref.args.len() == b.trait_ref.args.len()
+                    && a.method_args.len() == b.method_args.len()
+            }
+            _ => false,
+        };
+        if !same_role
+            || env.ordered_params().count() != arguments.len()
+            || original.metadata_types().count() != selected.metadata_types().count()
+        {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "closed call changed original selection identity or arity",
+            ));
+        }
+        for (raw, actual) in original.metadata_types().zip(selected.metadata_types()) {
+            self.validate_rhs_substitution(raw, actual, env, arguments, 0)?;
+        }
+        Ok(())
+    }
+
+    pub(in crate::compiler) fn nominal_realization_world(&self) -> u64 {
+        self.id.0.graph_word()
+    }
+
+    pub(in crate::compiler) fn nominal_realization_parameter(
+        &self,
+        input: &ClosedNominalInput,
+        parameter: &ir::ParamId,
+    ) -> Result<Ty> {
+        self.replay_closed_nominal_input(input)?;
+        self.close_nominal_bound_term(
+            &Ty::Param(parameter.clone()),
+            &input.source.schema().env,
+            &input.actuals,
+            0,
+        )
+    }
+
+    pub(in crate::compiler) fn replay_closed_nominal_input(
+        &self,
+        input: &ClosedNominalInput,
+    ) -> Result<()> {
+        if input.world != self.id || input.declaration != input.source.schema().declaration {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "foreign closed nominal input",
+            ));
+        }
+        self.replay_nominal_declaration(input.declaration, &input.source)?;
+        if input.actuals.len() != input.source.schema().env.total_arity()
+            || input.obligations.len() != input.source.schema().predicates.len()
+        {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "closed nominal obligation inventory changed",
+            ));
+        }
+        for actual in input.actuals.iter() {
+            self.validate_ty_metadata_in(actual, &self.empty.env, 0)?;
+            if !self.raw_associated_ty_is_closed(actual, 0)? {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "closed nominal input contains an open actual",
+                ));
+            }
+        }
+        let context = ProofContext {
+            predicates: &self.empty,
+            phase: FactsPhase::Schema,
+        };
+        for (source, retained) in input
+            .source
+            .schema()
+            .predicates
+            .iter()
+            .zip(input.obligations.iter())
+        {
+            self.budget
+                .charge_work(1)
+                .map_err(|e| FactsError::from_message(&self.budget, &e))?;
+            let expected =
+                self.close_nominal_predicate(source, &input.source.schema().env, &input.actuals)?;
+            if !self.eq_predicate(&expected, retained)? {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "closed nominal obligation order or terms changed",
+                ));
+            }
+            self.require_in(&expected, context, &mut Vec::new())?;
+        }
+        Ok(())
+    }
+
+    pub(in crate::compiler) fn close_nominal_input(
+        &self,
+        declaration: DeclId,
+        source: &NominalDeclarationProof,
+        actuals: &[Ty],
+    ) -> Result<ClosedNominalInput> {
+        self.replay_nominal_declaration(declaration, source)?;
+        if actuals.len() != source.schema().env.total_arity() {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "nominal actual arity changed",
+            ));
+        }
+        for actual in actuals {
+            self.validate_ty_metadata_in(actual, &self.empty.env, 0)?;
+            if !self.raw_associated_ty_is_closed(actual, 0)? {
+                return Err(FactsError::unsupported(
+                    &self.budget,
+                    "open nominal realization actual",
+                ));
+            }
+        }
+        let context = ProofContext {
+            predicates: &self.empty,
+            phase: FactsPhase::Schema,
+        };
+        let mut obligations = Vec::new();
+        for original in source.schema().predicates.iter() {
+            let goal = self.close_nominal_predicate(original, &source.schema().env, actuals)?;
+            // Declared source assumptions are not copied into this empty context.
+            // Every actual implementation/equality is independently discharged.
+            self.require_in(&goal, context, &mut Vec::new())?;
+            self.budget
+                .retain_bytes(std::mem::size_of::<Predicate>())
+                .map_err(|e| FactsError::from_message(&self.budget, &e))?;
+            obligations.try_reserve_exact(1).map_err(|_| {
+                FactsError::resource(&self.budget, "nominal obligation allocation failed")
+            })?;
+            obligations.push(goal);
+        }
+        self.budget
+            .retain_bytes(std::mem::size_of_val(actuals))
+            .map_err(|e| FactsError::from_message(&self.budget, &e))?;
+        Ok(ClosedNominalInput {
+            world: self.id,
+            declaration,
+            source: source.clone(),
+            actuals: Arc::from(actuals),
+            obligations: obligations.into(),
+        })
+    }
+
+    pub(in crate::compiler) fn replay_closed_nominal_application(
+        &self,
+        input: &ClosedNominalInput,
+        declaration: DeclId,
+        proof: &NominalDeclarationProof,
+        source: &Ty,
+        actuals: &[Ty],
+    ) -> Result<()> {
+        self.replay_closed_nominal_input(input)?;
+        self.replay_nominal_declaration(declaration, proof)?;
+        if input.declaration != declaration || !self.eq_types(&input.actuals, actuals, 0)? {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "nominal realization input application changed",
+            ));
+        }
+        self.validate_ty_metadata_in(source, &proof.schema().env, 0)?;
+        let (source_declaration, source_actuals) = match source {
+            Ty::Struct(n) => (n.def().source_decl, &n.def().type_args),
+            Ty::Enum(n) => (n.def().source_decl, &n.def().type_args),
+            _ => {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "nominal realization source is not a source schema",
+                ));
+            }
+        };
+        if source_declaration != declaration
+            || source_actuals.len() != proof.schema().env.total_arity()
+        {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "nominal realization source binder changed",
+            ));
+        }
+        for (actual, parameter) in source_actuals
+            .iter()
+            .zip(proof.schema().env.ordered_params())
+        {
+            if !self.eq_ty(actual, &Ty::Param(parameter), 0)? {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "nominal realization source binder order changed",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    pub(in crate::compiler) fn replay_nominal_field_term(
+        &self,
+        input: &ClosedNominalInput,
+        source: &Ty,
+        realized: &Ty,
+        depth: usize,
+    ) -> Result<()> {
+        self.budget
+            .check_depth(depth)
+            .map_err(|e| FactsError::from_message(&self.budget, &e))?;
+        self.budget
+            .charge_work(1)
+            .map_err(|e| FactsError::from_message(&self.budget, &e))?;
+        let valid = match (source, realized) {
+            (Ty::Param(parameter), _) => {
+                let expected = self.nominal_realization_parameter(input, parameter)?;
+                self.eq_ty(&expected, realized, depth + 1)?
+            }
+            (Ty::AssociatedType(projection), _) => {
+                let (expected, _) = self.normalize_nominal_field_projection(input, projection)?;
+                self.eq_ty(&expected, realized, depth + 1)?
+            }
+            (Ty::Struct(a), Ty::Struct(b)) => {
+                a.def().source_decl == b.def().source_decl
+                    && self.replay_nominal_field_arguments(
+                        input,
+                        &a.def().type_args,
+                        &b.def().type_args,
+                        depth + 1,
+                    )?
+            }
+            (Ty::Enum(a), Ty::Enum(b)) => {
+                a.def().source_decl == b.def().source_decl
+                    && self.replay_nominal_field_arguments(
+                        input,
+                        &a.def().type_args,
+                        &b.def().type_args,
+                        depth + 1,
+                    )?
+            }
+            (
+                Ty::Ref {
+                    kind: a,
+                    referent: x,
+                },
+                Ty::Ref {
+                    kind: b,
+                    referent: y,
+                },
+            )
+            | (
+                Ty::RawPtr {
+                    kind: a,
+                    pointee: x,
+                },
+                Ty::RawPtr {
+                    kind: b,
+                    pointee: y,
+                },
+            ) => {
+                if a != b {
+                    false
+                } else {
+                    self.replay_nominal_field_term(input, x, y, depth + 1)?;
+                    true
+                }
+            }
+            (Ty::Slice { element: a }, Ty::Slice { element: b }) => {
+                self.replay_nominal_field_term(input, a, b, depth + 1)?;
+                true
+            }
+            (Ty::Array { element: a, len: x }, Ty::Array { element: b, len: y }) => {
+                if x != y {
+                    false
+                } else {
+                    self.replay_nominal_field_term(input, a, b, depth + 1)?;
+                    true
+                }
+            }
+            (Ty::Tuple(a), Ty::Tuple(b)) => {
+                self.replay_nominal_field_arguments(input, a, b, depth + 1)?
+            }
+            (Ty::Closure(_), _) => {
+                return Err(FactsError::unsupported(
+                    &self.budget,
+                    "nominal field closure replay needs early parent-solved metadata",
+                ));
+            }
+            _ => self.eq_ty(source, realized, depth + 1)?,
+        };
+        if !valid {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "realized nominal field changed its canonical source term",
+            ));
+        }
+        Ok(())
+    }
+
+    fn replay_nominal_field_arguments(
+        &self,
+        input: &ClosedNominalInput,
+        source: &[Ty],
+        actual: &[Ty],
+        depth: usize,
+    ) -> Result<bool> {
+        if source.len() != actual.len() {
+            return Ok(false);
+        }
+        for (source, actual) in source.iter().zip(actual) {
+            self.replay_nominal_field_term(input, source, actual, depth + 1)?;
+        }
+        Ok(true)
+    }
+
+    pub(in crate::compiler) fn replay_nominal_normalizations(
+        &self,
+        input: &ClosedNominalInput,
+        source: &Ty,
+        dependencies: &[NormalizedAssociatedType],
+    ) -> Result<()> {
+        fn walk(
+            world: &ValidatedTraitWorld,
+            input: &ClosedNominalInput,
+            source: &Ty,
+            dependencies: &[NormalizedAssociatedType],
+            cursor: &mut usize,
+            depth: usize,
+        ) -> Result<()> {
+            world
+                .budget
+                .check_depth(depth)
+                .map_err(|e| FactsError::from_message(&world.budget, &e))?;
+            world
+                .budget
+                .charge_work(1)
+                .map_err(|e| FactsError::from_message(&world.budget, &e))?;
+            match source {
+                Ty::AssociatedType(projection) => {
+                    let (_, expected) =
+                        world.normalize_nominal_field_projection(input, projection)?;
+                    for receipt in &expected {
+                        let actual = dependencies.get(*cursor).ok_or_else(|| {
+                            FactsError::invalid(
+                                &world.budget,
+                                "nominal normalization receipt omitted",
+                            )
+                        })?;
+                        world.validate_projected_dependency(
+                            actual,
+                            ProofContext {
+                                predicates: &world.empty,
+                                phase: FactsPhase::Schema,
+                            },
+                        )?;
+                        if !world.same_projected_dependency(actual, receipt)? {
+                            return Err(FactsError::invalid(
+                                &world.budget,
+                                "nominal normalization receipt order or identity changed",
+                            ));
+                        }
+                        *cursor += 1;
+                    }
+                }
+                Ty::Struct(nominal) => {
+                    for argument in nominal.def().type_args.iter() {
+                        walk(world, input, argument, dependencies, cursor, depth + 1)?;
+                    }
+                }
+                Ty::Enum(nominal) => {
+                    for argument in nominal.def().type_args.iter() {
+                        walk(world, input, argument, dependencies, cursor, depth + 1)?;
+                    }
+                }
+                Ty::Tuple(fields) => {
+                    for field in fields.iter() {
+                        walk(world, input, field, dependencies, cursor, depth + 1)?;
+                    }
+                }
+                Ty::Ref { referent, .. } => {
+                    walk(world, input, referent, dependencies, cursor, depth + 1)?
+                }
+                Ty::RawPtr { pointee, .. } => {
+                    walk(world, input, pointee, dependencies, cursor, depth + 1)?
+                }
+                Ty::Array { element, .. } | Ty::Slice { element } => {
+                    walk(world, input, element, dependencies, cursor, depth + 1)?;
+                }
+                _ => {}
+            }
+            Ok(())
+        }
+        let mut cursor = 0;
+        match source {
+            Ty::Struct(nominal) => {
+                for field in nominal.def().fields.iter() {
+                    walk(self, input, &field.ty, dependencies, &mut cursor, 0)?;
+                }
+            }
+            Ty::Enum(nominal) => {
+                for variant in nominal.def().variants.iter() {
+                    for field in variant.fields.iter() {
+                        walk(self, input, &field.ty, dependencies, &mut cursor, 0)?;
+                    }
+                }
+            }
+            _ => {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "normalization receipts require a nominal source",
+                ));
+            }
+        }
+        if cursor != dependencies.len() {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "extra nominal normalization receipt",
+            ));
+        }
+        Ok(())
+    }
+
+    pub(in crate::compiler) fn normalize_nominal_field_projection(
+        &self,
+        input: &ClosedNominalInput,
+        original: &ir::AssociatedTypeProjection,
+    ) -> Result<(Ty, Vec<NormalizedAssociatedType>)> {
+        self.replay_closed_nominal_input(input)?;
+        let mut found = false;
+        for retained in input.source.schema().projections.iter() {
+            self.budget
+                .charge_work(1)
+                .map_err(|e| FactsError::from_message(&self.budget, &e))?;
+            if self.same_projection(original, retained)? {
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "projection is absent from exact nominal source schema",
+            ));
+        }
+        let projection = ir::AssociatedTypeProjection {
+            trait_ref: self.close_nominal_trait_ref(
+                &original.trait_ref,
+                &input.source.schema().env,
+                &input.actuals,
+            )?,
+            item: original.item,
+        };
+        let context = ProofContext {
+            predicates: &self.empty,
+            phase: FactsPhase::Schema,
+        };
+        self.require_in(
+            &Predicate::Implements(projection.trait_ref.clone()),
+            context,
+            &mut Vec::new(),
+        )?;
+        let (normalized, dependencies) = self.normalize_closed_projected_type(
+            &Ty::AssociatedType(Arc::new(projection)),
+            context,
+            false,
+        )?;
+        for dependency in &dependencies {
+            self.validate_projected_dependency(
+                dependency,
+                ProofContext {
+                    predicates: &self.empty,
+                    phase: FactsPhase::Schema,
+                },
+            )?;
+        }
+        Ok((normalized, dependencies))
+    }
+
+    fn close_nominal_predicate(
+        &self,
+        predicate: &Predicate,
+        env: &GenericEnv,
+        actuals: &[Ty],
+    ) -> Result<Predicate> {
+        Ok(match predicate {
+            Predicate::Implements(goal) => {
+                Predicate::Implements(self.close_nominal_trait_ref(goal, env, actuals)?)
+            }
+            Predicate::ProjectionEq { projection, ty } => Predicate::ProjectionEq {
+                projection: ir::AssociatedTypeProjection {
+                    trait_ref: self.close_nominal_trait_ref(&projection.trait_ref, env, actuals)?,
+                    item: projection.item,
+                },
+                ty: self.close_nominal_bound_term(ty, env, actuals, 0)?,
+            },
+        })
+    }
+
+    fn close_nominal_trait_ref(
+        &self,
+        goal: &TraitRef,
+        env: &GenericEnv,
+        actuals: &[Ty],
+    ) -> Result<TraitRef> {
+        let mut args = Vec::new();
+        self.budget
+            .retain_bytes(std::mem::size_of_val(goal.args.as_ref()))
+            .map_err(|e| FactsError::from_message(&self.budget, &e))?;
+        args.try_reserve_exact(goal.args.len()).map_err(|_| {
+            FactsError::resource(&self.budget, "nominal trait argument allocation failed")
+        })?;
+        for argument in goal.args.iter() {
+            args.push(self.close_nominal_bound_term(argument, env, actuals, 0)?);
+        }
+        Ok(TraitRef {
+            declaration: goal.declaration,
+            self_ty: self.close_nominal_bound_term(&goal.self_ty, env, actuals, 0)?,
+            args: args.into(),
+        })
+    }
+
+    fn close_nominal_bound_term(
+        &self,
+        ty: &Ty,
+        env: &GenericEnv,
+        actuals: &[Ty],
+        depth: usize,
+    ) -> Result<Ty> {
+        self.budget
+            .check_depth(depth)
+            .map_err(|e| FactsError::from_message(&self.budget, &e))?;
+        self.budget
+            .charge_work(1)
+            .map_err(|e| FactsError::from_message(&self.budget, &e))?;
+        let result = match ty {
+            Ty::Param(parameter) => {
+                let mut selected = None;
+                for (ordinal, declared) in env.ordered_params().enumerate() {
+                    self.budget
+                        .charge_work(1)
+                        .map_err(|e| FactsError::from_message(&self.budget, &e))?;
+                    if &declared == parameter {
+                        selected = actuals.get(ordinal);
+                        break;
+                    }
+                }
+                selected.cloned().ok_or_else(|| {
+                    FactsError::invalid(
+                        &self.budget,
+                        "nominal bound references a foreign parameter",
+                    )
+                })?
+            }
+            Ty::Ref { kind, referent } => Ty::Ref {
+                kind: *kind,
+                referent: Arc::new(self.close_nominal_bound_term(
+                    referent,
+                    env,
+                    actuals,
+                    depth + 1,
+                )?),
+            },
+            Ty::RawPtr { kind, pointee } => Ty::RawPtr {
+                kind: *kind,
+                pointee: Arc::new(self.close_nominal_bound_term(
+                    pointee,
+                    env,
+                    actuals,
+                    depth + 1,
+                )?),
+            },
+            Ty::Slice { element } => Ty::Slice {
+                element: Arc::new(self.close_nominal_bound_term(
+                    element,
+                    env,
+                    actuals,
+                    depth + 1,
+                )?),
+            },
+            Ty::Array { element, len } => Ty::Array {
+                len: *len,
+                element: Arc::new(self.close_nominal_bound_term(
+                    element,
+                    env,
+                    actuals,
+                    depth + 1,
+                )?),
+            },
+            Ty::Tuple(fields) => {
+                self.budget
+                    .retain_bytes(std::mem::size_of_val(fields.as_ref()))
+                    .map_err(|e| FactsError::from_message(&self.budget, &e))?;
+                let mut out = Vec::new();
+                out.try_reserve_exact(fields.len()).map_err(|_| {
+                    FactsError::resource(&self.budget, "nominal tuple argument allocation failed")
+                })?;
+                for field in fields.iter() {
+                    out.push(self.close_nominal_bound_term(field, env, actuals, depth + 1)?);
+                }
+                Ty::Tuple(out.into())
+            }
+            Ty::Closure(_) => {
+                return Err(FactsError::unsupported(
+                    &self.budget,
+                    "closure nominal realization requires an early parent-solved graph frontier",
+                ));
+            }
+            // Existing closed source nominal terms are checked below. An open
+            // nominal cannot pass the empty environment and must instead be
+            // supplied by an explicit child139 realization read, never reminted.
+            _ => ty.clone(),
+        };
+        self.validate_ty_metadata_in(&result, &self.empty.env, depth)?;
+        Ok(result)
+    }
+}

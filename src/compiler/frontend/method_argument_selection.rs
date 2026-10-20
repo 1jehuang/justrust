@@ -17,6 +17,10 @@ impl PlanCtx {
         module: &ModuleId,
         budget: &ir::PlanBudget,
         mut arguments: impl FnMut(&ir::Ty, ReceiverKind, bool) -> Result<MethodArguments<'a>, String>,
+        mut realize_signature: impl FnMut(
+            &ir::Callee,
+            &ir::Signature,
+        ) -> Result<Option<ir::Signature>, String>,
     ) -> Result<Option<MethodSelection>, String> {
         if let Some(selection) = self.closure_method_selection(receiver, name, caller)? {
             return Ok(Some(selection));
@@ -68,6 +72,14 @@ impl PlanCtx {
                             traits_only,
                             budget,
                         )? {
+                            // Selection must inspect the same representation as the
+                            // checked receiver. Keep the declaration-owned original
+                            // for final call construction and source receipt replay.
+                            let (signature, original_signature) =
+                                match realize_signature(&target, &signature)? {
+                                    Some(mapped) => (mapped, Some(signature)),
+                                    None => (signature, None),
+                                };
                             if !signature
                                 .params
                                 .first()
@@ -75,12 +87,13 @@ impl PlanCtx {
                                 .transpose()?
                                 .unwrap_or(false)
                             {
-                                return Err("canonical receiver formal mismatch".into());
+                                return Err("canonical method receiver formal mismatch".into());
                             }
                             ir::root_reference_layers(&candidate)?;
                             return Ok(Some(MethodSelection {
                                 target,
                                 signature,
+                                original_signature,
                                 mode,
                                 depth,
                                 adjustment,

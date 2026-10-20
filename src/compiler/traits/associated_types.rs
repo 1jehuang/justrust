@@ -387,6 +387,11 @@ impl ValidatedTraitWorld {
                 }
                 validate_nominal_modules(ty, self.catalog.modules(), &self.budget)?;
                 self.schema.validate_nominal(ty, env, &self.budget)?;
+                if let Some(capability) = value.realization() {
+                    capability.replay(ty, self).map_err(|error| {
+                        FactsError::from_message(&self.budget, &error.to_string())
+                    })?;
+                }
                 for argument in value.def().type_args.iter() {
                     child(argument)?;
                 }
@@ -405,6 +410,11 @@ impl ValidatedTraitWorld {
                 }
                 validate_nominal_modules(ty, self.catalog.modules(), &self.budget)?;
                 self.schema.validate_nominal(ty, env, &self.budget)?;
+                if let Some(capability) = value.realization() {
+                    capability.replay(ty, self).map_err(|error| {
+                        FactsError::from_message(&self.budget, &error.to_string())
+                    })?;
+                }
                 for argument in value.def().type_args.iter() {
                     child(argument)?;
                 }

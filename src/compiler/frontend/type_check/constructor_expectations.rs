@@ -23,9 +23,34 @@ impl Checker<'_> {
             }
             _ => return Err("constructor source schema kind mismatch".into()),
         };
+        let field_index = field;
         let field = fields
-            .get(field)
+            .get(field_index)
             .ok_or("unknown constructor field schema")?;
+        let expected = match expectation {
+            Expectation::HasType(ty) => Some(ty),
+            _ => None,
+        };
+        if let Some(realized) = self.realized_constructor_expectation(declaration, expected)? {
+            let concrete_fields = match (&realized, variant) {
+                (ir::Ty::Struct(ty), None) => &ty.def().fields,
+                (ir::Ty::Enum(ty), Some(index)) => {
+                    &ty.def()
+                        .variants
+                        .get(index)
+                        .ok_or("unknown realized constructor variant")?
+                        .fields
+                }
+                _ => return Err("realized constructor source kind mismatch".into()),
+            };
+            if concrete_fields.len() != fields.len() {
+                return Err("invalid metadata: realized constructor field topology drift".into());
+            }
+            let concrete = concrete_fields
+                .get(field_index)
+                .ok_or("unknown realized constructor field")?;
+            return self.infer_type_term(&concrete.ty, None, 0);
+        }
         let term = self.infer_type_term(&field.ty, Some(scope.binder()), 0)?;
         let arguments = self.constructor_source_arguments(declaration, expectation, 0)?;
         if let Some(arguments) = &arguments {

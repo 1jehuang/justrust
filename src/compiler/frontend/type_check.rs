@@ -22,10 +22,17 @@ mod inherent_method_hint;
 mod iterator_loop;
 #[path = "local_literals.rs"]
 mod local_literals;
+pub(in crate::compiler) use local_literals::nominal_manifest::{
+    DeclarationFields as NominalDeclarationFields, DeclarationRecipe as NominalDeclarationRecipe,
+    Demand as NominalDemand, Inputs as NominalPreparationInputs, Preparation as NominalPreparation,
+    PreparedHints as NominalPreparedHints, Shape as NominalShape,
+};
 #[path = "type_check/method_argument_hint.rs"]
 mod method_argument_hint;
 #[path = "type_check/method_owner.rs"]
 mod method_owner;
+mod nominal_calls;
+mod nominal_inputs;
 #[path = "type_check/opaque_returns.rs"]
 mod opaque_returns;
 #[path = "type_check/partial_annotation.rs"]
@@ -929,6 +936,20 @@ impl<'c, 's> Inference<'c, 's> {
         actuals: &[ir::Ty],
     ) -> Result<ir::Ty, FactsError> {
         let plan = self.checker.signatures.plan.as_ref().unwrap();
+        if let Some(inputs) = self.checker.nominal_inputs {
+            let demand = self
+                .checker
+                .nominal_input_demand(declaration, actuals)
+                .map_err(|e| source_error(&plan.budget, &e))?;
+            return (inputs.nominal_type)(&demand)
+                .map_err(|e| source_error(&plan.budget, &e))?
+                .ok_or_else(|| {
+                    source_error(
+                        &plan.budget,
+                        "missing graph input: inferred nominal realization",
+                    )
+                });
+        }
         plan.intern_nominal(declaration, actuals, self.checker.facts(), &plan.budget)
             .map_err(|e| source_error(&plan.budget, &e))
     }
@@ -1477,7 +1498,12 @@ impl<'s> Checker<'s> {
         let variant_index = variant
             .map(|name| self.variant_index(declaration, name))
             .transpose()?;
-        let definitions = match (&schema, variant_index) {
+        // Keep declaration/schema authority above. Only the field view changes:
+        // a closed expected application has already read its normalized graph
+        // definition, rather than a rigid projection from the raw schema.
+        let realized = self.realized_constructor_expectation(declaration, expected)?;
+        let field_source = realized.as_ref().unwrap_or(&schema);
+        let definitions = match (field_source, variant_index) {
             (ir::Ty::Struct(ty), None) => &ty.def().fields,
             (ir::Ty::Enum(ty), Some(index)) => {
                 &ty.def()
@@ -1593,13 +1619,7 @@ impl<'s> Checker<'s> {
         let Some(args) = solver.finish(fallback)? else {
             return Ok(None);
         };
-        let plan = self.signatures.plan()?;
-        Ok(Some(plan.intern_nominal(
-            declaration,
-            &args,
-            self.facts(),
-            &plan.budget,
-        )?))
+        Ok(Some(self.materialize_nominal_input(declaration, &args)?))
     }
 }
 pub(super) fn genuine_call(expr: &Expr) -> bool {
@@ -1672,6 +1692,11 @@ pub(super) struct Checker<'a> {
     pub(super) runtime_sites: Vec<(ir::ExprId, Arc<ir::RuntimeLocation>)>,
     pub(super) signatures: &'a Signatures,
     pub(super) canonical: Option<&'a CanonicalSourceCapability>,
+    // Borrowed only within this checking node. Child callable owners do not
+    // inherit this capability adapter implicitly.
+    nominal_inputs: Option<&'a NominalPreparationInputs<'a>>,
+    // Local suspension inventory propagated to the owning graph consumer.
+    nominal_blocked: std::cell::RefCell<Option<NominalPreparation>>,
     pub(super) scopes: Vec<HashMap<LocalKey, ir::LocalId>>,
     pub(super) lexical_scope: Option<super::super::semantic_scope::ScopeId>,
     pub(super) checked_closures: Vec<closures::check::CheckedClosure>,
@@ -3622,6 +3647,8 @@ impl<'a> Checker<'a> {
         Self {
             runtime_sites: Vec::new(),
             signatures,
+            nominal_inputs: None,
+            nominal_blocked: std::cell::RefCell::new(None),
             scopes: vec![HashMap::new()],
             lexical_scope: None,
             checked_closures: Vec::new(),
@@ -3773,7 +3800,7 @@ impl<'a> Checker<'a> {
         Ok(rows.into())
     }
     pub(super) fn checked_type_actual(&self, source: &Type) -> Result<ir::Ty, String> {
-        let ty = checked_ty(source, self.signatures)?;
+        let ty = self.source_type_actual(source)?;
         if ty.contains_slice() {
             return Err("unsupported: slice generic arguments".into());
         }
@@ -4209,7 +4236,7 @@ impl<'a> Checker<'a> {
         {
             return Err("implicit mutable-to-shared reference coercion/reborrowing is unsupported; use an explicit &*r reborrow".into());
         }
-        if !coerces(&got.ty, want) {
+        if !coerces(&got.ty, want) && !self.nominal_input_types_equal(&got.ty, want)? {
             Err(format!("expected {want:?}, got {:?}", got.ty))
         } else {
             Ok(())
@@ -5538,7 +5565,8 @@ impl<'a> Checker<'a> {
         fields: &[(InferField<'_>, &Expr)],
         expected: Option<&ir::Ty>,
     ) -> Result<ir::Ty, String> {
-        let ty = self.constructor_type_unchecked(name, variant, fields, expected)?;
+        let source_ty = self.constructor_type_unchecked(name, variant, fields, expected)?;
+        let ty = self.realize_constructor_source(&source_ty)?;
         self.prove_nominal_bounds(&ty)?;
         Ok(ty)
     }
@@ -6317,7 +6345,28 @@ impl<'a> Checker<'a> {
         b: &Block,
         expectation: Expectation<'_>,
     ) -> Result<(ir::TypedBlock, Flow), String> {
-        let hints = local_literals::hints(self, b, expectation.hard())?;
+        let hints = if let Some(inputs) = self.nominal_inputs {
+            match local_literals::hints_with_inputs(self, b, expectation.hard(), inputs)? {
+                NominalPreparedHints::Ready(hints) => hints,
+                NominalPreparedHints::Blocked(blocked) => {
+                    *self.nominal_blocked.borrow_mut() = Some(blocked);
+                    return Err(
+                        "missing graph input: nested nominal hint preparation blocked".into(),
+                    );
+                }
+            }
+        } else {
+            local_literals::hints(self, b, expectation.hard())?
+        };
+        self.block_with_resolved_hints(b, expectation, hints)
+    }
+
+    fn block_with_resolved_hints(
+        &mut self,
+        b: &Block,
+        expectation: Expectation<'_>,
+        hints: local_literals::Hints,
+    ) -> Result<(ir::TypedBlock, Flow), String> {
         self.closure_signature_hints.extend(hints.closures);
         let literal_hints = hints.locals;
         let entered_reachable = self.reachable;
@@ -6365,7 +6414,7 @@ impl<'a> Checker<'a> {
                         partial_annotation::matches_partial(ty, &inferred, self.signatures)?;
                         inferred
                     } else {
-                        checked_local_ty(ty, self.signatures)?
+                        self.source_local_ty(ty)?
                     };
                     self.accessible(&ty)?;
                     let local = self.local(name, ty, *mutable)?;
@@ -6386,7 +6435,7 @@ impl<'a> Checker<'a> {
                     let annotation = if matches!(ty, Type::Infer) {
                         literal_hints.get(&(s as *const Stmt as usize)).cloned()
                     } else {
-                        Some(checked_local_ty(ty, self.signatures)?)
+                        Some(self.source_local_ty(ty)?)
                     };
                     let extending = self.extending_borrows.len();
                     self.mark_extending_borrows(value, 0)?;
@@ -6404,7 +6453,7 @@ impl<'a> Checker<'a> {
                     let t = if matches!(ty, Type::Infer) {
                         f.ty.clone()
                     } else {
-                        let ty = checked_local_ty(ty, self.signatures)?;
+                        let ty = self.source_local_ty(ty)?;
                         self.accessible(&ty)?;
                         self.require(&f, &ty)?;
                         ty
@@ -6432,7 +6481,7 @@ impl<'a> Checker<'a> {
                     let annotation = if matches!(ty, Type::Infer) {
                         None
                     } else {
-                        Some(checked_local_ty(ty, self.signatures)?)
+                        Some(self.source_local_ty(ty)?)
                     };
                     let direct_dynamic = matches!(value, Expr::DynamicIndex { .. });
                     let direct_wildcard = matches!(pattern, Pattern::Wildcard);
@@ -6448,7 +6497,7 @@ impl<'a> Checker<'a> {
                     let seed = if matches!(ty, Type::Infer) {
                         flow.ty.clone()
                     } else {
-                        let ty = checked_local_ty(ty, self.signatures)?;
+                        let ty = self.source_local_ty(ty)?;
                         self.accessible(&ty)?;
                         self.require(&flow, &ty)?;
                         ty
@@ -7758,6 +7807,17 @@ impl<'a> Checker<'a> {
         } else {
             (target, signature)
         };
+        let (signature, nominal_realization) =
+            match self.nominal_call_signature(&target, signature)? {
+                nominal_calls::NominalCallSignature::Ready {
+                    signature,
+                    realization,
+                } => (signature, realization),
+                nominal_calls::NominalCallSignature::Blocked(blocked) => {
+                    *self.nominal_blocked.borrow_mut() = Some(blocked);
+                    return Err("missing graph input: canonical call signature realization".into());
+                }
+            };
         let actuals = target.type_arguments();
         if actuals.iter().any(ir::Ty::contains_slice) {
             return Err("unsupported: slice generic arguments".into());
@@ -7892,6 +7952,16 @@ impl<'a> Checker<'a> {
                 reason,
             };
         }
+        if let Some(realization) = nominal_realization {
+            self.canonical
+                .ok_or("nominal call realization requires canonical source publication")?
+                .record_nominal_call_realization(
+                    id,
+                    &realization.target,
+                    realization.original,
+                    realization.mapped,
+                )?;
+        }
         let traces = arguments
             .iter()
             .enumerate()
@@ -8003,7 +8073,7 @@ impl<'a> Checker<'a> {
             let call = self.finish_checked_call(
                 selected.target,
                 name,
-                selected.signature,
+                selected.original_signature.unwrap_or(selected.signature),
                 args,
                 self.type_actual_regions(type_args, region_offset)?,
                 Some((borrowed, None)),
@@ -8134,7 +8204,7 @@ impl<'a> Checker<'a> {
         self.finish_checked_call(
             selected.target,
             name,
-            selected.signature,
+            selected.original_signature.unwrap_or(selected.signature),
             args,
             self.type_actual_regions(type_args, region_offset)?,
             Some(adjusted),
@@ -10920,6 +10990,54 @@ pub(super) fn type_callable_source(
     type_callable_source_and_closures(program, declaration, plan, budget, canonical)
         .map(|(body, _)| body)
 }
+/// Prepare one canonical source callable before executable local obligations.
+/// The retained signature result is metadata, not a placeholder or admission;
+/// source recipes, rather than runtime locals, seed this emission-free solve.
+#[cfg(test)]
+pub(in crate::compiler) fn prepare_callable_nominals(
+    plan: &PlanCtx,
+    declaration: ir::DeclId,
+    receiver: Option<&NominalShape>,
+    inputs: &NominalPreparationInputs<'_>,
+) -> Result<NominalPreparation, String> {
+    let signatures = plan.environment(Some(declaration))?;
+    let function = plan.callable_body(&plan.program, declaration)?;
+    let signature = plan.function_schema(declaration)?.signature;
+    let mut checker = Checker::new(&signatures, signature.result, function.module);
+    checker.install_lexical_scope(function.lexical_scope)?;
+    checker.declaration = Some(declaration);
+    checker.unsafe_depth = usize::from(function.unsafety);
+    local_literals::nominal_manifest::prepare_callable(&checker, declaration, receiver, inputs)
+}
+
+/// Finalize only when every explicit graph input is present. Missing inputs
+/// remain Blocked, with no eager nominal hinting fallback or partial body.
+#[cfg(test)]
+pub(in crate::compiler) fn finalized_callable_nominal_hints(
+    plan: &PlanCtx,
+    declaration: ir::DeclId,
+    receiver: Option<&NominalShape>,
+    inputs: &NominalPreparationInputs<'_>,
+) -> Result<NominalPreparedHints, String> {
+    let signatures = plan.environment(Some(declaration))?;
+    let function = plan.callable_body(&plan.program, declaration)?;
+    let signature = plan.function_schema(declaration)?.signature;
+    let mut checker = Checker::new(&signatures, signature.result, function.module);
+    checker.install_lexical_scope(function.lexical_scope)?;
+    checker.declaration = Some(declaration);
+    checker.unsafe_depth = usize::from(function.unsafety);
+    local_literals::nominal_manifest::finalize_callable(&checker, declaration, receiver, inputs)
+}
+
+pub(in crate::compiler) enum NominalCallableOutput {
+    Ready(
+        ir::CheckedFunction,
+        Vec<closures::check::CheckedClosure>,
+        Vec<ir::OpaqueHiddenType>,
+    ),
+    Blocked(NominalPreparation),
+}
+
 pub(super) fn type_callable_source_and_closures(
     program: &Program,
     declaration: ir::DeclId,
@@ -10944,6 +11062,49 @@ pub(super) fn type_callable_source_outputs(
     ),
     String,
 > {
+    match type_callable_source_and_closures_inner(
+        program,
+        declaration,
+        plan,
+        budget,
+        canonical,
+        None,
+    )? {
+        NominalCallableOutput::Ready(body, closures, hidden) => Ok((body, closures, hidden)),
+        NominalCallableOutput::Blocked(_) => {
+            Err("internal: ordinary callable checking suspended without nominal inputs".into())
+        }
+    }
+}
+
+/// Consume the same borrowed graph-read inputs as preparation.
+pub(in crate::compiler) fn type_callable_source_with_nominal_inputs(
+    program: &Program,
+    declaration: ir::DeclId,
+    plan: &PlanCtx,
+    budget: &ir::PlanBudget,
+    canonical: Option<&CanonicalSourceCapability>,
+    receiver: Option<&NominalShape>,
+    inputs: &NominalPreparationInputs<'_>,
+) -> Result<NominalCallableOutput, String> {
+    type_callable_source_and_closures_inner(
+        program,
+        declaration,
+        plan,
+        budget,
+        canonical,
+        Some((receiver, inputs)),
+    )
+}
+
+fn type_callable_source_and_closures_inner(
+    program: &Program,
+    declaration: ir::DeclId,
+    plan: &PlanCtx,
+    budget: &ir::PlanBudget,
+    canonical: Option<&CanonicalSourceCapability>,
+    nominal: Option<(Option<&NominalShape>, &NominalPreparationInputs<'_>)>,
+) -> Result<NominalCallableOutput, String> {
     plan.check_budget(budget)?;
     budget.charge_work(1)?;
     if !Arc::ptr_eq(&program.names, &plan.program.names)
@@ -10963,6 +11124,11 @@ pub(super) fn type_callable_source_outputs(
         plan.callable_provider(declaration)?,
         CallableProvider::Recipe { .. }
     ) {
+        if nominal.is_some() {
+            return Err(
+                "unsupported: source nominal inputs require a source callable provider".into(),
+            );
+        }
         let env = plan.callable_env(declaration)?;
         budget.retain_bytes(env.total_arity() * std::mem::size_of::<ir::Ty>() + 128)?;
         let target = ir::CallTarget {
@@ -10972,7 +11138,7 @@ pub(super) fn type_callable_source_outputs(
         let facts = plan.callable_facts(declaration)?;
         return plan
             .checked_body(&target, &facts, budget)
-            .map(|body| (body, Vec::new(), Vec::new()));
+            .map(|body| NominalCallableOutput::Ready(body, Vec::new(), Vec::new()));
     }
     let f = plan.callable_body(program, declaration)?;
     plan.validate_callable_associated_bounds(program, declaration, budget)?;
@@ -11034,17 +11200,46 @@ pub(super) fn type_callable_source_outputs(
     if let Some(cap) = canonical {
         signatures.facts = Some(cap.facts.clone());
     }
-    let signature = plan.function_schema(declaration)?.signature;
+    let mut signature = plan.function_schema(declaration)?.signature;
     let context = plan.callable_context(declaration)?;
     walk_depth_checked(DepthNode::Block(&f.body), None, Some(&program.names))?;
     let module = context.module;
     let mut c = Checker::new(&signatures, signature.result.clone(), module);
-    c.prove_nominal_bounds(&signature.result)?;
     c.install_lexical_scope(f.lexical_scope)?;
     c.declaration = Some(declaration);
     c.canonical = canonical;
     c.closure_source_recipe = canonical.map(|cap| cap.inventory.owner.clone());
     c.unsafe_depth = usize::from(f.unsafety);
+    let root_hints = if let Some((receiver, inputs)) = nominal {
+        let mut hints = match local_literals::nominal_manifest::finalize_callable(
+            &c,
+            declaration,
+            receiver,
+            inputs,
+        )? {
+            NominalPreparedHints::Ready(hints) => hints,
+            NominalPreparedHints::Blocked(blocked) => {
+                return Ok(NominalCallableOutput::Blocked(blocked));
+            }
+        };
+        let realized = hints
+            .source_signature
+            .take()
+            .ok_or("invalid metadata: finalized source hints lack callable signature")?;
+        if realized.parameters.len() != signature.params.len() {
+            return Err("invalid metadata: realized callable parameter count changed".into());
+        }
+        // Preserve original source contracts/evidence. The ordinary proofs
+        // below must accept every realized value through the graph capability.
+        signature.params = realized.parameters;
+        signature.result = realized.result;
+        c.result = signature.result.clone();
+        c.nominal_inputs = Some(inputs);
+        Some(hints)
+    } else {
+        None
+    };
+    c.prove_nominal_bounds(&signature.result)?;
     let mut params = Vec::new();
     let offset = if context.receiver != ReceiverKind::None {
         let local = c.bind(LocalName::Receiver, signature.params[0].clone())?;
@@ -11084,9 +11279,19 @@ pub(super) fn type_callable_source_outputs(
         }
         params.push(local);
     }
-    let (body, flow) = c
-        .block_expected(&f.body, Some(&signature.result))
-        .map_err(|e| format!("in callable {:?}: {e}", f.name))?;
+    let typed = match root_hints {
+        Some(hints) => c.block_with_resolved_hints(&f.body, Some(&signature.result).into(), hints),
+        None => c.block_expected(&f.body, Some(&signature.result)),
+    };
+    let (body, flow) = match typed {
+        Ok(typed) => typed,
+        Err(error) => {
+            if let Some(blocked) = c.nominal_blocked.get_mut().take() {
+                return Ok(NominalCallableOutput::Blocked(blocked));
+            }
+            return Err(format!("in callable {:?}: {error}", f.name));
+        }
+    };
     c.require(&flow, &c.result)?;
     validate_shift_counts(&c.exprs, &c.count_queries)?;
     c.finalize_opaque_returns()?;
@@ -11109,13 +11314,13 @@ pub(super) fn type_callable_source_outputs(
     let closures = c.checked_closures;
     let hidden = c.opaque_hidden;
     if canonical.is_some() {
-        return Ok((checked, closures, hidden));
+        return Ok(NominalCallableOutput::Ready(checked, closures, hidden));
     }
     let facts = plan.callable_facts(declaration)?;
     ir::validate_call_evidence(&checked, &facts, budget)?;
     let mut cx = plan.clone();
     ir::canonicalize_checked_calls(&checked, &facts, &mut cx, budget)
-        .map(|body| (body, closures, hidden))
+        .map(|body| NominalCallableOutput::Ready(body, closures, hidden))
         .map_err(|e| e.into_legacy_diagnostic(budget))
 }
 pub fn type_function_with_plan(

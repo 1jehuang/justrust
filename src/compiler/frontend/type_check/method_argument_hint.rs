@@ -121,6 +121,20 @@ impl Checker<'_> {
                     },
                 )
             },
+            |target, signature| {
+                if self.nominal_inputs.is_none() {
+                    return Ok(None);
+                }
+                match self.nominal_call_signature(target, signature.clone())? {
+                    nominal_calls::NominalCallSignature::Ready { signature, .. } => {
+                        Ok(Some(signature))
+                    }
+                    nominal_calls::NominalCallSignature::Blocked(blocked) => {
+                        *self.nominal_blocked.borrow_mut() = Some(blocked);
+                        Err("missing graph input: canonical method signature realization".into())
+                    }
+                }
+            },
         )?;
         Ok((selection, deferred))
     }

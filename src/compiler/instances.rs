@@ -676,6 +676,7 @@ pub(super) fn build(
     context: &mut frontend::PlanCtx,
     sources: &[Arc<ir::CheckedFunction>],
     budget: &ir::PlanBudget,
+    engine: Option<crate::engine::EngineAuthority>,
 ) -> Result<Plan, String> {
     let mut declarations = HashMap::new();
     let mut entries = Vec::new();
@@ -772,7 +773,45 @@ pub(super) fn build(
             if let Some(previous) = self.canonical_keys.get(&identity.canonical)
                 && previous != &target
             {
-                return Err("generic canonical instance identity collision".into());
+                let describe = |ty: &ir::Ty| {
+                    let mut current = ty;
+                    let mut prefix = String::new();
+                    for _ in 0..8 {
+                        match current {
+                            ir::Ty::Ref { kind, referent } => {
+                                prefix.push_str(&format!("Ref({kind:?})->"));
+                                current = referent;
+                            }
+                            ir::Ty::RawPtr { kind, pointee } => {
+                                prefix.push_str(&format!("Ptr({kind:?})->"));
+                                current = pointee;
+                            }
+                            _ => break,
+                        }
+                    }
+                    match current {
+                        ir::Ty::Struct(value) => format!(
+                            "{prefix}Struct(decl={:?},id={:?},args={})",
+                            value.def().source_decl,
+                            value.id(),
+                            value.def().type_args.len()
+                        ),
+                        ir::Ty::Enum(value) => format!(
+                            "{prefix}Enum(decl={:?},id={:?},args={})",
+                            value.def().source_decl,
+                            value.id(),
+                            value.def().type_args.len()
+                        ),
+                        _ => format!("{prefix}kind={:?}", std::mem::discriminant(current)),
+                    }
+                };
+                return Err(format!(
+                    "generic canonical instance identity collision: previous={:?} args={:?}; next={:?} args={:?}",
+                    previous.declaration,
+                    previous.type_args.iter().map(&describe).collect::<Vec<_>>(),
+                    target.declaration,
+                    target.type_args.iter().map(&describe).collect::<Vec<_>>()
+                ));
             }
             self.canonical_keys
                 .insert(identity.canonical.clone(), target.clone());
@@ -866,13 +905,14 @@ pub(super) fn build(
                 ) {
                     continue;
                 }
-                let ty = ir::substitute_ty(
+                let ty = super::nominal_realization::substitution::substitute_ty(
                     ty,
                     &env,
                     &target.type_args,
                     ir::FactsCtx::from_validated(&closed_facts),
                     context,
                     budget,
+                    engine,
                 )?;
                 match closed_facts
                     .normal_drop_plan(&ty)
@@ -898,7 +938,7 @@ pub(super) fn build(
                 }
             }
         }
-        for expression in &source.exprs {
+        for (expression_index, expression) in source.exprs.iter().enumerate() {
             budget.charge_work(1)?;
             // --- trait objects (snail): each unsizing site demands every
             // vtable slot implementation for its exact substituted referent.
@@ -913,13 +953,14 @@ pub(super) fn build(
                     .exprs
                     .get(reference.0)
                     .ok_or("trait object unsizing operand outside arena")?;
-                let concrete = ir::substitute_ty(
+                let concrete = super::nominal_realization::substitution::substitute_ty(
                     &operand.ty,
                     &env,
                     &target.type_args,
                     ir::FactsCtx::from_validated(&closed_facts),
                     context,
                     budget,
+                    engine,
                 )?;
                 let ir::Ty::Ref { referent, .. } = &concrete else {
                     return Err("trait object unsizing operand must be a reference".into());
@@ -959,18 +1000,21 @@ pub(super) fn build(
                     // No copied side inventory or physical target is queued here.
                     continue;
                 }
-                let resolved = ir::substitute_callee(
+                let resolved = super::nominal_realization::substitution::substitute_callee(
                     callee,
                     &env,
                     &target.type_args,
                     &closed_facts,
                     context,
                     budget,
+                    engine,
                 )?;
                 let ir::Callee::Direct(next) = resolved else {
                     return Err("unresolved trait callee in concrete instance frontier".into());
                 };
-                queue.add(next, depth + 1, context, budget)?;
+                queue.add(next, depth + 1, context, budget).map_err(|error| {
+                    format!("{error}; MONO_PLAN caller={:?} expr={expression_index} callee-kind={:?}", target.declaration, std::mem::discriminant(callee))
+                })?;
             }
         }
         cursor += 1;
@@ -1497,7 +1541,7 @@ mod tests {
         }
         let publication = publication.unwrap();
         let function = super::super::cfg::lower_source_closed(&publication, &budget).unwrap();
-        let mut plan = build(&mut context, &sources, &budget).unwrap();
+        let mut plan = build(&mut context, &sources, &budget, None).unwrap();
         assert!(!plan.cleanup_targets.is_empty());
         plan.validate_cleanup_dependencies(&function).unwrap();
         let demanded = plan.cleanup_targets.clone();
@@ -1544,7 +1588,7 @@ mod tests {
             block.terminator.value,
             super::super::cfg::Terminator::Drop { .. }
         )));
-        let mut plan = build(&mut context, &sources, &budget).unwrap();
+        let mut plan = build(&mut context, &sources, &budget, None).unwrap();
         let target = plan
             .entries
             .iter()
@@ -1604,7 +1648,7 @@ mod tests {
                 frontend::PublishedCallableBody::Recipe(source) => sources.push(source),
             }
         }
-        let plan = build(&mut context, &sources, &budget).unwrap();
+        let plan = build(&mut context, &sources, &budget, None).unwrap();
         assert_eq!(plan.cleanup_targets.len(), 2);
         let first = &plan.cleanup_targets[0];
         let second = &plan.cleanup_targets[1];

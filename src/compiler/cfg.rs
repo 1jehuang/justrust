@@ -6526,7 +6526,7 @@ mod tests {
         assert!(super::super::ownership::verify_template(invalid).is_err());
         let app = ir::NominalAppId {
             snapshot: ir::SnapshotId::allocate().unwrap(),
-            index: 0,
+            index: crate::compiler::ir::NominalIndex::SourceSlot(0),
         };
         let declaration = test_decl();
         let enumeration = |arguments: std::sync::Arc<[Ty]>| {
@@ -7324,7 +7324,7 @@ mod tests {
             type_args: std::sync::Arc::from([]),
             id: ir::NominalAppId {
                 snapshot: ir::SnapshotId::allocate().unwrap(),
-                index: 0,
+                index: crate::compiler::ir::NominalIndex::SourceSlot(0),
             },
             name: "S".into(),
             module: modules.source_root().unwrap(),
@@ -11146,7 +11146,7 @@ mod tests {
             type_args: std::sync::Arc::from([]),
             id: ir::NominalAppId {
                 snapshot: ir::SnapshotId::allocate().unwrap(),
-                index: 0,
+                index: crate::compiler::ir::NominalIndex::SourceSlot(0),
             },
             name: "E".into(),
             module: modules.source_root().unwrap(),

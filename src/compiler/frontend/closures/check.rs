@@ -136,6 +136,7 @@ impl PlanCtx {
                 return Ok(Some(MethodSelection {
                     target,
                     signature,
+                    original_signature: None,
                     mode: receiver_mode,
                     depth: 0,
                     adjustment,
@@ -244,6 +245,7 @@ impl PlanCtx {
             return Ok(Some(MethodSelection {
                 target: selected.callee().clone(),
                 signature: selected.signature().clone(),
+                original_signature: None,
                 mode,
                 depth: 0,
                 adjustment,

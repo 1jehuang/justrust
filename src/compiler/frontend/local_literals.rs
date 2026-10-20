@@ -7,6 +7,8 @@ use super::*;
 #[cfg(test)]
 #[path = "local_literals/native_scalar_tests.rs"]
 mod native_scalar_tests;
+#[path = "local_literals/nominal_manifest.rs"]
+pub(super) mod nominal_manifest;
 
 #[path = "local_literals/iteration.rs"]
 mod iteration;
@@ -82,11 +84,26 @@ struct Solver<'a: 's, 'b: 's, 's> {
     operators: Vec<operators::Operation>,
     projection_defaults: bool,
     opaque_return: Option<Term>,
+    // Borrowed graph-read inputs and local suspension bookkeeping. Neither is
+    // part of a published manifest or executable type authority.
+    preparation: Option<&'s nominal_manifest::Inputs<'s>>,
+    missing_nominals: std::cell::RefCell<Vec<nominal_manifest::Demand>>,
+    missing_source_schemas: std::cell::Cell<bool>,
+    missing_declarations: std::cell::RefCell<Vec<ir::DeclId>>,
+    preparation_needs_actuals: std::cell::Cell<bool>,
 }
 
-pub(super) struct Hints {
+pub(in crate::compiler) struct Hints {
     pub locals: HashMap<usize, ir::Ty>,
     pub closures: HashMap<PathKey, ir::Signature>,
+    // Present only for a canonical source-callable solve with explicit inputs.
+    // These values still require ordinary executable facts/carrier validation.
+    pub source_signature: Option<SourceSignature>,
+}
+
+pub(in crate::compiler) struct SourceSignature {
+    pub parameters: Vec<ir::Ty>,
+    pub result: ir::Ty,
 }
 
 pub(super) fn hints(
@@ -94,6 +111,56 @@ pub(super) fn hints(
     block: &Block,
     expected: Option<&ir::Ty>,
 ) -> Result<Hints, String> {
+    let solver = solve_body(checker, block, expected, None)?;
+    finalized_hints(solver)
+}
+
+pub(super) fn hints_with_inputs<'a: 's, 'b: 's, 's>(
+    checker: &'a Checker<'b>,
+    block: &'s Block,
+    expected: Option<&ir::Ty>,
+    inputs: &'s nominal_manifest::Inputs<'s>,
+) -> Result<nominal_manifest::PreparedHints, String> {
+    nominal_manifest::finalize(checker, block, expected, inputs)
+}
+
+fn finalized_hints(solver: Solver<'_, '_, '_>) -> Result<Hints, String> {
+    let closures = solver.closure_hints()?;
+    let mut hints = HashMap::new();
+    for (site, term) in solver.sites.clone() {
+        if let Some(ty) = solver.resolve(term, 0)? {
+            hints.insert(site, ty);
+        } else if matches!(solver.domain(term), Domain::Nominal(..))
+            && !solver.contains_callable(term, 0)?
+        {
+            return Err(solver.user_error(
+                "E0282: type annotations needed: cannot infer the type of this binding",
+            ));
+        }
+    }
+    Ok(Hints {
+        locals: hints,
+        closures,
+        source_signature: None,
+    })
+}
+
+fn solve_body<'a: 's, 'b: 's, 's>(
+    checker: &'a Checker<'b>,
+    block: &'s Block,
+    expected: Option<&ir::Ty>,
+    preparation: Option<&'s nominal_manifest::Inputs<'s>>,
+) -> Result<Solver<'a, 'b, 's>, String> {
+    solve_body_with_seed(checker, block, expected, preparation, None)
+}
+
+fn solve_body_with_seed<'a: 's, 'b: 's, 's>(
+    checker: &'a Checker<'b>,
+    block: &'s Block,
+    expected: Option<&ir::Ty>,
+    preparation: Option<&'s nominal_manifest::Inputs<'s>>,
+    source_seed: Option<&nominal_manifest::SourceSeed>,
+) -> Result<Solver<'a, 'b, 's>, String> {
     let mut solver = Solver {
         checker,
         variables: Vec::new(),
@@ -115,18 +182,39 @@ pub(super) fn hints(
         operators: Vec::new(),
         projection_defaults: false,
         opaque_return: None,
+        preparation,
+        missing_nominals: std::cell::RefCell::new(Vec::new()),
+        missing_source_schemas: std::cell::Cell::new(false),
+        missing_declarations: std::cell::RefCell::new(Vec::new()),
+        preparation_needs_actuals: std::cell::Cell::new(false),
     };
-    let return_term = solver.return_expected(&checker.result.clone())?;
+    let return_term = match source_seed {
+        Some(seed) => solver.manifest_term(&seed.result, 0)?,
+        None => solver.return_expected(&checker.result.clone())?,
+    };
     solver.return_terms.push(return_term);
     let mut outer = HashMap::new();
-    for scope in &checker.scopes {
-        for (key, local) in scope {
-            let term = solver.fixed(checker.locals[local.0].ty.clone())?;
-            outer.insert(*key, term);
+    if let Some(seed) = source_seed {
+        for (key, shape) in &seed.parameters {
+            solver.checker.infer_work(0)?;
+            let term = solver.manifest_term(shape, 0)?;
+            if outer.insert(*key, term).is_some() {
+                return Err("invalid metadata: duplicate source parameter binding".into());
+            }
+        }
+    } else {
+        for scope in &checker.scopes {
+            for (key, local) in scope {
+                let term = solver.fixed(checker.locals[local.0].ty.clone())?;
+                outer.insert(*key, term);
+            }
         }
     }
     solver.scopes.push(outer);
     let result = solver.block(block, 0)?;
+    if source_seed.is_some() {
+        solver.coerce(result, return_term)?;
+    }
     if let Some(expected) = expected {
         let expected = solver.return_expected(expected)?;
         solver.coerce(result, expected)?;
@@ -138,23 +226,7 @@ pub(super) fn hints(
             solver.unify(term, unit)?;
         }
     }
-    let closures = solver.closure_hints()?;
-    let mut hints = HashMap::new();
-    for (site, term) in solver.sites.clone() {
-        if let Some(ty) = solver.resolve(term, 0)? {
-            hints.insert(site, ty);
-        } else if matches!(solver.domain(term), Domain::Nominal(..))
-            && !solver.contains_callable(term, 0)?
-        {
-            return Err(solver.user_error(
-                "E0282: type annotations needed: cannot infer the type of this binding",
-            ));
-        }
-    }
-    Ok(Hints {
-        locals: hints,
-        closures,
-    })
+    Ok(solver)
 }
 
 impl<'s> Solver<'_, '_, 's> {
@@ -242,20 +314,96 @@ impl<'s> Solver<'_, '_, 's> {
         };
         self.node(domain)
     }
+    fn source_has_inference(&self, ty: &Type, depth: usize) -> Result<bool, String> {
+        self.checker.infer_work(depth)?;
+        Ok(match ty {
+            Type::Infer => true,
+            Type::Apply(path) => {
+                let mut found = false;
+                for segment in &path.segments {
+                    for argument in &segment.args {
+                        found |= self.source_has_inference(argument, depth + 1)?;
+                    }
+                }
+                found
+            }
+            Type::Tuple(fields) => {
+                let mut found = false;
+                for field in fields {
+                    found |= self.source_has_inference(field, depth + 1)?;
+                }
+                found
+            }
+            Type::Ref { referent, .. } => self.source_has_inference(referent, depth + 1)?,
+            Type::RawPtr { pointee, .. } => self.source_has_inference(pointee, depth + 1)?,
+            Type::Array(element, _) | Type::Slice(element) => {
+                self.source_has_inference(element, depth + 1)?
+            }
+            _ => false,
+        })
+    }
     fn source_ty(&mut self, ty: &Type) -> Result<Term, String> {
+        if matches!(ty, Type::Infer) {
+            return self.fresh();
+        }
+        let partial = self.preparation.is_some() && self.source_has_inference(ty, 0)?;
+        if let Some(inputs) = self.preparation.filter(|_| !partial) {
+            // The source-schema provider authenticates the retained occurrence,
+            // aliases, projections and region rows without instantiating fields.
+            // Unknown source occurrences have no generic resumable identity:
+            // report the explicit boundary rather than inventing a token or
+            // taking the eager checked_local_ty compatibility path.
+            return match (inputs.source_type)(ty)? {
+                Some(shape) => self.manifest_term(&shape, 0),
+                None => Err(
+                    "unsupported: source type preparation requires an authenticated source recipe"
+                        .into(),
+                ),
+            };
+        }
         // Resolved aliases and primitive paths need not name a nominal. Only
         // genuinely partial types need reconstruction with fresh variables.
-        if let Ok(ty) = checked_local_ty(ty, self.checker.signatures) {
-            return self.fixed(ty);
+        if self.preparation.is_none() {
+            if let Ok(ty) = checked_local_ty(ty, self.checker.signatures) {
+                return self.fixed(ty);
+            }
         }
         match ty {
             Type::Infer => self.fresh(),
             Type::Apply(path) => {
+                if partial
+                    && path
+                        .segments
+                        .iter()
+                        .any(|segment| !segment.associated_types.is_empty())
+                {
+                    return Err(
+                        "unsupported: associated equalities in partial nominal source type".into(),
+                    );
+                }
                 let path_id = path.path(self.checker.names()?)?;
                 let decl = self
                     .checker
                     .nominal_decl(&path_id)
                     .map_err(|error| format!("{error} in partial local type {path_id:?}"))?;
+                if partial {
+                    let argument_count = path
+                        .segments
+                        .iter()
+                        .map(|segment| segment.args.len())
+                        .sum::<usize>();
+                    if self.checker.signatures.plan()?.param_env(decl)?.arity() != argument_count
+                        || path
+                            .segments
+                            .iter()
+                            .take(path.segments.len().saturating_sub(1))
+                            .any(|segment| {
+                                !segment.args.is_empty() || !segment.region_args.is_empty()
+                            })
+                    {
+                        return Err("unsupported: partial nominal source application owner or arity changed".into());
+                    }
+                }
                 let args = path
                     .segments
                     .iter()
@@ -475,6 +623,23 @@ impl<'s> Solver<'_, '_, 's> {
                 ty
             }
             Domain::Nominal(decl, args) => {
+                if let Some(inputs) = self.preparation {
+                    if !self.manifest_ready(&args, depth + 1)? {
+                        self.preparation_needs_actuals.set(true);
+                        return Ok(None);
+                    }
+                    let demand = nominal_manifest::Demand {
+                        declaration: decl,
+                        arguments: self.manifest_children(&args, depth + 1)?,
+                    };
+                    return match (inputs.nominal_type)(&demand)? {
+                        Some(ty) => Ok(Some(ty)),
+                        None => {
+                            self.record_missing_nominal(demand)?;
+                            Ok(None)
+                        }
+                    };
+                }
                 let mut actuals = Vec::new();
                 for arg in args {
                     let Some(ty) = self.resolve(arg, depth + 1)? else {
@@ -663,6 +828,7 @@ impl<'s> Solver<'_, '_, 's> {
         let mut methods = std::mem::take(&mut self.methods);
         let mut projections = std::mem::take(&mut self.projections);
         loop {
+            self.preparation_needs_actuals.set(false);
             let mut progress = false;
             let mut pending = Vec::new();
             for method in methods {
@@ -765,6 +931,16 @@ impl<'s> Solver<'_, '_, 's> {
                 progress = true;
             }
             if !progress {
+                if self.preparation.is_some()
+                    && (self.preparation_needs_actuals.get()
+                        || self.missing_source_schemas.get()
+                        || !self.missing_nominals.borrow().is_empty())
+                {
+                    // A missing graph input is not inference quiescence. In
+                    // particular it cannot authorize an i32/f64 fallback that
+                    // would choose an early nominal realization identity.
+                    break;
+                }
                 if !self.projection_defaults {
                     self.projection_defaults = true;
                     continue;
@@ -786,6 +962,9 @@ impl<'s> Solver<'_, '_, 's> {
                 FieldSelector::ConstantIndex(_),
             ) => Ok(Some(element)),
             (Domain::Nominal(decl, args), _) => {
+                if self.preparation.is_some() {
+                    return self.prepare_field(decl, &args, field);
+                }
                 let plan = self.checker.signatures.plan()?;
                 let (env, schema) = plan.nominal_schema(decl, &plan.budget)?;
                 let ir::Ty::Struct(schema) = schema else {
@@ -854,6 +1033,9 @@ impl<'s> Solver<'_, '_, 's> {
             Some((decl, _)) => decl,
             None => self.checker.nominal_decl(name)?,
         };
+        if self.preparation.is_some() {
+            return self.prepare_constructor(decl, variant, fields, self_ty, depth);
+        }
         let (env, schema) = plan.nominal_schema(decl, &plan.budget)?;
         let mut params = HashMap::new();
         for index in 0..env.arity() {
@@ -1045,6 +1227,9 @@ impl<'s> Solver<'_, '_, 's> {
         } else {
             self.checker.nominal_decl(name)?
         };
+        if self.preparation.is_some() {
+            return self.prepare_pattern(decl, variant_name, fields, term);
+        }
         let (env, schema) = plan.nominal_schema(decl, &plan.budget)?;
         let mut params = HashMap::new();
         for index in 0..env.arity() {
@@ -1223,6 +1408,17 @@ impl<'s> Solver<'_, '_, 's> {
     fn expr(&mut self, expr: &'s Expr, depth: usize) -> Result<Term, String> {
         self.checker.infer_work(depth)?;
         match expr {
+            Expr::NativeSyscall(arguments) => {
+                if arguments.len() != 7 {
+                    return Err("native syscall requires number and six usize arguments".into());
+                }
+                let usize_term = self.fixed(ir::Ty::Int(ir::IntTy::Usize))?;
+                for argument in arguments {
+                    let actual = self.expr(argument, depth + 1)?;
+                    self.coerce(actual, usize_term)?;
+                }
+                Ok(usize_term)
+            }
             Expr::Struct { name, fields } => {
                 let fields = fields
                     .iter()
@@ -1510,17 +1706,6 @@ impl<'s> Solver<'_, '_, 's> {
             Expr::Loop { body, .. } => {
                 self.block(body, depth + 1)?;
                 self.fresh()
-            }
-            Expr::NativeSyscall(arguments) => {
-                if arguments.len() != 7 {
-                    return Err("native syscall requires exactly seven operands".into());
-                }
-                let usize = self.fixed(ir::Ty::Int(ir::IntTy::Usize))?;
-                for argument in arguments {
-                    let actual = self.expr(argument, depth + 1)?;
-                    self.coerce(actual, usize)?;
-                }
-                Ok(usize)
             }
             Expr::Format { arguments, .. } => {
                 for a in arguments {

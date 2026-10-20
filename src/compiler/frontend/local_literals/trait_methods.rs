@@ -12,9 +12,10 @@ impl Solver<'_, '_, '_> {
         arguments: &[Term],
         explicit: &[Term],
     ) -> Result<Option<Term>, String> {
-        if !arguments
-            .iter()
-            .any(|argument| matches!(self.domain(self.peel_refs(*argument)), Domain::Callable(_)))
+        if self.preparation.is_none()
+            && !arguments.iter().any(|argument| {
+                matches!(self.domain(self.peel_refs(*argument)), Domain::Callable(_))
+            })
         {
             return Ok(None);
         }
@@ -74,6 +75,7 @@ impl Solver<'_, '_, '_> {
                 discovered = Some(application);
                 Ok(MethodArguments::Deferred)
             },
+            |_, _| Ok(None),
         )?;
         let Some((application, item)) = discovered else {
             return Ok(None);

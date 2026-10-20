@@ -7606,7 +7606,10 @@ mod tests {
         }
         let snapshot = ir::SnapshotId::allocate().unwrap();
         let ty = ir::EnumTy::new(ir::EnumDef {
-            id: ir::NominalAppId { snapshot, index: 0 },
+            id: ir::NominalAppId {
+                snapshot,
+                index: crate::compiler::ir::NominalIndex::SourceSlot(0),
+            },
             source_decl: super::super::traits::test_support::source_decl(
                 snapshot,
                 0,
@@ -7777,7 +7780,10 @@ mod tests {
         };
         let snapshot = ir::SnapshotId::allocate().unwrap();
         let ty = ir::EnumTy::new(ir::EnumDef {
-            id: ir::NominalAppId { snapshot, index: 0 },
+            id: ir::NominalAppId {
+                snapshot,
+                index: crate::compiler::ir::NominalIndex::SourceSlot(0),
+            },
             source_decl: ir::DeclId { snapshot, index: 0 },
             type_args: [].into(),
             name: "Backing".into(),

@@ -12,6 +12,9 @@ pub use associated_const::AssociatedConstOperand;
 mod schema_metadata;
 pub(super) use schema_metadata::substitute_schema_metadata_ty;
 #[cfg(test)]
+#[path = "ir/closed_call_receipt_tests.rs"]
+pub(in crate::compiler) mod closed_call_receipt_tests;
+#[cfg(test)]
 #[path = "ir/projection_pattern_tests.rs"]
 mod projection_pattern_tests;
 use std::hash::{Hash, Hasher};
@@ -78,9 +81,26 @@ impl SnapshotId {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum NominalIndex {
+    SourceSlot(usize),
+    GraphRealization(crate::engine::OutputIdentity),
+}
+impl NominalIndex {
+    /// Source-schema consumers cannot use graph coordinates as interner slots.
+    pub fn source_slot(self) -> Result<usize, String> {
+        match self {
+            Self::SourceSlot(index) => Ok(index),
+            Self::GraphRealization(_) => {
+                Err("graph nominal requires an explicit typed realization capability".into())
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct NominalAppId {
     pub snapshot: SnapshotId,
-    pub index: usize,
+    pub index: NominalIndex,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -1694,8 +1714,24 @@ pub struct BodySubstitutionProof {
     expression_types: Arc<[Ty]>,
     result: Ty,
     generated: GeneratedBodyShape,
+    closed_calls: Option<Arc<[super::frontend::nominal_call_receipts::closed::ClosedReceipt]>>,
+    engine: Option<crate::engine::EngineAuthority>,
 }
 impl BodySubstitutionProof {
+    pub(in crate::compiler) fn validate_current_engine(
+        &self,
+        engine: crate::engine::EngineAuthority,
+    ) -> Result<(), String> {
+        if self.engine != Some(engine) {
+            return Err("missing or foreign engine body substitution proof".into());
+        }
+        if let Some(rows) = &self.closed_calls {
+            for row in rows.iter() {
+                row.validate_current_engine(engine)?;
+            }
+        }
+        Ok(())
+    }
     pub fn template(&self) -> &super::ownership::VerifiedTemplateCfg {
         &self.template
     }
@@ -1775,6 +1811,15 @@ impl BodySubstitutionProof {
                 return Err("body substitution changed generated expression type".into());
             }
         }
+        super::frontend::nominal_call_receipts::closed::replay(
+            self.closed_calls.as_deref(),
+            self.engine,
+            source,
+            &self.template,
+            &self.target.type_args,
+            facts,
+            budget,
+        )?;
         self.generated.validate(source, facts, budget)?;
         Ok(())
     }
@@ -2491,7 +2536,45 @@ impl PlanBudget {
     }
 }
 pub trait SubstitutionCx {
+    #[track_caller]
     fn nominal_application(&self, id: NominalAppId) -> Result<NominalAppInfo, String>;
+    /// A graph-issued definition may be retained only through a consumer that
+    /// has the current engine and the original successful typed read capability.
+    /// Identity coordinates alone do not permit source-slot lookup or re-interning.
+    fn retain_realized_nominal(
+        &mut self,
+        _source: &Ty,
+        _caller: FactsCtx<'_>,
+        _budget: &PlanBudget,
+    ) -> Result<Ty, String> {
+        Err("graph nominal substitution requires current-engine typed reads".into())
+    }
+    fn current_engine(&self) -> Option<crate::engine::EngineAuthority> {
+        None
+    }
+    fn record_canonical_call_realization(
+        &mut self,
+        _expression: ExprId,
+        _selection: &Callee,
+        _target: &Callee,
+        _canonical: &Signature,
+        _mapped: &Signature,
+        _caller: FactsCtx<'_>,
+        _budget: &PlanBudget,
+    ) -> Result<(), String> {
+        Err("closed call realization requires recording context".into())
+    }
+    /// Only a current-engine adapter may convert a canonical call signature.
+    fn realize_canonical_call_signature(
+        &mut self,
+        _target: &Callee,
+        _canonical: &Signature,
+        _mapped: &Signature,
+        _caller: FactsCtx<'_>,
+        _budget: &PlanBudget,
+    ) -> Result<Option<Signature>, String> {
+        Ok(None)
+    }
     fn intern_nominal(
         &mut self,
         declaration: DeclId,
@@ -2836,6 +2919,9 @@ fn substitute_ty_walk(
             }
         }
         Ty::Struct(value) => {
+            if matches!(value.def().id.index, NominalIndex::GraphRealization(_)) {
+                return cx.retain_realized_nominal(ty, caller, budget);
+            }
             let app = cx.nominal_application(value.def().id)?;
             if app.type_args.len() > 32 {
                 return Err("nominal argument limit exceeded".into());
@@ -2856,6 +2942,9 @@ fn substitute_ty_walk(
             )?
         }
         Ty::Enum(value) => {
+            if matches!(value.def().id.index, NominalIndex::GraphRealization(_)) {
+                return cx.retain_realized_nominal(ty, caller, budget);
+            }
             let app = cx.nominal_application(value.def().id)?;
             if app.type_args.len() > 32 {
                 return Err("nominal argument limit exceeded".into());
@@ -2965,6 +3054,7 @@ pub(in crate::compiler) fn instantiate_checked_with_constants(
     let mut recording = RecordingSubstitutionCx {
         inner: cx,
         nominals: Vec::new(),
+        calls: None,
     };
     let mut visitor = Instantiate {
         facts: FactsCtx::from_validated(closed_facts),
@@ -3105,7 +3195,7 @@ pub(in crate::compiler) fn instantiate_checked_with_constants(
         .map_err(|e| e.into_legacy_diagnostic(budget))?
         .ref_contract()
         .clone();
-    output = canonicalize_call_metadata(&output, closed_facts, recording.inner, budget)
+    output = canonicalize_call_metadata(&output, closed_facts, &mut recording, None, budget)
         .map_err(|e| e.into_legacy_diagnostic(budget))?;
     let generated = GeneratedBodyShape::capture(&output, closed_facts, budget)?;
     budget.retain_bytes(
@@ -3122,6 +3212,8 @@ pub(in crate::compiler) fn instantiate_checked_with_constants(
     output.body_substitution = Some(Arc::new(BodySubstitutionProof {
         template: template.clone(),
         target: target.clone(),
+        engine: recording.inner.current_engine(),
+        closed_calls: recording.calls.map(Arc::from),
         nominals: recording.nominals.into(),
         local_types: output
             .locals
@@ -3145,10 +3237,103 @@ pub(in crate::compiler) fn instantiate_checked_with_constants(
 struct RecordingSubstitutionCx<'a, C> {
     inner: &'a mut C,
     nominals: Vec<NominalCarrierMapping>,
+    calls: Option<Vec<super::frontend::nominal_call_receipts::closed::ClosedReceipt>>,
+}
+impl<C> RecordingSubstitutionCx<'_, C> {
+    fn record_nominal_mapping(
+        &mut self,
+        original: NominalAppId,
+        instantiated: NominalAppId,
+        budget: &PlanBudget,
+    ) -> Result<(), String> {
+        budget.charge_work(self.nominals.len().saturating_add(1))?;
+        if let Some(old) = self
+            .nominals
+            .iter()
+            .find(|mapping| mapping.original == original)
+        {
+            if old.instantiated != instantiated {
+                return Err("conflicting nominal substitution".into());
+            }
+        } else {
+            budget.retain_bytes(3 * std::mem::size_of::<NominalCarrierMapping>())?;
+            self.nominals
+                .try_reserve(1)
+                .map_err(|_| "nominal mapping allocation resource limit")?;
+            self.nominals.push(NominalCarrierMapping {
+                original,
+                instantiated,
+            });
+        }
+        Ok(())
+    }
 }
 impl<C: SubstitutionCx> SubstitutionCx for RecordingSubstitutionCx<'_, C> {
+    fn current_engine(&self) -> Option<crate::engine::EngineAuthority> {
+        self.inner.current_engine()
+    }
+    fn realize_canonical_call_signature(
+        &mut self,
+        target: &Callee,
+        canonical: &Signature,
+        mapped: &Signature,
+        caller: FactsCtx<'_>,
+        budget: &PlanBudget,
+    ) -> Result<Option<Signature>, String> {
+        self.inner
+            .realize_canonical_call_signature(target, canonical, mapped, caller, budget)
+    }
+    fn record_canonical_call_realization(
+        &mut self,
+        expression: ExprId,
+        selection: &Callee,
+        target: &Callee,
+        canonical: &Signature,
+        mapped: &Signature,
+        caller: FactsCtx<'_>,
+        budget: &PlanBudget,
+    ) -> Result<(), String> {
+        use super::frontend::nominal_call_receipts::closed;
+        let facts = caller
+            .validated()
+            .ok_or("closed call recording requires caller authority")?;
+        let engine = self
+            .inner
+            .current_engine()
+            .ok_or("closed call recording requires current engine")?;
+        let row = closed::ClosedReceipt::issue(
+            expression, selection, target, canonical, mapped, engine, facts, budget,
+        )?;
+        for mapping in closed::conversion_rows(canonical, mapped, budget)? {
+            self.record_nominal_mapping(mapping.original, mapping.instantiated, budget)?;
+        }
+        let rows = self.calls.get_or_insert_with(Vec::new);
+        budget.retain_bytes(std::mem::size_of::<closed::ClosedReceipt>())?;
+        rows.try_reserve(1)
+            .map_err(|_| "closed call receipt allocation failed")?;
+        rows.push(row);
+        Ok(())
+    }
     fn nominal_application(&self, id: NominalAppId) -> Result<NominalAppInfo, String> {
         self.inner.nominal_application(id)
+    }
+    fn retain_realized_nominal(
+        &mut self,
+        source: &Ty,
+        caller: FactsCtx<'_>,
+        budget: &PlanBudget,
+    ) -> Result<Ty, String> {
+        let output = self.inner.retain_realized_nominal(source, caller, budget)?;
+        if !identical_type(source, &output, budget)? {
+            return Err("typed nominal identity substitution changed its definition".into());
+        }
+        let original = match source {
+            Ty::Struct(value) => value.def().id,
+            Ty::Enum(value) => value.def().id,
+            _ => return Err("typed nominal identity substitution changed kind".into()),
+        };
+        self.record_nominal_mapping(original, original, budget)?;
+        Ok(output)
     }
     fn intern_nominal(
         &mut self,
@@ -3193,25 +3378,7 @@ impl<C: SubstitutionCx> SubstitutionCx for RecordingSubstitutionCx<'_, C> {
         if before.source_decl != after.source_decl {
             return Err("nominal substitution changed source declaration".into());
         }
-        budget.charge_work(self.nominals.len().saturating_add(1))?;
-        if let Some(old) = self
-            .nominals
-            .iter()
-            .find(|mapping| mapping.original == request.original)
-        {
-            if old.instantiated != instantiated {
-                return Err("conflicting nominal substitution".into());
-            }
-        } else {
-            budget.retain_bytes(3 * std::mem::size_of::<NominalCarrierMapping>())?;
-            self.nominals
-                .try_reserve(1)
-                .map_err(|_| "nominal mapping allocation resource limit")?;
-            self.nominals.push(NominalCarrierMapping {
-                original: request.original,
-                instantiated,
-            });
-        }
+        self.record_nominal_mapping(request.original, instantiated, budget)?;
         Ok(output)
     }
 }
@@ -3337,7 +3504,7 @@ pub(super) fn canonicalize_source_calls(
     source: &CheckedFunction,
     facts: &super::traits::ValidatedFacts,
     cx: &mut impl SubstitutionCx,
-    _cap: &super::frontend::CanonicalSourceCapability,
+    cap: &super::frontend::CanonicalSourceCapability,
     budget: &PlanBudget,
 ) -> Result<CheckedFunction, super::traits::FactsError> {
     if facts.phase() == super::traits::FactsPhase::Schema
@@ -3349,7 +3516,7 @@ pub(super) fn canonicalize_source_calls(
             "canonical source transform requires original executable facts",
         ));
     }
-    canonicalize_call_metadata(source, facts, cx, budget)
+    canonicalize_call_metadata(source, facts, cx, Some(cap), budget)
 }
 
 pub fn canonicalize_checked_calls(
@@ -3366,7 +3533,7 @@ pub fn canonicalize_checked_calls(
             "call closure requires closed facts and same planning authority",
         ));
     }
-    let output = canonicalize_call_metadata(source, facts, _cx, budget)?;
+    let output = canonicalize_call_metadata(source, facts, _cx, None, budget)?;
     output
         .validate_with_facts(FactsCtx::from_validated(facts))
         .map_err(|e| FactsError::from_message(budget, &e))?;
@@ -3379,6 +3546,7 @@ fn canonicalize_call_metadata(
     source: &CheckedFunction,
     facts: &super::traits::ValidatedFacts,
     _cx: &mut impl SubstitutionCx,
+    source_cap: Option<&super::frontend::CanonicalSourceCapability>,
     budget: &PlanBudget,
 ) -> Result<CheckedFunction, super::traits::FactsError> {
     use super::traits::FactsError;
@@ -3386,7 +3554,7 @@ fn canonicalize_call_metadata(
         .preflight_plan(FactsCtx::from_validated(facts), budget)
         .map_err(|e| FactsError::from_message(budget, &e))?;
     let mut output = source.clone();
-    for expression in &mut output.exprs {
+    for (expression_index, expression) in output.exprs.iter_mut().enumerate() {
         budget
             .charge_work(1)
             .map_err(|e| FactsError::from_message(budget, &e))?;
@@ -3409,6 +3577,7 @@ fn canonicalize_call_metadata(
                         })?,
                 )
                 .map_err(|error| FactsError::from_message(budget, &error))?;
+            let selection = target.clone();
             let (callee, canonical) = match target {
                 Callee::Direct(target) => {
                     let proof = facts.service().discharge_direct(target, facts)?;
@@ -3438,6 +3607,43 @@ fn canonicalize_call_metadata(
                     "closed call signature disagrees with canonical declaration",
                 ));
             }
+            let canonical = if let Some(cap) = source_cap {
+                cap.realized_source_call_signature(
+                    ExprId(expression_index),
+                    &callee,
+                    &canonical,
+                    signature,
+                )?
+                .unwrap_or(canonical)
+            } else if facts.phase() == super::traits::FactsPhase::Closed {
+                match _cx
+                    .realize_canonical_call_signature(
+                        &callee,
+                        &canonical,
+                        signature,
+                        FactsCtx::from_validated(facts),
+                        budget,
+                    )
+                    .map_err(|e| FactsError::from_message(budget, &e))?
+                {
+                    Some(mapped) => {
+                        _cx.record_canonical_call_realization(
+                            ExprId(expression_index),
+                            &selection,
+                            &callee,
+                            &canonical,
+                            &mapped,
+                            FactsCtx::from_validated(facts),
+                            budget,
+                        )
+                        .map_err(|e| FactsError::from_message(budget, &e))?;
+                        mapped
+                    }
+                    None => canonical,
+                }
+            } else {
+                canonical
+            };
             *target = callee;
             *signature = canonical;
         }
@@ -3919,17 +4125,23 @@ impl<D> NominalRef<D> {
 }
 
 #[derive(Clone)]
-pub struct EnumTy(NominalRef<EnumDef>);
+pub struct EnumTy(
+    NominalRef<EnumDef>,
+    Option<super::nominal_realization::ReadNominal>,
+);
 
 impl EnumTy {
     pub(super) fn new(def: EnumDef) -> Self {
-        Self(NominalRef::Strong(Arc::new(def)))
+        Self(NominalRef::Strong(Arc::new(def)), None)
     }
     pub fn from_ref(r: NominalRef<EnumDef>) -> Self {
-        Self(r)
+        Self(r, None)
     }
     /// Owned definition of a freshly built, unshared strong handle.
     pub fn into_def(self) -> Result<EnumDef, String> {
+        if self.1.is_some() {
+            return Err("graph nominal cannot detach its typed read capability".into());
+        }
         match self.0 {
             NominalRef::Strong(a) => Arc::try_unwrap(a).map_err(|_| "shared nominal".into()),
             NominalRef::Back(..) => Err("back edge has no owned definition".into()),
@@ -3949,6 +4161,17 @@ impl EnumTy {
 
     pub fn def(&self) -> &EnumDef {
         self.0.get()
+    }
+
+    pub(super) fn with_realization(
+        mut self,
+        capability: super::nominal_realization::ReadNominal,
+    ) -> Self {
+        self.1 = Some(capability);
+        self
+    }
+    pub(super) fn realization(&self) -> Option<&super::nominal_realization::ReadNominal> {
+        self.1.as_ref()
     }
 
     pub fn has_payload(&self) -> bool {
@@ -4372,7 +4595,10 @@ fn projected_ty_inner<'a>(
 /// Immutable nominal handle. Equality and hashing use declaration identity,
 /// never field shape, names or Arc's structural pointee equality.
 #[derive(Clone)]
-pub struct StructTy(NominalRef<StructDef>);
+pub struct StructTy(
+    NominalRef<StructDef>,
+    Option<super::nominal_realization::ReadNominal>,
+);
 
 impl std::fmt::Debug for StructTy {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -4400,13 +4626,16 @@ impl StructTy {
     /// The declaration builder must validate the entire by-value dependency DAG
     /// before constructing definitions in dependency-first order.
     pub(super) fn new(def: StructDef) -> Self {
-        Self(NominalRef::Strong(Arc::new(def)))
+        Self(NominalRef::Strong(Arc::new(def)), None)
     }
     pub fn from_ref(r: NominalRef<StructDef>) -> Self {
-        Self(r)
+        Self(r, None)
     }
     /// Owned definition of a freshly built, unshared strong handle.
     pub fn into_def(self) -> Result<StructDef, String> {
+        if self.1.is_some() {
+            return Err("graph nominal cannot detach its typed read capability".into());
+        }
         match self.0 {
             NominalRef::Strong(a) => Arc::try_unwrap(a).map_err(|_| "shared nominal".into()),
             NominalRef::Back(..) => Err("back edge has no owned definition".into()),
@@ -4426,6 +4655,17 @@ impl StructTy {
 
     pub fn def(&self) -> &StructDef {
         self.0.get()
+    }
+
+    pub(super) fn with_realization(
+        mut self,
+        capability: super::nominal_realization::ReadNominal,
+    ) -> Self {
+        self.1 = Some(capability);
+        self
+    }
+    pub(super) fn realization(&self) -> Option<&super::nominal_realization::ReadNominal> {
+        self.1.as_ref()
     }
 
     pub fn field_index(&self, name: &str) -> Option<usize> {
@@ -8912,9 +9152,50 @@ impl CheckedFunction {
                         if args.get(*argument) != Some(&ExprId(borrow_index))
                             || signature.params.get(*argument) != Some(&expected)
                         {
-                            return Err(
-                                "two-phase borrow must be the exact mutable call argument".into()
-                            );
+                            let describe = |ty: &Ty| {
+                                let mut current = ty;
+                                let mut layers = Vec::new();
+                                for _ in 0..8 {
+                                    match current {
+                                        Ty::Ref { kind, referent } => {
+                                            layers.push(format!("Ref({kind:?})"));
+                                            current = referent;
+                                        }
+                                        Ty::RawPtr { kind, pointee } => {
+                                            layers.push(format!("Ptr({kind:?})"));
+                                            current = pointee;
+                                        }
+                                        _ => break,
+                                    }
+                                }
+                                match current {
+                                    Ty::Struct(n) => format!(
+                                        "{layers:?}:Struct({:?},{:?})",
+                                        n.def().source_decl,
+                                        n.id()
+                                    ),
+                                    Ty::Enum(n) => format!(
+                                        "{layers:?}:Enum({:?},{:?})",
+                                        n.def().source_decl,
+                                        n.id()
+                                    ),
+                                    _ => {
+                                        format!("{layers:?}:{:?}", std::mem::discriminant(current))
+                                    }
+                                }
+                            };
+                            return Err(format!(
+                                "two-phase borrow must be the exact mutable call argument: owner={} borrow={} activation={} argument={} actual={:?} local={} pathlen={} expected={} formal={:?}",
+                                self.name,
+                                borrow_index,
+                                activation.0,
+                                argument,
+                                args.get(*argument),
+                                place.local.0,
+                                place.projection.len(),
+                                describe(&expected),
+                                signature.params.get(*argument).map(describe)
+                            ));
                         }
                         match reason {
                             ImplicitBorrowKind::MutableReceiver => {
@@ -13310,7 +13591,10 @@ mod tests {
         let enumeration = EnumTy::new(EnumDef {
             source_decl: test_decl(),
             type_args: Arc::from([]),
-            id: NominalAppId { snapshot, index: 7 },
+            id: NominalAppId {
+                snapshot,
+                index: crate::compiler::ir::NominalIndex::SourceSlot(7),
+            },
             name: "E".into(),
             module: modules.core_root(),
             visibility: crate::compiler::ir::Visibility::Restricted(modules.core_root()),
@@ -13327,7 +13611,10 @@ mod tests {
         });
         let root = Ty::Struct(nominal(
             &modules,
-            NominalAppId { snapshot, index: 0 },
+            NominalAppId {
+                snapshot,
+                index: crate::compiler::ir::NominalIndex::SourceSlot(0),
+            },
             "Private",
             vec![
                 pair.clone(),
@@ -13454,7 +13741,10 @@ mod tests {
         };
         let other = Ty::Struct(nominal(
             &modules,
-            NominalAppId { snapshot, index: 1 },
+            NominalAppId {
+                snapshot,
+                index: crate::compiler::ir::NominalIndex::SourceSlot(1),
+            },
             "Private",
             root_type
                 .def()
@@ -13917,7 +14207,7 @@ mod tests {
             &modules,
             NominalAppId {
                 snapshot: SnapshotId::allocate().unwrap(),
-                index: 0,
+                index: crate::compiler::ir::NominalIndex::SourceSlot(0),
             },
             "S",
             vec![Ty::Int(IntTy::I32)],
@@ -13988,7 +14278,7 @@ mod tests {
         let modules = fixture_modules();
         let id = NominalAppId {
             snapshot: SnapshotId::allocate().unwrap(),
-            index: 0,
+            index: crate::compiler::ir::NominalIndex::SourceSlot(0),
         };
         let ty = EnumTy::new(EnumDef {
             source_decl: test_decl(),
@@ -14044,7 +14334,10 @@ mod tests {
             ],
             vec![
                 Projection::Downcast(VariantId {
-                    owner: NominalAppId { index: 1, ..id },
+                    owner: NominalAppId {
+                        index: NominalIndex::SourceSlot(1),
+                        ..id
+                    },
                     ..variant
                 }),
                 Projection::Field(0),
@@ -14097,7 +14390,7 @@ mod tests {
         let modules = fixture_modules();
         let id = NominalAppId {
             snapshot: SnapshotId::allocate().unwrap(),
-            index: 0,
+            index: crate::compiler::ir::NominalIndex::SourceSlot(0),
         };
         let handle = EnumTy::new(EnumDef {
             source_decl: test_decl(),
@@ -14391,13 +14684,19 @@ mod tests {
         let snapshot = SnapshotId::allocate().unwrap();
         let first = nominal(
             &modules,
-            NominalAppId { snapshot, index: 0 },
+            NominalAppId {
+                snapshot,
+                index: crate::compiler::ir::NominalIndex::SourceSlot(0),
+            },
             "S",
             vec![Ty::Int(IntTy::I32)],
         );
         let same_shape = nominal(
             &modules,
-            NominalAppId { snapshot, index: 1 },
+            NominalAppId {
+                snapshot,
+                index: crate::compiler::ir::NominalIndex::SourceSlot(1),
+            },
             "S",
             vec![Ty::Int(IntTy::I32)],
         );
@@ -14405,7 +14704,7 @@ mod tests {
             &modules,
             NominalAppId {
                 snapshot: SnapshotId::allocate().unwrap(),
-                index: 0,
+                index: crate::compiler::ir::NominalIndex::SourceSlot(0),
             },
             "S",
             vec![Ty::Int(IntTy::I32)],
@@ -14427,7 +14726,7 @@ mod tests {
             &modules,
             NominalAppId {
                 snapshot: SnapshotId::allocate().unwrap(),
-                index: 0,
+                index: crate::compiler::ir::NominalIndex::SourceSlot(0),
             },
             "S",
             vec![
@@ -14484,7 +14783,10 @@ mod tests {
         for index in 0..16 {
             ty = Ty::Struct(nominal(
                 &modules,
-                NominalAppId { snapshot, index },
+                NominalAppId {
+                    snapshot,
+                    index: NominalIndex::SourceSlot(index),
+                },
                 &"é".repeat(1000),
                 vec![ty.clone(), ty],
             ));
@@ -14585,13 +14887,19 @@ mod tests {
         let snapshot = SnapshotId::allocate().unwrap();
         let domain = Ty::Struct(nominal(
             &modules,
-            NominalAppId { snapshot, index: 0 },
+            NominalAppId {
+                snapshot,
+                index: crate::compiler::ir::NominalIndex::SourceSlot(0),
+            },
             "Same",
             vec![Ty::Bool],
         ));
         let other = Ty::Struct(nominal(
             &modules,
-            NominalAppId { snapshot, index: 1 },
+            NominalAppId {
+                snapshot,
+                index: crate::compiler::ir::NominalIndex::SourceSlot(1),
+            },
             "Same",
             vec![Ty::Bool],
         ));
@@ -14648,7 +14956,10 @@ mod tests {
         bindings[0].projection.insert(
             0,
             Projection::Downcast(VariantId {
-                owner: NominalAppId { snapshot, index: 0 },
+                owner: NominalAppId {
+                    snapshot,
+                    index: crate::compiler::ir::NominalIndex::SourceSlot(0),
+                },
                 index: 0,
             }),
         );
@@ -14847,7 +15158,7 @@ mod tests {
             type_args: Arc::from([]),
             id: NominalAppId {
                 snapshot: SnapshotId::allocate().unwrap(),
-                index: 0,
+                index: crate::compiler::ir::NominalIndex::SourceSlot(0),
             },
             name: "Tag".into(),
             module: modules.core_root(),
@@ -14962,7 +15273,7 @@ mod tests {
                 type_args: vec![Ty::Bool; 33].into(),
                 id: NominalAppId {
                     snapshot: SnapshotId::allocate().unwrap(),
-                    index: 0,
+                    index: crate::compiler::ir::NominalIndex::SourceSlot(0),
                 },
                 name: "InvalidArguments".into(),
                 module: modules.core_root(),
@@ -15021,7 +15332,7 @@ mod tests {
             type_args: Arc::from([]),
             id: NominalAppId {
                 snapshot: SnapshotId::allocate().unwrap(),
-                index: 0,
+                index: crate::compiler::ir::NominalIndex::SourceSlot(0),
             },
             name: "Tag".into(),
             module: modules.core_root(),
@@ -15040,7 +15351,7 @@ mod tests {
             .into(),
         });
         let mut definition = original.def().clone();
-        definition.id.index = 1;
+        definition.id.index = NominalIndex::SourceSlot(1);
         let replacement = EnumTy::new(definition);
         let old = Projection::Downcast(VariantId {
             owner: original.def().id,

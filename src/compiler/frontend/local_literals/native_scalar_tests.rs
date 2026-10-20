@@ -44,6 +44,11 @@ fn inspect(source: &str, malformed_arity: bool) -> Result<(usize, Vec<ir::Ty>), 
         operators: Vec::new(),
         projection_defaults: false,
         opaque_return: None,
+        preparation: None,
+        missing_nominals: std::cell::RefCell::new(Vec::new()),
+        missing_source_schemas: std::cell::Cell::new(false),
+        missing_declarations: std::cell::RefCell::new(Vec::new()),
+        preparation_needs_actuals: std::cell::Cell::new(false),
     };
     let unit = solver.fixed(ir::Ty::Unit)?;
     solver.return_terms.push(unit);

@@ -27,6 +27,7 @@ pub mod macro_rules;
 mod macro_transcribe;
 mod memory_layout;
 pub mod module_identity;
+mod nominal_realization;
 #[cfg(test)]
 mod opaque_authority_tests;
 mod opaque_dispatch;
@@ -226,6 +227,7 @@ const SSA: u32 = 130;
 const LOCAL_OPT: u32 = 131;
 const SUMMARY: u32 = 132;
 const IPO_OPT: u32 = 133;
+const NOMINAL_DECL_WELL_FORMED: u32 = 138;
 
 enum Input {
     Text(String),
@@ -284,6 +286,35 @@ struct PlanFact {
 struct InstanceBodyFact {
     facts: Arc<traits::ValidatedFacts>,
     checked: Arc<ir::CheckedFunction>,
+}
+impl InstanceBodyFact {
+    fn validate_current_engine(&self, engine: crate::engine::EngineAuthority) -> Result<(), Error> {
+        let target = self
+            .facts
+            .target()
+            .ok_or_else(|| Error::new("BODY requires closed target authority"))?;
+        let original = self
+            .facts
+            .original_callable_schema(traits::OriginalCallableSubject::Direct(target.declaration))
+            .map_err(|error| Error::new(error.to_string()))?;
+        if original.generic_env().total_arity() != target.type_args.len() {
+            return Err(Error::new("BODY target changed original callable arity"));
+        }
+        let requires_substitution = !target.type_args.is_empty()
+            || !self
+                .facts
+                .is_source_callable(target.declaration)
+                .map_err(|error| Error::new(error.to_string()))?;
+        if requires_substitution && self.checked.body_substitution.is_none() {
+            return Err(Error::new(
+                "generic or recipe BODY omitted substitution proof",
+            ));
+        }
+        if let Some(proof) = &self.checked.body_substitution {
+            proof.validate_current_engine(engine).map_err(Error::new)?;
+        }
+        Ok(())
+    }
 }
 /// `ANALYZE` output: the sealed concrete proof and its analysis.
 struct ConcreteProofFact {
@@ -589,6 +620,31 @@ impl Provider for CompilerProvider {
     }
     fn start(&self, cx: Context, key: Key) -> TaskFuture {
         let this = self.clone();
+        if key.kind == nominal_realization::KIND {
+            return Box::pin(async move { nominal_realization::run(&cx, key).await });
+        }
+        // Keep declaration-local publication out of the legacy giant polling
+        // frame used by unrelated source-checking producers.
+        if key.kind == NOMINAL_DECL_WELL_FORMED {
+            return Box::pin(async move {
+                if key.params.len() != 2 {
+                    return Err(Error::new(
+                        "nominal declaration key requires exact snapshot and declaration",
+                    ));
+                }
+                let declaration = ir::DeclId {
+                    snapshot: ir::SnapshotId::from_graph_word(key.params[0]),
+                    index: u32::try_from(key.params[1])
+                        .map_err(|_| Error::new("nominal declaration index overflow"))?,
+                };
+                let facts = Facts { cx: &cx };
+                let types = facts.types().await?;
+                let proof = types
+                    .publish_nominal_declaration(declaration)
+                    .map_err(Error::new)?;
+                cx.publish_fact(0, proof)
+            });
+        }
         Box::pin(async move {
             let facts = Facts { cx: &cx };
             let root = Facts::root;
@@ -936,9 +992,38 @@ impl Provider for CompilerProvider {
                             &this.0.budget,
                         )
                         .map_err(|error| source_fact_error(error, &this.0.budget))?;
-                    let (body, closures, hidden) = types
-                        .publish_callable_body_outputs(declaration, constants, &this.0.budget)
-                        .map_err(|error| source_fact_error(error, &this.0.budget))?;
+                    let closed_source = !generic
+                        && matches!(
+                            types.callable_provider(declaration).map_err(Error::new)?,
+                            frontend::CallableProvider::Source { .. }
+                        )
+                        && !matches!(
+                            types
+                                .function_schema(declaration)
+                                .map_err(Error::new)?
+                                .signature
+                                .result,
+                            ir::Ty::Opaque(_)
+                        )
+                        && types
+                            .callable_context(declaration)
+                            .map_err(Error::new)?
+                            .self_ty
+                            .is_none();
+                    let (body, closures, hidden) = if closed_source {
+                        nominal_realization::publish_callable(
+                            &cx,
+                            &types,
+                            declaration,
+                            constants,
+                            &this.0.budget,
+                        )
+                        .await?
+                    } else {
+                        types
+                            .publish_callable_body_outputs(declaration, constants, &this.0.budget)
+                            .map_err(|error| source_fact_error(error, &this.0.budget))?
+                    };
                     let fact = match body {
                         frontend::PublishedCallableBody::Source(publication) => {
                             if !publication
@@ -1184,8 +1269,13 @@ impl Provider for CompilerProvider {
                         sources.push(this.validated_body(&types, index, &template)?);
                     }
                     let mut context = types.as_ref().clone();
-                    let plan = instances::build(&mut context, &sources, &this.0.budget)
-                        .map_err(Error::new)?;
+                    let plan = instances::build(
+                        &mut context,
+                        &sources,
+                        &this.0.budget,
+                        Some(cx.authority()),
+                    )
+                    .map_err(Error::new)?;
                     cx.publish_fact(0, PlanFact { plan })
                 }
                 OPAQUE_REPRESENTATION => {
@@ -1254,6 +1344,7 @@ impl Provider for CompilerProvider {
                                 .map_err(Error::new)?;
                             let canonical: Arc<InstanceBodyFact> =
                                 facts.get(Key::new(CANONICAL_BODY, params)).await?;
+                            canonical.validate_current_engine(cx.authority())?;
                             return cx.publish_fact(
                                 0,
                                 InstanceBodyFact {
@@ -1369,13 +1460,14 @@ impl Provider for CompilerProvider {
                                 .map_err(|error| source_fact_error(error, &this.0.budget))?;
                         }
                         let checked = Arc::new(
-                            ir::instantiate_checked_with_constants(
+                            nominal_realization::substitution::instantiate_checked_with_constants(
                                 verified,
                                 &instance_target.type_args,
                                 &closed,
                                 &mut context,
                                 &this.0.budget,
                                 &constant_values,
+                                cx.authority(),
                             )
                             .map_err(Error::new)?,
                         );
@@ -1393,6 +1485,7 @@ impl Provider for CompilerProvider {
                         Error::new("cleanup demand is restricted to closed roots")
                     })?;
                     let body: Arc<InstanceBodyFact> = facts.get(function(BODY, index)).await?;
+                    body.validate_current_engine(cx.authority())?;
                     let template = facts.template(source).await?;
                     let publication = template
                         .publication
@@ -1412,6 +1505,7 @@ impl Provider for CompilerProvider {
                     let types = facts.types().await?;
                     let (instance_target, instance_source) = facts.instance(index).await?;
                     let body: Arc<InstanceBodyFact> = facts.get(function(BODY, index)).await?;
+                    body.validate_current_engine(cx.authority())?;
                     let lowered = if !Self::universal_body(&types, instance_target.declaration)? {
                         let template = facts.template(instance_source).await?;
                         let publication = template.publication.as_ref().ok_or_else(|| {
@@ -1436,6 +1530,7 @@ impl Provider for CompilerProvider {
                         facts.get(function(LOWER, index)).await?;
                     let lowered = lowered.as_ref().clone();
                     let body: Arc<InstanceBodyFact> = facts.get(function(BODY, index)).await?;
+                    body.validate_current_engine(cx.authority())?;
                     scale_task_work_by_cfg(&lowered);
                     if !Self::universal_body(&types, instance_target.declaration)? {
                         let template = facts.template(instance_source).await?;
@@ -1860,6 +1955,22 @@ impl Provider for CompilerProvider {
                         return cx.publish(0, 1);
                     }
                     let root_count = types.closed_roots().len();
+                    let nominal_count = types.nominal_declaration_count();
+                    let (mut nominal_handles, _nominal_handles_storage) =
+                        this.scratch_vec(nominal_count)?;
+                    for index in 0..nominal_count {
+                        let declaration = types.nominal_declaration(index).map_err(Error::new)?;
+                        nominal_handles.push(
+                            cx.request(Key::new(
+                                NOMINAL_DECL_WELL_FORMED,
+                                vec![
+                                    declaration.snapshot.graph_word(),
+                                    u64::from(declaration.index),
+                                ],
+                            ))
+                            .get(0),
+                        );
+                    }
                     let (mut constant_handles, _constant_handles_storage) =
                         this.scratch_vec(types.constant_count())?;
                     for index in 0..types.constant_count() {
@@ -1891,6 +2002,9 @@ impl Provider for CompilerProvider {
                         root_handles.push(cx.request(function(kind, index)).get(0));
                     }
                     let plan = facts.plan().await?;
+                    for handle in nominal_handles {
+                        let _: Arc<traits::NominalDeclarationProof> = cx.read_fact(handle).await?;
+                    }
                     for handle in constant_handles {
                         cx.read(handle).await?;
                     }

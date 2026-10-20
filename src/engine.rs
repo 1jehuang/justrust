@@ -280,6 +280,22 @@ impl Report {
 /// engines never share one. Not constructible outside this module.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct EngineAuthority(NonZeroU64);
+
+/// Immutable coordinates issued by the engine for one existing output slot.
+/// This contains no scheduler/handle state and is not evidence of publication
+/// or of the value's type. Consumers still need a successful typed fact read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct OutputIdentity {
+    engine: EngineAuthority,
+    node: u64,
+    output: usize,
+}
+impl OutputIdentity {
+    /// Read-only provenance, never permission to consume an output.
+    pub fn authority(self) -> EngineAuthority {
+        self.engine
+    }
+}
 impl EngineAuthority {
     fn of(shared: &Shared) -> Self {
         // `configured` only stores ids issued by `allocate_graph_id`.
@@ -435,6 +451,19 @@ pub struct Handle {
     graph: u64,
     node: Arc<Node>,
     index: usize,
+}
+
+impl Handle {
+    pub fn identity(&self) -> Result<OutputIdentity, Error> {
+        if self.index >= self.node.slots.len() {
+            return Err(Error::new("output identity index out of bounds"));
+        }
+        Ok(OutputIdentity {
+            engine: EngineAuthority(NonZeroU64::new(self.graph).expect("graph ids are nonzero")),
+            node: self.node.id,
+            output: self.index,
+        })
+    }
 }
 
 impl fmt::Debug for Handle {
@@ -954,6 +983,23 @@ impl Context {
     /// The authority of the engine running this node.
     pub fn authority(&self) -> EngineAuthority {
         EngineAuthority::of(&self.shared)
+    }
+
+    /// Stable coordinate of this canonical node, not a new owner root.
+    /// Reading it neither allocates identity nor authorizes an output value.
+    pub fn node_id(&self) -> u64 {
+        self.node.id
+    }
+
+    pub fn output_identity(&self, index: usize) -> Result<OutputIdentity, Error> {
+        if index >= self.node.slots.len() {
+            return Err(Error::new("output identity index out of bounds"));
+        }
+        Ok(OutputIdentity {
+            engine: self.authority(),
+            node: self.node.id,
+            output: index,
+        })
     }
 
     /// Mint this node's single owner root. Succeeds once per node execution;

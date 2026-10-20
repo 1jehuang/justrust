@@ -867,7 +867,10 @@ mod tests {
         let value = ir::EnumTy::new(ir::EnumDef {
             source_decl,
             type_args: Arc::from([]),
-            id: ir::NominalAppId { snapshot, index: 0 },
+            id: ir::NominalAppId {
+                snapshot,
+                index: crate::compiler::ir::NominalIndex::SourceSlot(0),
+            },
             name: "TwoPayloads".into(),
             module: modules.core_root(),
             visibility: ir::Visibility::Public,

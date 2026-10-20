@@ -640,6 +640,8 @@ impl PlanState {
                     if source_elides_lifetime(&field.ty) {
                         return Err("E0106: missing lifetime specifier in a field type; declare a lifetime parameter".into());
                     }
+                    let previous_context = state.source_context;
+                    state.source_context = Some(registry.source_type_context(decl)?);
                     let ty = state.source_ty_with_transport(
                         registry,
                         &field.ty,
@@ -649,7 +651,9 @@ impl PlanState {
                         depth + 1,
                         false,
                         transport,
-                    )?;
+                    );
+                    state.source_context = previous_context;
+                    let ty = ty?;
                     result.push(ir::FieldDef {
                         name,
                         ty,
@@ -677,7 +681,7 @@ impl PlanState {
             self.nominals.ordered.push(ir::Ty::Unit);
             let id = ir::NominalAppId {
                 snapshot: decl.snapshot,
-                index,
+                index: ir::NominalIndex::SourceSlot(index),
             };
             let is_struct = matches!(schema.as_ref(), NominalSchema::Struct(_));
             let mut build = |back: ir::Ty| -> Result<ir::Ty, String> {

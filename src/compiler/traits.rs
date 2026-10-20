@@ -30,6 +30,10 @@ mod equality;
 mod generic_methods;
 mod impl_constraints;
 mod inherent_constants;
+mod nominal_declarations;
+mod nominal_realization;
+pub use nominal_declarations::{NominalDeclarationProof, NominalDeclarationSchema};
+pub(in crate::compiler) use nominal_realization::ClosedNominalInput;
 mod nominal_normalization;
 mod normal_drop;
 mod opaque;
@@ -570,6 +574,12 @@ pub trait SchemaCx {
         caller: &GenericEnv,
         budget: &PlanBudget,
     ) -> Result<InstantiatedSchema>;
+    fn nominal_declaration_schema(&self, _declaration: DeclId) -> Result<NominalDeclarationSchema> {
+        Err(FactsError::unsupported(
+            self.budget(),
+            "nominal declaration source schema is unavailable",
+        ))
+    }
     fn validate_nominal(&self, ty: &Ty, env: &GenericEnv, budget: &PlanBudget) -> Result<()>;
     /// Remint an application from its authoritative source schema after the
     /// caller normalizes actual arguments with checked projection evidence.
@@ -8041,7 +8051,7 @@ mod tests {
         Ty::Struct(StructTy::new(StructDef {
             id: NominalAppId {
                 snapshot: registry,
-                index,
+                index: ir::NominalIndex::SourceSlot(index),
             },
             source_decl: declaration,
             type_args: args.into(),
