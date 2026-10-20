@@ -20,6 +20,31 @@ unique-reference move. The ordinary checker still evaluates every expression
 once, validates coercions, and produces the immutable checked body and closure
 metadata consumed through the graph.
 
+## Native scalar constraints
+
+The local solver assigns the native Linux syscall expression exactly seven
+`usize` operands and a `usize` result, matching the authoritative checker. An
+untyped operand receives that constraint before integer defaulting. A raw-pointer
+place dereference projects exactly its declared pointee, for either pointer
+kind. Neither rule authorizes an unsafe operation, mutable access through a
+const pointer, allocator provenance, or a nonpointer dereference. The ordinary
+source checker and memory/borrow checks remain mandatory.
+
+Parser-driven controls in `local_literals/native_scalar_tests.rs` exercise
+operand/result inference, arity and operand rejection, pointer-place projection,
+and preservation of unsafe/mutability rejection through full CHECK at workers
+1 and 8, including unused invalid bodies. This correction does not
+activate nominal realization or change graph identities or graph ratchets.
+
+Validation receipts (2026-10-20): `20261019-194210130-1640278` passed the
+syscall and pointer-pointee solver controls. `20261019-194717550-1660140`
+passed full CHECK rejection of all three unused invalid bodies at workers 1
+and 8. `20261019-194858674-1660052` passed all 14 graph-integrity gates on
+the isolated four-file change. A fresh CLI replay identified E0133 for omitted
+unsafe, complete initialization/move analysis with `InvalidReference` for the
+const-pointer store, and `InvalidMetadata` for the nonpointer dereference.
+This is a scoped inference correction, not a new native memory or syscall claim.
+
 ## Callable constraints
 
 The executable callable increment covers scalar/unit signatures. Invoking a

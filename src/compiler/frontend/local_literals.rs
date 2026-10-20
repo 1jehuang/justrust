@@ -4,6 +4,10 @@
 //! back through arbitrary nesting rather than defaulting a binding prematurely.
 use super::*;
 
+#[cfg(test)]
+#[path = "local_literals/native_scalar_tests.rs"]
+mod native_scalar_tests;
+
 #[path = "local_literals/iteration.rs"]
 mod iteration;
 
@@ -751,6 +755,7 @@ impl<'s> Solver<'_, '_, 's> {
     fn project(&mut self, base: Term, field: &FieldSelector) -> Result<Option<Term>, String> {
         let base = self.peel_refs(base);
         match (self.domain(base), field) {
+            (Domain::RawPtr(_, element), FieldSelector::Deref) => Ok(Some(element)),
             (Domain::Tuple(fields), FieldSelector::Tuple(i)) => Ok(fields.get(*i).copied()),
             (
                 Domain::Array(element, _) | Domain::Slice(element),
@@ -1481,6 +1486,17 @@ impl<'s> Solver<'_, '_, 's> {
             Expr::Loop { body, .. } => {
                 self.block(body, depth + 1)?;
                 self.fresh()
+            }
+            Expr::NativeSyscall(arguments) => {
+                if arguments.len() != 7 {
+                    return Err("native syscall requires exactly seven operands".into());
+                }
+                let usize = self.fixed(ir::Ty::Int(ir::IntTy::Usize))?;
+                for argument in arguments {
+                    let actual = self.expr(argument, depth + 1)?;
+                    self.coerce(actual, usize)?;
+                }
+                Ok(usize)
             }
             Expr::Format { arguments, .. } => {
                 for a in arguments {

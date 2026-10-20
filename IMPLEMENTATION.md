@@ -442,7 +442,11 @@ missing-file changes invalidate only justified consumers without stale lookup.
       later calls, expected results and canonical callable bounds, with lexical
       binding identities preserved through nested blocks and shadowing. Solved
       signatures remain hints, not source-written coercion or receiver authority
-      (`tests/callable_inference.rs`, `LOCAL-INFERENCE.md`). Reference-bearing
+      (`tests/callable_inference.rs`, `LOCAL-INFERENCE.md`). Native scalar
+      constraint correction mirrors syscall seven-`usize` operands/result and
+      raw-pointer place pointees, with parser/solver and unsafe/mutability
+      rejection controls; it does not activate nominal realization or relax
+      graph gates. Reference-bearing
       result carriers have explicit early Unsupported admission with no image;
       reference-parameter invocation, result transport, direct generic closure
       arguments and general iterator-item projections remain open.
