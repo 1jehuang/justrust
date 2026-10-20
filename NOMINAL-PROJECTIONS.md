@@ -244,6 +244,24 @@ Rust acceptance. An earlier broader shared-tree run still exposed unrelated
 native-adapter/scalar failures and two accepted unused-invalid projection cases;
 those remain separate follow-up work, not passing evidence for this repair.
 
+## Exact iterator call-result identities (2026-10-20)
+
+Closed call arguments compare canonical declarations and ordered type arguments
+only after both values pass the current validated fact authority. Foreign
+snapshots, distinct declarations, changed reference kinds and reordered arguments
+remain rejected. Generated `for` loops retain the checked `into_iter` result type
+for iterator storage and the checked `next` result enum for match patterns and
+downcast owners, rather than retaining their pre-realization source slots. The
+existing strict pattern and downcast validators are unchanged.
+
+All nine existing iterator-loop tests pass in `20261020-063714390-4138779`,
+including unchanged stock/native CHECK, BUILD and run cases at workers 1 and 8
+and source-replay rejection controls. The closed-call authority controls pass in
+`20261020-063908438-4141399`, unchanged graph integrity passes all 14 gates in
+`20261020-063758586-4138697`, and strict all-target clippy passes in
+`20261020-063952048-4142401`. This repairs the bounded iterator regression suite,
+not the entire iterator library or full Rust compatibility.
+
 ## Required acceptance gates
 
 - Stock/native CHECK, BUILD, and run at workers 1 and 8 for nested struct and

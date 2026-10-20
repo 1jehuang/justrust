@@ -103,7 +103,19 @@ impl std::iter::IntoIterator for Counter {
 
 fn fixture(library: &str, user: &str) -> Program {
     let mut program = parse(&format!("{library}{user}")).unwrap();
-    program.prelude_module = program.modules.parent(program.traits[0].module).unwrap();
+    let iterator = program
+        .traits
+        .iter()
+        .find(|declaration| {
+            declaration
+                .name
+                .display(program.names.as_ref())
+                .unwrap()
+                .as_str()
+                == "crate::std::iter::Iterator"
+        })
+        .expect("fixture must contain its own Iterator declaration");
+    program.prelude_module = program.modules.parent(iterator.module).unwrap();
     program
 }
 

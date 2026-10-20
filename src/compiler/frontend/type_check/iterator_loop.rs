@@ -55,6 +55,7 @@ impl Checker<'_> {
                 Some((value, None)),
             )?;
             self.require(&self.flow(iterator_value), &iterator_ty)?;
+            let iterator_ty = self.flow(iterator_value).ty;
             if let Some(cap) = self.canonical {
                 cap.record_for_iterator_call(
                     source,
@@ -130,6 +131,11 @@ impl Checker<'_> {
                 Arc::from([]),
                 Some((iterator_borrow, None)),
             )?;
+            // The checked call may realize the declaration's source nominal as a
+            // graph nominal. Generated patterns must use that exact output owner.
+            let ir::Ty::Enum(option) = self.flow(next).ty else {
+                return Err("checked Iterator::next must return Option<Item>".into());
+            };
             if let Some(cap) = self.canonical {
                 cap.record_for_iterator_call(source, true, next, &self.exprs[next.0].kind)?;
             }

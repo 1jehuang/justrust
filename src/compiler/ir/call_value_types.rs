@@ -2,10 +2,10 @@
 use super::*;
 
 fn exact(left: &Ty, right: &Ty, facts: FactsCtx<'_>, budget: &PlanBudget) -> Result<bool, String> {
-    if let Some(authority) = facts
-        .validated()
-        .filter(|f| f.phase() == super::super::traits::FactsPhase::Universal)
-    {
+    if let Some(authority) = facts.validated() {
+        // Source and graph-realized nominal values can have different storage
+        // identities in either phase. Validate both representations before
+        // comparing their canonical declaration and ordered type arguments.
         authority
             .validate_ty(left)
             .map_err(|e| e.into_legacy_diagnostic(budget))?;
@@ -51,5 +51,72 @@ impl CheckedFunction {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::compiler::frontend;
+
+    #[test]
+    fn closed_call_equality_preserves_nominal_and_reference_authority() {
+        let source = "struct A;struct B;enum E{One(i32)}enum F{One(i32)}fn types(a:A,b:B,e:E,f:F){}fn main(){}";
+        let program = frontend::parse(source).unwrap();
+        let budget = PlanBudget::default();
+        let plan = frontend::PlanCtx::from_program(&program, &budget).unwrap();
+        let named = |name: &str| {
+            (0..plan.callable_count())
+                .map(|index| plan.callable_decl(index).unwrap())
+                .find(|declaration| {
+                    matches!(plan.persistent_decl_path(*declaration).unwrap().item(),
+                        frontend::PersistentDeclItem::Name(found) if found == name)
+                })
+                .unwrap()
+        };
+        let parameters = plan
+            .signature(named("types"))
+            .unwrap()
+            .signature
+            .params
+            .clone();
+        let authority = plan
+            .instance_facts(&CallTarget {
+                declaration: named("main"),
+                type_args: Arc::from([]),
+            })
+            .unwrap();
+        let facts = FactsCtx::from_validated(&authority);
+        assert!(exact(&parameters[0], &parameters[0], facts, &budget).unwrap());
+        assert!(!exact(&parameters[0], &parameters[1], facts, &budget).unwrap());
+        assert!(exact(&parameters[2], &parameters[2], facts, &budget).unwrap());
+        assert!(!exact(&parameters[2], &parameters[3], facts, &budget).unwrap());
+        let shared = Ty::Ref {
+            kind: BorrowKind::Shared,
+            referent: Arc::new(parameters[0].clone()),
+        };
+        let mutable = Ty::Ref {
+            kind: BorrowKind::Mut,
+            referent: Arc::new(parameters[0].clone()),
+        };
+        assert!(!exact(&shared, &mutable, facts, &budget).unwrap());
+        let ordered = Ty::Tuple(Arc::from([parameters[0].clone(), parameters[1].clone()]));
+        let reversed = Ty::Tuple(Arc::from([parameters[1].clone(), parameters[0].clone()]));
+        assert!(!exact(&ordered, &reversed, facts, &budget).unwrap());
+        let foreign_program = frontend::parse(source).unwrap();
+        let foreign_budget = PlanBudget::default();
+        let foreign_plan =
+            frontend::PlanCtx::from_program(&foreign_program, &foreign_budget).unwrap();
+        let foreign = (0..foreign_plan.callable_count())
+            .map(|index| foreign_plan.callable_decl(index).unwrap())
+            .find(|declaration| {
+                matches!(foreign_plan.persistent_decl_path(*declaration).unwrap().item(),
+                    frontend::PersistentDeclItem::Name(found) if found == "types")
+            })
+            .unwrap();
+        let foreign_type = foreign_plan.signature(foreign).unwrap().signature.params[0].clone();
+        assert!(exact(&parameters[0], &foreign_type, facts, &budget).is_err());
+        let foreign_enum = foreign_plan.signature(foreign).unwrap().signature.params[2].clone();
+        assert!(exact(&parameters[2], &foreign_enum, facts, &budget).is_err());
     }
 }
