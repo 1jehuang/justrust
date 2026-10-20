@@ -14,14 +14,14 @@ impl PlanCtx {
         receiver: &ir::Ty,
         name: &AstIdent,
         caller: ir::FactsCtx<'_>,
-        module: &ModuleId,
-        budget: &ir::PlanBudget,
+        context: (&ModuleId, &ir::PlanBudget),
         mut arguments: impl FnMut(&ir::Ty, ReceiverKind, bool) -> Result<MethodArguments<'a>, String>,
         mut realize_signature: impl FnMut(
             &ir::Callee,
             &ir::Signature,
         ) -> Result<Option<ir::Signature>, String>,
     ) -> Result<Option<MethodSelection>, String> {
+        let (module, budget) = context;
         if let Some(selection) = self.closure_method_selection(receiver, name, caller)? {
             return Ok(Some(selection));
         }

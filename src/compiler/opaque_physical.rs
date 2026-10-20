@@ -110,9 +110,6 @@ impl PhysicalCfgDraft {
     pub(super) fn function(&self) -> &cfg::Function {
         &self.function
     }
-    pub(super) fn proof(&self) -> &PhysicalNormalizationProof {
-        &self.proof
-    }
     pub(super) fn seal(
         &mut self,
         publication: &Arc<source_replay::CanonicalSourcePublication>,
@@ -303,31 +300,6 @@ fn require_empty_physical_capture(actual: &ir::Ty, budget: &ir::PlanBudget) -> R
         ));
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod captured_family_tests {
-    use super::*;
-
-    #[test]
-    fn closed_capture_family_refuses_fixed_and_nested_reference_carriers() {
-        let budget = ir::PlanBudget::default();
-        require_empty_physical_capture(&ir::Ty::Int(ir::IntTy::I32), &budget).unwrap();
-        let reference = ir::Ty::Ref {
-            kind: ir::BorrowKind::Shared,
-            referent: Arc::new(ir::Ty::Int(ir::IntTy::I32)),
-        };
-        for actual in [
-            reference.clone(),
-            ir::Ty::Tuple(Arc::from([ir::Ty::Bool, reference.clone()])),
-            ir::Ty::Array {
-                element: Arc::new(reference),
-                len: 2,
-            },
-        ] {
-            assert!(require_empty_physical_capture(&actual, &budget).is_err());
-        }
-    }
 }
 
 /// Materialize the first carrier-empty boundary slice from the exact canonical
@@ -545,4 +517,29 @@ pub(super) fn normalize(
         function: output,
         proof: Arc::new(proof),
     })
+}
+
+#[cfg(test)]
+mod captured_family_tests {
+    use super::*;
+
+    #[test]
+    fn closed_capture_family_refuses_fixed_and_nested_reference_carriers() {
+        let budget = ir::PlanBudget::default();
+        require_empty_physical_capture(&ir::Ty::Int(ir::IntTy::I32), &budget).unwrap();
+        let reference = ir::Ty::Ref {
+            kind: ir::BorrowKind::Shared,
+            referent: Arc::new(ir::Ty::Int(ir::IntTy::I32)),
+        };
+        for actual in [
+            reference.clone(),
+            ir::Ty::Tuple(Arc::from([ir::Ty::Bool, reference.clone()])),
+            ir::Ty::Array {
+                element: Arc::new(reference),
+                len: 2,
+            },
+        ] {
+            assert!(require_empty_physical_capture(&actual, &budget).is_err());
+        }
+    }
 }

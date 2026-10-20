@@ -273,13 +273,13 @@ impl InferCtxt {
 
     fn bind(&mut self, root: u32, ty: &Ty) -> Result<(), TypeError> {
         let kind = self.vars[root as usize].kind;
-        let ok = match (kind, ty.as_ref()) {
-            (VarKind::General, _) => true,
-            (_, TyKind::Error) => true,
-            (VarKind::Integer, TyKind::Int(_)) => true,
-            (VarKind::Float, TyKind::Float(_)) => true,
-            _ => false,
-        };
+        let ok = matches!(
+            (kind, ty.as_ref()),
+            (VarKind::General, _)
+                | (_, TyKind::Error)
+                | (VarKind::Integer, TyKind::Int(_))
+                | (VarKind::Float, TyKind::Float(_))
+        );
         let var = mk(TyKind::Var(TyVid(root)));
         if !ok {
             return Err(TypeError::Mismatch(var, ty.clone()));

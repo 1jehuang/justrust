@@ -165,7 +165,13 @@ pub fn plan(ws: &Workspace, command: Command, sel: &Selection) -> Result<Vec<Uni
 }
 
 fn cfg_for(package: &Package, features: &BTreeSet<String>) -> Result<CfgSet, ManifestError> {
-    let _ = package;
+    if package.edition != "2024" {
+        return Err(err(format!(
+            "`{}`: Rust edition {} is unsupported; the native compiler currently supports only edition 2024",
+            package.root.join("Cargo.toml").display(),
+            package.edition
+        )));
+    }
     let mut cfg = CfgSet::native_x86_64_linux();
     for f in features {
         cfg.insert_user(&format!("feature={f:?}")).map_err(err)?;
@@ -266,28 +272,22 @@ impl Driver {
         })
     }
 
-    fn profile_name(&self) -> String {
+    fn profile_name(&self, command: Command) -> String {
         self.sel.profile.clone().unwrap_or_else(|| {
             if self.sel.release {
                 "release".into()
+            } else if command == Command::Test {
+                "test".into()
             } else {
                 "dev".into()
             }
         })
     }
 
-    fn debug_assertions(&self) -> bool {
-        let name = self.profile_name();
-        let inherits_release = name == "release" || name == "bench";
-        self.ws
-            .profiles
-            .get(&name)
-            .and_then(|p| p.debug_assertions)
-            .unwrap_or(!inherits_release)
-    }
-
     /// Run `command`; returns the process exit code.
     pub fn run(&self, command: Command) -> Result<i32, ManifestError> {
+        let profile_name = self.profile_name(command);
+        let profile = manifest::resolve_profile(&self.ws.profiles, &profile_name)?;
         let units = plan(&self.ws, command, &self.sel)?;
         let packages = selected_packages(&self.ws, &self.sel)?;
         let roots: Vec<_> = packages
@@ -303,10 +303,10 @@ impl Driver {
             .collect();
         let resolved = manifest::resolve_features(&self.ws, &roots, command == Command::Test)?;
         let start = Instant::now();
-        let profile_dir = if self.profile_name() == "dev" {
-            "debug".to_string()
-        } else {
-            self.profile_name()
+        let profile_dir = match profile_name.as_str() {
+            "dev" | "test" => "debug".to_string(),
+            "bench" => "release".to_string(),
+            _ => profile_name.clone(),
         };
         let out_dir = self.target_dir.join(&profile_dir);
         std::fs::create_dir_all(&out_dir)
@@ -329,9 +329,12 @@ impl Driver {
                 cfg: cfg_for(package, &resolved.enabled[unit.package])?,
                 externs: externs_for(&self.ws, unit, &resolved)?,
                 library: unit.kind == TargetKind::Lib,
+                overflow_checks: profile.overflow_checks.unwrap_or(true),
                 ..SourceOptions::default()
             };
-            options.cfg.set_debug_assertions(self.debug_assertions());
+            options
+                .cfg
+                .set_debug_assertions(profile.debug_assertions.unwrap_or(true));
             if unit.test {
                 options.cfg.names.insert("test".into());
                 options.test_filter = test_filter(&self.sel.trailing)?;
@@ -373,13 +376,14 @@ impl Driver {
                 artifacts.push((unit.clone(), file));
             }
         }
-        let profile_label = if self.profile_name() == "dev" {
-            "`dev` profile [unoptimized + debuginfo]".to_string()
-        } else if self.profile_name() == "release" {
-            "`release` profile [optimized]".to_string()
-        } else {
-            format!("`{}` profile", self.profile_name())
-        };
+        let profile_label = format!(
+            "`{profile_name}` profile [native unoptimized, overflow checks {}]",
+            if profile.overflow_checks.unwrap_or(true) {
+                "on"
+            } else {
+                "off"
+            }
+        );
         eprintln!(
             "{:>12} {profile_label} target(s) in {:.2}s",
             "Finished",

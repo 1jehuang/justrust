@@ -288,9 +288,11 @@ impl PhysicalCarrierBoundary<'_> {
         }
         Ok(())
     }
+    #[cfg(test)]
     pub(in crate::compiler) fn contract(&self) -> &ir::CarrierContract {
         &self.contract
     }
+    #[cfg(test)]
     pub(in crate::compiler) fn original(&self) -> &traits::CarrierContractView {
         &self.original
     }

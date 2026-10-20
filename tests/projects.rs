@@ -34,7 +34,7 @@ fn jr_with(
         .args(args)
         .current_dir(fixture(project))
         .env("CARGO_TARGET_DIR", target_dir(project))
-        .envs(env.into_iter().map(|(k, v)| (k, v)))
+        .envs(env)
         .output()
         .unwrap()
 }
@@ -172,40 +172,26 @@ fn failing_tests_report_like_libtest_and_exit_101() {
 }
 
 #[test]
-fn locked_registry_dependency_runs_from_local_cache() {
+fn locked_registry_earlier_edition_is_explicitly_unsupported() {
+    // Keep the authenticated external package unchanged. Positive registry
+    // execution remains blocked until edition 2021 semantics are implemented.
     let cargo_home = seed_registry_cache("utf8-width-0.1.8");
     for workers in ["1", "8"] {
-        let check = jr_with(
-            "registry",
-            &["check", "-j", workers],
-            [("CARGO_HOME", cargo_home.clone())],
-        );
-        assert!(
-            check.status.success(),
-            "{}",
-            String::from_utf8_lossy(&check.stderr)
-        );
-        let build = jr_with(
-            "registry",
-            &["build", "-j", workers],
-            [("CARGO_HOME", cargo_home.clone())],
-        );
-        assert!(
-            build.status.success(),
-            "{}",
-            String::from_utf8_lossy(&build.stderr)
-        );
-        let run = jr_with(
-            "registry",
-            &["run", "-j", workers],
-            [("CARGO_HOME", cargo_home.clone())],
-        );
-        assert!(
-            run.status.success(),
-            "{}",
-            String::from_utf8_lossy(&run.stderr)
-        );
-        assert_eq!(String::from_utf8_lossy(&run.stdout), "3\n");
+        for command in ["check", "build", "run"] {
+            let output = jr_with(
+                "registry",
+                &[command, "-j", workers],
+                [("CARGO_HOME", cargo_home.clone())],
+            );
+            assert_eq!(output.status.code(), Some(101));
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                stderr.contains("Rust edition 2021 is unsupported"),
+                "{stderr}"
+            );
+            assert!(stderr.contains("utf8-width-0.1.8"), "{stderr}");
+            assert!(!stderr.contains("Finished"), "{stderr}");
+        }
     }
 }
 
@@ -487,7 +473,7 @@ fn invalid_projects_are_rejected_explicitly() {
     std::fs::write(scratch.join("src/lib.rs"), "pub fn f() {}\n").unwrap();
     for (manifest, message) in [
         (
-            "[package]\nname = \"x\"\nversion = \"0.1.0\"\n[dependencies]\nserde = \"1\"\n",
+            "[package]\nname = \"x\"\nversion = \"0.1.0\"\nedition = \"2024\"\n[dependencies]\nserde = \"1\"\n",
             "Cargo.lock does not pin",
         ),
         (
@@ -496,7 +482,7 @@ fn invalid_projects_are_rejected_explicitly() {
         ),
         ("[package\nname = \"x\"\n", "failed to parse manifest"),
         (
-            "[package]\nname = \"x\"\n[dependencies]\ny = { path = \"missing\" }\n",
+            "[package]\nname = \"x\"\nedition = \"2024\"\n[dependencies]\ny = { path = \"missing\" }\n",
             "missing",
         ),
     ] {
@@ -514,7 +500,7 @@ fn invalid_projects_are_rejected_explicitly() {
     // A compile error in a dependency fails the dependent unit.
     std::fs::write(
         scratch.join("Cargo.toml"),
-        "[package]\nname = \"x\"\nversion = \"0.1.0\"\n",
+        "[package]\nname = \"x\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
     )
     .unwrap();
     std::fs::write(scratch.join("src/lib.rs"), "pub fn f() -> i32 { true }\n").unwrap();

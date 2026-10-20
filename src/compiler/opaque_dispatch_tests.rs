@@ -49,7 +49,7 @@ fn opaque_bound_dispatch_reads_exact_representation_before_physical_body() {
                     cx.read_fact(ready_handle).await?;
                 let representations = opaque_instances::read(
                     &facts,
-                    &[call.trait_ref.self_ty.clone()],
+                    std::slice::from_ref(&call.trait_ref.self_ty),
                     &provider.0.budget,
                 )
                 .await?;
@@ -75,7 +75,7 @@ fn opaque_bound_dispatch_reads_exact_representation_before_physical_body() {
                     &caller,
                     lowered.function(),
                     &representations,
-                    &[authorization.clone()],
+                    std::slice::from_ref(&authorization),
                     &types,
                     &provider.0.budget,
                 )?;

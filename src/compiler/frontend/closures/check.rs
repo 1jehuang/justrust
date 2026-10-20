@@ -62,17 +62,15 @@ impl PlanCtx {
                 .map_err(|e| e.into_legacy_diagnostic(&self.budget))?
                 == Some(ir::ClosureKind::Fn)
             {
-                if let Some(item) = self.registry.trait_items[index].first() {
-                    if let DeclItemName::Source(member) = self.declaration(*item)?.path.item {
-                        let names = self.program.names.as_ref();
-                        syntax_member =
-                            super::super::super::semantic_name::occurrence_index(names, member)
-                                .map_err(native_adapter::name_diagnostic)?
-                                == super::super::super::semantic_name::occurrence_index(
-                                    names, *name,
-                                )
+                if let Some(item) = self.registry.trait_items[index].first()
+                    && let DeclItemName::Source(member) = self.declaration(*item)?.path.item
+                {
+                    let names = self.program.names.as_ref();
+                    syntax_member =
+                        super::super::super::semantic_name::occurrence_index(names, member)
+                            .map_err(native_adapter::name_diagnostic)?
+                            == super::super::super::semantic_name::occurrence_index(names, *name)
                                 .map_err(native_adapter::name_diagnostic)?;
-                    }
                 }
                 break;
             }

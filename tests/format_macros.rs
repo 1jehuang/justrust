@@ -3,6 +3,10 @@
 use std::process::Command;
 
 fn run(name: &str, source: &str) -> Result<(String, String), String> {
+    run_with_workers(name, source, 1)
+}
+
+fn run_with_workers(name: &str, source: &str, workers: usize) -> Result<(String, String), String> {
     let dir = std::env::temp_dir().join(format!("jr-format-macros-{}-{name}", std::process::id()));
     let _ = std::fs::create_dir_all(&dir);
     let src = dir.join("main.rs");
@@ -11,6 +15,8 @@ fn run(name: &str, source: &str) -> Result<(String, String), String> {
     std::fs::write(&src, source).unwrap();
     let build = Command::new(env!("CARGO_BIN_EXE_jr-rust"))
         .arg(&src)
+        .arg("--workers")
+        .arg(workers.to_string())
         .arg("-o")
         .arg(&exe)
         .output()
@@ -24,6 +30,39 @@ fn run(name: &str, source: &str) -> Result<(String, String), String> {
         String::from_utf8_lossy(&out.stdout).into_owned(),
         String::from_utf8_lossy(&out.stderr).into_owned(),
     ))
+}
+
+#[test]
+fn independent_format_call_conversions_match_stock() {
+    let source = include_str!("fixtures/format_macros_basic.rs");
+    let dir = std::env::temp_dir().join(format!("jr-format-stock-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = dir.join("main.rs");
+    let executable = dir.join("stock");
+    std::fs::write(&src, source).unwrap();
+    let build = Command::new("rustc")
+        .arg("--edition=2024")
+        .arg(&src)
+        .arg("-o")
+        .arg(&executable)
+        .output()
+        .unwrap();
+    assert!(build.status.success(), "{build:?}");
+    let expected = Command::new(&executable).output().unwrap();
+    assert!(expected.status.success(), "{expected:?}");
+    let expected = (
+        String::from_utf8(expected.stdout).unwrap(),
+        String::from_utf8(expected.stderr).unwrap(),
+    );
+    for workers in [1, 8] {
+        let checked = justrust_engine::compiler::compile(source.into(), workers, true)
+            .unwrap_or_else(|error| panic!("workers={workers}, CHECK: {error}"));
+        assert!(checked.executable.is_none());
+        let actual = run_with_workers(&format!("independent-{workers}"), source, workers)
+            .unwrap_or_else(|error| panic!("workers={workers}, BUILD: {error}"));
+        assert_eq!(actual, expected, "workers={workers}");
+    }
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]

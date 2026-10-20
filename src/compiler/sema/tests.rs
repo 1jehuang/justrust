@@ -74,6 +74,11 @@ const WRAP_FIRST: DefId = 313;
 const ITERATOR_SUM: DefId = 314;
 const SLICE_LEN: DefId = 315;
 
+struct ImplHeader {
+    id: DefId,
+    generics: u32,
+}
+
 #[derive(Default)]
 struct Db {
     traits: HashMap<DefId, TraitData>,
@@ -184,14 +189,14 @@ impl Db {
     }
     fn imp(
         &mut self,
-        id: DefId,
-        generics: u32,
+        header: ImplHeader,
         tr: Option<TraitRef>,
         self_ty: Ty,
         preds: Vec<Predicate>,
         assoc: Vec<(DefId, Ty)>,
         items: Vec<(&str, DefId)>,
     ) {
+        let ImplHeader { id, generics } = header;
         if let Some(t) = &tr {
             self.impls_of.entry(t.trait_id).or_default().push(id);
         } else {
@@ -243,32 +248,34 @@ impl Db {
     }
 
     fn mini_std() -> Self {
-        let mut d = Db::default();
-        d.lang = LangItems {
-            sized: Some(SIZED),
-            copy: Some(COPY),
-            clone: Some(CLONE),
-            fn_: Some(FN),
-            fn_mut: Some(FN_MUT),
-            fn_once: Some(FN_ONCE),
-            fn_once_output: Some(FN_ONCE_OUTPUT),
-            deref: Some(DEREF),
-            deref_target: Some(DEREF_TARGET),
-            iterator: Some(ITERATOR),
-            iterator_item: Some(ITEM),
-            into_iterator: Some(INTO_ITER),
-            into_iter_item: Some(II_ITEM),
-            into_iter_into_iter: Some(II_INTOITER),
-        };
-        d.check_lang = CheckLang {
-            binops: vec![(BinOp::Add, ADD, ADD_OUT)],
-            index: Some((INDEX, INDEX_OUT)),
-            index_mut: None,
-            range: Some(RANGE),
-            range_inclusive: Some(RANGE_INCL),
-            string: None,
-            option: Some(OPTION),
-            result: None,
+        let mut d = Db {
+            lang: LangItems {
+                sized: Some(SIZED),
+                copy: Some(COPY),
+                clone: Some(CLONE),
+                fn_: Some(FN),
+                fn_mut: Some(FN_MUT),
+                fn_once: Some(FN_ONCE),
+                fn_once_output: Some(FN_ONCE_OUTPUT),
+                deref: Some(DEREF),
+                deref_target: Some(DEREF_TARGET),
+                iterator: Some(ITERATOR),
+                iterator_item: Some(ITEM),
+                into_iterator: Some(INTO_ITER),
+                into_iter_item: Some(II_ITEM),
+                into_iter_into_iter: Some(II_INTOITER),
+            },
+            check_lang: CheckLang {
+                binops: vec![(BinOp::Add, ADD, ADD_OUT)],
+                index: Some((INDEX, INDEX_OUT)),
+                index_mut: None,
+                range: Some(RANGE),
+                range_inclusive: Some(RANGE_INCL),
+                string: None,
+                option: Some(OPTION),
+                result: None,
+            },
+            ..Db::default()
         };
         for t in [SIZED, COPY] {
             d.tr(t, 0, vec![], vec![]);
@@ -455,8 +462,10 @@ impl Db {
 
         // impl<T> Vec<T> { new, push, len }
         d.imp(
-            I_VEC_INHERENT,
-            1,
+            ImplHeader {
+                id: I_VEC_INHERENT,
+                generics: 1,
+            },
             None,
             adt(VEC, vec![p(0)]),
             vec![],
@@ -496,8 +505,10 @@ impl Db {
         // impl<T> [T] { iter, len }
         let slice = mk(TyKind::Slice(p(0)));
         d.imp(
-            I_SLICE_INHERENT,
-            1,
+            ImplHeader {
+                id: I_SLICE_INHERENT,
+                generics: 1,
+            },
             None,
             slice.clone(),
             vec![],
@@ -526,8 +537,10 @@ impl Db {
         );
         // impl<T> Deref for Vec<T> { type Target = [T] }
         d.imp(
-            I_VEC_DEREF,
-            1,
+            ImplHeader {
+                id: I_VEC_DEREF,
+                generics: 1,
+            },
             Some(tref(DEREF, adt(VEC, vec![p(0)]), vec![])),
             adt(VEC, vec![p(0)]),
             vec![],
@@ -536,8 +549,10 @@ impl Db {
         );
         // impl<T> Index<usize> for Vec<T> { type Output = T }
         d.imp(
-            I_VEC_INDEX,
-            1,
+            ImplHeader {
+                id: I_VEC_INDEX,
+                generics: 1,
+            },
             Some(tref(INDEX, adt(VEC, vec![p(0)]), vec![usize_t()])),
             adt(VEC, vec![p(0)]),
             vec![],
@@ -546,8 +561,10 @@ impl Db {
         );
         // impl<T> FromIterator<T> for Vec<T>
         d.imp(
-            I_VEC_FROMITER,
-            1,
+            ImplHeader {
+                id: I_VEC_FROMITER,
+                generics: 1,
+            },
             Some(tref(FROM_ITER, adt(VEC, vec![p(0)]), vec![p(0)])),
             adt(VEC, vec![p(0)]),
             vec![],
@@ -556,8 +573,10 @@ impl Db {
         );
         // impl<T: Clone> Clone for Vec<T>
         d.imp(
-            I_VEC_CLONE,
-            1,
+            ImplHeader {
+                id: I_VEC_CLONE,
+                generics: 1,
+            },
             Some(tref(CLONE, adt(VEC, vec![p(0)]), vec![])),
             adt(VEC, vec![p(0)]),
             vec![ptrait(CLONE, p(0), vec![])],
@@ -566,8 +585,10 @@ impl Db {
         );
         // impl<T> Iterator for Iter<T> { type Item = &T }
         d.imp(
-            I_ITER_ITERATOR,
-            1,
+            ImplHeader {
+                id: I_ITER_ITERATOR,
+                generics: 1,
+            },
             Some(tref(ITERATOR, adt(ITER, vec![p(0)]), vec![])),
             adt(ITER, vec![p(0)]),
             vec![],
@@ -577,8 +598,10 @@ impl Db {
         // impl<B, I: Iterator, F: FnMut(I::Item) -> B> Iterator for Map<I, F> { type Item = B }  B=0, I=1, F=2
         let i_item = proj(ITERATOR, p(1), vec![], ITEM);
         d.imp(
-            I_MAP_ITERATOR,
-            3,
+            ImplHeader {
+                id: I_MAP_ITERATOR,
+                generics: 3,
+            },
             Some(tref(ITERATOR, adt(MAP, vec![p(1), p(2)]), vec![])),
             adt(MAP, vec![p(1), p(2)]),
             vec![
@@ -597,8 +620,10 @@ impl Db {
         );
         // impl<I: Iterator> Iterator for Enumerate<I> { type Item = (usize, I::Item) }
         d.imp(
-            I_ENUM_ITERATOR,
-            1,
+            ImplHeader {
+                id: I_ENUM_ITERATOR,
+                generics: 1,
+            },
             Some(tref(ITERATOR, adt(ENUMERATE, vec![p(0)]), vec![])),
             adt(ENUMERATE, vec![p(0)]),
             vec![ptrait(ITERATOR, p(0), vec![])],
@@ -610,8 +635,10 @@ impl Db {
         );
         // impl<A> Iterator for Range<A> { type Item = A }  (simplified bound)
         d.imp(
-            I_RANGE_ITERATOR,
-            1,
+            ImplHeader {
+                id: I_RANGE_ITERATOR,
+                generics: 1,
+            },
             Some(tref(ITERATOR, adt(RANGE, vec![p(0)]), vec![])),
             adt(RANGE, vec![p(0)]),
             vec![],
@@ -620,8 +647,10 @@ impl Db {
         );
         // impl<I: Iterator> IntoIterator for I { Item = I::Item, IntoIter = I }
         d.imp(
-            I_II_FOR_ITERATOR,
-            1,
+            ImplHeader {
+                id: I_II_FOR_ITERATOR,
+                generics: 1,
+            },
             Some(tref(INTO_ITER, p(0), vec![])),
             p(0),
             vec![ptrait(ITERATOR, p(0), vec![])],
@@ -633,8 +662,10 @@ impl Db {
         );
         // impl<'a, T> IntoIterator for &'a Vec<T> { Item = &T, IntoIter = Iter<T> }
         d.imp(
-            I_II_REF_VEC,
-            1,
+            ImplHeader {
+                id: I_II_REF_VEC,
+                generics: 1,
+            },
             Some(tref(INTO_ITER, shr(adt(VEC, vec![p(0)])), vec![])),
             shr(adt(VEC, vec![p(0)])),
             vec![],
@@ -643,8 +674,10 @@ impl Db {
         );
         // impl<T> IntoIterator for Vec<T> { Item = T, IntoIter = Iter<T> } (iter type simplified)
         d.imp(
-            I_II_VEC,
-            1,
+            ImplHeader {
+                id: I_II_VEC,
+                generics: 1,
+            },
             Some(tref(INTO_ITER, adt(VEC, vec![p(0)]), vec![])),
             adt(VEC, vec![p(0)]),
             vec![],
@@ -653,8 +686,10 @@ impl Db {
         );
         // impl<T> Option<T> { fn unwrap_or(self, d: T) -> T }
         d.imp(
-            I_OPTION_INHERENT,
-            1,
+            ImplHeader {
+                id: I_OPTION_INHERENT,
+                generics: 1,
+            },
             None,
             opt(p(0)),
             vec![],
@@ -673,8 +708,10 @@ impl Db {
         );
         // struct Wrap<T> { items: Vec<T> }  impl<T: Clone> Wrap<T> { new, add, first }
         d.imp(
-            I_WRAP_INHERENT,
-            1,
+            ImplHeader {
+                id: I_WRAP_INHERENT,
+                generics: 1,
+            },
             None,
             adt(WRAP, vec![p(0)]),
             vec![ptrait(CLONE, p(0), vec![])],

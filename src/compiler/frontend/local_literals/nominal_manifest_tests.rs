@@ -3,6 +3,53 @@
 use super::*;
 
 #[test]
+fn nominal_recipe_selectors_reject_non_fields_and_out_of_range_fields() {
+    let program = parse("struct Wrap<T>{value:T}fn main(){let w=Wrap{value:1u8};}").unwrap();
+    let signatures = signature_table(&program).unwrap();
+    let function = &program.functions[0];
+    let checker = Checker::new(&signatures, ir::Ty::Unit, function.module);
+    let declaration_schema = |declaration| {
+        let plan = signatures.plan()?;
+        let (env, _) = plan.nominal_schema(declaration, &plan.budget)?;
+        let parameter = ir::ParamId {
+            owner: env.binder(),
+            index: 0,
+        };
+        Ok(Some(DeclarationRecipe {
+            env,
+            fields: DeclarationFields::Struct(vec![Shape::Leaf(ir::Ty::Param(parameter))].into()),
+        }))
+    };
+    let nominal_type = |_: &Demand| Ok(None);
+    let inputs = Inputs::new(&declaration_schema, &primitive_source, &nominal_type);
+    let mut solver = solve_body(&checker, &function.body, None, Some(&inputs)).unwrap();
+    let manifest = solver.solved_nominal_manifest().unwrap();
+    let declaration = manifest.demands()[0].declaration;
+    let actual = solver.fixed(ir::Ty::Int(ir::IntTy::U8)).unwrap();
+    for selector in [FieldSelector::ConstantIndex(0), FieldSelector::Deref] {
+        assert!(
+            solver
+                .prepare_field(declaration, &[actual], &selector)
+                .unwrap_err()
+                .contains("non-field selector in nominal recipe")
+        );
+    }
+    assert!(
+        solver
+            .prepare_field(declaration, &[actual], &FieldSelector::Tuple(99))
+            .unwrap_err()
+            .contains("nominal recipe field index")
+    );
+    assert!(
+        solver
+            .prepare_field(declaration, &[], &FieldSelector::Tuple(0))
+            .unwrap_err()
+            .contains("nominal recipe argument arity")
+    );
+    assert!(checker.exprs.is_empty());
+}
+
+#[test]
 fn canonical_source_parameters_are_seeded_without_runtime_bindings() {
     let program = parse("fn seed(x:u8){let y:u8=x;}fn main(){}").unwrap();
     let signatures = signature_table(&program).unwrap();
@@ -215,7 +262,7 @@ fn missing_graph_read_blocks_after_later_numeric_constraint_without_emitting() {
         };
         assert_eq!(retained.inventory.as_ref().unwrap().owner, owner);
         assert!(matches!(preparation, Preparation::Blocked { .. }));
-        constants = retained;
+        constants = *retained;
     }
 }
 

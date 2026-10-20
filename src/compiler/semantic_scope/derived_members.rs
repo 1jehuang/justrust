@@ -83,12 +83,12 @@ impl ScopeArenaBuilder {
         &mut self,
         names: &impl NameAccess,
         modules: &impl ModuleAccess,
-        metadata: ItemMetadataId,
-        expansion: &ItemExpansionAdmission,
+        source: (ItemMetadataId, &ItemExpansionAdmission),
         derive: AstIdent,
         nominal: SpanId,
         kind: DerivedMemberKind,
     ) -> Result<DerivedMemberAdmission, ScopeError> {
+        let (metadata, expansion) = source;
         self.check_names(names)?;
         expansion.check_modules(names, modules)?;
         self.arena.check_item_proof(expansion)?;

@@ -162,32 +162,32 @@ impl Collector<'_> {
                 }
             }
             Type::Projection(projection) => {
-                if let SourceProjection::SelfItem { item, .. } = projection.as_ref() {
-                    if let Some(block) = self.implementation {
-                        let key = self
+                if let SourceProjection::SelfItem { item, .. } = projection.as_ref()
+                    && let Some(block) = self.implementation
+                {
+                    let key = self
+                        .registry
+                        .names
+                        .key(*item, LookupClass::Member)
+                        .map_err(native_adapter::name_diagnostic)?;
+                    for associated in &block.associated_types {
+                        self.budget.charge_work(1)?;
+                        if self
                             .registry
                             .names
-                            .key(*item, LookupClass::Member)
-                            .map_err(native_adapter::name_diagnostic)?;
-                        for associated in &block.associated_types {
-                            self.budget.charge_work(1)?;
-                            if self
-                                .registry
-                                .names
-                                .key(associated.name, LookupClass::Member)
-                                .map_err(native_adapter::name_diagnostic)?
-                                == key
-                            {
-                                self.walk(
-                                    &associated.value,
-                                    semantic,
-                                    parameter,
-                                    path,
-                                    prefix,
-                                    depth + 1,
-                                )?;
-                                break;
-                            }
+                            .key(associated.name, LookupClass::Member)
+                            .map_err(native_adapter::name_diagnostic)?
+                            == key
+                        {
+                            self.walk(
+                                &associated.value,
+                                semantic,
+                                parameter,
+                                path,
+                                prefix,
+                                depth + 1,
+                            )?;
+                            break;
                         }
                     }
                 }

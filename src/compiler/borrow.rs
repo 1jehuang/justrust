@@ -2738,7 +2738,7 @@ impl CarrierBuilder<'_, '_> {
                 }
                 let mut merged = self.empty_origins()?;
                 for (_, origins) in carriers {
-                    merged.union(&origins, &mut self.budget)?;
+                    merged.union(&origins, self.budget)?;
                 }
                 Ok(vec![(proof.captured_destination(), merged)])
             }
@@ -4411,6 +4411,13 @@ pub(super) enum Phase {
     Write,
 }
 #[derive(Clone, Copy, Debug)]
+pub(super) struct AccessPoint {
+    pub block: BlockId,
+    pub statement: Option<usize>,
+    pub phase: Phase,
+}
+
+#[derive(Clone, Copy, Debug)]
 pub(super) enum Access {
     Read,
     Write,
@@ -5776,11 +5783,14 @@ impl Plan {
         f: &cfg::Function,
         target: &Target,
         access: Access,
-        block: BlockId,
-        statement: Option<usize>,
-        phase: Phase,
+        point: AccessPoint,
         budget: &mut Budget,
     ) -> Result<Option<Problem>, Exhausted> {
+        let AccessPoint {
+            block,
+            statement,
+            phase,
+        } = point;
         let point = self.point_data(block, statement, phase);
         let active = self.active(&point.origins, &point.live, budget)?;
         'loans: for loan in active.members() {
@@ -5807,7 +5817,15 @@ impl Plan {
                     for authority in &target.authority {
                         if active.has(*authority)
                             && self.exclusive_origins(
-                                f, *authority, loan, block, statement, phase, budget,
+                                f,
+                                *authority,
+                                loan,
+                                AccessPoint {
+                                    block,
+                                    statement,
+                                    phase,
+                                },
+                                budget,
                             )?
                         {
                             continue 'loans;

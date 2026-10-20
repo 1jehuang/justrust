@@ -14,6 +14,39 @@ pub(super) fn validate_or_rows(rows: &[MatchPattern]) -> Result<(), String> {
     Ok(())
 }
 
+impl CheckedFunction {
+    pub(super) fn validate_or_pattern(
+        &self,
+        ty: &Ty,
+        rows: &[MatchPattern],
+        parameters: &std::collections::HashSet<LocalId>,
+        previous: &mut std::collections::HashSet<LocalId>,
+        facts: FactsCtx<'_>,
+    ) -> Result<(), String> {
+        validate_or_rows(rows)?;
+        let mut canonical = None;
+        for row in rows {
+            let mut bindings = std::collections::HashSet::new();
+            self.validate_pattern(ty, row, parameters, &mut bindings, facts)?;
+            if let Some(expected) = &canonical {
+                if expected != &bindings {
+                    return Err(
+                        "or-pattern rows must initialize the same canonical bindings".into(),
+                    );
+                }
+            } else {
+                canonical = Some(bindings);
+            }
+        }
+        for binding in canonical.unwrap_or_default() {
+            if !previous.insert(binding) {
+                return Err("match bindings must be distinct fresh locals".into());
+            }
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -78,38 +111,5 @@ mod tests {
                 .contains("flattened")
         );
         assert!(validate_or_rows(&[MatchPattern::Wildcard]).is_err());
-    }
-}
-
-impl CheckedFunction {
-    pub(super) fn validate_or_pattern(
-        &self,
-        ty: &Ty,
-        rows: &[MatchPattern],
-        parameters: &std::collections::HashSet<LocalId>,
-        previous: &mut std::collections::HashSet<LocalId>,
-        facts: FactsCtx<'_>,
-    ) -> Result<(), String> {
-        validate_or_rows(rows)?;
-        let mut canonical = None;
-        for row in rows {
-            let mut bindings = std::collections::HashSet::new();
-            self.validate_pattern(ty, row, parameters, &mut bindings, facts)?;
-            if let Some(expected) = &canonical {
-                if expected != &bindings {
-                    return Err(
-                        "or-pattern rows must initialize the same canonical bindings".into(),
-                    );
-                }
-            } else {
-                canonical = Some(bindings);
-            }
-        }
-        for binding in canonical.unwrap_or_default() {
-            if !previous.insert(binding) {
-                return Err("match bindings must be distinct fresh locals".into());
-            }
-        }
-        Ok(())
     }
 }

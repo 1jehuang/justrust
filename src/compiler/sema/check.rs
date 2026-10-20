@@ -452,18 +452,18 @@ impl<'a> Checker<'a> {
                 let bt = self.expr(*base, None);
                 let mut cur = self.structurally_resolve(&bt);
                 for _ in 0..8 {
-                    if let TyKind::Tuple(v) = cur.as_ref() {
-                        if let Some(t) = v.get(*index as usize) {
-                            return t.clone();
-                        }
+                    if let TyKind::Tuple(v) = cur.as_ref()
+                        && let Some(t) = v.get(*index as usize)
+                    {
+                        return t.clone();
                     }
                     if let TyKind::Adt(a, args) = cur.as_ref() {
                         let data = self.db.adt(*a);
-                        if data.variants.len() == 1 {
-                            if let Some((_, t)) = data.variants[0].fields.get(*index as usize) {
-                                let t = subst(t, args);
-                                return self.normalize(&t);
-                            }
+                        if data.variants.len() == 1
+                            && let Some((_, t)) = data.variants[0].fields.get(*index as usize)
+                        {
+                            let t = subst(t, args);
+                            return self.normalize(&t);
                         }
                     }
                     match self.deref_step(&cur) {
@@ -589,10 +589,10 @@ impl<'a> Checker<'a> {
                 let src = self.expr(*x, None);
                 let s = self.structurally_resolve(&src);
                 // Integer literals take the cast target when it is an int.
-                if let (TyKind::Var(v), TyKind::Int(_)) = (s.as_ref(), t.as_ref()) {
-                    if self.cx.var_kind(*v) == VarKind::Integer {
-                        // Keep the literal's own default (rustc: i32), not the target.
-                    }
+                if let (TyKind::Var(v), TyKind::Int(_)) = (s.as_ref(), t.as_ref())
+                    && self.cx.var_kind(*v) == VarKind::Integer
+                {
+                    // Keep the literal's own default (rustc: i32), not the target.
                 }
                 t
             }
@@ -692,7 +692,7 @@ impl<'a> Checker<'a> {
                 label,
             } => {
                 let it = self.expr(*iter, None);
-                let item = self.into_iter_item(*iter, &it);
+                let item = self.infer_into_iter_item(*iter, &it);
                 self.pat(pat, &item, None);
                 self.loops.push((*label, unit()));
                 self.expr(*b, None);
@@ -1241,11 +1241,11 @@ impl<'a> Checker<'a> {
         for _ in 0..8 {
             if let TyKind::Adt(a, args) = cur.as_ref() {
                 let data = self.db.adt(*a);
-                if data.variants.len() == 1 {
-                    if let Some((_, t)) = data.variants[0].fields.iter().find(|(n, _)| n == name) {
-                        let t = subst(t, args);
-                        return self.normalize(&t);
-                    }
+                if data.variants.len() == 1
+                    && let Some((_, t)) = data.variants[0].fields.iter().find(|(n, _)| n == name)
+                {
+                    let t = subst(t, args);
+                    return self.normalize(&t);
                 }
             }
             match self.deref_step(&cur) {
@@ -1458,7 +1458,7 @@ impl<'a> Checker<'a> {
         }
     }
 
-    fn into_iter_item(&mut self, e: ExprId, it: &Ty) -> Ty {
+    fn infer_into_iter_item(&mut self, e: ExprId, it: &Ty) -> Ty {
         let l = self.db.lang().clone();
         let (Some(ii), Some(item)) = (l.into_iterator, l.into_iter_item) else {
             return self.builtin_iter_item(e, it);
@@ -1636,10 +1636,10 @@ impl<'a> Checker<'a> {
             }
             expr_tys.push(r);
         }
-        if let Some(i) = unresolved {
-            if self.errors.is_empty() {
-                self.err(Some(i), CheckErrorKind::AnnotationsNeeded);
-            }
+        if let Some(i) = unresolved
+            && self.errors.is_empty()
+        {
+            self.err(Some(i), CheckErrorKind::AnnotationsNeeded);
         }
         let local_tys = self.locals.iter().map(|t| self.cx.resolve(t)).collect();
         let methods = self

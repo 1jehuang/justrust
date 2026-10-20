@@ -712,10 +712,12 @@ fn syntactic(
                         break;
                     }
                 }
-                if typeish && trees > 0 && angle == 0 {
-                    if let EventKind::Open(Delimiter::Brace | Delimiter::Bracket) = event.kind {
-                        break;
-                    }
+                if typeish
+                    && trees > 0
+                    && angle == 0
+                    && let EventKind::Open(Delimiter::Brace | Delimiter::Bracket) = event.kind
+                {
+                    break;
                 }
                 end = next_tree(end);
                 trees += 1;

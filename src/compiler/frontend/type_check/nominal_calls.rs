@@ -11,7 +11,7 @@ pub(super) struct NominalCallRealization {
 pub(super) enum NominalCallSignature {
     Ready {
         signature: ir::Signature,
-        realization: Option<NominalCallRealization>,
+        realization: Option<Box<NominalCallRealization>>,
     },
     Blocked(NominalPreparation),
 }
@@ -72,11 +72,11 @@ impl Checker<'_> {
             .map_err(|e| e.into_legacy_diagnostic(&plan.budget))?;
         Ok(NominalCallSignature::Ready {
             signature: mapped.clone(),
-            realization: Some(NominalCallRealization {
+            realization: Some(Box::new(NominalCallRealization {
                 target: target.clone(),
                 original: signature,
                 mapped,
-            }),
+            })),
         })
     }
 }

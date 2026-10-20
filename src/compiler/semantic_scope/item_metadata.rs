@@ -238,10 +238,10 @@ impl ScopeArena {
         modules: &impl ModuleAccess,
         id: ItemMetadataId,
         proof: &ItemExpansionAdmission,
-        scope: ModuleId,
-        item: SpanId,
+        location: (ModuleId, SpanId),
         attributes: &[SpanId],
     ) -> Result<(), ScopeError> {
+        let (scope, item) = location;
         self.check_names(names)?;
         proof.check_modules(names, modules)?;
         self.check_item_proof(proof)?;

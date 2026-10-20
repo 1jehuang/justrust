@@ -2,76 +2,6 @@
 //! No callable subject, fake function or retained mutable world is introduced.
 use super::*;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn plan() -> crate::compiler::frontend::PlanCtx {
-        let source = crate::compiler::frontend::parse("trait It{type Item;}impl It for i32{type Item=i32;}struct Peek<I:It>{value:I::Item}fn main(){}")
-            .unwrap();
-        crate::compiler::frontend::PlanCtx::from_program(&source, &ir::PlanBudget::default())
-            .unwrap()
-    }
-
-    #[test]
-    fn closed_nominal_input_replays_real_bounds_and_source_projection() {
-        let plan = plan();
-        let declaration = plan.nominal_declaration(0).unwrap();
-        let world = plan.trait_world().unwrap();
-        let source = world.nominal_declaration_wellformed(declaration).unwrap();
-        let input = world
-            .close_nominal_input(declaration, &source, &[Ty::Int(ir::IntTy::I32)])
-            .unwrap();
-        let projection = &source.schema().projections[0];
-        let (normalized, receipts) = world
-            .normalize_nominal_field_projection(&input, projection)
-            .unwrap();
-        assert_eq!(normalized, Ty::Int(ir::IntTy::I32));
-        assert!(!receipts.is_empty());
-        let template = plan.nominal_realization_template(declaration).unwrap();
-        world
-            .replay_nominal_normalizations(&input, &template, &receipts)
-            .unwrap();
-        assert!(
-            world
-                .replay_nominal_normalizations(&input, &template, &[])
-                .is_err()
-        );
-        let mut duplicated = receipts.clone();
-        duplicated.extend(receipts.iter().cloned());
-        assert!(
-            world
-                .replay_nominal_normalizations(&input, &template, &duplicated)
-                .is_err()
-        );
-        assert!(
-            world
-                .close_nominal_input(declaration, &source, &[])
-                .is_err()
-        );
-        assert!(
-            world
-                .close_nominal_input(declaration, &source, &[Ty::Bool])
-                .is_err()
-        );
-        let foreign = self::plan();
-        assert!(
-            foreign
-                .trait_world()
-                .unwrap()
-                .normalize_nominal_field_projection(&input, projection)
-                .is_err()
-        );
-        let mut absent = projection.clone();
-        absent.item = declaration;
-        assert!(
-            world
-                .normalize_nominal_field_projection(&input, &absent)
-                .is_err()
-        );
-    }
-}
-
 #[derive(Clone, Debug)]
 pub(in crate::compiler) struct ClosedNominalInput {
     world: WorldId,
@@ -131,7 +61,7 @@ impl ValidatedTraitWorld {
     ) -> Result<Ty> {
         self.replay_closed_nominal_input(input)?;
         self.close_nominal_bound_term(
-            &Ty::Param(parameter.clone()),
+            &Ty::Param(*parameter),
             &input.source.schema().env,
             &input.actuals,
             0,
@@ -708,5 +638,75 @@ impl ValidatedTraitWorld {
         };
         self.validate_ty_metadata_in(&result, &self.empty.env, depth)?;
         Ok(result)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn plan() -> crate::compiler::frontend::PlanCtx {
+        let source = crate::compiler::frontend::parse("trait It{type Item;}impl It for i32{type Item=i32;}struct Peek<I:It>{value:I::Item}fn main(){}")
+            .unwrap();
+        crate::compiler::frontend::PlanCtx::from_program(&source, &ir::PlanBudget::default())
+            .unwrap()
+    }
+
+    #[test]
+    fn closed_nominal_input_replays_real_bounds_and_source_projection() {
+        let plan = plan();
+        let declaration = plan.nominal_declaration(0).unwrap();
+        let world = plan.trait_world().unwrap();
+        let source = world.nominal_declaration_wellformed(declaration).unwrap();
+        let input = world
+            .close_nominal_input(declaration, &source, &[Ty::Int(ir::IntTy::I32)])
+            .unwrap();
+        let projection = &source.schema().projections[0];
+        let (normalized, receipts) = world
+            .normalize_nominal_field_projection(&input, projection)
+            .unwrap();
+        assert_eq!(normalized, Ty::Int(ir::IntTy::I32));
+        assert!(!receipts.is_empty());
+        let template = plan.nominal_realization_template(declaration).unwrap();
+        world
+            .replay_nominal_normalizations(&input, &template, &receipts)
+            .unwrap();
+        assert!(
+            world
+                .replay_nominal_normalizations(&input, &template, &[])
+                .is_err()
+        );
+        let mut duplicated = receipts.clone();
+        duplicated.extend(receipts.iter().cloned());
+        assert!(
+            world
+                .replay_nominal_normalizations(&input, &template, &duplicated)
+                .is_err()
+        );
+        assert!(
+            world
+                .close_nominal_input(declaration, &source, &[])
+                .is_err()
+        );
+        assert!(
+            world
+                .close_nominal_input(declaration, &source, &[Ty::Bool])
+                .is_err()
+        );
+        let foreign = self::plan();
+        assert!(
+            foreign
+                .trait_world()
+                .unwrap()
+                .normalize_nominal_field_projection(&input, projection)
+                .is_err()
+        );
+        let mut absent = projection.clone();
+        absent.item = declaration;
+        assert!(
+            world
+                .normalize_nominal_field_projection(&input, &absent)
+                .is_err()
+        );
     }
 }

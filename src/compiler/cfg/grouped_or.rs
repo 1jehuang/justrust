@@ -1,17 +1,22 @@
 //! Grouped source alternatives converge before the one source guard/body.
 use super::*;
 
+pub(super) struct Alternatives<'a> {
+    pub source: &'a Place,
+    pub rows: &'a [ir::MatchPattern],
+}
+
 impl Lowerer<'_> {
     pub(super) fn grouped_or_arm(
         &mut self,
         id: ExprId,
-        source: &Place,
-        rows: &[ir::MatchPattern],
+        alternatives: Alternatives<'_>,
         arm: &ir::TypedMatchArm,
         destination: &Place,
         completes: bool,
         join: BlockId,
     ) -> Result<(), String> {
+        let Alternatives { source, rows } = alternatives;
         self.divergence_work(rows.len())?;
         // Retry temporaries belong to this arm, not the surrounding match or
         // loop. Other arms never execute their StorageLive instructions.

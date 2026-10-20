@@ -3,153 +3,6 @@
 use super::*;
 use crate::compiler::expansion_span::SpanId;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn program() -> Program {
-        parse("macro_rules! item{()=>{#[doc=\"first\"]fn first(){}#[doc=\"second\"]fn second(){}}}item!();fn main(){}").unwrap()
-    }
-
-    #[test]
-    fn generated_copy_binding_rejects_nominal_and_impl_transplants() {
-        let original = parse("macro_rules! item{()=>{#[derive(Copy)]struct A;#[derive(Copy)]struct B;}}item!();fn main(){}").unwrap();
-        validate(&original).unwrap();
-        assert_eq!(original.generated_metadata.len(), 2);
-        let mut moved = original.clone();
-        let mut attachments = moved.generated_metadata.to_vec();
-        attachments[0].copies[0].nominal = attachments[1].copies[0].nominal;
-        moved.generated_metadata = attachments.into();
-        assert!(validate(&moved).is_err());
-        let mut moved = original.clone();
-        let mut attachments = moved.generated_metadata.to_vec();
-        attachments[0].copies[0].implementation = attachments[1].copies[0].implementation;
-        moved.generated_metadata = attachments.into();
-        assert!(validate(&moved).is_err());
-        let mut moved = original.clone();
-        let mut attachments = moved.generated_metadata.to_vec();
-        attachments[0].copies.clear();
-        moved.generated_metadata = attachments.into();
-        assert!(validate(&moved).is_err());
-
-        let mut duplicate =
-            parse("macro_rules! item{()=>{#[derive(Copy,Copy)]struct A;}}item!();fn main(){}")
-                .unwrap();
-        validate(&duplicate).unwrap();
-        let mut attachments = duplicate.generated_metadata.to_vec();
-        attachments[0].copies[1].implementation = attachments[0].copies[0].implementation;
-        duplicate.generated_metadata = attachments.into();
-        assert!(validate(&duplicate).is_err());
-    }
-
-    fn combined_program() -> Program {
-        use crate::compiler::source;
-        let options = source::SourceOptions::default();
-        let budget = crate::compiler::expansion_budget::ExpansionBudget::default();
-        let unit = source::prepare_text_unit(
-            "generated-authority.rs",
-            "macro_rules! item{()=>{#[derive(Debug,Clone,Copy)]struct A;#[derive(Debug,Clone,Copy)]struct B;}}item!();fn main(){}",
-            &options,
-        );
-        // The convenience frontend intentionally assembles user-only text. These
-        // tests require the same real embedded source attachment as graph PARSE,
-        // not a hand-built fmt declaration or a fabricated canonical trait ID.
-        let mut assembler = source::SourceAssembler::new(&options);
-        let mut step = assembler.provide(Arc::new(unit)).unwrap();
-        let prepared = loop {
-            match step {
-                source::AssemblyStep::Done(prepared) => break prepared,
-                source::AssemblyStep::Need(need) => {
-                    let unit = match need.parent.as_deref() {
-                        None => source::prepare_prelude_unit(&options, &budget),
-                        Some(parent) => {
-                            source::prepare_child_unit(parent, need.index, &options, &budget)
-                        }
-                    };
-                    step = assembler.provide(Arc::new(unit)).unwrap();
-                }
-            }
-        };
-        resolve(&parse_prepared(&prepared).unwrap()).unwrap()
-    }
-
-    #[test]
-    fn combined_derive_rejects_same_expansion_member_transplants() {
-        let original = combined_program();
-        validate(&original).unwrap();
-        let mut moved = original.clone();
-        let mut attachments = moved.generated_metadata.to_vec();
-        attachments[0].debug[0].1.scope = attachments[1].debug[0].1.scope;
-        moved.generated_metadata = attachments.into();
-        assert!(validate(&moved).is_err());
-
-        let mut moved = original.clone();
-        let mut attachments = moved.generated_metadata.to_vec();
-        attachments[0].debug[0].1.implementation = attachments[1].debug[0].1.implementation;
-        moved.generated_metadata = attachments.into();
-        assert!(validate(&moved).is_err());
-
-        let mut foreign = combined_program();
-        foreign.generated_metadata = original.generated_metadata;
-        assert!(validate(&foreign).is_err());
-    }
-
-    #[test]
-    fn derived_signature_authority_never_authorizes_generated_body_names() {
-        let original = combined_program();
-        let recipe = &original.generated_metadata[0].debug[0].1;
-        let index = recipe.implementation.unwrap();
-        let function = &original.impls[index].items[0].function;
-        let module = generated_debug::signature_module(&original, function)
-            .unwrap()
-            .unwrap();
-        assert_eq!(module, original.traits[recipe.source_trait.unwrap()].module);
-        name_validation::validate_function_names(&original, function, Some(function.module))
-            .unwrap();
-
-        let mut changed = function.clone();
-        changed.result = Type::Bool;
-        assert!(generated_debug::signature_module(&original, &changed).is_err());
-
-        // A genuine source signature occurrence is not executable body authority.
-        // Even with an otherwise exact generated signature, moving fmt's original
-        // declaration occurrence into the generated body must remain a contract error.
-        let foreign = original.traits[recipe.source_trait.unwrap()].name.clone();
-        let mut changed = function.clone();
-        changed.body.tail = Some(Box::new(Expr::Var(foreign)));
-        assert!(
-            name_validation::validate_function_names(&original, &changed, Some(changed.module))
-                .is_err()
-        );
-
-        let mut changed = original.clone();
-        changed.impls[index].items[0].function.visibility = ir::Visibility::Public;
-        assert!(validate(&changed).is_err());
-    }
-
-    #[test]
-    fn metadata_owner_and_order_are_exact_not_same_expansion_membership() {
-        let original = program();
-        validate(&original).unwrap();
-        assert_eq!(original.generated_metadata.len(), 2);
-        let mut moved = original.clone();
-        let mut attachments = moved.generated_metadata.to_vec();
-        attachments[0].owner = attachments[1].owner;
-        moved.generated_metadata = attachments.into();
-        assert!(validate(&moved).is_err());
-
-        let mut moved = original.clone();
-        let mut attachments = moved.generated_metadata.to_vec();
-        attachments[0].attributes[0].close = attachments[1].attributes[0].close;
-        moved.generated_metadata = attachments.into();
-        assert!(validate(&moved).is_err());
-
-        let mut foreign = program();
-        foreign.generated_metadata = original.generated_metadata;
-        assert!(validate(&foreign).is_err());
-    }
-}
-
 #[derive(Clone, Debug)]
 pub(super) struct Attachment {
     binding: crate::compiler::semantic_scope::ItemMetadataId,
@@ -264,8 +117,7 @@ pub(super) fn validate(program: &Program) -> Result<(), String> {
                 &*program.modules,
                 attachment.binding,
                 &attachment.admission,
-                attachment.scope,
-                attachment.owner,
+                (attachment.scope, attachment.owner),
                 &spans,
             )
             .map_err(|error| format!("generated metadata owner association: {error:?}"))?;
@@ -643,8 +495,7 @@ impl Parser<'_, '_> {
                         .admit_derived_member(
                             self.names,
                             &*self.modules,
-                            attachment.binding,
-                            &attachment.admission,
+                            (attachment.binding, &attachment.admission),
                             derive,
                             nominal,
                             crate::compiler::semantic_scope::DerivedMemberKind::Debug,
@@ -710,8 +561,7 @@ impl Parser<'_, '_> {
                         .admit_derived_member(
                             self.names,
                             &*self.modules,
-                            attachment.binding,
-                            &attachment.admission,
+                            (attachment.binding, &attachment.admission),
                             derive,
                             nominal,
                             crate::compiler::semantic_scope::DerivedMemberKind::Clone,
@@ -952,5 +802,152 @@ impl Parser<'_, '_> {
             self.expect(")")?;
             Ok(Doc::Stringify { name, site, tokens })
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn program() -> Program {
+        parse("macro_rules! item{()=>{#[doc=\"first\"]fn first(){}#[doc=\"second\"]fn second(){}}}item!();fn main(){}").unwrap()
+    }
+
+    #[test]
+    fn generated_copy_binding_rejects_nominal_and_impl_transplants() {
+        let original = parse("macro_rules! item{()=>{#[derive(Copy)]struct A;#[derive(Copy)]struct B;}}item!();fn main(){}").unwrap();
+        validate(&original).unwrap();
+        assert_eq!(original.generated_metadata.len(), 2);
+        let mut moved = original.clone();
+        let mut attachments = moved.generated_metadata.to_vec();
+        attachments[0].copies[0].nominal = attachments[1].copies[0].nominal;
+        moved.generated_metadata = attachments.into();
+        assert!(validate(&moved).is_err());
+        let mut moved = original.clone();
+        let mut attachments = moved.generated_metadata.to_vec();
+        attachments[0].copies[0].implementation = attachments[1].copies[0].implementation;
+        moved.generated_metadata = attachments.into();
+        assert!(validate(&moved).is_err());
+        let mut moved = original.clone();
+        let mut attachments = moved.generated_metadata.to_vec();
+        attachments[0].copies.clear();
+        moved.generated_metadata = attachments.into();
+        assert!(validate(&moved).is_err());
+
+        let mut duplicate =
+            parse("macro_rules! item{()=>{#[derive(Copy,Copy)]struct A;}}item!();fn main(){}")
+                .unwrap();
+        validate(&duplicate).unwrap();
+        let mut attachments = duplicate.generated_metadata.to_vec();
+        attachments[0].copies[1].implementation = attachments[0].copies[0].implementation;
+        duplicate.generated_metadata = attachments.into();
+        assert!(validate(&duplicate).is_err());
+    }
+
+    fn combined_program() -> Program {
+        use crate::compiler::source;
+        let options = source::SourceOptions::default();
+        let budget = crate::compiler::expansion_budget::ExpansionBudget::default();
+        let unit = source::prepare_text_unit(
+            "generated-authority.rs",
+            "macro_rules! item{()=>{#[derive(Debug,Clone,Copy)]struct A;#[derive(Debug,Clone,Copy)]struct B;}}item!();fn main(){}",
+            &options,
+        );
+        // The convenience frontend intentionally assembles user-only text. These
+        // tests require the same real embedded source attachment as graph PARSE,
+        // not a hand-built fmt declaration or a fabricated canonical trait ID.
+        let mut assembler = source::SourceAssembler::new(&options);
+        let mut step = assembler.provide(Arc::new(unit)).unwrap();
+        let prepared = loop {
+            match step {
+                source::AssemblyStep::Done(prepared) => break prepared,
+                source::AssemblyStep::Need(need) => {
+                    let unit = match need.parent.as_deref() {
+                        None => source::prepare_prelude_unit(&options, &budget),
+                        Some(parent) => {
+                            source::prepare_child_unit(parent, need.index, &options, &budget)
+                        }
+                    };
+                    step = assembler.provide(Arc::new(unit)).unwrap();
+                }
+            }
+        };
+        resolve(&parse_prepared(&prepared).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn combined_derive_rejects_same_expansion_member_transplants() {
+        let original = combined_program();
+        validate(&original).unwrap();
+        let mut moved = original.clone();
+        let mut attachments = moved.generated_metadata.to_vec();
+        attachments[0].debug[0].1.scope = attachments[1].debug[0].1.scope;
+        moved.generated_metadata = attachments.into();
+        assert!(validate(&moved).is_err());
+
+        let mut moved = original.clone();
+        let mut attachments = moved.generated_metadata.to_vec();
+        attachments[0].debug[0].1.implementation = attachments[1].debug[0].1.implementation;
+        moved.generated_metadata = attachments.into();
+        assert!(validate(&moved).is_err());
+
+        let mut foreign = combined_program();
+        foreign.generated_metadata = original.generated_metadata;
+        assert!(validate(&foreign).is_err());
+    }
+
+    #[test]
+    fn derived_signature_authority_never_authorizes_generated_body_names() {
+        let original = combined_program();
+        let recipe = &original.generated_metadata[0].debug[0].1;
+        let index = recipe.implementation.unwrap();
+        let function = &original.impls[index].items[0].function;
+        let module = generated_debug::signature_module(&original, function)
+            .unwrap()
+            .unwrap();
+        assert_eq!(module, original.traits[recipe.source_trait.unwrap()].module);
+        name_validation::validate_function_names(&original, function, Some(function.module))
+            .unwrap();
+
+        let mut changed = function.clone();
+        changed.result = Type::Bool;
+        assert!(generated_debug::signature_module(&original, &changed).is_err());
+
+        // A genuine source signature occurrence is not executable body authority.
+        // Even with an otherwise exact generated signature, moving fmt's original
+        // declaration occurrence into the generated body must remain a contract error.
+        let foreign = original.traits[recipe.source_trait.unwrap()].name.clone();
+        let mut changed = function.clone();
+        changed.body.tail = Some(Box::new(Expr::Var(foreign)));
+        assert!(
+            name_validation::validate_function_names(&original, &changed, Some(changed.module))
+                .is_err()
+        );
+
+        let mut changed = original.clone();
+        changed.impls[index].items[0].function.visibility = ir::Visibility::Public;
+        assert!(validate(&changed).is_err());
+    }
+
+    #[test]
+    fn metadata_owner_and_order_are_exact_not_same_expansion_membership() {
+        let original = program();
+        validate(&original).unwrap();
+        assert_eq!(original.generated_metadata.len(), 2);
+        let mut moved = original.clone();
+        let mut attachments = moved.generated_metadata.to_vec();
+        attachments[0].owner = attachments[1].owner;
+        moved.generated_metadata = attachments.into();
+        assert!(validate(&moved).is_err());
+
+        let mut moved = original.clone();
+        let mut attachments = moved.generated_metadata.to_vec();
+        attachments[0].attributes[0].close = attachments[1].attributes[0].close;
+        moved.generated_metadata = attachments.into();
+        assert!(validate(&moved).is_err());
+
+        let mut foreign = program();
+        foreign.generated_metadata = original.generated_metadata;
+        assert!(validate(&foreign).is_err());
     }
 }

@@ -44,7 +44,7 @@ fn run(command: &str, args: &[String]) -> Result<i32, Box<dyn std::error::Error>
             Some((f, v)) if f.starts_with("--") => (f, Some(v.to_string())),
             _ => (arg, None),
         };
-        let mut take = |i: &mut usize| -> Result<String, String> {
+        let take = |i: &mut usize| -> Result<String, String> {
             match &inline {
                 Some(v) => Ok(v.clone()),
                 None => value(i, flag),
@@ -96,6 +96,9 @@ fn run(command: &str, args: &[String]) -> Result<i32, Box<dyn std::error::Error>
             other => return Err(format!("unexpected argument '{other}' found").into()),
         }
         i += 1;
+    }
+    if sel.release && sel.profile.is_some() {
+        return Err("--release and --profile cannot be used together".into());
     }
     let manifest = match manifest_path {
         Some(path) => path,

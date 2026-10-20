@@ -1096,7 +1096,8 @@ mod tests {
         let released = budget.snapshot();
         assert!(released.retained_bytes < live.retained_bytes);
         assert_eq!(released.temporary_bytes, live.temporary_bytes);
-        for argument in ["(c\"C\")"] {
+        {
+            let argument = "(c\"C\")";
             let mut source = fixture_rules("($x:literal)=>{$x};", argument);
             let buffer = run(&mut source).unwrap();
             let view = super::super::TokenCursor::new(&buffer).current();

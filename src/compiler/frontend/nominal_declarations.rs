@@ -72,7 +72,7 @@ impl SchemaAdapter {
         };
         let args = symbolic_args(&info.param_env, &self.budget)?;
         let env = Arc::new(ir::GenericEnv::new(
-            &[info.param_env.clone()],
+            std::slice::from_ref(&info.param_env),
             &self.budget,
         )?);
         let bindings = param_bindings(&self.registry, info, &args)?;

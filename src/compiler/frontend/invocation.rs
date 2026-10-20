@@ -51,7 +51,7 @@ mod tests {
         let budget = ir::PlanBudget::default();
         let identity = sr::OriginalBodyId::new(&budget).unwrap();
         let inventory =
-            SourceInventory::build(&program, &program.functions[2], identity, &budget).unwrap();
+            SourceInventory::build(program, &program.functions[2], identity, &budget).unwrap();
         assert_eq!(
             inventory
                 .calls
@@ -61,8 +61,8 @@ mod tests {
             3
         );
         program.validate_name_handles().unwrap();
-        preflight_program_clone(&program, &budget).unwrap();
-        recipes::inventory(&program, &budget).unwrap();
+        preflight_program_clone(program, &budget).unwrap();
+        recipes::inventory(program, &budget).unwrap();
     }
 
     #[test]

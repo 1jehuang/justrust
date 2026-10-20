@@ -4,4 +4,5 @@
 pub mod cli;
 pub mod driver;
 pub mod manifest;
+pub mod target_cfg;
 pub mod toml;

@@ -107,6 +107,8 @@ pub(super) enum PublishedCallableBody {
     Recipe(Arc<ir::CheckedFunction>),
 }
 
+type ParsedPathArguments = (Vec<RegionName>, Vec<Type>, Vec<AssociatedTypeBinding>);
+
 /// Node-local publication attempt. A suspension returns the original sealed
 /// constant inputs intact, not a partially published body or reconstructed proof.
 pub(super) enum NominalCallablePublication {
@@ -117,7 +119,7 @@ pub(super) enum NominalCallablePublication {
     ),
     Blocked {
         preparation: NominalPreparation,
-        constants: const_inputs::SealedBodyConstants,
+        constants: Box<const_inputs::SealedBodyConstants>,
     },
 }
 
@@ -4808,7 +4810,13 @@ impl PlanCtx {
             DeclItemName::Source(ident) => {
                 self.program.names.spelling(ident).ok().map(str::to_owned)
             }
-            _ => Some(info.name.rsplit("::").next().unwrap_or(&info.name).to_owned()),
+            _ => Some(
+                info.name
+                    .rsplit("::")
+                    .next()
+                    .unwrap_or(&info.name)
+                    .to_owned(),
+            ),
         }
     }
     pub(super) fn publish_callable_body(
@@ -5008,12 +5016,12 @@ impl PlanCtx {
                         Some(&cap),
                     )
                     .map(|(body, closures, hidden)| {
-                        NominalCallableOutput::Ready(body, closures, hidden)
+                        NominalCallableOutput::Ready(Box::new(body), closures, hidden)
                     }),
                 };
                 let (checked, closures, hidden) = match checked {
                     Ok(NominalCallableOutput::Ready(body, closures, hidden)) => {
-                        (body, closures, hidden)
+                        (*body, closures, hidden)
                     }
                     Ok(NominalCallableOutput::Blocked(preparation)) => {
                         // The immutable inventory and typed constant facts are
@@ -5027,7 +5035,7 @@ impl PlanCtx {
                         };
                         return Ok(NominalCallablePublication::Blocked {
                             preparation,
-                            constants,
+                            constants: Box::new(constants),
                         });
                     }
                     Err(message) => {
@@ -9815,9 +9823,7 @@ impl<'input, 'names> Parser<'input, 'names> {
         Ok(args)
     }
     #[inline(never)]
-    fn path_arguments(
-        &mut self,
-    ) -> Result<(Vec<RegionName>, Vec<Type>, Vec<AssociatedTypeBinding>), ParseError> {
+    fn path_arguments(&mut self) -> Result<ParsedPathArguments, ParseError> {
         // Split the first `<` of a nested qualified associated projection.
         if !self.cursor.consume_type_lt() {
             return Err(self.error("expected \"<\""));
@@ -9895,7 +9901,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             count += 1;
             let sugar_site = self.token().span;
             let callable_sugar = type_context
-                && matches!(&*self.token().text, "Fn" | "FnMut" | "FnOnce")
+                && matches!(self.token().text, "Fn" | "FnMut" | "FnOnce")
                 && self.cursor.peek(1).is_some_and(|token| token.matches("("));
             let name = self.ident()?;
             let (region_args, args, associated_types) = if callable_sugar {
@@ -14442,7 +14448,8 @@ mod inactive_item_syntax_tests {
         ] {
             parse_syntax_unprepared(source).unwrap();
         }
-        for (source, token) in [("fn main(){if let true=true || false {}}", "||")] {
+        {
+            let (source, token) = ("fn main(){if let true=true || false {}}", "||");
             let error = parse_syntax_unprepared(source).unwrap_err();
             assert_eq!(error.kind, super::super::source::SourceErrorKind::Syntax);
             let at = source.find(token).unwrap();
@@ -17345,10 +17352,10 @@ impl PlanCtx {
                 id,
             );
             registry.trait_ids.push(id);
-            if let Some(slot) = iterator_traits::native_iterator_slot(program, declaration)? {
-                if registry.native_iterator_traits[slot].replace(id).is_some() {
-                    return Err("duplicate canonical native iterator trait".into());
-                }
+            if let Some(slot) = iterator_traits::native_iterator_slot(program, declaration)?
+                && registry.native_iterator_traits[slot].replace(id).is_some()
+            {
+                return Err("duplicate canonical native iterator trait".into());
             }
             let mut items = Vec::new();
             for (item, method) in declaration.items.iter().enumerate() {
@@ -19499,12 +19506,12 @@ impl PlanState {
             .arity()
             .checked_sub(1)
             .ok_or("contract: trait missing Self binder")?;
-        if args.len() < expected {
-            if let Ok(source) = registry.source_trait(declaration) {
-                while args.len() < expected && source.self_defaults.contains(&args.len()) {
-                    budget.retain_bytes(std::mem::size_of::<ir::Ty>())?;
-                    args.push(owner.clone());
-                }
+        if args.len() < expected
+            && let Ok(source) = registry.source_trait(declaration)
+        {
+            while args.len() < expected && source.self_defaults.contains(&args.len()) {
+                budget.retain_bytes(std::mem::size_of::<ir::Ty>())?;
+                args.push(owner.clone());
             }
         }
         if args.len() != expected {
@@ -20640,8 +20647,7 @@ impl PlanCtx {
             receiver,
             name,
             caller,
-            module,
-            budget,
+            (module, budget),
             |_, _, _| {
                 Ok(method_argument_selection::MethodArguments::Ready(
                     std::borrow::Cow::Borrowed(args),

@@ -1583,10 +1583,13 @@ mod tests {
             world
                 .origins
                 .iter()
-                .all(|(declaration, _)| *declaration != item)
+                .any(|(declaration, _)| *declaration == item)
         );
-        assert!(world.carriers.iter().all(|row| row.declaration != item));
-        assert!(world.declaration_carriers(item).is_err());
+        let carriers = world.declaration_carriers(item).unwrap();
+        assert!(carriers.contract.results.iter().any(|result| matches!(
+            result.location.channel,
+            ir::CarrierChannel::ProjectionTail { .. }
+        )));
         let facts = world.callable_facts(owners(&world)[0].items[0].1).unwrap();
         assert_eq!(facts.source_region_env(item).unwrap().declaration, item);
     }
@@ -1660,10 +1663,10 @@ mod tests {
         ] {
             let target = CallTarget {
                 declaration,
-                type_args: Arc::from([actual]),
+                type_args: Arc::from([actual.clone()]),
             };
-            // The old path accepted these ordinary executable reference shapes
-            // after replacing Self::Out with T. Only the owner guard rejects them.
+            // Root-reference actuals are admitted by the common carrier path.
+            // The direct proof must still preserve the exact associated output.
             world
                 .instantiate_in(
                     &world.callable_schema(declaration).unwrap(),
@@ -1675,8 +1678,9 @@ mod tests {
                     Some(declaration),
                 )
                 .unwrap();
-            assert!(matches!(world.instance_facts(&target),
-                Err(error) if error.kind() == FactsErrorKind::Unsupported));
+            let facts = world.instance_facts(&target).unwrap();
+            let proof = world.discharge_direct(&target, &facts).unwrap();
+            assert!(world.eq_ty(&proof.signature.result, &actual, 0).unwrap());
         }
     }
 
@@ -1718,8 +1722,9 @@ mod tests {
                     Some(declaration),
                 )
                 .unwrap();
-            assert!(matches!(world.instance_facts(&target),
-                Err(error) if error.kind() == FactsErrorKind::Unsupported));
+            let facts = world.instance_facts(&target).unwrap();
+            let proof = world.discharge_direct(&target, &facts).unwrap();
+            assert_eq!(proof.signature.result, Ty::Int(ir::IntTy::I32));
         }
     }
 

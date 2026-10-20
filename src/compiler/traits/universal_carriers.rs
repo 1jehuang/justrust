@@ -27,15 +27,15 @@ impl CarrierContractView {
                     )
                 {
                     charged(&self.budget, self.budget.charge_work(1))?;
-                    if let Some(ir::CarrierFamily::Opaque(candidate)) = location.channel.family() {
-                        if facts.world.eq_ty(
+                    if let Some(ir::CarrierFamily::Opaque(candidate)) = location.channel.family()
+                        && facts.world.eq_ty(
                             &Ty::Opaque(candidate),
                             &Ty::Opaque(opaque.clone()),
                             0,
-                        )? {
-                            found = true;
-                            break;
-                        }
+                        )?
+                    {
+                        found = true;
+                        break;
                     }
                 }
                 if !found {
@@ -56,30 +56,28 @@ impl CarrierContractView {
                 for input in self.original_contract.inputs.iter() {
                     if let Some(ir::CarrierFamily::Projection(candidate)) =
                         input.location.channel.family()
-                    {
-                        if facts.world.eq_ty(
+                        && facts.world.eq_ty(
                             &Ty::AssociatedType(candidate),
                             &Ty::AssociatedType(projection.clone()),
                             0,
-                        )? {
-                            found = true;
-                            break;
-                        }
+                        )?
+                    {
+                        found = true;
+                        break;
                     }
                 }
                 if !found {
                     for result in self.original_contract.results.iter() {
                         if let Some(ir::CarrierFamily::Projection(candidate)) =
                             result.location.channel.family()
-                        {
-                            if facts.world.eq_ty(
+                            && facts.world.eq_ty(
                                 &Ty::AssociatedType(candidate),
                                 &Ty::AssociatedType(projection.clone()),
                                 0,
-                            )? {
-                                found = true;
-                                break;
-                            }
+                            )?
+                        {
+                            found = true;
+                            break;
                         }
                     }
                 }

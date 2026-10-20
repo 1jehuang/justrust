@@ -69,12 +69,11 @@ fn names_imports_visibility_and_local_shadowing_use_value_namespace() {
         let source = "mod m{pub const X:u8=42;}use m::X as Z;const Y:u8=Z;fn main(){let X:u8=1;assert!(X==1);assert!(Y==42);assert!(m::X==42);}";
         compiler::compile_observed(source.into(), workers, true)
             .unwrap_or_else(|error| panic!("{error}"));
-        for source in ["static mut X:u8=1;fn main(){}"] {
-            assert!(
-                compiler::compile_observed(source.into(), workers, true).is_err(),
-                "accepted unsupported {source}"
-            );
-        }
+        let source = "static mut X:u8=1;fn main(){}";
+        assert!(
+            compiler::compile_observed(source.into(), workers, true).is_err(),
+            "accepted unsupported {source}"
+        );
     }
 }
 #[test]

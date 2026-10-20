@@ -50,7 +50,7 @@ impl Parser<'_, '_> {
                     .map_err(native_adapter::name_error)?,
             );
         }
-        if inclusive && start.is_some() {
+        if inclusive && let Some(start) = start {
             idents.push(
                 self.names
                     .intern_root("new", site)
@@ -60,7 +60,10 @@ impl Parser<'_, '_> {
                 .map_err(native_adapter::name_error)?;
             return Ok(Expr::Call {
                 name,
-                args: vec![start.unwrap(), end.unwrap()],
+                args: vec![
+                    start,
+                    end.ok_or_else(|| self.error("inclusive range requires an end"))?,
+                ],
             });
         }
         let name = AstPath::new(self.names, PathAnchor::Relative, &idents)

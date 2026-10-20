@@ -408,6 +408,7 @@ impl<'a> NativeConcrete<'a> {
 }
 
 struct Emitter<'a> {
+    overflow_checks: bool,
     object: Object,
     concrete: NativeConcrete<'a>,
     resolve: &'a dyn Fn(&ir::CallTarget) -> Result<String, String>,
@@ -540,6 +541,10 @@ impl<'a> Emitter<'a> {
     }
     fn check_integer_range(&mut self, ty: ir::IntTy) {
         assert!(ty.bits() <= 64, "wide integer reached word range check");
+        if !self.overflow_checks {
+            self.normalize_integer(ty);
+            return;
+        }
         if ty.bits() < 64 {
             self.bytes(&[0x48, 0x89, 0xc2]); // rdx = untruncated result
             self.normalize_integer(ty);
@@ -1417,8 +1422,12 @@ impl<'a> Emitter<'a> {
             BinaryOp::Shl | BinaryOp::Shr => {
                 // RCX is the independently typed, normalized FULL count.
                 // Unsigned comparison also rejects sign-extended negatives.
-                self.bytes(&[0x48, 0x83, 0xf9, ty.bits() as u8]);
-                self.trap_if(0x83); // jae, before hardware masks CL
+                if self.overflow_checks {
+                    self.bytes(&[0x48, 0x83, 0xf9, ty.bits() as u8]);
+                    self.trap_if(0x83);
+                } else {
+                    self.bytes(&[0x48, 0x83, 0xe1, (ty.bits() - 1) as u8]);
+                }
                 self.bytes(&[
                     0x48,
                     0xd3,
@@ -1453,16 +1462,22 @@ impl<'a> Emitter<'a> {
                     },
                     0xc8,
                 ]);
-                self.trap_if(if ty.is_signed() { 0x80 } else { 0x82 });
+                if self.overflow_checks {
+                    self.trap_if(if ty.is_signed() { 0x80 } else { 0x82 });
+                }
                 self.check_integer_range(ty);
             }
             BinaryOp::Mul => {
                 if ty.is_signed() {
                     self.bytes(&[0x48, 0x0f, 0xaf, 0xc1]);
-                    self.trap_if(0x80);
+                    if self.overflow_checks {
+                        self.trap_if(0x80);
+                    }
                 } else {
                     self.bytes(&[0x48, 0xf7, 0xe1]); // rdx:rax = unsigned product
-                    self.trap_if(0x82);
+                    if self.overflow_checks {
+                        self.trap_if(0x82);
+                    }
                 }
                 self.check_integer_range(ty);
             }
@@ -2669,7 +2684,9 @@ impl Emitter<'_> {
                 match (op, ty) {
                     (UnaryOp::Neg, ir::Ty::Int(integer)) if integer.is_signed() => {
                         self.bytes(&[0x48, 0xf7, 0xd8]);
-                        self.trap_if(0x80);
+                        if self.overflow_checks {
+                            self.trap_if(0x80);
+                        }
                         self.check_integer_range(integer);
                     }
                     (UnaryOp::Neg, ir::Ty::Float(ir::FloatTy::F64)) => {
@@ -3223,20 +3240,39 @@ pub fn emit_cfg_function(
     concrete: &ownership::ConcreteCfg,
     resolve: &dyn Fn(&ir::CallTarget) -> Result<String, String>,
 ) -> Result<Object, String> {
-    emit_native_cfg(NativeConcrete::Ordinary(concrete), resolve)
+    emit_cfg_function_with_overflow(concrete, resolve, true)
 }
 
+/// Emit a validated function under the immutable source runtime policy.
+pub fn emit_cfg_function_with_overflow(
+    concrete: &ownership::ConcreteCfg,
+    resolve: &dyn Fn(&ir::CallTarget) -> Result<String, String>,
+    overflow_checks: bool,
+) -> Result<Object, String> {
+    emit_native_cfg(NativeConcrete::Ordinary(concrete), resolve, overflow_checks)
+}
+
+#[cfg(test)]
 pub(super) fn emit_physical_cfg_function(
     concrete: &ownership::PhysicalConcrete<'_>,
     resolve: &dyn Fn(&ir::CallTarget) -> Result<String, String>,
 ) -> Result<Object, String> {
+    emit_physical_cfg_function_with_overflow(concrete, resolve, true)
+}
+
+pub(super) fn emit_physical_cfg_function_with_overflow(
+    concrete: &ownership::PhysicalConcrete<'_>,
+    resolve: &dyn Fn(&ir::CallTarget) -> Result<String, String>,
+    overflow_checks: bool,
+) -> Result<Object, String> {
     concrete.validate()?;
-    emit_native_cfg(NativeConcrete::Physical(concrete), resolve)
+    emit_native_cfg(NativeConcrete::Physical(concrete), resolve, overflow_checks)
 }
 
 fn emit_native_cfg(
     concrete: NativeConcrete<'_>,
     resolve: &dyn Fn(&ir::CallTarget) -> Result<String, String>,
+    overflow_checks: bool,
 ) -> Result<Object, String> {
     let function = concrete.function().as_ref();
     let validate_slice = |ty: &ir::Ty| -> Result<(), String> {
@@ -3434,6 +3470,7 @@ fn emit_native_cfg(
     let result_size = value_size(&function.result)?;
     let param_offsets = argument_slot_offsets(&param_words, aggregate_result)?;
     let mut emitter = Emitter {
+        overflow_checks,
         object: Object {
             code: Vec::new(),
             calls: Vec::new(),
@@ -4380,6 +4417,7 @@ mod tests {
         let concrete = unit_concrete_fixture();
         let resolve = |_: &ir::CallTarget| -> Result<String, String> { Err("no calls".into()) };
         let mut emitter = Emitter {
+            overflow_checks: true,
             object: Object {
                 code: Vec::new(),
                 calls: Vec::new(),
@@ -4450,6 +4488,7 @@ mod tests {
         let concrete = unit_concrete_fixture();
         let resolve = |_: &ir::CallTarget| -> Result<String, String> { Err("no calls".into()) };
         let mut e = Emitter {
+            overflow_checks: true,
             object: Object {
                 code: Vec::new(),
                 calls: Vec::new(),
@@ -4504,6 +4543,7 @@ mod tests {
         let concrete = unit_concrete_fixture();
         let resolve = |_: &ir::CallTarget| -> Result<String, String> { Err("no calls".into()) };
         let mut e = Emitter {
+            overflow_checks: true,
             object: Object {
                 code: Vec::new(),
                 calls: Vec::new(),
@@ -4976,6 +5016,7 @@ mod tests {
         let concrete = unit_concrete_fixture();
         let resolve = |_: &ir::CallTarget| -> Result<String, String> { Err("no calls".into()) };
         let mut e = Emitter {
+            overflow_checks: true,
             object: Object {
                 code: Vec::new(),
                 calls: Vec::new(),
@@ -5122,6 +5163,7 @@ mod tests {
         let concrete = unit_concrete_fixture();
         let resolve = |_: &ir::CallTarget| -> Result<String, String> { Err("no calls".into()) };
         let mut e = Emitter {
+            overflow_checks: true,
             object: Object {
                 code: Vec::new(),
                 calls: Vec::new(),
@@ -7454,6 +7496,7 @@ mod tests {
         // The initialized dummy is a private ABI invariant, not observable
         // through source indexing because an empty array has no valid index.
         let mut emitter = Emitter {
+            overflow_checks: true,
             object: Object {
                 code: vec![],
                 calls: vec![],
@@ -7719,6 +7762,7 @@ mod tests {
             )
             .unwrap();
             let mut branch = Emitter {
+                overflow_checks: true,
                 object: Object {
                     code: vec![],
                     calls: vec![],
@@ -7814,6 +7858,7 @@ mod tests {
         // This test exercises the private constructor emitter directly so it
         // can inspect inactive physical storage, which source Rust cannot read.
         let mut emitter = Emitter {
+            overflow_checks: true,
             object: Object {
                 code: vec![],
                 calls: vec![],

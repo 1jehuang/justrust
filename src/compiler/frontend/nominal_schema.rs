@@ -902,6 +902,40 @@ impl PlanState {
     }
 }
 
+/// Whether a source field type mentions a declared (non-`'static`) lifetime.
+pub(super) fn source_names_lifetime(ty: &Type) -> bool {
+    match ty {
+        Type::Ref {
+            region, referent, ..
+        } => matches!(region, Some(RegionName::Named(_))) || source_names_lifetime(referent),
+        Type::Array(inner, _) | Type::Slice(inner) => source_names_lifetime(inner),
+        Type::RawPtr { pointee, .. } => source_names_lifetime(pointee),
+        Type::Tuple(items) => items.iter().any(source_names_lifetime),
+        Type::Apply(path) => path
+            .segments
+            .iter()
+            .any(|segment| segment.args.iter().any(source_names_lifetime)),
+        _ => false,
+    }
+}
+
+/// Whether a source field type contains a reference with an elided lifetime.
+fn source_elides_lifetime(ty: &Type) -> bool {
+    match ty {
+        Type::Ref {
+            region, referent, ..
+        } => region.is_none() || source_elides_lifetime(referent),
+        Type::Array(inner, _) | Type::Slice(inner) => source_elides_lifetime(inner),
+        Type::RawPtr { pointee, .. } => source_elides_lifetime(pointee),
+        Type::Tuple(items) => items.iter().any(source_elides_lifetime),
+        Type::Apply(path) => path
+            .segments
+            .iter()
+            .any(|segment| segment.args.iter().any(source_elides_lifetime)),
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -983,39 +1017,5 @@ mod tests {
                 .unwrap_err()
                 .contains("wrong generic arity")
         );
-    }
-}
-
-/// Whether a source field type mentions a declared (non-`'static`) lifetime.
-pub(super) fn source_names_lifetime(ty: &Type) -> bool {
-    match ty {
-        Type::Ref {
-            region, referent, ..
-        } => matches!(region, Some(RegionName::Named(_))) || source_names_lifetime(referent),
-        Type::Array(inner, _) | Type::Slice(inner) => source_names_lifetime(inner),
-        Type::RawPtr { pointee, .. } => source_names_lifetime(pointee),
-        Type::Tuple(items) => items.iter().any(source_names_lifetime),
-        Type::Apply(path) => path
-            .segments
-            .iter()
-            .any(|segment| segment.args.iter().any(source_names_lifetime)),
-        _ => false,
-    }
-}
-
-/// Whether a source field type contains a reference with an elided lifetime.
-fn source_elides_lifetime(ty: &Type) -> bool {
-    match ty {
-        Type::Ref {
-            region, referent, ..
-        } => region.is_none() || source_elides_lifetime(referent),
-        Type::Array(inner, _) | Type::Slice(inner) => source_elides_lifetime(inner),
-        Type::RawPtr { pointee, .. } => source_elides_lifetime(pointee),
-        Type::Tuple(items) => items.iter().any(source_elides_lifetime),
-        Type::Apply(path) => path
-            .segments
-            .iter()
-            .any(|segment| segment.args.iter().any(source_elides_lifetime)),
-        _ => false,
     }
 }

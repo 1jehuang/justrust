@@ -363,6 +363,7 @@ impl ScopeArenaBuilder {
         })?;
         Ok(proof)
     }
+    #[cfg(test)]
     pub(crate) fn generated_function_root(
         &mut self,
         names: &impl NameAccess,

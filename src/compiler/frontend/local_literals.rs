@@ -125,6 +125,10 @@ pub(super) fn hints_with_inputs<'a: 's, 'b: 's, 's>(
 }
 
 fn finalized_hints(solver: Solver<'_, '_, '_>) -> Result<Hints, String> {
+    #[expect(
+        clippy::mutable_key_type,
+        reason = "PathKey equality and hashing use immutable path identity, never the retained allocation budget"
+    )]
     let closures = solver.closure_hints()?;
     let mut hints = HashMap::new();
     for (site, term) in solver.sites.clone() {
@@ -277,10 +281,10 @@ impl<'s> Solver<'_, '_, 's> {
         depth: usize,
     ) -> Result<Term, String> {
         self.checker.infer_work(depth)?;
-        if let ir::Ty::Param(param) = ty {
-            if let Some(term) = params.get(param) {
-                return Ok(*term);
-            }
+        if let ir::Ty::Param(param) = ty
+            && let Some(term) = params.get(param)
+        {
+            return Ok(*term);
         }
         if let ir::Ty::AssociatedType(projection) = ty {
             return self.associated_projection(projection, params, depth + 1);
@@ -363,10 +367,10 @@ impl<'s> Solver<'_, '_, 's> {
         }
         // Resolved aliases and primitive paths need not name a nominal. Only
         // genuinely partial types need reconstruction with fresh variables.
-        if self.preparation.is_none() {
-            if let Ok(ty) = checked_local_ty(ty, self.checker.signatures) {
-                return self.fixed(ty);
-            }
+        if self.preparation.is_none()
+            && let Ok(ty) = checked_local_ty(ty, self.checker.signatures)
+        {
+            return self.fixed(ty);
         }
         match ty {
             Type::Infer => self.fresh(),
@@ -812,15 +816,13 @@ impl<'s> Solver<'_, '_, 's> {
         for id in &plan.registry.function_ids {
             self.checker.infer_work(0)?;
             let info = plan.declaration(*id)?;
-            if let Some(owner) = &info.path.associated {
-                if owner.trait_decl.is_none()
-                    && owner.nominal == nominal
-                    && plan.registry.source_member_equal(info.path.item, name)?
-                {
-                    if found.replace(*id).is_some() {
-                        return Ok(None);
-                    }
-                }
+            if let Some(owner) = &info.path.associated
+                && owner.trait_decl.is_none()
+                && owner.nominal == nominal
+                && plan.registry.source_member_equal(info.path.item, name)?
+                && found.replace(*id).is_some()
+            {
+                return Ok(None);
             }
         }
         Ok(found)
@@ -841,19 +843,19 @@ impl<'s> Solver<'_, '_, 's> {
                     continue;
                 }
                 let receiver = self.peel_refs(method.receiver);
-                if let Domain::Nominal(decl, _) = self.domain(receiver) {
-                    if let Some(candidate) = self.candidate(decl, method.name)? {
-                        let result = self.callable(
-                            candidate,
-                            &method.args,
-                            Some(receiver),
-                            None,
-                            &method.actuals,
-                        )?;
-                        self.unify(result, method.result)?;
-                        progress = true;
-                        continue;
-                    }
+                if let Domain::Nominal(decl, _) = self.domain(receiver)
+                    && let Some(candidate) = self.candidate(decl, method.name)?
+                {
+                    let result = self.callable(
+                        candidate,
+                        &method.args,
+                        Some(receiver),
+                        None,
+                        &method.actuals,
+                    )?;
+                    self.unify(result, method.result)?;
+                    progress = true;
+                    continue;
                 }
                 // A concrete receiver can also select trait or primitive methods.
                 if let Some(ty) = self.resolve(receiver, 0)? {
@@ -868,28 +870,28 @@ impl<'s> Solver<'_, '_, 's> {
                         continue;
                     }
                     let plan = self.checker.signatures.plan()?;
-                    if method.actuals.is_empty() {
-                        if let Ok(selected) = plan.select_method(
+                    if method.actuals.is_empty()
+                        && let Ok(selected) = plan.select_method(
                             &ty,
                             &method.name,
                             &[],
                             self.checker.facts(),
                             &self.checker.module,
                             &plan.budget,
-                        ) {
-                            for (arg, param) in method
-                                .args
-                                .iter()
-                                .zip(selected.signature.params.iter().skip(1))
-                            {
-                                let param = self.fixed(param.clone())?;
-                                self.coerce(*arg, param)?;
-                            }
-                            let result = self.fixed(selected.signature.result)?;
-                            self.unify(result, method.result)?;
-                            progress = true;
-                            continue;
+                        )
+                    {
+                        for (arg, param) in method
+                            .args
+                            .iter()
+                            .zip(selected.signature.params.iter().skip(1))
+                        {
+                            let param = self.fixed(param.clone())?;
+                            self.coerce(*arg, param)?;
                         }
+                        let result = self.fixed(selected.signature.result)?;
+                        self.unify(result, method.result)?;
+                        progress = true;
+                        continue;
                     }
                 }
                 pending.push(method);
@@ -955,15 +957,23 @@ impl<'s> Solver<'_, '_, 's> {
         Ok(())
     }
     fn project(&mut self, base: Term, field: &FieldSelector) -> Result<Option<Term>, String> {
-        let base = self.peel_refs(base);
+        // Autoderef belongs to field/index lookup. An explicit Deref must
+        // consume exactly its reference or pointer layer, not the referent.
+        let base = if matches!(field, FieldSelector::Deref) {
+            base
+        } else {
+            self.peel_refs(base)
+        };
         match (self.domain(base), field) {
-            (Domain::RawPtr(_, element), FieldSelector::Deref) => Ok(Some(element)),
+            (Domain::Ref(_, element) | Domain::RawPtr(_, element), FieldSelector::Deref) => {
+                Ok(Some(element))
+            }
             (Domain::Tuple(fields), FieldSelector::Tuple(i)) => Ok(fields.get(*i).copied()),
             (
                 Domain::Array(element, _) | Domain::Slice(element),
                 FieldSelector::ConstantIndex(_),
             ) => Ok(Some(element)),
-            (Domain::Nominal(decl, args), _) => {
+            (Domain::Nominal(decl, args), FieldSelector::Tuple(_) | FieldSelector::Named(_)) => {
                 if self.preparation.is_some() {
                     return self.prepare_field(decl, &args, field);
                 }
@@ -1014,7 +1024,12 @@ impl<'s> Solver<'_, '_, 's> {
     fn place(&mut self, place: &Place) -> Result<Term, String> {
         let mut term = self.lookup(&place.local)?;
         for field in &place.fields {
-            term = self.field(term, field.clone())?;
+            term = if matches!(field, FieldSelector::ConstantIndex(_)) {
+                let index = self.node(Domain::Integer)?;
+                self.operator_index(term, index, false)?
+            } else {
+                self.field(term, field.clone())?
+            };
         }
         Ok(term)
     }
@@ -1333,7 +1348,8 @@ impl<'s> Solver<'_, '_, 's> {
                     ..
                 } => {
                     let base = self.place(array)?;
-                    let target = self.field(base, FieldSelector::ConstantIndex(0))?;
+                    let index = self.expr(index, depth + 1)?;
+                    let target = self.operator_index(base, index, true)?;
                     let value = self.expr(value, depth + 1)?;
                     if !matches!(
                         stmt,
@@ -1344,9 +1360,6 @@ impl<'s> Solver<'_, '_, 's> {
                     ) {
                         self.coerce(value, target)?;
                     }
-                    let index = self.expr(index, depth + 1)?;
-                    let usize = self.fixed(ir::Ty::Int(ir::IntTy::Usize))?;
-                    self.unify(index, usize)?;
                 }
                 Stmt::Expr(expr) | Stmt::ImplicitExpr(expr) => {
                     self.expr(expr, depth + 1)?;
@@ -1555,10 +1568,10 @@ impl<'s> Solver<'_, '_, 's> {
                     .iter()
                     .map(|a| self.source_ty(a))
                     .collect::<Result<Vec<_>, _>>()?;
-                if let Domain::Nominal(decl, _) = self.domain(owner) {
-                    if let Some(candidate) = self.candidate(decl, *name)? {
-                        return self.callable(candidate, &args, None, Some(owner), &actuals);
-                    }
+                if let Domain::Nominal(decl, _) = self.domain(owner)
+                    && let Some(candidate) = self.candidate(decl, *name)?
+                {
+                    return self.callable(candidate, &args, None, Some(owner), &actuals);
                 }
                 self.fresh()
             }
@@ -1581,10 +1594,10 @@ impl<'s> Solver<'_, '_, 's> {
                     return Ok(result);
                 }
                 let owner = self.peel_refs(receiver);
-                if let Domain::Nominal(decl, _) = self.domain(owner) {
-                    if let Some(candidate) = self.candidate(decl, *name)? {
-                        return self.callable(candidate, &args, Some(owner), None, &actuals);
-                    }
+                if let Domain::Nominal(decl, _) = self.domain(owner)
+                    && let Some(candidate) = self.candidate(decl, *name)?
+                {
+                    return self.callable(candidate, &args, Some(owner), None, &actuals);
                 }
                 let result = self.fresh()?;
                 self.delayed_results.push(result);
@@ -1663,18 +1676,12 @@ impl<'s> Solver<'_, '_, 's> {
             Expr::DynamicIndex { base, index, .. } => {
                 let base = self.expr(base, depth + 1)?;
                 let index = self.expr(index, depth + 1)?;
-                if matches!(
-                    self.domain(self.peel_refs(base)),
-                    Domain::Array(..) | Domain::Slice(..)
-                ) {
-                    let usize = self.fixed(ir::Ty::Int(ir::IntTy::Usize))?;
-                    self.unify(index, usize)?;
-                }
-                self.field(base, FieldSelector::ConstantIndex(0))
+                self.operator_index(base, index, false)
             }
-            Expr::Index { base, index, .. } => {
+            Expr::Index { base, .. } => {
                 let base = self.expr(base, depth + 1)?;
-                self.field(base, FieldSelector::ConstantIndex(*index))
+                let index = self.node(Domain::Integer)?;
+                self.operator_index(base, index, false)
             }
             Expr::Field { base, field } => {
                 let base = self.expr(base, depth + 1)?;

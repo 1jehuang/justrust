@@ -130,10 +130,10 @@ impl Parser<'_, '_> {
             }
             (pieces, arguments, specs)
         };
-        if spelling == "writeln" {
-            if let Some(last) = pieces.last_mut() {
-                last.push('\n');
-            }
+        if spelling == "writeln"
+            && let Some(last) = pieces.last_mut()
+        {
+            last.push('\n');
         }
         self.names
             .retain_parser_text(
@@ -295,7 +295,7 @@ impl Checker<'_> {
             borrows.push((local, ty));
         }
         for (index, (local, ty)) in borrows.into_iter().enumerate() {
-            let mut borrow = self.into_lit(ty.clone(), ir::ExprKind::Local(local))?;
+            let mut borrow = self.emit_lit(ty.clone(), ir::ExprKind::Local(local))?;
             let ir::Ty::Ref { referent, .. } = ty else {
                 return Err("contract: format operand is not a shared borrow".into());
             };
@@ -305,7 +305,7 @@ impl Checker<'_> {
             } = &referent
             {
                 let inner = inner.as_ref().clone();
-                borrow = self.into_lit(referent.clone(), ir::ExprKind::Deref { value: borrow })?;
+                borrow = self.emit_lit(referent.clone(), ir::ExprKind::Deref { value: borrow })?;
                 referent = inner;
             }
             let (trait_name, method) =
@@ -359,7 +359,7 @@ impl Checker<'_> {
         ))
     }
 
-    fn into_lit(&mut self, ty: ir::Ty, kind: ir::ExprKind) -> Result<ir::ExprId, String> {
+    fn emit_lit(&mut self, ty: ir::Ty, kind: ir::ExprKind) -> Result<ir::ExprId, String> {
         self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
         let id = ir::ExprId(self.exprs.len());
         self.exprs.push(ir::TypedExpr {

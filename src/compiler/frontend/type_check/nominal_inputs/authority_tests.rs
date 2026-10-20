@@ -17,10 +17,10 @@ impl Provider for IngressProvider {
         }
     }
     fn start(&self, cx: Context, key: Key) -> TaskFuture {
-        if key.kind == SIGNATURES {
-            if let Some(plan) = self.signatures.clone() {
-                return Box::pin(async move { cx.publish_fact(0, plan) });
-            }
+        if key.kind == SIGNATURES
+            && let Some(plan) = self.signatures.clone()
+        {
+            return Box::pin(async move { cx.publish_fact(0, plan) });
         }
         if key.kind != 997 {
             return CompilerProvider(self.snapshot.clone()).start(cx, key);

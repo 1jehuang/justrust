@@ -383,10 +383,10 @@ impl WorldDb {
                 }
                 None => None,
             };
-            if let Some(Owner::Trait(t)) = owner {
-                if let Some(td) = db.traits.get_mut(&t) {
-                    td.methods.push((name.clone(), id));
-                }
+            if let Some(Owner::Trait(t)) = owner
+                && let Some(td) = db.traits.get_mut(&t)
+            {
+                td.methods.push((name.clone(), id));
             }
             db.fns.insert(
                 id,
@@ -645,14 +645,13 @@ mod tests {
             ) {
                 continue;
             }
-            if let Some(p) = prelude {
-                if program
+            if let Some(p) = prelude
+                && program
                     .modules
                     .is_descendant(info.path.module, p)
                     .unwrap_or(true)
-                {
-                    continue;
-                }
+            {
+                continue;
             }
             let name = info.name.clone();
             if name.contains("$closure") {

@@ -1,6 +1,8 @@
 //! Canonical metadata substitution for non-callable constant members.
 use super::*;
 
+type ConstantMetadata = (Option<ir::Ty>, ir::Ty, Arc<[ir::Predicate]>);
+
 impl SchemaAdapter {
     pub(in crate::compiler::frontend) fn substitute_constant_metadata(
         &self,
@@ -8,7 +10,7 @@ impl SchemaAdapter {
         args: &[ir::Ty],
         caller: &ir::GenericEnv,
         budget: &ir::PlanBudget,
-    ) -> Result<(Option<ir::Ty>, ir::Ty, Arc<[ir::Predicate]>), tr::FactsError> {
+    ) -> Result<ConstantMetadata, tr::FactsError> {
         if !budget.same_authority(&self.budget) {
             return Err(tr::FactsError::invalid(
                 budget,

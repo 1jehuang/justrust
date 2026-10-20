@@ -76,7 +76,7 @@ fn primitive_min_source_issuer_rejects_raw_and_transplanted_authority() {
         "impl i32{pub const MIN:i32=-2147483647i32-1i32;}fn main(){}",
         "mod __justrust_std{pub mod primitive_constants{impl i32{pub const MIN:i32=-2147483647i32-1i32;}}}fn main(){}",
     ] {
-        let error = parse(source).err().expect("user primitive impl accepted");
+        let error = parse(source).expect_err("user primitive impl accepted");
         assert!(error.contains("E0390"), "{error}");
     }
     let mut missing = original.clone();

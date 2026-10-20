@@ -170,10 +170,7 @@ fn parse_spec(spec: &str) -> Result<FormatSpec, String> {
         out.flags |= 1;
         i += 1;
     }
-    if chars.get(i) == Some(&'0') && chars.get(i + 1).is_some_and(|c| c.is_ascii_digit()) {
-        out.flags |= 4;
-        i += 1;
-    } else if chars.get(i) == Some(&'0') && !chars.get(i + 1).is_some_and(|c| *c == '$') {
+    if chars.get(i) == Some(&'0') && chars.get(i + 1) != Some(&'$') {
         out.flags |= 4;
         i += 1;
     }

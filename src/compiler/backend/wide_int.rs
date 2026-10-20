@@ -47,7 +47,13 @@ impl Emitter<'_> {
         match op {
             UnaryOp::Not => self.bytes(&[0x48, 0xf7, 0xd0, 0x48, 0xf7, 0xd2]),
             UnaryOp::Neg => {
-                if ty.is_signed() {
+                if !self.overflow_checks {
+                    self.bytes(&[0x48, 0xf7, 0xd8, 0x48, 0x83, 0xd2, 0x00, 0x48, 0xf7, 0xda]);
+                    self.wi_store(32, 0);
+                    self.wi_store(40, 2);
+                    self.wi_result();
+                    return Ok(());
+                } else if ty.is_signed() {
                     // Negate both limbs. Only MIN is forbidden, tested below.
                     self.bytes(&[0x48, 0xf7, 0xd8, 0x48, 0x83, 0xd2, 0x00, 0x48, 0xf7, 0xda]);
                     // NEG high alone can overflow for valid negative values with nonzero low.
@@ -93,10 +99,16 @@ impl Emitter<'_> {
             }
             self.wi_load(1, 24);
             self.wi_rr(0x85, 1, 1);
-            self.trap_if(0x85);
+            if self.overflow_checks {
+                self.trap_if(0x85);
+            }
             self.wi_load(1, 16);
             self.bytes(&[0x48, 0x83, 0xf9, (ty.bits() - 1) as u8]);
-            self.trap_if(0x87);
+            if self.overflow_checks {
+                self.trap_if(0x87);
+            } else {
+                self.bytes(&[0x48, 0x83, 0xe1, (ty.bits() - 1) as u8]);
+            }
             self.wi_load(0, 0);
             self.bytes(&[
                 0x48,
@@ -128,7 +140,9 @@ impl Emitter<'_> {
             Add | Sub => {
                 self.wi_rr(if op == Add { 0x01 } else { 0x29 }, 0, 1);
                 self.wi_rr(if op == Add { 0x11 } else { 0x19 }, 2, 3);
-                self.trap_if(if ty.is_signed() { 0x80 } else { 0x82 });
+                if self.overflow_checks {
+                    self.trap_if(if ty.is_signed() { 0x80 } else { 0x82 });
+                }
             }
             _ => {
                 let opcode = match op {
@@ -187,10 +201,16 @@ impl Emitter<'_> {
     fn wi_shift(&mut self, op: BinaryOp, ty: ir::IntTy) -> Result<(), String> {
         self.wi_load(1, 24);
         self.wi_rr(0x85, 1, 1);
-        self.trap_if(0x85);
+        if self.overflow_checks {
+            self.trap_if(0x85);
+        }
         self.wi_load(1, 16);
         self.bytes(&[0x48, 0x83, 0xf9, 0x7f]);
-        self.trap_if(0x87);
+        if self.overflow_checks {
+            self.trap_if(0x87);
+        } else {
+            self.bytes(&[0x48, 0x83, 0xe1, 0x7f]);
+        }
         self.wi_load(0, 0);
         self.wi_load(2, 8);
         self.bytes(&[0x48, 0x83, 0xf9, 0x40]);
@@ -273,7 +293,9 @@ impl Emitter<'_> {
         self.wi_load(0, 112);
         self.wi_load(2, 120);
         self.wi_rr(0x09, 0, 2);
-        self.trap_if(0x85);
+        if self.overflow_checks {
+            self.trap_if(0x85);
+        }
         self.wi_load(0, 96);
         self.wi_store(32, 0);
         self.wi_load(2, 104);
@@ -284,17 +306,23 @@ impl Emitter<'_> {
             let positive = self.jump(&[0x0f, 0x89]);
             self.word(1u64 << 63);
             self.wi_rr(0x39, 2, 0);
-            self.trap_if(0x87);
+            if self.overflow_checks {
+                self.trap_if(0x87);
+            }
             let below = self.jump(&[0x0f, 0x82]);
             self.wi_load(0, 32);
             self.wi_rr(0x85, 0, 0);
-            self.trap_if(0x85);
+            if self.overflow_checks {
+                self.trap_if(0x85);
+            }
             self.patch(below, self.position())?;
             self.wi_neg(32);
             let done = self.jump(&[0xe9]);
             self.patch(positive, self.position())?;
             self.wi_rr(0x85, 2, 2);
-            self.trap_if(0x88);
+            if self.overflow_checks {
+                self.trap_if(0x88);
+            }
             self.patch(done, self.position())?;
         }
         self.wi_result();
@@ -419,6 +447,15 @@ mod tests {
     }
 
     fn run(cases: &[Case], unary: &[(UnaryOp, ir::IntTy, u128, u128)], check_results: bool) -> i32 {
+        run_with_policy(cases, unary, check_results, true)
+    }
+
+    fn run_with_policy(
+        cases: &[Case],
+        unary: &[(UnaryOp, ir::IntTy, u128, u128)],
+        check_results: bool,
+        overflow_checks: bool,
+    ) -> i32 {
         let program = frontend::parse("fn main() {}").unwrap();
         let signatures = frontend::signature_table(&program).unwrap();
         let checked = frontend::type_function_with_signatures(&program, 0, &signatures).unwrap();
@@ -436,6 +473,7 @@ mod tests {
         .unwrap();
         let resolve = |_: &ir::CallTarget| Err("no calls".into());
         let mut e = Emitter {
+            overflow_checks,
             object: Object {
                 code: Vec::new(),
                 calls: Vec::new(),
@@ -545,6 +583,69 @@ mod tests {
         std::fs::remove_file(path).unwrap();
         std::fs::remove_dir(dir).unwrap();
         status.code().unwrap_or(-1)
+    }
+
+    #[test]
+    fn wide_native_wrapping_oracle() {
+        use BinaryOp::*;
+        use ir::IntTy::*;
+        let values = [
+            0,
+            1,
+            2,
+            u64::MAX as u128,
+            1u128 << 64,
+            (1u128 << 127) - 1,
+            1u128 << 127,
+            u128::MAX,
+        ];
+        let mut cases = Vec::new();
+        let mut unary = Vec::new();
+        for a in values {
+            unary.push((UnaryOp::Neg, I128, a, a.wrapping_neg()));
+            for ty in [I128, U128] {
+                for b in values {
+                    for (op, expected) in [
+                        (Add, a.wrapping_add(b)),
+                        (Sub, a.wrapping_sub(b)),
+                        (Mul, a.wrapping_mul(b)),
+                    ] {
+                        cases.push(Case {
+                            op,
+                            ty,
+                            a,
+                            b,
+                            expected,
+                        });
+                    }
+                }
+                for b in [0, 1, 63, 64, 127, 128, 129, 255, u128::MAX] {
+                    let amount = (b & 127) as u32;
+                    cases.push(Case {
+                        op: Shl,
+                        ty,
+                        a,
+                        b,
+                        expected: a.wrapping_shl(amount),
+                    });
+                    cases.push(Case {
+                        op: Shr,
+                        ty,
+                        a,
+                        b,
+                        expected: if ty.is_signed() {
+                            (a as i128).wrapping_shr(amount) as u128
+                        } else {
+                            a.wrapping_shr(amount)
+                        },
+                    });
+                }
+            }
+        }
+        for chunk in cases.chunks(200) {
+            assert_eq!(run_with_policy(chunk, &[], true, false), 0, "{chunk:?}");
+        }
+        assert_eq!(run_with_policy(&[], &unary, true, false), 0);
     }
 
     #[test]

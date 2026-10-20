@@ -166,17 +166,15 @@ impl PlanCtx {
                 .spelling(associated.name)
                 .map_err(native_adapter::name_diagnostic)?
                 == item_name
-            {
-                if item
+                && item
                     .replace(self.registry.associated_type_item(
                         declaration,
                         associated.name,
                         &self.budget,
                     )?)
                     .is_some()
-                {
-                    return Err("duplicate canonical IntoIterator::Item".into());
-                }
+            {
+                return Err("duplicate canonical IntoIterator::Item".into());
             }
         }
         let item =

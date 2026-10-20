@@ -27,51 +27,6 @@ fn opaque_bound_diagnostic(owner: Option<ir::DeclId>, goal: &ir::Predicate) -> S
     )
 }
 
-#[cfg(test)]
-mod diagnostic_tests {
-    use super::*;
-
-    #[test]
-    fn opaque_bound_diagnostic_distinguishes_membership_and_output() {
-        let declaration = ir::DeclId {
-            snapshot: ir::SnapshotId::allocate().unwrap(),
-            index: 7,
-        };
-        let application = ir::TraitRef {
-            declaration,
-            self_ty: ir::Ty::Unit,
-            args: vec![ir::Ty::Unit].into(),
-        };
-        let membership = opaque_bound_diagnostic(
-            Some(declaration),
-            &ir::Predicate::Implements(application.clone()),
-        );
-        let output = opaque_bound_diagnostic(
-            Some(declaration),
-            &ir::Predicate::ProjectionEq {
-                projection: ir::AssociatedTypeProjection {
-                    trait_ref: application,
-                    item: declaration,
-                },
-                ty: ir::Ty::Unit,
-            },
-        );
-        for diagnostic in [&membership, &output] {
-            assert!(diagnostic.starts_with(
-                "E0277: hidden return type does not satisfy its declared opaque bounds;"
-            ));
-            assert!(diagnostic.contains("defining owner=Some(DeclId"));
-            assert!(diagnostic.contains("trait=DeclId"));
-            assert!(diagnostic.len() < 600);
-            assert!(!diagnostic.contains("self_ty:"));
-        }
-        assert!(membership.contains("required membership;"));
-        assert!(!membership.contains("required associated"));
-        assert!(output.contains("required associated Output/equality item=DeclId"));
-        assert!(!output.contains("required membership;"));
-    }
-}
-
 fn hidden_contains_opaque(
     ty: &ir::Ty,
     budget: &ir::PlanBudget,
@@ -213,5 +168,50 @@ impl Checker<'_> {
             tr::ProofOutcome::Proved(_) => Ok(()),
             tr::ProofOutcome::NotProven => Err(opaque_bound_diagnostic(self.declaration, goal)),
         }
+    }
+}
+
+#[cfg(test)]
+mod diagnostic_tests {
+    use super::*;
+
+    #[test]
+    fn opaque_bound_diagnostic_distinguishes_membership_and_output() {
+        let declaration = ir::DeclId {
+            snapshot: ir::SnapshotId::allocate().unwrap(),
+            index: 7,
+        };
+        let application = ir::TraitRef {
+            declaration,
+            self_ty: ir::Ty::Unit,
+            args: vec![ir::Ty::Unit].into(),
+        };
+        let membership = opaque_bound_diagnostic(
+            Some(declaration),
+            &ir::Predicate::Implements(application.clone()),
+        );
+        let output = opaque_bound_diagnostic(
+            Some(declaration),
+            &ir::Predicate::ProjectionEq {
+                projection: ir::AssociatedTypeProjection {
+                    trait_ref: application,
+                    item: declaration,
+                },
+                ty: ir::Ty::Unit,
+            },
+        );
+        for diagnostic in [&membership, &output] {
+            assert!(diagnostic.starts_with(
+                "E0277: hidden return type does not satisfy its declared opaque bounds;"
+            ));
+            assert!(diagnostic.contains("defining owner=Some(DeclId"));
+            assert!(diagnostic.contains("trait=DeclId"));
+            assert!(diagnostic.len() < 600);
+            assert!(!diagnostic.contains("self_ty:"));
+        }
+        assert!(membership.contains("required membership;"));
+        assert!(!membership.contains("required associated"));
+        assert!(output.contains("required associated Output/equality item=DeclId"));
+        assert!(!output.contains("required membership;"));
     }
 }

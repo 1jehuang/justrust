@@ -4,6 +4,10 @@ Date: 2026-10-20. Inspected source revision: `910ca024c09c5d9ef5a53c8f93829bd1c8
 Scope: native clean-room compiler, not the installed stable justrust bootstrap client.
 This is an assessment, not a full conformance certification or an implementation change.
 
+Follow-up: `RUST-SUPPORT-FOLLOWUP.md` records subsequent fixes, their acceptance
+receipts, and still-open compatibility failures. The findings below remain the
+historical baseline for the inspected revision.
+
 ## Bottom line
 
 The compiler has substantial working slices, but is not close to an evidenced claim of arbitrary Rust project compatibility. The immediate bottleneck is not another isolated syntax feature: production inference, trait selection, associated-type normalization, ownership transport and the source library must work together. The new general semantic core exists but is not yet the production checker. Project configuration also has observable correctness bugs, not merely explicitly unsupported features.

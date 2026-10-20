@@ -143,7 +143,7 @@ fn initializer_dependency_path(
     input: &[u32],
     budget: &ir::PlanBudget,
 ) -> Result<Vec<u32>, Error> {
-    if input.contains(&u32::MAX) || input.len() % 2 != 0 {
+    if input.contains(&u32::MAX) || !input.len().is_multiple_of(2) {
         return Err(Error::new(
             "invalid original initializer dependency coordinate",
         ));

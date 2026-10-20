@@ -148,6 +148,21 @@ graph-integrity tests then pass in `20261019-232315842-2737020` and
 `20261019-232409929-2742857`, tree
 `9b4e2c80a1485be854230adbf52a1e0a52ebb3ec`, without ratchet or stack changes.
 
+Closed-call nominal conversion rows remain local to their call receipts, rather
+than being merged into the enclosing body's nominal substitution map. These
+represent different substitution contexts. The body map still rejects conflicting
+targets (`20261020-031145817-3606040`), and each call receipt still independently
+replays its exact engine, selection, signature and conversion inventory. A real
+BUILD of the unchanged basic format fixture supplies nonidentity conversion rows
+for the authority regression: replacing a converted identity with its source
+identity or omitting the conversion inventory is rejected by the actual BODY
+consumer (`20261020-031211231-3608364`). The existing full receipt mutation test
+also passes (`20261020-031146421-3604869`). The unchanged fixture matches live
+stock rustc stdout and stderr after native CHECK/BUILD at workers 1 and 8, alongside
+all 14 unchanged graph-integrity gates (`20261020-031050478-3603331`). This fixes
+the baseline format BUILD's `conflicting nominal substitution` rejection without
+relaxing body substitutions or call authority. It does not complete G0-G12.
+
 Temporary diagnostic dumps were removed. A bounded two-boolean no-progress
 message preserves the rejection guard and avoids a new unused-field warning;
 its minimal compile check passes in `20261019-232942365-2756546`. Baseline warnings

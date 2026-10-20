@@ -103,12 +103,12 @@ impl ClosedReceipt {
         expression: ir::ExprId,
         selection: &ir::Callee,
         target: &ir::Callee,
-        original: &ir::Signature,
-        mapped: &ir::Signature,
+        signatures: (&ir::Signature, &ir::Signature),
         engine: crate::engine::EngineAuthority,
         facts: &tr::ValidatedFacts,
         budget: &ir::PlanBudget,
     ) -> Result<Self, String> {
+        let (original, mapped) = signatures;
         let receipt = Receipt {
             expression,
             target: target.clone(),
@@ -262,6 +262,58 @@ mod tests {
     use crate::compiler::ir::closed_call_receipt_tests::{
         issued_body_fixture, issued_rows, reject_changed_rows,
     };
+
+    #[test]
+    fn format_call_conversions_keep_occurrence_authority() {
+        use crate::compiler::{
+            BODY, BUILD, CANONICAL_BODY, CompilerProvider, Input, InstanceBodyFact, Snapshot,
+        };
+        use crate::engine::{Engine, Key};
+        let source = include_str!("../../../../tests/fixtures/format_macros_basic.rs");
+        let engine = Engine::new(CompilerProvider(Arc::new(Snapshot {
+            input: Input::Text(source.into()),
+            source_options: crate::compiler::source::SourceOptions::default(),
+            budget: ir::PlanBudget::default(),
+        })));
+        let build = engine.request(Key::new(BUILD, vec![]));
+        let report = engine.run(1).unwrap();
+        build.completion().unwrap();
+        let (body, rows, first, index) = report
+            .node_evaluations
+            .iter()
+            .filter(|(key, _)| matches!(key.kind, BODY | CANONICAL_BODY))
+            .filter_map(|(key, _)| engine.fact_of::<InstanceBodyFact>(key, 0))
+            .find_map(|body| {
+                body.checked.body_substitution.as_ref()?;
+                if !body
+                    .checked
+                    .exprs
+                    .iter()
+                    .any(|expression| matches!(expression.kind, ir::ExprKind::Call { .. }))
+                {
+                    return None;
+                }
+                let rows = issued_rows(&body);
+                let (first, index) = rows.iter().enumerate().find_map(|(first, row)| {
+                    row.conversions
+                        .iter()
+                        .position(|conversion| conversion.original != conversion.instantiated)
+                        .map(|index| (first, index))
+                })?;
+                Some((body, rows, first, index))
+            })
+            .expect("real format BUILD must issue a nonidentity nominal call conversion");
+        let authority = engine.authority();
+        assert!(!reject_changed_rows(&body, authority, Some(rows.clone())));
+
+        let mut changed = rows.to_vec();
+        let conversion = &mut Arc::make_mut(&mut changed[first].conversions)[index];
+        conversion.instantiated = conversion.original;
+        assert!(reject_changed_rows(&body, authority, Some(changed.into())));
+        let mut omitted = rows.to_vec();
+        omitted[first].conversions = Arc::from([]);
+        assert!(reject_changed_rows(&body, authority, Some(omitted.into())));
+    }
 
     #[test]
     fn issued_closed_call_body_rejects_changed_receipt_inventory() {

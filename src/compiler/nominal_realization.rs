@@ -44,7 +44,7 @@ pub(super) async fn publish_callable(
                 preparation,
                 constants: retained,
             } => {
-                constants = retained;
+                constants = *retained;
                 inputs.satisfy(cx, types, declaration, preparation).await?;
             }
         }

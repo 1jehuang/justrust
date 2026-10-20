@@ -43,10 +43,10 @@ pub mod owner_path;
 pub mod ownership;
 mod resource_accounting;
 mod root_cleanup;
+pub mod sema;
 pub mod semantic_name;
 pub mod semantic_path;
 pub mod semantic_scope;
-pub mod sema;
 pub mod source;
 mod source_item_macro;
 mod source_macro;
@@ -258,13 +258,6 @@ struct OpaqueHiddenTypesFact {
 }
 /// Exact closed hidden record. Reading this fact grants no source-level trait
 /// information and does not itself authorize carrier-erasing physical lowering.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "source-only opaque admission tests representation authority before physical consumers are wired"
-    )
-)]
 struct OpaqueRepresentationFact {
     record: ir::OpaqueHiddenType,
     definition: ir::OpaqueDefinitionProof,
@@ -1300,12 +1293,11 @@ impl Provider for CompilerProvider {
                     for record in hidden.representations.iter() {
                         if record.opaque().owner() == opaque.owner()
                             && record.opaque().site() == opaque.site()
+                            && found.replace(record).is_some()
                         {
-                            if found.replace(record).is_some() {
-                                return Err(Error::new(
-                                    "opaque body published duplicate hidden occurrences",
-                                ));
-                            }
+                            return Err(Error::new(
+                                "opaque body published duplicate hidden occurrences",
+                            ));
                         }
                     }
                     let record = found.ok_or_else(|| {
@@ -1661,9 +1653,11 @@ impl Provider for CompilerProvider {
                             return cx.publish_fact(0, object);
                         }
                     }
-                    let mut object = backend::emit_cfg_function(&proof.concrete, &|target| {
-                        instances::symbol_of(target, &types, &this.0.budget)
-                    })
+                    let mut object = backend::emit_cfg_function_with_overflow(
+                        &proof.concrete,
+                        &|target| instances::symbol_of(target, &types, &this.0.budget),
+                        this.0.source_options.overflow_checks,
+                    )
                     .map_err(Error::new)?;
                     if let Some((target, false, true, signature)) = c_boundary {
                         let private = instances::symbol_of(&target, &types, &this.0.budget)
@@ -1695,10 +1689,11 @@ impl Provider for CompilerProvider {
                         );
                     }
                     let function = proof.concrete.function();
-                    let fact = match ssa::lower::lower(
+                    let fact = match ssa::lower::lower_with_overflow(
                         function,
                         &|target| instances::symbol_of(target, &types, &this.0.budget),
                         &meter,
+                        this.0.source_options.overflow_checks,
                     )
                     .map_err(Error::new)?
                     {
@@ -1868,14 +1863,13 @@ impl Provider for CompilerProvider {
                                 target: ir::Callee::Direct(target),
                                 ..
                             } = &block.terminator.value
+                                && Self::universal_body(&types, target.declaration)?
                             {
-                                if Self::universal_body(&types, target.declaration)? {
-                                    callees.push(
-                                        types
-                                            .callable_index(target.declaration)
-                                            .map_err(Error::new)?,
-                                    );
-                                }
+                                callees.push(
+                                    types
+                                        .callable_index(target.declaration)
+                                        .map_err(Error::new)?,
+                                );
                             }
                         }
                         callees.sort_unstable();

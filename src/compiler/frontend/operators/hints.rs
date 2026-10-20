@@ -47,10 +47,10 @@ impl type_check::Checker<'_> {
             ) {
                 continue;
             }
-            if let Some(previous) = &unique {
-                if previous != argument {
-                    return Ok(None);
-                }
+            if let Some(previous) = &unique
+                && previous != argument
+            {
+                return Ok(None);
             }
             unique = Some(argument.clone());
         }

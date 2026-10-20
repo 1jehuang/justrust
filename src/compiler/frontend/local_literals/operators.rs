@@ -8,6 +8,7 @@ pub(super) enum Kind {
     Binary(BinaryOp),
     Unary(UnaryOp),
     Assign(BinaryOp),
+    Index(bool),
 }
 pub(super) struct Operation {
     kind: Kind,
@@ -24,6 +25,16 @@ fn comparison(op: BinaryOp) -> bool {
 }
 
 impl Solver<'_, '_, '_> {
+    pub(super) fn operator_index(
+        &mut self,
+        base: Term,
+        index: Term,
+        mutable: bool,
+    ) -> Result<Term, String> {
+        let base = self.peel_refs(base);
+        self.queue_operator(Kind::Index(mutable), base, Some(index))
+    }
+
     pub(super) fn operator_binary(
         &mut self,
         op: BinaryOp,
@@ -90,7 +101,15 @@ impl Solver<'_, '_, '_> {
             right,
             result,
         } = *operation;
+        let left = if matches!(kind, Kind::Index(_)) {
+            self.peel_refs(left)
+        } else {
+            left
+        };
         if matches!(self.domain(left), Domain::Unknown) {
+            if matches!(kind, Kind::Index(_)) {
+                return Ok(false);
+            }
             // Only the final numeric-default round may infer a missing builtin
             // receiver from numeric RHS evidence. Later nominal uses win first.
             if !self.projection_defaults {
@@ -110,6 +129,17 @@ impl Solver<'_, '_, '_> {
             Domain::Nominal(..) | Domain::Tuple(..) | Domain::Fixed(ir::Ty::Param(_))
         );
         if !overloaded {
+            if matches!(kind, Kind::Index(_)) {
+                let element = match self.domain(left) {
+                    Domain::Array(element, _) | Domain::Slice(element) => element,
+                    Domain::Unknown => return Ok(false),
+                    _ => return Err(self.user_error("E0608: cannot index this type")),
+                };
+                let usize = self.fixed(ir::Ty::Int(ir::IntTy::Usize))?;
+                self.unify(right.ok_or("index constraint omitted operand")?, usize)?;
+                self.unify(result, element)?;
+                return Ok(true);
+            }
             if let Some(right) = right {
                 let shift = matches!(
                     kind,
@@ -137,6 +167,8 @@ impl Solver<'_, '_, '_> {
             Kind::Unary(UnaryOp::Not) => Some(("ops", "Not", "not")),
             Kind::Assign(op) => super::super::operators::assign_trait(op)
                 .map(|(name, method)| ("ops", name, method)),
+            Kind::Index(false) => Some(("ops", "Index", "index")),
+            Kind::Index(true) => Some(("ops", "IndexMut", "index_mut")),
         };
         let Some((module, name, method)) = spec else {
             return Ok(false);
@@ -189,21 +221,28 @@ impl Solver<'_, '_, '_> {
                 "E0369: no implementation of the canonical operator trait for these operand types",
             ));
         };
-        if let Some(right) = right {
-            if let Some(formal) = signature.params.get(1) {
-                let formal = if module == "cmp" {
-                    match formal {
-                        ir::Ty::Ref { referent, .. } => referent.as_ref(),
-                        _ => formal,
-                    }
-                } else {
-                    formal
-                };
-                let formal = self.fixed(formal.clone())?;
-                self.coerce(right, formal)?;
-            }
+        if let Some(right) = right
+            && let Some(formal) = signature.params.get(1)
+        {
+            let formal = if module == "cmp" {
+                match formal {
+                    ir::Ty::Ref { referent, .. } => referent.as_ref(),
+                    _ => formal,
+                }
+            } else {
+                formal
+            };
+            let formal = self.fixed(formal.clone())?;
+            self.coerce(right, formal)?;
         }
-        let output = self.fixed(signature.result)?;
+        let output = if matches!(kind, Kind::Index(_)) {
+            let ir::Ty::Ref { referent, .. } = signature.result else {
+                return Err("invalid metadata: index method result is not a reference".into());
+            };
+            self.fixed((*referent).clone())?
+        } else {
+            self.fixed(signature.result)?
+        };
         self.unify(result, output)?;
         Ok(true)
     }

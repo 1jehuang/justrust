@@ -149,23 +149,6 @@ impl Resolver<'_> {
         Ok(found)
     }
 
-    fn body_contains_projection(&self, body: &Block) -> Result<bool, String> {
-        let mut found = false;
-        let mut inspect = |node: &DepthNode<'_>, depth| {
-            self.alias_budget.check_depth(depth)?;
-            self.alias_budget.charge_work(1)?;
-            found |= matches!(node, DepthNode::Type(Type::Projection(_)));
-            Ok(())
-        };
-        walk_depth_inspecting(
-            DepthNode::Block(body),
-            None,
-            Some(self.names()),
-            Some(&mut inspect),
-        )?;
-        Ok(found)
-    }
-
     #[inline(never)]
     fn source_trait_index(&mut self, path: &TraitPath, module: ModuleId) -> Result<usize, String> {
         let TraitPath::Source(path) = path else {
@@ -2724,11 +2707,12 @@ impl Resolver<'_> {
                 by_ref,
             } => {
                 let path = self.single_path(*name)?;
-                if !*mutable && by_ref.is_none() {
-                    if let Some(literal) = self.const_pattern(&path, module)? {
-                        *pattern = literal;
-                        return Ok(());
-                    }
+                if !*mutable
+                    && by_ref.is_none()
+                    && let Some(literal) = self.const_pattern(&path, module)?
+                {
+                    *pattern = literal;
+                    return Ok(());
                 }
                 if let Some(item) = self.zero_constructor(&path, module)? {
                     if *mutable || by_ref.is_some() {
@@ -3865,6 +3849,10 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
         .program
         .symbols
         .check(parsed.program.names.as_ref())?;
+    #[expect(
+        clippy::mutable_key_type,
+        reason = "PathKey hashes immutable owner/anchor/namespace/name keys only; its shared resource ledger is not semantic identity"
+    )]
     let mut static_muts = std::collections::HashSet::new();
     for function in parsed.program.functions.iter().filter(|f| f.static_mut) {
         static_muts.insert(name_scope::path_key(
@@ -4292,10 +4280,10 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
             }
             resolver.finish_closure_function(function)?;
             function.embedded_source = None;
-            if let Some(receipt) = embedded_resolved {
-                if receipt.matches_resolved(function, resolver.names())? {
-                    function.embedded_source = Some(receipt);
-                }
+            if let Some(receipt) = embedded_resolved
+                && receipt.matches_resolved(function, resolver.names())?
+            {
+                function.embedded_source = Some(receipt);
             }
             Ok(())
         })?;
@@ -4476,9 +4464,7 @@ mod associated_projection_tests {
             "trait Call<A>{type Out;}trait Apply<F:Call<i32,Out=i32>>{}fn main(){}",
             "trait Call<A>{type Out;}trait Apply:Call<i32,Out=i32>{}fn main(){}",
         ] {
-            let error = parse(source)
-                .err()
-                .expect("trait header equality was admitted");
+            let error = parse(source).expect_err("trait header equality was admitted");
             assert!(error.contains("associated equalities"), "{error}");
         }
     }
@@ -4489,6 +4475,10 @@ mod associated_projection_tests {
             "trait Apply{fn call(&self);}mod foreign{pub trait Other{fn call(&self);}}fn main(){}",
         )
         .unwrap();
+        #[expect(
+            clippy::mutable_key_type,
+            reason = "PathKey equality and hashing use immutable path identity, never the retained allocation budget"
+        )]
         let items = HashMap::new();
         let mut resolver = Resolver {
             program: &program,

@@ -29,7 +29,12 @@ fn validated_nested_nominal_interning_replays_authority_after_unlock() {
         )
         .unwrap();
     let outer = plan
-        .intern_nominal(declaration(&plan, 1), &[inner.clone()], caller, &budget)
+        .intern_nominal(
+            declaration(&plan, 1),
+            std::slice::from_ref(&inner),
+            caller,
+            &budget,
+        )
         .unwrap();
     caller
         .validate_ty_metadata_with_budget(&outer, &budget)

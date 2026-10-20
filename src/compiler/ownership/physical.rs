@@ -41,8 +41,10 @@ pub(in crate::compiler) fn analyze_physical<'a>(
         FactsCtx::Validated(&facts),
         Some(facts.budget()),
         (Some(&function), Some(&facts)),
-        None,
-        &mut effects,
+        AnalysisEffects {
+            table: None,
+            output: &mut effects,
+        },
         Some(validation),
     );
     if !analysis.passed() {

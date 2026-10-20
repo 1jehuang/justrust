@@ -366,10 +366,10 @@ impl Capabilities {
         for demand in demands {
             if let Some(key) =
                 self.key_with_missing(demand, world, caller, budget, &mut missing, 0)?
+                && !self.nominals.iter().any(|n| n.fact.key == key)
+                && !missing.contains(&key)
             {
-                if !self.nominals.iter().any(|n| n.fact.key == key) && !missing.contains(&key) {
-                    missing.push(key)
-                }
+                missing.push(key)
             }
         }
         Ok(missing)

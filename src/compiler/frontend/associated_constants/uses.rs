@@ -320,7 +320,7 @@ impl PlanCtx {
                 &self.registry,
                 path,
                 &owner,
-                &bindings,
+                bindings,
                 ir::FactsCtx::Universal(&env),
                 budget,
             );

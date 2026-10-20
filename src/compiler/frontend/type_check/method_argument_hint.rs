@@ -46,8 +46,7 @@ impl Checker<'_> {
             receiver,
             name,
             self.facts(),
-            &self.module,
-            &plan.budget,
+            (&self.module, &plan.budget),
             |owner, mode, traits_only| {
                 if let Some(written) = &written {
                     return Ok(MethodArguments::Ready(Cow::Borrowed(written)));

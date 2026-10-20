@@ -507,8 +507,10 @@ pub fn verify_template(template: cfg::TemplateCfg) -> Result<VerifiedTemplateCfg
         FactsCtx::Validated(template.facts()),
         Some(template.budget()),
         (Some(template.function()), Some(template.facts())),
-        None,
-        &mut candidate_effects,
+        AnalysisEffects {
+            table: None,
+            output: &mut candidate_effects,
+        },
         None,
     );
     if !analysis.passed() {
@@ -615,8 +617,10 @@ fn analyze_closed_context(
         FactsCtx::Validated(closed.facts()),
         Some(closed.budget()),
         (Some(closed.function()), Some(closed.facts())),
-        effects,
-        &mut candidate_effects,
+        AnalysisEffects {
+            table: effects,
+            output: &mut candidate_effects,
+        },
         None,
     );
     if !analysis.passed() {
@@ -2374,9 +2378,11 @@ impl Transfer<'_> {
                 self.f,
                 target,
                 access,
-                self.block,
-                self.statement,
-                self.phase,
+                borrow::AccessPoint {
+                    block: self.block,
+                    statement: self.statement,
+                    phase: self.phase,
+                },
                 self.budget,
             )?
         {
@@ -3315,18 +3321,37 @@ fn analyze_with_facts(
     facts: FactsCtx<'_>,
     plan: Option<&super::ir::PlanBudget>,
 ) -> Analysis {
-    analyze_with_context(f, limits, facts, plan, (None, None), None, &mut None, None)
+    analyze_with_context(
+        f,
+        limits,
+        facts,
+        plan,
+        (None, None),
+        AnalysisEffects {
+            table: None,
+            output: &mut None,
+        },
+        None,
+    )
 }
+struct AnalysisEffects<'a> {
+    table: Option<&'a Arc<CarrierEffectTable>>,
+    output: &'a mut Option<Arc<borrow::CarrierEffects>>,
+}
+
 fn analyze_with_context(
     f: &cfg::Function,
     limits: Limits,
     facts: FactsCtx<'_>,
     plan: Option<&super::ir::PlanBudget>,
     exact: (Option<&Arc<cfg::Function>>, Option<&Arc<ValidatedFacts>>),
-    effect_table: Option<&Arc<CarrierEffectTable>>,
-    effect_output: &mut Option<Arc<borrow::CarrierEffects>>,
+    effects: AnalysisEffects<'_>,
     physical: Option<&super::opaque_physical::PhysicalValidation<'_>>,
 ) -> Analysis {
+    let AnalysisEffects {
+        table: effect_table,
+        output: effect_output,
+    } = effects;
     let (exact_function, exact_facts) = exact;
     if let FactsCtx::Validated(authority) = facts {
         if authority.phase() == FactsPhase::Schema {

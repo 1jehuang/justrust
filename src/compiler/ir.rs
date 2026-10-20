@@ -2535,6 +2535,11 @@ impl PlanBudget {
         }
     }
 }
+pub struct CallRealizationSignatures<'a> {
+    pub canonical: &'a Signature,
+    pub mapped: &'a Signature,
+}
+
 pub trait SubstitutionCx {
     #[track_caller]
     fn nominal_application(&self, id: NominalAppId) -> Result<NominalAppInfo, String>;
@@ -2557,8 +2562,7 @@ pub trait SubstitutionCx {
         _expression: ExprId,
         _selection: &Callee,
         _target: &Callee,
-        _canonical: &Signature,
-        _mapped: &Signature,
+        _signatures: CallRealizationSignatures<'_>,
         _caller: FactsCtx<'_>,
         _budget: &PlanBudget,
     ) -> Result<(), String> {
@@ -3268,6 +3272,45 @@ impl<C> RecordingSubstitutionCx<'_, C> {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[test]
+fn body_nominal_substitution_remains_single_valued() {
+    let mut inner = ();
+    let mut recording = RecordingSubstitutionCx {
+        inner: &mut inner,
+        nominals: Vec::new(),
+        calls: None,
+    };
+    let budget = PlanBudget::default();
+    let original = NominalAppId {
+        snapshot: SnapshotId(1),
+        index: NominalIndex::SourceSlot(0),
+    };
+    let first = NominalAppId {
+        index: NominalIndex::SourceSlot(1),
+        ..original
+    };
+    let conflicting = NominalAppId {
+        index: NominalIndex::SourceSlot(2),
+        ..original
+    };
+    recording
+        .record_nominal_mapping(original, first, &budget)
+        .unwrap();
+    recording
+        .record_nominal_mapping(original, first, &budget)
+        .unwrap();
+    assert_eq!(
+        recording
+            .record_nominal_mapping(original, conflicting, &budget)
+            .unwrap_err(),
+        "conflicting nominal substitution"
+    );
+    assert_eq!(recording.nominals.len(), 1);
+    assert_eq!(recording.nominals[0].instantiated, first);
+}
+
 impl<C: SubstitutionCx> SubstitutionCx for RecordingSubstitutionCx<'_, C> {
     fn current_engine(&self) -> Option<crate::engine::EngineAuthority> {
         self.inner.current_engine()
@@ -3288,11 +3331,11 @@ impl<C: SubstitutionCx> SubstitutionCx for RecordingSubstitutionCx<'_, C> {
         expression: ExprId,
         selection: &Callee,
         target: &Callee,
-        canonical: &Signature,
-        mapped: &Signature,
+        signatures: CallRealizationSignatures<'_>,
         caller: FactsCtx<'_>,
         budget: &PlanBudget,
     ) -> Result<(), String> {
+        let CallRealizationSignatures { canonical, mapped } = signatures;
         use super::frontend::nominal_call_receipts::closed;
         let facts = caller
             .validated()
@@ -3302,11 +3345,19 @@ impl<C: SubstitutionCx> SubstitutionCx for RecordingSubstitutionCx<'_, C> {
             .current_engine()
             .ok_or("closed call recording requires current engine")?;
         let row = closed::ClosedReceipt::issue(
-            expression, selection, target, canonical, mapped, engine, facts, budget,
+            expression,
+            selection,
+            target,
+            (canonical, mapped),
+            engine,
+            facts,
+            budget,
         )?;
-        for mapping in closed::conversion_rows(canonical, mapped, budget)? {
-            self.record_nominal_mapping(mapping.original, mapping.instantiated, budget)?;
-        }
+        // Canonical call signatures belong to their callee's instantiation,
+        // not the enclosing body's substitution environment. Their nominal
+        // conversions are occurrence-specific and are retained and replayed
+        // by `row`; merging them into the body map would conflate callee
+        // realization with the enclosing body's nominal substitution.
         let rows = self.calls.get_or_insert_with(Vec::new);
         budget.retain_bytes(std::mem::size_of::<closed::ClosedReceipt>())?;
         rows.try_reserve(1)
@@ -3631,8 +3682,10 @@ fn canonicalize_call_metadata(
                             ExprId(expression_index),
                             &selection,
                             &callee,
-                            &canonical,
-                            &mapped,
+                            CallRealizationSignatures {
+                                canonical: &canonical,
+                                mapped: &mapped,
+                            },
                             FactsCtx::from_validated(facts),
                             budget,
                         )
@@ -8417,6 +8470,7 @@ impl CheckedFunction {
         }
         block(&self.body, facts, budget, 0)
     }
+    #[cfg(test)]
     pub(super) fn validate_match(
         &self,
         scrutinee: ExprId,
@@ -8732,24 +8786,6 @@ impl CheckedFunction {
         Ok(())
     }
 
-    pub(super) fn validate_let_else(
-        &self,
-        value: ExprId,
-        ty: &Ty,
-        pattern: &MatchPattern,
-        else_branch: ExprId,
-        parameters: &std::collections::HashSet<LocalId>,
-    ) -> Result<(), String> {
-        self.validate_let_else_with_facts(
-            value,
-            ty,
-            pattern,
-            else_branch,
-            parameters,
-            FactsCtx::Concrete,
-        )
-    }
-
     pub(super) fn validate_let_else_with_facts(
         &self,
         value: ExprId,
@@ -8807,6 +8843,7 @@ impl CheckedFunction {
         self.validate_pattern_bindings_with_params(ty, bindings, &parameters)
     }
 
+    #[cfg(test)]
     pub(super) fn validate_pattern_bindings_with_params(
         &self,
         ty: &Ty,

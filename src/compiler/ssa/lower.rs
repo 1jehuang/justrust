@@ -11,8 +11,9 @@
 //!
 //! Construction: every CFG block becomes an SSA block whose parameters are all
 //! locals. `opt::local` then removes trivial parameters, which yields minimal
-//! SSA. Overflow checks are always on in the native profile today, matching the
-//! stack emitter, so arithmetic lowers to `Overflow::Trap`.
+//! SSA. The graph supplies the immutable source overflow policy explicitly:
+//! arithmetic lowers to `Overflow::Trap` or `Overflow::Wrap` accordingly.
+//! The legacy convenience entry point retains checked defaults.
 //!
 //! Accounting (audit priority 1-2): a validation pass computes the exact
 //! output dimensions without allocating, charging work per statement,
@@ -373,6 +374,7 @@ fn put<T>(data: &mut Vec<T>, value: T) -> Result<(), String> {
 }
 
 struct Ctx<'a, 'm> {
+    overflow_checks: bool,
     runtime_location: Option<std::sync::Arc<ir::RuntimeLocation>>,
     cfg: &'a cfg::Function,
     meter: &'a Meter<'m>,
@@ -445,7 +447,14 @@ impl Ctx<'_, '_> {
                 let ty = operand_ty(self.cfg, value).ok_or("validated operand changed")?;
                 let value = self.operand(block, env, value)?;
                 let (op, overflow) = match (op, ty) {
-                    (UnaryOp::Neg, _) => (UnOp::Neg, Overflow::Trap),
+                    (UnaryOp::Neg, _) => (
+                        UnOp::Neg,
+                        if self.overflow_checks {
+                            Overflow::Trap
+                        } else {
+                            Overflow::Wrap
+                        },
+                    ),
                     (UnaryOp::Not, _) => (UnOp::Not, Overflow::Wrap),
                 };
                 self.inst(
@@ -463,7 +472,7 @@ impl Ctx<'_, '_> {
                 let kind = match binary_kind(*op).map_err(String::from)? {
                     (Some(op), _) => InstKind::Binary {
                         op,
-                        overflow: if op.has_overflow_mode() {
+                        overflow: if op.has_overflow_mode() && self.overflow_checks {
                             Overflow::Trap
                         } else {
                             Overflow::Wrap
@@ -607,6 +616,16 @@ pub fn lower(
     resolve: &dyn Fn(&ir::CallTarget) -> Result<String, String>,
     meter: &Meter<'_>,
 ) -> Result<Lowering, String> {
+    lower_with_overflow(function, resolve, meter, true)
+}
+
+/// Lower runtime arithmetic with the source profile's immutable overflow policy.
+pub fn lower_with_overflow(
+    function: &cfg::Function,
+    resolve: &dyn Fn(&ir::CallTarget) -> Result<String, String>,
+    meter: &Meter<'_>,
+    overflow_checks: bool,
+) -> Result<Lowering, String> {
     let locals = function.locals.len();
     let blocks = function.blocks.len();
     meter.work(meter::add(locals, blocks)?)?;
@@ -688,6 +707,7 @@ pub fn lower(
                 });
             }
             let mut ctx = Ctx {
+                overflow_checks,
                 runtime_location: None,
                 cfg: function,
                 meter,

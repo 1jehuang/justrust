@@ -239,12 +239,11 @@ impl<'a> Lower<'a> {
                 .ok_or_else(|| Unsupported("Self outside impl".into()));
         }
         // A single-segment path may name a type parameter.
-        if let Some(n) = path.single() {
-            if let Ok(k) = self.key(n, LookupClass::TypeParameter) {
-                if let Some(i) = self.tparams.iter().position(|x| *x == Some(k)) {
-                    return Ok(st::param(i as u32));
-                }
-            }
+        if let Some(n) = path.single()
+            && let Ok(k) = self.key(n, LookupClass::TypeParameter)
+            && let Some(i) = self.tparams.iter().position(|x| *x == Some(k))
+        {
+            return Ok(st::param(i as u32));
         }
         let key = path.key(Namespace::Type);
         let decl = *self
@@ -749,10 +748,10 @@ impl<'a> Lower<'a> {
                 let k = self.key(*n, LookupClass::Member)?;
                 let fields = self.source_fields(adt, variant)?;
                 for (i, f) in fields.iter().enumerate() {
-                    if let FieldName::Named(fname) = f.name {
-                        if self.key(fname, LookupClass::Member)? == k {
-                            return Ok(i as u32);
-                        }
+                    if let FieldName::Named(fname) = f.name
+                        && self.key(fname, LookupClass::Member)? == k
+                    {
+                        return Ok(i as u32);
                     }
                 }
                 un("unknown field")
@@ -1198,12 +1197,12 @@ impl<'a> Lower<'a> {
     }
 
     fn struct_target(&self, name: &AstPath) -> R<(st::DefId, u32)> {
-        if name.anchor() == PathAnchor::SelfType && name.is_empty() {
-            if let Some(t) = &self.self_ty {
-                if let st::TyKind::Adt(d, _) = t.as_ref() {
-                    return Ok((*d, 0));
-                }
-            }
+        if name.anchor() == PathAnchor::SelfType
+            && name.is_empty()
+            && let Some(t) = &self.self_ty
+            && let st::TyKind::Adt(d, _) = t.as_ref()
+        {
+            return Ok((*d, 0));
         }
         match self.plan.registry.nominals.get(&name.key(Namespace::Type)) {
             Some(d) => Ok((def(*d), 0)),
@@ -1221,12 +1220,11 @@ impl<'a> Lower<'a> {
                 .ok_or_else(|| Unsupported("self outside method".into()))?;
             return Ok(self.push(h::HirExpr::Local(id)));
         }
-        if path.anchor() == PathAnchor::Relative {
-            if let Some(n) = path.single() {
-                if let Some(id) = self.lookup(n)? {
-                    return Ok(self.push(h::HirExpr::Local(id)));
-                }
-            }
+        if path.anchor() == PathAnchor::Relative
+            && let Some(n) = path.single()
+            && let Some(id) = self.lookup(n)?
+        {
+            return Ok(self.push(h::HirExpr::Local(id)));
         }
         if let Some(d) = self
             .plan
@@ -1248,12 +1246,11 @@ impl<'a> Lower<'a> {
     }
 
     fn callee(&mut self, name: &AstPath) -> R<h::ExprId> {
-        if name.anchor() == PathAnchor::Relative {
-            if let Some(n) = name.single() {
-                if let Some(id) = self.lookup(n)? {
-                    return Ok(self.push(h::HirExpr::Local(id)));
-                }
-            }
+        if name.anchor() == PathAnchor::Relative
+            && let Some(n) = name.single()
+            && let Some(id) = self.lookup(n)?
+        {
+            return Ok(self.push(h::HirExpr::Local(id)));
         }
         if let Some(d) = self
             .plan

@@ -229,6 +229,7 @@ mod tests {
         .unwrap();
         let resolve = |_: &ir::CallTarget| -> Result<String, String> { Err("no calls".into()) };
         let mut e = Emitter {
+            overflow_checks: true,
             object: Object {
                 code: Vec::new(),
                 calls: Vec::new(),

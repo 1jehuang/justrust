@@ -30,6 +30,7 @@ const MAX_MODULE_DEPTH: usize = 128;
 pub(super) const MAX_BYTES: usize = 8 * 1024 * 1024;
 pub(super) const MAX_FILES: usize = 1024;
 const MAX_ORIGINS: usize = 1024 * 1024;
+
 #[derive(Clone, Debug)]
 /// Native x86_64 Linux configuration plus bounded user predicates.
 /// The default pins abort and enables debug assertions, not complete Rust panic semantics.
@@ -43,6 +44,9 @@ pub struct SourceOptions {
     /// Optimizer mode (OPTIMIZATION.md section 6). An explicit compile input:
     /// the compiler never reads `JR_OPT` itself.
     pub opt: super::ssa::OptMode,
+    /// Runtime integer overflow checks, independent of debug assertions and optimization.
+    /// False wraps arithmetic and masks shifts; division and remainder still trap.
+    pub overflow_checks: bool,
     /// Dependency crates compiled with this crate, each mounted as a hidden
     /// root module `__justrust_extern_<name>` and nameable as `<name>::`.
     /// Order is attachment order; the graph keys them as SOURCE `[2 + i]`.
@@ -83,6 +87,7 @@ impl Default for SourceOptions {
             cfg: CfgSet::native_x86_64_linux(),
             prelude: true,
             opt: super::ssa::OptMode::default(),
+            overflow_checks: true,
             externs: Vec::new(),
             library: false,
             test_filter: TestFilter::default(),
@@ -266,6 +271,7 @@ pub struct PreparedSource {
     embedded_files: Vec<source_embedded::EmbeddedFile>,
     embedded_transport: Option<source_embedded::AssemblyTransport>,
     debug_assertions: bool,
+    overflow_checks: bool,
     /// Assembly-owned crate root for each original file. Empty only for raw
     /// caller-built maps, whose files all belong to the single input crate.
     pub(super) crate_roots: Vec<FileId>,
@@ -285,6 +291,7 @@ impl Default for PreparedSource {
             embedded_files: Vec::new(),
             embedded_transport: None,
             debug_assertions: CfgSet::DEFAULT_DEBUG_ASSERTIONS,
+            overflow_checks: true,
             crate_roots: Vec::new(),
             crate_policies: Vec::new(),
             text: String::new(),
@@ -330,6 +337,9 @@ impl PreparedSource {
     /// Immutable native profile fact captured when source options were validated.
     pub fn debug_assertions(&self) -> bool {
         self.debug_assertions
+    }
+    pub fn overflow_checks(&self) -> bool {
+        self.overflow_checks
     }
     pub fn map_range(&self, r: Range<usize>) -> Option<SourceSpan> {
         if r.end > self.text.len()
@@ -853,6 +863,7 @@ impl SourceAssembler {
         Self {
             prepared: PreparedSource {
                 debug_assertions: options.cfg.debug_assertions(),
+                overflow_checks: options.overflow_checks,
                 ..PreparedSource::default()
             },
             frames: Vec::new(),
@@ -2003,6 +2014,15 @@ fn tokens(text: &str) -> Result<Vec<Token>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn changed_overflow_policy_cannot_reuse_assembly_authority() {
+        let options = SourceOptions::default();
+        let mut prepared =
+            prepare_text_with_prelude("profile.rs", "fn main(){}", &options).unwrap();
+        prepared.overflow_checks = false;
+        assert!(super::super::frontend::parse_prepared(&prepared).is_err());
+    }
     use std::sync::atomic::{AtomicUsize, Ordering};
     #[derive(Default)]
     struct RecordingReader {

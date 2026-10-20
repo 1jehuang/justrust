@@ -263,13 +263,8 @@ impl ValidatedTraitWorld {
             let location = self.rebase_source_location(&row.location, original, actual)?;
             match row.region {
                 ir::CarrierRegionTerm::Named(id)
-                    if id.declaration == source.declaration && id.index < source.region_count =>
-                {
-                    ()
-                }
-                ir::CarrierRegionTerm::Fixed(id) if id.0 < signature.ref_contract.region_count => {
-                    ()
-                }
+                    if id.declaration == source.declaration && id.index < source.region_count => {}
+                ir::CarrierRegionTerm::Fixed(id) if id.0 < signature.ref_contract.region_count => {}
                 _ => {
                     return Err(FactsError::invalid(
                         &self.budget,

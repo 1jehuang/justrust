@@ -147,7 +147,9 @@ fn symbolic_closure_output_equality_rejects_foreign_context_and_rhs() {
         normal
             .validate_for(
                 &projection,
-                &other_world.callable_facts(other_checked.ty.owner()).unwrap()
+                &other_world
+                    .callable_facts(other_checked.ty.owner())
+                    .unwrap()
             )
             .is_err()
     );

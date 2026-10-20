@@ -2548,22 +2548,15 @@ mod tests {
         callable.schema.signature.result = schemas[0].1.signature.result.clone();
         schemas.push((default, callable.schema.clone()));
 
-        // First prove that the same headers reach an actual capability rejection.
+        // Universal projection defaults now admit these exact headers. The
+        // malformed callback identities below must still reject independently.
         let adapter = Arc::new(RhsAdapter {
             inner: world.schema.clone(),
             values: Vec::new(),
             bounds: Vec::new(),
             schemas: schemas.clone(),
         });
-        let error =
-            ValidatedTraitWorld::build(headers.clone(), adapter, &world.budget).unwrap_err();
-        assert_eq!(error.kind(), FactsErrorKind::Unsupported);
-        assert!(
-            error
-                .to_string()
-                .contains("projection-bearing trait default signatures"),
-            "{error}"
-        );
+        ValidatedTraitWorld::build(headers.clone(), adapter, &world.budget).unwrap();
 
         for foreign in [false, true] {
             let invalid = if foreign {
@@ -2588,7 +2581,7 @@ mod tests {
     }
 
     #[test]
-    fn associated_bound_rejects_noncanonical_trait_even_with_matching_source() {
+    fn associated_bound_rejects_unproved_trait_even_with_matching_source() {
         let world = fixture();
         let header = &world.headers.associated_types[0];
         let bounds: Arc<[DeclId]> = Arc::from([header.trait_decl]);
@@ -2601,7 +2594,7 @@ mod tests {
             bounds: vec![(header.declaration, bounds)],
         });
         let error = ValidatedTraitWorld::build(headers, adapter, &world.budget).unwrap_err();
-        assert_eq!(error.kind(), FactsErrorKind::Unsupported);
+        assert_eq!(error.kind(), FactsErrorKind::Unproved);
     }
 
     #[test]
@@ -2693,7 +2686,7 @@ mod tests {
         let error = NormalizedAssociatedType(Arc::new(forged))
             .validate_for(&projection, &facts)
             .unwrap_err();
-        assert_eq!(error.kind(), FactsErrorKind::Unsupported);
+        assert_eq!(error.kind(), FactsErrorKind::Unproved);
     }
 
     #[test]

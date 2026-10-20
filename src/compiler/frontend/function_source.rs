@@ -241,19 +241,19 @@ fn block(
             }
             Stmt::Return(value) => {
                 emit(FunctionSyntaxEvent::Return(value.is_some()))?;
-                if let Some(value) = value {
-                    if !expression(names, value, depth + 1, emit)? {
-                        return Ok(false);
-                    }
+                if let Some(value) = value
+                    && !expression(names, value, depth + 1, emit)?
+                {
+                    return Ok(false);
                 }
             }
             _ => return Ok(false),
         }
     }
-    if let Some(value) = &value.tail {
-        if !expression(names, value, depth + 1, emit)? {
-            return Ok(false);
-        }
+    if let Some(value) = &value.tail
+        && !expression(names, value, depth + 1, emit)?
+    {
+        return Ok(false);
     }
     Ok(true)
 }
@@ -997,6 +997,7 @@ impl PlanCtx {
     /// This prerequisite API does not itself admit any intrinsic or query kind.
     /// The operation-specific consumer must additionally check its exact kind,
     /// queried type, and occurrence in the authenticated function body.
+    #[cfg(test)]
     pub(super) fn replay_embedded_function(&self, declaration: ir::DeclId) -> Result<(), String> {
         let info = self.registry.declaration(declaration)?;
         let receipt = info

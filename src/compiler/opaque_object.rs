@@ -208,9 +208,11 @@ pub(super) async fn produce(
                     &analysis,
                 ))
             })?;
-    let object = backend::emit_physical_cfg_function(&concrete, &|target| {
-        instances::symbol_of(target, &types, &provider.0.budget)
-    })
+    let object = backend::emit_physical_cfg_function_with_overflow(
+        &concrete,
+        &|target| instances::symbol_of(target, &types, &provider.0.budget),
+        provider.0.source_options.overflow_checks,
+    )
     .map_err(Error::new)?;
     Ok(Some(object))
 }

@@ -1,96 +1,6 @@
 //! Exact instantiated supertrait applications and vtable slot identities.
 use super::*;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::compiler::frontend::{self, PlanCtx};
-
-    #[test]
-    fn dynamic_metadata_and_unsizing_replay_exact_equalities() {
-        let source = frontend::parse("struct S;trait Has<A>{type Out;fn get(&self,a:A)->Self::Out;}impl Has<i32> for S{type Out=i32;fn get(&self,a:i32)->i32{a}}fn main(){}").unwrap();
-        let plan = PlanCtx::from_program(&source, &PlanBudget::default()).unwrap();
-        let world = plan.trait_world().unwrap();
-        let header = world
-            .headers
-            .traits
-            .iter()
-            .find(|header| !header.associated_types.is_empty())
-            .unwrap();
-        let item = header.associated_types[0];
-        let object = ir::DynTy {
-            principal: header.declaration,
-            args: Arc::from([Ty::Int(ir::IntTy::I32)]),
-            associated_types: Arc::from([(item, Ty::Int(ir::IntTy::I32))]),
-        };
-        let validate = |object: &ir::DynTy| {
-            world.validate_ty_metadata_in(&Ty::Dyn(Arc::new(object.clone())), &world.empty.env, 0)
-        };
-        validate(&object).unwrap();
-        let mut missing = object.clone();
-        missing.associated_types = Arc::from([]);
-        assert!(validate(&missing).is_err());
-        let mut duplicate = object.clone();
-        duplicate.associated_types = Arc::from([
-            (item, Ty::Int(ir::IntTy::I32)),
-            (item, Ty::Int(ir::IntTy::I32)),
-        ]);
-        assert!(validate(&duplicate).is_err());
-        let mut wrong_arity = object.clone();
-        wrong_arity.args = Arc::from([]);
-        assert!(validate(&wrong_arity).is_err());
-        let mut foreign = object.clone();
-        foreign.associated_types = Arc::from([(header.declaration, Ty::Int(ir::IntTy::I32))]);
-        assert!(validate(&foreign).is_err());
-        let implementation = world
-            .headers
-            .impls
-            .iter()
-            .find(|implementation| implementation.trait_ref.declaration == header.declaration)
-            .unwrap();
-        let concrete = implementation.trait_ref.self_ty.clone();
-        let target = world
-            .headers
-            .callables
-            .iter()
-            .find(|callable| {
-                callable.schema.env.total_arity() == 0
-                    && world.info(callable.declaration).unwrap().owner.is_none()
-            })
-            .unwrap();
-        let facts = world
-            .instance_facts(&CallTarget {
-                declaration: target.declaration,
-                type_args: Arc::from([]),
-            })
-            .unwrap();
-        facts.prove_dynamic_unsize(&concrete, &object).unwrap();
-        assert!(facts.prove_dynamic_unsize(&concrete, &missing).is_err());
-        let mut wrong_value = object.clone();
-        wrong_value.associated_types = Arc::from([(item, Ty::Bool)]);
-        validate(&wrong_value).unwrap();
-        assert!(facts.prove_dynamic_unsize(&concrete, &wrong_value).is_err());
-        assert!(
-            !world
-                .eq_ty(
-                    &Ty::Dyn(Arc::new(object.clone())),
-                    &Ty::Dyn(Arc::new(wrong_value)),
-                    0
-                )
-                .unwrap()
-        );
-        assert!(
-            world
-                .eq_ty(
-                    &Ty::Dyn(Arc::new(object.clone())),
-                    &Ty::Dyn(Arc::new(object)),
-                    0
-                )
-                .unwrap()
-        );
-    }
-}
-
 impl ValidatedTraitWorld {
     pub(super) fn dynamic_associated_binding(
         &self,
@@ -382,5 +292,95 @@ impl ValidatedFacts {
             }
         }
         Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::compiler::frontend::{self, PlanCtx};
+
+    #[test]
+    fn dynamic_metadata_and_unsizing_replay_exact_equalities() {
+        let source = frontend::parse("struct S;trait Has<A>{type Out;fn get(&self,a:A)->Self::Out;}impl Has<i32> for S{type Out=i32;fn get(&self,a:i32)->i32{a}}fn main(){}").unwrap();
+        let plan = PlanCtx::from_program(&source, &PlanBudget::default()).unwrap();
+        let world = plan.trait_world().unwrap();
+        let header = world
+            .headers
+            .traits
+            .iter()
+            .find(|header| !header.associated_types.is_empty())
+            .unwrap();
+        let item = header.associated_types[0];
+        let object = ir::DynTy {
+            principal: header.declaration,
+            args: Arc::from([Ty::Int(ir::IntTy::I32)]),
+            associated_types: Arc::from([(item, Ty::Int(ir::IntTy::I32))]),
+        };
+        let validate = |object: &ir::DynTy| {
+            world.validate_ty_metadata_in(&Ty::Dyn(Arc::new(object.clone())), &world.empty.env, 0)
+        };
+        validate(&object).unwrap();
+        let mut missing = object.clone();
+        missing.associated_types = Arc::from([]);
+        assert!(validate(&missing).is_err());
+        let mut duplicate = object.clone();
+        duplicate.associated_types = Arc::from([
+            (item, Ty::Int(ir::IntTy::I32)),
+            (item, Ty::Int(ir::IntTy::I32)),
+        ]);
+        assert!(validate(&duplicate).is_err());
+        let mut wrong_arity = object.clone();
+        wrong_arity.args = Arc::from([]);
+        assert!(validate(&wrong_arity).is_err());
+        let mut foreign = object.clone();
+        foreign.associated_types = Arc::from([(header.declaration, Ty::Int(ir::IntTy::I32))]);
+        assert!(validate(&foreign).is_err());
+        let implementation = world
+            .headers
+            .impls
+            .iter()
+            .find(|implementation| implementation.trait_ref.declaration == header.declaration)
+            .unwrap();
+        let concrete = implementation.trait_ref.self_ty.clone();
+        let target = world
+            .headers
+            .callables
+            .iter()
+            .find(|callable| {
+                callable.schema.env.total_arity() == 0
+                    && world.info(callable.declaration).unwrap().owner.is_none()
+            })
+            .unwrap();
+        let facts = world
+            .instance_facts(&CallTarget {
+                declaration: target.declaration,
+                type_args: Arc::from([]),
+            })
+            .unwrap();
+        facts.prove_dynamic_unsize(&concrete, &object).unwrap();
+        assert!(facts.prove_dynamic_unsize(&concrete, &missing).is_err());
+        let mut wrong_value = object.clone();
+        wrong_value.associated_types = Arc::from([(item, Ty::Bool)]);
+        validate(&wrong_value).unwrap();
+        assert!(facts.prove_dynamic_unsize(&concrete, &wrong_value).is_err());
+        assert!(
+            !world
+                .eq_ty(
+                    &Ty::Dyn(Arc::new(object.clone())),
+                    &Ty::Dyn(Arc::new(wrong_value)),
+                    0
+                )
+                .unwrap()
+        );
+        assert!(
+            world
+                .eq_ty(
+                    &Ty::Dyn(Arc::new(object.clone())),
+                    &Ty::Dyn(Arc::new(object)),
+                    0
+                )
+                .unwrap()
+        );
     }
 }

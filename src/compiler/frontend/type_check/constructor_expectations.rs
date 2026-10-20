@@ -53,10 +53,10 @@ impl Checker<'_> {
         }
         let term = self.infer_type_term(&field.ty, Some(scope.binder()), 0)?;
         let arguments = self.constructor_source_arguments(declaration, expectation, 0)?;
-        if let Some(arguments) = &arguments {
-            if arguments.len() != scope.arity() {
-                return Err("constructor source argument arity mismatch".into());
-            }
+        if let Some(arguments) = &arguments
+            && arguments.len() != scope.arity()
+        {
+            return Err("constructor source argument arity mismatch".into());
         }
         self.replace_constructor_slots(&term, arguments.as_deref(), 0)
     }

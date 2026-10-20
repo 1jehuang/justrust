@@ -8,10 +8,6 @@ use super::*;
 pub(super) struct ClosureAdapterActuals<'a> {
     pub closure: &'a Arc<ir::ClosureTy>,
     pub mode: ir::ClosureKind,
-    pub owner_arguments: &'a [Ty],
-    pub receiver: &'a Ty,
-    pub arguments: &'a Ty,
-    pub result: &'a Ty,
 }
 
 impl ValidatedTraitWorld {
@@ -178,13 +174,6 @@ impl ValidatedTraitWorld {
                 "closure target tuple or result differs from its sealed signature",
             ));
         }
-        Ok(ClosureAdapterActuals {
-            closure,
-            mode,
-            owner_arguments,
-            receiver,
-            arguments,
-            result,
-        })
+        Ok(ClosureAdapterActuals { closure, mode })
     }
 }

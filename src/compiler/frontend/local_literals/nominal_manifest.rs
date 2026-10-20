@@ -368,17 +368,16 @@ fn preparation_status(
     }
     for term in 0..solver.variables.len() {
         solver.checker.infer_work(0)?;
-        if solver.root(term) == term {
-            if let Domain::Nominal(_, arguments) = solver.domain(term) {
-                if !solver.manifest_ready(&arguments, 1)? {
-                    return Ok(Preparation::Blocked {
-                        nominals: solver.pending_nominals()?,
-                        declarations: solver.pending_declarations()?,
-                        needs_source_schemas: false,
-                        unresolved_constraints: true,
-                    });
-                }
-            }
+        if solver.root(term) == term
+            && let Domain::Nominal(_, arguments) = solver.domain(term)
+            && !solver.manifest_ready(&arguments, 1)?
+        {
+            return Ok(Preparation::Blocked {
+                nominals: solver.pending_nominals()?,
+                declarations: solver.pending_declarations()?,
+                needs_source_schemas: false,
+                unresolved_constraints: true,
+            });
         }
     }
     let manifest = solver.solved_nominal_manifest()?;
@@ -388,6 +387,7 @@ fn preparation_status(
         }
     }
     let unresolved_constraints = !solver.methods.is_empty()
+        || !solver.operators.is_empty()
         || !solver.projections.is_empty()
         || !solver.iterator_items.is_empty()
         || !solver.associated_equalities.is_empty()
@@ -396,7 +396,7 @@ fn preparation_status(
     let missing = solver.pending_nominals()?;
     if !missing.is_empty() || unresolved_constraints {
         Ok(Preparation::Blocked {
-            nominals: missing.into(),
+            nominals: missing,
             declarations: solver.pending_declarations()?,
             needs_source_schemas: false,
             unresolved_constraints,
@@ -452,7 +452,7 @@ impl<'s> Solver<'_, '_, 's> {
         actuals: Option<&[Term]>,
     ) -> Result<HashMap<ir::ParamId, Term>, String> {
         if let Some(actuals) = actuals {
-            if actuals.len() != env.arity() as usize {
+            if actuals.len() != env.arity() {
                 return Err("invalid metadata: nominal recipe argument arity".into());
             }
             self.checker.infer_storage(actuals.len())?;
@@ -491,7 +491,7 @@ impl<'s> Solver<'_, '_, 's> {
         env: &ir::ParamEnv,
         params: &HashMap<ir::ParamId, Term>,
     ) -> Result<Term, String> {
-        self.checker.infer_storage(env.arity() as usize)?;
+        self.checker.infer_storage(env.arity())?;
         let args = (0..env.arity())
             .map(|index| {
                 let parameter = ir::ParamId {
@@ -638,10 +638,10 @@ impl<'s> Solver<'_, '_, 's> {
         depth: usize,
     ) -> Result<Term, String> {
         self.checker.infer_work(depth)?;
-        if let Shape::Leaf(ir::Ty::Param(parameter)) = shape {
-            if let Some(term) = params.get(parameter) {
-                return Ok(*term);
-            }
+        if let Shape::Leaf(ir::Ty::Param(parameter)) = shape
+            && let Some(term) = params.get(parameter)
+        {
+            return Ok(*term);
         }
         let domain = match shape {
             Shape::Leaf(ty) => match ty {

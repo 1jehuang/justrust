@@ -32,14 +32,13 @@ impl Solver<'_, '_, '_> {
             receiver,
             &name,
             checker.facts(),
-            &checker.module,
-            &plan.budget,
+            (&checker.module, &plan.budget),
             |owner, mode, traits_only| {
                 if !traits_only {
-                    if let Some((nominal, _)) = nominal_parts(owner) {
-                        if self.candidate(nominal, name)?.is_some() {
-                            return Ok(MethodArguments::Deferred);
-                        }
+                    if let Some((nominal, _)) = nominal_parts(owner)
+                        && self.candidate(nominal, name)?.is_some()
+                    {
+                        return Ok(MethodArguments::Deferred);
                     }
                     return Ok(MethodArguments::Missing);
                 }

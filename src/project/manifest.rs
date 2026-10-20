@@ -37,6 +37,9 @@ pub struct Dependency {
     pub package: String,
     pub source: DependencySource,
     pub dev: bool,
+    /// Whether this edge applies to the pinned native target. Inactive edges
+    /// remain declared for feature-name validation but never demand a crate.
+    pub target_active: bool,
     pub optional: bool,
     pub features: Vec<String>,
     pub default_features: bool,
@@ -84,9 +87,62 @@ impl Package {
 
 #[derive(Clone, Debug, Default)]
 pub struct Profile {
+    pub inherits: Option<String>,
     pub debug_assertions: Option<bool>,
     pub overflow_checks: Option<bool>,
     pub opt_level: Option<String>,
+}
+
+/// Resolve Cargo's built-in profile bases and explicit custom inheritance.
+/// These are manifest facts only, not mutable compiler configuration.
+pub fn resolve_profile(
+    profiles: &BTreeMap<String, Profile>,
+    name: &str,
+) -> Result<Profile, ManifestError> {
+    let mut seen = BTreeSet::new();
+    let mut chain = Vec::new();
+    let mut current = name;
+    let release;
+    loop {
+        if !seen.insert(current) {
+            return err(format!(
+                "profile.{name}: cyclic profile inheritance at `{current}`"
+            ));
+        }
+        if let Some(profile) = profiles.get(current) {
+            chain.push(profile);
+        }
+        match current {
+            "dev" | "release" => {
+                release = current == "release";
+                break;
+            }
+            "test" => current = "dev",
+            "bench" => current = "release",
+            _ => {
+                current = profiles
+                    .get(current)
+                    .and_then(|p| p.inherits.as_deref())
+                    .ok_or_else(|| ManifestError(format!("profile `{current}` is not defined")))?;
+                if matches!(current, "test" | "bench") {
+                    return err(format!(
+                        "profile.{name}: inheriting from `{current}` is unsupported"
+                    ));
+                }
+            }
+        }
+    }
+    let mut resolved = Profile {
+        debug_assertions: Some(!release),
+        overflow_checks: Some(!release),
+        ..Profile::default()
+    };
+    for profile in chain.into_iter().rev() {
+        resolved.debug_assertions = profile.debug_assertions.or(resolved.debug_assertions);
+        resolved.overflow_checks = profile.overflow_checks.or(resolved.overflow_checks);
+        resolved.opt_level = profile.opt_level.clone().or(resolved.opt_level);
+    }
+    Ok(resolved)
 }
 
 #[derive(Clone, Debug)]
@@ -385,6 +441,12 @@ pub fn load(manifest: &Path) -> Result<Workspace, ManifestError> {
     while i < loader.packages.len() {
         let deps: Vec<_> = loader.packages[i].dependencies.clone();
         for dep in deps {
+            // Path declarations must still name a real package, as Cargo
+            // validates manifests even for a non-selected target. Registry
+            // source acquisition is unnecessary for an inactive edge.
+            if !dep.target_active && !matches!(dep.source, DependencySource::Path(_)) {
+                continue;
+            }
             match &dep.source {
                 DependencySource::Path(path) => {
                     let index = loader.package(path)?;
@@ -425,27 +487,67 @@ pub fn load(manifest: &Path) -> Result<Workspace, ManifestError> {
         default_members = vec![loader.package(manifest.parent().unwrap())?];
     }
     let mut profiles = BTreeMap::new();
+    if get(&root_table, "profile").is_some_and(|value| !matches!(value, Value::Table(_))) {
+        return err("profile: expected a table");
+    }
     if let Some(Value::Table(table)) = get(&root_table, "profile") {
         for (name, value) in table {
+            if name.is_empty()
+                || !name
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
+                || matches!(name.as_str(), "debug" | "build-override" | "package")
+            {
+                return err(format!("invalid or reserved profile name `{name}`"));
+            }
             let Value::Table(p) = &value.value else {
                 return err(format!("profile.{name}: expected a table"));
             };
             let what = format!("profile.{name}");
+            let builtin = matches!(name.as_str(), "dev" | "release" | "test" | "bench");
+            let inherits = get_str(p, "inherits", &what)?;
+            if builtin && inherits.is_some() {
+                return err(format!(
+                    "{what}.inherits: built-in profiles cannot specify inheritance"
+                ));
+            }
+            if !builtin && inherits.is_none() {
+                return err(format!(
+                    "{what}: custom profiles require an inherits setting"
+                ));
+            }
+            for key in p.keys() {
+                if !matches!(
+                    key.as_str(),
+                    "inherits" | "debug-assertions" | "overflow-checks" | "opt-level"
+                ) {
+                    return err(format!("{what}.{key}: profile setting is unsupported"));
+                }
+            }
             let opt_level = match get(p, "opt-level") {
                 None => None,
-                Some(Value::Integer(n)) => Some(n.to_string()),
-                Some(Value::String(s)) => Some(s.clone()),
+                Some(Value::Integer(0)) => Some("0".to_string()),
+                Some(Value::Integer(_) | Value::String(_)) => {
+                    return err(format!(
+                        "{what}.opt-level: only integer opt-level=0 is supported by the native compiler"
+                    ));
+                }
                 Some(v) => return err(format!("{what}.opt-level: unexpected {}", v.type_name())),
             };
+            let overflow_checks = get_bool(p, "overflow-checks", &what)?;
             profiles.insert(
                 name.clone(),
                 Profile {
+                    inherits,
                     debug_assertions: get_bool(p, "debug-assertions", &what)?,
-                    overflow_checks: get_bool(p, "overflow-checks", &what)?,
+                    overflow_checks,
                     opt_level,
                 },
             );
         }
+    }
+    for name in profiles.keys() {
+        resolve_profile(&profiles, name)?;
     }
     Ok(Workspace {
         root: root_dir,
@@ -548,6 +650,15 @@ impl Loader {
         };
         let version = inherited("version")?.unwrap_or_else(|| "0.0.0".into());
         let edition = inherited("edition")?.unwrap_or_else(|| "2015".into());
+        match edition.as_str() {
+            "2015" | "2018" | "2021" | "2024" => {}
+            _ => {
+                return err(format!(
+                    "`{}`: invalid Rust edition `{edition}`; expected 2015, 2018, 2021, or 2024",
+                    path.display()
+                ));
+            }
+        }
         let locked = match locked {
             Some(index) => Some(index),
             None => self.find_package_lock(&name, &version, None),
@@ -577,12 +688,38 @@ impl Loader {
                 }
             }
         }
-        if let Some(Value::Table(targets)) = get(&table, "target") {
-            if !targets.is_empty() {
-                return err(format!(
-                    "`{}`: target-specific dependency tables are unsupported",
-                    path.display()
-                ));
+        if let Some(targets) = get(&table, "target") {
+            let Value::Table(targets) = targets else {
+                return err("target: expected a table");
+            };
+            for (selector, target) in targets {
+                let active = super::target_cfg::matches(selector)
+                    .map_err(|error| ManifestError(format!("target.{selector}: {error}")))?;
+                let Value::Table(sections) = &target.value else {
+                    return err(format!("target.{selector}: expected a table"));
+                };
+                for (section, dependencies_value) in sections {
+                    let dev = match section.as_str() {
+                        "dependencies" | "build-dependencies" => false,
+                        "dev-dependencies" => true,
+                        _ => return err(format!("unsupported target.{selector}.{section}")),
+                    };
+                    let Value::Table(deps) = &dependencies_value.value else {
+                        return err(format!("target.{selector}.{section}: expected a table"));
+                    };
+                    if active && section == "build-dependencies" && !deps.is_empty() {
+                        return err(format!(
+                            "`{}`: build-dependencies (build scripts) are unsupported",
+                            path.display()
+                        ));
+                    }
+                    for (key, spec) in deps {
+                        let mut dependency =
+                            self.dependency(&dir, locked, key, &spec.value, dev, section)?;
+                        dependency.target_active = active;
+                        dependencies.push(dependency);
+                    }
+                }
             }
         }
         let build_script = match get(package, "build") {
@@ -784,6 +921,7 @@ impl Loader {
             package,
             source,
             dev,
+            target_active: true,
             optional: get_bool(&table, "optional", &what)?.unwrap_or(false),
             features,
             default_features: get_bool(&table, "default-features", &what)?
@@ -998,6 +1136,9 @@ pub fn resolve_features(
         queue.push((*index, include_dev));
     }
     let dep_index = |ws: &Workspace, dep: &Dependency| -> Option<usize> {
+        if !dep.target_active {
+            return None;
+        }
         let path = match &dep.source {
             DependencySource::Path(path) => path.canonicalize().ok()?,
             DependencySource::Registry(registry) => registry_source_root(registry).ok()?,
@@ -1013,36 +1154,40 @@ pub fn resolve_features(
                     Some(d) => (d, true),
                     None => (dep, false),
                 };
-                let Some(d) = package
+                let matching: Vec<_> = package
                     .dependencies
                     .iter()
-                    .find(|d| d.name == dep.replace('-', "_"))
-                else {
+                    .filter(|d| d.name == dep.replace('-', "_"))
+                    .collect();
+                if matching.is_empty() {
                     return err(format!(
                         "package `{}`: unknown dependency `{dep}` in feature",
                         package.name
                     ));
-                };
-                if !weak && d.optional {
-                    active_deps[index].insert(d.name.clone());
                 }
-                if (!d.optional || active_deps[index].contains(&d.name))
-                    && let Some(target) = dep_index(ws, d)
-                {
-                    work.push((target, sub.to_string()));
-                    queue.push((target, false));
+                for d in matching {
+                    if !weak && d.optional {
+                        active_deps[index].insert(d.name.clone());
+                    }
+                    if (!d.optional || active_deps[index].contains(&d.name))
+                        && let Some(target) = dep_index(ws, d)
+                    {
+                        work.push((target, sub.to_string()));
+                        queue.push((target, false));
+                    }
                 }
                 continue;
             }
             if let Some(dep) = feature.strip_prefix("dep:") {
                 active_deps[index].insert(dep.replace('-', "_"));
-                if let Some(d) = package
+                for d in package
                     .dependencies
                     .iter()
-                    .find(|d| d.name == dep.replace('-', "_"))
-                    && let Some(target) = dep_index(ws, d)
+                    .filter(|d| d.name == dep.replace('-', "_"))
                 {
-                    queue.push((target, false));
+                    if let Some(target) = dep_index(ws, d) {
+                        queue.push((target, false));
+                    }
                 }
                 continue;
             }
@@ -1058,20 +1203,22 @@ pub fn resolve_features(
                 None if feature == "default" => {}
                 None => {
                     // An optional dependency used as an implicit feature.
-                    if let Some(d) = package
+                    let matching: Vec<_> = package
                         .dependencies
                         .iter()
-                        .find(|d| d.optional && d.name == feature.replace('-', "_"))
-                    {
-                        active_deps[index].insert(d.name.clone());
-                        if let Some(target) = dep_index(ws, d) {
-                            queue.push((target, false));
-                        }
-                    } else {
+                        .filter(|d| d.optional && d.name == feature.replace('-', "_"))
+                        .collect();
+                    if matching.is_empty() {
                         return err(format!(
                             "package `{}` does not have the feature `{feature}`",
                             package.name
                         ));
+                    }
+                    for d in matching {
+                        active_deps[index].insert(d.name.clone());
+                        if let Some(target) = dep_index(ws, d) {
+                            queue.push((target, false));
+                        }
                     }
                 }
             }
@@ -1084,7 +1231,10 @@ pub fn resolve_features(
         }
         visited[index] = true;
         for d in &ws.packages[index].dependencies {
-            if (d.dev && !dev) || (d.optional && !active_deps[index].contains(&d.name)) {
+            if !d.target_active
+                || (d.dev && !dev)
+                || (d.optional && !active_deps[index].contains(&d.name))
+            {
                 continue;
             }
             if let Some(target) = dep_index(ws, d) {
@@ -1137,6 +1287,9 @@ pub fn visible_dependencies(
 ) -> Vec<(String, usize)> {
     let mut out = Vec::new();
     for d in &ws.packages[package].dependencies {
+        if !d.target_active {
+            continue;
+        }
         if d.dev && !dev {
             continue;
         }

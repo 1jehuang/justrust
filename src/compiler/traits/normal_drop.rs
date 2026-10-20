@@ -9,6 +9,9 @@ pub enum NormalDropPlan {
     Destructor(Arc<ValidatedDestructor>),
 }
 
+/// Declaration-ordered fields with nontrivial drop glue.
+pub type DropGlueFields = Vec<(usize, Arc<ValidatedDestructor>)>;
+
 /// Structural drop glue run after the owner's own `Drop::drop` (if any).
 /// Field indices follow declaration order; drops run in that order, matching
 /// Rust's field, tuple element and array element destruction order.
@@ -16,9 +19,9 @@ pub enum NormalDropPlan {
 pub enum DropGlue {
     None,
     /// Struct or tuple fields that need dropping.
-    Fields(Vec<(usize, Arc<ValidatedDestructor>)>),
+    Fields(DropGlueFields),
     /// Enum variants whose payload fields need dropping, keyed by variant index.
-    Variants(Vec<(usize, Vec<(usize, Arc<ValidatedDestructor>)>)>),
+    Variants(Vec<(usize, DropGlueFields)>),
     /// Every element of a fixed-length array.
     Array {
         len: usize,

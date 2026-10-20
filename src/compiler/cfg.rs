@@ -648,6 +648,10 @@ pub enum Rvalue {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "canonical callee authority stays inline; changing CFG representation requires separate measured work"
+)]
 pub enum Terminator {
     /// Runtime-guarded, canonically authorized exclusive destructor invocation.
     /// Storage stays live; ownership ends on the normal continuation.
@@ -1998,29 +2002,29 @@ impl Function {
                         "cannot move non-Copy value out of array index or dereference".into(),
                     );
                 }
-                if !raw && !place.projection.is_empty() && !facts.must_copy(ty)? {
-                    if let Some(validated) = facts.validated()
-                        && validated.has_normal_drop_impls()
-                    {
-                        for end in 0..place.projection.len() {
-                            if !matches!(place.projection[end], Projection::Field(_))
-                                || (end > 0
-                                    && matches!(place.projection[end - 1], Projection::Downcast(_)))
-                            {
-                                continue;
-                            }
-                            let base = ir::projected_ty(
-                                &self.locals[place.local.0].ty,
-                                &place.projection[..end],
-                            )?;
-                            if let crate::compiler::traits::NormalDropPlan::Destructor(d) =
-                                validated
-                                    .normal_drop_plan(base)
-                                    .map_err(|e| e.into_legacy_diagnostic(validated.budget()))?
-                                && d.own_target().is_some()
-                            {
-                                return Err("E0509: cannot move out of a type which implements the `Drop` trait".into());
-                            }
+                if !raw
+                    && !place.projection.is_empty()
+                    && !facts.must_copy(ty)?
+                    && let Some(validated) = facts.validated()
+                    && validated.has_normal_drop_impls()
+                {
+                    for end in 0..place.projection.len() {
+                        if !matches!(place.projection[end], Projection::Field(_))
+                            || (end > 0
+                                && matches!(place.projection[end - 1], Projection::Downcast(_)))
+                        {
+                            continue;
+                        }
+                        let base = ir::projected_ty(
+                            &self.locals[place.local.0].ty,
+                            &place.projection[..end],
+                        )?;
+                        if let crate::compiler::traits::NormalDropPlan::Destructor(d) = validated
+                            .normal_drop_plan(base)
+                            .map_err(|e| e.into_legacy_diagnostic(validated.budget()))?
+                            && d.own_target().is_some()
+                        {
+                            return Err("E0509: cannot move out of a type which implements the `Drop` trait".into());
                         }
                     }
                 }
@@ -3438,7 +3442,17 @@ impl Lowerer<'_> {
         let join = self.block();
         for arm in arms {
             if let ir::MatchPattern::Or { rows, .. } = &arm.pattern {
-                self.grouped_or_arm(id, &source, rows, arm, &destination, completes, join)?;
+                self.grouped_or_arm(
+                    id,
+                    grouped_or::Alternatives {
+                        source: &source,
+                        rows,
+                    },
+                    arm,
+                    &destination,
+                    completes,
+                    join,
+                )?;
                 continue;
             }
             let pattern = &arm.pattern;

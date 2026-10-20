@@ -11031,7 +11031,7 @@ pub(in crate::compiler) fn finalized_callable_nominal_hints(
 
 pub(in crate::compiler) enum NominalCallableOutput {
     Ready(
-        ir::CheckedFunction,
+        Box<ir::CheckedFunction>,
         Vec<closures::check::CheckedClosure>,
         Vec<ir::OpaqueHiddenType>,
     ),
@@ -11070,7 +11070,7 @@ pub(super) fn type_callable_source_outputs(
         canonical,
         None,
     )? {
-        NominalCallableOutput::Ready(body, closures, hidden) => Ok((body, closures, hidden)),
+        NominalCallableOutput::Ready(body, closures, hidden) => Ok((*body, closures, hidden)),
         NominalCallableOutput::Blocked(_) => {
             Err("internal: ordinary callable checking suspended without nominal inputs".into())
         }
@@ -11138,7 +11138,7 @@ fn type_callable_source_and_closures_inner(
         let facts = plan.callable_facts(declaration)?;
         return plan
             .checked_body(&target, &facts, budget)
-            .map(|body| NominalCallableOutput::Ready(body, Vec::new(), Vec::new()));
+            .map(|body| NominalCallableOutput::Ready(Box::new(body), Vec::new(), Vec::new()));
     }
     let f = plan.callable_body(program, declaration)?;
     plan.validate_callable_associated_bounds(program, declaration, budget)?;
@@ -11314,13 +11314,17 @@ fn type_callable_source_and_closures_inner(
     let closures = c.checked_closures;
     let hidden = c.opaque_hidden;
     if canonical.is_some() {
-        return Ok(NominalCallableOutput::Ready(checked, closures, hidden));
+        return Ok(NominalCallableOutput::Ready(
+            Box::new(checked),
+            closures,
+            hidden,
+        ));
     }
     let facts = plan.callable_facts(declaration)?;
     ir::validate_call_evidence(&checked, &facts, budget)?;
     let mut cx = plan.clone();
     ir::canonicalize_checked_calls(&checked, &facts, &mut cx, budget)
-        .map(|body| NominalCallableOutput::Ready(body, closures, hidden))
+        .map(|body| NominalCallableOutput::Ready(Box::new(body), closures, hidden))
         .map_err(|e| e.into_legacy_diagnostic(budget))
 }
 pub fn type_function_with_plan(

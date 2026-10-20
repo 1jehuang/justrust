@@ -6297,7 +6297,7 @@ impl ValidatedTraitWorld {
             }
             ProofOutcome::NotProven => Err(FactsError::unproved(
                 &self.budget,
-                "trait obligation is not proven by caller bounds or a conditional implementation",
+                "E0277: trait obligation is not proven by caller bounds or a conditional implementation",
             )),
         }
     }
@@ -8356,9 +8356,9 @@ mod tests {
         ] {
             facts.validate_ty(&shared_slice(element)).unwrap();
         }
-        assert!(
-            matches!(facts.validate_ty(&shared_slice(reference(Ty::Bool))), Err(error) if error.kind() == FactsErrorKind::Unsupported)
-        );
+        facts
+            .validate_ty(&shared_slice(reference(Ty::Bool)))
+            .unwrap();
         let foreign = case();
         assert!(
             matches!(facts.validate_ty(&shared_slice(foreign.leaf)), Err(error) if error.kind() == FactsErrorKind::InvalidMetadata)
@@ -8503,13 +8503,13 @@ mod tests {
             self_ty: c.leaf.clone(),
             args: Arc::from([Ty::Bool, reference(Ty::Bool)]),
         });
-        assert!(
-            matches!(world.prove_goal(&goal, &facts), Err(error) if error.kind() == FactsErrorKind::Unsupported)
-        );
+        let error = world.prove_goal(&goal, &facts).unwrap_err();
+        assert_eq!(error.kind(), FactsErrorKind::InvalidMetadata);
+        assert!(error.to_string().contains("trait argument arity mismatch"));
     }
 
     #[test]
-    fn generic_trait_nominal_argument_containing_reference_is_unsupported() {
+    fn generic_trait_reference_nominal_argument_does_not_invent_membership() {
         let mut c = generic_marker_case();
         let declaration = test_support::source_decl(c.value_trait.snapshot, 23, &c.budget).unwrap();
         let Ty::Struct(value) = nominal(
@@ -8537,9 +8537,10 @@ mod tests {
             self_ty: c.leaf.clone(),
             args: Arc::from([argument]),
         });
-        assert!(
-            matches!(world.prove_goal(&goal, &facts), Err(error) if error.kind() == FactsErrorKind::Unsupported)
-        );
+        assert!(matches!(
+            world.prove_goal(&goal, &facts).unwrap(),
+            ProofOutcome::NotProven
+        ));
     }
 
     fn generic_value_case() -> Case {
@@ -8915,7 +8916,7 @@ mod tests {
                 prefix: 3,
             }
         );
-        assert!(world.validate_actual(&nested, facts.env()).is_err());
+        world.validate_actual(&nested, facts.env()).unwrap();
         let mutable = Ty::Ref {
             kind: BorrowKind::Mut,
             referent: Arc::new(reference(Ty::Int(IntTy::I32))),
@@ -8932,11 +8933,9 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
-        assert!(
-            world
-                .validate_executable_actual(&empty_product, facts.env())
-                .is_err()
-        );
+        world
+            .validate_executable_actual(&empty_product, facts.env())
+            .unwrap();
         // Typed structural validation grants no verified family body capability.
     }
 
@@ -9082,17 +9081,20 @@ mod tests {
             .unwrap();
         assert_eq!(view.ref_contract().input_regions.len(), 3);
         assert_eq!(view.contract().inputs.len(), 3);
-        assert!(
-            world
-                .instance_facts(&CallTarget {
-                    declaration,
-                    type_args: Arc::from([
-                        Ty::Tuple(Arc::from([reference(Ty::Int(IntTy::I32))])),
-                        Ty::Int(IntTy::I32)
-                    ]),
-                })
-                .is_err()
-        );
+        let aggregate = world
+            .instance_facts(&CallTarget {
+                declaration,
+                type_args: Arc::from([
+                    Ty::Tuple(Arc::from([reference(Ty::Int(IntTy::I32))])),
+                    Ty::Int(IntTy::I32),
+                ]),
+            })
+            .unwrap();
+        let aggregate_view = aggregate.carrier_contract(SignatureSubject::Body).unwrap();
+        assert!(aggregate_view.contract().inputs.iter().any(|input| {
+            !input.location.path.0.is_empty()
+                && matches!(input.location.channel, ir::CarrierChannel::Fixed(_))
+        }));
         // Structural facts never create a verified executable template or body.
         assert_eq!(transported.phase(), FactsPhase::Closed);
         let root = reference(parameter(0));
@@ -9103,7 +9105,7 @@ mod tests {
         world
             .validate_ty_inner(&root, universal.env(), 0, TypeUse::Aggregate, &mut walk)
             .unwrap();
-        assert!(world.validate_actual(&root, universal.env()).is_err());
+        world.validate_actual(&root, universal.env()).unwrap();
         assert!(universal.must_copy(&root).unwrap());
     }
 
@@ -9455,8 +9457,13 @@ mod tests {
             declaration: c.caller,
             type_args: Arc::from([c.leaf.clone()]),
         };
-        assert!(
-            matches!(world.instance_facts(&wrong_entry),Err(e)if e.kind()==FactsErrorKind::Unproved)
+        let Err(error) = world.instance_facts(&wrong_entry) else {
+            panic!("accepted an instance without its required trait proof");
+        };
+        assert_eq!(error.kind(), FactsErrorKind::Unproved);
+        assert_eq!(
+            error.to_string(),
+            "E0277: trait obligation is not proven by caller bounds or a conditional implementation"
         );
         let schema = world.schema_facts(c.item).unwrap();
         assert!(schema.must_copy(&Ty::Int(IntTy::I32)).is_err());
@@ -9890,9 +9897,15 @@ mod tests {
         assert!(
             matches!(schema.original_callable_schema(OriginalCallableSubject::Direct(c.caller)), Err(e) if e.kind() == FactsErrorKind::InvalidMetadata)
         );
-        assert!(
-            matches!(facts.original_callable_schema(OriginalCallableSubject::TraitItem(&c.call(c.caller_parameter.clone()))), Err(e) if e.kind() == FactsErrorKind::Unsupported)
-        );
+        let required = facts
+            .original_callable_schema(OriginalCallableSubject::TraitItem(
+                &c.call(c.caller_parameter.clone()),
+            ))
+            .unwrap();
+        assert_eq!(required.declaration(), c.item);
+        required.validate_for(&facts).unwrap();
+        assert!(matches!(required.validate_for(&rebound), Err(e)
+            if e.kind() == FactsErrorKind::InvalidMetadata));
         let mut forged = (*facts).clone();
         forged.predicates = world.empty.clone();
         assert!(

@@ -248,8 +248,8 @@ impl Checker<'_> {
         }
         self.charge_node(
             evaluated.len() * 3 * std::mem::size_of::<ir::ExprId>()
-                + pieces.len() * std::mem::size_of::<String>()
-                + modes.len() * std::mem::size_of::<ir::FormatMode>(),
+                + std::mem::size_of_val(pieces)
+                + std::mem::size_of_val(modes),
         )?;
         let flow = Flow {
             ty: ir::Ty::Unit,

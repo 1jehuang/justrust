@@ -130,6 +130,7 @@ pub(super) struct AssemblyTransport {
     files: Arc<[(PathBuf, Arc<str>)]>,
     issuers: Arc<[(FileId, Arc<()>)]>,
     debug_assertions: bool,
+    overflow_checks: bool,
     _admitted: super::super::expansion_budget::RetainedBytes,
 }
 impl AssemblyTransport {
@@ -176,6 +177,7 @@ impl AssemblyTransport {
                 .map(|file| (file.file, file.unit.identity.clone()))
                 .collect(),
             debug_assertions: source.debug_assertions,
+            overflow_checks: source.overflow_checks,
             _admitted: admitted,
         })
     }
@@ -209,6 +211,7 @@ impl AssemblyTransport {
             || self.attributes.as_ref() != source.attributes
             || self.roots.as_ref() != source.crate_roots
             || self.debug_assertions != source.debug_assertions
+            || self.overflow_checks != source.overflow_checks
             || !policies_match
             || !files_match
             || !issuers_match

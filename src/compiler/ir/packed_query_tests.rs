@@ -134,15 +134,13 @@ fn packed_query_ir_rejects_missing_swapped_kind_type_owner_and_capability() {
     let cap = plan.packed_reserve_authority(owner).unwrap();
     let query =
         TypeAlignmentQuery::issue_packed(Ty::Int(super::super::IntTy::U8), &facts, cap).unwrap();
-    query
-        .validate(FactsCtx::Validated(&facts), &budget)
-        .unwrap();
-    assert!(query.same_query(&query.clone(), &budget).unwrap());
+    query.validate(FactsCtx::Validated(&facts), budget).unwrap();
+    assert!(query.same_query(&query.clone(), budget).unwrap());
     let reject = |changed: &TypeAlignmentQuery| {
-        assert!(!query.same_query(changed, &budget).unwrap());
+        assert!(!query.same_query(changed, budget).unwrap());
         assert!(
             changed
-                .validate(FactsCtx::Validated(&facts), &budget)
+                .validate(FactsCtx::Validated(&facts), budget)
                 .is_err()
         );
     };
@@ -165,11 +163,11 @@ fn packed_query_ir_rejects_missing_swapped_kind_type_owner_and_capability() {
     let foreign_facts = foreign.0.callable_facts(foreign.1).unwrap();
     assert!(
         query
-            .validate(FactsCtx::Validated(&foreign_facts), &budget)
+            .validate(FactsCtx::Validated(&foreign_facts), budget)
             .is_err()
     );
     changed = query.clone();
     changed.owner = foreign.1;
     reject(&changed);
-    assert!(query.validate(FactsCtx::Concrete, &budget).is_err());
+    assert!(query.validate(FactsCtx::Concrete, budget).is_err());
 }

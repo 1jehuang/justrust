@@ -50,165 +50,6 @@ impl ValidatedFacts {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::compiler::frontend::{self, PlanCtx};
-
-    fn fixture() -> (Arc<ValidatedTraitWorld>, Arc<ValidatedFacts>, TraitCall) {
-        let program = frontend::parse(
-            "trait Has<A,B>{type Out;fn get(self)->Self::Out;}fn caller<T:Has<i32,bool>>(x:T)-><T as Has<i32,bool>>::Out{x.get()}fn main(){}",
-        ).unwrap();
-        let ctx = PlanCtx::from_program(&program, &PlanBudget::default()).unwrap();
-        let world = ctx.trait_world().unwrap();
-        // The fixture's first user function is `caller`; library and recipe
-        // providers must not be mistaken for it by generic arity alone.
-        let caller = ctx.function_decl(0).unwrap();
-        let facts = world.callable_facts(caller).unwrap();
-        let goal = facts
-            .predicates
-            .predicates
-            .iter()
-            .find_map(|predicate| match predicate {
-                Predicate::Implements(goal) if goal.args.len() == 2 => Some(goal.clone()),
-                _ => None,
-            })
-            .unwrap();
-        let item = world
-            .headers
-            .items
-            .iter()
-            .find(|h| h.trait_decl == goal.declaration)
-            .unwrap()
-            .declaration;
-        (
-            world,
-            facts,
-            TraitCall {
-                trait_ref: goal,
-                item,
-                method_args: Arc::from([]),
-            },
-        )
-    }
-
-    #[test]
-    fn rigid_required_method_keeps_projection_without_inventing_equality() {
-        let (world, facts, call) = fixture();
-        let (application, evidence) = world
-            .instantiate_universal_required_item(&call, &facts)
-            .unwrap();
-        assert!(matches!(
-            application.signature.result,
-            Ty::AssociatedType(_)
-        ));
-        assert!(evidence.dependencies.is_empty());
-        assert!(matches!(
-            evidence.selection.0.origin,
-            ProofOrigin::Assumption
-        ));
-        world
-            .validate_universal_required_evidence(&evidence, &facts)
-            .unwrap();
-        world
-            .universal_required_carrier_contract(&call, &facts)
-            .unwrap()
-            .validate_for(&facts)
-            .unwrap();
-    }
-
-    #[test]
-    fn projection_assignment_normal_form_requires_exact_universal_authority() {
-        let (world, facts, call) = fixture();
-        let (application, _) = world
-            .instantiate_universal_required_item(&call, &facts)
-            .unwrap();
-        let normal = &application.signature.result;
-        let context = ProofContext::from_facts(&facts);
-        world
-            .validate_associated_normal_form(normal, facts.env(), context, &mut Vec::new())
-            .unwrap();
-        for phase in [FactsPhase::Schema, FactsPhase::Closed] {
-            assert!(
-                world
-                    .validate_associated_normal_form(
-                        normal,
-                        facts.env(),
-                        ProofContext {
-                            predicates: &facts.predicates,
-                            phase
-                        },
-                        &mut Vec::new(),
-                    )
-                    .is_err()
-            );
-        }
-        let (_, foreign, _) = fixture();
-        assert!(
-            world
-                .validate_associated_normal_form(
-                    normal,
-                    foreign.env(),
-                    ProofContext::from_facts(&foreign),
-                    &mut Vec::new(),
-                )
-                .is_err()
-        );
-        let Ty::AssociatedType(projection) = normal else {
-            panic!("rigid projection required")
-        };
-        let mut forged = projection.as_ref().clone();
-        forged.trait_ref.args = Arc::from([Ty::Bool, Ty::Int(ir::IntTy::I32)]);
-        assert!(
-            world
-                .validate_associated_normal_form(
-                    &Ty::AssociatedType(Arc::new(forged)),
-                    facts.env(),
-                    context,
-                    &mut Vec::new(),
-                )
-                .is_err()
-        );
-    }
-
-    #[test]
-    fn universal_required_method_rejects_forged_arguments_signature_and_caller() {
-        let (world, facts, call) = fixture();
-        let (_, evidence) = world
-            .instantiate_universal_required_item(&call, &facts)
-            .unwrap();
-        let mut forged = (*evidence).clone();
-        forged.signature.result = Ty::Bool;
-        assert!(
-            world
-                .validate_universal_required_evidence(&forged, &facts)
-                .is_err()
-        );
-        let mut forged = (*evidence).clone();
-        let mut actuals = forged.call.trait_ref.args.to_vec();
-        actuals.reverse();
-        forged.call.trait_ref.args = actuals.into();
-        assert!(
-            world
-                .validate_universal_required_evidence(&forged, &facts)
-                .is_err()
-        );
-        let mut wrong_arity = call.clone();
-        wrong_arity.method_args = Arc::from([Ty::Bool]);
-        assert!(
-            world
-                .instantiate_universal_required_item(&wrong_arity, &facts)
-                .is_err()
-        );
-        let (_, foreign, _) = fixture();
-        assert!(
-            world
-                .validate_universal_required_evidence(&evidence, &foreign)
-                .is_err()
-        );
-    }
-}
-
 impl ValidatedTraitWorld {
     pub(super) fn map_universal_projection_type(
         &self,
@@ -755,5 +596,164 @@ impl ValidatedTraitWorld {
             ));
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::compiler::frontend::{self, PlanCtx};
+
+    fn fixture() -> (Arc<ValidatedTraitWorld>, Arc<ValidatedFacts>, TraitCall) {
+        let program = frontend::parse(
+            "trait Has<A,B>{type Out;fn get(self)->Self::Out;}fn caller<T:Has<i32,bool>>(x:T)-><T as Has<i32,bool>>::Out{x.get()}fn main(){}",
+        ).unwrap();
+        let ctx = PlanCtx::from_program(&program, &PlanBudget::default()).unwrap();
+        let world = ctx.trait_world().unwrap();
+        // The fixture's first user function is `caller`; library and recipe
+        // providers must not be mistaken for it by generic arity alone.
+        let caller = ctx.function_decl(0).unwrap();
+        let facts = world.callable_facts(caller).unwrap();
+        let goal = facts
+            .predicates
+            .predicates
+            .iter()
+            .find_map(|predicate| match predicate {
+                Predicate::Implements(goal) if goal.args.len() == 2 => Some(goal.clone()),
+                _ => None,
+            })
+            .unwrap();
+        let item = world
+            .headers
+            .items
+            .iter()
+            .find(|h| h.trait_decl == goal.declaration)
+            .unwrap()
+            .declaration;
+        (
+            world,
+            facts,
+            TraitCall {
+                trait_ref: goal,
+                item,
+                method_args: Arc::from([]),
+            },
+        )
+    }
+
+    #[test]
+    fn rigid_required_method_keeps_projection_without_inventing_equality() {
+        let (world, facts, call) = fixture();
+        let (application, evidence) = world
+            .instantiate_universal_required_item(&call, &facts)
+            .unwrap();
+        assert!(matches!(
+            application.signature.result,
+            Ty::AssociatedType(_)
+        ));
+        assert!(evidence.dependencies.is_empty());
+        assert!(matches!(
+            evidence.selection.0.origin,
+            ProofOrigin::Assumption
+        ));
+        world
+            .validate_universal_required_evidence(&evidence, &facts)
+            .unwrap();
+        world
+            .universal_required_carrier_contract(&call, &facts)
+            .unwrap()
+            .validate_for(&facts)
+            .unwrap();
+    }
+
+    #[test]
+    fn projection_assignment_normal_form_requires_exact_universal_authority() {
+        let (world, facts, call) = fixture();
+        let (application, _) = world
+            .instantiate_universal_required_item(&call, &facts)
+            .unwrap();
+        let normal = &application.signature.result;
+        let context = ProofContext::from_facts(&facts);
+        world
+            .validate_associated_normal_form(normal, facts.env(), context, &mut Vec::new())
+            .unwrap();
+        for phase in [FactsPhase::Schema, FactsPhase::Closed] {
+            assert!(
+                world
+                    .validate_associated_normal_form(
+                        normal,
+                        facts.env(),
+                        ProofContext {
+                            predicates: &facts.predicates,
+                            phase
+                        },
+                        &mut Vec::new(),
+                    )
+                    .is_err()
+            );
+        }
+        let (_, foreign, _) = fixture();
+        assert!(
+            world
+                .validate_associated_normal_form(
+                    normal,
+                    foreign.env(),
+                    ProofContext::from_facts(&foreign),
+                    &mut Vec::new(),
+                )
+                .is_err()
+        );
+        let Ty::AssociatedType(projection) = normal else {
+            panic!("rigid projection required")
+        };
+        let mut forged = projection.as_ref().clone();
+        forged.trait_ref.args = Arc::from([Ty::Bool, Ty::Int(ir::IntTy::I32)]);
+        assert!(
+            world
+                .validate_associated_normal_form(
+                    &Ty::AssociatedType(Arc::new(forged)),
+                    facts.env(),
+                    context,
+                    &mut Vec::new(),
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn universal_required_method_rejects_forged_arguments_signature_and_caller() {
+        let (world, facts, call) = fixture();
+        let (_, evidence) = world
+            .instantiate_universal_required_item(&call, &facts)
+            .unwrap();
+        let mut forged = (*evidence).clone();
+        forged.signature.result = Ty::Bool;
+        assert!(
+            world
+                .validate_universal_required_evidence(&forged, &facts)
+                .is_err()
+        );
+        let mut forged = (*evidence).clone();
+        let mut actuals = forged.call.trait_ref.args.to_vec();
+        actuals.reverse();
+        forged.call.trait_ref.args = actuals.into();
+        assert!(
+            world
+                .validate_universal_required_evidence(&forged, &facts)
+                .is_err()
+        );
+        let mut wrong_arity = call.clone();
+        wrong_arity.method_args = Arc::from([Ty::Bool]);
+        assert!(
+            world
+                .instantiate_universal_required_item(&wrong_arity, &facts)
+                .is_err()
+        );
+        let (_, foreign, _) = fixture();
+        assert!(
+            world
+                .validate_universal_required_evidence(&evidence, &foreign)
+                .is_err()
+        );
     }
 }

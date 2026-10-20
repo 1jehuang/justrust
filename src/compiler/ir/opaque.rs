@@ -364,150 +364,6 @@ impl OpaquePackProof {
     }
 }
 
-#[cfg(test)]
-mod captured_pack_tests {
-    use super::*;
-    use crate::compiler as c;
-
-    #[test]
-    fn captured_pack_rejects_order_omission_foreign_occurrence_and_family() {
-        let snapshot = Arc::new(c::Snapshot {
-            input: c::Input::Text("fn compose<A,B,C>(f:impl Fn(A)->B,g:impl Fn(B)->C)->impl Fn(A)->C{move |x:A|g(f(x))}fn main(){}".into()),
-            source_options: c::source::SourceOptions::default(),
-            budget: PlanBudget::default(),
-        });
-        let budget = snapshot.budget.clone();
-        let engine = c::Engine::new(c::CompilerProvider(snapshot));
-        let key = c::Facts::item(c::TEMPLATE_BODY, 0);
-        let requested = engine.request(key.clone());
-        let other_key = c::Facts::item(c::TEMPLATE_BODY, 1);
-        let other_requested = engine.request(other_key.clone());
-        engine.run(1).unwrap();
-        requested.completion().unwrap();
-        other_requested.completion().unwrap();
-        let other_body = engine
-            .fact_of::<c::TemplateBodyFact>(&other_key, 0)
-            .unwrap();
-        let body = engine.fact_of::<c::TemplateBodyFact>(&key, 0).unwrap();
-        let publication = body.publication.as_ref().unwrap();
-        let occurrence = body
-            .checked
-            .exprs
-            .iter()
-            .position(|expr| matches!(expr.kind, ExprKind::OpaqueWrap { .. }))
-            .unwrap();
-        let proof =
-            OpaquePackProof::seal(publication.clone(), ExprId(occurrence), &budget).unwrap();
-        assert_eq!(proof.sources.len(), 2);
-        proof
-            .validate_occurrence(publication, Some(ExprId(occurrence)), &budget)
-            .unwrap();
-        let facts = FactsCtx::from_validated(publication.facts());
-        assert!(
-            proof
-                .validate_occurrence(
-                    other_body.publication.as_ref().unwrap(),
-                    Some(ExprId(occurrence)),
-                    &budget
-                )
-                .is_err()
-        );
-        let mut changed = proof.clone();
-        let mut rows = changed.sources.to_vec();
-        rows.reverse();
-        changed.sources = rows.into();
-        assert!(
-            changed
-                .validate_occurrence(publication, Some(ExprId(occurrence)), &budget)
-                .is_err()
-        );
-        let mut changed = proof.clone();
-        changed.sources = Arc::from([proof.sources[0].clone()]);
-        assert!(
-            changed
-                .validate_shape(&proof.hidden, facts, &budget)
-                .is_err()
-        );
-        let mut changed = proof.clone();
-        changed.publication = c::source_replay::OriginalBodyId::new(&budget).unwrap();
-        assert!(
-            changed
-                .validate_occurrence(publication, Some(ExprId(occurrence)), &budget)
-                .is_err()
-        );
-        assert!(
-            proof
-                .validate_occurrence(publication, Some(ExprId(occurrence + 1)), &budget)
-                .is_err()
-        );
-        let mut changed = proof.clone();
-        let mut rows = changed.sources.to_vec();
-        let CarrierChannel::ParamTail { parameter, .. } = &mut rows[0].channel else {
-            panic!("expected symbolic family")
-        };
-        parameter.index = u16::MAX;
-        changed.sources = rows.into();
-        assert!(
-            changed
-                .validate_shape(&proof.hidden, facts, &budget)
-                .is_err()
-        );
-        for rows in [
-            Arc::from([proof.sources[0].clone(), proof.sources[0].clone()]),
-            {
-                let mut rows = proof.sources.to_vec();
-                let CarrierChannel::ParamTail { prefix, .. } = &mut rows[0].channel else {
-                    unreachable!()
-                };
-                *prefix = 1;
-                Arc::from(rows)
-            },
-            {
-                let mut rows = proof.sources.to_vec();
-                rows[0].path = CarrierPath(Arc::from([CarrierStep::Field(usize::MAX)]));
-                Arc::from(rows)
-            },
-        ] {
-            let mut changed = proof.clone();
-            changed.sources = rows;
-            assert!(
-                changed
-                    .validate_occurrence(publication, Some(ExprId(occurrence)), &budget)
-                    .is_err()
-            );
-        }
-        for opaque in [
-            OpaqueTy::new(
-                proof.opaque.owner(),
-                proof.opaque.owner_args().into(),
-                proof.opaque.site() + 1,
-                proof.opaque.bounds().into(),
-                proof.opaque.captured_regions().into(),
-            ),
-            OpaqueTy::new(
-                proof.opaque.owner(),
-                proof.opaque.owner_args().into(),
-                proof.opaque.site(),
-                proof.opaque.bounds().into(),
-                Arc::from([SourceRegionId {
-                    declaration: proof.opaque.owner(),
-                    index: u16::MAX,
-                }]),
-            ),
-        ] {
-            let mut changed = proof.clone();
-            changed.opaque = Arc::new(opaque);
-            assert!(
-                changed
-                    .validate_occurrence(publication, Some(ExprId(occurrence)), &budget)
-                    .is_err()
-            );
-        }
-        let template = c::cfg::lower_source_template(publication, &budget).unwrap();
-        c::ownership::verify_template(template).unwrap();
-    }
-}
-
 /// Exact canonical defining body and all of its chosen return wrappers.
 /// Neither a raw hidden record nor satisfaction of the declared bounds can mint it.
 #[derive(Clone, Debug)]
@@ -695,4 +551,148 @@ pub(super) fn validate_wrap(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod captured_pack_tests {
+    use super::*;
+    use crate::compiler as c;
+
+    #[test]
+    fn captured_pack_rejects_order_omission_foreign_occurrence_and_family() {
+        let snapshot = Arc::new(c::Snapshot {
+            input: c::Input::Text("fn compose<A,B,C>(f:impl Fn(A)->B,g:impl Fn(B)->C)->impl Fn(A)->C{move |x:A|g(f(x))}fn main(){}".into()),
+            source_options: c::source::SourceOptions::default(),
+            budget: PlanBudget::default(),
+        });
+        let budget = snapshot.budget.clone();
+        let engine = c::Engine::new(c::CompilerProvider(snapshot));
+        let key = c::Facts::item(c::TEMPLATE_BODY, 0);
+        let requested = engine.request(key.clone());
+        let other_key = c::Facts::item(c::TEMPLATE_BODY, 1);
+        let other_requested = engine.request(other_key.clone());
+        engine.run(1).unwrap();
+        requested.completion().unwrap();
+        other_requested.completion().unwrap();
+        let other_body = engine
+            .fact_of::<c::TemplateBodyFact>(&other_key, 0)
+            .unwrap();
+        let body = engine.fact_of::<c::TemplateBodyFact>(&key, 0).unwrap();
+        let publication = body.publication.as_ref().unwrap();
+        let occurrence = body
+            .checked
+            .exprs
+            .iter()
+            .position(|expr| matches!(expr.kind, ExprKind::OpaqueWrap { .. }))
+            .unwrap();
+        let proof =
+            OpaquePackProof::seal(publication.clone(), ExprId(occurrence), &budget).unwrap();
+        assert_eq!(proof.sources.len(), 2);
+        proof
+            .validate_occurrence(publication, Some(ExprId(occurrence)), &budget)
+            .unwrap();
+        let facts = FactsCtx::from_validated(publication.facts());
+        assert!(
+            proof
+                .validate_occurrence(
+                    other_body.publication.as_ref().unwrap(),
+                    Some(ExprId(occurrence)),
+                    &budget
+                )
+                .is_err()
+        );
+        let mut changed = proof.clone();
+        let mut rows = changed.sources.to_vec();
+        rows.reverse();
+        changed.sources = rows.into();
+        assert!(
+            changed
+                .validate_occurrence(publication, Some(ExprId(occurrence)), &budget)
+                .is_err()
+        );
+        let mut changed = proof.clone();
+        changed.sources = Arc::from([proof.sources[0].clone()]);
+        assert!(
+            changed
+                .validate_shape(&proof.hidden, facts, &budget)
+                .is_err()
+        );
+        let mut changed = proof.clone();
+        changed.publication = c::source_replay::OriginalBodyId::new(&budget).unwrap();
+        assert!(
+            changed
+                .validate_occurrence(publication, Some(ExprId(occurrence)), &budget)
+                .is_err()
+        );
+        assert!(
+            proof
+                .validate_occurrence(publication, Some(ExprId(occurrence + 1)), &budget)
+                .is_err()
+        );
+        let mut changed = proof.clone();
+        let mut rows = changed.sources.to_vec();
+        let CarrierChannel::ParamTail { parameter, .. } = &mut rows[0].channel else {
+            panic!("expected symbolic family")
+        };
+        parameter.index = u16::MAX;
+        changed.sources = rows.into();
+        assert!(
+            changed
+                .validate_shape(&proof.hidden, facts, &budget)
+                .is_err()
+        );
+        for rows in [
+            Arc::from([proof.sources[0].clone(), proof.sources[0].clone()]),
+            {
+                let mut rows = proof.sources.to_vec();
+                let CarrierChannel::ParamTail { prefix, .. } = &mut rows[0].channel else {
+                    unreachable!()
+                };
+                *prefix = 1;
+                Arc::from(rows)
+            },
+            {
+                let mut rows = proof.sources.to_vec();
+                rows[0].path = CarrierPath(Arc::from([CarrierStep::Field(usize::MAX)]));
+                Arc::from(rows)
+            },
+        ] {
+            let mut changed = proof.clone();
+            changed.sources = rows;
+            assert!(
+                changed
+                    .validate_occurrence(publication, Some(ExprId(occurrence)), &budget)
+                    .is_err()
+            );
+        }
+        for opaque in [
+            OpaqueTy::new(
+                proof.opaque.owner(),
+                proof.opaque.owner_args().into(),
+                proof.opaque.site() + 1,
+                proof.opaque.bounds().into(),
+                proof.opaque.captured_regions().into(),
+            ),
+            OpaqueTy::new(
+                proof.opaque.owner(),
+                proof.opaque.owner_args().into(),
+                proof.opaque.site(),
+                proof.opaque.bounds().into(),
+                Arc::from([SourceRegionId {
+                    declaration: proof.opaque.owner(),
+                    index: u16::MAX,
+                }]),
+            ),
+        ] {
+            let mut changed = proof.clone();
+            changed.opaque = Arc::new(opaque);
+            assert!(
+                changed
+                    .validate_occurrence(publication, Some(ExprId(occurrence)), &budget)
+                    .is_err()
+            );
+        }
+        let template = c::cfg::lower_source_template(publication, &budget).unwrap();
+        c::ownership::verify_template(template).unwrap();
+    }
 }

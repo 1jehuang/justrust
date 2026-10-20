@@ -154,12 +154,6 @@ impl<'a> Solver<'a> {
         Self { db, env }
     }
 
-    fn trait_args(tr: &TraitRef) -> Vec<Ty> {
-        let mut v = vec![tr.self_ty.clone()];
-        v.extend(tr.args.iter().cloned());
-        v
-    }
-
     /// Normalize every projection in `ty` that can be decided now. Undecided
     /// projections are replaced by a fresh variable and a pending projection
     /// goal is returned.
@@ -231,24 +225,23 @@ impl<'a> Solver<'a> {
         let self_ty = cx.shallow(&tr.self_ty);
         let mut cands = Vec::new();
         // Self is an unresolved general variable: anything could match.
-        if let TyKind::Var(v) = self_ty.as_ref() {
-            if cx.var_kind(*v) == super::infer::VarKind::General {
-                return Ok((cands, true));
-            }
+        if let TyKind::Var(v) = self_ty.as_ref()
+            && cx.var_kind(*v) == super::infer::VarKind::General
+        {
+            return Ok((cands, true));
         }
         for (i, p) in self.env.predicates.iter().enumerate() {
-            if let Predicate::Trait(b) = p {
-                if b.trait_id == tr.trait_id
-                    && cx.can(|cx| {
-                        cx.unify(&b.self_ty, &tr.self_ty)?;
-                        for (x, y) in b.args.iter().zip(&tr.args) {
-                            cx.unify(x, y)?;
-                        }
-                        Ok::<(), TypeError>(())
-                    })
-                {
-                    cands.push(Candidate::Param(i));
-                }
+            if let Predicate::Trait(b) = p
+                && b.trait_id == tr.trait_id
+                && cx.can(|cx| {
+                    cx.unify(&b.self_ty, &tr.self_ty)?;
+                    for (x, y) in b.args.iter().zip(&tr.args) {
+                        cx.unify(x, y)?;
+                    }
+                    Ok::<(), TypeError>(())
+                })
+            {
+                cands.push(Candidate::Param(i));
             }
         }
         if self.builtin_applies(cx, tr) && !cands.iter().any(|c| matches!(c, Candidate::Param(_))) {
@@ -409,10 +402,10 @@ impl<'a> Solver<'a> {
                     let ok = cx.can(|cx| {
                         let nested = self.confirm(cx, tr, c)?;
                         for g in nested {
-                            if let Goal::Trait(n) = &g {
-                                if matches!(self.select_trait(cx, n)?, Selected::NoMatch) {
-                                    return Err(SolveError::Unsatisfied(g.clone()));
-                                }
+                            if let Goal::Trait(n) = &g
+                                && matches!(self.select_trait(cx, n)?, Selected::NoMatch)
+                            {
+                                return Err(SolveError::Unsatisfied(g.clone()));
                             }
                         }
                         Ok::<(), SolveError>(())
@@ -440,23 +433,22 @@ impl<'a> Solver<'a> {
         let l = self.db.lang();
         // Environment equalities first.
         for p in &self.env.predicates {
-            if let Predicate::Projection(q, rhs) = p {
-                if q.item == proj.item
-                    && cx.can(|cx| {
-                        cx.unify(&q.trait_ref.self_ty, &tr.self_ty)?;
-                        for (x, y) in q.trait_ref.args.iter().zip(&tr.args) {
-                            cx.unify(x, y)?;
-                        }
-                        Ok::<(), TypeError>(())
-                    })
-                {
+            if let Predicate::Projection(q, rhs) = p
+                && q.item == proj.item
+                && cx.can(|cx| {
                     cx.unify(&q.trait_ref.self_ty, &tr.self_ty)?;
                     for (x, y) in q.trait_ref.args.iter().zip(&tr.args) {
                         cx.unify(x, y)?;
                     }
-                    cx.unify(rhs, ty)?;
-                    return Ok(Selected::Done(Vec::new()));
+                    Ok::<(), TypeError>(())
+                })
+            {
+                cx.unify(&q.trait_ref.self_ty, &tr.self_ty)?;
+                for (x, y) in q.trait_ref.args.iter().zip(&tr.args) {
+                    cx.unify(x, y)?;
                 }
+                cx.unify(rhs, ty)?;
+                return Ok(Selected::Done(Vec::new()));
             }
         }
         let self_ty = cx.shallow(&tr.self_ty);
@@ -646,11 +638,11 @@ impl Fulfill {
                         continue;
                     };
                     let args = tr.args.first().map(|a| cx.shallow(a));
-                    if let Some(a) = args {
-                        if let TyKind::Tuple(v) = a.as_ref() {
-                            let out = sig.as_ref().and_then(|s| s.1.clone());
-                            sig = Some((v.clone(), out, kind));
-                        }
+                    if let Some(a) = args
+                        && let TyKind::Tuple(v) = a.as_ref()
+                    {
+                        let out = sig.as_ref().and_then(|s| s.1.clone());
+                        sig = Some((v.clone(), out, kind));
                     }
                 }
                 Goal::Projection(p, rhs)
@@ -658,10 +650,10 @@ impl Fulfill {
                 {
                     if let Some(s) = &mut sig {
                         s.1 = Some(rhs.clone());
-                    } else if let Some(a) = p.trait_ref.args.first() {
-                        if let TyKind::Tuple(v) = cx.shallow(a).as_ref() {
-                            sig = Some((v.clone(), Some(rhs.clone()), ClosureKind::FnOnce));
-                        }
+                    } else if let Some(a) = p.trait_ref.args.first()
+                        && let TyKind::Tuple(v) = cx.shallow(a).as_ref()
+                    {
+                        sig = Some((v.clone(), Some(rhs.clone()), ClosureKind::FnOnce));
                     }
                 }
                 _ => {}

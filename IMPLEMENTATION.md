@@ -6,6 +6,19 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 
 ## Completed foundations, not full compatibility
 
+**Audit follow-up in progress (2026-10-20):** `OVERFLOW-PROFILES.md` defines
+explicit runtime overflow policy across stack and SSA lowering, independent of
+assertions and optimization. `NOMINAL-RECIPE-SELECTORS.md` separates Index/IndexMut
+obligations from nominal field recipes, removing internal metadata failures without
+claiming that the three affected full programs now compile. Final acceptance and
+graph-integrity evidence are recorded in the feature contracts. G0-G12 remain open.
+
+- [x] Keep validated closed-call nominal conversion inventories occurrence-local.
+      Enclosing body substitutions remain single-valued and reject conflicting
+      targets. The unchanged format-macro fixture now matches live stock
+      CHECK/BUILD/run at workers 1/8, with 14 graph-integrity gates passing
+      (`20261020-031050478-3603331`). This compatibility fix closes no full Rust gate.
+
 - [x] Packed-byte query operation authority binds genuine loader-issued function
       syntax, exact original query occurrence and canonical callee through a
       default-deny borrowed schema service (`PACKED-QUERY-AUTHORITY.md`). It is a
@@ -1152,6 +1165,13 @@ and runs the declared tests. No stock-compiled library artifacts may conceal
 missing native compilation. Catalog Copy/Clone support is not core acceptance.
 
 ### G8. Existing Cargo projects and source-to-test workflows
+
+**In progress (2026-10-20):** `TARGET-DEPENDENCIES.md` defines native-target
+conditional dependency admission, inactive-edge filtering and feature propagation
+across repeated conditional declarations. `PROJECT-CONFIGURATION.md` defines
+explicit edition/profile validation. These changes require stock-differential
+acceptance and do not close G8, provide build scripts/proc macros, or establish
+self-hosting. Final validation evidence belongs in the feature contracts.
 
 - [ ] Parse existing manifests/workspaces, targets/profiles and configuration;
       implement lockfile-compatible package/version resolution, registries/git/path

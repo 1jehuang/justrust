@@ -166,8 +166,7 @@ fn unused_associated_constant_missing_foreign_and_mismatched_members_are_rejecte
     ] {
         let program = parse(source).unwrap();
         let error = PlanCtx::from_program(&program, &ir::PlanBudget::default())
-            .err()
-            .expect("invalid unused member accepted");
+            .expect_err("invalid unused member accepted");
         assert!(error.contains(diagnostic), "{diagnostic}: {error}");
     }
     make_plan("trait T{const VALUE:u8=1;} struct Unit{tag:u8} impl T for Unit{} fn main(){}");

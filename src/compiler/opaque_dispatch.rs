@@ -239,7 +239,7 @@ pub(super) async fn produce(
     };
     let representations = opaque_instances::read(
         &facts,
-        &[public.trait_ref.self_ty.clone()],
+        std::slice::from_ref(&public.trait_ref.self_ty),
         &provider.0.budget,
     )
     .await?;
@@ -342,7 +342,10 @@ pub(super) async fn produce(
         .types_equal(&body_params, &physical_signature.params)
         .map_err(|e| Error::new(e.to_string()))?
         || !world
-            .types_equal(&[body.checked.result.clone()], &[physical_signature.result])
+            .types_equal(
+                std::slice::from_ref(&body.checked.result),
+                &[physical_signature.result],
+            )
             .map_err(|e| Error::new(e.to_string()))?
     {
         return Err(Error::new(

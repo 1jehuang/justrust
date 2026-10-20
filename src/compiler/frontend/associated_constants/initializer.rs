@@ -38,7 +38,7 @@ impl PlanCtx {
     ) -> Result<&AssociatedConstUse, String> {
         self.check_budget(budget)?;
         budget.check_depth(path.len() / 2)?;
-        if path.len() % 2 != 0 {
+        if !path.len().is_multiple_of(2) {
             return Err("constant initializer path has a partial coordinate".into());
         }
         let mut expression = self
@@ -46,7 +46,7 @@ impl PlanCtx {
             .initializer
             .as_ref()
             .ok_or("associated constant declaration has no original initializer")?;
-        for step in path.chunks_exact(2) {
+        for step in path.as_chunks::<2>().0 {
             budget.charge_work(1)?;
             expression = match (expression, step[0], step[1]) {
                 (Expr::Unary { value, .. }, 1, 0) => value,

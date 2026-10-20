@@ -2,12 +2,14 @@
 //!
 //! This is metadata substitution authority, not a replacement for graph-reading
 //! and replaying the original parent publication and mode-specific checked body.
+#[cfg(test)]
 use super::*;
 
 #[cfg(test)]
 #[path = "closure_owner_instance_tests.rs"]
 mod tests;
 
+#[cfg(test)]
 impl ValidatedFacts {
     pub(in crate::compiler) fn instantiate_closure_owner(
         &self,
