@@ -55,7 +55,15 @@ For an agent started with a nonempty prefix, pass its exact canonical prefix:
 or enables automatic deletion. Use the existing authenticated `remote ssh`
 command to invoke that native binary on a hosted machine. The default is a dry
 plan regardless of `JUSTRUST_REMOTE_EVICT`; `--apply` is explicit authorization
-for one collection pass. Automatic agent collection still defaults to `dry`.
+for one collection pass. Automatic agent collection defaults to `on` since
+2026-10-20 (`JUSTRUST_REMOTE_EVICT=dry` logs only, `0` disables). The dry
+default let the hosted disk fill to 100% again on 2026-10-19 even though the
+plan was correct, so it was promoted after its plan was reviewed on the live
+machine. On the same day every root was wrongly skipped as `InUse`, because
+the account's own non-dumpable session processes (`systemd --user`,
+`(sd-pam)`, and the agent's parent `sshd`) were counted as unknowable live
+use. Those exact processes are now recognized. Any other unreadable process
+of the account still blocks collection.
 There is no flag to reduce the fixed two-hour grace or enroll arbitrary roots.
 
 Collection is bounded by disk watermarks: trigger below 15% free or 50 GiB

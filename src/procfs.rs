@@ -46,6 +46,65 @@ pub fn running_executable() -> std::io::Result<std::fs::File> {
     std::fs::File::open(path)
 }
 
+/// The account's own non-dumpable session processes, which can never be
+/// building inside a mirror: this process's ancestors (sshd for the agent),
+/// and the per-user `systemd --user` manager and its `(sd-pam)` helper.
+#[cfg(target_os = "linux")]
+fn is_session_plumbing(base: &std::path::Path, pid: &str) -> bool {
+    let Ok(pid_num) = pid.parse::<u32>() else {
+        return false;
+    };
+    // Only processes the kernel hides from their owner: a readable cwd is
+    // inspected normally and never exempt.
+    if std::fs::read_link(base.join("cwd")).is_ok() {
+        return false;
+    }
+    if ancestors_of_self().contains(&pid_num) {
+        return true;
+    }
+    let cmdline = std::fs::read(base.join("cmdline")).unwrap_or_default();
+    let argv: Vec<&[u8]> = cmdline
+        .split(|b| *b == 0)
+        .filter(|a| !a.is_empty())
+        .collect();
+    is_user_manager_argv(&argv)
+}
+
+/// `systemd --user` itself, or its PAM helper `(sd-pam)`.
+#[cfg(target_os = "linux")]
+fn is_user_manager_argv(argv: &[&[u8]]) -> bool {
+    match argv {
+        [b"(sd-pam)"] => true,
+        [exe, flag] => *flag == b"--user" && exe.ends_with(b"/systemd"),
+        _ => false,
+    }
+}
+
+/// PIDs of this process's parent chain (excluding itself).
+#[cfg(target_os = "linux")]
+fn ancestors_of_self() -> Vec<u32> {
+    let mut out = Vec::new();
+    let mut pid = std::process::id();
+    for _ in 0..64 {
+        let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
+            break;
+        };
+        // The comm field may contain spaces and parens: fields after the last ')'.
+        let Some(after) = stat.rsplit_once(')').map(|(_, rest)| rest) else {
+            break;
+        };
+        let Some(ppid) = after.split_whitespace().nth(1).and_then(|p| p.parse().ok()) else {
+            break;
+        };
+        if ppid <= 1 {
+            break;
+        }
+        out.push(ppid);
+        pid = ppid;
+    }
+    out
+}
+
 /// Conservative live-use exclusion for native target GC. Non-Linux hosts
 /// cannot prove inactivity here and must retain targets.
 pub fn path_in_use_by_other(path: &std::path::Path) -> bool {
@@ -80,6 +139,15 @@ pub fn path_in_use_by_other(path: &std::path::Path) -> bool {
                 Err(_) => return true,
             };
             let same_principal = meta.uid() == unsafe { libc::geteuid() };
+            // The account's own session plumbing is non-dumpable, so even its
+            // owner gets EACCES on cwd/fd: the agent's ancestors (`sshd:
+            // user@notty`, which starts it) and the user's `systemd --user`
+            // manager with its `(sd-pam)` child. None of them can run a build
+            // inside a mirror. Treating them as uncertainty made every root
+            // permanently "in use" on hosted machines (2026-10-20: all 14
+            // registered roots skipped as InUse at 99% disk). Every other
+            // unreadable process of this principal still fails closed.
+            let same_principal = same_principal && !is_session_plumbing(&base, pid);
             match std::fs::read_link(base.join("cwd")) {
                 Ok(cwd) if cwd.starts_with(path) => return true,
                 Err(e) if same_principal && e.kind() != std::io::ErrorKind::NotFound => {
@@ -854,6 +922,69 @@ fn join_args(b: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn only_the_user_manager_argv_is_session_plumbing() {
+        let yes: [&[&[u8]]; 3] = [
+            &[b"/usr/lib/systemd/systemd", b"--user"],
+            &[b"/lib/systemd/systemd", b"--user"],
+            &[b"(sd-pam)"],
+        ];
+        for argv in yes {
+            assert!(is_user_manager_argv(argv), "{argv:?}");
+        }
+        let no: [&[&[u8]]; 6] = [
+            &[b"cargo", b"build"],
+            &[b"/usr/lib/systemd/systemd", b"--user", b"--extra"],
+            &[b"/tmp/evil/systemd-like", b"--user"],
+            &[b"/usr/lib/systemd/systemd"],
+            &[b"sd-pam"],
+            &[],
+        ];
+        for argv in no {
+            assert!(!is_user_manager_argv(argv), "{argv:?}");
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn ancestors_are_the_parent_chain() {
+        let ancestors = ancestors_of_self();
+        let parent = std::os::unix::process::parent_id();
+        if parent > 1 {
+            assert_eq!(ancestors.first(), Some(&parent));
+        }
+        assert!(!ancestors.contains(&std::process::id()));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn readable_processes_are_never_exempt_and_live_use_is_seen() {
+        let base = std::env::var_os("JCODE_SCRATCH_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir);
+        let dir = base.join(format!("jr-inuse-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let dir = dir.canonicalize().unwrap();
+        let mut child = std::process::Command::new("sleep")
+            .arg("30")
+            .current_dir(&dir)
+            .spawn()
+            .unwrap();
+        let child_base = std::path::PathBuf::from(format!("/proc/{}", child.id()));
+        assert!(!is_session_plumbing(&child_base, &child.id().to_string()));
+        assert!(
+            path_in_use_by_other(&dir),
+            "a child with its cwd inside is live use"
+        );
+        child.kill().unwrap();
+        child.wait().unwrap();
+        // No "unused afterwards" assertion: a parallel test process that is
+        // momentarily unreadable (mid-exec) is correctly treated as possible
+        // use, so that check is nondeterministic by design.
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[cfg(unix)]
     #[test]

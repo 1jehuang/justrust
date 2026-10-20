@@ -16,8 +16,8 @@
 //!   is skipped. Builds and eviction exclude each other per root with a flock.
 //! - Trigger: when free space is below the low watermark, evict least
 //!   recently built targets until above the high watermark.
-//! - `JUSTRUST_REMOTE_EVICT`: `dry` (default) only logs what it would delete,
-//!   `on` deletes, `0`/`off` disables.
+//! - `JUSTRUST_REMOTE_EVICT`: `on` (default) deletes, `dry` only logs what it
+//!   would delete, `0`/`off` disables.
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -52,8 +52,8 @@ impl Mode {
     pub fn from_env() -> Mode {
         match std::env::var("JUSTRUST_REMOTE_EVICT").as_deref() {
             Ok("0" | "off" | "false") => Mode::Off,
-            Ok("1" | "on" | "true") => Mode::On,
-            _ => Mode::Dry,
+            Ok("dry") => Mode::Dry,
+            _ => Mode::On,
         }
     }
 }
@@ -687,7 +687,7 @@ fn collect_report(
 }
 
 /// Explicit native maintenance on this machine, not a source sync or build.
-/// CLI --apply is the only opt-in here; the automatic default remains dry.
+/// The CLI plans (dry) unless --apply; the automatic agent default is on.
 #[cfg(unix)]
 pub fn command(apply: bool, prefix: &str) -> anyhow::Result<()> {
     let registry = Registry::open(prefix)?;
@@ -989,9 +989,9 @@ mod tests {
     }
 
     #[test]
-    fn mode_parsing_defaults_to_dry() {
+    fn mode_parsing_defaults_to_on() {
         if std::env::var_os("JUSTRUST_REMOTE_EVICT").is_none() {
-            assert_eq!(Mode::from_env(), Mode::Dry);
+            assert_eq!(Mode::from_env(), Mode::On);
         }
     }
 

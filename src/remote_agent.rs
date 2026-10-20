@@ -102,7 +102,7 @@ fn write_atomic(path: &Path, data: &[u8], mode: u32) -> std::io::Result<()> {
 }
 
 /// One low-disk collection pass over this agent's mirrored roots
-/// (`JUSTRUST_REMOTE_EVICT`: dry by default). Logged to the agent's stderr.
+/// (`JUSTRUST_REMOTE_EVICT`: on by default). Logged to the agent's stderr.
 fn evict_now(roots: &crate::remote_evict::Shared) {
     use crate::remote_evict as ev;
     let Some(home) = dirs::home_dir() else { return };
