@@ -1,0 +1,34 @@
+{
+  "schema": 1,
+  "date": "2026-10-20",
+  "source_revision": "910ca024c09c5d9ef5a53c8f93829bd1c844f74a",
+  "native_binary_sha256": "5edbf31e23cad6ed827e2be84408220d6668290ec22b8522f26ebf53caddbdba",
+  "oracle": "rustc 1.98.1 (48a229cea 2026-09-01)",
+  "native_binary_built_by_run": "20261020-024746019-3524835",
+  "probes": [
+    {
+      "name": "ignored-overflow-checks",
+      "manifest": "[package]\nname = \"audit-overflow\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[profile.release]\noverflow-checks = false\n",
+      "source": "fn increment(x: u8) -> u8 { x + 1 }\nfn main() { println!(\"{}\", increment(255)); }\n",
+      "native_command": "jr-rust run --manifest-path <probe>/Cargo.toml --release -j 1",
+      "native_driver_exit": 134,
+      "native_stdout": "",
+      "native_diagnostic": "attempt to add with overflow",
+      "stock_commands": ["rustc --edition=2024 -C opt-level=3 -C overflow-checks=no <probe>/src/main.rs -o <probe>/stock-overflow", "<probe>/stock-overflow"],
+      "stock_exit": 0,
+      "stock_stdout": "0\n",
+      "classification": "accepted program has wrong runtime behavior"
+    },
+    {
+      "name": "invalid-edition-accepted",
+      "manifest": "[package]\nname = \"audit-edition\"\nversion = \"0.1.0\"\nedition = \"2099\"\n",
+      "source": "fn main() {}\n",
+      "native_command": "jr-rust check --manifest-path <probe>/Cargo.toml -j 1",
+      "native_exit": 0,
+      "stock_command": "cargo metadata --no-deps --format-version 1 --manifest-path <probe>/Cargo.toml",
+      "stock_exit": 101,
+      "stock_diagnostic": "supported edition values are `2015`, `2018`, `2021`, or `2024`, but `2099` is unknown",
+      "classification": "invalid project accepted"
+    }
+  ]
+}
