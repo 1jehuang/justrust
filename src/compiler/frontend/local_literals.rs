@@ -924,6 +924,27 @@ impl<'s> Solver<'_, '_, 's> {
                     _ => None,
                 };
                 let receiver = self.peel_refs(method.receiver);
+                // Slice/str have an inherent length operation independent of
+                // their element's nominal layout. Keeping this pending until
+                // nominal method selection creates a false missing-input cycle.
+                // These are result constraints only: checked lowering still
+                // validates the exact receiver and its canonical SliceLen site.
+                // Arrays deliberately keep ordinary method lookup first, since
+                // an in-scope array trait method can shadow slice unsizing.
+                if matches!(
+                    self.domain(receiver),
+                    Domain::Slice(_) | Domain::Fixed(ir::Ty::Str)
+                ) && slice_len_method_candidate(
+                    method.name,
+                    method.actuals.len(),
+                    method.args.len(),
+                    self.checker.names()?,
+                )? {
+                    let result = self.fixed(ir::Ty::Int(ir::IntTy::Usize))?;
+                    self.unify(result, method.result)?;
+                    progress = true;
+                    continue;
+                }
                 let primitive_signature = if leading_signature.is_some() {
                     leading_signature
                 } else if method.actuals.is_empty()
@@ -969,7 +990,14 @@ impl<'s> Solver<'_, '_, 's> {
                     continue;
                 }
                 // A concrete receiver can also select trait or primitive methods.
-                if let Some(ty) = self.resolve(receiver, 0)? {
+                if let Some(mut ty) = self.resolve(receiver, 0)? {
+                    if matches!(ty, ir::Ty::Array { .. }) {
+                        let Some(original) = self.resolve(method.receiver, 0)? else {
+                            pending.push(method);
+                            continue;
+                        };
+                        ty = original;
+                    }
                     if let Some(result) = self.trait_method_constraints(
                         &ty,
                         method.name,
@@ -981,6 +1009,37 @@ impl<'s> Solver<'_, '_, 's> {
                         continue;
                     }
                     let plan = self.checker.signatures.plan()?;
+                    if array_len_receiver::receiver_is_array(&ty)
+                        && slice_len_method_candidate(
+                            method.name,
+                            method.actuals.len(),
+                            method.args.len(),
+                            self.checker.names()?,
+                        )?
+                        && plan
+                            .select_method_with_arguments(
+                                &ty,
+                                &method.name,
+                                self.checker.facts(),
+                                (&self.checker.module, &plan.budget),
+                                |_, _, _| {
+                                    Ok(method_argument_selection::MethodArguments::Ready(
+                                        std::borrow::Cow::Borrowed(&[]),
+                                    ))
+                                },
+                                |_, _| Ok(None),
+                            )?
+                            .is_none()
+                    {
+                        // Only complete absence of an applicable ordinary
+                        // method permits array-to-slice builtin fallback.
+                        // Selection errors and missing generic arguments are
+                        // not absence and must never authorize this path.
+                        let result = self.fixed(ir::Ty::Int(ir::IntTy::Usize))?;
+                        self.unify(result, method.result)?;
+                        progress = true;
+                        continue;
+                    }
                     if method.actuals.is_empty() {
                         match plan.select_method(
                             &ty,

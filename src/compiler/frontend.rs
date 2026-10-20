@@ -2530,15 +2530,26 @@ fn slice_len_candidate(expr: &Expr, names: &NameStore) -> Result<bool, String> {
         ..
     } = expr
     {
-        Ok(names
-            .spelling(*name)
-            .map_err(native_adapter::name_diagnostic)?
-            == "len"
-            && type_args.is_empty()
-            && args.is_empty())
+        slice_len_method_candidate(*name, type_args.len(), args.len(), names)
     } else {
         Ok(false)
     }
+}
+
+/// Lexical hint only; receiver typing and canonical source replay still grant
+/// builtin authority. Shared by body constraints and checked lowering.
+fn slice_len_method_candidate(
+    name: AstIdent,
+    type_arguments: usize,
+    arguments: usize,
+    names: &NameStore,
+) -> Result<bool, String> {
+    Ok(names
+        .spelling(name)
+        .map_err(native_adapter::name_diagnostic)?
+        == "len"
+        && type_arguments == 0
+        && arguments == 0)
 }
 
 /// Syntax alone never grants primitive-method authority: the checker resolves

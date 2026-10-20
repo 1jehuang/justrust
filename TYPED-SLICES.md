@@ -76,6 +76,25 @@ unchanged, not reclassified as unsupported to make the suite pass. This is a
 prerequisite for error-handling programs, not a claim that unchanged
 `full_programs/15_error_handling.rs` or full Rust now compiles.
 
+## Length inference follow-up (October 20, 2026)
+
+The later unchanged-source baseline isolated `noncopy_len` as an unresolved
+nominal-constraint failure; `bounds_empty` and `slice_range` already passed CHECK
+at workers 1 and 8, so their production paths were not changed. Slice and string
+length now constrain the result to `usize` without waiting for unrelated nominal
+layout. Array receivers retain their original reference type and complete ordinary
+method selection before permitting array-to-slice length fallback. Selection
+errors, generic-argument failures and real in-scope trait methods never authorize
+that fallback. Checked lowering still validates the canonical builtin occurrence.
+
+The complete existing `typed_slices` suite passed 10/10, including unchanged
+128-cell/50-ELF native acceptance and the expanded 15-source shared-reference
+stock CHECK/BUILD/run matrix at workers 1 and 8. Existing array native/authority
+suites passed 6/6, including trait priority and invalid-selection controls. The
+array graph suite passed 2/2 with CHECK proving no code generation and BUILD
+retaining the exact loan/unsize assertions. Graph integrity passed 14/14 without
+changing ceilings. These are bounded inference repairs, not full-program support.
+
 ## Native descriptor and memory contract
 
 Keep the existing private two-word data/length descriptor and two-word argument

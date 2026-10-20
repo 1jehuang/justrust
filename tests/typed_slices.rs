@@ -453,6 +453,11 @@ fn shared_reference_elements_stock_native_workers1_8() {
             true,
         ),
         (
+            "loaded_string_length",
+            "fn read(items:&[&str])->usize {items[1usize].len()} fn main(){let a=[\"x\",\"ok\"];if read(&a)==2usize{println!(\"ok\");}}",
+            true,
+        ),
+        (
             "borrowed",
             "fn read<'a,'b>(items:&'a [&'b i32])->&'b i32 {items[0usize]} fn main(){let n=42i32;let a=[&n];let r=read(&a);if *r==42i32{println!(\"ok\");}}",
             true,
@@ -481,6 +486,11 @@ fn shared_reference_elements_stock_native_workers1_8() {
             "same_named_elision",
             "fn read<'a>(items:&'a [&'a i32])->&i32{items[0usize]} fn main(){let n=42i32;let a=[&n];if *read(&a)==42i32{println!(\"ok\");}}",
             true,
+        ),
+        (
+            "length_wrong_result",
+            "fn bad(items:&[&str])->bool{items[0usize].len()} fn main(){}",
+            false,
         ),
         (
             "coercion_wrong_referent",
@@ -690,6 +700,26 @@ fn shared_reference_slice_check_graph_keeps_typed_carriers_without_codegen() {
                 }))
         );
     }
+}
+
+#[test]
+fn existing_slice_inference_regressions() {
+    let mut failures = Vec::new();
+    for case in cases()
+        .into_iter()
+        .filter(|case| matches!(case.name, "noncopy_len" | "bounds_empty" | "slice_range"))
+    {
+        for workers in [1, 8] {
+            if let Err(error) = compiler::compile_observed(case.source.to_owned(), workers, true) {
+                eprintln!("{} workers={workers}: {error}", case.name);
+                failures.push((case.name, workers, error.to_string()));
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "existing slice inference regressions: {failures:?}"
+    );
 }
 
 #[test]
