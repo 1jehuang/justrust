@@ -2488,6 +2488,7 @@ impl<'a, 'b> CarrierBuilder<'a, 'b> {
                     ),
                 )?,
             }
+            let mut nominal_calls = super::traits::NominalCarrierSource::new(f, authority);
             for (index, block) in f.blocks.iter().enumerate() {
                 if let Terminator::Call {
                     target, signature, ..
@@ -2504,7 +2505,7 @@ impl<'a, 'b> CarrierBuilder<'a, 'b> {
                                 )
                             })
                     } else {
-                        authority.carrier_contract(ir::SignatureSubject::Call(target))
+                        nominal_calls.call(BlockId(index))
                     };
                     match call_view {
                         Ok(view) => {

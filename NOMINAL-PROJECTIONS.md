@@ -274,6 +274,25 @@ workers 1 and 8 pass in `20261020-064016829-4143040`; graph integrity remains
 14/14 in `20261020-064123788-4142963`. Let-else or-pattern lowering still has an
 explicit unsupported boundary and is not claimed as implemented by this repair.
 
+## Graph-realized nominal result carriers (2026-10-20)
+
+Ordinary direct calls now transport reference-result carrier coordinates from
+the exact validated CFG signature when graph realization changes a nominal
+owner. A local immutable-borrow cursor checks source lowering provenance before
+issuing a private immutable transport capsule. Validation rederives all rows
+from the declaration contract and exact signature; no result-flow or loan rule
+is relaxed. Physical, projected, closure and equality-specialized transports
+remain separate unsupported modes at this bridge.
+
+The three unchanged optional-reference source cases (one valid, dangling borrow
+and mutation negatives) pass stock/native CHECK, BUILD and run/rejection at
+workers 1 and 8 in `20261020-064211980-4145653`. Independent forged authority,
+row, signature, target and source-provenance controls pass in
+`20261020-064331841-4147700`. Graph integrity passes 14/14 in
+`20261020-064123788-4142963`; strict clippy passes in
+`20261020-063734146-4135727`. This is a generic nominal-result prerequisite,
+not acceptance of the full sieve program or general iterator library.
+
 ## Required acceptance gates
 
 - Stock/native CHECK, BUILD, and run at workers 1 and 8 for nested struct and

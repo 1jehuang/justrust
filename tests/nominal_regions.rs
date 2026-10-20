@@ -1,5 +1,7 @@
 //! Named nominal lifetimes must not be replaced by temporary receiver loans.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[path = "support/stock_rustc.rs"]
+mod stock_rustc;
 mod oracle {
     use std::path::PathBuf;
     use std::process::Command;
@@ -23,9 +25,7 @@ mod oracle {
             .unwrap_or_else(|| PathBuf::from(env!("CARGO_BIN_EXE_jr-rust")));
         let native = root.join("compiler");
         std::fs::copy(&selected, &native).unwrap();
-        let stock = std::env::var_os("JUSTRUST_REAL_RUSTC")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("rustc"));
+        let stock = super::stock_rustc::stock_rustc();
         let mut failures = Vec::new();
         for (index, case) in cases.iter().enumerate() {
             let source = root.join(format!("case-{index}.rs"));
@@ -122,6 +122,36 @@ mod oracle {
     }
 }
 use oracle::{Case, Expect};
+
+#[test]
+fn graph_nominal_optional_reference_results_match_stock() {
+    oracle::check(
+        "graph-nominal-reference-results",
+        &[
+            Case {
+                name: "generic_optional_reference_result",
+                source: r#"struct W<'a,T>{r:&'a T}
+impl<'a,T> W<'a,T>{fn next(&mut self)->Option<&'a T>{Some(self.r)}}
+fn main(){let n=7i32;let mut w=W{r:&n};let x=w.next();match x{Some(r)=>println!("{}",*r),None=>()}}"#,
+                expect: Expect::Run("7\n"),
+            },
+            Case {
+                name: "generic_optional_reference_cannot_escape_owner",
+                source: r#"struct W<'a,T>{r:&'a T}
+impl<'a,T> W<'a,T>{fn next(&mut self)->Option<&'a T>{Some(self.r)}}
+fn main(){let x:Option<&i32>;{let n=7i32;let mut w=W{r:&n};x=w.next();}match x{Some(r)=>println!("{}",*r),None=>()}}"#,
+                expect: Expect::Invalid("E0597"),
+            },
+            Case {
+                name: "generic_optional_reference_blocks_mutation",
+                source: r#"struct W<'a,T>{r:&'a T}
+impl<'a,T> W<'a,T>{fn next(&mut self)->Option<&'a T>{Some(self.r)}}
+fn main(){let mut n=7i32;let mut w=W{r:&n};let x=w.next();n=9;match x{Some(r)=>println!("{}",*r),None=>()}println!("{}",n);}"#,
+                expect: Expect::Invalid("E0506"),
+            },
+        ],
+    );
+}
 
 #[test]
 fn named_carrier_preserves_exact_field_return_paths() {

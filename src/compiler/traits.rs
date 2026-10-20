@@ -34,6 +34,8 @@ mod nominal_declarations;
 mod nominal_realization;
 pub use nominal_declarations::{NominalDeclarationProof, NominalDeclarationSchema};
 pub(in crate::compiler) use nominal_realization::ClosedNominalInput;
+mod nominal_carriers;
+pub(in crate::compiler) use nominal_carriers::NominalCarrierSource;
 mod nominal_normalization;
 mod normal_drop;
 mod opaque;
@@ -1242,6 +1244,7 @@ struct SignatureTopologyProof {
 /// region solutions belong to the borrow plan, never this world-owned view.
 #[derive(Clone, Debug)]
 pub struct CarrierContractView {
+    nominal: Option<Arc<nominal_carriers::NominalCarrierAuthority>>,
     closure_result: Option<(Arc<ir::ClosureTy>, ir::ClosureKind)>,
     physical: Option<super::opaque_physical::PhysicalCarrierIdentity>,
     world: WorldId,
@@ -1329,6 +1332,9 @@ impl CarrierContractView {
                 facts.budget(),
                 "carrier view has foreign context authority",
             ));
+        }
+        if let Some(authority) = &self.nominal {
+            return authority.validate(self, facts);
         }
         if let Some((closure, mode)) = &self.closure_result {
             return facts
@@ -3996,6 +4002,7 @@ impl ValidatedTraitWorld {
         let projected_subject = projected.as_ref().map(|proof| proof.goal().clone());
         let fixed = signature.ref_contract.clone();
         let view = CarrierContractView {
+            nominal: None,
             physical: None,
             closure_result: None,
             result_signature: signature,
