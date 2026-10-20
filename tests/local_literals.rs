@@ -1,8 +1,47 @@
 //! Local scalar inference with real stock acceptance/rejection witnesses.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[path = "support/iterator_oracle.rs"]
+mod differential;
 #[path = "support/oracle.rs"]
 mod oracle;
 use oracle::{Case, Expect};
+
+#[test]
+fn loop_break_results_retain_later_type_constraints() {
+    let cases = [
+        Case {
+            name: "nested_break_value",
+            source: "fn main(){let x=loop{break 7+loop{break 2;};};let wide:u64=x;println!(\"{}\",wide);}",
+            expect: Expect::Run("9\n"),
+        },
+        Case {
+            name: "tuple_break_projection",
+            source: "fn main(){let pair=loop{break (7,true);};let wide:u64=pair.0;println!(\"{} {}\",wide,pair.1);}",
+            expect: Expect::Run("7 true\n"),
+        },
+        Case {
+            name: "outer_label_not_inner_loop",
+            source: "fn main(){let x='outer:loop{let y=loop{if false{break 'outer 9;}break true;};if y{break 7;}};let wide:u64=x;println!(\"{}\",wide);}",
+            expect: Expect::Run("7\n"),
+        },
+        Case {
+            name: "labeled_block_break_value",
+            source: "fn main(){let x='done:{if true{break 'done 11;}13};let wide:u64=x;println!(\"{}\",wide);}",
+            expect: Expect::Run("11\n"),
+        },
+        Case {
+            name: "conflicting_break_types",
+            source: "fn unused(){let _x=loop{if true{break 1u8;}break 2u16;};}fn main(){}",
+            expect: Expect::Invalid("E0308"),
+        },
+    ];
+    for case in cases {
+        match case.expect {
+            Expect::Run(_) => differential::stock_native(case.source),
+            Expect::Invalid(_) => differential::stock_and_native_reject(case.source),
+        }
+    }
+}
 
 #[test]
 fn unused_scalar_conflicts_are_user_errors() {
@@ -50,7 +89,9 @@ fn unused_scalar_conflicts_are_user_errors() {
                         .unwrap();
                 assert!(failure.report.unwrap().capture_complete);
                 let diagnostic = failure.error.to_string();
-                assert!(diagnostic.starts_with("Unproved:"), "{diagnostic}");
+                // Stock may classify an unsupported operator as E0277;
+                // native inference reports the conflicting domains as E0308.
+                assert!(diagnostic.starts_with("E0308:"), "{diagnostic}");
                 assert!(diagnostic.contains("does not match"), "{diagnostic}");
                 assert!(!diagnostic.contains("InvalidMetadata"), "{diagnostic}");
                 assert!(diagnostic.contains(left), "{diagnostic}");

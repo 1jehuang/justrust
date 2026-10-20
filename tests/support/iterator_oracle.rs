@@ -1,11 +1,40 @@
 use justrust_engine::compiler;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
-use std::process::Command;
+use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 #[path = "stock_rustc.rs"]
 mod stock_rustc;
 static NEXT: AtomicU64 = AtomicU64::new(0);
+
+fn run_image(path: &std::path::Path, root: &std::path::Path) -> Output {
+    let stdout = root.join("execution.stdout");
+    let stderr = root.join("execution.stderr");
+    let mut child = Command::new(path)
+        .stdin(Stdio::null())
+        .stdout(fs::File::create(&stdout).unwrap())
+        .stderr(fs::File::create(&stderr).unwrap())
+        .spawn()
+        .unwrap();
+    let start = Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if start.elapsed() > Duration::from_secs(10) {
+            child.kill().unwrap();
+            child.wait().unwrap();
+            panic!("oracle executable timed out: {}", path.display());
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    Output {
+        status,
+        stdout: fs::read(stdout).unwrap(),
+        stderr: fs::read(stderr).unwrap(),
+    }
+}
 
 fn root() -> std::path::PathBuf {
     std::env::var_os("JCODE_SCRATCH_DIR")
@@ -41,7 +70,7 @@ pub fn stock_native_with_args(source: &str, args: &[&str]) {
         "{}",
         String::from_utf8_lossy(&built.stderr)
     );
-    let expected = Command::new(&stock).output().unwrap();
+    let expected = run_image(&stock, &root);
     assert!(expected.status.success());
     for workers in [1, 8] {
         let checked = compiler::compile(source.into(), workers, true)
@@ -59,7 +88,7 @@ pub fn stock_native_with_args(source: &str, args: &[&str]) {
         let path = root.join(format!("native-{workers}"));
         fs::write(&path, built.executable.unwrap()).unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
-        let actual = Command::new(&path).output().unwrap();
+        let actual = run_image(&path, &root);
         assert_eq!(actual.status.code(), expected.status.code());
         assert_eq!(actual.stdout, expected.stdout);
         assert_eq!(actual.stderr, expected.stderr);

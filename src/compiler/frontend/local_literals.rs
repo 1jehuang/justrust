@@ -27,6 +27,8 @@ mod projection_call;
 #[path = "local_literals/associated_projection.rs"]
 mod associated_projection;
 
+#[path = "local_literals/control_flow.rs"]
+mod control_flow;
 #[path = "local_literals/operators.rs"]
 mod operators;
 
@@ -79,6 +81,7 @@ struct Solver<'a: 's, 'b: 's, 's> {
     closure_terms: Vec<(PathKey, Term)>,
     local_context: Option<Option<super::super::super::semantic_scope::ScopeId>>,
     return_terms: Vec<Term>,
+    control_targets: Vec<control_flow::ControlTarget>,
     unit_defaults: Vec<Term>,
     associated_equalities: Vec<(Term, Term)>,
     operators: Vec<operators::Operation>,
@@ -181,6 +184,7 @@ fn solve_body_with_seed<'a: 's, 'b: 's, 's>(
         closure_terms: Vec::new(),
         local_context: None,
         return_terms: Vec::new(),
+        control_targets: Vec::new(),
         unit_defaults: Vec::new(),
         associated_equalities: Vec::new(),
         operators: Vec::new(),
@@ -1499,24 +1503,34 @@ impl<'s> Solver<'_, '_, 's> {
                     self.coerce(value, result)?;
                 }
                 Stmt::While {
-                    condition, body, ..
+                    label,
+                    condition,
+                    body,
                 } => {
                     self.expr(condition, depth + 1)?;
+                    let unit = self.fixed(ir::Ty::Unit)?;
+                    self.enter_control(*label, unit, false)?;
                     self.block(body, depth + 1)?;
+                    self.leave_control()?;
                 }
                 Stmt::WhileLet {
+                    label,
                     pattern,
                     scrutinee,
                     body,
                     ..
                 } => {
                     let term = self.expr(scrutinee, depth + 1)?;
+                    let unit = self.fixed(ir::Ty::Unit)?;
+                    self.enter_control(*label, unit, false)?;
                     self.scopes.push(HashMap::new());
                     self.pattern(pattern, term)?;
                     self.block(body, depth + 1)?;
                     self.scopes.pop();
+                    self.leave_control()?;
                 }
                 Stmt::For {
+                    label,
                     pattern,
                     source,
                     body,
@@ -1524,10 +1538,13 @@ impl<'s> Solver<'_, '_, 's> {
                 } => {
                     let item = self.iteration_item(source, depth)?;
                     self.sites.push((stmt as *const Stmt as usize, item));
+                    let unit = self.fixed(ir::Ty::Unit)?;
+                    self.enter_control(*label, unit, false)?;
                     self.scopes.push(HashMap::new());
                     self.pattern(pattern, item)?;
                     self.block(body, depth + 1)?;
                     self.scopes.pop();
+                    self.leave_control()?;
                 }
                 _ => {}
             }
@@ -1551,7 +1568,10 @@ impl<'s> Solver<'_, '_, 's> {
         match expr {
             Expr::NativeSyscall(arguments) => {
                 if arguments.len() != 7 {
-                    return Err("native syscall requires number and six usize arguments".into());
+                    return Err(
+                        "native syscall requires exactly seven operands: number and six usize arguments"
+                            .into(),
+                    );
                 }
                 let usize_term = self.fixed(ir::Ty::Int(ir::IntTy::Usize))?;
                 for argument in arguments {
@@ -1824,10 +1844,32 @@ impl<'s> Solver<'_, '_, 's> {
                 let value = self.place(place)?;
                 self.node(Domain::Ref(*kind, value))
             }
-            Expr::Loop { body, .. } => {
+            Expr::Loop { label, body } => {
+                let result = self.fresh()?;
+                self.enter_control(*label, result, false)?;
                 self.block(body, depth + 1)?;
-                self.fresh()
+                if self.leave_control()? {
+                    Ok(result)
+                } else {
+                    self.fixed(ir::Ty::Never)
+                }
             }
+            Expr::LabeledBlock { label, body } => {
+                let result = self.fresh()?;
+                self.enter_control(Some(*label), result, true)?;
+                let tail = self.block(body, depth + 1)?;
+                self.coerce(tail, result)?;
+                self.leave_control()?;
+                Ok(result)
+            }
+            Expr::Break { label, value } => {
+                let value = match value {
+                    Some(value) => self.expr(value, depth + 1)?,
+                    None => self.fixed(ir::Ty::Unit)?,
+                };
+                self.infer_break(*label, value)
+            }
+            Expr::Continue { label } => self.infer_continue(*label),
             Expr::Format { arguments, .. } => {
                 for a in arguments {
                     self.expr(a, depth + 1)?;

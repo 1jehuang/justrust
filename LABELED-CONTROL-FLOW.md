@@ -13,6 +13,17 @@ Regression coverage accepts 120 nested break operands, rejects 140 with a nestin
 diagnostic, and validates original labeled targets while rejecting a forged
 target identity.
 
+## Body-local result constraints (2026-10-20)
+
+Local scalar inference carries each loop or labeled block's result variable
+through its own break operands, including nested tuple projections and later
+width constraints. Labels use canonical source identities and closure-local
+return depth, so an inner loop cannot capture an outer labeled result by
+accident. A nested hint query without the enclosing target leaves target
+authority to ordinary checking. These are local inference constraints only:
+existing label, move, loan and CFG validators remain authoritative.
+Stock-differential regressions live in `tests/local_literals.rs`.
+
 ## Checked representation
 
 Labels are resolved lexically to private `LoopId` values during source checking.
