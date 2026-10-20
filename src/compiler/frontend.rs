@@ -331,15 +331,55 @@ mod canonical_source_replay_tests {
             0,
         );
         ir::validate_published_source(&legacy, &budget).unwrap();
-        // Associated omitted method inference is still not admitted by this ordinary-call slice.
-        let program = fixture_program(
+        // Associated omitted arguments now use the same sealed source replay.
+        let (program, plan, budget, associated) = published(
             "struct S{x:i32}impl S{fn id<T>(x:T)->T{x}}fn f(r:&i32){let y=S::id(r);}",
+            0,
         );
-        let budget = ir::PlanBudget::default();
-        let plan = PlanCtx::from_program(&program, &budget).unwrap();
-        assert!(
-            plan.publish_callable_body(plan.function_decl(0).unwrap(), &budget)
-                .is_err()
+        ir::validate_published_source(&associated, &budget).unwrap();
+        let (call, target, argument) = associated
+            .source()
+            .exprs
+            .iter()
+            .enumerate()
+            .find_map(|(index, expr)| match &expr.kind {
+                ir::ExprKind::Call {
+                    target: ir::Callee::Direct(target),
+                    args,
+                    ..
+                } => Some((index, target, args[0])),
+                _ => None,
+            })
+            .unwrap();
+        let path = plan.semantic_path(target.declaration).unwrap();
+        assert!(path.associated.is_some());
+        let DeclItemName::Source(name) = path.item else {
+            panic!("expected source method")
+        };
+        assert_eq!(program.names.spelling(name).unwrap(), "id");
+        assert_eq!(
+            target.type_args.as_ref(),
+            &[associated.source().exprs[argument.0].ty.clone()]
+        );
+        assert!(matches!(
+            associated.source().exprs[argument.0].kind,
+            ir::ExprKind::Local(_)
+        ));
+        let mut forged = associated.source().as_ref().clone();
+        let ir::ExprKind::Call {
+            target: ir::Callee::Direct(target),
+            ..
+        } = &mut forged.exprs[call].kind
+        else {
+            unreachable!()
+        };
+        target.declaration = plan.function_decl(0).unwrap();
+        assert_eq!(
+            kind_error(associated.validate_source(&Arc::new(forged), associated.facts(), &budget)),
+            tr::FactsErrorKind::InvalidMetadata
+        );
+        super::parser_tests::stock_native_run(
+            "struct S{x:i32}impl S{fn id<T>(x:T)->T{x}}fn main(){let value=7i32;let r=&value;let y=S::id(r);assert_eq!(*y,7);}",
         );
     }
     #[test]
@@ -364,19 +404,81 @@ mod canonical_source_replay_tests {
             "fn renamed<T>(x:T)->T{x}fn main(){let mut value=1i32;let r=renamed(&value);value=2;let later=*r;}",
             "fn renamed<T>(x:T)->T{x}fn main(){let mut value=1i32;let r=renamed(&mut value);let moved=r;let invalid=*r;}",
         ] {
+            let stock =
+                super::parser_tests::stock_compile(source, std::path::Path::new("/dev/null"), true);
+            assert!(
+                !stock.status.success()
+                    && String::from_utf8_lossy(&stock.stderr).contains("error[E"),
+                "stock did not produce a Rust semantic rejection: {source}: {}",
+                String::from_utf8_lossy(&stock.stderr)
+            );
             for workers in [1, 8] {
                 for check in [true, false] {
                     let failure = super::super::compile_observed(source.into(), workers, check)
                         .err()
                         .unwrap();
-                    assert!(
-                        failure
-                            .analyses
+                    if source.contains("let value=1i32") {
+                        let diagnostic = failure.error.to_string();
+                        assert!(diagnostic.contains("ImmutableReassignment"), "{diagnostic}");
+                        assert!(diagnostic.contains("source declaration 1"), "{diagnostic}");
+                        let report = failure.report.as_ref().unwrap();
+                        let admission = report
+                            .node_evaluations
                             .iter()
-                            .any(|(_, analysis)| !analysis.passed()),
-                        "{source}: {}",
-                        failure.error
-                    );
+                            .zip(&report.node_ids)
+                            .find_map(|((key, _), id)| {
+                                (key.kind == super::super::SOURCE_ADMISSION
+                                    && key.params.as_slice() == [1])
+                                .then_some(id)
+                            })
+                            .expect(
+                                "main must fail its source admission, before instance analysis",
+                            );
+                        assert!(report.node_errors.iter().any(|(id, error)| id == admission
+                            && error.to_string().contains("ImmutableReassignment")));
+                    } else {
+                        let report = failure.report.as_ref().unwrap();
+                        let source_rejection =
+                            report.node_evaluations.iter().zip(&report.node_ids).any(
+                                |((key, _), id)| {
+                                    key.kind == super::super::SOURCE_ADMISSION
+                                        && key.params.as_slice() == [1]
+                                        && report.node_errors.iter().any(|(failed_id, error)| {
+                                            failed_id == id
+                                                && error
+                                                    .to_string()
+                                                    .contains("initialization/move analysis")
+                                        })
+                                },
+                            );
+                        assert!(
+                            source_rejection
+                                || failure
+                                    .analyses
+                                    .iter()
+                                    .any(|(_, analysis)| analysis.complete && !analysis.passed()),
+                            "{source}: {}",
+                            failure.error
+                        );
+                        let diagnostic = failure.error.to_string();
+                        assert!(
+                            diagnostic.contains("BorrowConflict")
+                                || diagnostic.contains("ReadNotDefinitelyInitialized")
+                                || diagnostic.contains("InvalidReference"),
+                            "{source}: {diagnostic}"
+                        );
+                    }
+                    let report = failure.report.as_ref().unwrap();
+                    assert!(report.capture_complete);
+                    assert!(!report.published_kind(super::super::BUILD));
+                    if check {
+                        assert!(
+                            report
+                                .node_evaluations
+                                .iter()
+                                .all(|(key, _)| key.kind != super::super::OBJECT)
+                        );
+                    }
                 }
             }
         }
@@ -407,16 +509,64 @@ mod canonical_source_replay_tests {
                 }
             }
         }
-        for source in [
-            "fn renamed<T>(x:T)->T{x}struct S{x:i32}fn main(){let value=S{x:1};let r=renamed(&value.x);}",
-            "fn renamed<T>(x:T)->T{x}fn runtime()->i32{1}fn main(){let value=runtime();let r=renamed(&value);}",
-            "fn renamed<T>(x:T)->T{x}fn main(){let value=1i32;let nested=&value;let r=renamed(&nested);}",
+    }
+
+    #[test]
+    fn root_borrow_unsupported_origins_have_typed_rejections() {
+        for (source, expected) in [
+            (
+                "fn renamed<T>(x:T)->T{x}struct S{x:i32}fn main(){let value=S{x:1};let r=renamed(&value.x);}",
+                "inferred reference requires original shared local Var",
+            ),
+            (
+                "fn renamed<T>(x:T)->T{x}fn runtime()->i32{1}fn main(){let value=runtime();let r=renamed(&value);}",
+                "fresh borrow root requires an annotation or suffixed integer/Bool/char literal",
+            ),
+            (
+                "fn renamed<T>(x:T)->T{x}fn main(){let value=1i32;let nested=&value;let r=renamed(&nested);}",
+                "fresh borrow root requires an annotation or suffixed integer/Bool/char literal",
+            ),
         ] {
-            let error = super::super::compile(source.into(), 1, true).err().unwrap();
+            let stock =
+                super::parser_tests::stock_compile(source, std::path::Path::new("/dev/null"), true);
             assert!(
-                error.to_string().contains("unsupported")
-                    || error.to_string().contains("Unsupported"),
-                "{source}: {error}"
+                stock.status.success(),
+                "stock: {}",
+                String::from_utf8_lossy(&stock.stderr)
+            );
+            let program = fixture_program(source);
+            let budget = ir::PlanBudget::default();
+            let plan = PlanCtx::from_program(&program, &budget).unwrap();
+            let main = program
+                .functions
+                .iter()
+                .position(|function| {
+                    function.name.anchor() == PathAnchor::Crate
+                        && function.name.len() == 1
+                        && program.names.spelling(function.name.segments()[0]).unwrap() == "main"
+                })
+                .unwrap();
+            let error = plan
+                .publish_callable_body(plan.function_decl(main).unwrap(), &budget)
+                .err()
+                .expect("bounded origin must remain unsupported");
+            assert_eq!(error.kind(), tr::FactsErrorKind::Unsupported);
+            let failure = super::super::compile_observed(source.into(), 1, true)
+                .err()
+                .unwrap();
+            assert!(
+                failure.error.to_string().contains(expected),
+                "{source}: {}",
+                failure.error
+            );
+            let report = failure.report.unwrap();
+            assert!(report.capture_complete);
+            assert!(!report.published_kind(super::super::BUILD));
+            assert!(
+                report
+                    .node_evaluations
+                    .iter()
+                    .all(|(key, _)| key.kind != super::super::OBJECT)
             );
         }
     }

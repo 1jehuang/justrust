@@ -1,5 +1,106 @@
 use super::*;
 
+pub(super) fn stock_compile(
+    source: &str,
+    output: &std::path::Path,
+    metadata: bool,
+) -> std::process::Output {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    let mut command = Command::new(super::super::stock_rustc::stock_rustc());
+    command.env_remove("RUSTC_BOOTSTRAP").args([
+        "--edition=2024",
+        "--crate-name=source_contract",
+        "-Cpanic=abort",
+    ]);
+    if metadata {
+        command.arg("--emit=metadata");
+    }
+    let metadata_path = metadata.then(|| {
+        std::env::temp_dir().join(format!(
+            "source-contract-metadata-{}-{}.rmeta",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ))
+    });
+    let mut child = command
+        .arg("-")
+        .arg("-o")
+        .arg(metadata_path.as_deref().unwrap_or(output))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(source.as_bytes())
+        .unwrap();
+    let result = child.wait_with_output().unwrap();
+    if let Some(path) = metadata_path
+        && path.exists()
+    {
+        std::fs::remove_file(path).unwrap();
+    }
+    result
+}
+
+pub(super) fn stock_native_run(source: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    use std::process::Command;
+    let directory = std::env::temp_dir().join(format!(
+        "source-contract-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir(&directory).unwrap();
+    let stock_path = directory.join("stock");
+    let stock = stock_compile(source, &stock_path, false);
+    assert!(
+        stock.status.success(),
+        "stock: {}",
+        String::from_utf8_lossy(&stock.stderr)
+    );
+    let expected = Command::new(&stock_path).output().unwrap();
+    assert!(expected.status.success(), "stock runtime: {expected:?}");
+    assert!(expected.stderr.is_empty(), "stock runtime: {expected:?}");
+    for workers in [1, 8] {
+        let checked = super::super::compile(source.into(), workers, true).unwrap();
+        assert!(checked.executable.is_none());
+        assert!(checked.report.capture_complete);
+        assert!(
+            checked
+                .report
+                .node_evaluations
+                .iter()
+                .all(|(key, _)| !matches!(key.kind, super::super::OBJECT | super::super::BUILD))
+        );
+        let built = super::super::compile(source.into(), workers, false).unwrap();
+        assert!(built.report.capture_complete);
+        let path = directory.join(format!("native-{workers}"));
+        std::fs::write(&path, built.executable.unwrap()).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let actual = Command::new(path).output().unwrap();
+        assert_eq!(
+            actual.status.code(),
+            expected.status.code(),
+            "workers={workers}: {}",
+            String::from_utf8_lossy(&actual.stderr)
+        );
+        assert_eq!(actual.stdout, expected.stdout, "workers={workers}");
+        assert!(actual.stderr.is_empty(), "workers={workers}: {actual:?}");
+    }
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
 #[test]
 fn builtin_matches_source_shape_and_single_evaluation() {
     for (open, close) in [("(", ")"), ("[", "]"), ("{", "}")] {
@@ -1662,7 +1763,35 @@ fn assertion_failure(expr: &Expr) -> &SourcePanic {
     assert!(then_block.statements.is_empty());
     assert!(then_block.tail.is_none());
     assert!(else_block.statements.is_empty());
-    let Some(Expr::Panic(panic)) = else_block.tail.as_deref() else {
+    let failure = else_block.tail.as_deref().unwrap();
+    let failure = if let Expr::Block(block) = failure {
+        let [
+            Stmt::Expr(Expr::Format {
+                pieces,
+                arguments,
+                stream,
+                ..
+            }),
+        ] = block.statements.as_slice()
+        else {
+            panic!("expected one formatted panic output")
+        };
+        assert_eq!(*stream, ir::OutputStream::PanicStderr);
+        assert_eq!(pieces.len(), arguments.len() + 1);
+        let Expr::Unsafe(pid) = &arguments[0] else {
+            panic!("expected generated process identity")
+        };
+        assert!(matches!(pid.tail.as_deref(), Some(Expr::NativeSyscall(_))));
+        let Some(Expr::Panic(panic)) = block.tail.as_deref() else {
+            panic!("formatted output must end in panic")
+        };
+        assert!(panic.preformatted);
+        assert!(panic.message.is_empty());
+        block.tail.as_deref().unwrap()
+    } else {
+        failure
+    };
+    let Expr::Panic(panic) = failure else {
         panic!("expected assertion failure source Panic")
     };
     panic
@@ -1685,7 +1814,20 @@ fn builtin_assert_delimiters_messages_and_unit_source_shape() {
         let program = parse(&format!("fn main(){{\n{invocation}\n}}")).unwrap();
         let expression = program.functions[0].body.tail.as_deref().unwrap();
         let panic = assertion_failure(expression);
-        assert_eq!(panic.message, expected);
+        if panic.preformatted {
+            let Expr::If { else_block, .. } = expression else {
+                unreachable!()
+            };
+            let Some(Expr::Block(block)) = else_block.tail.as_deref() else {
+                unreachable!()
+            };
+            let Stmt::Expr(Expr::Format { pieces, .. }) = &block.statements[0] else {
+                unreachable!()
+            };
+            assert!(pieces.iter().any(|piece| piece.contains(expected)));
+        } else {
+            assert_eq!(panic.message, expected);
+        }
         validate_panic_site(panic, &program.names).unwrap();
         let original = program.names.session().original(panic.site, 512).unwrap();
         let (_, line, column) = program
@@ -1990,7 +2132,23 @@ fn comparison_assertions_delimiters_messages_and_source_order() {
                 let inventory =
                     SourceInventory::build(&program, &program.functions[2], identity, &budget)
                         .unwrap();
-                assert_eq!(inventory.calls.len(), 2);
+                assert_eq!(inventory.calls.len(), 3);
+                assert_eq!(
+                    inventory
+                        .calls
+                        .iter()
+                        .filter(|call| call.operator_candidate)
+                        .count(),
+                    1
+                );
+                let ordinary: Vec<_> = inventory
+                    .calls
+                    .iter()
+                    .filter_map(|call| call.ordinary.as_ref())
+                    .collect();
+                assert_eq!(ordinary.len(), 2);
+                assert!(canonical_path_matches(&program, ordinary[0], "left"));
+                assert!(canonical_path_matches(&program, ordinary[1], "right"));
                 let env = type_env(&program).unwrap();
                 let checked = type_function_with_env(&program, 2, &env).unwrap();
                 assert_eq!(
@@ -2015,6 +2173,9 @@ fn comparison_assertions_delimiters_messages_and_source_order() {
             }
         }
     }
+    stock_native_run(
+        "fn left()->i32{print!(\"L\");1}fn right()->i32{print!(\"R\");1}fn message()->i32{print!(\"M\");9}fn main(){assert_eq!(left(),right(),\"{}\",message());println!(\"done\");}",
+    );
 }
 
 #[test]
@@ -2028,21 +2189,30 @@ fn comparison_assertions_shadowing_syntax_and_operand_boundaries() {
             program.functions[0].body.tail.as_deref(),
             Some(Expr::Integer(_))
         ));
-        for source in [
-            format!("macro_rules! {name}{{()=>{{42}};}}fn main(){{{name}!()}}"),
-            format!("fn main(){{macro_rules! {name}{{(other)=>{{42}};}}{name}!(1,1)}}"),
-        ] {
-            assert!(parse(&source).is_err(), "{source}");
-        }
+        let module_shadow = format!(
+            "macro_rules! {name}{{()=>{{42}};}}fn main(){{let value={name}!();assert!(value==42);}}"
+        );
+        good(&module_shadow);
+        stock_native_run(&module_shadow);
+        let missing_arm =
+            format!("fn main(){{macro_rules! {name}{{(other)=>{{42}};}}{name}!(1,1)}}");
+        assert!(parse(&missing_arm).is_err(), "{missing_arm}");
         for arguments in ["", "1", "1,", ",1", "1,,2", "1 2", "1,2,,"] {
             assert!(
                 parse(&format!("fn main(){{{name}!({arguments})}}")).is_err(),
                 "{name}: {arguments}"
             );
         }
-        for arguments in ["1,2,42", "1,2,message", "1,2,\"{}\"", "1,2,\"literal\",42"] {
+        for arguments in ["1,2,42", "1,2,message"] {
             let error = parse(&format!("fn main(){{{name}!({arguments})}}")).unwrap_err();
             assert!(error.contains("unsupported"), "{error}");
+        }
+        for (arguments, diagnostic) in [
+            ("1,2,\"{}\"", "invalid reference to positional argument"),
+            ("1,2,\"literal\",42", "argument never used"),
+        ] {
+            let error = parse(&format!("fn main(){{{name}!({arguments})}}")).unwrap_err();
+            assert!(error.contains(diagnostic), "{error}");
         }
         for operands in ["&1,&1", "(1,true),(1,true)", "[1],[1]", "1,true"] {
             let source = format!("fn main(){{{name}!({operands});}}");
@@ -2154,7 +2324,35 @@ fn debug_assertions_keep_checked_arguments_and_configured_source_shape() {
             let identity = sr::OriginalBodyId::new(&budget).unwrap();
             let inventory =
                 SourceInventory::build(&program, &program.functions[2], identity, &budget).unwrap();
-            assert_eq!(inventory.calls.len(), calls);
+            // The comparison has a source operator candidate, but primitive
+            // equality must not become an extra executable function call.
+            assert_eq!(inventory.calls.len(), calls + 1);
+            assert_eq!(
+                inventory
+                    .calls
+                    .iter()
+                    .filter(|call| call.operator_candidate)
+                    .count(),
+                1
+            );
+            assert_eq!(
+                inventory
+                    .calls
+                    .iter()
+                    .filter(|call| call.ordinary.is_some())
+                    .count(),
+                calls
+            );
+            let env = type_env(&program).unwrap();
+            let checked = type_function_with_env(&program, 2, &env).unwrap();
+            assert_eq!(
+                checked
+                    .exprs
+                    .iter()
+                    .filter(|expr| matches!(expr.kind, ir::ExprKind::Call { .. }))
+                    .count(),
+                calls
+            );
             program.validate_name_handles().unwrap();
             preflight_program_clone(&program, &budget).unwrap();
             recipes::inventory(&program, &budget).unwrap();
@@ -2197,11 +2395,14 @@ fn debug_assertions_preserve_expansion_profile_shadowing_and_message_bounds() {
                 program.functions[0].body.tail.as_deref(),
                 Some(Expr::Integer(_))
             ));
-            for suffix in [",42", ",\"{}\"", ",\"message\",42"] {
+            for (suffix, diagnostic) in [
+                (",42", "unsupported"),
+                (",\"{}\"", "invalid reference to positional argument"),
+                (",\"message\",42", "argument never used"),
+            ] {
                 let source = format!("fn main(){{{name}!({args}{suffix})}}");
                 let error = configured_debug_program(&source, enabled).unwrap_err();
-                assert!(error.contains(name), "{error}");
-                assert!(error.contains("unsupported"), "{error}");
+                assert!(error.contains(diagnostic), "{error}");
             }
         }
     }
