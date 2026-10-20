@@ -18,17 +18,9 @@ more parallelizable, and more cacheable.
 
 ---
 
-> **Note:** `main` contains the clean-room compiler rewrite. `jr-rust` is the
-> compiler executable built by this repository's `justrust-engine` Cargo package,
-> not a separate crate or repository. Core compiler development lives here.
-> It supports only a small Rust subset so far ([compiler documentation](docs/compiler/COMPILER.md)).
-> The released client and service described below are maintained on the
-> [`stable`](https://github.com/1jehuang/justrust/tree/stable) branch.
-
 justrust is rebuilding every step of the Rust build toolchain from scratch,
 with a goal of **100–1,000× faster builds** through more parallelism, finer-grained
-caching, and less redundant work. This is an ambition for the new toolchain,
-not a measured speedup or a claim about today's released client.
+caching, and less redundant work.
 
 The released client makes the edit, check, and test loop faster locally or with
 our remote build service while the new toolchain takes shape.
