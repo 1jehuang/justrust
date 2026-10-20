@@ -7972,3 +7972,25 @@ build or daemon restart was launched for this acceptance record.
 
 ## 2026-10-19: hosted test run hung with no output
 `justrust test -p jcode-base -p jcode-provider-openai-runtime -p jcode-app-core -p jcode-tui --lib` (hosted, jcode) printed nothing for 30+ minutes and had to be cancelled. The same tests with `--local` finished in 28s and 55s. Run id unknown (not in `justrust log`). Investigate a remote hang or missing timeout or heartbeat.
+
+## 2026-10-20: hosted disk full again; GC skipped every root as InUse
+The hosted build disk measured 100% (4.9 GB free of 484 GB). Every hosted
+build failed or fell back locally. The automatic collector ran, but the
+daemon log showed all 14 registered roots skipped as `InUse` on every pass
+(263 InUse, 1333 Leased and 18844 Recent skips over the evening). No process
+actually had a cwd or fd under those roots. The fail-closed check in
+`procfs::path_in_use_by_other` counted the account's own non-dumpable session
+processes as unknowable live use: `systemd --user`, `(sd-pam)` and the
+agent's parent `sshd`, whose cwd/fd/exe return EACCES even to their owner.
+The automatic mode was also still `dry`, so even a correct plan freed nothing.
+
+Fix in c390897db: exempt exactly those processes (this process's ancestors,
+and the user manager by exact argv, only when unreadable). Every other
+unreadable process of the account still blocks collection. The automatic
+default is now `on`. On the live machine, the fixed binary's dry plan listed
+12 idle registered targets oldest-first and still skipped the 2 roots with
+active leases. One `justrust remote gc --apply` freed 138,805,305,344 bytes
+(4.9 GB -> 135 GB free, 73% used). Sources stayed intact, and a hosted
+`justrust test --test graph_integrity` of committed main passed on hosted
+afterwards. The hosted agent now runs the same binary (sha256 2989351da2ba344e...)
+and its plan reports no collection needed.
