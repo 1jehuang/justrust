@@ -3,6 +3,55 @@
 mod oracle;
 
 #[test]
+fn supported_fragment_and_parameter_projection_preserve_local_hygiene() {
+    for source in [
+        "macro_rules! unused {()=>{$missing};} macro_rules! value {($x:expr)=>{$x};()=>{0};} fn main(){assert_eq!(value!(3+4),7);assert_eq!(value!(),0);}",
+        "macro_rules! typed {($value:expr)=>{{let copy:T=$value;copy}};} fn identity<T>(value:T)->T{typed!(value)} fn main(){assert_eq!(identity(7u64),7u64);}",
+        "fn main(){let value=7;macro_rules! read {()=>{value};} {let value=11;assert_eq!(read!(),7);assert_eq!(value,11);}}",
+        "macro_rules! item {()=>{struct Data{value:i32} impl Data{fn read(&self)->i32{self.value}}};} item!();fn main(){let data=Data{value:7};assert_eq!(data.read(),7);}",
+    ] {
+        oracle::stock_native(source);
+    }
+}
+
+#[test]
+fn invalid_macros_and_hygienic_misses_are_source_errors_even_when_unused() {
+    for source in [
+        "macro_rules! unused {($x:unknown_fragment)=>{};} fn main(){}",
+        "macro_rules! missing {()=>{$missing};} fn unused(){let value=missing!();} fn main(){}",
+        "fn unused(){macro_rules! read {()=>{value};} let value=7;let result=read!();} fn main(){}",
+        "macro_rules! item {($name:ident,$parameter:ident)=>{fn $name($parameter:i32)->i32{value}};} item!(unused,value);fn main(){}",
+        // Stock rejects the unbound lifetime. Native currently rejects the
+        // named local annotation as unsupported, not lifetime-resolution parity.
+        "macro_rules! refer {($value:expr)=>{{let copy:&'a i32=$value;copy}};} fn unused(value:&i32)->&i32{refer!(value)} fn main(){}",
+    ] {
+        let fixture = oracle::Fixture::new(source, &[], None);
+        let stock = fixture.stock(true);
+        assert!(
+            !stock.status.success(),
+            "stock accepted invalid hygiene control: {source}"
+        );
+        for workers in [1, 8] {
+            for check in [true, false] {
+                let failure = fixture.native(workers, check).err().unwrap_or_else(|| {
+                    panic!("native accepted workers={workers} check={check}: {source}")
+                });
+                assert!(failure.report.as_ref().is_some_and(|r| r.capture_complete));
+                let diagnostic = failure.to_string().to_lowercase();
+                for unexpected in [
+                    "invalid metadata",
+                    "invalidmetadata",
+                    "budget",
+                    "limit exceeded",
+                ] {
+                    assert!(!diagnostic.contains(unexpected), "{failure}: {source}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn user_macro_shadow_does_not_rebind_prelude_sources() {
     for source in [
         "macro_rules! panic {() => {23i32};} fn f()->i32 {panic!()} fn main(){assert_eq!(f(),23i32);}",

@@ -842,13 +842,27 @@ impl ScopeArena {
         }
         let span = names.session().span(names.span(ident)?)?;
         if let Some(e) = span.expansion
-            && self.item_anchor(e)?.is_some()
+            && let Some(proof) = self.item_anchor(e)?
         {
             return match role {
                 // Non-function generated items (structs, enums, impls, traits,
                 // consts): their names come from a checked, anchored item
                 // expansion and resolve with ordinary module scoping.
-                OccurrenceRole::OriginalModule(_) => Ok(()),
+                OccurrenceRole::OriginalModule(_) => {
+                    proof.check_modules(names, modules)?;
+                    proof.validate_span(names.session(), names.span(ident)?)?;
+                    if proof.target_module != module
+                        || self
+                            .association(semantic_name::occurrence_index(names, ident)?)?
+                            .is_some()
+                    {
+                        return Err(ScopeError::ConflictingAssociation);
+                    }
+                    // An item expansion can also own executable products. Its
+                    // existence alone does not authorize moving one of their
+                    // recorded locals/references into the module domain.
+                    Ok(())
+                }
                 OccurrenceRole::GeneratedDeclaration {
                     function,
                     declaration,
@@ -1039,6 +1053,34 @@ mod tests {
         let mut f = fixture();
         let mut scopes = ScopeArenaBuilder::for_names(&f.names).unwrap();
         let proof = anchor(&f, &mut scopes);
+        let module = f.modules.source_root().unwrap();
+        let item_name = f
+            .names
+            .admit_item_token(f.marked, Edition::E2024, &proof)
+            .unwrap();
+        scopes
+            .check_occurrence_in(
+                &f.names,
+                &f.modules,
+                item_name,
+                OccurrenceRole::OriginalModule(module),
+            )
+            .unwrap();
+        let child_name = f.names.intern_root("child", f.original).unwrap();
+        let child = f
+            .modules
+            .intern_child(&f.names, module, child_name)
+            .unwrap();
+        assert!(
+            scopes
+                .check_occurrence_in(
+                    &f.names,
+                    &f.modules,
+                    item_name,
+                    OccurrenceRole::OriginalModule(child),
+                )
+                .is_err()
+        );
         let declaration = f
             .names
             .admit_item_token(f.marked, Edition::E2024, &proof)
@@ -1093,7 +1135,6 @@ mod tests {
         scopes
             .seal_item_product(&f.names, &f.modules, &proof, function, declaration)
             .unwrap();
-        let module = f.modules.source_root().unwrap();
         scopes
             .check_occurrence_in(
                 &f.names,
@@ -1113,6 +1154,19 @@ mod tests {
                 )
                 .is_err()
         );
+        for bound in [root_x, marked_binder, captured_use] {
+            assert!(
+                scopes
+                    .check_occurrence_in(
+                        &f.names,
+                        &f.modules,
+                        bound,
+                        OccurrenceRole::OriginalModule(module),
+                    )
+                    .is_err(),
+                "function-bound occurrences cannot acquire module authority"
+            );
+        }
         assert!(
             scopes
                 .check_occurrence_in(

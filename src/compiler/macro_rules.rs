@@ -758,13 +758,34 @@ mod tests {
             let mut f = Fixture::new(source);
             assert!(matches!(f.definition(0), Err(MacroError::Syntax { .. })));
         }
-        let mut f = Fixture::new("{ ($x:expr) => {}; () => {} }");
+        let mut f = Fixture::new("{ ($x:unknown_fragment) => {}; () => {} }");
         assert!(matches!(
             f.definition(0),
             Err(MacroError::Unsupported { .. })
         ));
-        let mut f = Fixture::new("{ () => {$missing} }");
-        assert!(f.definition(0).is_ok());
+        let mut f = Fixture::new("{ ($x:expr) => {$x}; () => {empty} } {1+2} {}");
+        let definition = f.definition(0).unwrap();
+        let output = f.expand(&definition, f.part(1)).unwrap();
+        // Expression matchers are supported now. Verify arm selection here;
+        // forwarding opacity is a separate fragment-representation contract.
+        assert!(
+            !output
+                .tokens(&f.session)
+                .unwrap()
+                .is_empty(&f.session)
+                .unwrap()
+        );
+        let output = f.expand(&definition, f.part(2)).unwrap();
+        assert_eq!(f.first_symbol(&output), "empty");
+        let mut f = Fixture::new("{ () => {$missing} } {}");
+        let definition = f.definition(0).unwrap();
+        assert!(matches!(
+            f.expand(&definition, f.part(1)),
+            Err(MacroError::Syntax {
+                message: "unknown transcriber metavariable",
+                ..
+            })
+        ));
     }
 
     #[test]

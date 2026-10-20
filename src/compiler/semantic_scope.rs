@@ -1514,16 +1514,27 @@ mod tests {
         let captured_use = names
             .admit_expanded_token(capture, Edition::E2024, &proof)
             .unwrap();
-        for class in [
-            LookupClass::Label,
-            LookupClass::TypeParameter,
-            LookupClass::LifetimeParameter,
-        ] {
-            assert!(matches!(
-                names.key(def_use, class),
-                Err(NameError::Unsupported(UnsupportedName::NonRootContext))
-            ));
+        assert!(matches!(
+            names.key(def_use, LookupClass::Label),
+            Err(NameError::Unsupported(UnsupportedName::NonRootContext))
+        ));
+        // Parameter names now have the same invocation-site textual lookup as
+        // items. That projection must not erase local-variable hygiene, and it
+        // does not grant the unsupported label projection any authority.
+        for class in [LookupClass::TypeParameter, LookupClass::LifetimeParameter] {
+            assert_eq!(
+                names.key(def_use, class).unwrap(),
+                names.key(captured_use, class).unwrap()
+            );
+            assert_eq!(
+                names.key(def_use, class).unwrap(),
+                names.key(caller_x, class).unwrap()
+            );
         }
+        assert_ne!(
+            names.key(def_use, LookupClass::Local).unwrap(),
+            names.key(captured_use, LookupClass::Local).unwrap()
+        );
         assert_eq!(
             scopes.resolve_reference(&names, call, def_use).unwrap(),
             Some(original)
