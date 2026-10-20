@@ -11,6 +11,11 @@ pub(super) fn query_value(
     budget: &ir::PlanBudget,
 ) -> Result<Option<usize>, String> {
     query.validate(facts, budget)?;
+    if query.is_packed_byte_reserve() {
+        // A byte-count query only. No allocation, pointer or initialized-range
+        // authority is granted here; private storage_stride::<u8>() stays eight.
+        return Ok(Some(1));
+    }
     if !query.is_private_storage_stride() {
         return alignment(query.queried_type(), facts, budget);
     }

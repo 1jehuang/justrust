@@ -42,6 +42,7 @@ mod trait_method_source_tests;
 
 mod function_qualifiers;
 mod function_source;
+pub use function_source::packed_query::PackedReserveAuthority;
 mod generated_callables;
 mod generated_debug;
 mod generated_derive;
@@ -19676,6 +19677,16 @@ impl SchemaAdapter {
     }
 }
 impl tr::SchemaCx for SchemaAdapter {
+    fn replay_packed_reserve_authority(
+        &self,
+        authority: &PackedReserveAuthority,
+        declaration: ir::DeclId,
+    ) -> Result<(), tr::FactsError> {
+        authority
+            .replay(&self.program, &self.registry, declaration, &self.budget)
+            .map_err(|error| self.error(error))
+    }
+
     fn closure_recipe(
         &self,
         provider: ir::DeclId,

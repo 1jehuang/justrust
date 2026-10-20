@@ -668,7 +668,7 @@ fn embedded_function_authority_header_body_site_and_canonical_identity_tampering
 /// Syntax-only control, not a substitute for loader or canonical authority.
 #[test]
 fn embedded_function_authority_recipe_preserves_ordered_calls_and_arguments() {
-    fn events(names: &NameStore, function: &Function) -> Vec<Event> {
+    fn events(names: &NameStore, function: &Function) -> Vec<FunctionSyntaxEvent> {
         let mut events = Vec::new();
         assert!(
             recipe(names, function, &mut |event| {

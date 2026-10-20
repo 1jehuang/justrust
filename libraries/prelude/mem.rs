@@ -13,6 +13,21 @@ pub(super) fn storage_stride<T>() -> usize {
     __justrust_storage_stride!(T)
 }
 
+// Packed native bytes are not the compiler's private u8 carrier slots.
+// This helper remains ordinary source; its one query has separate exact
+// original-function authority. No caller or allocator effect is privileged.
+pub(super) fn packed_reserve(address: usize, old_count: usize, new_count: usize) -> usize {
+    let unit = __justrust_storage_stride!(u8);
+    if new_count == 0usize {
+        return 0usize;
+    }
+    if old_count > 18446744073709551615usize / unit || new_count > 18446744073709551615usize / unit
+    {
+        return 0usize;
+    }
+    raw_realloc(address, old_count * unit, new_count * unit)
+}
+
 pub fn align_of<T>() -> usize {
     __justrust_align_of!(T)
 }

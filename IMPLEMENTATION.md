@@ -6,6 +6,17 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 
 ## Completed foundations, not full compatibility
 
+- [x] Packed-byte query operation authority binds genuine loader-issued function
+      syntax, exact original query occurrence and canonical callee through a
+      default-deny borrowed schema service (`PACKED-QUERY-AUTHORITY.md`). It is a
+      query-admission prerequisite only: allocation/runtime memory origins,
+      String/Vec activation and G0-G12 completion remain open. Exact-parent519a
+      enum alignment CHECK acceptance is documented as an existing limitation,
+      not a green alignment suite or BUILD-support claim. Final c0-parent
+      check--tests and immutable-facts scanner passed on treef794d06b
+      (20261020-020020285-3274461, 20261020-020112811-3287086); other gates
+      retain the exact split-tree provenance documented in the feature contract.
+
 - [x] Native array `.len()` uses ordinary shared borrowing/reborrowing, checked array-to-slice unsizing and canonical slice-length source authority, preserving non-Copy local storage and receiver effects (`ARRAY-LEN.md`). G0-G12 remain partial; destructor-bearing temporary receivers remain explicitly unsupported.
 
 - [x] Indexed native format arguments retain checked shared place borrows, evaluate source indices once and reject conflicting later mutations (`INDEXED-FORMAT.md`). G0-G12 remain partial.

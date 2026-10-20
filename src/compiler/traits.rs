@@ -470,6 +470,19 @@ pub trait SchemaCx {
     fn core_catalog(&self) -> &Arc<CoreCatalog>;
     fn declaration_info(&self, id: DeclId) -> Result<SchemaDecl>;
     fn declaration_schema(&self, id: DeclId) -> Result<GenericSchema>;
+    /// Default deny: a catalog or alternate schema adapter cannot authenticate
+    /// original loader/parser function occurrences using declaration IDs alone.
+    fn replay_packed_reserve_authority(
+        &self,
+        authority: &super::frontend::PackedReserveAuthority,
+        declaration: DeclId,
+    ) -> Result<()> {
+        let _ = (authority, declaration);
+        Err(FactsError::invalid(
+            self.budget(),
+            "packed reserve source authority is unavailable in this schema adapter",
+        ))
+    }
     fn closure_trait_kind(&self, declaration: DeclId) -> Result<Option<ir::ClosureKind>> {
         let _ = declaration;
         Ok(None)
@@ -732,6 +745,30 @@ impl OriginalCallableView {
     }
 }
 impl ValidatedFacts {
+    /// Replay against the actual borrowed source adapter, not a capability's
+    /// self-reported owner/snapshot. The query never retains these facts/world.
+    pub(in crate::compiler) fn replay_packed_reserve_authority(
+        &self,
+        authority: &super::frontend::PackedReserveAuthority,
+    ) -> Result<()> {
+        if self.phase() == FactsPhase::Schema
+            || self.closure.is_some()
+            || self.closure_mode.is_some()
+            || self.env().ordered_params().next().is_some()
+            || self
+                .target()
+                .is_some_and(|target| !target.type_args.is_empty())
+        {
+            return Err(FactsError::invalid(
+                self.budget(),
+                "packed reserve requires its exact nongeneric callable facts",
+            ));
+        }
+        self.world
+            .schema
+            .replay_packed_reserve_authority(authority, self.declaration())
+    }
+
     /// Ordered method slots of a trait object's vtable for `principal`:
     /// supertrait methods first (depth-first, declaration order, each trait
     /// once), then the principal's own methods in declaration order. Every

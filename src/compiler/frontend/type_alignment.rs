@@ -64,6 +64,7 @@ impl type_check::Checker<'_> {
         {
             "align_of" => ir::TypeQueryKind::Alignment,
             "storage_stride" => ir::TypeQueryKind::PrivateStorageStride,
+            "packed_reserve" => ir::TypeQueryKind::PackedByteReserveUnit,
             _ => return Err("private type query outside its canonical source body".into()),
         };
         if plan
@@ -79,7 +80,10 @@ impl type_check::Checker<'_> {
             );
         }
         let queried = type_check::checked_local_ty(queried, self.signatures)?;
-        let query = if kind == ir::TypeQueryKind::Alignment {
+        let query = if kind == ir::TypeQueryKind::PackedByteReserveUnit {
+            let authority = plan.packed_reserve_authority(facts.declaration())?;
+            ir::TypeAlignmentQuery::issue_packed(queried, facts, authority)?
+        } else if kind == ir::TypeQueryKind::Alignment {
             ir::TypeAlignmentQuery::issue(queried, facts)?
         } else {
             ir::TypeAlignmentQuery::issue_kind(queried, facts, kind)?

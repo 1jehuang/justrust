@@ -6,8 +6,11 @@ use crate::compiler::token_session::OriginalSpan;
 #[path = "function_source_tests.rs"]
 mod tests;
 
+#[path = "packed_query_source.rs"]
+pub(in crate::compiler) mod packed_query;
+
 #[derive(Clone, Debug)]
-enum Event {
+enum FunctionSyntaxEvent {
     Path(PathAnchor, usize),
     OriginalPath(PathAnchor, usize),
     Name(AstIdent),
@@ -32,22 +35,25 @@ enum Event {
 fn path(
     names: &impl NameAccess,
     path: &AstPath,
-    emit: &mut impl FnMut(Event) -> Result<(), String>,
+    emit: &mut impl FnMut(FunctionSyntaxEvent) -> Result<(), String>,
 ) -> Result<(), String> {
     path.check(names).map_err(native_adapter::name_diagnostic)?;
-    emit(Event::Path(path.anchor(), path.segments().len()))?;
+    emit(FunctionSyntaxEvent::Path(
+        path.anchor(),
+        path.segments().len(),
+    ))?;
     for name in path.segments() {
-        emit(Event::Name(*name))?;
+        emit(FunctionSyntaxEvent::Name(*name))?;
     }
     let original = path
         .original_use(names)
         .map_err(native_adapter::name_diagnostic)?;
-    emit(Event::OriginalPath(
+    emit(FunctionSyntaxEvent::OriginalPath(
         original.anchor(),
         original.segments().len(),
     ))?;
     for name in original.segments() {
-        emit(Event::Name(*name))?;
+        emit(FunctionSyntaxEvent::Name(*name))?;
     }
     Ok(())
 }
@@ -63,33 +69,42 @@ fn optional_name(
         _ => Ok(false),
     }
 }
-fn event_equal(names: &NameStore, a: Option<&Event>, b: &Event) -> Result<bool, String> {
+fn event_equal(
+    names: &NameStore,
+    a: Option<&FunctionSyntaxEvent>,
+    b: &FunctionSyntaxEvent,
+) -> Result<bool, String> {
     let Some(a) = a else {
         return Ok(false);
     };
     Ok(match (a, b) {
-        (Event::Path(a, n), Event::Path(b, m))
-        | (Event::OriginalPath(a, n), Event::OriginalPath(b, m)) => a == b && n == m,
-        (Event::Name(a), Event::Name(b)) => exact_source_ident(names, *a, *b)?,
-        (Event::IntType(a), Event::IntType(b)) => a == b,
-        (Event::InferType, Event::InferType)
-        | (Event::UnitType, Event::UnitType)
-        | (Event::Variable, Event::Variable)
-        | (Event::TypeAlignment, Event::TypeAlignment)
-        | (Event::If, Event::If) => true,
-        (Event::Parameter(a, x), Event::Parameter(b, y)) | (Event::Let(a, x), Event::Let(b, y)) => {
+        (FunctionSyntaxEvent::Path(a, n), FunctionSyntaxEvent::Path(b, m))
+        | (FunctionSyntaxEvent::OriginalPath(a, n), FunctionSyntaxEvent::OriginalPath(b, m)) => {
+            a == b && n == m
+        }
+        (FunctionSyntaxEvent::Name(a), FunctionSyntaxEvent::Name(b)) => {
+            exact_source_ident(names, *a, *b)?
+        }
+        (FunctionSyntaxEvent::IntType(a), FunctionSyntaxEvent::IntType(b)) => a == b,
+        (FunctionSyntaxEvent::InferType, FunctionSyntaxEvent::InferType)
+        | (FunctionSyntaxEvent::UnitType, FunctionSyntaxEvent::UnitType)
+        | (FunctionSyntaxEvent::Variable, FunctionSyntaxEvent::Variable)
+        | (FunctionSyntaxEvent::TypeAlignment, FunctionSyntaxEvent::TypeAlignment)
+        | (FunctionSyntaxEvent::If, FunctionSyntaxEvent::If) => true,
+        (FunctionSyntaxEvent::Parameter(a, x), FunctionSyntaxEvent::Parameter(b, y))
+        | (FunctionSyntaxEvent::Let(a, x), FunctionSyntaxEvent::Let(b, y)) => {
             x == y && optional_name(names, *a, *b)?
         }
-        (Event::Block(n, a), Event::Block(m, b)) => n == m && a == b,
-        (Event::Expression(a), Event::Expression(b)) | (Event::Return(a), Event::Return(b)) => {
-            a == b
+        (FunctionSyntaxEvent::Block(n, a), FunctionSyntaxEvent::Block(m, b)) => n == m && a == b,
+        (FunctionSyntaxEvent::Expression(a), FunctionSyntaxEvent::Expression(b))
+        | (FunctionSyntaxEvent::Return(a), FunctionSyntaxEvent::Return(b)) => a == b,
+        (FunctionSyntaxEvent::Integer(a, x), FunctionSyntaxEvent::Integer(b, y)) => {
+            a == b && x == y
         }
-        (Event::Integer(a, x), Event::Integer(b, y)) => a == b && x == y,
-        (Event::Call(a), Event::Call(b)) | (Event::NativeSyscall(a), Event::NativeSyscall(b)) => {
-            a == b
-        }
-        (Event::Unsafe, Event::Unsafe) => true,
-        (Event::Binary(a, x), Event::Binary(b, y)) => a == b && x == y,
+        (FunctionSyntaxEvent::Call(a), FunctionSyntaxEvent::Call(b))
+        | (FunctionSyntaxEvent::NativeSyscall(a), FunctionSyntaxEvent::NativeSyscall(b)) => a == b,
+        (FunctionSyntaxEvent::Unsafe, FunctionSyntaxEvent::Unsafe) => true,
+        (FunctionSyntaxEvent::Binary(a, x), FunctionSyntaxEvent::Binary(b, y)) => a == b && x == y,
         _ => false,
     })
 }
@@ -102,12 +117,12 @@ fn binding(name: BindingName) -> Option<AstIdent> {
 fn ty(
     _names: &impl NameAccess,
     value: &Type,
-    emit: &mut impl FnMut(Event) -> Result<(), String>,
+    emit: &mut impl FnMut(FunctionSyntaxEvent) -> Result<(), String>,
 ) -> Result<bool, String> {
     emit(match value {
-        Type::Int(value) => Event::IntType(*value),
-        Type::Infer => Event::InferType,
-        Type::Unit => Event::UnitType,
+        Type::Int(value) => FunctionSyntaxEvent::IntType(*value),
+        Type::Infer => FunctionSyntaxEvent::InferType,
+        Type::Unit => FunctionSyntaxEvent::UnitType,
         _ => return Ok(false),
     })?;
     Ok(true)
@@ -116,19 +131,19 @@ fn expression(
     names: &impl NameAccess,
     value: &Expr,
     depth: usize,
-    emit: &mut impl FnMut(Event) -> Result<(), String>,
+    emit: &mut impl FnMut(FunctionSyntaxEvent) -> Result<(), String>,
 ) -> Result<bool, String> {
     if depth > 64 {
         return Ok(false);
     }
     match value {
-        Expr::Integer(value) => emit(Event::Integer(value.magnitude, value.suffix))?,
+        Expr::Integer(value) => emit(FunctionSyntaxEvent::Integer(value.magnitude, value.suffix))?,
         Expr::Var(value) => {
-            emit(Event::Variable)?;
+            emit(FunctionSyntaxEvent::Variable)?;
             path(names, value, emit)?;
         }
         Expr::Call { name, args } => {
-            emit(Event::Call(args.len()))?;
+            emit(FunctionSyntaxEvent::Call(args.len()))?;
             path(names, name, emit)?;
             for argument in args {
                 if !expression(names, argument, depth + 1, emit)? {
@@ -137,7 +152,7 @@ fn expression(
             }
         }
         Expr::Unsafe(value) => {
-            emit(Event::Unsafe)?;
+            emit(FunctionSyntaxEvent::Unsafe)?;
             if !block(names, value, depth + 1, emit)? {
                 return Ok(false);
             }
@@ -146,7 +161,7 @@ fn expression(
             if arguments.len() != 7 {
                 return Ok(false);
             }
-            emit(Event::NativeSyscall(arguments.len()))?;
+            emit(FunctionSyntaxEvent::NativeSyscall(arguments.len()))?;
             for argument in arguments {
                 if !expression(names, argument, depth + 1, emit)? {
                     return Ok(false);
@@ -154,7 +169,7 @@ fn expression(
             }
         }
         Expr::TypeAlignment(value) => {
-            emit(Event::TypeAlignment)?;
+            emit(FunctionSyntaxEvent::TypeAlignment)?;
             if !ty(names, value, emit)? {
                 return Ok(false);
             }
@@ -165,7 +180,7 @@ fn expression(
             right,
             site,
         } => {
-            emit(Event::Binary(*op, *site))?;
+            emit(FunctionSyntaxEvent::Binary(*op, *site))?;
             if !expression(names, left, depth + 1, emit)?
                 || !expression(names, right, depth + 1, emit)?
             {
@@ -177,7 +192,7 @@ fn expression(
             then_block,
             else_block,
         } => {
-            emit(Event::If)?;
+            emit(FunctionSyntaxEvent::If)?;
             if !expression(names, condition, depth + 1, emit)?
                 || !block(names, then_block, depth + 1, emit)?
                 || !block(names, else_block, depth + 1, emit)?
@@ -193,12 +208,15 @@ fn block(
     names: &impl NameAccess,
     value: &Block,
     depth: usize,
-    emit: &mut impl FnMut(Event) -> Result<(), String>,
+    emit: &mut impl FnMut(FunctionSyntaxEvent) -> Result<(), String>,
 ) -> Result<bool, String> {
     if depth > 64 {
         return Ok(false);
     }
-    emit(Event::Block(value.statements.len(), value.tail.is_some()))?;
+    emit(FunctionSyntaxEvent::Block(
+        value.statements.len(),
+        value.tail.is_some(),
+    ))?;
     for statement in &value.statements {
         match statement {
             Stmt::Let {
@@ -207,13 +225,13 @@ fn block(
                 ty: annotation,
                 value,
             } => {
-                emit(Event::Let(binding(*name), *mutable))?;
+                emit(FunctionSyntaxEvent::Let(binding(*name), *mutable))?;
                 if !ty(names, annotation, emit)? || !expression(names, value, depth + 1, emit)? {
                     return Ok(false);
                 }
             }
             Stmt::Expr(value) | Stmt::ImplicitExpr(value) => {
-                emit(Event::Expression(matches!(
+                emit(FunctionSyntaxEvent::Expression(matches!(
                     statement,
                     Stmt::ImplicitExpr(_)
                 )))?;
@@ -222,7 +240,7 @@ fn block(
                 }
             }
             Stmt::Return(value) => {
-                emit(Event::Return(value.is_some()))?;
+                emit(FunctionSyntaxEvent::Return(value.is_some()))?;
                 if let Some(value) = value {
                     if !expression(names, value, depth + 1, emit)? {
                         return Ok(false);
@@ -242,7 +260,7 @@ fn block(
 fn recipe(
     names: &impl NameAccess,
     function: &Function,
-    emit: &mut impl FnMut(Event) -> Result<(), String>,
+    emit: &mut impl FnMut(FunctionSyntaxEvent) -> Result<(), String>,
 ) -> Result<bool, String> {
     if function.static_mut
         || !function.type_params.is_empty()
@@ -257,7 +275,7 @@ fn recipe(
     }
     path(names, &function.name, emit)?;
     for (index, (name, annotation)) in function.params.iter().enumerate() {
-        emit(Event::Parameter(
+        emit(FunctionSyntaxEvent::Parameter(
             binding(*name),
             function.param_mut.get(index).copied().unwrap_or(false),
         ))?;
@@ -282,7 +300,9 @@ pub(super) struct SourceFunction {
     constness: Constness,
     unsafety: bool,
     parameters: usize,
-    events: Arc<[Event]>,
+    events: Arc<[FunctionSyntaxEvent]>,
+    // Exact original builtin invocation and its full-recipe event ordinal.
+    packed_query: Option<(usize, OriginalSpan)>,
     _admitted: crate::compiler::expansion_budget::RetainedBytes,
 }
 
@@ -293,6 +313,7 @@ pub(super) fn issue(
     source: OriginalSpan,
     function_index: usize,
     issuer: &crate::compiler::source::EmbeddedOriginalFile,
+    query_token: Option<OriginalSpan>,
     names: &impl NameAccess,
 ) -> Result<Option<Arc<SourceFunction>>, String> {
     if !issuer.authorizes(names.session().sources(), source) {
@@ -314,7 +335,7 @@ pub(super) fn issue(
     use crate::compiler::expansion_budget::Storage;
     let budget = names.budget();
     let bytes = count
-        .checked_mul(std::mem::size_of::<Event>())
+        .checked_mul(std::mem::size_of::<FunctionSyntaxEvent>())
         .and_then(|n| n.checked_add(std::mem::size_of::<SourceFunction>()))
         .ok_or("function source recipe allocation overflow")?;
     let admitted = budget
@@ -338,6 +359,27 @@ pub(super) fn issue(
     {
         return Err("function source recipe changed during issuance".into());
     }
+    let mut query_event = None;
+    let mut query_count = 0usize;
+    for (index, event) in events.iter().enumerate() {
+        budget
+            .charge(crate::compiler::expansion_budget::Counter::Work, 1)
+            .map_err(|error| error.to_string())?;
+        if matches!(event, FunctionSyntaxEvent::TypeAlignment) {
+            query_count = query_count.checked_add(1).ok_or("query count overflow")?;
+            if matches!(
+                events.get(index + 1),
+                Some(FunctionSyntaxEvent::IntType(ir::IntTy::U8))
+            ) {
+                query_event = Some(index);
+            }
+        }
+    }
+    let packed_query = if query_count == 1 {
+        query_event.zip(query_token)
+    } else {
+        None
+    };
     Ok(Some(Arc::new(SourceFunction {
         source,
         function_index,
@@ -349,6 +391,7 @@ pub(super) fn issue(
         unsafety: function.unsafety,
         parameters: function.params.len(),
         events: events.into(),
+        packed_query,
         _admitted: admitted,
     })))
 }
@@ -403,7 +446,7 @@ enum FunctionPhase {
     Original(Arc<SourceFunction>),
     Resolved {
         original: Arc<SourceFunction>,
-        expected: Arc<[Event]>,
+        expected: Arc<[FunctionSyntaxEvent]>,
         _admitted: crate::compiler::expansion_budget::RetainedBytes,
     },
 }
@@ -464,13 +507,20 @@ pub(super) fn issue_parsed(
     else {
         return Ok(None);
     };
-    Ok(
-        issue(function, source, function_index, issuer, parser.names)?.map(|original| {
-            Arc::new(FunctionSource {
-                phase: FunctionPhase::Original(original),
-            })
-        }),
-    )
+    let query_token = packed_query::original_query_token(parser.names, tokens)?;
+    Ok(issue(
+        function,
+        source,
+        function_index,
+        issuer,
+        query_token,
+        parser.names,
+    )?
+    .map(|original| {
+        Arc::new(FunctionSource {
+            phase: FunctionPhase::Original(original),
+        })
+    }))
 }
 
 // This is only the parser's original-range predicate, never an authority mint.
@@ -589,14 +639,16 @@ impl FunctionSource {
             )
             .map_err(|error| error.to_string())?;
         while index < original.events.len() {
-            if matches!(original.events[index], Event::Call(_)) {
+            if matches!(original.events[index], FunctionSyntaxEvent::Call(_)) {
                 let path_start = index
                     .checked_add(1)
                     .ok_or("embedded call offset overflow")?;
                 let names_start = path_start
                     .checked_add(1)
                     .ok_or("embedded call names offset overflow")?;
-                let Some(Event::Path(anchor, count)) = original.events.get(path_start) else {
+                let Some(FunctionSyntaxEvent::Path(anchor, count)) =
+                    original.events.get(path_start)
+                else {
                     return Err("embedded function call lost original path".into());
                 };
                 let path_end = index
@@ -629,12 +681,12 @@ impl FunctionSource {
                     .get(names_start..path_end)
                     .ok_or("embedded original path missing")?
                 {
-                    let Event::Name(name) = event else {
+                    let FunctionSyntaxEvent::Name(name) = event else {
                         return Err("embedded original path changed kind".into());
                     };
                     identifiers.push(*name);
                 }
-                let Some(Event::OriginalPath(original_anchor, original_count)) =
+                let Some(FunctionSyntaxEvent::OriginalPath(original_anchor, original_count)) =
                     original.events.get(path_end)
                 else {
                     return Err("embedded call lost authored path channel".into());
@@ -661,7 +713,7 @@ impl FunctionSource {
                     .get(authored_start..end)
                     .ok_or("embedded authored path missing")?;
                 for (event, name) in authored.iter().zip(&identifiers) {
-                    if !event_equal(names, Some(event), &Event::Name(*name))? {
+                    if !event_equal(names, Some(event), &FunctionSyntaxEvent::Name(*name))? {
                         return Err("embedded parser call changed authored occurrence".into());
                     }
                 }
@@ -726,7 +778,7 @@ impl FunctionSource {
             }
         }
         let bytes = total
-            .checked_mul(std::mem::size_of::<Event>())
+            .checked_mul(std::mem::size_of::<FunctionSyntaxEvent>())
             .ok_or("embedded resolved recipe storage overflow")?;
         let admitted = names
             .budget()

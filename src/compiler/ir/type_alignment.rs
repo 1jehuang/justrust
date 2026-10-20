@@ -5,14 +5,17 @@ use super::{DeclId, FactsCtx, ParamId, PlanBudget, Ty};
 pub enum TypeQueryKind {
     Alignment,
     PrivateStorageStride,
+    /// Exact original packed reserve helper only; never private u8 stride.
+    PackedByteReserveUnit,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TypeAlignmentQuery {
     kind: TypeQueryKind,
     owner: DeclId,
-    parameter: ParamId,
+    parameter: Option<ParamId>,
     queried: Ty,
+    packed: Option<super::super::frontend::PackedReserveAuthority>,
 }
 
 impl TypeAlignmentQuery {
@@ -29,6 +32,11 @@ impl TypeAlignmentQuery {
         facts: &crate::compiler::traits::ValidatedFacts,
         kind: TypeQueryKind,
     ) -> Result<Self, String> {
+        if kind == TypeQueryKind::PackedByteReserveUnit {
+            return Err(
+                "packed byte query requires operation-specific original source authority".into(),
+            );
+        }
         let mut parameters = facts.env().ordered_params();
         let parameter = parameters
             .next()
@@ -45,9 +53,34 @@ impl TypeAlignmentQuery {
         Ok(Self {
             kind,
             owner: facts.declaration(),
-            parameter,
+            parameter: Some(parameter),
             queried,
+            packed: None,
         })
+    }
+
+    pub(in crate::compiler) fn issue_packed(
+        queried: Ty,
+        facts: &crate::compiler::traits::ValidatedFacts,
+        authority: super::super::frontend::PackedReserveAuthority,
+    ) -> Result<Self, String> {
+        if queried != Ty::Int(super::IntTy::U8) {
+            return Err("packed byte query requires its original exact nongeneric u8 body".into());
+        }
+        facts
+            .replay_packed_reserve_authority(&authority)
+            .map_err(|error| error.to_string())?;
+        Ok(Self {
+            kind: TypeQueryKind::PackedByteReserveUnit,
+            owner: facts.declaration(),
+            parameter: None,
+            queried,
+            packed: Some(authority),
+        })
+    }
+
+    pub fn is_packed_byte_reserve(&self) -> bool {
+        self.kind == TypeQueryKind::PackedByteReserveUnit
     }
 
     pub fn is_private_storage_stride(&self) -> bool {
@@ -71,6 +104,7 @@ impl TypeAlignmentQuery {
         Ok(self.kind == other.kind
             && self.owner == other.owner
             && self.parameter == other.parameter
+            && self.packed == other.packed
             && super::identical_type(&self.queried, &other.queried, budget)?)
     }
 
@@ -86,17 +120,39 @@ impl TypeAlignmentQuery {
         if facts.declaration() != self.owner || facts.registry_snapshot() != self.owner.snapshot {
             return Err("alignment query has a foreign canonical source owner".into());
         }
-        let expected = if let Some(target) = facts.target() {
+        let expected = if self.kind == TypeQueryKind::PackedByteReserveUnit {
+            let authority = self
+                .packed
+                .as_ref()
+                .ok_or("packed query lost its original operation authority")?;
+            if self.parameter.is_some() {
+                return Err("packed query changed canonical parameter channel".into());
+            }
+            facts
+                .replay_packed_reserve_authority(authority)
+                .map_err(|error| error.to_string())?;
+            Ty::Int(super::IntTy::U8)
+        } else if self.packed.is_some() {
+            return Err(
+                "packed query operation authority transplanted to another query kind".into(),
+            );
+        } else if let Some(target) = facts.target() {
+            if self.parameter.is_none() {
+                return Err("alignment query lost its canonical parameter".into());
+            }
             if target.type_args.len() != 1 {
                 return Err("alignment query closed argument arity mismatch".into());
             }
             target.type_args[0].clone()
         } else {
             let mut parameters = facts.env().ordered_params();
-            if parameters.next() != Some(self.parameter) || parameters.next().is_some() {
+            if parameters.next() != self.parameter || parameters.next().is_some() {
                 return Err("alignment query canonical parameter identity mismatch".into());
             }
-            Ty::Param(self.parameter)
+            Ty::Param(
+                self.parameter
+                    .ok_or("alignment query canonical parameter missing")?,
+            )
         };
         if !super::identical_type(&self.queried, &expected, budget)? {
             return Err("alignment queried type differs from its exact source substitution".into());
@@ -105,6 +161,10 @@ impl TypeAlignmentQuery {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "packed_query_tests.rs"]
+mod packed_tests;
 
 #[cfg(test)]
 mod tests {
@@ -175,7 +235,7 @@ mod tests {
         );
         let other = plan.callable_facts(plan.function_decl(1).unwrap()).unwrap();
         let mut forged_parameter = query.clone();
-        forged_parameter.parameter = other.env().ordered_params().next().unwrap();
+        forged_parameter.parameter = other.env().ordered_params().next();
         assert!(
             forged_parameter
                 .validate(FactsCtx::Validated(&facts), &budget)
