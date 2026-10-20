@@ -18,6 +18,7 @@ mod carrier_regions;
 mod catalog;
 #[path = "traits/closure_dispatch.rs"]
 mod closure_dispatch;
+mod closure_owner_instance;
 mod closure_owner_substitution;
 mod closure_projections;
 mod closure_provider_domain;

@@ -672,7 +672,13 @@ cleanup failures.
       unused move/bound rejection (`closure_generic_owners`), with ordered-prefix,
       copied-shape and foreign-recipe authority controls. Reference results,
       closure-backed opaque returns and the parent-solved layout frontier remain
-      open. Unqualified closure calls now resolve genuine lexical
+      open. A borrowed Closed-facts reconstruction helper now replays the
+      original sealed owner template under canonical ordered actuals and discharges
+      its real predicates, retaining the same seal. Three source-publication
+      authority units cover bound/phase/arity/template misuse, foreign recipes
+      and changed sealed results. Memory-effect/key decoder integration remains
+      open and still requires independent exact parent publication/body replay.
+      Unqualified closure calls now resolve genuine lexical
       bindings before item/import lookup, preserving local/parameter shadowing
       and rejecting unused non-callable or invalid item calls
       (`tests/closure_lexical_calls.rs`, explicit worker-1/8 CHECK/BUILD/run).

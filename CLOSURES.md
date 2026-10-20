@@ -81,6 +81,25 @@ This bounded milestone does not admit reference-bearing results, generic
 closure-backed opaque returns, or closure layout before the parent-solved graph
 frontier. Full Iterator adapter execution and all closure modes remain open.
 
+## Borrowed closed-owner reconstruction
+
+`ValidatedFacts::instantiate_closure_owner` reconstructs an original sealed
+closure template under ordered concrete owner arguments. It requires genuine
+Closed caller facts, canonical original owner `ParamId`s and the retained source
+recipe. The existing simultaneous metadata substitution kernel and exact RHS
+replay validate every resulting type, then the actual caller context discharges
+the owner's instantiated predicates. The result retains the same parent-minted
+shape seal and carries no world, publication, CFG or mutable state.
+
+Three source-publication authority units cover real bound discharge and seal
+preservation, malformed actuals and phase/template misuse, genuine foreign-world
+metadata, a foreign seal copied onto exact local IDs, and same-ID/same-seal
+changed-result mapping. The independent-world fixture correctly allocates distinct
+snapshot IDs. These are borrowed helper controls, not executable memory-effect
+or decoder acceptance. Consumers must still graph-read and replay the exact
+finalized parent publication and mode body. Generic closure keys and memory
+consumer integration remain separate work.
+
 ## Trait-method closure input inference
 
 Before a checked closure type exists, a unique canonical in-scope trait-method
