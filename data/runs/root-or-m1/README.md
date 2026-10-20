@@ -4,7 +4,7 @@ Source checkpoint: `bd912d003`, composed non-destructively from preserved
 `f2cf166a5` and approved published `aa1d3c8c1`. This is private, not main
 acceptance. No local compiler build, full suite, push, installation, resource
 ceiling change or new kind was performed. Existing source seal authority is
-unchanged. Exact contract: `ROOT-OR-PATTERNS.md`.
+unchanged. Exact contract: `../../../docs/compiler/ROOT-OR-PATTERNS.md`.
 
 All run IDs below use prefix `20261019-`; the nine exact owned records are in
 `scoped.jsonl`. Each compiler invocation used `JUSTRUST_REMOTE=force`,

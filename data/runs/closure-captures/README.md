@@ -1,7 +1,7 @@
 # Scoped immediate shared capture acceptance
 
 These are redacted stable-client receipts, not full-Rust or speed evidence.
-`CLOSURES.md` defines the admitted immediate, explicit-signature, shared scalar
+`../../../docs/compiler/CLOSURES.md` defines the admitted immediate, explicit-signature, shared scalar
 parent-parameter subset. Stored/local/mutable/move captures and callable traits
 remain open. No graph-integrity ceiling or mutable-carrier baseline changed.
 

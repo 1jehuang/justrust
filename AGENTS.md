@@ -9,9 +9,9 @@ releases are tagged from `stable`, never from `main`. The old `main` tip is
 tagged `pre-cleanroom-main-2026-10-19`. `clean-room-rewrite` is a retired
 alias kept equal to `main` for agents with old instructions; push to `main`.
 For this rewrite, this section supersedes conflicting legacy instructions below.
-`ARCHITECTURE.md` and `PROTOTYPE.md` define the graph design and first milestone.
-`RUST-COMPATIBILITY.md` defines the full Rust goal and compatibility contract.
-`IMPLEMENTATION.md` tracks the complete open implementation program. Completing a
+`docs/compiler/ARCHITECTURE.md` and `docs/compiler/PROTOTYPE.md` define the graph design and first milestone.
+`docs/compiler/RUST-COMPATIBILITY.md` defines the full Rust goal and compatibility contract.
+`docs/compiler/IMPLEMENTATION.md` tracks the complete open implementation program. Completing a
 subset milestone must not be reported as completing full Rust support.
 Implement in Rust using standard Cargo/rustc/std as bootstrap tools. Selective
 third-party utility crates are permitted; keep dependencies minimal. Do not
@@ -27,12 +27,12 @@ commit/push on `main` in this checkout. Client fixes go to `stable` in
 Do not tag releases from `main`.
 Legacy toolchain paths, reinstall requirements, benchmark commands and component
 ownership descriptions below describe the old implementation, not requirements
-to recreate it. Retained `bench/`, `docs/`, `data/`, CHANGELOG.md and FINDINGS.md
+to recreate it. Retained `bench/`, `docs/`, `data/`, CHANGELOG.md and docs/compiler/FINDINGS.md
 are historical/reference material unless explicitly adopted for the new engine.
 Preserve licensing and attribution. No compiler compatibility or speed claims
 follow from synthetic graph fixtures.
 
-### Hard rule: nothing outside the graph (GRAPH-INTEGRITY.md)
+### Hard rule: nothing outside the graph (docs/compiler/GRAPH-INTEGRITY.md)
 
 The compiler is the graph. Every compiler fact is a typed graph output read
 through engine handles. No side-slot results, shared mutable state, global
@@ -45,8 +45,8 @@ rustc alone is not sufficient.
 
 ### Graph model primer (read before touching compiler code)
 
-Summarized from ARCHITECTURE.md sections 17-18, PROTOTYPE.md, ENGINE.md and
-GRAPH-INTEGRITY.md. Read those for detail. This is what every agent must know.
+Summarized from docs/compiler/ARCHITECTURE.md sections 17-18, docs/compiler/PROTOTYPE.md, docs/compiler/ENGINE.md and
+docs/compiler/GRAPH-INTEGRITY.md. Read those for detail. This is what every agent must know.
 
 **One graph, no phases.** Project discovery, parsing, resolution, checking,
 lowering, codegen, linking and tests are all producers and consumers in one
@@ -69,7 +69,7 @@ awaits a typed output (this records the dependency edge), `cx.publish_fact(i, v)
 finalizes output `i`, `cx.fork(fut)` exposes an independent branch, `cx.fail`
 reports failure. In `src/compiler/mod.rs` reads go through the `Facts` helper
 (`facts.get(Key::new(KIND, params))`). Node kinds are the `const ...: u32`
-values there (100 `PARSE` through 115 `UNIVERSAL_EFFECTS_READY`). COMPILER.md
+values there (100 `PARSE` through 115 `UNIVERSAL_EFFECTS_READY`). docs/compiler/COMPILER.md
 "Graph operations" describes what each one does.
 
 **How to write a node.**
@@ -97,9 +97,9 @@ values there (100 `PARSE` through 115 `UNIVERSAL_EFFECTS_READY`). COMPILER.md
 `effects_ready` and `mono_plan` are still whole-program nodes. `PlanCtx`,
 `ValidatedTraitWorld` and the budget types still carry mutable state reachable
 from facts. Do not copy these patterns into new code. Split or remove them when
-you are nearby. Current numbers live in GRAPH-INTEGRITY.md.
+you are nearby. Current numbers live in docs/compiler/GRAPH-INTEGRITY.md.
 
-**Correctness contract (RUST-COMPATIBILITY.md).** Edition 2024, Linux x86-64.
+**Correctness contract (docs/compiler/RUST-COMPATIBILITY.md).** Edition 2024, Linux x86-64.
 Valid supported programs behave as stock rustc does. Invalid programs are
 rejected even when the bad item is unused. Unsupported constructs get an
 explicit diagnostic, never an approximate translation. CHECK must not demand
@@ -113,7 +113,7 @@ forged-fact and invalid-input rejection, and graph-shape coverage. Extend existi
 suites and feature contracts by default; do not create a new Markdown file or
 three new test files for each small fix. A new feature document is warranted only
 for a substantial contract not already covered by an existing one. Keep contract,
-IR/CFG shape and acceptance evidence concise and update IMPLEMENTATION.md when
+IR/CFG shape and acceptance evidence concise and update docs/compiler/IMPLEMENTATION.md when
 actual gate status or a tracked blocker changes. Do not substitute planning,
 audits or test-expectation changes for production integration. Always run
 `justrust test --test graph_integrity` before committing compiler changes.
@@ -122,13 +122,13 @@ audits or test-expectation changes for production integration. Always run
 
 | Need | Read |
 |---|---|
-| Why the graph is shaped this way | ARCHITECTURE.md 17-18 |
-| Engine semantics, publication, cancellation | PROTOTYPE.md, ENGINE.md |
-| What each compiler node kind does, supported syntax | COMPILER.md |
-| Enforced structural rules and current debt | GRAPH-INTEGRITY.md |
-| Full Rust plan, gates, workstreams, open items | IMPLEMENTATION.md, RUST-COMPATIBILITY.md |
-| Optimizer and codegen direction (no LLVM) | OPTIMIZATION.md |
-| Per-feature contracts | the matching `FEATURE.md` at repo root |
+| Why the graph is shaped this way | docs/compiler/ARCHITECTURE.md 17-18 |
+| Engine semantics, publication, cancellation | docs/compiler/PROTOTYPE.md, docs/compiler/ENGINE.md |
+| What each compiler node kind does, supported syntax | docs/compiler/COMPILER.md |
+| Enforced structural rules and current debt | docs/compiler/GRAPH-INTEGRITY.md |
+| Full Rust plan, gates, workstreams, open items | docs/compiler/IMPLEMENTATION.md, docs/compiler/RUST-COMPATIBILITY.md |
+| Optimizer and codegen direction (no LLVM) | docs/compiler/OPTIMIZATION.md |
+| Per-feature contracts | the matching feature document in `docs/compiler/` |
 
 justrust is Rust compile as a service for coding agents. Every change should make
 the agent edit, check, and test loop faster or more informative, and be
@@ -300,7 +300,7 @@ billing, private caches) and never weaken the security invariants in
   and correctness checks relevant to the change. Its coverage is not universal
   (see `bench/synth/README.md`, Known gaps). If the broad gate is blocked,
   report it as blocked rather than substituting `desktop-test-edit`.
-- Record notable observations in `FINDINGS.md` with the run id.
+- Record notable observations in `docs/compiler/FINDINGS.md` with the run id.
 - Run `justrust export` from the repo root and commit `data/runs/` so every
   cited run id exists in the repository (slim, path-redacted summaries, see
   `data/runs/README.md`).

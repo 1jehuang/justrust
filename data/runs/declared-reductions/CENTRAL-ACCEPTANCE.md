@@ -33,6 +33,6 @@ frozen until full and lint completion.
 Original isolated expected-red and green records remain in `scoped.jsonl`.
 Actual-capacity rejection is fail-closed; old and failed retained admission is
 conservative, not refund-neutral or a minimal-peak guarantee. See
-`DECLARED-REDUCTIONS.md` for trusted producer and remaining nominal authority
+`../../../docs/compiler/DECLARED-REDUCTIONS.md` for trusted producer and remaining nominal authority
 boundaries. PlanCtx, nominal interner, schema adapter and other mutable graph debt
 remain explicitly unfinished. No full Rust, corpus promotion or speedup claim.

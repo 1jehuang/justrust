@@ -102,7 +102,7 @@ All files under `unsupported/` compile and run on stock. Native rejection must b
 
 The destructuring probe copies a scalar field legally but is outside the native owned-pattern slice. Indexed and borrowed replacements may encounter their excluded container/reference domain first; these tests do not require a particular error precedence. Dead-code probes require an explicit unsupported boundary even though stock never executes their excluded expressions.
 
-These fixtures do not prove all unsupported boundaries, borrow-based temporary lifetime extension, or unwind behavior. D21 later-use loan conflicts, D23 malicious cleanup/proof mutation, and D24 induced resource exhaustion with no partial publication require separately owned internal controls. The harness's no-failure/no-poison assertions are not a D24 exhaustion test. See `DROP-NORMAL.md` for the larger implementation contract. Native results are recorded in `DROP-NORMAL.md`.
+These fixtures do not prove all unsupported boundaries, borrow-based temporary lifetime extension, or unwind behavior. D21 later-use loan conflicts, D23 malicious cleanup/proof mutation, and D24 induced resource exhaustion with no partial publication require separately owned internal controls. The harness's no-failure/no-poison assertions are not a D24 exhaustion test. See `../../../docs/compiler/DROP-NORMAL.md` for the larger implementation contract. Native results are recorded in `../../../docs/compiler/DROP-NORMAL.md`.
 
 ## Later additions (v6-v9)
 

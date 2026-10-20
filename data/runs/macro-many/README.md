@@ -24,7 +24,7 @@ invalid but native transport-Unsupported, not invalid-Rust syntax parity.
 Scoped validation: all-target check, seven item-scope unit tests, twenty-four
 item-source/authority tests, twenty-three unchanged matcher/local/nested/literal
 tests, seven unchanged graph-integrity tests, strict all-target clippy, formatting
-and diff checks. See `ITEM-SOURCE-MACROS.md` for exact run IDs and phase details.
+and diff checks. See `../../../docs/compiler/ITEM-SOURCE-MACROS.md` for exact run IDs and phase details.
 
 The first check ran `remote on hosted`. A later connection timeout triggered the
 stable client's automatic local fallback for the scoped acceptance runs. The

@@ -5,7 +5,7 @@ This document specifies the next source-inference authority. Contract review is 
 
 ## 1. Evidence and actual loss points
 
-Prerequisites are `docs/reference-inference-source-order-20261016.md` and `GENERIC-CARRIERS.md`. The six-case evidence committed in b929df0c3 and the separately frozen shared-local baseline committed in 8f42de61b supply the observed requirements. The source anchors below identify inspected implementation, not completed replay implementation.
+Prerequisites are `docs/reference-inference-source-order-20261016.md` and `compiler/GENERIC-CARRIERS.md`. The six-case evidence committed in b929df0c3 and the separately frozen shared-local baseline committed in 8f42de61b supply the observed requirements. The source anchors below identify inspected implementation, not completed replay implementation.
 
 * `frontend.rs:7025-7350`: InferKind/Inference are frontend-private, coupled to Checker. Slots, constrain/merge/resolve exist; finish fences newly inferred root Ref actuals.
 * `7649-7677`: infer_call_args applies expected result first, scans all arguments, then finishes. No pre-checking frontier survives.

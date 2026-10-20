@@ -5,7 +5,7 @@
 function. Its SHA256 is
 `2d109735cfff1317afd02e093012ee4d4c3b5bf39431da45f6afe99002b0f9b5`.
 
-It comes from the same retained source import described in CORE-BRINGUP.md:
+It comes from the same retained source import described in ../../../docs/compiler/CORE-BRINGUP.md:
 source inventory revision `d907fba494adcabfdd642a18a7918b0c9847d35b`, upstream
 revision `1d81eb4ad9cd207e3e638bd32b17ec4fce8412a6`, source version `1.101.0`,
 local import commit `8f0a1aeef27a0bb43b0e405c86e8a9dcd2c2448c`.
@@ -30,4 +30,4 @@ requiring the ideal rounded exponent in all cases.
 This is a stepping stone toward library support: it does not compile core's
 original numeric method provider, the core crate root, standard libraries,
 const evaluation, a library artifact or a general Cargo project. The scoped
-contract and validation status are tracked in LEADING-ZEROS.md at repository root.
+contract and validation status are tracked in ../../../docs/compiler/LEADING-ZEROS.md at repository root.

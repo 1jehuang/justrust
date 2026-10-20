@@ -98,7 +98,7 @@ from a cache.
 The optimizations that owning both sides of a layer boundary enables, ranked,
 are in `docs/integrations.md`.
 
-Each phase needs before/after measurements recorded in FINDINGS.md.
+Each phase needs before/after measurements recorded in compiler/FINDINGS.md.
 Focused scenarios and factors establish component-specific wins. General
 speed claims and default promotion require the comprehensive synthetic
 comparison plus relevant regression and correctness checks, not merely a

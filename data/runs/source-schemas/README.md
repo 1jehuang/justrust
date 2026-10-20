@@ -1,6 +1,6 @@
 # Bounded SourceSchemas evidence
 
-Exact private base af5c06a69. See SOURCE-SCHEMAS.md for contract and limitations.
+Exact private base af5c06a69. See ../../../docs/compiler/SOURCE-SCHEMAS.md for contract and limitations.
 All final runs below were forced hosted. No complete stock suite was run in
 competition with central acceptance. No main edits, push, installation or budget
 changes were performed.
@@ -32,4 +32,4 @@ source SHA256 9218242011e9a3eee0745b19b5da42423789bb8713b82f3c779dc667c97cd9f3
 and tests d6bb202b8e0c27e725fe545ad3fa1aa7a0e52b669951a9f7125a9013fcd0f0e0,
 without edits/builds. His remaining scope caveats (trusted producer mode/RHS/region
 payload, returned schema receipt boundary, no full weak-ledger proof) are explicit
-in SOURCE-SCHEMAS.md. All ten recovery stashes remain intact.
+in ../../../docs/compiler/SOURCE-SCHEMAS.md. All ten recovery stashes remain intact.

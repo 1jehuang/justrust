@@ -102,7 +102,7 @@ $24/month. The private cloud repository records the maintenance in commit
 
 ## Why replace the October 10 table?
 
-The original source in `FINDINGS.md`, “Remote vs local on uv” (2026-10-10),
+The original source in `compiler/FINDINGS.md`, “Remote vs local on uv” (2026-10-10),
 measured local justrust, not stock Cargo. Its 77.7-second local fresh-directory
 run had only 5/574 dependency-cache hits, while the remote comparison had
 574/574 hits. Labeling the former “Standard toolchain” and both “shared cache”

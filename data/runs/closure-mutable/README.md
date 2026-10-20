@@ -3,7 +3,7 @@
 This is a private incremental checkpoint, not publication, full Rust support,
 a full-suite pass, or speed evidence. It preserves inherited clean HEAD
 `5359c321e` and changes only the immediate explicit-signature scalar parent
-parameter subset in `CLOSURES.md`. No main checkout was edited or built. No push,
+parameter subset in `../../../docs/compiler/CLOSURES.md`. No main checkout was edited or built. No push,
 install, spawn, graph baseline change, aggregate-reference relaxation or
 reference-region authority change occurred.
 

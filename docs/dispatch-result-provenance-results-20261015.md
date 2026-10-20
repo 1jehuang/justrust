@@ -115,7 +115,7 @@ JUSTRUST_HOME=/home/jeremy/.jcode/scratch/dispatch-synth40-coherent/A2/home \
   justrust export --out data/runs --machine dispatch-synth40-A2
 ```
 
-It exported 87 slim runs into the new isolated `data/runs/dispatch-synth40-A2/` shard: all 86 cited invocation IDs plus the pre-existing coherent A2 setup run. No cited identity run is missing. Unrelated `data/runs/xps14/` and `FINDINGS.md` were not edited. Original private logs and benchmark evidence remain in place. Reproduce the read-only audit with:
+It exported 87 slim runs into the new isolated `data/runs/dispatch-synth40-A2/` shard: all 86 cited invocation IDs plus the pre-existing coherent A2 setup run. No cited identity run is missing. Unrelated `data/runs/xps14/` and `compiler/FINDINGS.md` were not edited. Original private logs and benchmark evidence remain in place. Reproduce the read-only audit with:
 
 ```sh
 python3 bench/synth/audit_dispatch_a2.py \

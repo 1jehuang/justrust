@@ -22,7 +22,7 @@ Only the scanner-proven ten `DeclaredCallableContext` reachable debt lines and
 one lexical baseline line (`2 Mutex .../equality.rs`) are removed. Total reachable
 entries72 to62, carriers7 to6. No new fact roots, tables, caches, indices or node
 keys are introduced. Feature contract and remaining nominal hardblock are in
-DECLARED-REDUCTIONS.md. This is actual bounded carrier removal, not broad mutable
+../../../docs/compiler/DECLARED-REDUCTIONS.md. This is actual bounded carrier removal, not broad mutable
 world removal or a compile-time performance claim.
 
 ## Independent read review

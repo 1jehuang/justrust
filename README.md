@@ -12,15 +12,17 @@
 Rebuilding every step of the Rust build toolchain from scratch to be faster,
 more parallelizable, and more cacheable.
 
-[Website](https://jcode.sh/rust) · [Install](#install) · [Use](#use) · [Remote builds](#remote-builds) · [Goal](#goal) · [Findings](FINDINGS.md) · [Changelog](CHANGELOG.md)
+[Website](https://jcode.sh/rust) · [Install](#install) · [Use](#use) · [Remote builds](#remote-builds) · [Goal](#goal) · [Findings](docs/compiler/FINDINGS.md) · [Changelog](CHANGELOG.md)
 
 </div>
 
 ---
 
-> **Note:** `main` is the clean-room compiler rewrite (`jr-rust`), which supports
-> only a small Rust subset so far ([COMPILER.md](COMPILER.md)). The client and
-> service described below are released from the
+> **Note:** `main` contains the clean-room compiler rewrite. `jr-rust` is the
+> compiler executable built by this repository's `justrust-engine` Cargo package,
+> not a separate crate or repository. Core compiler development lives here.
+> It supports only a small Rust subset so far ([compiler documentation](docs/compiler/COMPILER.md)).
+> The released client and service described below are maintained on the
 > [`stable`](https://github.com/1jehuang/justrust/tree/stable) branch.
 
 justrust is rebuilding every step of the Rust build toolchain from scratch,
@@ -112,6 +114,9 @@ build and test results.
 
 ## Design
 
+Compiler design, implementation plans, and feature contracts live in
+[docs/compiler/](docs/compiler/README.md).
+
 The new compiler is one demand-driven graph, not a pipeline of phases. File
 discovery, parsing, name resolution, type and borrow checking, lowering, code
 generation, linking and tests are all designed as nodes that produce and consume immutable,
@@ -124,12 +129,12 @@ check passes.
 Nodes are keyed per file, per item, or per generic instance, so equivalent work
 shares one node and is computed once within a build. Because every compiler
 fact lives in the graph, with no side tables or global state (enforced by
-[GRAPH-INTEGRITY.md](GRAPH-INTEGRITY.md)), the same identities are meant to
+[GRAPH-INTEGRITY.md](docs/compiler/GRAPH-INTEGRITY.md)), the same identities are meant to
 become the units for incremental rebuilds, persistent and remote caching,
 and scheduling across cores and machines. Today reuse is within a single build
 only, a few stages (parsing, resolution) are still whole-program nodes being
 split, and cross-build persistence and shared caches are planned, not built.
-See [ARCHITECTURE.md](ARCHITECTURE.md) and [ENGINE.md](ENGINE.md) for details.
+See [ARCHITECTURE.md](docs/compiler/ARCHITECTURE.md) and [ENGINE.md](docs/compiler/ENGINE.md) for details.
 
 ## Contributing and license
 

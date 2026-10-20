@@ -5,8 +5,8 @@ compiling complete, realistic single-file programs end to end (stock rustc
 output == native output).
 
 Repository: /home/jeremy/justrust-clean-room, branch `main`
-(remote origin). Read AGENTS.md (top clean-room section), GRAPH-INTEGRITY.md,
-RUST-COMPATIBILITY.md, IMPLEMENTATION.md and COMPILER.md first.
+(remote origin). Read AGENTS.md (top clean-room section), ../docs/compiler/GRAPH-INTEGRITY.md,
+../docs/compiler/RUST-COMPATIBILITY.md, ../docs/compiler/IMPLEMENTATION.md and ../docs/compiler/COMPILER.md first.
 
 Shared checkout: work in /home/jeremy/justrust-clean-room on `main`.
 Do NOT create git worktrees (global rule in ~/AGENTS.md: each one costs 10-17 GB
@@ -44,7 +44,7 @@ Hard rules:
   Never approximate.
 - Prefer general, real implementations over narrow "bounded slice" special cases.
   The aim is breadth toward real programs. Keep correctness, but don't spend hours on
-  ceremony documents. A short `<FEATURE>.md` plus tests and a line in IMPLEMENTATION.md is enough.
+  ceremony documents. A short `<FEATURE>.md` plus tests and a line in ../docs/compiler/IMPLEMENTATION.md is enough.
 - Full-suite regressions: run `justrust test` before pushing (hosted is fine).
 - Server restarts happen often and stop idle workers. Commit your own hunks
   (even WIP commits, `git commit -m "WIP: ..."`) at least every ~20 minutes and
