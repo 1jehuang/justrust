@@ -2278,23 +2278,43 @@ impl PlanBudget {
     #[track_caller]
     fn charge_task(&self, amount: usize, kind: ResourceBudgetKind) -> Option<Result<(), String>> {
         let caller = std::panic::Location::caller();
-        let limit = match kind {
-            ResourceBudgetKind::Work => self.limits.work,
-            _ => self.limits.nodes,
+        let defaults = PlanLimits::default();
+        let (own_limit, default_limit) = match kind {
+            ResourceBudgetKind::Work => (self.limits.work, defaults.work),
+            _ => (self.limits.nodes, defaults.nodes),
         };
         // A budget built with a tighter limit than the default bounds one
         // local sub-computation (for example one contract validation). Its
-        // limit applies to that computation alone, so it keeps its own ledger.
-        // Routing it to the task meter would compare a local bound against the
-        // enclosing task's cumulative work and fail spuriously in large tasks.
-        let defaults = PlanLimits::default();
-        let default_limit = match kind {
-            ResourceBudgetKind::Work => defaults.work,
-            _ => defaults.nodes,
-        };
-        if limit < default_limit {
-            return None;
+        // bound applies to that computation alone, never to the enclosing
+        // task's cumulative work, so it is enforced on this budget's own
+        // ledger. The charge is still added to the task meter under the
+        // ordinary per-task limit, so repeated bounded locals cannot exceed
+        // what the task may spend in total.
+        let local = own_limit < default_limit;
+        let limit = if local { default_limit } else { own_limit };
+        let task = self.charge_task_meter(amount, kind, limit, caller)?;
+        if task.is_err() || !local {
+            return Some(task);
         }
+        Some(self.charge(
+            amount,
+            match kind {
+                ResourceBudgetKind::Work => |u: &mut PlanUsage| &mut u.work,
+                _ => |u: &mut PlanUsage| &mut u.nodes,
+            },
+            own_limit,
+            kind,
+            None,
+        ))
+    }
+    /// Charge the polled node's meter. `None` outside graph polling.
+    fn charge_task_meter(
+        &self,
+        amount: usize,
+        kind: ResourceBudgetKind,
+        limit: usize,
+        caller: &'static std::panic::Location<'static>,
+    ) -> Option<Result<(), String>> {
         crate::engine::with_current_meter(|meter| {
             let meter = meter?;
             let counter = match kind {
@@ -10085,6 +10105,64 @@ mod conditional_validation_tests {
             ..PlanLimits::default()
         });
         assert!(CheckedFunction::conditional_join_matches(&dag, &dag, &dag, &bounded).unwrap());
+    }
+}
+
+#[cfg(test)]
+mod local_budget_task_meter_tests {
+    use super::*;
+    use crate::engine::{Context, Engine, Key, Provider, TaskFuture};
+
+    /// Runs `body` inside one graph task, so budgets see that task's meter,
+    /// and publishes 1 on Ok or 0 on Err.
+    struct OneTask(fn() -> Result<(), String>);
+    impl Provider for OneTask {
+        fn outputs(&self, _: &Key) -> usize {
+            1
+        }
+        fn start(&self, cx: Context, _: Key) -> TaskFuture {
+            let body = self.0;
+            Box::pin(async move { cx.publish(0, u64::from(body().is_ok())) })
+        }
+    }
+    fn in_task(body: fn() -> Result<(), String>) -> bool {
+        let engine = Engine::new(OneTask(body));
+        let demand = engine.request(Key::new(1, vec![]));
+        engine.run(1).unwrap();
+        demand.result(0).unwrap() == 1
+    }
+    fn local(work: usize) -> PlanBudget {
+        PlanBudget::new(PlanLimits {
+            work,
+            ..PlanLimits::default()
+        })
+    }
+
+    #[test]
+    fn local_bound_is_enforced_per_local_budget() {
+        assert!(in_task(|| local(100).charge_work(100)));
+        assert!(!in_task(|| local(100).charge_work(101)));
+    }
+
+    #[test]
+    fn precharged_task_does_not_trip_a_small_local_limit() {
+        assert!(in_task(|| {
+            PlanBudget::default().charge_work(5_000_000)?;
+            local(1_000).charge_work(1_000)
+        }));
+    }
+
+    #[test]
+    fn repeated_bounded_locals_still_exhaust_the_task() {
+        assert!(!in_task(|| {
+            let per_local = PlanLimits::default().work / 4;
+            // Each local stays within its own bound; together they exceed
+            // the ordinary per-task limit, which must still be enforced.
+            for _ in 0..5 {
+                local(per_local).charge_work(per_local)?;
+            }
+            Ok(())
+        }));
     }
 }
 
