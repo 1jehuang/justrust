@@ -262,6 +262,18 @@ and source-replay rejection controls. The closed-call authority controls pass in
 `20261020-063952048-4142401`. This repairs the bounded iterator regression suite,
 not the entire iterator library or full Rust compatibility.
 
+## Missing constructor demand retry (2026-10-20)
+
+A constructor whose exact nominal realization is not yet available now records
+that demand through the existing local preparation retry protocol. It no longer
+exits as a missing-input infrastructure error. The demand preserves declaration
+and ordered actuals without widening source schemas or inventing a graph value.
+Existing source/current-graph and foreign-engine rejection controls plus an
+unchanged enum-construction/match stock/native CHECK, BUILD and run matrix at
+workers 1 and 8 pass in `20261020-064016829-4143040`; graph integrity remains
+14/14 in `20261020-064123788-4142963`. Let-else or-pattern lowering still has an
+explicit unsupported boundary and is not claimed as implemented by this repair.
+
 ## Required acceptance gates
 
 - Stock/native CHECK, BUILD, and run at workers 1 and 8 for nested struct and

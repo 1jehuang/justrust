@@ -1,4 +1,4 @@
-//! Real graph-read constructor ingress authority, not native acceptance.
+//! Real graph-read constructor ingress authority and stock/native acceptance.
 use super::*;
 use crate::compiler::nominal_realization::{ReadNominal, RealizationKey, read_manifest};
 use crate::compiler::{CompilerProvider, Input, SIGNATURES, Snapshot};
@@ -50,6 +50,13 @@ impl Provider for IngressProvider {
 }
 
 #[test]
+fn missing_constructor_nominal_is_demanded_before_native_match() {
+    crate::compiler::frontend::parser_tests::stock_native_run(
+        "enum E{A(i32),B(i32)}fn main(){let value=E::A(42);match value{E::A(x)=>println!(\"{}\",x),E::B(x)=>println!(\"{}\",x)}}",
+    );
+}
+
+#[test]
 fn constructor_ingress_replays_source_application_snapshot_and_actuals() {
     let budget = ir::PlanBudget::default();
     let snapshot = Arc::new(Snapshot {
@@ -91,6 +98,38 @@ fn constructor_ingress_replays_source_application_snapshot_and_actuals() {
     checker.nominal_inputs = Some(&inputs);
     let converted = checker.realize_constructor_source(&source).unwrap();
     assert_eq!(converted, realized);
+    {
+        let absent = |_: &NominalDemand| Ok(None);
+        let missing_inputs =
+            NominalPreparationInputs::new(&declaration_schema, &source_type, &absent);
+        let mut pending = Checker::new(&signatures, ir::Ty::Unit, function.module);
+        pending.declaration = Some(main);
+        pending
+            .install_lexical_scope(function.lexical_scope)
+            .unwrap();
+        pending.nominal_inputs = Some(&missing_inputs);
+        assert!(
+            pending
+                .realize_constructor_source(&source)
+                .unwrap_err()
+                .contains("missing graph input")
+        );
+        let blocked = pending.nominal_blocked.borrow();
+        let Some(NominalPreparation::Blocked {
+            nominals,
+            declarations,
+            needs_source_schemas,
+            unresolved_constraints,
+        }) = blocked.as_ref()
+        else {
+            panic!("missing constructor did not request its graph input")
+        };
+        assert_eq!(nominals.len(), 1);
+        assert_eq!(nominals[0].declaration, *declaration);
+        assert!(nominals[0].arguments.is_empty());
+        assert!(declarations.is_empty());
+        assert!(!needs_source_schemas && !unresolved_constraints);
+    }
     assert_eq!(
         checker.realize_constructor_source(&realized).unwrap(),
         realized

@@ -92,8 +92,17 @@ impl Checker<'_> {
             return plan.intern_nominal(declaration, actuals, self.facts(), &plan.budget);
         };
         let demand = self.nominal_input_demand(declaration, actuals)?;
-        (inputs.nominal_type)(&demand)?
-            .ok_or_else(|| "missing graph input: constructor nominal realization".into())
+        if let Some(ty) = (inputs.nominal_type)(&demand)? {
+            return Ok(ty);
+        }
+        self.infer_storage(1)?;
+        *self.nominal_blocked.borrow_mut() = Some(NominalPreparation::Blocked {
+            nominals: Arc::from([demand]),
+            declarations: Arc::from([]),
+            needs_source_schemas: false,
+            unresolved_constraints: false,
+        });
+        Err("missing graph input: constructor nominal realization".into())
     }
 
     /// Convert a canonical source constructor through its complete graph receipt.
