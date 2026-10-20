@@ -3895,6 +3895,7 @@ impl<'a> Checker<'a> {
                     .get(&owner)
                     .ok_or("generic pattern is not nominal")?;
                 let actual = plan.intern_nominal(decl, &args, self.facts(), &plan.budget)?;
+                let actual = self.realize_constructor_source(&actual)?;
                 if !coerces(expected, &actual) {
                     return Err("generic pattern application does not match scrutinee".into());
                 }

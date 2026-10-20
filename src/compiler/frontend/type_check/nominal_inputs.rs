@@ -133,7 +133,8 @@ impl Checker<'_> {
         }
         for (source, actual) in arguments.iter().zip(actuals) {
             self.infer_work(0)?;
-            if !replay_type_equal(source, actual, budget)
+            let source = self.realize_constructor_actual(source, 0)?;
+            if !replay_type_equal(&source, actual, budget)
                 .map_err(|e| e.into_legacy_diagnostic(budget))?
             {
                 return Err(
@@ -169,6 +170,45 @@ impl Checker<'_> {
         self.facts()
             .validate_ty_metadata_with_budget(&realized, budget)?;
         Ok(realized)
+    }
+
+    /// Transport only source representations. Existing graph identities must
+    /// survive exact replay, including nested identities from another engine.
+    pub(super) fn realize_constructor_actual(
+        &self,
+        ty: &ir::Ty,
+        depth: usize,
+    ) -> Result<ir::Ty, String> {
+        self.infer_work(depth)?;
+        Ok(match ty {
+            ir::Ty::Struct(_) | ir::Ty::Enum(_) => self.realize_constructor_source(ty)?,
+            ir::Ty::Tuple(fields) => {
+                self.infer_storage(fields.len())?;
+                ir::Ty::Tuple(
+                    fields
+                        .iter()
+                        .map(|field| self.realize_constructor_actual(field, depth + 1))
+                        .collect::<Result<Vec<_>, _>>()?
+                        .into(),
+                )
+            }
+            ir::Ty::Ref { kind, referent } => ir::Ty::Ref {
+                kind: *kind,
+                referent: Arc::new(self.realize_constructor_actual(referent, depth + 1)?),
+            },
+            ir::Ty::RawPtr { kind, pointee } => ir::Ty::RawPtr {
+                kind: *kind,
+                pointee: Arc::new(self.realize_constructor_actual(pointee, depth + 1)?),
+            },
+            ir::Ty::Array { element, len } => ir::Ty::Array {
+                element: Arc::new(self.realize_constructor_actual(element, depth + 1)?),
+                len: *len,
+            },
+            ir::Ty::Slice { element } => ir::Ty::Slice {
+                element: Arc::new(self.realize_constructor_actual(element, depth + 1)?),
+            },
+            _ => ty.clone(),
+        })
     }
 
     pub(super) fn realized_constructor_expectation(

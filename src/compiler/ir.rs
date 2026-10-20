@@ -3667,6 +3667,11 @@ fn canonicalize_call_metadata(
                 )?
                 .unwrap_or(canonical)
             } else if facts.phase() == super::traits::FactsPhase::Closed {
+                // The incoming selection/signature was validated above. Resolving
+                // a trait item may refine its return origins to the selected
+                // implementation's exact contract. Nominal conversion changes
+                // representation only, so replay it under that proven contract.
+                signature.ref_contract = canonical.ref_contract.clone();
                 match _cx
                     .realize_canonical_call_signature(
                         &callee,

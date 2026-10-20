@@ -218,6 +218,32 @@ are retained in `data/runs/associated-result-receivers/2026-10.jsonl`.
 This is scoped receiver representation integration, not acceptance of the full
 NonNull input, all inferred owner forms, full Iterator or full Rust.
 
+## Native constructor regression repair (2026-10-20)
+
+Constructor ordered actuals now replay source-to-graph realization recursively
+before exact identity comparison. Existing graph actuals retain their typed
+identity, including nested foreign-engine rejection. Generic pattern applications
+and method receiver candidates use the same ingress instead of comparing raw
+source slots against graph signatures. Declaration, argument order, source schema
+and complete realization receipt checks remain intact.
+
+Closed call canonicalization validates the original selection/signature before
+adopting the selected implementation's proven reference contract for nominal
+representation replay. This preserves refined return pointers without accepting
+a forged incoming contract or weakening signature equality.
+
+The three unchanged native generic/trait regression programs pass stock/native
+CHECK, BUILD and execution at workers 1 and 8 in
+`20261020-035817872-3802212`. Stock alone uses `-Aunconditional_panic` for the
+fixtures' existing `1/0` failure sentinels. All nine nominal realization controls
+pass in `20261020-035825323-3802520`; expanded constructor nested-identity controls
+pass in `20261020-035841880-3803328`, and original-call forged carrier controls in
+`20261020-035844372-3803067`. All 14 graph-integrity gates pass unchanged in
+`20261020-035829386-3802664`. These are scoped regressions, not full-suite or full
+Rust acceptance. An earlier broader shared-tree run still exposed unrelated
+native-adapter/scalar failures and two accepted unused-invalid projection cases;
+those remain separate follow-up work, not passing evidence for this repair.
+
 ## Required acceptance gates
 
 - Stock/native CHECK, BUILD, and run at workers 1 and 8 for nested struct and

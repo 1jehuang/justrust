@@ -29,6 +29,12 @@ impl Checker<'_> {
         expected: Option<&ir::Ty>,
     ) -> Result<(Option<MethodSelection>, bool), String> {
         let plan = self.signatures.plan()?;
+        let realized_receiver = if self.nominal_inputs.is_some() {
+            Some(self.realize_constructor_actual(receiver, 0)?)
+        } else {
+            None
+        };
+        let receiver = realized_receiver.as_ref().unwrap_or(receiver);
         let written =
             if !explicit.is_empty() && !explicit.iter().any(partial_annotation::has_nested_infer) {
                 self.infer_storage(explicit.len())?;

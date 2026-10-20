@@ -19,6 +19,10 @@ fn root() -> std::path::PathBuf {
 }
 
 pub fn stock_native(source: &str) {
+    stock_native_with_args(source, &[]);
+}
+
+pub fn stock_native_with_args(source: &str, args: &[&str]) {
     let root = root();
     fs::create_dir_all(&root).unwrap();
     let input = root.join("main.rs");
@@ -26,6 +30,7 @@ pub fn stock_native(source: &str) {
     fs::write(&input, source).unwrap();
     let built = Command::new(stock_rustc::stock_rustc())
         .args(["--edition=2024", "-Cpanic=abort"])
+        .args(args)
         .arg(&input)
         .arg("-o")
         .arg(&stock)

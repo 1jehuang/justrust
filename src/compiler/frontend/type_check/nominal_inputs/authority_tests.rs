@@ -121,6 +121,48 @@ fn constructor_ingress_replays_source_application_snapshot_and_actuals() {
         checker.realize_constructor_source(&foreign_graph).is_err(),
         "constructor ingress laundered a same-world foreign-engine graph read"
     );
+    // Source-to-graph transport recurses through structural actuals, but must
+    // never replace an already graph-owned child with a current-engine lookup.
+    for shape in 0..5 {
+        let wrap = |ty: ir::Ty| match shape {
+            0 => ir::Ty::Tuple(vec![ty].into()),
+            1 => ir::Ty::Array {
+                element: Arc::new(ty),
+                len: 2,
+            },
+            2 => ir::Ty::Slice {
+                element: Arc::new(ty),
+            },
+            3 => ir::Ty::Ref {
+                kind: ir::BorrowKind::Shared,
+                referent: Arc::new(ty),
+            },
+            _ => ir::Ty::RawPtr {
+                kind: ir::BorrowKind::Shared,
+                pointee: Arc::new(ty),
+            },
+        };
+        assert_eq!(
+            checker
+                .realize_constructor_actual(&wrap(source.clone()), 0)
+                .unwrap(),
+            wrap(realized.clone()),
+            "source actual transport failed for shape {shape}"
+        );
+        assert_eq!(
+            checker
+                .realize_constructor_actual(&wrap(realized.clone()), 0)
+                .unwrap(),
+            wrap(realized.clone()),
+            "current graph actual changed for shape {shape}"
+        );
+        assert!(
+            checker
+                .realize_constructor_actual(&wrap(foreign_graph.clone()), 0)
+                .is_err(),
+            "foreign-engine graph actual laundered under shape {shape}"
+        );
+    }
     let ir::Ty::Struct(original) = &source else {
         panic!("struct source")
     };
