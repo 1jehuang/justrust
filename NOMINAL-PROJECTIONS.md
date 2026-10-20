@@ -163,6 +163,46 @@ they were not repeated or misrepresented as this later parent's full acceptance.
 All cited successful summaries are retained under
 `data/runs/nominal-projections/2026-10.jsonl`.
 
+## Associated factory receiver integration
+
+A chained associated-call result hint replays the complete selected Call
+signature through the same borrowed nominal inputs used for method formals,
+before extracting its result type. Missing typed reads retain the exact Blocked
+inventory and propagate an error, never a raw result hint or `None` fallback.
+Strict receiver comparison and final original/mapped source-call receipts remain
+unchanged. No new graph node, shared state, type-equivalence exception or separate
+authority protocol is introduced.
+
+The explicit `Holder::<u32>` fixture covers both enum and struct factory results,
+without depending on inferred static owners or the recovered NonNull fixture.
+Stock/native graph CHECK produces no executable and demands no codegen at workers
+1 and 8, followed by matching BUILD and execution. On frozen tree `b758c40e`
+(parent `519a7ff4`), the positive passes in `20261020-013112547-3150488`.
+Unused wrong-argument and missing-member programs are rejected by stock and native
+CHECK/BUILD at workers 1 and 8 (`20261020-013623345-3171333`,
+`20261020-013731049-3176221`). The genuine caller-facts unit retains the exact
+missing demand and rejects callback metadata with a wrong declaration or changed
+ordered actual (`20261020-013604879-3170360`). These adversarial metadata callbacks
+are not fabricated graph capabilities and do not independently prove current-
+engine provenance; successful graph callbacks still use the existing typed-read
+capability boundary.
+
+That frozen parent passes all-test-target checking, library clippy and all 14
+graph integrity tests (`20261020-013835708-3178487`,
+`20261020-013853837-3182240`, `20261020-013907002-3182685`). Clippy exits successfully
+with existing warnings, not warning-free. Owned Rust files were formatted without
+bundling unrelated baseline formatting changes.
+
+After exact peer static-owner inference carry onto `59f91c4b`, combined tree
+`0adee9e2` passes checking of all 345 compiled test targets and the same explicit
+positive stock/native CHECK/BUILD/run at workers 1 and 8
+(`20261020-014327809-3192995`, `20261020-014347945-3196974`). The prior authority,
+clippy and graph receipts retain their `519a7ff4` provenance, rather than claiming
+those gates were repeated on the combined parent. The nine authentic summaries
+are retained in `data/runs/associated-result-receivers/2026-10.jsonl`.
+This is scoped receiver representation integration, not acceptance of the full
+NonNull input, all inferred owner forms, full Iterator or full Rust.
+
 ## Required acceptance gates
 
 - Stock/native CHECK, BUILD, and run at workers 1 and 8 for nested struct and

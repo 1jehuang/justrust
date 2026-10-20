@@ -1385,7 +1385,20 @@ and measured integration throughput after each accepted slice.
 
 ## Active work and evidence limits
 
-Closed nominal field realization (`NOMINAL-PROJECTIONS.md`): the unchanged
+Closed nominal field realization (`NOMINAL-PROJECTIONS.md`): associated factory
+receiver hints now reuse full canonical Call signature realization before result
+extraction, preserving strict method selection and original/mapped source receipts.
+Explicit-owner struct/enum factory chains pass stock/native graph CHECK-no-image,
+BUILD and run at workers 1 and 8; unused wrong arguments/missing members and genuine
+caller-facts missing/wrong declaration/ordered actual metadata controls reject.
+Frozen `b758c40e` on `519a7ff4` passes check, library clippy (existing warnings) and
+all 14 graph gates (`20261020-013907002-3182685`). Exact static-owner parent carry
+onto `59f91c4b` passes 345-target checking and the explicit positive again
+(`20261020-014327809-3192995`, `20261020-014347945-3196974`); the earlier authority,
+clippy and graph gates retain their original-parent provenance. Nine authentic
+summaries are in `data/runs/associated-result-receivers/2026-10.jsonl`. This does
+not claim full NonNull, Iterator or Rust acceptance.
+The previously accepted closed realization evidence follows unchanged: the unchanged
 nested closed `Peek<I: It>` struct and closed enum consumers pass stock/native
 CHECK, BUILD and execution at workers 1 and 8. Typed graph reads preserve source
 declaration/ordered actuals separately from engine-issued representation identity.
