@@ -106,16 +106,15 @@ const ROOT_CONTEXT_OWNER: SessionId = SessionId(NonZeroU64::MAX);
 pub struct AtomFingerprint([u64; 2]);
 impl AtomFingerprint {
     pub fn of(text: &str) -> Self {
-        // Fixed-basis 128-bit FNV-1a: deterministic across processes and
-        // sessions. Collisions are rejected at interning, never aliased.
-        const PRIME: u128 = 0x0000_0000_0100_0000_0000_0000_0000_013B;
-        let mut state: u128 = 0x6c62_272e_07bb_0142_62b8_2175_6295_c58d;
-        for byte in text.bytes() {
-            state ^= u128::from(byte);
-            state = state.wrapping_mul(PRIME);
-        }
+        // BLAKE3 truncated to 128 bits: collision-resistant against crafted
+        // identifiers and deterministic across processes and sessions.
+        // In-session collisions are still rejected at interning, and
+        // cross-session meetings verify spelling (see `same_atom`).
+        let hash = blake3::hash(text.as_bytes());
+        let bytes = hash.as_bytes();
+        let lane = |i: usize| u64::from_le_bytes(bytes[i..i + 8].try_into().unwrap());
         // Two u64 lanes keep 8-byte alignment, so NameData/NameKey layouts do not grow.
-        Self([(state >> 64) as u64, state as u64])
+        Self([lane(0), lane(8)])
     }
     fn table_hash(self) -> u64 {
         self.0[0] ^ self.0[1]
