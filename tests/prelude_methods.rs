@@ -10,6 +10,30 @@ use std::sync::atomic::{AtomicU64, Ordering};
 #[path = "support/closure_oracle.rs"]
 mod closure_oracle;
 
+#[test]
+fn vec_clone_is_elementwise_in_order() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "vec-clone",
+        &[
+            Case {
+                name: "independent_copy",
+                source: "fn main(){let v=vec![1i32,2,3];let mut w=v.clone();w.push(4);println!(\"{} {}\",v.len(),w.len());}",
+                expect: Expect::Run("3 4\n"),
+            },
+            Case {
+                name: "clones_each_element_once_front_to_back",
+                source: "struct C(i32);impl Clone for C{fn clone(&self)->C{println!(\"c{}\",self.0);C(self.0)}}fn main(){let v=vec![C(1),C(2),C(3)];let w=v.clone();println!(\"{}\",w.len());}",
+                expect: Expect::Run("c1\nc2\nc3\n3\n"),
+            },
+            // An element without Clone is rejected (no image), but today it
+            // stops at the generic 'nominal source constraints' boundary
+            // instead of stock's E0599, as Option::clone does. Tracked as the
+            // prelude unmet-bound diagnostic gap; add the Invalid case then.
+        ],
+    );
+}
+
 /// `Option<&T>::unwrap` and friends return a reference carried by the by-value
 /// generic `self`. The result must keep the input loan alive (E0597 when the
 /// referent dies first) without rejecting ordinary in-scope uses.

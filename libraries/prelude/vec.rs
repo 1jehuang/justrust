@@ -302,6 +302,20 @@ pub fn __jr_vec_seed<T>(first: T, capacity: usize) -> Vec<T> {
     v
 }
 
+/// Element-wise clone in index order, matching std's observable behavior
+/// (each element's `clone` runs once, front to back).
+impl<T: Clone> Clone for Vec<T> {
+    fn clone(&self) -> Vec<T> {
+        let mut out: Vec<T> = Vec::with_capacity(self.len);
+        let mut i = 0usize;
+        while i < self.len {
+            out.push(self.get_ref(i).clone());
+            i += 1usize;
+        }
+        out
+    }
+}
+
 impl<T> super::ops::Index<usize> for Vec<T> {
     type Output = T;
     fn index(&self, index: usize) -> &T {
