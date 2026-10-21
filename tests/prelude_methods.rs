@@ -52,6 +52,74 @@ fn vec_clone_is_elementwise_in_order() {
     );
 }
 
+/// A method name with no inherent, prelude-trait or in-scope trait candidate
+/// on a final receiver type is stock's E0599, even in unused functions.
+#[test]
+fn absent_method_on_final_receiver_is_e0599() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "absent-method",
+        &[
+            Case {
+                name: "slice_receiver",
+                source: "fn f(v:&[i32])->i32{v.nonexistent()}fn main(){}",
+                expect: Expect::Invalid("no method named `nonexistent` found"),
+            },
+            Case {
+                name: "struct_receiver",
+                source: "struct S{x:i32}impl S{fn get(&self)->i32{self.x}}fn f(s:&S)->i32{s.nonexistent()}fn main(){println!(\"{}\",S{x:1}.get());}",
+                expect: Expect::Invalid("no method named `nonexistent` found"),
+            },
+            Case {
+                name: "generic_param_receiver",
+                source: "trait A{fn a(&self);}fn f<T:A>(t:T){t.nonexistent()}fn main(){}",
+                expect: Expect::Invalid("no method named `nonexistent` found"),
+            },
+            Case {
+                name: "inferred_vec_receiver",
+                source: "fn f(){let v=Vec::new();v.nonexistent();let _:Vec<i32>=v;}fn main(){}",
+                expect: Expect::Invalid("no method named `nonexistent` found"),
+            },
+            Case {
+                name: "existing_method_still_runs",
+                source: "struct S{x:i32}impl S{fn get(&self)->i32{self.x}}fn f(v:&[i32])->usize{v.len()}fn main(){println!(\"{} {}\",S{x:4}.get(),f(&[1,2]));}",
+                expect: Expect::Run("4 2\n"),
+            },
+        ],
+    );
+    for (source, receiver) in [
+        (
+            "fn f(v:&[i32])->i32{v.nonexistent()}fn main(){}",
+            "`&[i32]`",
+        ),
+        ("struct S;fn f(s:&S){s.nonexistent()}fn main(){}", "`&S`"),
+        ("fn f<T>(t:T){t.nonexistent()}fn main(){}", "`T`"),
+    ] {
+        for workers in [1, 8] {
+            let error = compiler::compile(source.into(), workers, true)
+                .err()
+                .expect("absent method accepted")
+                .to_string();
+            assert!(
+                error.contains("E0599: no method named `nonexistent` found for ")
+                    && error.contains(receiver),
+                "workers={workers}: {error}"
+            );
+        }
+    }
+    // A receiver that is still an inference variable is not final: stock
+    // reports E0282 there and the native boundary must stay explicit.
+    let error = compiler::compile(
+        "fn f(){let x=None;x.nonexistent();}fn main(){}".into(),
+        1,
+        true,
+    )
+    .err()
+    .expect("unknown receiver accepted")
+    .to_string();
+    assert!(!error.contains("E0599"), "{error}");
+}
+
 /// `Option<&T>::unwrap` and friends return a reference carried by the by-value
 /// generic `self`. The result must keep the input loan alive (E0597 when the
 /// referent dies first) without rejecting ordinary in-scope uses.

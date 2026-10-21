@@ -1153,6 +1153,25 @@ impl<'s> Solver<'_, '_, 's> {
                             }
                         }
                     }
+                    // No declaration of this name exists anywhere, so no
+                    // autoderef step of this final receiver can select it.
+                    if !final_receiver_has_inference(&ty)
+                        && method_name_has_no_declaration(plan, &method.name, &plan.budget)?
+                    {
+                        let name = self
+                            .checker
+                            .names()?
+                            .spelling(method.name)
+                            .map_err(native_adapter::name_diagnostic)?;
+                        let shown = match self.resolve(method.receiver, 0)? {
+                            Some(original) => original,
+                            None => ty.clone(),
+                        };
+                        selection_errors.push(format!(
+                            "E0599: no method named `{name}` found for `{}` in the current scope",
+                            diagnostic_ty(&shown, plan)
+                        ));
+                    }
                 }
                 pending.push(method);
             }
@@ -2108,8 +2127,137 @@ impl<'s> Solver<'_, '_, 's> {
     }
 }
 
-/// An exact method-selection failure caused by an unmet trait bound, which
-/// stock reports as E0599/E0277 rather than an inference boundary.
+/// A receiver is final only when no part of it can still be refined.
+fn final_receiver_has_inference(ty: &ir::Ty) -> bool {
+    match ty {
+        ir::Ty::Opaque(_) | ir::Ty::Closure(_) | ir::Ty::AssociatedType(_) => true,
+        ir::Ty::Ref { referent, .. } => final_receiver_has_inference(referent),
+        ir::Ty::RawPtr { pointee, .. } => final_receiver_has_inference(pointee),
+        ir::Ty::Array { element, .. } | ir::Ty::Slice { element } => {
+            final_receiver_has_inference(element)
+        }
+        ir::Ty::Tuple(items) => items.iter().any(final_receiver_has_inference),
+        ir::Ty::Struct(t) => t.def().type_args.iter().any(final_receiver_has_inference),
+        ir::Ty::Enum(t) => t.def().type_args.iter().any(final_receiver_has_inference),
+        _ => false,
+    }
+}
+
+/// Diagnostic-only absence proof over the sealed registry: no inherent,
+/// trait, trait-default or prelude callable and no builtin primitive
+/// operation is spelled `name`. Never selects a callee.
+fn method_name_has_no_declaration(
+    plan: &PlanCtx,
+    name: &AstIdent,
+    budget: &ir::PlanBudget,
+) -> Result<bool, String> {
+    let spelling = plan
+        .program
+        .names
+        .spelling(*name)
+        .map_err(native_adapter::name_diagnostic)?;
+    if ir::IntrinsicOp::candidate_name(spelling)
+        || matches!(spelling, "len" | "iter" | "leading_zeros")
+    {
+        return Ok(false);
+    }
+    for id in plan
+        .registry
+        .function_ids
+        .iter()
+        .chain(plan.registry.trait_items.iter().flatten())
+    {
+        budget.charge_work(1)?;
+        let info = plan.declaration(*id)?;
+        if plan.registry.source_member_equal(info.path.item, *name)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn diagnostic_ty(ty: &ir::Ty, plan: &PlanCtx) -> String {
+    use ir::{FloatTy as F, IntTy as I};
+    let list = |items: &[ir::Ty]| {
+        items
+            .iter()
+            .map(|t| diagnostic_ty(t, plan))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let nominal = |name: &str, args: &[ir::Ty]| {
+        let short = name.rsplit("::").next().unwrap_or(name);
+        if args.is_empty() {
+            short.to_owned()
+        } else {
+            format!("{short}<{}>", list(args))
+        }
+    };
+    match ty {
+        ir::Ty::Int(i) => match i {
+            I::I8 => "i8",
+            I::I16 => "i16",
+            I::I32 => "i32",
+            I::I64 => "i64",
+            I::Isize => "isize",
+            I::I128 => "i128",
+            I::U8 => "u8",
+            I::U16 => "u16",
+            I::U32 => "u32",
+            I::U64 => "u64",
+            I::Usize => "usize",
+            I::U128 => "u128",
+        }
+        .into(),
+        ir::Ty::Float(F::F32) => "f32".into(),
+        ir::Ty::Float(F::F64) => "f64".into(),
+        ir::Ty::Char => "char".into(),
+        ir::Ty::Str => "str".into(),
+        ir::Ty::Bool => "bool".into(),
+        ir::Ty::Unit => "()".into(),
+        ir::Ty::Never => "!".into(),
+        ir::Ty::Ref { kind, referent } => format!(
+            "&{}{}",
+            if *kind == ir::BorrowKind::Mut {
+                "mut "
+            } else {
+                ""
+            },
+            diagnostic_ty(referent, plan)
+        ),
+        ir::Ty::RawPtr { kind, pointee } => format!(
+            "*{} {}",
+            if *kind == ir::BorrowKind::Mut {
+                "mut"
+            } else {
+                "const"
+            },
+            diagnostic_ty(pointee, plan)
+        ),
+        ir::Ty::Tuple(items) => format!("({})", list(items)),
+        ir::Ty::Array { element, len } => format!("[{}; {len}]", diagnostic_ty(element, plan)),
+        ir::Ty::Slice { element } => format!("[{}]", diagnostic_ty(element, plan)),
+        ir::Ty::Struct(t) => nominal(&t.def().name, &t.def().type_args),
+        ir::Ty::Enum(t) => nominal(&t.def().name, &t.def().type_args),
+        ir::Ty::Param(p) => {
+            let index = p.index as usize;
+            plan.declaration(p.owner.declaration)
+                .ok()
+                .and_then(|info| info.type_params.get(index).copied())
+                .and_then(|ident| plan.program.names.spelling(ident).ok().map(str::to_owned))
+                .unwrap_or_else(|| "Self".into())
+        }
+        ir::Ty::Dyn(d) => match plan.declaration(d.principal) {
+            Ok(info) => format!("dyn {}", nominal(&info.name, &d.args)),
+            Err(_) => "dyn _".into(),
+        },
+        ir::Ty::Opaque(_) | ir::Ty::Closure(_) | ir::Ty::AssociatedType(_) => "_".into(),
+    }
+}
+
+/// An exact method-selection failure (unmet trait bound or proven absent
+/// method), which stock reports as E0599/E0277 rather than an inference
+/// boundary.
 fn is_bound_failure(error: &str) -> bool {
     error.starts_with("E0599") || error.starts_with("E0277")
 }
