@@ -1357,6 +1357,19 @@ impl<'s> Solver<'_, '_, 's> {
                     self.defer_bindings(child, bindings)?;
                 }
             }
+            Pattern::At { name, pattern, .. } => {
+                // The whole-place name and its subpattern bindings share the
+                // same scope rules as a plain binding.
+                if let Some(key) = self.inference_key(name, true)? {
+                    let term = match bindings.get(&key) {
+                        Some(term) => *term,
+                        None => self.fresh()?,
+                    };
+                    bindings.insert(key, term);
+                    self.bind(name, term)?;
+                }
+                self.defer_bindings(pattern, bindings)?;
+            }
             Pattern::Apply { pattern, .. } | Pattern::Ref { pattern, .. } => {
                 self.defer_bindings(pattern, bindings)?;
             }
@@ -1416,6 +1429,23 @@ impl<'s> Solver<'_, '_, 's> {
                     None => term,
                 };
                 self.bind(name, bound)
+            }
+            Pattern::At {
+                name,
+                by_ref,
+                pattern,
+                ..
+            } => {
+                // `name @ pat` binds the whole matched value with the same
+                // type and mode as a plain binding, then tests `pat` against
+                // the same term. Admission (Copy/shared only) stays in the
+                // checker; inference only supplies the type.
+                let bound = match by_ref {
+                    Some(kind) => self.node(Domain::Ref(*kind, term))?,
+                    None => term,
+                };
+                self.bind(name, bound)?;
+                self.pattern(pattern, term)
             }
             Pattern::Tuple(fields) => {
                 let (term, mode) = self.pattern_referent(term);

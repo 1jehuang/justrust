@@ -1786,9 +1786,36 @@ mod tests {
             "/// documented\nfn value()->i32{42}fn main(){println!(\"{}\",value());}",
             "fn main(){let x=Some(42);match x{whole @ Some(_)=>{match whole{Some(n)=>println!(\"{}\",n),None=>{}}},None=>{}}}",
             "fn value()->Result<i32,i32>{let x:Result<i32,i32>=Ok(42);Ok(x?)}fn main(){match value(){Ok(n)=>println!(\"{}\",n),Err(_)=>{}}}",
-            "fn main(){macro_rules! stop{($label:lifetime)=>{break $label;};}'done:loop{stop!('done);}println!(\"{}\",42);}",
         ] {
             super::super::parser_tests::stock_native_run(source);
+        }
+        // Stock accepts a label passed through a `lifetime` fragment. Native
+        // expansion does not yet carry labels, so it must reject explicitly in
+        // CHECK and BUILD rather than approximate. Promote this to
+        // stock_native_run when expanded labels are implemented.
+        let expanded_label = "fn main(){macro_rules! stop{($label:lifetime)=>{break $label;};}'done:loop{stop!('done);}println!(\"{}\",42);}";
+        let stock = super::super::parser_tests::stock_compile(
+            expanded_label,
+            std::path::Path::new("unused"),
+            true,
+        );
+        assert!(
+            stock.status.success(),
+            "{}",
+            String::from_utf8_lossy(&stock.stderr)
+        );
+        for workers in [1, 8] {
+            for check in [true, false] {
+                let error = crate::compiler::compile(expanded_label.into(), workers, check)
+                    .err()
+                    .expect("expanded labels must not be approximated");
+                assert!(
+                    error
+                        .to_string()
+                        .contains("unsupported: expanded labels are unsupported"),
+                    "{error}"
+                );
+            }
         }
         for punctuation in ["@", "?"] {
             let input = super::super::lex(punctuation).unwrap();
