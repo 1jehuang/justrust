@@ -94,6 +94,11 @@ pub enum HirExpr {
     Lit(HirLit),
     /// A constant item or associated constant of the given declared type.
     Const(Ty),
+    /// `Type::NAME`: an inherent associated constant, typed by lookup.
+    AssocConst {
+        self_ty: Ty,
+        name: String,
+    },
     /// `e?`: early return of the residual through the enclosing fn.
     Try(ExprId),
     /// `<Self as Trait>::item(args)` or `Trait::item(args)`.

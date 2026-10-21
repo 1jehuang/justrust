@@ -60,6 +60,11 @@ pub trait ItemDb: TraitDb {
     fn adt(&self, a: DefId) -> &AdtData;
     /// Associated functions of one impl: (name, fn).
     fn impl_items(&self, i: DefId) -> &[(String, DefId)];
+    /// Associated constants of one inherent impl: (name, type over the
+    /// impl's parameters).
+    fn impl_consts(&self, _i: DefId) -> &[(String, Ty)] {
+        &[]
+    }
     fn check_lang(&self) -> &CheckLang;
     fn as_trait_db(&self) -> &dyn TraitDb;
 }
@@ -447,6 +452,20 @@ impl<'a> Checker<'a> {
                     Some(t) => t,
                     None => {
                         self.err(Some(e), CheckErrorKind::NoMethod(name.clone()));
+                        error()
+                    }
+                }
+            }
+            HirExpr::AssocConst { self_ty, name } => {
+                let self_ty = self.cx.fill_holes(self_ty);
+                let self_ty = self.structurally_resolve(&self_ty);
+                match self.resolve_assoc_const(&self_ty, name) {
+                    Some(t) => t,
+                    None => {
+                        self.err(
+                            Some(e),
+                            CheckErrorKind::Unsupported("associated constant lookup"),
+                        );
                         error()
                     }
                 }
@@ -883,6 +902,32 @@ impl<'a> Checker<'a> {
         let output = self.normalize(&subst(&sig.output, &args));
         args = args.into_iter().collect();
         (mk(TyKind::FnPtr(inputs, output)), args)
+    }
+
+    /// Inherent associated constant `Self::NAME`: the first inherent impl of
+    /// the simplified self type whose head unifies and that declares `name`.
+    /// Trait-provided constants are not modeled yet (explicit Unsupported).
+    fn resolve_assoc_const(&mut self, self_ty: &Ty, name: &str) -> Option<Ty> {
+        let key = simplify(self_ty)?;
+        for &i in self.db.inherent_impls(key).to_vec().iter() {
+            let Some((_, t)) = self
+                .db
+                .impl_consts(i)
+                .iter()
+                .find(|(n, _)| n == name)
+                .cloned()
+            else {
+                continue;
+            };
+            let data = self.db.impl_data(i).clone();
+            let args = self.cx.fresh_args(data.generics as usize);
+            let head = subst(&data.self_ty, &args);
+            if self.cx.unify(&head, self_ty).is_err() {
+                continue;
+            }
+            return Some(self.normalize(&subst(&t, &args)));
+        }
+        None
     }
 
     fn resolve_assoc(&mut self, e: ExprId, self_ty: &Ty, name: &str) -> Option<Ty> {

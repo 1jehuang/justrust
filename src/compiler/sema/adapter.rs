@@ -26,6 +26,7 @@ pub struct WorldDb {
     impls_of: HashMap<DefId, Vec<DefId>>,
     inherent: HashMap<SimplifiedType, Vec<DefId>>,
     impl_items: HashMap<DefId, Vec<(String, DefId)>>,
+    impl_consts: HashMap<DefId, Vec<(String, Ty)>>,
     fns: HashMap<DefId, FnSig>,
     adts: HashMap<DefId, AdtData>,
     lang: LangItems,
@@ -67,6 +68,9 @@ impl ItemDb for WorldDb {
     }
     fn impl_items(&self, i: DefId) -> &[(String, DefId)] {
         self.impl_items.get(&i).map_or(&self.empty_items, |v| v)
+    }
+    fn impl_consts(&self, i: DefId) -> &[(String, Ty)] {
+        self.impl_consts.get(&i).map_or(&[], |v| v)
     }
     fn check_lang(&self) -> &CheckLang {
         &self.check_lang
@@ -404,6 +408,59 @@ impl WorldDb {
         }
 
         db.discover_lang(plan);
+        // Inherent associated constants, typed from their validated header
+        // over the owning impl's environment. Trait constants are not mapped.
+        for decl in plan.associated_constant_declarations() {
+            let Ok(h) = plan.associated_constant_header(decl, &plan.budget) else {
+                db.unsupported
+                    .push((def(decl), "associated constant header unavailable"));
+                continue;
+            };
+            let owner = def(h.owner);
+            // Trait-impl constants are not mapped yet (explicit Unsupported).
+            let Ok(owner_info) = plan.declaration(h.owner) else {
+                continue;
+            };
+            if owner_info.kind != ir::DeclKind::Impl {
+                continue;
+            }
+            let map = TyMap {
+                env: &h.env,
+                extra: &[],
+            };
+            let mut u = None;
+            // Constant-only inherent impls (`impl i32 { const MIN }`) have no
+            // callable to register them above: register from the header.
+            if !db.impls.contains_key(&owner) {
+                let Some(owner_ty) = &h.owner_ty else {
+                    continue;
+                };
+                let self_ty = map.ty(owner_ty, &mut u);
+                if let Some(key) = ty::simplify(&self_ty) {
+                    db.inherent.entry(key).or_default().push(owner);
+                }
+                db.impls.insert(
+                    owner,
+                    ImplData {
+                        id: owner,
+                        generics: h.env.total_arity() as u32,
+                        trait_ref: None,
+                        self_ty,
+                        predicates: Vec::new(),
+                        assoc_types: Vec::new(),
+                    },
+                );
+            }
+            let Ok(info) = plan.declaration(decl) else {
+                continue;
+            };
+            let Some(name) = plan.sema_item_name(info) else {
+                continue;
+            };
+            let t = map.ty(&h.ty, &mut u);
+            note(&mut db, def(decl), u);
+            db.impl_consts.entry(owner).or_default().push((name, t));
+        }
         // Field tables for every nominal, from its symbolic schema.
         for info in plan.sema_declarations() {
             if !matches!(info.kind, ir::DeclKind::Struct | ir::DeclKind::Enum) {
@@ -699,6 +756,27 @@ mod tests {
             }
         }
         (ok, total, notes)
+    }
+
+    /// Inherent associated constants type through the semantic core,
+    /// including a primitive owner (`i32::MIN`) and a user impl with only a
+    /// constant. An unknown constant is rejected, not approximated.
+    #[test]
+    fn inherent_associated_constants_are_typed() {
+        let good = "struct P; impl P { const K: u8 = 3; } fn main() { let a: i32 = i32::MIN; let b: u8 = P::K; let _ = (a, b); }";
+        let plan = plan_for("good.rs", good).unwrap();
+        let db = WorldDb::build(&plan).unwrap();
+        let (ok, total, notes) = shadow(&plan, &db);
+        assert_eq!((ok, total), (1, 1), "{notes:?}");
+
+        // Wrong use type: P::K is u8.
+        let bad =
+            "struct P; impl P { const K: u8 = 3; } fn main() { let b: bool = P::K; let _ = b; }";
+        if let Ok(plan) = plan_for("bad.rs", bad) {
+            let db = WorldDb::build(&plan).unwrap();
+            let (ok, total, notes) = shadow(&plan, &db);
+            assert_eq!((ok, total), (0, 1), "{notes:?}");
+        }
     }
 
     /// format!/write! operands lower into the semantic core and are still

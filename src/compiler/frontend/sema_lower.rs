@@ -1151,7 +1151,17 @@ impl<'a> Lower<'a> {
                 let t = self.ty(&ty)?;
                 self.push(h::HirExpr::Const(t))
             }
-            Expr::AssociatedConst(_) => return un("associated constant"),
+            // Inherent `Type::NAME`. Trait-qualified forms stay unsupported.
+            Expr::AssociatedConst(value) if value.trait_path.is_none() => {
+                let self_ty = self.ty(&value.owner)?;
+                let name = self
+                    .names()
+                    .spelling(value.name)
+                    .map_err(|e| Unsupported(format!("{e:?}")))?
+                    .to_owned();
+                self.push(h::HirExpr::AssocConst { self_ty, name })
+            }
+            Expr::AssociatedConst(_) => return un("trait associated constant"),
             Expr::TraitCall {
                 owner,
                 trait_path,
