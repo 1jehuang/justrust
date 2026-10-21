@@ -317,3 +317,5 @@ mod tests {
         );
     }
 }
+
+impl crate::engine::Fact for NominalDeclarationProof {}

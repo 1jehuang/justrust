@@ -9226,3 +9226,5 @@ mod tests {
         }
     }
 }
+
+impl crate::engine::Fact for Object {}

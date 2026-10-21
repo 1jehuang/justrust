@@ -2931,3 +2931,9 @@ fn main(){println!("mod absent; }"); let x = r##"mod raw; {"##; let c = '}';}
         assert!(tree.load().unwrap_err().contains("UTF-8"));
     }
 }
+
+impl crate::engine::Fact for PreparedSource {}
+
+impl crate::engine::Fact for FileUnit {}
+
+impl crate::engine::Fact for UnitFailure {}

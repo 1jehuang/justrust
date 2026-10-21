@@ -1397,3 +1397,5 @@ mod float_inference_tests {
         }
     }
 }
+
+impl crate::engine::Fact for CanonicalSourcePublication {}

@@ -22477,3 +22477,9 @@ struct MethodSelection {
     depth: usize,
     adjustment: ReceiverAdjustment,
 }
+
+impl crate::engine::Fact for ParsedProgram {}
+
+impl crate::engine::Fact for PlanCtx {}
+
+impl crate::engine::Fact for Program {}

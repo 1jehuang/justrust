@@ -583,3 +583,9 @@ mod caller_tests {
         assert!(!same_caller_computation(&original, &foreign, &budget).unwrap());
     }
 }
+
+impl crate::engine::Fact for AssociatedConstantCheckedFact {}
+
+impl crate::engine::Fact for AssociatedConstantHeaderFact {}
+
+impl crate::engine::Fact for AssociatedConstantValueFact {}

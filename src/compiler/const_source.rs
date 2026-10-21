@@ -421,3 +421,5 @@ fn binary(op: frontend::BinaryOp) -> scalar::Binary {
         F::Shr => S::Shr,
     }
 }
+
+impl crate::engine::Fact for DeclarationFact {}

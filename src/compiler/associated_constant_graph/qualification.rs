@@ -92,3 +92,5 @@ impl QualifiedMemberUse {
         Ok(())
     }
 }
+
+impl crate::engine::Fact for QualifiedMemberUse {}

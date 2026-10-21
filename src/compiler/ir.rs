@@ -15654,3 +15654,9 @@ mod tests {
         );
     }
 }
+
+impl crate::engine::Fact for NominalIndex {}
+
+impl crate::engine::Fact for RetainedStorage {}
+
+impl crate::engine::Fact for DeclId {}

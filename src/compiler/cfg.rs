@@ -12085,3 +12085,7 @@ mod tests {
 #[cfg(test)]
 #[path = "cfg/slice_ownership_tests.rs"]
 mod slice_ownership_tests;
+
+impl crate::engine::Fact for Function {}
+
+impl crate::engine::Fact for TemplateCfg {}

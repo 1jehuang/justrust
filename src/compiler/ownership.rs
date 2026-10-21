@@ -9931,3 +9931,5 @@ mod tests {
         assert_eq!(result.stats.worklist_pops, 0);
     }
 }
+
+impl crate::engine::Fact for Analysis {}

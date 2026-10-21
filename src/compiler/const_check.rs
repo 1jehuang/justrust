@@ -518,3 +518,9 @@ mod storage_tests {
         assert_eq!(exact.usage_snapshot().bytes, proof_bytes);
     }
 }
+
+impl crate::engine::Fact for BodyFact {}
+
+impl crate::engine::Fact for QualificationFact {}
+
+impl crate::engine::Fact for ValueFact {}

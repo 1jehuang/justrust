@@ -2883,3 +2883,29 @@ mod optimizer_resource_tests {
         }
     }
 }
+
+impl crate::engine::Fact for BodyLexicalFact {}
+
+impl crate::engine::Fact for CaptureEnvironmentFact {}
+
+impl crate::engine::Fact for ClosureBodiesFact {}
+
+impl crate::engine::Fact for ConcreteProofFact {}
+
+impl crate::engine::Fact for InstanceBodyFact {}
+
+impl crate::engine::Fact for OpaqueHiddenTypesFact {}
+
+impl crate::engine::Fact for OpaqueRepresentationFact {}
+
+impl crate::engine::Fact for PlanFact {}
+
+impl crate::engine::Fact for SsaFact {}
+
+impl crate::engine::Fact for SummaryFact {}
+
+impl crate::engine::Fact for TemplateBodyFact {}
+
+impl crate::engine::Fact for UniversalProofFact {}
+
+impl crate::engine::Fact for traits::ValidatedTraitWorld {}

@@ -1530,3 +1530,5 @@ mod tests {
         b.check().unwrap();
     }
 }
+
+impl crate::engine::Fact for RetainedBytes {}

@@ -355,3 +355,5 @@ impl PlanCtx {
         })
     }
 }
+
+impl crate::engine::Fact for AuthorizedAssociatedConstant {}

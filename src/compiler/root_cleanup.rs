@@ -303,3 +303,5 @@ mod tests {
         assert!(RootCleanupDemand::derive(&owner, &body, &publication, &budget).is_err());
     }
 }
+
+impl crate::engine::Fact for RootCleanupDemand {}

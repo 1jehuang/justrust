@@ -1128,3 +1128,9 @@ mod tests {
         assert!(RealizationKey::encode(7, declaration, &[vec![1; 32]], 32).is_err());
     }
 }
+
+impl crate::engine::Fact for NominalSourceFact {}
+
+impl crate::engine::Fact for RealizedNominal {}
+
+impl crate::engine::Fact for ReadNominal {}

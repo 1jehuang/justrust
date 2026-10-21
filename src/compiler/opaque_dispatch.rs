@@ -393,3 +393,7 @@ pub(super) async fn produce(
     }
     cx.publish_fact(1, PhysicalCalleeReady { target: physical })
 }
+
+impl crate::engine::Fact for OpaqueCallAuthorization {}
+
+impl crate::engine::Fact for PhysicalCalleeReady {}

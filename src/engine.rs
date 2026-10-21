@@ -146,6 +146,51 @@ pub struct Key {
     pub params: Vec<u64>,
 }
 
+/// The two sealed parameterless roots. Every other typed key carries
+/// per-file, per-item or per-instance parameters.
+pub const CHECK_ROOT_KIND: u32 = 104;
+pub const BUILD_ROOT_KIND: u32 = 105;
+
+/// Whole-program kinds that still use parameterless keys. Known debt from
+/// docs/compiler/GRAPH-INTEGRITY.md that may only shrink: never add a kind.
+const PARAMLESS_DEBT_KINDS: [u32; 5] = [100, 101, 106, 113, 115];
+
+/// A typed node identity. Each node kind declares one key type that encodes
+/// its canonical ordered parameters. Compiler code builds keys only through
+/// this trait; raw [`Key::new`] is reserved for the engine and its tests.
+pub trait NodeKey {
+    const KIND: u32;
+    fn encode(&self, params: &mut Vec<u64>);
+    /// Canonical engine key. Panics for a parameterless key of any kind other
+    /// than the sealed roots and the recorded whole-program debt.
+    fn key(&self) -> Key {
+        let mut params = Vec::new();
+        self.encode(&mut params);
+        assert!(
+            !params.is_empty()
+                || matches!(Self::KIND, CHECK_ROOT_KIND | BUILD_ROOT_KIND)
+                || PARAMLESS_DEBT_KINDS.contains(&Self::KIND),
+            "node kind {} has a parameterless (whole-program) key",
+            Self::KIND
+        );
+        Key::new(Self::KIND, params)
+    }
+}
+
+/// Sealed graph roots: the only legitimately parameterless node keys.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CheckRoot;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BuildRoot;
+impl NodeKey for CheckRoot {
+    const KIND: u32 = CHECK_ROOT_KIND;
+    fn encode(&self, _: &mut Vec<u64>) {}
+}
+impl NodeKey for BuildRoot {
+    const KIND: u32 = BUILD_ROOT_KIND;
+    fn encode(&self, _: &mut Vec<u64>) {}
+}
+
 impl Key {
     pub fn new(kind: u32, params: Vec<u64>) -> Self {
         Self {
@@ -531,12 +576,30 @@ struct Slot {
     result: Option<Result<u64, Error>>,
     /// Typed immutable fact published with the output, readable by consumers
     /// through the same dependency-recording read as the `u64` value.
-    fact: Option<Fact>,
+    fact: Option<FactBox>,
     waiters: HashMap<(u64, u64), Waker>,
 }
 
 /// A typed, immutable, shareable compiler fact carried by a graph output.
-pub type Fact = Arc<dyn Any + Send + Sync>;
+pub type FactBox = Arc<dyn Any + Send + Sync>;
+
+/// Marker for values that may be published as graph facts. Implementations
+/// assert the type is immutable: it must not reach `Mutex`, `RwLock`,
+/// `OnceLock`, `Cell`, atomics or budget handles. `tests/graph_integrity.rs`
+/// checks published types for reachable mutable state.
+pub trait Fact: Any + Send + Sync {}
+
+impl Fact for () {}
+impl Fact for u64 {}
+impl Fact for usize {}
+impl<T: Fact + ?Sized> Fact for Arc<T> {}
+impl<T: Fact> Fact for Vec<T> {}
+impl<T: Fact> Fact for Option<T> {}
+impl<A: Fact, B: Fact> Fact for (A, B) {}
+impl Fact for EngineAuthority {}
+impl Fact for u8 {}
+impl<T: Fact, E: Fact> Fact for Result<T, E> {}
+impl<A: Fact, B: Fact, C: Fact> Fact for (A, B, C) {}
 
 struct Task {
     id: u64,
@@ -692,6 +755,11 @@ impl Engine {
                 worker_abort_instead: AtomicBool::new(false),
             }),
         }
+    }
+
+    /// Attach a demand for a typed node key.
+    pub fn request_key<K: NodeKey>(&self, key: &K) -> Demand {
+        self.request(key.key())
     }
 
     pub fn request(&self, key: Key) -> Demand {
@@ -1021,6 +1089,32 @@ impl Context {
         }
     }
 
+    /// Demand a typed node. Equivalent to `request(key.key())`.
+    pub fn request_key<K: NodeKey>(&self, key: &K) -> Outputs {
+        self.request(key.key())
+    }
+
+    /// Demand every key before any is awaited, returning output `index` of
+    /// each. Request-all-then-await keeps independent prerequisites parallel.
+    pub fn request_all<'k, K: NodeKey + 'k>(
+        &self,
+        keys: impl IntoIterator<Item = &'k K>,
+        index: usize,
+    ) -> Vec<Handle> {
+        keys.into_iter()
+            .map(|key| self.request_key(key).get(index))
+            .collect()
+    }
+
+    /// Demand a typed node and await its typed fact at output `index`.
+    pub async fn read_key<T: Fact, K: NodeKey>(
+        &self,
+        key: &K,
+        index: usize,
+    ) -> Result<Arc<T>, Error> {
+        self.read_fact::<T>(self.request_key(key).get(index)).await
+    }
+
     pub async fn read(&self, handle: Handle) -> Result<u64, Error> {
         if handle.graph != self.shared.id {
             return Err(Error::new(
@@ -1088,11 +1182,16 @@ impl Context {
     /// Publish a typed fact as this output. Consumers obtain it with
     /// [`Context::read_fact`], which records the dependency edge exactly like
     /// [`Context::read`]. The fact is immutable once published.
-    pub fn publish_fact<T: Any + Send + Sync>(&self, index: usize, fact: T) -> Result<(), Error> {
+    pub fn publish_fact<T: Fact>(&self, index: usize, fact: T) -> Result<(), Error> {
         self.publish_with_fact(index, 1, Some(Arc::new(fact)))
     }
 
-    fn publish_with_fact(&self, index: usize, value: u64, fact: Option<Fact>) -> Result<(), Error> {
+    fn publish_with_fact(
+        &self,
+        index: usize,
+        value: u64,
+        fact: Option<FactBox>,
+    ) -> Result<(), Error> {
         let state = lock(&self.node.state);
         if let Some(error) = &state.error {
             return Err(error.clone());
