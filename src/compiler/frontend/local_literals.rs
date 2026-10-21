@@ -1585,6 +1585,10 @@ impl<'s> Solver<'_, '_, 's> {
                         self.coerce(term, ty)?;
                         term = ty;
                     }
+                    // Like a plain let, publish the solved initializer type so
+                    // the checker types literal arms/branches of the value from
+                    // the same unification (`let _ = match .. { .. => y, _ => 0 }`).
+                    self.sites.push((stmt as *const Stmt as usize, term));
                     self.pattern(pattern, term)?;
                 }
                 Stmt::Assign { name, value } => {

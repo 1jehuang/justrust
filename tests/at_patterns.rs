@@ -73,6 +73,24 @@ fn inferred_at_bindings_match_stock_at_workers_1_and_8() {
                 source: r#"fn main() { let whole @ (a, _) = (3, true); let _: bool = whole.0; let _ = a; }"#,
                 expect: Expect::Invalid("E0308"),
             },
+            // Unannotated pattern lets take literal types from the solved
+            // initializer, like plain lets (`let _ = match .. { .. => y, _ => 0 }`).
+            Case {
+                name: "pattern_let_literal_arms_follow_initializer",
+                source: r#"fn main() {
+    let y = 1u8;
+    let _ = match 1u8 { 1 => y, _ => 0 };
+    let _ = if true { y } else { 0 };
+    let (a, b) = (if false { y } else { 255 }, 2);
+    println!("{} {}", a, b);
+}"#,
+                expect: Expect::Run("255 2\n"),
+            },
+            Case {
+                name: "pattern_let_literal_arm_overflow",
+                source: r#"fn main() { let y = 1u8; let _ = if true { y } else { 300 }; }"#,
+                expect: Expect::Invalid("literal out of range"),
+            },
         ],
     );
 }

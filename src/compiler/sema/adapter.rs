@@ -701,6 +701,36 @@ mod tests {
         (ok, total, notes)
     }
 
+    /// format!/write! operands lower into the semantic core and are still
+    /// type checked: a mismatched operand stays an error.
+    #[test]
+    fn format_into_operands_are_checked() {
+        let good = "fn main() { let n: u32 = 3; let s = format!(\"{} {}\", n, n + 1); let _ = s; }";
+        let plan = plan_for("good.rs", good).unwrap();
+        let db = WorldDb::build(&plan).unwrap();
+        let (ok, total, notes) = shadow(&plan, &db);
+        assert_eq!((ok, total), (1, 1), "{notes:?}");
+
+        // A mismatched format operand must be rejected by planning (the old
+        // checker) or by the semantic core. Never accepted by both.
+        for (name, bad) in [
+            (
+                "bad.rs",
+                "fn main() { let n: u32 = 3; let s = format!(\"{}\", n + true); let _ = s; }",
+            ),
+            (
+                "bad2.rs",
+                "fn main() { let n: u32 = 3; let s = format!(\"{}\", { let b: bool = n; b }); let _ = s; }",
+            ),
+        ] {
+            if let Ok(plan) = plan_for(name, bad) {
+                let db = WorldDb::build(&plan).unwrap();
+                let (ok, total, notes) = shadow(&plan, &db);
+                assert_eq!((ok, total), (0, 1), "{name}: {notes:?}");
+            }
+        }
+    }
+
     #[test]
     #[ignore = "diagnostic probe: run with --ignored --nocapture"]
     fn corpus_plan_stage() {

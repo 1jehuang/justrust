@@ -6518,11 +6518,25 @@ impl<'a> Checker<'a> {
                     } else {
                         Some(self.source_local_ty(ty)?)
                     };
+                    // An unannotated pattern let still has a solved initializer
+                    // type. Use it only as an inferred expectation, never as a
+                    // hard annotation, exactly like the plain-let path.
+                    let inferred = if matches!(written, Type::Infer) {
+                        literal_hints.get(&(s as *const Stmt as usize)).cloned()
+                    } else {
+                        None
+                    };
                     let direct_dynamic = matches!(value, Expr::DynamicIndex { .. });
                     let direct_wildcard = matches!(pattern, Pattern::Wildcard);
                     let extending = self.extending_borrows.len();
                     self.mark_extending_borrows(value, 0)?;
-                    let value = self.expr_expected(value, annotation.as_ref());
+                    let value = match (&annotation, &inferred) {
+                        (Some(ty), _) => self.expr_expected(value, Some(ty)),
+                        (None, Some(hint)) => {
+                            self.expr_with_expectation(value, Expectation::Inferred(hint))
+                        }
+                        (None, None) => self.expr_expected(value, None),
+                    };
                     self.extending_borrows.truncate(extending);
                     let value = value?;
                     let flow = self.flow(value);
@@ -9402,6 +9416,11 @@ impl<'a> Checker<'a> {
         }
         let mut shared: Vec<Option<shared_or_arms::SharedOrArm>> =
             (0..flattened.len()).map(|_| None).collect();
+        // Every row of one source or-arm must bind the same names with the same
+        // types and mutability, even when rows are checked separately and the
+        // body never reads the binding (stock E0308).
+        let mut row_bindings: Vec<Option<HashMap<NameKey, (ir::Ty, bool)>>> =
+            (0..flattened.len()).map(|_| None).collect();
         let mut expanded_groups = Vec::new();
         let mut expanded = Vec::with_capacity(arms.len());
         for (group, (arm, flat)) in arms.zip(&flattened).enumerate() {
@@ -9427,6 +9446,10 @@ impl<'a> Checker<'a> {
         }
         if expanded.len() > 4096 {
             return Err("match arm count exceeds limit 4096".into());
+        }
+        let mut group_rows = vec![0usize; flattened.len()];
+        for &group in &expanded_groups {
+            group_rows[group] += 1;
         }
         let arms = expanded.iter().copied();
         let mut domain = source.ty.clone();
@@ -9661,6 +9684,39 @@ impl<'a> Checker<'a> {
                     guard: *guard,
                     body: *body,
                 });
+            }
+            if arm_result.is_ok() && group_rows[group] > 1 {
+                let mut signature = HashMap::new();
+                for (name, local) in self.shared_pattern_bindings(scope_depth)? {
+                    let declaration = self
+                        .locals
+                        .get(local.0)
+                        .ok_or("or-pattern binding outside checked locals")?;
+                    signature.insert(name, (declaration.ty.clone(), declaration.mutable));
+                }
+                match &row_bindings[group] {
+                    None => row_bindings[group] = Some(signature),
+                    Some(first) => {
+                        if first.len() != signature.len()
+                            || first.keys().any(|name| !signature.contains_key(name))
+                        {
+                            self.scopes.truncate(scope_depth);
+                            return Err(
+                                "E0408: or-pattern alternatives bind different variables".into()
+                            );
+                        }
+                        if first
+                            .iter()
+                            .any(|(name, binding)| signature[name] != *binding)
+                        {
+                            self.scopes.truncate(scope_depth);
+                            return Err(
+                                "E0308: or-pattern alternatives bind different types or mutability"
+                                    .into(),
+                            );
+                        }
+                    }
+                }
             }
             self.scopes.truncate(scope_depth);
             let (pattern, coverage, body, useful, guard) = arm_result?;

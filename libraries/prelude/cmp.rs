@@ -432,6 +432,44 @@ impl PartialOrd for bool {
         Option::Some(self.cmp(other))
     }
 }
+// Floats are only partially ordered: NaN is unequal to everything and
+// unordered, exactly as the primitive IEEE comparisons.
+impl PartialEq for f32 {
+    fn eq(&self, other: &f32) -> bool {
+        *self == *other
+    }
+}
+impl PartialOrd for f32 {
+    fn partial_cmp(&self, other: &f32) -> Option<Ordering> {
+        if *self < *other {
+            Option::Some(Ordering::Less)
+        } else if *self > *other {
+            Option::Some(Ordering::Greater)
+        } else if *self == *other {
+            Option::Some(Ordering::Equal)
+        } else {
+            Option::None
+        }
+    }
+}
+impl PartialEq for f64 {
+    fn eq(&self, other: &f64) -> bool {
+        *self == *other
+    }
+}
+impl PartialOrd for f64 {
+    fn partial_cmp(&self, other: &f64) -> Option<Ordering> {
+        if *self < *other {
+            Option::Some(Ordering::Less)
+        } else if *self > *other {
+            Option::Some(Ordering::Greater)
+        } else if *self == *other {
+            Option::Some(Ordering::Equal)
+        } else {
+            Option::None
+        }
+    }
+}
 impl Ord for bool {
     fn cmp(&self, other: &bool) -> Ordering {
         match (*self, *other) {

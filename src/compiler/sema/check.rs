@@ -1059,8 +1059,9 @@ impl<'a> Checker<'a> {
         let rt = self.structurally_resolve(&rt);
         let probed = self.probe_method(e, &rt, name);
         if probed.is_none() && name == "len" && args.is_empty() && turbofish.is_empty() {
-            // Builtin slice length (`ExprKind::SliceLen`): receivers autoderef
-            // to `[T]` or `[T; N]`. `str` and nominal `len` are source methods.
+            // Builtin length of `[T]`, `[T; N]` and `str` (`ExprKind::SliceLen`
+            // and the native str length); receivers autoderef through
+            // references. Nominal `len` (Vec, String) are source methods.
             let mut cur = rt.clone();
             let mut derefs = 0u32;
             while let TyKind::Ref(_, inner) = cur.as_ref() {
@@ -1068,7 +1069,10 @@ impl<'a> Checker<'a> {
                 cur = self.structurally_resolve(&inner);
                 derefs += 1;
             }
-            if matches!(cur.as_ref(), TyKind::Slice(_) | TyKind::Array(..)) {
+            if matches!(
+                cur.as_ref(),
+                TyKind::Slice(_) | TyKind::Array(..) | TyKind::Str
+            ) {
                 self.slice_lens.insert(e, derefs);
                 return int(IntTy::Usize);
             }

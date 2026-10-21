@@ -71,6 +71,43 @@ as one pure library, in the same style as `src/compiler/ssa/`:
    `source_replay::CallInferenceState`, `type_check/*_hint.rs`, ...), with a
    line-count and corpus delta recorded for each deletion.
 
+## Status (2026-10-21)
+
+Shadow probe (`sema::adapter::tests::corpus_plan_stage`, ignored): programs
+01-05 and 07 pass every body under the semantic core (was 01, 04, 07), from
+native range/array/slice `for` items, primitive intrinsics through the shared
+`ir::intrinsics` table, builtin slice/array/str `len` and IEEE float
+`PartialEq`/`PartialOrd` (commits d3bf91370, 827280eae, 978db0784). CHECK still
+uses the old checker. Corpus remaining blockers, by kind:
+
+- Library surface: `str::chars`/`split_whitespace`, `[T]::iter`/`swap`/`to_vec`,
+  `Iterator::map`/`fold`/`cloned`, `Result::map_err`.
+- Lowering into `sema::hir`: opaque returns, associated consts. Format macros
+  and literal output lower since 568d3be95 (bodies: 14 10->11/13, 15 4->5/7,
+  18 7->9/11, 19 18->20/21; 19 now needs only `Iterator::fold`).
+- PLAN failures before checking: `dyn` outside a reference (13), `HashMap` (17, 20).
+
+## Cutover finding: the old checker gates library growth
+
+Library methods are ordinary prelude source, so every addition must also pass
+the old checker. A `StrMethods` trait for `chars`/`split_whitespace` (with
+stock-differential cases) was withdrawn: trait methods with a `str` Self type
+fail `ir::reject_references` ("slice generic arguments are unsupported") in
+trait/impl validation (`traits.rs`, `predicate_subjects.rs`), and the trait
+also shadowed the working builtin `str` length. Further library growth
+therefore either relaxes those old-checker gates one by one or waits for step 3.
+
+Step 3 is not a CHECK-only swap. The backend consumes `ir::CheckedFunction`,
+which carries more than types: `call_evidence` (argument traces and region
+actuals), `ref_contract`, `runtime_sites` and `body_substitution` proofs that
+ownership and CFG lowering validate. `Typeck` produces expression/local types,
+method resolutions, intrinsic and length sites only. The cutover therefore
+needs either (a) a `Typeck` -> `CheckedFunction` lowering that reconstructs
+that evidence from resolved types, or (b) the old checker consuming `Typeck`
+as its inference oracle in place of its own partial unifiers, keeping its
+evidence production. (b) is incremental, deletes special cases directly and
+keeps the backend contract; it is the recommended first slice.
+
 ## Not yet covered
 
 Lifetimes/regions (handled by borrow checking, not here), higher-ranked
