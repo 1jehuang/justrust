@@ -763,12 +763,30 @@ mod tests {
     #[test]
     fn primitive_differential_sources_check_and_reject() {
         for (name, src) in [
-            ("intr_ref", "fn by_ref(x: &mut u64) -> u64 { x.wrapping_mul(3) } fn main(){ let mut a = u64::MAX; let _ = by_ref(&mut a); }"),
-            ("intr_val", "fn main(){ let n: i64 = -7; let _ = (n.abs(), n.pow(2)); }"),
-            ("slice_len", "fn slen(s: &[i32]) -> usize { s.len() } fn main(){ let arr = [1i32, 2, 3]; let _ = (slen(&arr), arr.len()); }"),
-            ("str_len", "fn main(){ let n: usize = \"h\u{e9}llo\".len(); let _ = n; }"),
-            ("float_eq", "fn eqv<T: PartialEq>(a: T, b: T) -> bool { a == b } fn main(){ let _ = (eqv(1.5f64, 1.5f64), eqv(1.0f32, 2.0f32)); }"),
-            ("range_for", "fn main(){ let mut s = 0u8; for i in 0..3u8 { s += i; } for i in 1..=2i64 { let _: i64 = i; } let _ = s; }"),
+            (
+                "intr_ref",
+                "fn by_ref(x: &mut u64) -> u64 { x.wrapping_mul(3) } fn main(){ let mut a = u64::MAX; let _ = by_ref(&mut a); }",
+            ),
+            (
+                "intr_val",
+                "fn main(){ let n: i64 = -7; let _ = (n.abs(), n.pow(2)); }",
+            ),
+            (
+                "slice_len",
+                "fn slen(s: &[i32]) -> usize { s.len() } fn main(){ let arr = [1i32, 2, 3]; let _ = (slen(&arr), arr.len()); }",
+            ),
+            (
+                "str_len",
+                "fn main(){ let n: usize = \"h\u{e9}llo\".len(); let _ = n; }",
+            ),
+            (
+                "float_eq",
+                "fn eqv<T: PartialEq>(a: T, b: T) -> bool { a == b } fn main(){ let _ = (eqv(1.5f64, 1.5f64), eqv(1.0f32, 2.0f32)); }",
+            ),
+            (
+                "range_for",
+                "fn main(){ let mut s = 0u8; for i in 0..3u8 { s += i; } for i in 1..=2i64 { let _: i64 = i; } let _ = s; }",
+            ),
         ] {
             let plan = plan_for(name, src).unwrap_or_else(|e| panic!("{name}: {e}"));
             let db = WorldDb::build(&plan).unwrap();
@@ -777,11 +795,20 @@ mod tests {
         }
         for (name, src) in [
             // abs exists only on signed integers.
-            ("abs_unsigned", "fn main(){ let n: u32 = 7; let _ = n.abs(); }"),
+            (
+                "abs_unsigned",
+                "fn main(){ let n: u32 = 7; let _ = n.abs(); }",
+            ),
             // slice len is usize, not u8.
-            ("len_type", "fn main(){ let a = [1i32]; let n: u8 = a.len(); let _ = n; }"),
+            (
+                "len_type",
+                "fn main(){ let a = [1i32]; let n: u8 = a.len(); let _ = n; }",
+            ),
             // range items take the bound type.
-            ("range_item", "fn main(){ for i in 0..3u8 { let _: i64 = i; } }"),
+            (
+                "range_item",
+                "fn main(){ for i in 0..3u8 { let _: i64 = i; } }",
+            ),
         ] {
             if let Ok(plan) = plan_for(name, src) {
                 let db = WorldDb::build(&plan).unwrap();
