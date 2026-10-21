@@ -1,6 +1,5 @@
 //! Sealed source ownership and issuing authority for token-only handles.
 //! No raw FileId/SourceSpan is accepted as an owned source reference.
-use std::hash::BuildHasher;
 use std::mem::size_of;
 use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
@@ -31,6 +30,8 @@ pub enum TokenError {
         span: Option<SpanId>,
     },
     IdExhausted,
+    /// Two distinct spellings share one atom fingerprint.
+    AtomCollision,
     TraceTruncated,
     SourceLimit {
         resource: SourceLimitResource,
@@ -57,6 +58,7 @@ impl std::fmt::Display for TokenError {
             Self::InvalidInput(message) => f.write_str(message),
             Self::UnbalancedDelimiter { .. } => f.write_str("unbalanced token delimiter"),
             Self::IdExhausted => f.write_str("token identity space exhausted"),
+            Self::AtomCollision => f.write_str("identifier atom fingerprint collision"),
             Self::TraceTruncated => f.write_str("bounded token provenance traversal truncated"),
             Self::SourceLimit {
                 resource,
@@ -94,6 +96,31 @@ struct SourceSnapshotId(NonZeroU64);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(super) struct SessionId(NonZeroU64);
+/// Reserved owner of the crate-root syntax context. Never issued to a session.
+const ROOT_CONTEXT_OWNER: SessionId = SessionId(NonZeroU64::MAX);
+
+/// Content identity of an interned spelling: a fixed-key 128-bit fingerprint,
+/// equal across sessions for equal text (PARSE-SPLIT.md step 2a). A session
+/// rejects two distinct spellings with one fingerprint (`AtomCollision`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct AtomFingerprint([u64; 2]);
+impl AtomFingerprint {
+    pub fn of(text: &str) -> Self {
+        // Fixed-basis 128-bit FNV-1a: deterministic across processes and
+        // sessions. Collisions are rejected at interning, never aliased.
+        const PRIME: u128 = 0x0000_0000_0100_0000_0000_0000_0000_013B;
+        let mut state: u128 = 0x6c62_272e_07bb_0142_62b8_2175_6295_c58d;
+        for byte in text.bytes() {
+            state ^= u128::from(byte);
+            state = state.wrapping_mul(PRIME);
+        }
+        // Two u64 lanes keep 8-byte alignment, so NameData/NameKey layouts do not grow.
+        Self([(state >> 64) as u64, state as u64])
+    }
+    fn table_hash(self) -> u64 {
+        self.0[0] ^ self.0[1]
+    }
+}
 impl SessionId {
     #[cfg(test)]
     pub(super) fn bits(self) -> NonZeroU64 {
@@ -128,6 +155,13 @@ macro_rules! session_handle {
     )+};
 }
 session_handle!(SpanId, ExpansionId, SyntaxContextId, SymbolId, CrateId);
+impl SyntaxContextId {
+    /// The fixed crate-root context (no session owns it).
+    pub const ROOT: Self = Self {
+        session: ROOT_CONTEXT_OWNER,
+        index: 0,
+    };
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct SourceFileHandle {
@@ -613,6 +647,7 @@ impl<T> BudgetVec<T> {
 
 struct SymbolEntry {
     hash: u64,
+    fingerprint: AtomFingerprint,
     text: String,
     _lease: ByteLease,
 }
@@ -630,7 +665,6 @@ pub struct TokenSession {
     budget: ExpansionBudget,
     symbols: BudgetVec<SymbolEntry>,
     symbol_slots: BudgetVec<Option<u32>>,
-    symbol_hasher: std::collections::hash_map::RandomState,
     spans: BudgetVec<SpanData>,
     contexts: BudgetVec<ContextData>,
     expansions: BudgetVec<ExpansionEntry>,
@@ -690,6 +724,9 @@ impl TokenSession {
         }
         let (issuer, tag) = owner.into_parts();
         let id = SessionId(tag.bits());
+        if id == ROOT_CONTEXT_OWNER {
+            return Err(TokenError::IdExhausted);
+        }
         let session = Self::build(id, sources, budget)?;
         Ok((
             session,
@@ -735,7 +772,6 @@ impl TokenSession {
             sources,
             symbols: BudgetVec::new(&budget, Storage::Retained)?,
             symbol_slots: BudgetVec::new(&budget, Storage::Retained)?,
-            symbol_hasher: std::collections::hash_map::RandomState::new(),
             spans: BudgetVec::new(&budget, Storage::Retained)?,
             contexts,
             expansions: BudgetVec::new(&budget, Storage::Retained)?,
@@ -767,11 +803,11 @@ impl TokenSession {
     fn index(&self, index: usize) -> Result<u32, TokenError> {
         Ok(self.budget.checked_u32(index as u64)?)
     }
+    /// The crate-root context is one fixed value shared by every session, so
+    /// root-context names from different files compare equal. Mark contexts
+    /// stay qualified by their owning session.
     pub fn root_context(&self) -> SyntaxContextId {
-        SyntaxContextId {
-            session: self.id,
-            index: 0,
-        }
+        SyntaxContextId::ROOT
     }
     pub fn symbol(&self, id: SymbolId) -> Result<&str, TokenError> {
         self.check_owner(id.session)?;
@@ -781,17 +817,54 @@ impl TokenSession {
             .map(|s| s.text.as_str())
             .ok_or(TokenError::InvalidHandle)
     }
-    /// Exact byte interning with a session-randomized, collision-safe index.
+    /// Content fingerprint of an interned symbol, equal across sessions.
+    pub fn fingerprint(&self, id: SymbolId) -> Result<AtomFingerprint, TokenError> {
+        self.check_owner(id.session)?;
+        self.symbols
+            .as_slice()
+            .get(id.index as usize)
+            .map(|s| s.fingerprint)
+            .ok_or(TokenError::InvalidHandle)
+    }
+    /// Text of an atom this session interned. A fingerprint the session never
+    /// interned is foreign: atoms grant no text authority by themselves.
+    pub fn fingerprint_text(&self, fingerprint: AtomFingerprint) -> Result<&str, TokenError> {
+        self.budget.check()?;
+        let count = self.symbol_slots.len();
+        if count == 0 {
+            return Err(TokenError::ForeignHandle);
+        }
+        let mut slot = fingerprint.table_hash() as usize & (count - 1);
+        loop {
+            self.budget.charge(Counter::Work, 1)?;
+            let Some(index) = self.symbol_slots.as_slice()[slot] else {
+                return Err(TokenError::ForeignHandle);
+            };
+            let entry = &self.symbols.as_slice()[index as usize];
+            if entry.fingerprint == fingerprint {
+                return Ok(entry.text.as_str());
+            }
+            slot = (slot + 1) & (count - 1);
+        }
+    }
+    /// Exact byte interning keyed by the content fingerprint. Distinct
+    /// spellings sharing a fingerprint are rejected, never aliased.
     pub fn intern_symbol(&mut self, text: &str) -> Result<SymbolId, TokenError> {
         self.budget.check()?;
         self.budget.charge(Counter::Work, text.len() as u64 + 1)?;
-        self.intern_hashed(text, self.symbol_hasher.hash_one(text))
+        let fingerprint = AtomFingerprint::of(text);
+        self.intern_fingerprinted(text, fingerprint.table_hash(), fingerprint)
+    }
+    #[cfg(test)]
+    fn intern_hashed(&mut self, text: &str, hash: u64) -> Result<SymbolId, TokenError> {
+        self.intern_fingerprinted(text, hash, AtomFingerprint::of(text))
     }
 
     fn symbol_slot(
         &self,
         text: &str,
         hash: u64,
+        fingerprint: AtomFingerprint,
     ) -> Result<Option<(usize, Option<u32>)>, TokenError> {
         let count = self.symbol_slots.len();
         if count == 0 {
@@ -810,6 +883,9 @@ impl TokenSession {
                 if entry.text == text {
                     return Ok(Some((slot, Some(index))));
                 }
+            }
+            if entry.fingerprint == fingerprint {
+                return Err(TokenError::AtomCollision);
             }
             slot = (slot + 1) & (count - 1);
         }
@@ -849,9 +925,14 @@ impl TokenSession {
         Ok(())
     }
 
-    fn intern_hashed(&mut self, text: &str, hash: u64) -> Result<SymbolId, TokenError> {
+    fn intern_fingerprinted(
+        &mut self,
+        text: &str,
+        hash: u64,
+        fingerprint: AtomFingerprint,
+    ) -> Result<SymbolId, TokenError> {
         self.budget.check()?;
-        if let Some((_, Some(index))) = self.symbol_slot(text, hash)? {
+        if let Some((_, Some(index))) = self.symbol_slot(text, hash, fingerprint)? {
             return Ok(SymbolId {
                 session: self.id,
                 index,
@@ -861,7 +942,7 @@ impl TokenSession {
             self.grow_symbol_index()?;
         }
         let (slot, _) = self
-            .symbol_slot(text, hash)?
+            .symbol_slot(text, hash, fingerprint)?
             .ok_or(TokenError::InvalidHandle)?;
         let index = self.index(self.symbols.len())?;
         self.budget.charge(Counter::Work, text.len() as u64)?;
@@ -878,6 +959,7 @@ impl TokenSession {
         }
         self.symbols.push(SymbolEntry {
             hash,
+            fingerprint,
             text: owned,
             _lease: lease,
         })?;
@@ -966,6 +1048,10 @@ impl TokenSession {
         })
     }
     pub fn context(&self, id: SyntaxContextId) -> Result<&ContextData, TokenError> {
+        if id == SyntaxContextId::ROOT {
+            self.budget.check()?;
+            return Ok(&ContextData::Root);
+        }
         self.check_owner(id.session)?;
         self.contexts
             .as_slice()
@@ -1561,10 +1647,17 @@ mod tests {
         assert_ne!(a_symbol, b_symbol);
         assert!(matches!(a.symbol(b_symbol), Err(TokenError::ForeignHandle)));
         assert!(matches!(a.span(b_span), Err(TokenError::ForeignHandle)));
-        assert!(matches!(
-            a.context(b.root_context()),
-            Err(TokenError::ForeignHandle)
-        ));
+        assert_eq!(a.root_context(), b.root_context());
+        assert_eq!(
+            a.fingerprint(a_symbol).unwrap(),
+            b.fingerprint(b_symbol).unwrap()
+        );
+        let b_exp = b.add_expansion(record(b_span, b_crate, None)).unwrap();
+        let b_root = b.root_context();
+        let b_mark = b
+            .apply_mark(b_root, b_exp, Transparency::SemiTransparent)
+            .unwrap();
+        assert!(matches!(a.context(b_mark), Err(TokenError::ForeignHandle)));
         assert!(matches!(
             a.synthetic_span(b_span, SyntheticReason::ExpansionToken),
             Err(TokenError::ForeignHandle)
@@ -1595,9 +1688,35 @@ mod tests {
         let span_a = a.original_span(original).unwrap();
         let span_b = b.original_span(original).unwrap();
         assert_ne!(span_a, span_b);
+        // The crate-root context is shared; spans stay session-owned.
+        a.with_context(span_a, b.root_context(), None).unwrap();
         assert!(matches!(
-            a.with_context(span_a, b.root_context(), None),
+            a.with_context(span_b, a.root_context(), None),
             Err(TokenError::ForeignHandle)
+        ));
+    }
+
+    #[test]
+    fn atom_fingerprints_are_content_canonical_and_collisions_reject() {
+        let (mut a, _, _) = fixture();
+        let (mut b, _, _) = fixture();
+        let x = a.intern_symbol("value").unwrap();
+        let y = b.intern_symbol("value").unwrap();
+        assert_eq!(AtomFingerprint::of("value"), a.fingerprint(x).unwrap());
+        assert_eq!(a.fingerprint(x).unwrap(), b.fingerprint(y).unwrap());
+        assert_eq!(
+            a.fingerprint_text(b.fingerprint(y).unwrap()).unwrap(),
+            "value"
+        );
+        assert!(matches!(
+            a.fingerprint_text(AtomFingerprint::of("never_interned")),
+            Err(TokenError::ForeignHandle)
+        ));
+        // A forged entry with a colliding fingerprint must never alias.
+        let forged = AtomFingerprint::of("value");
+        assert!(matches!(
+            a.intern_fingerprinted("other", forged.table_hash(), forged),
+            Err(TokenError::AtomCollision)
         ));
     }
 

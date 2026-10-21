@@ -40,7 +40,7 @@ impl NameStoreBuilder {
         let expansion = self.store.session.span(span)?.expansion;
         let span = self.store.session.with_context(span, context, expansion)?;
         Ok(self.append(NameData {
-            atom: NameAtomId(spelling),
+            atom: NameAtomId::new(&self.store.session, spelling)?,
             spelling,
             context,
             span,

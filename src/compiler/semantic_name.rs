@@ -10,7 +10,8 @@ use std::sync::Arc;
 use super::expansion_budget::{BudgetFailure, ByteLease, Counter, ExpansionBudget, Storage};
 use super::token::{Edition, Token, TokenKind};
 use super::token_session::{
-    BudgetVec, SessionId, SpanId, SymbolId, SyntaxContextId, TokenError, TokenSession,
+    AtomFingerprint, BudgetVec, SessionId, SpanId, SymbolId, SyntaxContextId, TokenError,
+    TokenSession,
 };
 
 mod derived;
@@ -28,8 +29,16 @@ pub struct AstIdent {
 
 /// Canonical identifier atom. ASCII spelling is already normalized. Unicode
 /// admission requires bounded NFC normalization before constructing this atom.
+/// Identity is the content fingerprint, so equal spellings from different
+/// sessions are the same atom with no shared table. Text comes from the
+/// occurrence's owner-checked spelling handle, never from the atom.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct NameAtomId(SymbolId);
+pub struct NameAtomId(AtomFingerprint);
+impl NameAtomId {
+    fn new(session: &TokenSession, symbol: SymbolId) -> Result<Self, TokenError> {
+        Ok(Self(session.fingerprint(symbol)?))
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Namespace {
@@ -291,7 +300,7 @@ impl NameStoreBuilder {
         }
         Self::check_ascii(self.session().symbol(ident.symbol)?, self.budget())?;
         self.append(NameData {
-            atom: NameAtomId(ident.symbol),
+            atom: NameAtomId::new(&self.store.session, ident.symbol)?,
             spelling: ident.symbol,
             context: ident.context,
             span: token.span,
@@ -354,7 +363,7 @@ impl NameStoreBuilder {
         }
         let symbol = self.store.session.intern_symbol(atom.spelling())?;
         Ok(NameKey {
-            atom: NameAtomId(symbol),
+            atom: NameAtomId::new(&self.store.session, symbol)?,
             context: self.session().root_context(),
             class: LookupClass::Member,
         })
@@ -369,7 +378,7 @@ impl NameStoreBuilder {
     ) -> Result<NameKey, NameError> {
         let symbol = self.store.session.intern_symbol(atom.spelling())?;
         Ok(NameKey {
-            atom: NameAtomId(symbol),
+            atom: NameAtomId::new(&self.store.session, symbol)?,
             context: self.session().root_context(),
             class: LookupClass::Item(namespace),
         })
@@ -424,7 +433,7 @@ impl NameStoreBuilder {
         }
         Self::check_ascii(self.session().symbol(ident.symbol)?, self.budget())?;
         self.append(NameData {
-            atom: NameAtomId(ident.symbol),
+            atom: NameAtomId::new(&self.store.session, ident.symbol)?,
             spelling: ident.symbol,
             context: ident.context,
             span: token.span,
@@ -442,7 +451,7 @@ impl NameStoreBuilder {
         Self::check_ascii(text, self.budget())?;
         let spelling = self.store.session.intern_symbol(text)?;
         self.append(NameData {
-            atom: NameAtomId(spelling),
+            atom: NameAtomId::new(&self.store.session, spelling)?,
             spelling,
             context: self.session().root_context(),
             span: origin,
@@ -466,7 +475,7 @@ impl NameStoreBuilder {
             .session
             .intern_symbol(&format!("$closure${ordinal}"))?;
         self.append(NameData {
-            atom: NameAtomId(spelling),
+            atom: NameAtomId::new(&self.store.session, spelling)?,
             spelling,
             context: self.session().root_context(),
             span: origin,
@@ -488,7 +497,7 @@ impl NameStoreBuilder {
             .session
             .intern_symbol(&format!("$closure_env${ordinal}${field}"))?;
         self.append(NameData {
-            atom: NameAtomId(spelling),
+            atom: NameAtomId::new(&self.store.session, spelling)?,
             spelling,
             context: self.session().root_context(),
             span: origin,
@@ -511,7 +520,7 @@ impl NameStoreBuilder {
             .session
             .intern_symbol(&format!("$impl_trait${ordinal}"))?;
         self.append(NameData {
-            atom: NameAtomId(spelling),
+            atom: NameAtomId::new(&self.store.session, spelling)?,
             spelling,
             context: self.session().root_context(),
             span: origin,
@@ -676,7 +685,7 @@ impl NameStore {
     }
     pub fn atom_text(&self, atom: NameAtomId) -> Result<&str, NameError> {
         self.budget().charge(Counter::Work, 1)?;
-        Ok(self.session.symbol(atom.0)?)
+        Ok(self.session.fingerprint_text(atom.0)?)
     }
     pub fn span(&self, ident: AstIdent) -> Result<SpanId, NameError> {
         Ok(self.record(ident)?.span)
@@ -964,7 +973,9 @@ mod tests {
         );
         let (foreign, foreign_cap, _, _) = owned_fixture(ExpansionBudget::default());
         let mut foreign = NameStoreBuilder::new(foreign, foreign_cap, Edition::E2024).unwrap();
-        assert_ne!(
+        // Content-canonical atoms: the same root-context descriptor key is
+        // equal across sessions (PARSE-SPLIT.md step 2a).
+        assert_eq!(
             catalog,
             foreign
                 .catalog_key(BuiltinAtom::Copy, Namespace::Type)
@@ -1039,10 +1050,9 @@ mod tests {
             a.check(b_name),
             Err(NameError::Token(TokenError::ForeignHandle))
         ));
-        assert!(matches!(
-            a.atom_text(b.data(b_name).unwrap().atom),
-            Err(NameError::Token(TokenError::ForeignHandle))
-        ));
+        // Atoms are content identities: an equal spelling's text is readable
+        // in either store, and grants no occurrence authority.
+        assert_eq!(a.atom_text(b.data(b_name).unwrap().atom).unwrap(), "x");
         assert!(matches!(
             a.intern_root("x", eof_b),
             Err(NameError::Token(TokenError::ForeignHandle))
@@ -1051,7 +1061,9 @@ mod tests {
             a.from_token(token_b, Edition::E2024),
             Err(NameError::Token(TokenError::ForeignHandle))
         ));
-        assert_ne!(
+        // Same spelling, root context: equal keys across sessions, while the
+        // occurrences themselves stay foreign (checked above).
+        assert_eq!(
             a.key(a_name, LookupClass::Local).unwrap(),
             b.key(b_name, LookupClass::Local).unwrap()
         );

@@ -181,7 +181,7 @@ impl SourceError {
                 }
             },
             TokenError::SourceLimit { .. } | TokenError::TraceTruncated => SourceErrorKind::Limit,
-            TokenError::IdExhausted => SourceErrorKind::Infrastructure,
+            TokenError::IdExhausted | TokenError::AtomCollision => SourceErrorKind::Infrastructure,
             TokenError::UnbalancedDelimiter { .. } => SourceErrorKind::Syntax,
             TokenError::ForeignHandle
             | TokenError::InvalidHandle
