@@ -3291,6 +3291,15 @@ fn tuple_invalid_fields_assignments_and_operators_are_rejected() {
 
 #[test]
 fn tuple_type_nesting_and_nested_inference_are_checked() {
+    // Direct parser calls run where graph workers do: on a worker-sized stack.
+    std::thread::Builder::new()
+        .stack_size(crate::engine::WORKER_STACK_BYTES)
+        .spawn(tuple_type_nesting_and_nested_inference_body)
+        .unwrap()
+        .join()
+        .unwrap();
+}
+fn tuple_type_nesting_and_nested_inference_body() {
     let nested = format!("{}i32{}", "(".repeat(140), ",)".repeat(140));
     assert!(
         parse(&format!("fn f(x:{nested}){{}}fn main(){{}}"))
