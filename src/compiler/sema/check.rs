@@ -98,6 +98,10 @@ pub struct Typeck {
     pub expr_tys: Vec<Ty>,
     pub local_tys: Vec<Ty>,
     pub methods: HashMap<ExprId, MethodRes>,
+    /// Primitive intrinsic calls with the receiver autoderef count.
+    pub intrinsics: HashMap<ExprId, (crate::compiler::ir::Intrinsic, u32)>,
+    /// Builtin slice/array `.len()` calls with the receiver autoderef count.
+    pub slice_lens: HashMap<ExprId, u32>,
     pub errors: Vec<CheckError>,
 }
 
@@ -113,6 +117,8 @@ struct Checker<'a> {
     ret: Ty,
     loops: Vec<(u32, Ty)>,
     methods: HashMap<ExprId, MethodRes>,
+    intrinsics: HashMap<ExprId, (crate::compiler::ir::Intrinsic, u32)>,
+    slice_lens: HashMap<ExprId, u32>,
     errors: Vec<CheckError>,
     closure_ret: Vec<Ty>,
 }
@@ -139,6 +145,8 @@ pub fn check_body(
         ret: ret.clone(),
         loops: Vec::new(),
         methods: HashMap::new(),
+        intrinsics: HashMap::new(),
+        slice_lens: HashMap::new(),
         errors: Vec::new(),
         closure_ret: Vec::new(),
     };
@@ -1049,7 +1057,28 @@ impl<'a> Checker<'a> {
     ) -> Ty {
         let rt = self.expr(recv, None);
         let rt = self.structurally_resolve(&rt);
-        let Some(res) = self.probe_method(e, &rt, name) else {
+        let probed = self.probe_method(e, &rt, name);
+        if probed.is_none() && name == "len" && args.is_empty() && turbofish.is_empty() {
+            // Builtin slice length (`ExprKind::SliceLen`): receivers autoderef
+            // to `[T]` or `[T; N]`. `str` and nominal `len` are source methods.
+            let mut cur = rt.clone();
+            let mut derefs = 0u32;
+            while let TyKind::Ref(_, inner) = cur.as_ref() {
+                let inner = inner.clone();
+                cur = self.structurally_resolve(&inner);
+                derefs += 1;
+            }
+            if matches!(cur.as_ref(), TyKind::Slice(_) | TyKind::Array(..)) {
+                self.slice_lens.insert(e, derefs);
+                return int(IntTy::Usize);
+            }
+        }
+        if probed.is_none()
+            && let Some(out) = self.intrinsic_call(e, &rt, name, args)
+        {
+            return out;
+        }
+        let Some(res) = probed else {
             if !matches!(rt.as_ref(), TyKind::Error) {
                 let msg = format!("{name} on {}", self.cx.resolve(&rt));
                 let kind = if matches!(rt.as_ref(), TyKind::Var(_)) {
@@ -1123,6 +1152,56 @@ impl<'a> Checker<'a> {
             },
         );
         output
+    }
+
+    /// Inherent primitive methods (`ir::intrinsics`), resolved after every
+    /// source candidate failed. The receiver autoderefs through references to
+    /// an exact scalar type. One shared table defines the signature, so the
+    /// semantic core and the backend cannot disagree about it. An integer or
+    /// float variable is not yet a fixed receiver: rustc reports E0689 there.
+    fn intrinsic_call(&mut self, e: ExprId, rt: &Ty, name: &str, args: &[ExprId]) -> Option<Ty> {
+        use crate::compiler::ir::{Intrinsic, ScalarTy};
+        if !crate::compiler::ir::IntrinsicOp::candidate_name(name) {
+            return None;
+        }
+        let mut cur = self.structurally_resolve(rt);
+        let mut derefs = 0u32;
+        while let TyKind::Ref(_, inner) = cur.as_ref() {
+            let inner = inner.clone();
+            cur = self.structurally_resolve(&inner);
+            derefs += 1;
+        }
+        let scalar = match cur.as_ref() {
+            TyKind::Int(i) => ScalarTy::Int(*i),
+            TyKind::Float(f) => ScalarTy::Float(*f),
+            TyKind::Char => ScalarTy::Char,
+            _ => return None,
+        };
+        let intrinsic = Intrinsic::resolve(scalar, name)?;
+        let sig = intrinsic.signature()?;
+        if let Some(reason) = intrinsic.unsupported_reason() {
+            self.err(Some(e), CheckErrorKind::Unsupported(reason));
+        }
+        let lower = |t: &crate::compiler::ir::Ty| -> Ty {
+            match t {
+                crate::compiler::ir::Ty::Int(i) => int(*i),
+                crate::compiler::ir::Ty::Float(f) => mk(TyKind::Float(*f)),
+                crate::compiler::ir::Ty::Char => mk(TyKind::Char),
+                crate::compiler::ir::Ty::Bool => bool_ty(),
+                _ => error(),
+            }
+        };
+        if sig.params.len() != args.len() + 1 {
+            self.err(
+                Some(e),
+                CheckErrorKind::Unsupported("wrong number of method arguments"),
+            );
+            return Some(lower(&sig.result));
+        }
+        let params: Vec<Ty> = sig.params[1..].iter().map(lower).collect();
+        self.check_args(args, &params);
+        self.intrinsics.insert(e, (intrinsic, derefs));
+        Some(lower(&sig.result))
     }
 
     /// Method probe. Returns (method, adjusted receiver type, derefs, autoref,
@@ -1463,6 +1542,12 @@ impl<'a> Checker<'a> {
         let (Some(ii), Some(item)) = (l.into_iterator, l.into_iter_item) else {
             return self.builtin_iter_item(e, it);
         };
+        // Integer ranges, arrays and slices are iterated natively by the
+        // backend and have no source `IntoIterator` impl in the bootstrap
+        // prelude. Their item type is fixed by the language rule.
+        if self.is_native_iterable(it) {
+            return self.builtin_iter_item(e, it);
+        }
         let tr = TraitRef {
             trait_id: ii,
             self_ty: it.clone(),
@@ -1484,7 +1569,21 @@ impl<'a> Checker<'a> {
         v
     }
 
-    /// Without an `IntoIterator` lang item (the bootstrap prelude has none),
+    fn is_native_iterable(&mut self, it: &Ty) -> bool {
+        let t = self.structurally_resolve(it);
+        let cl = self.db.check_lang();
+        match t.as_ref() {
+            TyKind::Adt(d, _) => Some(*d) == cl.range || Some(*d) == cl.range_inclusive,
+            TyKind::Array(..) | TyKind::Slice(_) => true,
+            TyKind::Ref(_, inner) => {
+                let inner = self.structurally_resolve(inner);
+                matches!(inner.as_ref(), TyKind::Array(..) | TyKind::Slice(_))
+            }
+            _ => false,
+        }
+    }
+
+    /// Without an `IntoIterator` lang item (older bootstrap preludes),
     /// `for` admits exactly the native iteration forms: integer ranges,
     /// arrays, slices and references to them.
     fn builtin_iter_item(&mut self, e: ExprId, it: &Ty) -> Ty {
@@ -1659,6 +1758,8 @@ impl<'a> Checker<'a> {
             expr_tys,
             local_tys,
             methods,
+            intrinsics: self.intrinsics,
+            slice_lens: self.slice_lens,
             errors: self.errors,
         }
     }

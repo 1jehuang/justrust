@@ -1291,3 +1291,65 @@ fn work_scales_linearly_with_body() {
     let ratio = b as f64 / a as f64;
     assert!(ratio < 2.3, "work growth {ratio} ({a} -> {b})");
 }
+
+fn param_body(b: B, param_ty: Ty, p: LocalId, tail: ExprId, ret: Ty) -> HirBody {
+    let mut body = b.body(vec![], Some(tail), ret);
+    body.params = vec![(B::bind(p), param_ty)];
+    body
+}
+
+/// `fn f(x: &mut u64) -> u64 { x.wrapping_mul(3) }`: primitive intrinsics
+/// autoderef to the exact scalar and take their signature from the shared
+/// `ir::intrinsics` table, and the literal argument becomes u64.
+#[test]
+fn intrinsic_method_through_reference() {
+    let mut b = B::default();
+    let x = b.local();
+    let xr = b.var(x);
+    let three = b.int(3);
+    let call = b.mcall(xr, "wrapping_mul", vec![three]);
+    let u64_t = int(IntTy::U64);
+    let body = param_body(b, mutr(u64_t.clone()), x, call, u64_t.clone());
+    let r = ok(&body);
+    assert_eq!(r.expr_tys[three as usize], u64_t);
+    assert_eq!(r.intrinsics.get(&call).map(|(_, d)| *d), Some(1));
+}
+
+/// Negative: `abs` exists only for signed integers (E0599 on u32).
+#[test]
+fn intrinsic_on_wrong_scalar_is_no_method() {
+    let mut b = B::default();
+    let x = b.local();
+    let xr = b.var(x);
+    let call = b.mcall(xr, "abs", vec![]);
+    let u32_t = int(IntTy::U32);
+    let body = param_body(b, u32_t.clone(), x, call, u32_t);
+    let r = run(&body);
+    assert!(
+        matches!(
+            r.errors.first().map(|e| &e.kind),
+            Some(CheckErrorKind::NoMethod(_))
+        ),
+        "{:?}",
+        r.errors
+    );
+}
+
+/// `fn f(s: &mut [i32]) -> usize { s.len() }`. The mini std declares a source
+/// `[T]::len`, which wins; the builtin length only applies without one.
+#[test]
+fn builtin_slice_len_through_mut_reference() {
+    let mut b = B::default();
+    let s = b.local();
+    let sr = b.var(s);
+    let call = b.mcall(sr, "len", vec![]);
+    let body = param_body(
+        b,
+        mutr(mk(TyKind::Slice(int(IntTy::I32)))),
+        s,
+        call,
+        usize_t(),
+    );
+    let r = ok(&body);
+    assert!(r.methods.contains_key(&call) || r.slice_lens.get(&call) == Some(&1));
+}
