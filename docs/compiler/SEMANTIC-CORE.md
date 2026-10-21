@@ -91,16 +91,27 @@ IEEE float `PartialEq`/`PartialOrd` (827280eae); format macro lowering
   test): a user struct produced through a generic closure result gets two
   nominal identities; `.map_err(..)?` needs an annotation; a by-value
   `mut acc` closure parameter calling `&mut self` methods is rejected.
+- `for` over a source iterator value is rejected by the native compiler at
+  every commit checked back to 1b43e6a71 ("nominal source constraints cannot
+  progress", nominal_realization/preparation.rs), including
+  `for x in vec.iter()`; `tests/iterator_associated.rs`
+  `native_vec_shared_iteration_matches_stock` and `unchanged_sieve_matches_stock`
+  fail on main a27587346. `while let Some(c) = it.next()` over the same
+  iterator works. A prelude `str::chars` (`StrMethods`, Self = `str`) compiles
+  and runs through `.next()`, so trait methods on `str` are not the blocker
+  recorded above; `for c in s.chars()` is. Native corpus at a27587346: 6/20
+  (01, 02, 03, 05, 07, 08), unchanged.
 
 ## Cutover finding: the old checker gates library growth
 
 Library methods are ordinary prelude source, so every addition must also pass
 the old checker. A `StrMethods` trait for `chars`/`split_whitespace` (with
-stock-differential cases) was withdrawn: trait methods with a `str` Self type
-fail `ir::reject_references` ("slice generic arguments are unsupported") in
-trait/impl validation (`traits.rs`, `predicate_subjects.rs`), and the trait
-also shadowed the working builtin `str` length. Further library growth
-therefore either relaxes those old-checker gates one by one or waits for step 3.
+stock-differential cases) was withdrawn. Correction (later the same day):
+the "slice generic arguments are unsupported" error came from declaring `len`
+in the trait, which shadowed the builtin `str` length; a `chars`-only trait
+compiles and runs through `.next()`. The remaining blocker is `for` over any
+source iterator (see Status). Further library growth therefore either
+relaxes those old-checker gates one by one or waits for step 3.
 
 Step 3 is not a CHECK-only swap. The backend consumes `ir::CheckedFunction`,
 which carries more than types: `call_evidence` (argument traces and region
