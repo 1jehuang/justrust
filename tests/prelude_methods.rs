@@ -7,6 +7,61 @@ use std::os::unix::fs::PermissionsExt;
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+#[path = "support/closure_oracle.rs"]
+mod closure_oracle;
+
+#[test]
+fn result_or_changes_error_type_without_changing_value_or_evaluation() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "result-or",
+        &[
+            Case {
+                name: "different_error_types_and_eager_fallback",
+                source: r#"
+fn fallback() -> Result<i32, bool> { println!("fallback"); Err(true) }
+fn main() {
+    let ok: Result<i32, i32> = Ok(7);
+    let out: Result<i32, bool> = ok.or(fallback());
+    println!("{}", out.unwrap());
+    let err: Result<i32, i32> = Err(9);
+    let out: Result<i32, bool> = err.or(fallback());
+    println!("{}", out.unwrap_err());
+}
+"#,
+                expect: Expect::Run("fallback\n7\nfallback\ntrue\n"),
+            },
+            Case {
+                name: "moves_noncopy_value_and_replacement_error",
+                source: r#"
+struct Value { n: i32 }
+struct Old { n: i32 }
+struct New { n: i32 }
+fn main() {
+    let ok: Result<Value, Old> = Ok(Value { n: 11 });
+    let out: Result<Value, New> = ok.or(Err(New { n: 99 }));
+    match out { Ok(v) => println!("{}", v.n), Err(e) => println!("bad {}", e.n) }
+    let err: Result<Value, Old> = Err(Old { n: 3 });
+    let out: Result<Value, New> = err.or(Err(New { n: 13 }));
+    match out { Ok(v) => println!("bad {}", v.n), Err(e) => println!("{}", e.n) }
+}
+"#,
+                expect: Expect::Run("11\n13\n"),
+            },
+            Case {
+                name: "value_type_cannot_change",
+                source: "fn main(){let r:Result<i32,i32>=Ok(7);let other:Result<bool,bool>=Ok(true);let _=r.or(other);}",
+                expect: Expect::Invalid("E0308"),
+            },
+            Case {
+                name: "consumes_original_noncopy_result",
+                source: "struct V{n:i32}fn main(){let r:Result<V,i32>=Ok(V{n:7});let _:Result<V,bool>=r.or(Err(true));let _=r.is_ok();}",
+                expect: Expect::Invalid("E0382"),
+            },
+        ],
+    );
+}
+
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
 fn differential(source: &str) -> Output {

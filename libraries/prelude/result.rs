@@ -57,7 +57,7 @@ impl<T, E> Result<T, E> {
         }
     }
 
-    pub fn or(self, other: Result<T, E>) -> Result<T, E> {
+    pub fn or<F>(self, other: Result<T, F>) -> Result<T, F> {
         match self {
             Result::Ok(value) => Result::Ok(value),
             Result::Err(_) => other,
