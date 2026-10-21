@@ -2150,14 +2150,23 @@ impl SourceInventory {
                     "unexpanded macro syntax cannot enter active source inventory",
                 ));
             }
-            Expr::Try(inner) => self.expr(
-                inner,
-                &node.child(40, 0, budget)?,
-                None,
-                None,
-                budget,
-                depth + 1,
-            )?,
+            Expr::Try(inner) => {
+                // A differing residual error type lowers to a `From::from`
+                // call at this occurrence (operand pointer tagged 3).
+                self.operator_site(
+                    inner.as_ref() as *const Expr as usize | 3,
+                    &node.child(44, 0, budget)?,
+                    budget,
+                )?;
+                self.expr(
+                    inner,
+                    &node.child(40, 0, budget)?,
+                    None,
+                    None,
+                    budget,
+                    depth + 1,
+                )?
+            }
             Expr::Output(output) => validate_output_site(output, &self.names)
                 .map_err(|message| source_error(budget, &message))?,
             Expr::FormatInto(source) => {

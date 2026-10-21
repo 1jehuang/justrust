@@ -129,7 +129,7 @@ impl Checker<'_> {
                 let converted = if error_ty == target_ty {
                     read
                 } else {
-                    self.try_from_conversion(read, &error_ty, &target_ty)?
+                    self.try_from_conversion(operand, read, &error_ty, &target_ty)?
                 };
                 (
                     vec![ir::PatternBinding {
@@ -179,18 +179,53 @@ impl Checker<'_> {
         ))
     }
 
-    /// `From::from(error)` for a differing residual error type, resolved
-    /// through the ordinary trait registry. Unresolvable conversions are a
-    /// type error, never an approximate cast.
+    /// `<to as From<from>>::from(error)` for a differing residual error type,
+    /// selected through the validated trait world exactly like an explicit
+    /// qualified call. An unproven obligation is E0277, never a cast.
     fn try_from_conversion(
         &mut self,
+        operand: &Expr,
         error: ir::ExprId,
         from: &ir::Ty,
         to: &ir::Ty,
     ) -> Result<ir::ExprId, String> {
-        Err(format!(
-            "E0277: `?` couldn't convert the error to {to:?}: `From<{from:?}>` conversion is unsupported (error {:?})",
-            error.0
-        ))
+        let plan = self
+            .signatures
+            .plan
+            .clone()
+            .ok_or("`?` conversion requires registry")?;
+        let (declaration, ident) = self.prelude_trait_method("convert", "From", "from")?;
+        let trait_ref = ir::TraitRef {
+            declaration,
+            self_ty: to.clone(),
+            args: Arc::from([from.clone()]),
+        };
+        let Some((target, signature, _)) =
+            plan.select_trait(&trait_ref, &ident, &[], self.facts(), false, &plan.budget)?
+        else {
+            return Err(format!(
+                "E0277: `?` couldn't convert the error to `{}`: the trait `From<{}>` is not implemented for `{}`",
+                super::format_lowering::rust_ty_name(to),
+                super::format_lowering::rust_ty_name(from),
+                super::format_lowering::rust_ty_name(to)
+            ));
+        };
+        if signature.params.len() != 1 {
+            return Err("contract: `From::from` must take exactly one argument".into());
+        }
+        // The already-checked error read occupies the single parameter slot.
+        let call = self.finish_checked_call(
+            target,
+            ident,
+            signature,
+            &[],
+            Arc::from([]),
+            Some((error, None)),
+        )?;
+        if let Some(cap) = self.canonical {
+            let pointer = operand as *const Expr as usize | 3;
+            cap.record_call_at(pointer, call, &self.exprs[call.0].kind)?;
+        }
+        Ok(call)
     }
 }
