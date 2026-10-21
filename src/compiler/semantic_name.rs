@@ -690,6 +690,31 @@ impl NameStore {
     pub fn span(&self, ident: AstIdent) -> Result<SpanId, NameError> {
         Ok(self.record(ident)?.span)
     }
+    /// Semantic key equality where `mine` came from this store and `theirs`
+    /// from `other` (a sibling file's store). The fingerprint is only a fast
+    /// path: equal fingerprints are confirmed by comparing both stores'
+    /// spellings, and a mismatch is a hard `AtomCollision`, never a match.
+    /// Every place where two sessions' keys first meet must use this.
+    pub fn same_key_across(
+        &self,
+        mine: NameKey,
+        other: &NameStore,
+        theirs: NameKey,
+    ) -> Result<bool, NameError> {
+        self.budget().charge(Counter::Work, 1)?;
+        if mine.class != theirs.class || mine.context != theirs.context || mine.atom != theirs.atom
+        {
+            return Ok(false);
+        }
+        let left = self.session.fingerprint_text(mine.atom.0)?;
+        let right = other.session.fingerprint_text(theirs.atom.0)?;
+        self.budget()
+            .charge(Counter::Work, left.len().max(right.len()) as u64)?;
+        if left != right {
+            return Err(TokenError::AtomCollision.into());
+        }
+        Ok(true)
+    }
     pub fn data(&self, ident: AstIdent) -> Result<NameData, NameError> {
         Ok(*self.record(ident)?)
     }
@@ -1067,10 +1092,49 @@ mod tests {
             a.key(a_name, LookupClass::Local).unwrap(),
             b.key(b_name, LookupClass::Local).unwrap()
         );
+        let a_store = a.freeze().unwrap();
+        let b_key = b.key(b_name, LookupClass::Local).unwrap();
+        let a_key = a_store.key(a_name, LookupClass::Local).unwrap();
+        // A third file interns distinct spelling "y" under x's fingerprint
+        // (a cross-file collision its own table cannot see). Fingerprints
+        // agree, so verification must refuse rather than resolve to `x`.
+        let (session_c, session_c_cap, _, _) = owned_fixture(ExpansionBudget::default());
+        let mut c = NameStoreBuilder::new(session_c, session_c_cap, Edition::E2024).unwrap();
+        let forged_y = c.store.session.intern_forged("y", AtomFingerprint::of("x"));
+        // c's fixture already interned the real "x": in-session collision.
+        assert!(matches!(forged_y, Err(TokenError::AtomCollision)));
+        let budget = ExpansionBudget::default();
+        let source = SourceSnapshot::from_text(Path::new("c.rs"), "y\n", &budget).unwrap();
+        let (mut session_c, session_c_cap) = TokenSession::standalone(source, budget).unwrap();
+        let forged_y = session_c
+            .intern_forged("y", AtomFingerprint::of("x"))
+            .unwrap();
+        let c_store = NameStoreBuilder::new(session_c, session_c_cap, Edition::E2024)
+            .unwrap()
+            .freeze()
+            .unwrap();
+        let forged_key = NameKey {
+            atom: NameAtomId::new(&c_store.session, forged_y).unwrap(),
+            ..a_key
+        };
+        assert_eq!(forged_key.atom, a_key.atom);
+        let b_store = b.freeze().unwrap();
+        assert!(a_store.same_key_across(a_key, &b_store, b_key).unwrap());
+        assert!(matches!(
+            a_store.same_key_across(a_key, &c_store, forged_key),
+            Err(NameError::Token(TokenError::AtomCollision))
+        ));
+        let member = NameKey {
+            class: LookupClass::Member,
+            ..b_key
+        };
+        assert!(!a_store.same_key_across(a_key, &b_store, member).unwrap());
+        drop(c);
         let forged = AstIdent {
-            owner: a.session().id(),
+            owner: a_store.session().id(),
             index: u32::MAX,
         };
+        let a = a_store;
         assert!(matches!(
             a.check(forged),
             Err(NameError::Token(TokenError::InvalidHandle))

@@ -854,6 +854,16 @@ impl TokenSession {
         let fingerprint = AtomFingerprint::of(text);
         self.intern_fingerprinted(text, fingerprint.table_hash(), fingerprint)
     }
+    /// Test-only: intern `text` under a forged fingerprint, modelling a
+    /// cross-file hash collision that a single session cannot detect.
+    #[cfg(test)]
+    pub(super) fn intern_forged(
+        &mut self,
+        text: &str,
+        fingerprint: AtomFingerprint,
+    ) -> Result<SymbolId, TokenError> {
+        self.intern_fingerprinted(text, fingerprint.table_hash(), fingerprint)
+    }
     #[cfg(test)]
     fn intern_hashed(&mut self, text: &str, hash: u64) -> Result<SymbolId, TokenError> {
         self.intern_fingerprinted(text, hash, AtomFingerprint::of(text))
