@@ -146,6 +146,19 @@ Step 1 touches PlanCtx/trait-world queries (jaguar's lane while it is being
 split) and the CHECK fan-out (lizard). It needs their agreement on the fact
 shapes before code.
 
+Coordinator ruling (shark, 2026-10-21): per-declaration header facts belong to
+gorilla's SIGNATURES-per-item split; sema must consume those, not build a
+parallel set. The oracle lives behind a per-body fact in frontend type_check,
+never in the CHECK root arm (CHECK only aggregates per-item results). Proposed
+to gorilla, shared with trait selection and coherence:
+
+- `IMPLS_OF_TRAIT`: `Item<K>(trait DeclId)` to the ordered trait impls naming
+  that trait (explicit completeness fact).
+- `INHERENT_IMPLS_BY_SELF`: `Params<K>(tag, [payload])` over a simplified self
+  type (Bool, Char, Str, Int(IntTy), Float(FloatTy), Adt(DeclId), Slice, Array,
+  Ref, RawPtr, Tuple(arity)) to the ordered inherent impls, including
+  constant-only impls. No display names.
+
 ## Not yet covered
 
 Lifetimes/regions (handled by borrow checking, not here), higher-ranked
