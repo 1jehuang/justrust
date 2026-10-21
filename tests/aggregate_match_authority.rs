@@ -311,10 +311,39 @@ fn aggregate_binding_paths_cannot_project_through_scalar_leaf() {
     reject(function);
 }
 
+/// `&mut i32` is not Copy, so overlapping by-value bindings of it are moves.
+/// Stock rustc accepts overlapping Copy bindings (`x @ (a, b)` on Copy data),
+/// so the rejection controls below must use a non-Copy domain.
+fn mut_ref() -> Ty {
+    Ty::Ref {
+        kind: BorrowKind::Mut,
+        referent: Arc::new(Ty::Int(IntTy::I32)),
+    }
+}
+
+fn noncopy_domain() -> Ty {
+    Ty::Tuple(vec![mut_ref(), Ty::Bool].into())
+}
+
+/// Rebuilds the fixture over `(&mut i32, bool)` with matching local types.
+fn noncopy_fixture() -> CheckedFunction {
+    let mut function = fixture();
+    let domain = noncopy_domain();
+    function.locals[0].ty = domain.clone();
+    function.exprs[0].ty = domain.clone();
+    function.locals[1].ty = mut_ref();
+    function.locals[3].ty = mut_ref();
+    *pattern(&mut function).0 = domain;
+    function
+        .validate()
+        .expect("non-Copy aggregate baseline must validate");
+    function
+}
+
 #[test]
 fn aggregate_binding_cannot_claim_the_whole_root() {
-    let mut function = fixture();
-    function.locals[1].ty = domain();
+    let mut function = noncopy_fixture();
+    function.locals[1].ty = noncopy_domain();
     let (_, bindings) = pattern(&mut function);
     bindings.truncate(1);
     bindings[0].projection.clear();
@@ -322,16 +351,34 @@ fn aggregate_binding_cannot_claim_the_whole_root() {
 }
 
 #[test]
-fn aggregate_binding_paths_cannot_overlap_the_same_field() {
+fn copy_aggregate_binding_may_claim_the_whole_root_like_stock() {
+    // `let x @ (_, _) = (1i32, true);` is accepted by stock rustc.
     let mut function = fixture();
+    function.locals[1].ty = domain();
+    let (_, bindings) = pattern(&mut function);
+    bindings.truncate(1);
+    bindings[0].projection.clear();
+    function.validate().unwrap();
+}
+
+#[test]
+fn aggregate_binding_paths_cannot_overlap_the_same_field() {
+    let mut function = noncopy_fixture();
     *pattern(&mut function).1 = vec![binding(1, 0), binding(3, 0)];
     reject(function);
 }
 
 #[test]
-fn aggregate_binding_paths_cannot_overlap_parent_and_nested_field() {
+fn copy_aggregate_binding_paths_may_overlap_like_stock() {
     let mut function = fixture();
-    let inner = domain();
+    *pattern(&mut function).1 = vec![binding(1, 0), binding(3, 0)];
+    function.validate().unwrap();
+}
+
+#[test]
+fn aggregate_binding_paths_cannot_overlap_parent_and_nested_field() {
+    let mut function = noncopy_fixture();
+    let inner = noncopy_domain();
     let outer = Ty::Tuple(vec![inner.clone(), Ty::Bool].into());
     function.locals[0].ty = outer.clone();
     function.exprs[0].ty = outer.clone();
