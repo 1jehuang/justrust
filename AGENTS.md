@@ -43,6 +43,13 @@ whole-program node kind, or loosen a ceiling without explicit user approval.
 Every feature milestone must also pass these gates; correctness against stock
 rustc alone is not sufficient.
 
+**Structural enforcement (approved 2026-10-20).** Read "Structural
+enforcement" in docs/compiler/GRAPH-INTEGRITY.md before any graph change:
+typed keys only, no for-all-items read loops, request-all-then-await,
+immutable `Fact` types, per-node budgets. Do not add new raw `Key::new` node
+kinds or new shared budget handles. Engine/dispatch changes coordinate with
+the shark session.
+
 ### Graph model primer (read before touching compiler code)
 
 Summarized from docs/compiler/ARCHITECTURE.md sections 17-18, docs/compiler/PROTOTYPE.md, docs/compiler/ENGINE.md and

@@ -31,6 +31,34 @@ Not allowed:
 How finely work is split into scheduled tasks is a measured choice. Where facts
 live and how they are read is not.
 
+## Structural enforcement (approved 2026-10-20, in progress)
+
+The ratchets below detect coarse nodes after they are written. The target is
+an engine API in which they cannot be expressed. Approved by the user
+2026-10-20. Every agent touching `src/engine.rs` or `src/compiler/` must
+follow these rules now, even before the API enforces them:
+
+1. **Typed keys.** Each node kind declares a key type (`FileId`, `ItemId`,
+   `InstanceId(DeclId, TypeArgs)`, ...). Raw `Key::new(kind, vec![..])` is
+   being removed. Only the sealed `Check` and `Build` roots are parameterless.
+2. **No for-all-items reads.** Node code must not iterate `0..*_count()` and
+   read each item. Bulk needs go through an explicit, keyed completeness fact
+   (per file, per module, per trait) or the two roots.
+3. **Request, then await.** A node declares all independent prerequisites
+   before awaiting any (`cx.request_all` then await). Requesting inside a loop
+   body that awaits is a bug.
+4. **Facts are provably immutable.** Published types implement `Fact`, which
+   is rejected for anything reaching `Mutex`, `RwLock`, `OnceLock`, `Cell`,
+   atomics or budget handles.
+5. **Per-node budgets.** The engine hands each node its own meter, sized from
+   its input. No shared budget handle may be stored in a fact or node state.
+
+Lanes (coordinator: shark): typed-key API first, then in parallel
+`MONO_PLAN` -> per-instance `INSTANCE`, `CHECK` fan-in via per-file item
+facts, `parse`/`resolve`/`signatures` split, `PlanCtx`/`ValidatedTraitWorld`
+memo state into keyed nodes, budgets per node. Coordinate with shark before
+editing `src/engine.rs` or the dispatch in `src/compiler/mod.rs`.
+
 ## How this happened
 
 ARCHITECTURE.md section 17 required this from the start. The first compiler
