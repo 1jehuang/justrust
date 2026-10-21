@@ -802,9 +802,6 @@ impl ValidatedTraitWorld {
             let normal = normalization.ty();
             self.validate_equality_domain_in(projection, normal, context, active)?;
             if !self.eq_ty(normal, rhs, 0)? {
-                eprintln!(
-                    "EQUALITY CLOSED MISMATCH projection={projection:?} normal={normal:?} rhs={rhs:?}"
-                );
                 return Ok(ProofOutcome::NotProven);
             }
             return self.evidence(
@@ -816,16 +813,21 @@ impl ValidatedTraitWorld {
         let Some(normal) =
             self.declared_equality_rhs(projection, &context.predicates.predicates, context.env())?
         else {
-            eprintln!(
-                "EQUALITY NO ROW projection={projection:?} rhs={rhs:?} rows={:?}",
-                context.predicates.predicates
+            let Some((membership, normal)) =
+                self.rigid_nominal_implementation_rhs(projection, context, active)?
+            else {
+                return Ok(ProofOutcome::NotProven);
+            };
+            if !self.eq_ty(&normal, rhs, 0)? {
+                return Ok(ProofOutcome::NotProven);
+            }
+            return self.evidence(
+                &goal,
+                context,
+                ProofOrigin::ImplementationEquality { membership },
             );
-            return Ok(ProofOutcome::NotProven);
         };
         if !self.eq_ty(&normal, rhs, 0)? {
-            eprintln!(
-                "EQUALITY ROW MISMATCH projection={projection:?} normal={normal:?} rhs={rhs:?}"
-            );
             return Ok(ProofOutcome::NotProven);
         }
         self.require_in(
@@ -834,6 +836,144 @@ impl ValidatedTraitWorld {
             active,
         )?;
         self.evidence(&goal, context, ProofOrigin::DeclaredEquality)
+    }
+    /// Equality-only selection for a rigid source nominal subject such as
+    /// `slice::Iter<T>`. The impl is chosen by canonical head matching in the
+    /// genuine caller context and its RHS is reminted from the immutable
+    /// declaration callback. This never grants a carrier, layout or origin.
+    pub(super) fn rigid_nominal_implementation_rhs(
+        &self,
+        projection: &ir::AssociatedTypeProjection,
+        context: ProofContext<'_>,
+        active: &mut Vec<GoalKey>,
+    ) -> Result<Option<(ProofEvidence, Ty)>> {
+        if !matches!(projection.trait_ref.self_ty, Ty::Struct(_) | Ty::Enum(_))
+            || self.goal_is_closed(&projection.trait_ref, context.env())?
+            || self.type_contains_projection(&projection.trait_ref.self_ty, 0)?
+        {
+            return Ok(None);
+        }
+        for argument in projection.trait_ref.args.iter() {
+            if self.type_contains_projection(argument, 0)? {
+                return Ok(None);
+            }
+        }
+        let membership = match self.prove_implementation_in(
+            &Predicate::Implements(projection.trait_ref.clone()),
+            context,
+            active,
+        )? {
+            ProofOutcome::Proved(evidence) => evidence,
+            ProofOutcome::NotProven => return Ok(None),
+        };
+        let normal = self.implementation_equality_rhs(projection, &membership, context)?;
+        Ok(Some((membership, normal)))
+    }
+
+    /// Replays an implementation-selected equality from its membership record.
+    pub(super) fn implementation_equality_rhs(
+        &self,
+        projection: &ir::AssociatedTypeProjection,
+        membership: &ProofEvidence,
+        context: ProofContext<'_>,
+    ) -> Result<Ty> {
+        let record = &membership.0;
+        let ProofOrigin::Implementation {
+            declaration,
+            arguments,
+        } = &record.origin
+        else {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "implementation equality lacks an implementation witness",
+            ));
+        };
+        if record.world != self.id
+            || record.environment != context.predicates.index
+            || record.phase != context.phase
+            || !self.eq_predicate(
+                &record.goal,
+                &Predicate::Implements(projection.trait_ref.clone()),
+            )?
+        {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "implementation equality changed world, caller context or application",
+            ));
+        }
+        let header = self
+            .headers
+            .impls
+            .iter()
+            .find(|header| header.declaration == *declaration)
+            .ok_or_else(|| {
+                FactsError::invalid(&self.budget, "implementation equality lost its impl")
+            })?;
+        if header.trait_ref.declaration != projection.trait_ref.declaration
+            || arguments.len() != header.schema_env.ordered_params().count()
+        {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "implementation equality changed trait or binder arity",
+            ));
+        }
+        let value = self.associated_value(*declaration, projection.item)?;
+        let raw_rhs = self
+            .schema
+            .associated_type_rhs(*declaration, projection.item)?;
+        if !self.eq_ty(&raw_rhs, &value.rhs, 0)? {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "implementation equality RHS callback changed",
+            ));
+        }
+        retain::<ir::RefContract>(&self.budget, 1)?;
+        let schema = GenericSchema {
+            env: header.schema_env.clone(),
+            signature: Signature {
+                params: Vec::new(),
+                result: raw_rhs.clone(),
+                ref_contract: Arc::new(ir::RefContract::default()),
+            },
+            predicates: Arc::from([]),
+        };
+        let instantiated =
+            self.schema
+                .instantiate_schema(&schema, arguments, context.env(), &self.budget)?;
+        self.validate_rhs_substitution(
+            &raw_rhs,
+            &instantiated.signature.result,
+            &header.schema_env,
+            arguments,
+            0,
+        )?;
+        if !instantiated.signature.params.is_empty() || !instantiated.predicates.is_empty() {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "implementation equality substitution invented obligations",
+            ));
+        }
+        // Residual projections stay symbolic only for rigid parameter subjects
+        // whose membership the genuine caller context proves. Anything else
+        // (closed or nominal nested projection) stays outside this path.
+        let normal = self.map_equality_type(&instantiated.signature.result, 0, &mut |nested| {
+            if !matches!(nested.trait_ref.self_ty, Ty::Param(_))
+                || self.goal_is_closed(&nested.trait_ref, context.env())?
+            {
+                return Err(FactsError::unsupported(
+                    &self.budget,
+                    "unsupported: projected RHS in rigid implementation equality",
+                ));
+            }
+            self.require_in(
+                &Predicate::Implements(nested.trait_ref.clone()),
+                context,
+                &mut Vec::new(),
+            )?;
+            self.projection_type(nested)
+        })?;
+        self.validate_ty_metadata_in(&normal, context.env(), 0)?;
+        Ok(normal)
     }
     pub(super) fn build_declared_callable_contexts(&mut self) -> Result<()> {
         for callable in self.headers.callables.iter() {

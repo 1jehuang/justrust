@@ -615,8 +615,20 @@ impl ValidatedTraitWorld {
                     active.pop();
                     result
                 } else {
-                    // No assignment authority for a different application. Only the
-                    // ordinary closed selector may independently normalize it.
+                    // No assignment authority for a different application. A rigid
+                    // application retains its identity only when the owner's own
+                    // predicates prove membership (e.g. `I::Item` under `I: Iterator`).
+                    // Otherwise only the ordinary closed selector may normalize it.
+                    let context = ProofContext {
+                        predicates: &owner.predicates,
+                        phase: FactsPhase::Universal,
+                    };
+                    if matches!(projection.trait_ref.self_ty, Ty::Param(_))
+                        && let Some(symbolic) =
+                            self.retain_universal_owner_projection(projection, context)?
+                    {
+                        return Ok(symbolic);
+                    }
                     self.normalize_closed_projected_type(
                         ty,
                         ProofContext {
@@ -1036,6 +1048,15 @@ impl ValidatedTraitWorld {
         let arguments = self.trait_arguments(&implementation.trait_ref)?;
         let mut value =
             self.substitute_projected_schema(&item.schema, &arguments, &implementation.schema_env)?;
+        // A reference Self actual (`impl Tr for &'a Vec<T>`) expands the raw
+        // declaration's Self tail into exact input regions, as ordinary
+        // instantiation does. Topology derives from the original schema only.
+        value.signature.ref_contract = self.realize_ref_contract(
+            &item.schema,
+            &arguments,
+            &value.signature,
+            Some(item.declaration),
+        )?;
         for ty in &mut value.signature.params {
             *ty = self.normalize_owner_type(ty, &owner, &mut Vec::new(), 0)?;
         }

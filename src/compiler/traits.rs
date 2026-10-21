@@ -1115,6 +1115,10 @@ enum ProofOrigin {
     ClosedEquality {
         normalization: NormalizedAssociatedType,
     },
+    /// Rigid source-nominal equality selected through exact impl membership.
+    ImplementationEquality {
+        membership: ProofEvidence,
+    },
     Builtin {
         item: CatalogItem,
     },
@@ -6468,6 +6472,21 @@ impl ValidatedTraitWorld {
                 return Err(FactsError::invalid(
                     &self.budget,
                     "reflexive equality lost exact membership or projection identity",
+                ));
+            }
+        }
+        if let ProofOrigin::ImplementationEquality { membership } = &origin {
+            let Predicate::ProjectionEq { projection, ty } = predicate else {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "implementation equality evidence cannot prove membership",
+                ));
+            };
+            let normal = self.implementation_equality_rhs(projection, membership, facts)?;
+            if !self.eq_ty(&normal, ty, 0)? {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "implementation equality evidence changed RHS",
                 ));
             }
         }
