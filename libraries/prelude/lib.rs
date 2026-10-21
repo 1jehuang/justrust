@@ -41,6 +41,7 @@ pub mod cmp;
 pub mod default;
 pub mod convert;
 pub mod hash;
+pub mod collections;
 pub mod string;
 pub mod fmt;
 pub mod primitive;

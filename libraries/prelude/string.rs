@@ -389,3 +389,23 @@ impl<T: super::fmt::Display> ToString for T {
         f.into_string()
     }
 }
+
+impl super::cmp::PartialEq for String {
+    fn eq(&self, other: &String) -> bool {
+        str_eq(self.as_str(), other.as_str())
+    }
+}
+
+impl super::cmp::Eq for String {}
+
+// std's str hashing: the bytes, then a 0xff terminator.
+impl super::hash::Hash for String {
+    fn hash<H: super::hash::Hasher>(&self, state: &mut H) {
+        let mut i = 0usize;
+        while i < self.len {
+            state.write_u8(read_u8(self.ptr + i));
+            i += 1usize;
+        }
+        state.write_u8(255u8);
+    }
+}
