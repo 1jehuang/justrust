@@ -159,6 +159,16 @@ to gorilla, shared with trait selection and coherence:
   Ref, RawPtr, Tuple(arity)) to the ordered inherent impls, including
   constant-only impls. No display names.
 
+Agreed with gorilla (2026-10-21): both are separate node kinds (reading one
+per-item SIGNATURES header never waits on all impls). `IMPLS_OF_TRAIT` keys on
+the trait DeclId only. Both orderings are canonical (module ordinal, then decl
+index), never hash order. Both producers read the per-module impl inventory
+(`MODULE_INDEX`, kind 122, arriving with gorilla's RESOLVE-per-module split),
+not per-item facts. hare implements both in gorilla's lane once SIGNATURES per
+item exists. Sequence: gorilla PARSE split, then RESOLVE per module (adds
+MODULE_INDEX), then SIGNATURES per item; then these two facts; then sema
+TraitDb over them; then the oracle slice.
+
 ## Not yet covered
 
 Lifetimes/regions (handled by borrow checking, not here), higher-ranked
