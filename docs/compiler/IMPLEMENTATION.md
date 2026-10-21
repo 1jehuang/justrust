@@ -1507,6 +1507,21 @@ and measured integration throughput after each accepted slice.
 
 ## Active work and evidence limits
 
+Handoff (2026-10-21, semantic-core lane): native `for` over a source iterator
+value (`for x in vec.iter()`, `for c in s.chars()`, a user `IntoIterator`)
+is rejected on main 136ffab82 and every commit checked back to 1b43e6a71, with
+distinct errors per form ("nominal source constraints cannot progress",
+"reference-bearing projected method signature", "closed associated projection
+must normalize before execution"). `iterator_associated`
+`native_vec_shared_iteration_matches_stock` and `unchanged_sieve_matches_stock`
+fail. `while let Some(x) = it.next()` over the same iterators works. This is the
+known blocker of 8767ed720 and gates programs 04, 06, 09, 10, 15 and 17 plus a
+ready `str::chars` (`StrMethods`, Self = `str`; works through `.next()`). The
+uncommitted `libraries/prelude/iter.rs` edit seen at 03:46 fails
+`graph_integrity::optimizer_nodes_add_no_whole_program_barriers` ("trait method
+argument arity mismatch"); HEAD's iter.rs passes. Semantic-core status and the
+cutover design are in `SEMANTIC-CORE.md`.
+
 Closed nominal field realization (`NOMINAL-PROJECTIONS.md`): associated factory
 receiver hints now reuse full canonical Call signature realization before result
 extraction, preserving strict method selection and original/mapped source receipts.
