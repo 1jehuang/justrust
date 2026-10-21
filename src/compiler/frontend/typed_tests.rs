@@ -2001,21 +2001,8 @@ fn e3_mixed_contracts_preserve_formal_kinds_and_real_shared_return_reborrows() {
             .any(|e| matches!(e.kind,ir::ExprKind::Local(local) if local==weaken.params[0]))
     );
     for index in 0..p.functions.len() {
-        if p.functions[index]
-            .name
-            .display(p.names.as_ref())
-            .unwrap()
-            .as_str()
-            == "crate::no_mut_target"
-        {
-            assert!(
-                check_function_with_signatures(&p, index, &env)
-                    .unwrap_err()
-                    .contains("unsupported")
-            );
-        } else {
-            check_function_with_signatures(&p, index, &env).unwrap();
-        }
+        // Stock accepts every item, including the diverging `no_mut_target`.
+        check_function_with_signatures(&p, index, &env).unwrap();
     }
 }
 
@@ -2540,15 +2527,8 @@ fn b3b_mutable_call_temp_copy_reads_preserve_computed_place_boundaries() {
     ] {
         let p = parse(source).unwrap();
         let env = signature_table(&p).unwrap();
-        if source.contains("{loop{}}") {
-            assert!(
-                check_function_with_signatures(&p, 0, &env)
-                    .unwrap_err()
-                    .contains("unsupported")
-            );
-        } else {
-            check_function_with_signatures(&p, 0, &env).unwrap();
-        }
+        // Stock accepts all three: a diverging body satisfies any result.
+        check_function_with_signatures(&p, 0, &env).unwrap();
     }
 }
 

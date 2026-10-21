@@ -10,6 +10,106 @@ use std::sync::atomic::{AtomicU64, Ordering};
 #[path = "support/closure_oracle.rs"]
 mod closure_oracle;
 
+/// `Option<&T>::unwrap` and friends return a reference carried by the by-value
+/// generic `self`. The result must keep the input loan alive (E0597 when the
+/// referent dies first) without rejecting ordinary in-scope uses.
+#[test]
+fn by_value_generic_self_reference_results_keep_input_loans() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "generic-self-ref-results",
+        &[
+            Case {
+                name: "in_scope_unwrap_expect_unwrap_or",
+                source: r#"
+fn main() {
+    let v = 7;
+    let x = 8;
+    let r = Some(&v).unwrap();
+    let e = Some(&x).expect("x");
+    let none: Option<&i32> = None;
+    let u = none.unwrap_or(&v);
+    let q: Result<&i32, ()> = Ok(&x);
+    let k = q.unwrap();
+    let s = *r + *e * 10 + *u * 100 + *k * 1000;
+    println!("{}", s);
+}
+"#,
+                expect: Expect::Run("8787\n"),
+            },
+            Case {
+                name: "unwrap_or_variants_in_scope",
+                source: r#"
+fn main() {
+    let v = 7;
+    let w = 8;
+    let n: Option<&i32> = None;
+    let a = n.unwrap_or(&w);
+    let b = Some(&v).unwrap_or(&w);
+    let r: Result<&i32, ()> = Err(());
+    let c = r.unwrap_or(&v);
+    let r2: Result<&i32, ()> = Ok(&w);
+    let d = r2.unwrap_or(&v);
+    let s = *a + *b * 10 + *c * 100 + *d * 1000;
+    println!("{}", s);
+}
+"#,
+                expect: Expect::Run("8778\n"),
+            },
+            Case {
+                name: "unwrap_or_fallback_escapes_scope",
+                source: r#"
+fn main() { let r: &i32; { let v = 7; let n: Option<&i32> = None; r = n.unwrap_or(&v); } let k = *r; println!("{}", k); }
+"#,
+                expect: Expect::Invalid("E0597"),
+            },
+            Case {
+                name: "result_unwrap_or_fallback_escapes_scope",
+                source: r#"
+fn main() { let r: &i32; { let v = 7; let o: Result<&i32, ()> = Err(()); r = o.unwrap_or(&v); } let k = *r; println!("{}", k); }
+"#,
+                expect: Expect::Invalid("E0597"),
+            },
+            Case {
+                name: "unwrap_escapes_scope",
+                source: r#"
+fn main() { let r: &i32; { let v = 7; let o = Some(&v); r = o.unwrap(); } println!("{}", *r); }
+"#,
+                expect: Expect::Invalid("E0597"),
+            },
+            Case {
+                name: "expect_escapes_scope",
+                source: r#"
+fn main() { let r: &i32; { let v = 7; r = Some(&v).expect("x"); } let n = *r; println!("{}", n); }
+"#,
+                expect: Expect::Invalid("E0597"),
+            },
+            Case {
+                name: "unwrap_or_escapes_scope",
+                source: r#"
+fn main() { let w = 1; let r: &i32; { let v = 7; r = Some(&v).unwrap_or(&w); } let n = *r; println!("{}", n); }
+"#,
+                expect: Expect::Invalid("E0597"),
+            },
+            Case {
+                name: "result_unwrap_escapes_scope",
+                source: r#"
+fn main() { let r: &i32; { let v = 7; let o: Result<&i32, ()> = Ok(&v); r = o.unwrap(); } let n = *r; println!("{}", n); }
+"#,
+                expect: Expect::Invalid("E0597"),
+            },
+            Case {
+                name: "unused_item_unwrap_escapes_scope",
+                source: r#"
+fn unused() -> i32 { let r: &i32; { let v = 7; r = Some(&v).unwrap(); } *r }
+fn main() { println!("ok"); }
+"#,
+                expect: Expect::Invalid("E0597"),
+            },
+        ],
+    );
+}
+
 #[test]
 fn result_or_changes_error_type_without_changing_value_or_evaluation() {
     use closure_oracle::{Case, Expect};

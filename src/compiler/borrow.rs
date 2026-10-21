@@ -3239,6 +3239,11 @@ impl CarrierBuilder<'_, '_> {
             }
             let mut value = self.empty_origins()?;
             let mut fixed_contract = false;
+            // A fixed result row whose region is reached only through a
+            // parameter nested in an input aggregate (`Option<T>::unwrap`
+            // with `T = &'a U`) names no positioned input. Its origin is the
+            // structural carrier source, which must still flow below.
+            let mut fixed_sourceless = false;
             if location.path.0.is_empty()
                 && let CarrierChannel::Fixed(position) = location.channel
                 && let Some(result) = signature
@@ -3248,6 +3253,10 @@ impl CarrierBuilder<'_, '_> {
                     .find(|result| result.position == position)
             {
                 fixed_contract = true;
+                // Positioned rows cannot name a reference nested in a
+                // by-value input aggregate (`self: Option<T>`), so the
+                // structural sources always join the result's liveness.
+                fixed_sourceless = true;
                 for (input, suffix, precision) in return_inputs(&result.returns) {
                     let input_value = self.input_value(
                         &entry,
@@ -3328,7 +3337,7 @@ impl CarrierBuilder<'_, '_> {
                     }
                 }
             }
-            if !fixed_contract
+            if (!fixed_contract || fixed_sourceless)
                 && let Some((_, input)) = result_values
                     .iter()
                     .find(|(candidate, _)| *candidate == location)
@@ -3336,6 +3345,11 @@ impl CarrierBuilder<'_, '_> {
                 for parent in input.references.0.members() {
                     self.parents[row.0].insert(parent);
                     self.dependencies[row.0].insert(parent);
+                    if fixed_sourceless {
+                        // Liveness only: the structural source keeps the
+                        // input loans alive but is not an exact place target.
+                        continue;
+                    }
                     for target in self.targets[parent].clone() {
                         let mut target = target;
                         if !target.authority.contains(&parent) {
@@ -5778,6 +5792,21 @@ impl Plan {
                         budget,
                     )?;
                 }
+                if !contained {
+                    // A sourceless fixed row (`Option<T>::unwrap` instance
+                    // with `T = &U`): the result is carried by a by-value
+                    // input aggregate. Callers bind it through the structural
+                    // carrier source, so any parameter carrier is admissible.
+                    // Also a carrier nested in a by-value aggregate input,
+                    // which no positioned row can name (`unwrap_or`).
+                    let by_value_nested = !position.path.0.is_empty()
+                        && !matches!(f.locals[local.0].ty, Ty::Ref { .. });
+                    if (return_inputs(&result.returns).next().is_none() || by_value_nested)
+                        && f.params.iter().any(|p| p == local)
+                    {
+                        contained = true;
+                    }
+                }
                 if !contained && !position.path.0.is_empty() {
                     // A reference stored inside an aggregate behind a borrowed
                     // parameter (`s.x` with `s: &'r S<'a>`). Nominal lifetimes
@@ -5843,6 +5872,13 @@ impl Plan {
                             .flatten()
                     });
                 let Some(region) = region.map(|row| row.region) else {
+                    if return_inputs(&result.returns).next().is_none()
+                        || (!position.path.0.is_empty()
+                            && !matches!(f.locals[local.0].ty, Ty::Ref { .. }))
+                    {
+                        // Parameter carrier admitted above.
+                        continue;
+                    }
                     return Ok(Some(Problem::Invalid(
                         "returned reference depends on an unbound input carrier region".into(),
                     )));

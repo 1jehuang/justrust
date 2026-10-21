@@ -1353,13 +1353,11 @@ mod tests {
             },
             Ty::Tuple(Arc::from([Ty::Tuple(Arc::from([reference]))])),
         ] {
-            assert_eq!(
-                world
-                    .validate_equality_domain(projection, &rhs, facts.env())
-                    .unwrap_err()
-                    .kind(),
-                FactsErrorKind::Unsupported
-            );
+            // Stock accepts shared-reference RHS types, including nested
+            // in zero-length arrays and tuples; equality rows are type data.
+            world
+                .validate_equality_domain(projection, &rhs, facts.env())
+                .unwrap();
         }
     }
 
