@@ -101,7 +101,7 @@ values there (100 `PARSE` through 115 `UNIVERSAL_EFFECTS_READY`). docs/compiler/
 - Local `Cell`/`RefCell`/loops inside one node's computation are fine.
 
 **Known debt, may only shrink.** `parse`, `resolve`, `signatures`,
-`effects_ready` and `mono_plan` are still whole-program nodes. `PlanCtx`,
+and `mono_plan` are still whole-program nodes. `PlanCtx`,
 `ValidatedTraitWorld` and the budget types still carry mutable state reachable
 from facts. Do not copy these patterns into new code. Split or remove them when
 you are nearby. Current numbers live in docs/compiler/GRAPH-INTEGRITY.md.

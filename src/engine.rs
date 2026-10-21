@@ -205,8 +205,6 @@ root_keys! {
     ResolveDebtRoot = 106;
     /// DEBT (may only shrink): whole-program monomorphization plan.
     MonoPlanDebtRoot = 113;
-    /// DEBT (may only shrink): whole-program effects barrier.
-    EffectsReadyDebtRoot = 115;
 }
 
 impl Key {
