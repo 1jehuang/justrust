@@ -1,6 +1,8 @@
 //! Original root-arm binder-free OR M1. Stock32 plus separately approved I9.
 //! Stock 1.98.1 48a229ceaefd4985c50990b14116b6d856af0985, edition2024.
 //! Policy exclusions are valid Rust, not invalid-language diagnostics.
+//! r20-r27 were policy exclusions (p03-p08, p11, p14) that later work made compile;
+//! they are promoted to printing variants whose output matches stock exactly.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
 use justrust_engine::compiler;
 use std::{fs, os::unix::fs::PermissionsExt, process::Command};
@@ -83,32 +85,38 @@ const CASES: &[(&str, &str)] = &[
         "fn main(){let _=match 1u8{0=>0,0|1=>1,_=>2};}",
     ),
     (
-        "p03_nested",
-        "fn main(){let _=match (0u8,1u8){(0|1,_)=>1,_=>0};}",
-    ),
-    ("p04_binding", "fn main(){let _=match 1u8{x|x=>x};}"),
-    (
-        "p05_match_guard",
-        "fn main(){let _=match 1u8{0|1 if true=>1,_=>0};}",
+        "r20_nested",
+        "fn main(){let a=match (0u8,1u8){(0|1,_)=>1,_=>0};let b=match (2u8,1u8){(0|1,_)=>1,_=>0};let c=match (1u8,9u8){(0|1,9|8)=>5,_=>0};println!(\"{} {} {}\",a,b,c);}",
     ),
     (
-        "p06_matches_guard",
-        "fn main(){let _=matches!(1u8,0|1 if true);}",
+        "r21_binding",
+        "fn main(){let a=match 1u8{x|x=>x};let b=match 5u8{x|x=>x+1};println!(\"{} {}\",a,b);}",
     ),
     (
-        "p07_reference",
-        "fn main(){let _=match &1u8{&0|&1=>1,_=>0};}",
+        "r22_match_guard",
+        "fn main(){let f=|n:u8,g:bool|match n{0|1 if g=>1,_=>0};println!(\"{} {} {}\",f(1,true),f(1,false),f(2,true));}",
     ),
     (
-        "p08_noncopy",
-        "struct S(u8);fn main(){let s=S(0);let _=match s{S(0)|S(1)=>0,_=>1};}",
+        "r23_matches_guard",
+        "fn main(){let g=true;println!(\"{} {}\",matches!(1u8,0|1 if g),matches!(2u8,0|1 if g));}",
+    ),
+    (
+        "r24_reference",
+        "fn main(){let a=match &1u8{&0|&1=>1,_=>0};let b=match &7u8{&0|&1=>1,_=>0};println!(\"{} {}\",a,b);}",
+    ),
+    (
+        "r25_noncopy",
+        "struct S(u8);fn main(){let s=S(1);let a=match s{S(0)|S(1)=>5,_=>6};let t=S(9);let b=match t{S(0)|S(1)=>5,_=>6};println!(\"{} {}\",a,b);}",
     ),
     (
         "p09_parameter",
         "fn f((true|false):bool){}fn main(){f(true);}",
     ),
     ("p10_let", "fn main(){let (true|false)=true;}"),
-    ("p11_for", "fn main(){for (true|false) in [true,false]{}}"),
+    (
+        "r26_for",
+        "fn main(){let mut n=0;for (true|false) in [true,false]{n+=1;}println!(\"{}\",n);}",
+    ),
     (
         "p12_generated_match",
         "macro_rules! m{()=>{match 1u8{0|1=>7,_=>0}}}fn main(){println!(\"{}\",m!());}",
@@ -117,7 +125,10 @@ const CASES: &[(&str, &str)] = &[
         "p13_generated_matches",
         "macro_rules! m{()=>{matches!(1u8,0|1)}}fn main(){println!(\"{}\",m!());}",
     ),
-    ("p14_at", "fn main(){let _=match 1u8{x @ (0|1)=>x,_=>0};}"),
+    (
+        "r27_at",
+        "fn main(){let _=match 1u8{x @ (0|1)=>x,_=>0};let a=match 1u8{x @ (0|1)=>x,_=>9};println!(\"{}\",a);}",
+    ),
     (
         "i09_missing_alternative_spaced",
         "fn main() { let _ = match 0 { 0 | => 7, _ => 0 }; }\n",
@@ -148,6 +159,14 @@ fn exact_stock_sources_check_build_and_execute_workers1_8() {
             assert!(output.status.success(), "{name}: {:?}", output);
             let expected = match name {
                 "r07_matches" => "true\n",
+                "r20_nested" => "1 0 5\n",
+                "r21_binding" => "1 6\n",
+                "r22_match_guard" => "1 0 0\n",
+                "r23_matches_guard" => "true false\n",
+                "r24_reference" => "1 0\n",
+                "r25_noncopy" => "5 6\n",
+                "r26_for" => "2\n",
+                "r27_at" => "1\n",
                 "r08_fallback_once" => "0 10\n",
                 "r09_source_body_once" => "7 1 1\n",
                 _ => "7\n",
