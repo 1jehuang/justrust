@@ -1353,3 +1353,33 @@ fn builtin_slice_len_through_mut_reference() {
     let r = ok(&body);
     assert!(r.methods.contains_key(&call) || r.slice_lens.get(&call) == Some(&1));
 }
+
+/// `fn f(a: &[i64; 3]) { for x in a.iter() { let _: &i64 = x; } }`: native
+/// array `.iter()` yields shared element loans like `&array`.
+#[test]
+fn native_array_iter_yields_shared_elements() {
+    let mut b = B::default();
+    let a = b.local();
+    let x = b.local();
+    let ar = b.var(a);
+    let it = b.mcall(ar, "iter", vec![]);
+    let body_e = b.e(HirExpr::Block {
+        stmts: vec![],
+        tail: None,
+    });
+    let f = b.e(HirExpr::For {
+        pat: B::bind(x),
+        iter: it,
+        body: body_e,
+        label: u32::MAX,
+    });
+    let arr = mk(TyKind::Array(int(IntTy::I64), 3));
+    let mut body = b.body(vec![HirStmt::Expr(f)], None, unit());
+    body.params = vec![(B::bind(a), shr(arr))];
+    let r = ok(&body);
+    // The mini std declares a source `[T]::iter` reached by unsizing, which
+    // wins; the native rule applies only without one. Either way the loop
+    // item is a shared element loan.
+    assert!(r.native_iters.contains(&it) || r.methods.contains_key(&it));
+    assert_eq!(r.local_tys[x as usize], shr(int(IntTy::I64)));
+}

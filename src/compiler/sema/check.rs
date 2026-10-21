@@ -102,6 +102,8 @@ pub struct Typeck {
     pub intrinsics: HashMap<ExprId, (crate::compiler::ir::Intrinsic, u32)>,
     /// Builtin slice/array `.len()` calls with the receiver autoderef count.
     pub slice_lens: HashMap<ExprId, u32>,
+    /// Native array/slice `.iter()` calls, typed as `&[T]`.
+    pub native_iters: std::collections::HashSet<ExprId>,
     pub errors: Vec<CheckError>,
 }
 
@@ -119,6 +121,7 @@ struct Checker<'a> {
     methods: HashMap<ExprId, MethodRes>,
     intrinsics: HashMap<ExprId, (crate::compiler::ir::Intrinsic, u32)>,
     slice_lens: HashMap<ExprId, u32>,
+    native_iters: std::collections::HashSet<ExprId>,
     errors: Vec<CheckError>,
     closure_ret: Vec<Ty>,
 }
@@ -147,6 +150,7 @@ pub fn check_body(
         methods: HashMap::new(),
         intrinsics: HashMap::new(),
         slice_lens: HashMap::new(),
+        native_iters: Default::default(),
         errors: Vec::new(),
         closure_ret: Vec::new(),
     };
@@ -1077,6 +1081,22 @@ impl<'a> Checker<'a> {
                 return int(IntTy::Usize);
             }
         }
+        if probed.is_none() && name == "iter" && args.is_empty() && turbofish.is_empty() {
+            // Native array iteration (`ForAdapter::Iter`, FOR-LOANS.md):
+            // `xs.iter()` iterates like `&xs`, yielding shared element loans.
+            // Typed as the shared array reference so the native `for` rule
+            // applies. Slices are not admitted: the native compiler rejects
+            // `slice.iter()` today and there is no source `slice::Iter` yet.
+            let mut cur = rt.clone();
+            while let TyKind::Ref(_, inner) = cur.as_ref() {
+                let inner = inner.clone();
+                cur = self.structurally_resolve(&inner);
+            }
+            if let TyKind::Array(..) = cur.as_ref() {
+                self.native_iters.insert(e);
+                return reference(Mutbl::Not, cur.clone());
+            }
+        }
         if probed.is_none()
             && let Some(out) = self.intrinsic_call(e, &rt, name, args)
         {
@@ -1764,6 +1784,7 @@ impl<'a> Checker<'a> {
             methods,
             intrinsics: self.intrinsics,
             slice_lens: self.slice_lens,
+            native_iters: self.native_iters,
             errors: self.errors,
         }
     }
