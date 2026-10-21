@@ -82,7 +82,9 @@ uses the old checker. Corpus remaining blockers, by kind:
 
 - Library surface: `str::chars`/`split_whitespace`, `[T]::iter`/`swap`/`to_vec`,
   `Iterator::map`/`fold`/`cloned`, `Result::map_err`.
-- Lowering into `sema::hir`: format macros, opaque returns, associated consts.
+- Lowering into `sema::hir`: opaque returns, associated consts. Format macros
+  and literal output lower since 568d3be95 (bodies: 14 10->11/13, 15 4->5/7,
+  18 7->9/11, 19 18->20/21; 19 now needs only `Iterator::fold`).
 - PLAN failures before checking: `dyn` outside a reference (13), `HashMap` (17, 20).
 
 ## Cutover finding: the old checker gates library growth
