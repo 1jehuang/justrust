@@ -14,6 +14,9 @@ use super::token_session::{
     TokenSession,
 };
 
+mod crate_view;
+#[allow(unused_imports)]
+pub use crate_view::{CrateNameKey, CrateNames};
 mod derived;
 mod literal_consume;
 pub(crate) use derived::{DerivedAtom, validate_derived_identifier};

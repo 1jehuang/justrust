@@ -121,7 +121,7 @@ impl AtomFingerprint {
     }
 }
 impl SessionId {
-    #[cfg(test)]
+    /// Ordering key for owner indexes; never an authority by itself.
     pub(super) fn bits(self) -> NonZeroU64 {
         self.0
     }
