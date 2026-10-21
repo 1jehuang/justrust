@@ -64,7 +64,7 @@ impl ValidatedTraitWorld {
                     predicates: &self.empty,
                     phase: FactsPhase::Schema,
                 };
-                self.require_in(&expected, context, &mut Vec::new())?;
+                self.require_in(&expected, context, &mut ProofScratch::default())?;
                 let (_, dependencies) = self.normalize_closed_projected_type(
                     &Ty::AssociatedType(Arc::new(projection.clone())),
                     context,

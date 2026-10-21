@@ -117,7 +117,7 @@ impl ValidatedTraitWorld {
         self.require_closure_owner_predicates(
             &closure,
             ProofContext::from_facts(facts),
-            &mut Vec::new(),
+            &mut ProofScratch::default(),
         )?;
         let receipt = closure.result_receipt().ok_or_else(|| {
             FactsError::invalid(

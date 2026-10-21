@@ -235,7 +235,7 @@ impl ValidatedTraitWorld {
         &self,
         rows: &[Predicate],
         context: ProofContext<'_>,
-        active: &mut Vec<GoalKey>,
+        active: &mut ProofScratch,
     ) -> Result<()> {
         // Metadata errors win over domain restrictions, even for unused rows.
         for row in rows {
@@ -251,7 +251,7 @@ impl ValidatedTraitWorld {
         &self,
         rows: &[Predicate],
         context: ProofContext<'_>,
-        active: &mut Vec<GoalKey>,
+        active: &mut ProofScratch,
     ) -> Result<()> {
         // Keep original occurrence rows in the carrier seal, but replay their
         // newly closed nested actuals through canonical normalization first.
@@ -516,7 +516,11 @@ impl ValidatedTraitWorld {
             for origin in context.origins.iter() {
                 result_push(&self.budget, &mut rows, origin.row.clone())?;
             }
-            self.replay_equality_rows(&rows, ProofContext::from_facts(facts), &mut Vec::new())?;
+            self.replay_equality_rows(
+                &rows,
+                ProofContext::from_facts(facts),
+                &mut ProofScratch::default(),
+            )?;
         }
         let mut raw_rows = Vec::new();
         for origin in &origins {
@@ -536,7 +540,7 @@ impl ValidatedTraitWorld {
         self.replay_equality_rows(
             &instantiated.predicates,
             ProofContext::from_facts(facts),
-            &mut Vec::new(),
+            &mut ProofScratch::default(),
         )?;
         let mut actual_rows = Vec::new();
         let mut certificates = Vec::new();

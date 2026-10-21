@@ -112,7 +112,7 @@ impl ValidatedTraitWorld {
                         predicates: &self.empty,
                         phase: FactsPhase::Closed
                     },
-                    &mut Vec::new()
+                    &mut ProofScratch::default()
                 )?,
                 ProofOutcome::Proved(_)
             )),

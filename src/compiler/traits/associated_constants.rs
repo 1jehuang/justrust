@@ -161,7 +161,7 @@ impl ValidatedTraitWorld {
         let membership = match self.prove_in(
             &Predicate::Implements(application.clone()),
             context,
-            &mut Vec::new(),
+            &mut ProofScratch::default(),
         )? {
             ProofOutcome::Proved(proof) => proof,
             ProofOutcome::NotProven => {
@@ -220,7 +220,7 @@ impl ValidatedTraitWorld {
         let membership = match self.prove_implementation_in(
             &Predicate::Implements(application.clone()),
             context,
-            &mut Vec::new(),
+            &mut ProofScratch::default(),
         )? {
             ProofOutcome::Proved(proof) => proof,
             ProofOutcome::NotProven => {

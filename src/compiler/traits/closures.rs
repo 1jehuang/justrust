@@ -178,7 +178,7 @@ impl ValidatedTraitWorld {
         &self,
         predicate: &Predicate,
         context: ProofContext<'_>,
-        active: &mut Vec<GoalKey>,
+        active: &mut ProofScratch,
     ) -> Result<Option<ProofOutcome>> {
         let Predicate::Implements(goal) = predicate else {
             return Ok(None);

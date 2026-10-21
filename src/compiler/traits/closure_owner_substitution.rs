@@ -124,7 +124,7 @@ impl ValidatedTraitWorld {
         &self,
         closure: &ir::ClosureTy,
         context: ProofContext<'_>,
-        active: &mut Vec<GoalKey>,
+        active: &mut ProofScratch,
     ) -> Result<()> {
         self.replay_closure_owner_substitution(closure, context.env())?;
         let schema = self.callable_schema(closure.owner())?;

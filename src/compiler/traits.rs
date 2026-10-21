@@ -8,7 +8,7 @@ use super::ir::{
     Ty,
 };
 use super::module_identity::{ModuleArena, ModuleError, ModuleId};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 mod associated_bounds;
 mod associated_constants;
@@ -1074,7 +1074,7 @@ impl ValidatedFacts {
                 args: Arc::from([]),
             }),
             ProofContext::from_facts(self),
-            &mut Vec::new(),
+            &mut ProofScratch::default(),
         )?;
         Ok(())
     }
@@ -1086,6 +1086,15 @@ impl ValidatedFacts {
             ));
         }
         self.validate_ty(ty)?;
+        // Scalar leaves are Copy by language definition, with no impl
+        // selection or environment dependence. Composite types still run the
+        // full obligation engine.
+        if matches!(
+            ty,
+            Ty::Int(_) | Ty::Float(_) | Ty::Char | Ty::Bool | Ty::Unit | Ty::Never
+        ) {
+            return Ok(true);
+        }
         let predicate = Predicate::Implements(TraitRef {
             declaration: self.world.catalog.id(CatalogItem::Copy),
             self_ty: ty.clone(),
@@ -1184,15 +1193,61 @@ struct GoalKey {
     goal: Predicate,
 }
 #[derive(Clone, Debug)]
-enum MemoState {
-    Active,
-    Complete(ProofOutcome),
-    Errored(FactsError),
-}
-#[derive(Clone, Debug)]
 struct MemoEntry {
     key: GoalKey,
-    state: MemoState,
+    result: Result<ProofOutcome>,
+}
+/// Node-local proof scratch: the DFS ancestry used for cycle detection plus
+/// the memo tables for one proof computation. Owned by the caller and passed
+/// by `&mut`; never stored in `ValidatedTraitWorld` or any published fact.
+#[derive(Default)]
+struct ProofScratch {
+    active: Vec<GoalKey>,
+    memo: Vec<MemoEntry>,
+    projections: Vec<associated_types::NormalizationMemo>,
+}
+/// Distinct goals one proof computation may memoize. Per scratch (per
+/// node), never a shared whole-world ledger.
+const MAX_SCRATCH_OBLIGATIONS: usize = 4096;
+impl ProofScratch {
+    fn charge_obligation(&self, budget: &PlanBudget) -> Result<()> {
+        if self.memo.len() + self.projections.len() >= MAX_SCRATCH_OBLIGATIONS {
+            return Err(FactsError::resource(
+                budget,
+                "trait obligation limit for one proof computation exceeded",
+            ));
+        }
+        charged(budget, budget.charge_work(1))
+    }
+}
+/// Caller-owned proof scratch for a sequence of trait queries inside one
+/// graph node (for example every call site of one body). It memoizes within
+/// that computation only: it is never stored in a fact or shared between
+/// nodes, and it resets when used with a different trait world.
+#[derive(Default)]
+pub struct TraitScratch {
+    world: Option<WorldId>,
+    proofs: ProofScratch,
+}
+impl TraitScratch {
+    fn for_world(&mut self, world: WorldId) -> &mut ProofScratch {
+        if self.world != Some(world) {
+            self.world = Some(world);
+            self.proofs = ProofScratch::default();
+        }
+        &mut self.proofs
+    }
+}
+impl std::ops::Deref for ProofScratch {
+    type Target = Vec<GoalKey>;
+    fn deref(&self) -> &Vec<GoalKey> {
+        &self.active
+    }
+}
+impl std::ops::DerefMut for ProofScratch {
+    fn deref_mut(&mut self) -> &mut Vec<GoalKey> {
+        &mut self.active
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -1524,7 +1579,6 @@ pub struct ValidatedTraitWorld {
     environments: Vec<Arc<PredicateEnv>>,
     environment_index: DeclIndex,
     empty: Arc<PredicateEnv>,
-    memo: Mutex<Vec<MemoEntry>>,
     requirements: Vec<(DeclId, Arc<[Predicate]>)>,
     requirement_index: DeclIndex,
     origins: Vec<(DeclId, Arc<ir::SignatureOriginSchema>)>,
@@ -1535,7 +1589,6 @@ pub struct ValidatedTraitWorld {
     /// `(declaration, first position)` sorted by declaration, rebuilt with
     /// `normalized_callables`. Replaces a linear scan per header lookup.
     normalized_callable_index: Vec<(DeclId, usize)>,
-    projection_memo: Mutex<Vec<associated_types::NormalizationMemo>>,
     owner_normalization_ready: bool,
     owner_normalization_finalized: bool,
     has_associated_bounds: bool,
@@ -1684,7 +1737,6 @@ impl ValidatedTraitWorld {
             environments: Vec::new(),
             environment_index: DeclIndex::default(),
             empty,
-            memo: Mutex::new(Vec::new()),
             requirements: Vec::new(),
             requirement_index: DeclIndex::default(),
             origins: Vec::new(),
@@ -1693,7 +1745,6 @@ impl ValidatedTraitWorld {
             carrier_index: DeclIndex::default(),
             normalized_callables: Vec::new(),
             normalized_callable_index: Vec::new(),
-            projection_memo: Mutex::new(Vec::new()),
             owner_normalization_ready: false,
             owner_normalization_finalized: false,
             has_associated_bounds: false,
@@ -1724,7 +1775,7 @@ impl ValidatedTraitWorld {
                 predicates: &env,
                 phase: FactsPhase::Universal,
             };
-            world.require_impl_wf(h, &h.trait_ref, context, &mut Vec::new())?;
+            world.require_impl_wf(h, &h.trait_ref, context, &mut ProofScratch::default())?;
         }
         world.build_environments()?;
         world.build_constant_environments()?;
@@ -3230,7 +3281,7 @@ impl ValidatedTraitWorld {
                                 predicates: &env,
                                 phase: FactsPhase::Universal,
                             },
-                            &mut Vec::new(),
+                            &mut ProofScratch::default(),
                         )?,
                         ProofOutcome::NotProven
                     ) {
@@ -5013,7 +5064,7 @@ impl ValidatedTraitWorld {
         h: &ImplHeader,
         goal: &TraitRef,
         context: ProofContext<'_>,
-        active: &mut Vec<GoalKey>,
+        active: &mut ProofScratch,
     ) -> Result<()> {
         if goal.declaration != h.trait_ref.declaration {
             return Err(FactsError::invalid(
@@ -5612,7 +5663,11 @@ impl ValidatedTraitWorld {
         // The complete predicate batch, including ordinary membership rows,
         // already passed metadata validation above. Only equality discharge is
         // new work here; replaying metadata repeats deep actual-type walks.
-        self.replay_validated_equality_rows(&result.predicates, facts, &mut Vec::new())?;
+        self.replay_validated_equality_rows(
+            &result.predicates,
+            facts,
+            &mut ProofScratch::default(),
+        )?;
         Ok(result)
     }
     fn validate_executable_actual(&self, actual: &Ty, env: &GenericEnv) -> Result<()> {
@@ -6334,7 +6389,7 @@ impl ValidatedTraitWorld {
         &self,
         predicate: &Predicate,
         facts: ProofContext<'_>,
-        active: &mut Vec<GoalKey>,
+        active: &mut ProofScratch,
     ) -> Result<ProofEvidence> {
         match self.prove_in(predicate, facts, active)? {
             ProofOutcome::Proved(p) => Ok(p),
@@ -6360,7 +6415,7 @@ impl ValidatedTraitWorld {
         &self,
         predicate: &Predicate,
         facts: &ValidatedFacts,
-        active: &mut Vec<GoalKey>,
+        active: &mut ProofScratch,
     ) -> Result<ProofOutcome> {
         self.prove_in(predicate, ProofContext::from_facts(facts), active)
     }
@@ -6368,7 +6423,7 @@ impl ValidatedTraitWorld {
         &self,
         predicate: &Predicate,
         facts: ProofContext<'_>,
-        active: &mut Vec<GoalKey>,
+        active: &mut ProofScratch,
     ) -> Result<ProofOutcome> {
         charged(&self.budget, self.budget.check_depth(active.len()))?;
         charged(&self.budget, self.budget.charge_work(1))?;
@@ -6395,59 +6450,22 @@ impl ValidatedTraitWorld {
                 ));
             }
         }
-        let index = {
-            let mut memo = self.memo.lock().map_err(|_| {
-                FactsError::resource(&self.budget, "trait obligation cache poisoned")
-            })?;
-            let mut index = None;
-            for (i, entry) in memo.iter().enumerate() {
-                if self.same_key(&entry.key, &key)? {
-                    match &entry.state {
-                        MemoState::Complete(outcome) => return Ok(outcome.clone()),
-                        MemoState::Errored(e) => return Err(e.clone()),
-                        MemoState::Active => {
-                            index = Some(i);
-                            break;
-                        }
-                    }
-                }
+        for entry in active.memo.iter() {
+            if self.same_key(&entry.key, &key)? {
+                return entry.result.clone();
             }
-            if let Some(index) = index {
-                index
-            } else {
-                charged(&self.budget, self.budget.charge_obligation())?;
-                let index = memo.len();
-                push(
-                    &self.budget,
-                    &mut memo,
-                    MemoEntry {
-                        key: key.clone(),
-                        state: MemoState::Active,
-                    },
-                )?;
-                index
-            }
-        };
-        if let Err(error) = push(&self.budget, active, key.clone()) {
-            let mut memo = self.memo.lock().map_err(|_| {
-                FactsError::resource(&self.budget, "trait obligation cache poisoned")
-            })?;
-            memo[index].state = MemoState::Errored(error.clone());
-            return Err(error);
         }
+        active.charge_obligation(&self.budget)?;
+        // Transient DFS ancestry, popped below and bounded by check_depth.
+        active.active.push(key.clone());
         let result = self.prove_uncached(predicate, facts, active);
-        active.pop();
-        // No cache lock is held over recursive execution. Concurrent requests
-        // can compute the same active key independently, never treating another
-        // worker's active entry as a cycle or receiving a fresh goal allowance.
-        let mut memo = self
-            .memo
-            .lock()
-            .map_err(|_| FactsError::resource(&self.budget, "trait obligation cache poisoned"))?;
-        memo[index].state = match &result {
-            Ok(outcome) => MemoState::Complete(outcome.clone()),
-            Err(e) => MemoState::Errored(e.clone()),
-        };
+        active.active.pop();
+        // Transient node-local scratch, bounded by MAX_SCRATCH_OBLIGATIONS
+        // and dropped with the computation, so it retains no ledger bytes.
+        active.memo.push(MemoEntry {
+            key,
+            result: result.clone(),
+        });
         result
     }
     fn evidence(
@@ -6522,7 +6540,7 @@ impl ValidatedTraitWorld {
         &self,
         predicate: &Predicate,
         facts: ProofContext<'_>,
-        active: &mut Vec<GoalKey>,
+        active: &mut ProofScratch,
     ) -> Result<ProofOutcome> {
         if let Some(outcome) = self.prove_opaque(predicate, facts)? {
             return Ok(outcome);
@@ -6578,7 +6596,7 @@ impl ValidatedTraitWorld {
         &self,
         predicate: &Predicate,
         facts: ProofContext<'_>,
-        active: &mut Vec<GoalKey>,
+        active: &mut ProofScratch,
     ) -> Result<ProofOutcome> {
         let Predicate::Implements(goal) = predicate else {
             return Err(FactsError::invalid(
@@ -6729,7 +6747,7 @@ impl ValidatedTraitWorld {
         &self,
         predicate: &Predicate,
         context: ProofContext<'_>,
-        active: &mut Vec<GoalKey>,
+        active: &mut ProofScratch,
     ) -> Result<Option<ProofOutcome>> {
         let Predicate::Implements(goal) = predicate else {
             return Ok(None);
@@ -6845,7 +6863,7 @@ impl ValidatedTraitWorld {
         self.require_in(
             &Predicate::Implements(call.trait_ref.clone()),
             context,
-            &mut Vec::new(),
+            &mut ProofScratch::default(),
         )?;
         let (instantiated, topology) = if method_arity == 0 {
             self.instantiate_item(item, &call.trait_ref, context)?
@@ -6856,7 +6874,7 @@ impl ValidatedTraitWorld {
             )
         };
         for predicate in instantiated.predicates.iter() {
-            self.require_in(predicate, context, &mut Vec::new())?;
+            self.require_in(predicate, context, &mut ProofScratch::default())?;
         }
         Ok((instantiated.signature, topology))
     }
@@ -6868,6 +6886,7 @@ impl ValidatedTraitWorld {
         &self,
         target: &CallTarget,
         context: ProofContext<'_>,
+        scratch: &mut ProofScratch,
     ) -> Result<DirectCallProof> {
         self.ensure_provider(target.declaration)?;
         self.validate_closure_direct(target, context)?;
@@ -6884,7 +6903,7 @@ impl ValidatedTraitWorld {
             push(
                 &self.budget,
                 &mut evidence,
-                self.require_in(predicate, context, &mut Vec::new())?,
+                self.require_in(predicate, context, scratch)?,
             )?;
         }
         Ok(DirectCallProof {
@@ -7076,22 +7095,51 @@ impl TraitCx for ValidatedTraitWorld {
         self.trait_signature_in(call, ProofContext::from_facts(facts))
     }
     fn prove_goal(&self, goal: &Predicate, facts: &ValidatedFacts) -> Result<ProofOutcome> {
+        self.prove_goal_with(goal, facts, &mut TraitScratch::default())
+    }
+    fn prove_goal_with(
+        &self,
+        goal: &Predicate,
+        facts: &ValidatedFacts,
+        scratch: &mut TraitScratch,
+    ) -> Result<ProofOutcome> {
         self.check_facts(facts, true)?;
-        self.prove(goal, facts, &mut Vec::new())
+        self.prove(goal, facts, scratch.for_world(self.id))
     }
     fn discharge_direct(
         &self,
         target: &CallTarget,
         facts: &ValidatedFacts,
     ) -> Result<DirectCallProof> {
+        self.discharge_direct_with(target, facts, &mut TraitScratch::default())
+    }
+    fn discharge_direct_with(
+        &self,
+        target: &CallTarget,
+        facts: &ValidatedFacts,
+        scratch: &mut TraitScratch,
+    ) -> Result<DirectCallProof> {
         self.check_facts(facts, true)?;
-        self.discharge_in(target, ProofContext::from_facts(facts))
+        self.discharge_in(
+            target,
+            ProofContext::from_facts(facts),
+            scratch.for_world(self.id),
+        )
     }
     fn resolve_trait_call(
         &self,
         call: &TraitCall,
         facts: &ValidatedFacts,
     ) -> Result<ResolvedTraitCall> {
+        self.resolve_trait_call_with(call, facts, &mut TraitScratch::default())
+    }
+    fn resolve_trait_call_with(
+        &self,
+        call: &TraitCall,
+        facts: &ValidatedFacts,
+        scratch: &mut TraitScratch,
+    ) -> Result<ResolvedTraitCall> {
+        let scratch = scratch.for_world(self.id);
         self.check_facts(facts, true)?;
         let caller = ProofContext::from_facts(facts);
         if self.schema_contains_projection(&self.item_header(call.item)?.schema)?
@@ -7103,7 +7151,7 @@ impl TraitCx for ValidatedTraitWorld {
             let evidence = self.require_in(
                 &Predicate::Implements(call.trait_ref.clone()),
                 caller,
-                &mut Vec::new(),
+                scratch,
             )?;
             return Ok(ResolvedTraitCall {
                 callee: Callee::TraitItem(call.clone()),
@@ -7125,7 +7173,7 @@ impl TraitCx for ValidatedTraitWorld {
             && (!self.goal_is_closed(&call.trait_ref, facts.env())?
                 || !self.method_args_are_closed(call, facts.env())?)
         {
-            let evidence = self.require_in(&predicate, caller, &mut Vec::new())?;
+            let evidence = self.require_in(&predicate, caller, scratch)?;
             return Ok(ResolvedTraitCall {
                 callee: if matches!(&call.trait_ref.self_ty, Ty::Dyn(_)) {
                     Callee::Virtual(ir::VirtualCall { call: call.clone() })
@@ -7146,7 +7194,7 @@ impl TraitCx for ValidatedTraitWorld {
             phase: FactsPhase::Closed,
         };
         let (signature, topology) = self.trait_signature_with_topology(call, closed)?;
-        let evidence = self.require_in(&predicate, closed, &mut Vec::new())?;
+        let evidence = self.require_in(&predicate, closed, scratch)?;
         if evidence.0.world != self.id
             || evidence.0.environment != self.empty.index
             || evidence.0.phase != FactsPhase::Closed
@@ -7307,7 +7355,7 @@ impl TraitCx for ValidatedTraitWorld {
                 "selected implementation has no required item mapping",
             )
         })?;
-        let direct = self.discharge_in(&target, closed)?;
+        let direct = self.discharge_in(&target, closed, scratch)?;
         let mut return_matches =
             self.return_refines(&signature.ref_contract, &direct.signature.ref_contract)?;
         if !return_matches
@@ -9661,26 +9709,22 @@ mod tests {
             finalized: world.owner_normalization_finalized,
             goal: goal.clone(),
         };
-        c.budget.charge_obligation().unwrap();
-        push(
-            &c.budget,
-            &mut world.memo.lock().unwrap(),
-            MemoEntry {
-                key: key.clone(),
-                state: MemoState::Active,
-            },
-        )
-        .unwrap();
-        // Another worker's Active entry is not this operation's DFS ancestry.
+        // The memo is node-local: a second proof in the same scratch hits it,
+        // a fresh scratch recomputes, and only DFS ancestry forms a cycle.
+        let mut scratch = ProofScratch::default();
         assert!(matches!(
-            world.prove_goal(&goal, &facts).unwrap(),
+            world.prove(&goal, &facts, &mut scratch).unwrap(),
             ProofOutcome::Proved(_)
         ));
-        let len = world.memo.lock().unwrap().len();
+        let len = scratch.memo.len();
+        assert!(len > 0);
+        world.prove(&goal, &facts, &mut scratch).unwrap();
+        assert_eq!(scratch.memo.len(), len);
         world.prove_goal(&goal, &facts).unwrap();
-        assert_eq!(world.memo.lock().unwrap().len(), len);
+        let mut cyclic = ProofScratch::default();
+        cyclic.active.push(key);
         assert!(
-            matches!(world.prove(&goal,&facts,&mut vec![key]),Err(e)if e.kind()==FactsErrorKind::Cycle)
+            matches!(world.prove(&goal,&facts,&mut cyclic),Err(e)if e.kind()==FactsErrorKind::Cycle)
         );
         let budget = PlanBudget::default();
         for _ in 0..4096 {

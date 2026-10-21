@@ -132,7 +132,7 @@ impl NormalizedProjectionEquality {
             projection,
             &evidence.rhs,
             ProofContext::from_facts(facts),
-            &mut Vec::new(),
+            &mut ProofScratch::default(),
         )?;
         world.compare_predicate_rows(&evidence.rows, &facts.predicates.predicates)?;
         let actual = world
@@ -157,7 +157,7 @@ impl NormalizedProjectionEquality {
         world.require_in(
             &Predicate::Implements(projection.trait_ref.clone()),
             ProofContext::from_facts(facts),
-            &mut Vec::new(),
+            &mut ProofScratch::default(),
         )?;
         Ok(())
     }
@@ -360,7 +360,7 @@ impl ValidatedTraitWorld {
         self.require_in(
             &Predicate::Implements(call.trait_ref.clone()),
             context,
-            &mut Vec::new(),
+            &mut ProofScratch::default(),
         )?;
         let raw = clone_schema(&item.schema, &self.budget)?;
         let source_regions = self.validate_source_regions(call.item, &raw.signature)?;
@@ -369,7 +369,12 @@ impl ValidatedTraitWorld {
         let mut dependencies = Vec::new();
         let mut reduce = |projection: &ir::AssociatedTypeProjection| -> Result<Ty> {
             let proof = self.normalize_projection_for_facts(projection, facts)?;
-            self.validate_equality_domain_in(projection, proof.ty(), context, &mut Vec::new())?;
+            self.validate_equality_domain_in(
+                projection,
+                proof.ty(),
+                context,
+                &mut ProofScratch::default(),
+            )?;
             let normal = proof.ty().clone();
             push(&self.budget, &mut dependencies, (projection.clone(), proof))?;
             Ok(normal)
@@ -389,7 +394,7 @@ impl ValidatedTraitWorld {
             ));
         }
         for row in instantiated.predicates.iter() {
-            self.require_in(row, context, &mut Vec::new())?;
+            self.require_in(row, context, &mut ProofScratch::default())?;
         }
         self.validate_schema_signature(call.item, &instantiated.signature, facts.env(), None)?;
         let normalized_regions =
@@ -628,7 +633,7 @@ impl ValidatedTraitWorld {
         projection: &ir::AssociatedTypeProjection,
         rhs: &Ty,
         context: ProofContext<'_>,
-        active: &mut Vec<GoalKey>,
+        active: &mut ProofScratch,
     ) -> Result<()> {
         self.validate_equality_domain(projection, rhs, context.env())?;
         self.require_equality_rhs_sized(rhs, context, active)
@@ -638,7 +643,7 @@ impl ValidatedTraitWorld {
         &self,
         rhs: &Ty,
         context: ProofContext<'_>,
-        active: &mut Vec<GoalKey>,
+        active: &mut ProofScratch,
     ) -> Result<()> {
         let sized = Predicate::Implements(TraitRef {
             declaration: self.catalog.id(CatalogItem::Sized),
@@ -673,7 +678,7 @@ impl ValidatedTraitWorld {
                         predicates: &self.empty,
                         phase: FactsPhase::Closed,
                     },
-                    &mut Vec::new(),
+                    &mut ProofScratch::default(),
                 )?;
             }
         }
@@ -739,7 +744,7 @@ impl ValidatedTraitWorld {
         let membership = self.require_in(
             &Predicate::Implements(projection.trait_ref.clone()),
             ProofContext::from_facts(facts),
-            &mut Vec::new(),
+            &mut ProofScratch::default(),
         )?;
         retain::<ProjectionEqualityEvidence>(&self.budget, 1)?;
         let proof = NormalizedProjectionEquality(Arc::new(ProjectionEqualityEvidence {
@@ -780,7 +785,7 @@ impl ValidatedTraitWorld {
         projection: &ir::AssociatedTypeProjection,
         rhs: &Ty,
         context: ProofContext<'_>,
-        active: &mut Vec<GoalKey>,
+        active: &mut ProofScratch,
     ) -> Result<ProofOutcome> {
         self.check_context(context)?;
         self.validate_equality_domain_in(projection, rhs, context, active)?;
@@ -853,7 +858,7 @@ impl ValidatedTraitWorld {
         &self,
         projection: &ir::AssociatedTypeProjection,
         context: ProofContext<'_>,
-        active: &mut Vec<GoalKey>,
+        active: &mut ProofScratch,
     ) -> Result<Option<(ProofEvidence, Ty)>> {
         if !matches!(projection.trait_ref.self_ty, Ty::Struct(_) | Ty::Enum(_))
             || self.goal_is_closed(&projection.trait_ref, context.env())?
@@ -976,7 +981,7 @@ impl ValidatedTraitWorld {
             self.require_in(
                 &Predicate::Implements(nested.trait_ref.clone()),
                 context,
-                &mut Vec::new(),
+                &mut ProofScratch::default(),
             )?;
             self.projection_type(nested)
         })?;
@@ -1282,7 +1287,7 @@ impl ValidatedTraitWorld {
                 self.require_in(
                     &Predicate::Implements(projection.trait_ref.clone()),
                     ProofContext::from_facts(facts),
-                    &mut Vec::new(),
+                    &mut ProofScratch::default(),
                 )?;
                 return Ok(Ty::AssociatedType(Arc::new(projection.clone())));
             }

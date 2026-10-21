@@ -79,7 +79,7 @@ impl ValidatedFacts {
         world.require_closure_owner_predicates(
             &actual,
             ProofContext::from_facts(self),
-            &mut Vec::new(),
+            &mut ProofScratch::default(),
         )?;
         Ok(actual)
     }

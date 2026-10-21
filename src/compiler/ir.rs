@@ -434,6 +434,24 @@ pub trait TraitCx: Send + Sync {
         call: &TraitCall,
         facts: &super::traits::ValidatedFacts,
     ) -> Result<super::traits::ResolvedTraitCall, super::traits::FactsError>;
+    fn prove_goal_with(
+        &self,
+        goal: &Predicate,
+        facts: &super::traits::ValidatedFacts,
+        scratch: &mut super::traits::TraitScratch,
+    ) -> Result<super::traits::ProofOutcome, super::traits::FactsError>;
+    fn discharge_direct_with(
+        &self,
+        target: &CallTarget,
+        facts: &super::traits::ValidatedFacts,
+        scratch: &mut super::traits::TraitScratch,
+    ) -> Result<super::traits::DirectCallProof, super::traits::FactsError>;
+    fn resolve_trait_call_with(
+        &self,
+        call: &TraitCall,
+        facts: &super::traits::ValidatedFacts,
+        scratch: &mut super::traits::TraitScratch,
+    ) -> Result<super::traits::ResolvedTraitCall, super::traits::FactsError>;
 }
 #[derive(Clone, Debug)]
 pub struct GenericSignature {
@@ -3612,6 +3630,8 @@ fn canonicalize_call_metadata(
         .preflight_plan(FactsCtx::from_validated(facts), budget)
         .map_err(|e| FactsError::from_message(budget, &e))?;
     let mut output = source.clone();
+    // One proof scratch for every call in this body: node-local memo only.
+    let mut scratch = super::traits::TraitScratch::default();
     for (expression_index, expression) in output.exprs.iter_mut().enumerate() {
         budget
             .charge_work(1)
@@ -3638,14 +3658,20 @@ fn canonicalize_call_metadata(
             let selection = target.clone();
             let (callee, canonical) = match target {
                 Callee::Direct(target) => {
-                    let proof = facts.service().discharge_direct(target, facts)?;
+                    let proof =
+                        facts
+                            .service()
+                            .discharge_direct_with(target, facts, &mut scratch)?;
                     (
                         Callee::Direct(proof.target().clone()),
                         proof.signature().clone(),
                     )
                 }
                 Callee::TraitItem(call) => {
-                    let proof = facts.service().resolve_trait_call(call, facts)?;
+                    let proof =
+                        facts
+                            .service()
+                            .resolve_trait_call_with(call, facts, &mut scratch)?;
                     (proof.callee().clone(), proof.signature().clone())
                 }
                 // Dynamic dispatch stays virtual in every phase. Its canonical

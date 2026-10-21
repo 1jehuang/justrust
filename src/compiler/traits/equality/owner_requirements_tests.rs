@@ -231,13 +231,18 @@ fn rigid_nominal_equality_uses_canonical_impl_and_rejects_same_named_or_wrong_rh
     let element = cursor.def().type_args[0].clone();
     assert!(matches!(
         world
-            .prove_projection_equality(&projection, &element, context, &mut Vec::new())
+            .prove_projection_equality(&projection, &element, context, &mut ProofScratch::default())
             .unwrap(),
         ProofOutcome::Proved(_)
     ));
     assert!(matches!(
         world
-            .prove_projection_equality(&projection, &Ty::Bool, context, &mut Vec::new())
+            .prove_projection_equality(
+                &projection,
+                &Ty::Bool,
+                context,
+                &mut ProofScratch::default()
+            )
             .unwrap(),
         ProofOutcome::NotProven
     ));
@@ -261,7 +266,12 @@ fn rigid_nominal_equality_uses_canonical_impl_and_rejects_same_named_or_wrong_rh
     };
     assert!(
         !matches!(
-            world.prove_projection_equality(&foreign, &element, context, &mut Vec::new()),
+            world.prove_projection_equality(
+                &foreign,
+                &element,
+                context,
+                &mut ProofScratch::default()
+            ),
             Ok(ProofOutcome::Proved(_))
         ),
         "same-named trait must not reuse another declaration's assignment"
@@ -273,7 +283,7 @@ fn rigid_nominal_equality_uses_canonical_impl_and_rejects_same_named_or_wrong_rh
     };
     assert!(
         world
-            .prove_projection_equality(&mixed, &element, context, &mut Vec::new())
+            .prove_projection_equality(&mixed, &element, context, &mut ProofScratch::default())
             .is_err()
     );
 }
@@ -287,7 +297,7 @@ fn implementation_equality_replay_rejects_forged_and_foreign_membership() {
         item,
     };
     let (membership, normal) = world
-        .rigid_nominal_implementation_rhs(&projection, context, &mut Vec::new())
+        .rigid_nominal_implementation_rhs(&projection, context, &mut ProofScratch::default())
         .unwrap()
         .unwrap();
     world

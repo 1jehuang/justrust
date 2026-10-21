@@ -153,7 +153,7 @@ impl ValidatedTraitWorld {
                     "closed nominal obligation order or terms changed",
                 ));
             }
-            self.require_in(&expected, context, &mut Vec::new())?;
+            self.require_in(&expected, context, &mut ProofScratch::default())?;
         }
         Ok(())
     }
@@ -189,7 +189,7 @@ impl ValidatedTraitWorld {
             let goal = self.close_nominal_predicate(original, &source.schema().env, actuals)?;
             // Declared source assumptions are not copied into this empty context.
             // Every actual implementation/equality is independently discharged.
-            self.require_in(&goal, context, &mut Vec::new())?;
+            self.require_in(&goal, context, &mut ProofScratch::default())?;
             self.budget
                 .retain_bytes(std::mem::size_of::<Predicate>())
                 .map_err(|e| FactsError::from_message(&self.budget, &e))?;
@@ -518,7 +518,7 @@ impl ValidatedTraitWorld {
         self.require_in(
             &Predicate::Implements(projection.trait_ref.clone()),
             context,
-            &mut Vec::new(),
+            &mut ProofScratch::default(),
         )?;
         let (normalized, dependencies) = self.normalize_closed_projected_type(
             &Ty::AssociatedType(Arc::new(projection)),

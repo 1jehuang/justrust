@@ -132,7 +132,11 @@ impl ValidatedTraitWorld {
         let mut obligations = Vec::new();
         for (original, predicate) in header.predicates.iter().zip(predicates.iter()) {
             self.validate_predicate_substitution(original, predicate, &header.env, arguments)?;
-            match self.prove_in(predicate, ProofContext::from_facts(facts), &mut Vec::new())? {
+            match self.prove_in(
+                predicate,
+                ProofContext::from_facts(facts),
+                &mut ProofScratch::default(),
+            )? {
                 ProofOutcome::Proved(proof) => push(&self.budget, &mut obligations, proof)?,
                 ProofOutcome::NotProven => {
                     return Err(FactsError::unproved(

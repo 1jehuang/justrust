@@ -129,7 +129,7 @@ struct NormalizationContext<'a> {
 #[derive(Default)]
 struct NormalizationStack {
     active: Vec<(NormalizationKey, DeclId)>,
-    obligations: Vec<GoalKey>,
+    obligations: ProofScratch,
 }
 
 impl ValidatedTraitWorld {
@@ -923,7 +923,7 @@ impl ValidatedTraitWorld {
         owner: &TraitRef,
         normal: &Ty,
         context: ProofContext<'_>,
-        active: &mut Vec<GoalKey>,
+        active: &mut ProofScratch,
     ) -> Result<()> {
         if !self.has_associated_bounds {
             return Ok(());
@@ -1210,11 +1210,8 @@ impl ValidatedTraitWorld {
             }
         }
         let cached = {
-            let memo = self.projection_memo.lock().map_err(|_| {
-                FactsError::resource(&self.budget, "associated normalization cache poisoned")
-            })?;
             let mut cached = None;
-            for entry in memo.iter() {
+            for entry in stack.obligations.projections.iter() {
                 if self.normalization_key_equal(&entry.key, &key)? {
                     cached = Some(entry.result.clone());
                     break;
@@ -1227,7 +1224,7 @@ impl ValidatedTraitWorld {
             self.validate_normalization_evidence(&evidence, context)?;
             return Ok(evidence);
         }
-        charged(&self.budget, self.budget.charge_obligation())?;
+        stack.obligations.charge_obligation(&self.budget)?;
         let mut child_dependencies = Vec::new();
         let selected_goal = TraitRef {
             declaration: projection.trait_ref.declaration,
@@ -1515,17 +1512,10 @@ impl ValidatedTraitWorld {
             Ok(evidence)
         })();
         stack.active.pop();
-        let mut memo = self.projection_memo.lock().map_err(|_| {
-            FactsError::resource(&self.budget, "associated normalization cache poisoned")
-        })?;
-        push(
-            &self.budget,
-            &mut memo,
-            NormalizationMemo {
-                key,
-                result: result.clone(),
-            },
-        )?;
+        stack.obligations.projections.push(NormalizationMemo {
+            key,
+            result: result.clone(),
+        });
         result
     }
 
@@ -1694,7 +1684,7 @@ impl ValidatedTraitWorld {
         normal: &Ty,
         env: &GenericEnv,
         context: ProofContext<'_>,
-        active: &mut Vec<GoalKey>,
+        active: &mut ProofScratch,
     ) -> Result<()> {
         self.check_context(context)?;
         if self.type_contains_projection(normal, 0)? {
@@ -1861,7 +1851,7 @@ impl ValidatedTraitWorld {
                     &evidence.key.projection.trait_ref,
                     &evidence.normal,
                     context.proof,
-                    &mut Vec::new(),
+                    &mut ProofScratch::default(),
                 )?;
                 return Ok(());
             }
@@ -1919,7 +1909,7 @@ impl ValidatedTraitWorld {
                     &evidence.key.projection.trait_ref,
                     &evidence.normal,
                     context.proof,
-                    &mut Vec::new(),
+                    &mut ProofScratch::default(),
                 )?;
                 return Ok(());
             }
@@ -1969,7 +1959,7 @@ impl ValidatedTraitWorld {
                 predicates: &self.empty,
                 phase: FactsPhase::Closed,
             },
-            &mut Vec::new(),
+            &mut ProofScratch::default(),
         )?;
         Ok(())
     }
@@ -2687,7 +2677,9 @@ mod tests {
         let cached = world
             .normalize_associated_type(&projection, &facts)
             .unwrap();
-        assert!(Arc::ptr_eq(&first.0, &cached.0));
+        // Normalization scratch is node-local, so repeated calls recompute
+        // rather than share a cached Arc. Both results must still validate.
+        first.validate_for(&projection, &facts).unwrap();
         cached.validate_for(&projection, &facts).unwrap();
         let mut forged = (*cached.0).clone();
         forged.normal = Ty::Slice {

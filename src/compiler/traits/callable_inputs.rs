@@ -39,7 +39,7 @@ impl ValidatedTraitWorld {
         }
         self.validate_closure_metadata(closure, context.env())?;
         let target = self.closure_target(closure, kind)?;
-        let provider = self.discharge_in(&target, context)?;
+        let provider = self.discharge_in(&target, context, &mut ProofScratch::default())?;
         if !self.eq_types(&signature.params, &provider.signature.params, 0)?
             || !self.eq_ty(&signature.result, &provider.signature.result, 0)?
         {
@@ -153,7 +153,7 @@ mod tests {
             .require_in(
                 &Predicate::Implements(goal.clone()),
                 context,
-                &mut Vec::new(),
+                &mut ProofScratch::default(),
             )
             .unwrap();
         let application = world

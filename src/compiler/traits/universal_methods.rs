@@ -254,7 +254,7 @@ impl ValidatedTraitWorld {
         self.require_in(
             &Predicate::Implements(projection.trait_ref.clone()),
             context,
-            &mut Vec::new(),
+            &mut ProofScratch::default(),
         )?;
         retain::<ir::AssociatedTypeProjection>(&self.budget, 1)?;
         Ok(Some(Ty::AssociatedType(Arc::new(projection.clone()))))
@@ -289,7 +289,7 @@ impl ValidatedTraitWorld {
         let selection = self.require_in(
             &Predicate::Implements(call.trait_ref.clone()),
             context,
-            &mut Vec::new(),
+            &mut ProofScratch::default(),
         )?;
         // The evidence is tied to this caller, never the empty closed context.
         if selection.0.world != self.id
@@ -324,7 +324,12 @@ impl ValidatedTraitWorld {
                     .is_some()
             {
                 let proof = self.normalize_projection_for_facts(projection, facts)?;
-                self.validate_equality_domain_in(projection, proof.ty(), context, &mut Vec::new())?;
+                self.validate_equality_domain_in(
+                    projection,
+                    proof.ty(),
+                    context,
+                    &mut ProofScratch::default(),
+                )?;
                 let ty = proof.ty().clone();
                 push(&self.budget, &mut dependencies, (projection.clone(), proof))?;
                 return Ok(ty);
@@ -332,7 +337,7 @@ impl ValidatedTraitWorld {
             self.require_in(
                 &Predicate::Implements(projection.trait_ref.clone()),
                 context,
-                &mut Vec::new(),
+                &mut ProofScratch::default(),
             )?;
             retain::<ir::AssociatedTypeProjection>(&self.budget, 1)?;
             Ok(Ty::AssociatedType(Arc::new(projection.clone())))
@@ -348,7 +353,7 @@ impl ValidatedTraitWorld {
             &mut reduce,
         )?;
         for predicate in instantiated.predicates.iter() {
-            self.require_in(predicate, context, &mut Vec::new())?;
+            self.require_in(predicate, context, &mut ProofScratch::default())?;
         }
         self.validate_schema_signature(call.item, &instantiated.signature, facts.env(), None)?;
         let source_regions = self.validate_source_regions(call.item, &instantiated.signature)?;
@@ -676,7 +681,12 @@ mod tests {
         let normal = &application.signature.result;
         let context = ProofContext::from_facts(&facts);
         world
-            .validate_associated_normal_form(normal, facts.env(), context, &mut Vec::new())
+            .validate_associated_normal_form(
+                normal,
+                facts.env(),
+                context,
+                &mut ProofScratch::default(),
+            )
             .unwrap();
         for phase in [FactsPhase::Schema, FactsPhase::Closed] {
             assert!(
@@ -688,7 +698,7 @@ mod tests {
                             predicates: &facts.predicates,
                             phase
                         },
-                        &mut Vec::new(),
+                        &mut ProofScratch::default(),
                     )
                     .is_err()
             );
@@ -700,7 +710,7 @@ mod tests {
                     normal,
                     foreign.env(),
                     ProofContext::from_facts(&foreign),
-                    &mut Vec::new(),
+                    &mut ProofScratch::default(),
                 )
                 .is_err()
         );
@@ -715,7 +725,7 @@ mod tests {
                     &Ty::AssociatedType(Arc::new(forged)),
                     facts.env(),
                     context,
-                    &mut Vec::new(),
+                    &mut ProofScratch::default(),
                 )
                 .is_err()
         );

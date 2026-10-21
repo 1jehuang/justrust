@@ -520,7 +520,7 @@ impl ValidatedTraitWorld {
                             predicates: &owner.predicates,
                             phase: FactsPhase::Universal,
                         },
-                        &mut Vec::new(),
+                        &mut ProofScratch::default(),
                     )?;
                     Ok(normal)
                 } else if self.eq_ty(
@@ -540,7 +540,7 @@ impl ValidatedTraitWorld {
                     let selection = self.prove_implementation_in(
                         &Predicate::Implements(projection.trait_ref.clone()),
                         context,
-                        &mut Vec::new(),
+                        &mut ProofScratch::default(),
                     )?;
                     let ProofOutcome::Proved(selection) = selection else {
                         // Prefer a proven generic implementation's assignment
@@ -720,7 +720,7 @@ impl ValidatedTraitWorld {
                         predicates: &owner.predicates,
                         phase: FactsPhase::Universal,
                     },
-                    &mut Vec::new(),
+                    &mut ProofScratch::default(),
                     Some(&owner),
                 )?;
             }
@@ -926,7 +926,7 @@ impl ValidatedTraitWorld {
                         predicates: &self.empty,
                         phase: FactsPhase::Closed,
                     },
-                    &mut Vec::new(),
+                    &mut ProofScratch::default(),
                 )?;
                 if !matches!(&selection.0.origin,
                     ProofOrigin::Implementation { declaration, arguments }
@@ -957,7 +957,7 @@ impl ValidatedTraitWorld {
                     &normal,
                     context.env(),
                     context,
-                    &mut Vec::new(),
+                    &mut ProofScratch::default(),
                 )?;
             }
             if raw.signature.params.len() != signature.params.len() {
@@ -1136,7 +1136,7 @@ impl ValidatedTraitWorld {
                     phase: FactsPhase::Closed,
                 }
             },
-            &mut Vec::new(),
+            &mut ProofScratch::default(),
         )?;
         if !matches!(
             &selection.0.origin,

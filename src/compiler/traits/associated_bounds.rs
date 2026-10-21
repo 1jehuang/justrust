@@ -128,7 +128,7 @@ impl ValidatedTraitWorld {
         owner: &TraitRef,
         normal: &Ty,
         context: ProofContext<'_>,
-        active: &mut Vec<GoalKey>,
+        active: &mut ProofScratch,
         implementation: Option<&projected_methods::OwnerNormalizationContext<'_>>,
     ) -> Result<()> {
         let predicates = self.associated_bounds_for(associated, owner, context.env())?;
@@ -274,7 +274,9 @@ mod tests {
             .unwrap();
         let context = ProofContext::from_facts(&facts);
         for row in rows.iter() {
-            world.require_in(row, context, &mut Vec::new()).unwrap();
+            world
+                .require_in(row, context, &mut ProofScratch::default())
+                .unwrap();
         }
         assert!(rows.iter().any(|row| matches!(
             row,
@@ -287,7 +289,11 @@ mod tests {
         wrong.args = Arc::from([Ty::Bool, Ty::Int(ir::IntTy::I32)]);
         assert!(matches!(
             world
-                .prove_in(&Predicate::Implements(wrong), context, &mut Vec::new())
+                .prove_in(
+                    &Predicate::Implements(wrong),
+                    context,
+                    &mut ProofScratch::default()
+                )
                 .unwrap(),
             ProofOutcome::NotProven
         ));
@@ -318,7 +324,7 @@ mod tests {
         let context = ProofContext::from_facts(&facts);
         assert!(matches!(
             world
-                .prove_projection_equality(&projection, &ty, context, &mut Vec::new())
+                .prove_projection_equality(&projection, &ty, context, &mut ProofScratch::default())
                 .unwrap(),
             ProofOutcome::Proved(_)
         ));
@@ -328,7 +334,7 @@ mod tests {
             .require_in(
                 &Predicate::Implements(foreign_owner),
                 ProofContext::from_facts(&foreign),
-                &mut Vec::new(),
+                &mut ProofScratch::default(),
             )
             .unwrap();
         assert!(
@@ -347,7 +353,7 @@ mod tests {
                 &wrong,
                 &Ty::AssociatedType(Arc::new(wrong.clone())),
                 context,
-                &mut Vec::new()
+                &mut ProofScratch::default()
             ),
             Err(_) | Ok(ProofOutcome::NotProven)
         ));
