@@ -63,6 +63,20 @@ impl<T, E> Result<T, E> {
             Result::Err(_) => other,
         }
     }
+
+    pub fn map<U, F: FnOnce(T) -> U>(self, op: F) -> Result<U, E> {
+        match self {
+            Result::Ok(value) => Result::Ok(op(value)),
+            Result::Err(error) => Result::Err(error),
+        }
+    }
+
+    pub fn map_err<G, O: FnOnce(E) -> G>(self, op: O) -> Result<T, G> {
+        match self {
+            Result::Ok(value) => Result::Ok(value),
+            Result::Err(error) => Result::Err(op(error)),
+        }
+    }
 }
 
 // TODO: require E: Debug and print it once std::fmt is enabled.
