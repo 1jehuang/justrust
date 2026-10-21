@@ -1272,8 +1272,15 @@ impl Provider for CompilerProvider {
                     let types = facts.types().await?;
                     let callable_count = types.callable_count();
                     let (mut sources, _sources_reservation) = this.scratch_vec(callable_count)?;
+                    // Request every template before awaiting any, so the
+                    // per-callable bodies are demanded together instead of
+                    // one at a time behind the previous await.
+                    let (mut handles, _handles_reservation) = this.scratch_vec(callable_count)?;
                     for index in 0..callable_count {
-                        let template = facts.template(index).await?;
+                        handles.push(cx.request(function(TEMPLATE_BODY, index)).get(0));
+                    }
+                    for (index, handle) in handles.into_iter().enumerate() {
+                        let template: Arc<TemplateBodyFact> = cx.read_fact(handle).await?;
                         sources.push(this.validated_body(&types, index, &template)?);
                     }
                     let mut context = types.as_ref().clone();
