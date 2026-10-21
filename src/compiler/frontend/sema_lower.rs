@@ -1115,7 +1115,24 @@ impl<'a> Lower<'a> {
                 let x = self.expr(v)?;
                 self.push(h::HirExpr::Try(x))
             }
-            Expr::Output(_) | Expr::FormatInto(_) => return un("formatted output form"),
+            // Literal-only output has no operands and type `()`.
+            Expr::Output(_) => self.push(h::HirExpr::Block {
+                stmts: vec![],
+                tail: None,
+            }),
+            // Buffered format!/write! placeholder calls (format_macros.rs)
+            // have type `()` inside the parser-built buffer block. As for
+            // `Format`, operands are checked as expressions; the
+            // Display/Debug obligation is not modeled yet. The fabricated
+            // `rest` arguments only name that block's buffer and constants.
+            Expr::FormatInto(source) => {
+                let mut stmts = Vec::new();
+                for a in &source.arguments {
+                    let x = self.expr(a)?;
+                    stmts.push(h::HirStmt::Expr(x));
+                }
+                self.push(h::HirExpr::Block { stmts, tail: None })
+            }
             Expr::ConstItem(path) => {
                 let decl = *self
                     .plan
