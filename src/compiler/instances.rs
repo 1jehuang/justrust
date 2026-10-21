@@ -607,6 +607,41 @@ fn charge_target_lookup(target: &ir::CallTarget, budget: &ir::PlanBudget) -> Res
     Ok(())
 }
 
+/// Two raw targets with one canonical key may share a planned instance only
+/// when both validate under their own closed instance facts and the validated
+/// trait world proves their ordered arguments equal (canonical declaration and
+/// arguments, both representations validated). Anything else stays a
+/// collision error: differing authorization never merges.
+fn admit_representation_alias(
+    previous: &ir::CallTarget,
+    next: &ir::CallTarget,
+    context: &frontend::PlanCtx,
+    budget: &ir::PlanBudget,
+) -> Result<bool, String> {
+    if previous.declaration != next.declaration || previous.type_args.len() != next.type_args.len()
+    {
+        return Ok(false);
+    }
+    let previous_facts = context.instance_facts(previous)?;
+    let next_facts = context.instance_facts(next)?;
+    for facts in [&previous_facts, &next_facts] {
+        for ty in previous.type_args.iter().chain(next.type_args.iter()) {
+            budget.charge_work(1)?;
+            facts
+                .validate_ty(ty)
+                .map_err(|e| e.into_legacy_diagnostic(budget))?;
+        }
+        if !facts
+            .world()
+            .types_equal(&previous.type_args, &next.type_args)
+            .map_err(|e| e.into_legacy_diagnostic(budget))?
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 pub(super) struct Instance {
     pub target: ir::CallTarget,
     pub source_index: usize,
@@ -710,6 +745,7 @@ pub(super) fn build(
         depths: &'a mut Vec<usize>,
         canonical_keys: &'a mut HashMap<Arc<[u8]>, ir::CallTarget>,
         reservations: &'a mut Vec<ir::PlanReservation>,
+        aliases: &'a mut Vec<(ir::CallTarget, ir::CallTarget)>,
     }
     impl Queue<'_> {
         fn add(
@@ -772,6 +808,25 @@ pub(super) fn build(
             )?;
             if let Some(previous) = self.canonical_keys.get(&identity.canonical)
                 && previous != &target
+                && admit_representation_alias(previous, &target, context, budget)?
+            {
+                // Same canonical instance reached through a second, separately
+                // validated nominal representation. Seal it as a lookup alias of
+                // the one planned instance; no second body is planned.
+                budget.retain_bytes(2 * std::mem::size_of::<ir::CallTarget>())?;
+                self.aliases
+                    .try_reserve(1)
+                    .map_err(|_| "generic instance alias allocation limit exceeded")?;
+                self.aliases.push((target.clone(), previous.clone()));
+                let index = *self
+                    .seen
+                    .get(previous)
+                    .ok_or("canonical instance alias names an unplanned target")?;
+                self.seen.insert(target, index);
+                return Ok(());
+            }
+            if let Some(previous) = self.canonical_keys.get(&identity.canonical)
+                && previous != &target
             {
                 let describe = |ty: &ir::Ty| {
                     let mut current = ty;
@@ -826,6 +881,7 @@ pub(super) fn build(
             Ok(())
         }
     }
+    let mut aliases = Vec::new();
     let mut queue = Queue {
         declarations: &declarations,
         entries: &mut entries,
@@ -833,6 +889,7 @@ pub(super) fn build(
         depths: &mut depths,
         canonical_keys: &mut canonical_keys,
         reservations: &mut reservations,
+        aliases: &mut aliases,
     };
     // Preserve legacy source-order telemetry for nongeneric roots. These indices
     // are local slots only. Canonical identity never contains this ordering.
@@ -1051,6 +1108,18 @@ pub(super) fn build(
         charge_target_lookup(&instance.target, budget)?;
         lookup.insert(instance.target.clone(), index);
     }
+    lookup
+        .try_reserve(aliases.len())
+        .map_err(|_| "generic sealed lookup allocation limit exceeded")?;
+    for (alias, canonical) in &aliases {
+        charge_target_lookup(alias, budget)?;
+        let index = *lookup
+            .get(canonical)
+            .ok_or("canonical instance alias target is absent from sealed plan")?;
+        if lookup.insert(alias.clone(), index).is_some() {
+            return Err("canonical instance alias duplicates a planned target".into());
+        }
+    }
     reservations.push(lookup_reservation);
     Ok(Plan {
         entries,
@@ -1161,6 +1230,61 @@ mod tests {
             }
         }
         assert_eq!((entries, nested), (1, 1));
+    }
+
+    #[test]
+    fn representation_alias_requires_validated_equal_nominals() {
+        fn setup(source: &str) -> (frontend::PlanCtx, ir::PlanBudget, ir::DeclId, Vec<ir::Ty>) {
+            let program = frontend::parse(source).unwrap();
+            let budget = ir::PlanBudget::default();
+            let context = frontend::PlanCtx::from_program(&program, &budget).unwrap();
+            let find = |name: &str| {
+                (0..context.callable_count())
+                    .map(|index| context.callable_decl(index).unwrap())
+                    .find(|declaration| named(&context, *declaration, name))
+                    .unwrap()
+            };
+            let generic = find("identity");
+            let params = context
+                .signature(find("types"))
+                .unwrap()
+                .signature
+                .params
+                .to_vec();
+            (context, budget, generic, params)
+        }
+        let source = "struct A;struct B;fn identity<T>(x:T)->T{x}fn types(a:A,b:B){}fn main(){}";
+        let (context, budget, generic, params) = setup(source);
+        let target = |ty: &ir::Ty| ir::CallTarget {
+            declaration: generic,
+            type_args: Arc::from([ty.clone()]),
+        };
+        assert!(
+            admit_representation_alias(&target(&params[0]), &target(&params[0]), &context, &budget)
+                .unwrap()
+        );
+        assert!(
+            !admit_representation_alias(
+                &target(&params[0]),
+                &target(&params[1]),
+                &context,
+                &budget
+            )
+            .unwrap()
+        );
+        // A nominal forged from another program's interner is never admitted,
+        // even when its declaration index and arity coincide.
+        let (_other, _, _, foreign) =
+            setup("struct B;struct A;fn identity<T>(x:T)->T{x}fn types(a:A,b:B){}fn main(){}");
+        assert!(!matches!(
+            admit_representation_alias(
+                &target(&params[0]),
+                &target(&foreign[1]),
+                &context,
+                &budget
+            ),
+            Ok(true)
+        ));
     }
 
     #[test]

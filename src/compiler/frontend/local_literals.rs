@@ -944,10 +944,14 @@ impl<'s> Solver<'_, '_, 's> {
     fn solve(&mut self) -> Result<(), String> {
         let mut methods = std::mem::take(&mut self.methods);
         let mut projections = std::mem::take(&mut self.projections);
+        // Selection failures on fully resolved receivers. Reported only at
+        // genuine quiescence, never while a graph input is still missing.
+        let mut selection_errors: Vec<String> = Vec::new();
         loop {
             self.preparation_needs_actuals.set(false);
             let mut progress = false;
             let mut pending = Vec::new();
+            selection_errors.clear();
             for method in methods {
                 if let Some(result) =
                     self.callable_method_application(method.receiver, method.name, &method.args)?
@@ -1132,6 +1136,20 @@ impl<'s> Solver<'_, '_, 's> {
                                         return Err(error);
                                     }
                                 }
+                                if plan.method_exists_with_unmet_bounds(
+                                    &ty,
+                                    &method.name,
+                                    &plan.budget,
+                                )? {
+                                    let name = self
+                                        .checker
+                                        .names()?
+                                        .spelling(method.name)
+                                        .map_err(native_adapter::name_diagnostic)?;
+                                    selection_errors.push(format!(
+                                        "E0599: the method `{name}` exists but its trait bounds were not satisfied"
+                                    ));
+                                }
                             }
                         }
                     }
@@ -1198,6 +1216,9 @@ impl<'s> Solver<'_, '_, 's> {
                 if !self.projection_defaults {
                     self.projection_defaults = true;
                     continue;
+                }
+                if let Some(error) = selection_errors.into_iter().find(|e| is_bound_failure(e)) {
+                    return Err(error);
                 }
                 break;
             }
@@ -2085,4 +2106,10 @@ impl<'s> Solver<'_, '_, 's> {
             || *name == format!("crate::{std}::result::Result"))
         .then_some(payload))
     }
+}
+
+/// An exact method-selection failure caused by an unmet trait bound, which
+/// stock reports as E0599/E0277 rather than an inference boundary.
+fn is_bound_failure(error: &str) -> bool {
+    error.starts_with("E0599") || error.starts_with("E0277")
 }

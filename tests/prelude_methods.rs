@@ -26,10 +26,28 @@ fn vec_clone_is_elementwise_in_order() {
                 source: "struct C(i32);impl Clone for C{fn clone(&self)->C{println!(\"c{}\",self.0);C(self.0)}}fn main(){let v=vec![C(1),C(2),C(3)];let w=v.clone();println!(\"{}\",w.len());}",
                 expect: Expect::Run("c1\nc2\nc3\n3\n"),
             },
-            // An element without Clone is rejected (no image), but today it
-            // stops at the generic 'nominal source constraints' boundary
-            // instead of stock's E0599, as Option::clone does. Tracked as the
-            // prelude unmet-bound diagnostic gap; add the Invalid case then.
+            // A bounded prelude method on an element without Clone reports
+            // stock's unmet-bound E0599, not an inference boundary.
+            Case {
+                name: "non_clone_element_is_e0599",
+                source: "struct N;fn main(){let v=vec![N];let _w=v.clone();}",
+                expect: Expect::Invalid("E0599"),
+            },
+            Case {
+                name: "option_non_clone_payload_is_e0599",
+                source: "struct N;fn main(){let _x=Some(N).clone();}",
+                expect: Expect::Invalid("E0599"),
+            },
+            Case {
+                name: "unused_item_non_clone_is_e0599",
+                source: "struct N;fn unused(){let v=vec![N];let _w=v.clone();}fn main(){}",
+                expect: Expect::Invalid("E0599"),
+            },
+            Case {
+                name: "user_trait_unmet_impl_bound_is_e0599",
+                source: "struct N;struct W<T>(T);trait C{fn c(&self);}impl<T:Clone> C for W<T>{fn c(&self){}}fn main(){W(N).c();}",
+                expect: Expect::Invalid("E0599"),
+            },
         ],
     );
 }

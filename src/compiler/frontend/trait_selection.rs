@@ -317,6 +317,54 @@ impl PlanCtx {
 
 impl PlanCtx {
     #[allow(clippy::too_many_arguments)]
+    /// Diagnostic-only: a trait implementation item named `name` whose impl
+    /// self type matches `owner` structurally, ignoring its where-clauses.
+    /// Used after ordinary selection failed, to report the unmet bound
+    /// (E0599) rather than an inference boundary. Never selects a callee.
+    pub(super) fn method_exists_with_unmet_bounds(
+        &self,
+        owner: &ir::Ty,
+        name: &AstIdent,
+        budget: &ir::PlanBudget,
+    ) -> Result<bool, String> {
+        self.check_budget(budget)?;
+        let Some((nominal, _)) = nominal_parts(owner) else {
+            return Ok(false);
+        };
+        for id in &self.registry.function_ids {
+            budget.charge_work(1)?;
+            let info = self.declaration(*id)?;
+            let Some(associated) = &info.path.associated else {
+                continue;
+            };
+            if associated.trait_decl.is_none()
+                || associated.nominal != nominal
+                || associated.receiver == ReceiverKind::None
+                || !self.registry.source_member_equal(info.path.item, *name)?
+            {
+                continue;
+            }
+            let impl_env = self.param_env(associated.impl_decl)?;
+            // Only a generic impl can carry an unmet bound. A concrete impl
+            // that matched yet failed is an ambiguity or arity diagnostic.
+            if impl_env.arity() == 0 {
+                continue;
+            }
+            let _scratch = budget.reserve_bytes(32 * 512 + 128)?;
+            if match_impl_type(
+                &associated.self_pattern,
+                owner,
+                &impl_env,
+                &mut HashMap::new(),
+                budget,
+                0,
+            )? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     pub(super) fn lookup_associated(
         &self,
         owner: &ir::Ty,
