@@ -1152,6 +1152,16 @@ impl ValidatedTraitWorld {
         let arguments = self.trait_arguments(goal)?;
         let mut instantiated =
             self.substitute_projected_schema(&item.schema, &arguments, context.env())?;
+        // As in `instantiate_owner_item`: a reference Self actual
+        // (`IntoIterator for &'a Vec<T>`) expands the raw declaration's Self
+        // tail into exact input regions. Topology derives from the original
+        // schema only, never from the substituted result.
+        instantiated.signature.ref_contract = self.realize_ref_contract(
+            &item.schema,
+            &arguments,
+            &instantiated.signature,
+            Some(item.declaration),
+        )?;
         let mut dependencies = Vec::new();
         for ty in &mut instantiated.signature.params {
             let (normal, proofs) = self.normalize_closed_projected_type(ty, context, false)?;

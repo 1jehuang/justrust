@@ -82,3 +82,16 @@ fn typed_vec_iter_loop_sieve_shape_matches_stock() {
         "fn main(){let limit:usize=30;let mut is_prime:Vec<bool>=vec![true;limit+1];is_prime[0]=false;is_prime[1]=false;let mut i:usize=2;while i*i<=limit{if is_prime[i]{let mut j:usize=i*i;while j<=limit{is_prime[j]=false;j+=i;}}i+=1;}let mut count:usize=0;for p in is_prime.iter(){if *p{count+=1;}}let mut sum:i32=0;let v:Vec<i32>=vec![2,3,5];for &x in v.iter(){sum+=x;}println!(\"{} {}\",count,sum);}",
     );
 }
+
+#[test]
+fn typed_vec_ref_into_iter_loops_match_stock_and_preserve_loans() {
+    oracle::stock_native(
+        "fn f(v:&Vec<i32>)->i32{let mut s:i32=0;for x in v{s+=*x;}s} fn main(){let v:Vec<i32>=vec![4,5];let mut t:i32=0;for &x in &v{t+=x;}println!(\"{} {}\",f(&v),t);}",
+    );
+    for source in [
+        "fn main(){let mut v:Vec<i32>=vec![1];for x in &v{v.push(*x);}}",
+        "fn bad<'a>(v:&'a Vec<i32>)->&'static i32{let mut last:&i32=&0;for x in v{last=x;}last} fn main(){}",
+    ] {
+        oracle::stock_and_native_reject(source);
+    }
+}
