@@ -618,7 +618,7 @@ impl NameStore {
 
     fn record(&self, ident: AstIdent) -> Result<&NameData, NameError> {
         self.budget().charge(Counter::Work, 1)?;
-        if ident.owner != self.session.id() {
+        if !self.session.admits(ident.owner) {
             return Err(TokenError::ForeignHandle.into());
         }
         self.records

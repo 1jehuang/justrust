@@ -14,7 +14,7 @@ use std::sync::atomic::AtomicU64;
 use super::expansion_budget::{BudgetFailure, ByteLease, Counter, ExpansionBudget, Storage};
 use super::semantic_name::{AstIdent, LookupClass, NameError, NameKey, Namespace};
 use super::semantic_path::NameAccess;
-use super::token_session::{BudgetVec, SessionId, TokenError, allocate_identity};
+use super::token_session::{BudgetVec, CrateOwners, SessionId, TokenError, allocate_identity};
 
 /// An opaque module in one arena. Equality alone never validates ownership.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -146,6 +146,8 @@ impl ChildIndex {
 
 pub struct ModuleArena {
     owner: NonZeroU64,
+    /// Explicit crate-scoped owner set; exactly `owner` today.
+    owners: CrateOwners<NonZeroU64>,
     source_names: Option<SessionId>,
     source_root: Option<ModuleId>,
     catalog: [ModuleId; 4],
@@ -233,6 +235,7 @@ impl ModuleArenaBuilder {
         Ok(Self {
             arena: ModuleArena {
                 owner,
+                owners: CrateOwners::single(owner),
                 source_names,
                 source_root,
                 catalog: [
@@ -402,7 +405,7 @@ impl ModuleArena {
     }
     fn node(&self, id: ModuleId) -> Result<&ModuleNode, ModuleError> {
         self.budget.charge(Counter::Work, 1)?;
-        if id.owner != self.owner {
+        if !self.owners.admits(id.owner) {
             return Err(ModuleError::ForeignOwner);
         }
         self.nodes

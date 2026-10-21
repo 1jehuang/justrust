@@ -101,6 +101,26 @@ impl SessionId {
     }
 }
 
+/// Explicit, crate-scoped set of owners whose handles a store admits
+/// (PARSE-SPLIT.md blocker 1). Membership is never "any": the set is built
+/// only from owners the store itself was issued, and is immutable once built.
+/// Today every set holds exactly its own owner, so admission is unchanged.
+/// Per-file sessions will extend it with the crate's sibling file owners.
+/// Held inline (no heap) so the existing retained-byte accounting is exact.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct CrateOwners<T: Copy + Eq> {
+    issuer: T,
+}
+impl<T: Copy + Eq> CrateOwners<T> {
+    /// The set containing exactly the issuing owner.
+    pub(super) fn single(owner: T) -> Self {
+        Self { issuer: owner }
+    }
+    pub(super) fn admits(&self, owner: T) -> bool {
+        owner == self.issuer
+    }
+}
+
 macro_rules! session_handle {
     ($($name:ident),+ $(,)?) => {$(
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -604,6 +624,8 @@ struct ExpansionEntry {
 pub struct TokenSession {
     pub(super) fragments: BudgetVec<super::macro_fragments::FragmentPayload>,
     id: SessionId,
+    /// Owners whose handles this session admits; exactly `id` today.
+    crate_owners: CrateOwners<SessionId>,
     sources: SourceSnapshot,
     budget: ExpansionBudget,
     symbols: BudgetVec<SymbolEntry>,
@@ -709,6 +731,7 @@ impl TokenSession {
             fragments: BudgetVec::new(&budget, Storage::Retained)?,
             _lease: lease,
             id,
+            crate_owners: CrateOwners::single(id),
             sources,
             symbols: BudgetVec::new(&budget, Storage::Retained)?,
             symbol_slots: BudgetVec::new(&budget, Storage::Retained)?,
@@ -729,9 +752,13 @@ impl TokenSession {
     pub fn budget(&self) -> &ExpansionBudget {
         &self.budget
     }
+    /// Whether `owner` is in this session's explicit crate owner set.
+    pub(super) fn admits(&self, owner: SessionId) -> bool {
+        self.crate_owners.admits(owner)
+    }
     fn check_owner(&self, owner: SessionId) -> Result<(), TokenError> {
         self.budget.check()?;
-        if owner != self.id {
+        if !self.admits(owner) {
             Err(TokenError::ForeignHandle)
         } else {
             Ok(())
