@@ -234,6 +234,9 @@ const LOCAL_OPT: u32 = 131;
 const SUMMARY: u32 = 132;
 const IPO_OPT: u32 = 133;
 const NOMINAL_DECL_WELL_FORMED: u32 = 138;
+/// Per-module item inventory (keyed by inventory ordinal): the callables,
+/// constants, nominals and associated constants that module owns.
+const ITEM_INVENTORY: u32 = 141;
 
 enum Input {
     Text(String),
@@ -253,6 +256,15 @@ struct TemplateBodyFact {
     closure_mode: Option<ir::ClosureKind>,
     publication: Option<Arc<source_replay::CanonicalSourcePublication>>,
 }
+/// `ITEM_INVENTORY` output: items owned by one module.
+struct ItemInventoryFact {
+    callables: Vec<usize>,
+    universal: Vec<usize>,
+    constants: Vec<ir::DeclId>,
+    nominals: Vec<ir::DeclId>,
+    associated_constants: Vec<ir::DeclId>,
+}
+impl crate::engine::Fact for ItemInventoryFact {}
 struct ClosureBodiesFact {
     bodies: Arc<[frontend::closures::publication::PublishedClosure]>,
     publication: Option<frontend::closures::publication::ClosurePublicationProof>,
@@ -1930,47 +1942,104 @@ impl Provider for CompilerProvider {
                     }
                     cx.publish(0, 1)
                 }
+                ITEM_INVENTORY => {
+                    let ordinal = item_index(&key, "missing module inventory ordinal")?;
+                    let types = facts.types().await?;
+                    let items = types.module_inventory(ordinal).map_err(Error::new)?;
+                    let mut universal = Vec::new();
+                    for &index in &items.callables {
+                        let declaration = types.callable_decl(index).map_err(Error::new)?;
+                        if Self::universal_body(&types, declaration)? {
+                            universal.push(index);
+                        }
+                    }
+                    cx.publish_fact(
+                        0,
+                        ItemInventoryFact {
+                            callables: items.callables.clone(),
+                            universal,
+                            constants: items.constants.clone(),
+                            nominals: items.nominals.clone(),
+                            associated_constants: items.associated_constants.clone(),
+                        },
+                    )
+                }
                 CHECK | BUILD => {
                     // Closed source roots have stable slots from SIGNATURES.
                     // Demand them before sealing the additional generic frontier:
                     // otherwise MONO_PLAN becomes a scheduling barrier even
                     // though these pipelines do not depend on its output.
                     let types = facts.types().await?;
+                    // Item checks fan out through per-module inventory facts,
+                    // never a scan of whole-program item counts.
+                    let inventory_keys: Vec<keys::Item<ITEM_INVENTORY>> = (0..types
+                        .module_inventory_count())
+                        .map(keys::Item)
+                        .collect();
+                    let inventory_handles = cx.request_all(&inventory_keys, 0);
+                    let mut inventories = Vec::with_capacity(inventory_handles.len());
+                    for handle in inventory_handles {
+                        let inventory: Arc<ItemInventoryFact> = cx.read_fact(handle).await?;
+                        inventories.push(inventory);
+                    }
+                    let (mut constant_keys, mut admission_keys, mut nominal_keys) =
+                        (Vec::new(), Vec::new(), Vec::new());
+                    let mut associated = Vec::new();
+                    for inventory in &inventories {
+                        this.0
+                            .budget
+                            .charge_work(
+                                inventory.constants.len()
+                                    + inventory.callables.len()
+                                    + inventory.nominals.len()
+                                    + inventory.associated_constants.len(),
+                            )
+                            .map_err(Error::new)?;
+                        constant_keys.extend(
+                            inventory
+                                .constants
+                                .iter()
+                                .map(|d| keys::Item::<CONST_VALUE>(d.index as usize)),
+                        );
+                        admission_keys.extend(
+                            inventory
+                                .callables
+                                .iter()
+                                .map(|&index| keys::Item::<SOURCE_ADMISSION>(index)),
+                        );
+                        nominal_keys.extend(inventory.nominals.iter().map(|d| {
+                            keys::Params::<NOMINAL_DECL_WELL_FORMED>(
+                                d.snapshot.graph_word(),
+                                vec![u64::from(d.index)],
+                            )
+                        }));
+                        associated.extend(inventory.associated_constants.iter().copied());
+                    }
+                    let associated_keys: Vec<keys::Params<ASSOCIATED_CONST_HEADER>> = associated
+                        .iter()
+                        .map(|d| keys::Params(d.snapshot.graph_word(), vec![u64::from(d.index)]))
+                        .collect();
+                    let constant_handles = cx.request_all(&constant_keys, 0);
+                    let associated_handles = cx.request_all(&associated_keys, 1);
                     if key.kind == CHECK {
-                        let count = types
-                            .constant_count()
-                            .checked_add(types.callable_count())
-                            .ok_or_else(|| {
-                                Error::new("source admission frontier limit exceeded")
-                            })?;
-                        let (mut handles, _handles_storage) = this.scratch_vec(count)?;
-                        for index in 0..types.constant_count() {
-                            let declaration = types.constant_decl(index).map_err(Error::new)?;
-                            handles.push(
-                                cx.request(function(CONST_VALUE, declaration.index as usize))
-                                    .get(0),
-                            );
-                        }
-                        for index in 0..types.callable_count() {
-                            handles.push(cx.request(function(SOURCE_ADMISSION, index)).get(0));
-                        }
-                        let (mut associated_handles, _associated_handles_storage) =
-                            this.scratch_vec(types.associated_constant_count())?;
-                        for declaration in types.associated_constant_declarations() {
-                            associated_handles.push((
-                                declaration,
-                                cx.request(keys::params(
-                                    ASSOCIATED_CONST_HEADER,
-                                    declaration.snapshot.graph_word(),
-                                    vec![u64::from(declaration.index)],
-                                ))
-                                .get(1),
-                            ));
-                        }
-                        for handle in handles {
+                        // SOURCE_ADMISSION itself demands UNIVERSAL_EFFECTS_READY
+                        // for exactly the universal callables.
+                        let admission_handles = cx.request_all(&admission_keys, 0);
+                        let universal_keys: Vec<keys::Item<UNIVERSAL_EFFECTS_READY>> = inventories
+                            .iter()
+                            .flat_map(|inventory| inventory.universal.iter().copied())
+                            .map(keys::Item)
+                            .collect();
+                        let universal_handles = cx.request_all(&universal_keys, 0);
+                        for handle in constant_handles
+                            .into_iter()
+                            .chain(admission_handles)
+                            .chain(universal_handles)
+                        {
                             cx.read(handle).await?;
                         }
-                        for (declaration, handle) in associated_handles {
+                        for (declaration, handle) in associated.into_iter().zip(associated_handles)
+                        {
                             let checked: Arc<
                                 associated_constant_graph::AssociatedConstantCheckedFact,
                             > = cx.read_fact(handle).await?;
@@ -1979,42 +2048,7 @@ impl Provider for CompilerProvider {
                         return cx.publish(0, 1);
                     }
                     let root_count = types.closed_roots().len();
-                    let nominal_count = types.nominal_declaration_count();
-                    let (mut nominal_handles, _nominal_handles_storage) =
-                        this.scratch_vec(nominal_count)?;
-                    for index in 0..nominal_count {
-                        let declaration = types.nominal_declaration(index).map_err(Error::new)?;
-                        nominal_handles.push(
-                            cx.request(keys::params(
-                                NOMINAL_DECL_WELL_FORMED,
-                                declaration.snapshot.graph_word(),
-                                vec![u64::from(declaration.index)],
-                            ))
-                            .get(0),
-                        );
-                    }
-                    let (mut constant_handles, _constant_handles_storage) =
-                        this.scratch_vec(types.constant_count())?;
-                    for index in 0..types.constant_count() {
-                        let declaration = types.constant_decl(index).map_err(Error::new)?;
-                        constant_handles.push(
-                            cx.request(function(CONST_VALUE, declaration.index as usize))
-                                .get(0),
-                        );
-                    }
-                    let (mut associated_handles, _associated_handles_storage) =
-                        this.scratch_vec(types.associated_constant_count())?;
-                    for declaration in types.associated_constant_declarations() {
-                        associated_handles.push((
-                            declaration,
-                            cx.request(keys::params(
-                                ASSOCIATED_CONST_HEADER,
-                                declaration.snapshot.graph_word(),
-                                vec![u64::from(declaration.index)],
-                            ))
-                            .get(1),
-                        ));
-                    }
+                    let nominal_handles = cx.request_all(&nominal_keys, 0);
                     let kind = if key.kind == BUILD { OBJECT } else { ANALYZE };
                     let (mut root_handles, _root_handles_reservation) =
                         this.scratch_vec(root_count)?;
@@ -2028,33 +2062,10 @@ impl Provider for CompilerProvider {
                     for handle in constant_handles {
                         cx.read(handle).await?;
                     }
-                    for (declaration, handle) in associated_handles {
+                    for (declaration, handle) in associated.into_iter().zip(associated_handles) {
                         let checked: Arc<associated_constant_graph::AssociatedConstantCheckedFact> =
                             cx.read_fact(handle).await?;
                         checked.validate(&types, declaration, &this.0.budget)?;
-                    }
-                    if key.kind == CHECK {
-                        // Required universal admission is per-caller, not one
-                        // root join. CHECK only waits on the callables that
-                        // actually need universal admission.
-                        let types = facts.types().await?;
-                        let callable_count = types.callable_count();
-                        let (mut handles, _handles_reservation) =
-                            this.scratch_vec(callable_count.checked_mul(2).ok_or_else(|| {
-                                Error::new("universal admission frontier limit exceeded")
-                            })?)?;
-                        for index in 0..callable_count {
-                            handles.push(cx.request(function(TEMPLATE_BODY, index)).get(0));
-                            let declaration = types.callable_decl(index).map_err(Error::new)?;
-                            if Self::universal_body(&types, declaration)? {
-                                handles.push(
-                                    cx.request(function(UNIVERSAL_EFFECTS_READY, index)).get(0),
-                                );
-                            }
-                        }
-                        for handle in handles {
-                            cx.read(handle).await?;
-                        }
                     }
 
                     let additional = plan

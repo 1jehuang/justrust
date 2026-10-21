@@ -17065,7 +17065,19 @@ pub struct PlanCtx {
     /// Callable indices of nongeneric Source callables in callable order:
     /// exactly the root slots `instances::build` enumerates first.
     closed_roots: Arc<[usize]>,
+    /// Per-module item ownership, in first-declaration order. Each entry is
+    /// the input of one keyed ITEM_INVENTORY node.
+    module_items: Arc<[ModuleItems]>,
     pub budget: ir::PlanBudget,
+}
+/// Declarations owned by one module: the per-module inventory CHECK fans
+/// out over instead of scanning whole-program item counts.
+#[derive(Clone, Debug, Default)]
+pub struct ModuleItems {
+    pub callables: Vec<usize>,
+    pub constants: Vec<ir::DeclId>,
+    pub nominals: Vec<ir::DeclId>,
+    pub associated_constants: Vec<ir::DeclId>,
 }
 /// Shared read-only part of a [`TypeEnv`].
 #[derive(Debug)]
@@ -18816,13 +18828,68 @@ impl PlanCtx {
             source_schemas,
             shared_env: None,
             closed_roots: Arc::from([]),
+            module_items: Arc::from([]),
             budget: budget.clone(),
         };
         plan.validate_inherent_overlaps(budget)?;
         plan.publish_trait_world(program)?;
         plan.validate_c_abi()?;
         plan.closed_roots = plan.compute_closed_roots()?;
+        plan.module_items = plan.compute_module_items()?;
         Ok(plan)
+    }
+    fn compute_module_items(&self) -> Result<Arc<[ModuleItems]>, String> {
+        let mut slots: HashMap<ModuleId, usize> = HashMap::new();
+        let mut modules: Vec<ModuleItems> = Vec::new();
+        let mut slot = |decl: ir::DeclId| -> Result<usize, String> {
+            self.budget.charge_work(1)?;
+            let module = self.declaration(decl)?.path.module;
+            Ok(*slots.entry(module).or_insert_with(|| {
+                modules.push(ModuleItems::default());
+                modules.len() - 1
+            }))
+        };
+        let mut callables = Vec::new();
+        for index in 0..self.callable_count() {
+            callables.push((slot(self.callable_decl(index)?)?, index));
+        }
+        let mut constants = Vec::new();
+        for index in 0..self.constant_count() {
+            let decl = self.constant_decl(index)?;
+            constants.push((slot(decl)?, decl));
+        }
+        let mut nominals = Vec::new();
+        for index in 0..self.nominal_declaration_count() {
+            let decl = self.nominal_declaration(index)?;
+            nominals.push((slot(decl)?, decl));
+        }
+        let mut associated = Vec::new();
+        for decl in self.associated_constant_declarations().collect::<Vec<_>>() {
+            associated.push((slot(decl)?, decl));
+        }
+        for (at, index) in callables {
+            modules[at].callables.push(index);
+        }
+        for (at, decl) in constants {
+            modules[at].constants.push(decl);
+        }
+        for (at, decl) in nominals {
+            modules[at].nominals.push(decl);
+        }
+        for (at, decl) in associated {
+            modules[at].associated_constants.push(decl);
+        }
+        Ok(modules.into())
+    }
+    /// Number of per-module item inventories.
+    pub fn module_inventory_count(&self) -> usize {
+        self.module_items.len()
+    }
+    /// Items owned by the module with inventory ordinal `ordinal`.
+    pub fn module_inventory(&self, ordinal: usize) -> Result<&ModuleItems, String> {
+        self.module_items
+            .get(ordinal)
+            .ok_or_else(|| "invalid module inventory ordinal".into())
     }
     fn compute_closed_roots(&self) -> Result<Arc<[usize]>, String> {
         let mut roots = Vec::new();
@@ -20203,6 +20270,7 @@ impl SchemaAdapter {
             validated: Arc::new(HashMap::new()),
             shared_env: None,
             closed_roots: Arc::from([]),
+            module_items: Arc::from([]),
         })
     }
     fn error(&self, e: String) -> tr::FactsError {

@@ -629,6 +629,7 @@ fn kind_name(kind: u32) -> String {
         131 => "local_opt",
         132 => "summary",
         133 => "ipo_opt",
+        141 => "item_inventory",
         _ => return format!("kind{kind}"),
     }
     .to_string()
@@ -829,6 +830,31 @@ fn no_new_whole_program_barriers() {
          tests/graph_integrity.rs to {:.2} to lock in the progress.",
         worst.0,
         worst.0 + 0.02
+    );
+}
+
+/// CHECK fans out through per-module item inventories and per-item checks.
+/// It must not scan every callable's TEMPLATE_BODY to discover which ones are
+/// universal: non-universal callables reach CHECK only through admission.
+#[test]
+fn check_root_reads_item_inventories_not_template_bodies() {
+    let graph = build_graph(16);
+    let (check, _) = graph
+        .keys
+        .iter()
+        .find(|(_, key)| key.0 == "check" && key.1.is_empty())
+        .expect("check root");
+    let direct: Vec<&(String, Vec<u64>)> = graph.deps[check]
+        .iter()
+        .map(|dep| &graph.keys[dep])
+        .collect();
+    assert!(
+        direct.iter().all(|key| key.0 != "template_body"),
+        "CHECK depends directly on TEMPLATE_BODY: {direct:?}. {RULE}"
+    );
+    assert!(
+        direct.iter().any(|key| key.0 == "item_inventory"),
+        "CHECK no longer reads per-module item inventories: {direct:?}"
     );
 }
 
