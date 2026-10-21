@@ -54,6 +54,39 @@ fn f(t: T) -> i32 { match t { T::A(x) | T::B(y) => x } }
 fn main() { let _ = f(T::A(1)); }"#,
                 expect: Expect::Invalid("E0408"),
             },
+            Case {
+                name: "fixture_bracket_pairs",
+                source: r#"fn ok(open: char, c: char) -> bool { matches!((open, c), ('(', ')') | ('[', ']') | ('{', '}')) }
+fn kind(c: char) -> i32 { match c { '(' | '[' | '{' => 1, ')' | ']' | '}' => 2, _ => 0 } }
+fn main() { println!("{} {} {} {}", ok('[', ']'), ok('(', ']'), kind('{'), kind('}')); }"#,
+                expect: Expect::Run("true false 1 2\n"),
+            },
+            Case {
+                name: "nested_option_tuple",
+                source: r#"fn f(p: (Option<i32>, i32)) -> i32 { match p { (Some(1 | 2), y) | (None, y) => y, (Some(_), _) => -1 } }
+fn main() { println!("{} {} {}", f((Some(2), 5)), f((None, 6)), f((Some(9), 7))); }"#,
+                expect: Expect::Run("5 6 -1\n"),
+            },
+            Case {
+                name: "binding_type_mismatch",
+                source: r#"enum T { A(i32), B(bool) }
+fn f(t: T) -> i32 { match t { T::A(x) | T::B(x) => 1 } }
+fn main() { let _ = f(T::A(1)); }"#,
+                expect: Expect::Invalid("E0308"),
+            },
+            Case {
+                name: "unbound_in_unused_item",
+                source: r#"enum T { A(i32), B(i32) }
+fn unused(t: T) -> i32 { match t { T::A(x) | T::B(y) => y } }
+fn main() { println!("live"); }"#,
+                expect: Expect::Invalid("E0408"),
+            },
+            Case {
+                name: "nonexhaustive_unused",
+                source: r#"fn unused(c: char) -> i32 { match c { 'a' | 'b' => 1 } }
+fn main() { println!("live"); }"#,
+                expect: Expect::Invalid("E0004"),
+            },
         ],
     );
 }

@@ -13217,9 +13217,6 @@ impl<'input, 'names> Parser<'input, 'names> {
     #[inline(never)]
     fn labeled_expression(&mut self, min: u8, statement: bool) -> Result<Expr, ParseError> {
         let site = self.token().span;
-        if self.token().provenance == TokenProvenance::Expanded {
-            return Err(self.unsupported("expanded labels are unsupported"));
-        }
         let label = self.input.mint_name(&self.token(), self.names)?;
         self.cursor.bump();
         self.expect(":")?;
@@ -13426,9 +13423,6 @@ impl<'input, 'names> Parser<'input, 'names> {
             }
         } else if self.eat("continue") {
             let label = if self.token().is_lifetime() {
-                if self.token().provenance == TokenProvenance::Expanded {
-                    return Err(self.unsupported("expanded labels are unsupported"));
-                }
                 let label = self.input.mint_name(&self.token(), self.names)?;
                 self.cursor.bump();
                 Some(label)

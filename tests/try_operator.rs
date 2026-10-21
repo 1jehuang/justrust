@@ -62,3 +62,89 @@ fn main() { let _ = f(Some(1)); }"#,
         ],
     );
 }
+
+fn jr(source: &str, workers: usize, check: bool) -> (std::process::Output, Option<Vec<u8>>) {
+    let dir = std::env::temp_dir().join(format!(
+        "jr-try-{}-{workers}-{check}-{:x}",
+        std::process::id(),
+        source.len()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let input = dir.join("main.rs");
+    let image = dir.join("out");
+    std::fs::write(&input, source).unwrap();
+    let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_jr-rust"));
+    command
+        .arg(&input)
+        .args(["--workers", &workers.to_string()]);
+    if check {
+        command.arg("--check");
+    } else {
+        command.arg("-o").arg(&image);
+    }
+    let output = command.output().unwrap();
+    let ran = (!check && output.status.success())
+        .then(|| std::process::Command::new(&image).output().unwrap().stdout);
+    assert!(!check || !image.exists(), "check published an executable");
+    let _ = std::fs::remove_dir_all(&dir);
+    (output, ran)
+}
+
+/// CHECK, BUILD and run at workers 1 and 8, including drops of live locals on
+/// the `?` early-return path, plus rejection paths that must not publish.
+#[test]
+fn try_operator_workers_and_drops() {
+    let drops = r#"struct D(i32);
+impl Drop for D { fn drop(&mut self) { println!("drop {}", self.0); } }
+fn step(x: i32) -> Result<i32, i32> { if x > 1 { Err(x) } else { Ok(x) } }
+fn run(x: i32) -> Result<i32, i32> { let _a = D(10 + x); let v = step(x)?; let _b = D(20 + x); Ok(v) }
+fn main() {
+    match run(1) { Ok(v) => println!("ok {}", v), Err(e) => println!("err {}", e) }
+    match run(5) { Ok(v) => println!("ok {}", v), Err(e) => println!("err {}", e) }
+}"#;
+    let expected = "drop 21\ndrop 11\nok 1\ndrop 15\nerr 5\n";
+    oracle::check(
+        "try-operator-drops",
+        &[
+            Case {
+                name: "drops_on_early_return",
+                source: drops,
+                expect: Expect::Run(expected),
+            },
+            Case {
+                name: "unused_bad_try",
+                source: "fn unused(x: Option<i32>) -> i32 { x? }\nfn main() {}",
+                expect: Expect::Invalid("E0277"),
+            },
+        ],
+    );
+    let conversion = r#"struct A; struct B;
+impl From<A> for B { fn from(_: A) -> B { B } }
+fn f() -> Result<i32, A> { Err(A) }
+fn g() -> Result<i32, B> { Ok(f()? + 1) }
+fn main() { let _ = g(); }"#;
+    for workers in [1, 8] {
+        for check in [true, false] {
+            let (output, ran) = jr(drops, workers, check);
+            assert!(
+                output.status.success(),
+                "workers={workers} check={check}: {output:?}"
+            );
+            if let Some(stdout) = ran {
+                assert_eq!(
+                    String::from_utf8_lossy(&stdout),
+                    expected,
+                    "workers={workers}"
+                );
+            }
+            let (output, _) = jr(conversion, workers, check);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(!output.status.success(), "conversion accepted: {stderr}");
+            assert!(
+                stderr.contains("unsupported"),
+                "workers={workers}: {stderr}"
+            );
+            assert!(!stderr.contains("panicked at"), "{stderr}");
+        }
+    }
+}

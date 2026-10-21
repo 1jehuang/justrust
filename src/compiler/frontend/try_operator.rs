@@ -179,18 +179,18 @@ impl Checker<'_> {
         ))
     }
 
-    /// `From::from(error)` for a differing residual error type, resolved
-    /// through the ordinary trait registry. Unresolvable conversions are a
-    /// type error, never an approximate cast.
+    /// `From::from(error)` for a differing residual error type. Residual
+    /// `From` dispatch is not implemented yet, so this is an explicit
+    /// unsupported diagnostic (never an approximate cast and never a claim
+    /// that a possibly valid program is ill-typed).
     fn try_from_conversion(
         &mut self,
-        error: ir::ExprId,
+        _error: ir::ExprId,
         from: &ir::Ty,
         to: &ir::Ty,
     ) -> Result<ir::ExprId, String> {
         Err(format!(
-            "E0277: `?` couldn't convert the error to {to:?}: `From<{from:?}>` conversion is unsupported (error {:?})",
-            error.0
+            "unsupported: `?` error conversion `From<{from:?}>` for {to:?} is not implemented; the residual error type must equal the function's error type"
         ))
     }
 }

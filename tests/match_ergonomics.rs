@@ -158,6 +158,36 @@ fn cases() -> Vec<Case> {
             source: "fn main() { let p = (1, 2); let r = &p; let (ref a, b) = r; }",
             expect: Expect::Invalid("cannot explicitly borrow"),
         },
+        Case {
+            name: "option_of_ref_enum_rows",
+            source: "enum T { P, M, N(f64) } fn pk(t: &T) -> Option<&T> { Some(t) } fn f(t: &T) -> i32 { match pk(t) { Some(T::P) => 1, Some(T::N(x)) => *x as i32, Some(_) => 2, None => 0 } } fn main() { println!(\"{} {} {}\", f(&T::P), f(&T::M), f(&T::N(7.0))); }",
+            expect: Expect::Run("1 2 7\n"),
+        },
+        Case {
+            name: "while_let_ref_option_chain",
+            source: "struct N { v: i32, next: Option<Box<N>> } fn sum(h: &Option<Box<N>>) -> i32 { let mut s = 0; let mut cur = h; while let Some(n) = cur { s += n.v; cur = &n.next; } s } fn main() { let l = Some(Box::new(N { v: 1, next: Some(Box::new(N { v: 2, next: None })) })); println!(\"{}\", sum(&l)); }",
+            expect: Expect::Run("3\n"),
+        },
+        Case {
+            name: "match_ref_option_tuple",
+            source: "fn f(o: &Option<(i32, bool)>) -> i32 { match o { Some((n, true)) => *n, Some((_, false)) => -1, None => 0 } } fn main() { println!(\"{} {} {}\", f(&Some((4, true))), f(&Some((4, false))), f(&None)); }",
+            expect: Expect::Run("4 -1 0\n"),
+        },
+        Case {
+            name: "explicit_ref_amp_under_default_ref",
+            source: "fn main() { let o = Some((1, 2)); if let Some((&a, b)) = &o { let _ = (a, b); } }",
+            expect: Expect::Invalid("reference pattern not allowed"),
+        },
+        Case {
+            name: "move_string_from_ref_option",
+            source: "fn f(o: &Option<String>) -> String { match *o { Some(s) => s, None => String::new() } } fn main() { let _ = f(&None); }",
+            expect: Expect::Invalid("E0507"),
+        },
+        Case {
+            name: "unused_explicit_ref_under_default",
+            source: "fn unused(p: &(i32, i32)) -> i32 { let (ref a, b) = p; *a + *b } fn main() { println!(\"live\"); }",
+            expect: Expect::Invalid("cannot explicitly borrow"),
+        },
     ]
 }
 

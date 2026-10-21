@@ -4528,7 +4528,7 @@ impl<'a> Checker<'a> {
                         false,
                         &plan.budget,
                     )?
-                    .ok_or("trait obligation not proven")?
+                    .ok_or("E0277: trait obligation not proven")?
                     .1
                     .result,
                 )
@@ -8357,7 +8357,7 @@ impl<'a> Checker<'a> {
                 false,
                 &plan.budget,
             )?
-            .ok_or("trait obligation not proven")?
+            .ok_or("E0277: trait obligation not proven")?
         } else {
             plan.select_associated(
                 &owner,

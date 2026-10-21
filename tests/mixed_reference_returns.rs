@@ -419,24 +419,29 @@ fn shared_mutable_branch_joins_preserve_reference_authority() {
             );
         }
     }
-    // The existing expected-reference-through-loop boundary is independent
-    // of branch unification. Preserve the exact stock-valid source and demand
-    // its explicit diagnostic rather than accidentally claiming loop support.
-    let source = "fn pick<'a>(s:&'a i32,m:&'a mut i32,b:bool)->&'a i32{if b{loop{}}else{m}}fn main(){let x=3;let mut y=7;let r=pick(&x,&mut y,false);assert!(*r==7);y=9;assert!(y==9);println!(\"7\");}";
-    stock_branch_case(source, true);
-    for workers in [1, 8] {
-        for check in [true, false] {
-            let failure =
-                justrust_engine::compiler::compile_observed(source.into(), workers, check)
-                    .err()
-                    .expect("reference result through loop remains unsupported");
-            assert!(failure.to_string().contains(
-                "reference expected-context propagation through loop results is unsupported"
-            ));
-            let report = failure.report.unwrap();
-            assert!(report.capture_complete);
-            assert!(!report.published_kind(105));
-        }
+    // Loop and labeled-block results propagate the declared shared reference
+    // context: a source mutable carrier is reborrowed, never moved or upgraded.
+    for body in [
+        "if b{loop{}}else{m}",
+        "loop{break m;}",
+        "loop{if b{break s;}break m;}",
+        "'out: loop{loop{break 'out m;}}",
+        "'out:{if b{break 'out s;}m}",
+    ] {
+        let source = format!(
+            "fn pick<'a>(s:&'a i32,m:&'a mut i32,b:bool)->&'a i32{{{body}}}fn main(){{let x=3;let mut y=7;let r=pick(&x,&mut y,false);assert!(*r==7);y=9;assert!(y==9);println!(\"7\");}}"
+        );
+        stock_branch_case(&source, true);
+        runs(&source, "7\n");
+    }
+    // An inferred &mut loop result moves its carrier: reusing it is invalid.
+    for source in [
+        "fn main(){let mut n=1;let p=&mut n;let q=loop{break p;};let x=*p;let y=*q;}",
+        "fn pick<'a>(s:&'a i32,m:&'a mut i32)->&'a i32{loop{break m;}}fn main(){let x=1;let mut n=2;let p=&mut n;let q=pick(&x,p);*p=3;let y=*q;}",
+        "fn bad<'a>(s:&'a i32)->&'a mut i32{loop{break s;}}fn main(){}",
+    ] {
+        stock_branch_case(source, false);
+        rejects("loop reference authority", source);
     }
     for source in [
         "fn pick<'a>(s:&'a i32,m:&'a mut i32,b:bool)->&'a mut i32{if b{s}else{m}}fn main(){}",
