@@ -6,9 +6,6 @@ impl<'input> Parser<'input, '_> {
     #[inline(never)]
     pub(super) fn break_prefix(&mut self) -> Result<Expr, ParseError> {
         let label = if self.token().is_lifetime() {
-            if self.token().provenance == TokenProvenance::Expanded {
-                return Err(self.unsupported("expanded labels are unsupported"));
-            }
             let label = self.input.mint_name(&self.token(), self.names)?;
             self.cursor.bump();
             Some(label)

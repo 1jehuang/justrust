@@ -1789,33 +1789,21 @@ mod tests {
         ] {
             super::super::parser_tests::stock_native_run(source);
         }
-        // Stock accepts a label passed through a `lifetime` fragment. Native
-        // expansion does not yet carry labels, so it must reject explicitly in
-        // CHECK and BUILD rather than approximate. Promote this to
-        // stock_native_run when expanded labels are implemented.
-        let expanded_label = "fn main(){macro_rules! stop{($label:lifetime)=>{break $label;};}'done:loop{stop!('done);}println!(\"{}\",42);}";
-        let stock = super::super::parser_tests::stock_compile(
-            expanded_label,
-            std::path::Path::new("unused"),
-            true,
-        );
-        assert!(
-            stock.status.success(),
-            "{}",
-            String::from_utf8_lossy(&stock.stderr)
-        );
-        for workers in [1, 8] {
-            for check in [true, false] {
-                let error = crate::compiler::compile(expanded_label.into(), workers, check)
-                    .err()
-                    .expect("expanded labels must not be approximated");
-                assert!(
-                    error
-                        .to_string()
-                        .contains("unsupported: expanded labels are unsupported"),
-                    "{error}"
-                );
-            }
+        // Labels are hygienic: fragment-passed labels keep the caller's
+        // context, while labels written in a macro body stay expansion-local.
+        for source in [
+            "fn main(){macro_rules! stop{($label:lifetime)=>{break $label};}'done:loop{stop!('done);}println!(\"{}\",42);}",
+            "fn main(){macro_rules! next{($l:lifetime)=>{continue $l};}let mut n=0;'outer:for i in 0..4{loop{n+=i;next!('outer);}}println!(\"{}\",n);}",
+            "fn main(){macro_rules! inner{()=>{{let mut n=0;'l:loop{n+=1;if n==3{break 'l;}}n}};}let v=inner!();'l:loop{break 'l;}println!(\"{}\",v);}",
+            "fn main(){macro_rules! a{($l:lifetime)=>{b!($l)};}macro_rules! b{($m:lifetime)=>{break $m 7};}let v='x:loop{a!('x);};println!(\"{}\",v);}",
+        ] {
+            super::super::parser_tests::stock_native_run(source);
+        }
+        for source in [
+            "macro_rules! m{()=>{'l:loop{break 'l;}};}fn unused(){m!();break 'l;}fn main(){}",
+            "macro_rules! m{()=>{break 'l};}fn unused(){'l:loop{m!();}}fn main(){}",
+        ] {
+            super::super::parser_tests::stock_native_reject_e0426(source);
         }
         for punctuation in ["@", "?"] {
             let input = super::super::lex(punctuation).unwrap();

@@ -1514,10 +1514,15 @@ mod tests {
         let captured_use = names
             .admit_expanded_token(capture, Edition::E2024, &proof)
             .unwrap();
-        assert!(matches!(
-            names.key(def_use, LookupClass::Label),
-            Err(NameError::Unsupported(UnsupportedName::NonRootContext))
-        ));
+        // Labels are fully hygienic: a macro-internal label keeps its mark
+        // context and can never meet the caller's same-named label (E0426),
+        // while a captured `$l:lifetime` label keys exactly as the caller's.
+        let def_label = names.key(def_use, LookupClass::Label).unwrap();
+        assert_ne!(def_label, names.key(caller_x, LookupClass::Label).unwrap());
+        assert_ne!(
+            def_label,
+            names.key(captured_use, LookupClass::Label).unwrap()
+        );
         // Parameter names now have the same invocation-site textual lookup as
         // items. That projection must not erase local-variable hygiene, and it
         // does not grant the unsupported label projection any authority.

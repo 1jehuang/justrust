@@ -103,6 +103,10 @@ pub(super) fn stock_native_run(source: &str) {
     std::fs::remove_dir_all(directory).unwrap();
 }
 
+pub(super) fn stock_native_reject_e0426(source: &str) {
+    stock_native_reject_with_diagnostics(source, Some(("E0426", "undeclared label")));
+}
+
 fn stock_native_reject(source: &str) {
     stock_native_reject_with_diagnostics(source, None);
 }
