@@ -531,18 +531,24 @@ impl PlanCtx {
         };
         let mut candidates = BudgetVec::new(self.program.names.budget(), Storage::Temporary)
             .map_err(selection_token_error)?;
+        // Resolve each in-scope trait import once, not once per declared trait
+        // (traits x imports path resolutions, each charging token work).
+        let implicit = self.program.implicit_prelude(*module)?;
+        let mut imported = Vec::new();
+        for (import_module, path) in &self.registry.trait_imports {
+            budget.charge_work(1)?;
+            if import_module == module || Some(*import_module) == implicit {
+                imported.push(self.resolve_trait_path(path)?);
+            }
+        }
         for trait_id in &self.registry.trait_ids {
             budget.charge_work(1)?;
             let info = self.declaration(*trait_id)?;
             let mut visible =
                 info.path.module == *module || self.catalog.declaration(*trait_id).is_some();
-            for (import_module, path) in &self.registry.trait_imports {
-                budget.charge_work(1)?;
-                let in_scope = import_module == module
-                    || Some(*import_module) == self.program.implicit_prelude(*module)?;
-                if in_scope && self.resolve_trait_path(path)? == *trait_id {
-                    visible = true;
-                }
+            budget.charge_work(imported.len())?;
+            if imported.contains(trait_id) {
+                visible = true;
             }
             for predicate in facts.predicates().predicates() {
                 budget.charge_work(1)?;
