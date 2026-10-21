@@ -124,6 +124,28 @@ as its inference oracle in place of its own partial unifiers, keeping its
 evidence production. (b) is incremental, deletes special cases directly and
 keeps the backend contract; it is the recommended first slice.
 
+## Cutover prerequisite: per-item TraitDb (found 2026-10-21)
+
+`WorldDb::build` reads every trait, impl, callable, constant and nominal in the
+program (`for h in headers.*`, `for info in plan.sema_declarations()`). That is
+fine for the ignored shadow probe, but calling it from a per-body CHECK node
+is a disguised whole-program join, which GRAPH-INTEGRITY.md forbids. The
+`TraitDb`/`ItemDb` traits were designed for per-item answers, but the adapter
+does not provide them yet. Before any CHECK path consults `Typeck`:
+
+1. Back `TraitDb`/`ItemDb` with per-item graph facts, demanded on access:
+   `trait_data`/`fn_sig`/`adt` per declaration, `impls_of(trait)` as the explicit
+   all-impls-of-a-trait completeness fact, `inherent_impls` per simplified type.
+   Because demand is async, either prefetch per body (collect needed ids, request
+   all, then await) or run the checker as a suspendable node step.
+2. Then the oracle slice: in `block_with_expectation`, when `local_literals`
+   leaves a `let` site unresolved, take its type from `Typeck` (sites key on the
+   same `*const Stmt` address), converting nominals through `intern_nominal`.
+
+Step 1 touches PlanCtx/trait-world queries (jaguar's lane while it is being
+split) and the CHECK fan-out (lizard). It needs their agreement on the fact
+shapes before code.
+
 ## Not yet covered
 
 Lifetimes/regions (handled by borrow checking, not here), higher-ranked
