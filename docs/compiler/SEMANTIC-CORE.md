@@ -74,18 +74,23 @@ as one pure library, in the same style as `src/compiler/ssa/`:
 ## Status (2026-10-21)
 
 Shadow probe (`sema::adapter::tests::corpus_plan_stage`, ignored): programs
-01-05 and 07 pass every body under the semantic core (was 01, 04, 07), from
-native range/array/slice `for` items, primitive intrinsics through the shared
-`ir::intrinsics` table, builtin slice/array/str `len` and IEEE float
-`PartialEq`/`PartialOrd` (commits d3bf91370, 827280eae, 978db0784). CHECK still
-uses the old checker. Corpus remaining blockers, by kind:
+01-05, 07, 08 and 19 pass every body under the semantic core (8/20; was 01,
+04, 07 at f1242cac3). CHECK still uses the old checker. Commits: native
+range/array/slice `for` items, primitive intrinsics through the shared
+`ir::intrinsics` table, builtin slice/array/str `len` (d3bf91370, 978db0784);
+IEEE float `PartialEq`/`PartialOrd` (827280eae); format macro lowering
+(568d3be95); `Iterator::fold` (307a11d36); `Result::map`/`map_err`
+(88a08adf4); native array `.iter()` (4999d32b3). Remaining blockers, by kind:
 
-- Library surface: `str::chars`/`split_whitespace`, `[T]::iter`/`swap`/`to_vec`,
-  `Iterator::map`/`fold`/`cloned`, `Result::map_err`.
-- Lowering into `sema::hir`: opaque returns, associated consts. Format macros
-  and literal output lower since 568d3be95 (bodies: 14 10->11/13, 15 4->5/7,
-  18 7->9/11, 19 18->20/21; 19 now needs only `Iterator::fold`).
-- PLAN failures before checking: `dyn` outside a reference (13), `HashMap` (17, 20).
+- Library surface: `str::chars`/`split_whitespace`, `str::is_empty`,
+  `[T]::iter`/`swap`/`to_vec`, `Iterator::map`/`cloned`.
+- Lowering into `sema::hir`: opaque returns, associated consts.
+- PLAN failures before checking: `dyn` outside a reference (13), `BTreeMap`
+  (17), `Rc` (20).
+- Old-checker gaps found while adding library methods (each recorded in its
+  test): a user struct produced through a generic closure result gets two
+  nominal identities; `.map_err(..)?` needs an annotation; a by-value
+  `mut acc` closure parameter calling `&mut self` methods is rejected.
 
 ## Cutover finding: the old checker gates library growth
 
