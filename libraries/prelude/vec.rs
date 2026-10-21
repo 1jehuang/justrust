@@ -388,3 +388,16 @@ impl<T: super::cmp::Ord> Vec<T> {
         super::result::Result::Err(left)
     }
 }
+
+impl<T: Clone> Vec<T> {
+    /// Clones each element of `other` once, in index order, onto the end.
+    pub fn extend_from_slice(&mut self, other: &[T]) {
+        self.reserve(other.len());
+        let mut i = 0usize;
+        while i < other.len() {
+            let element = &other[i];
+            self.push(element.clone());
+            i += 1usize;
+        }
+    }
+}

@@ -31,6 +31,9 @@ impl type_check::Checker<'_> {
             );
         }
         let hint = self.scalar_hint(base)?;
+        if let Some(view) = self.vec_range_view(kind, base, hint.as_ref())? {
+            return Ok(view);
+        }
         if matches!(hint, Some(ir::Ty::Array { .. })) {
             let place = type_check::static_source_place(base).map_err(|_| {
                 "unsupported: range indexing of a non-place array value".to_string()
@@ -63,6 +66,77 @@ impl type_check::Checker<'_> {
         }
         self.expr(base)
     }
+    /// `v[a..b]` on a prelude `Vec<T>` (or a reference to one) ranges over the
+    /// ordinary source view `v.as_slice()` / `v.as_mut_slice()`, as stock's
+    /// `Index<Range<usize>>` derefs to `[T]`. The view call is checked like
+    /// any written method call, so receiver borrowing rules are unchanged.
+    fn vec_range_view(
+        &mut self,
+        kind: ir::BorrowKind,
+        base: &Expr,
+        hint: Option<&ir::Ty>,
+    ) -> Result<Option<ir::ExprId>, String> {
+        let mut ty = hint;
+        while let Some(ir::Ty::Ref { referent, .. }) = ty {
+            ty = Some(referent.as_ref());
+        }
+        let Some(ir::Ty::Struct(value)) = ty else {
+            return Ok(None);
+        };
+        if !matches!(base, Expr::Var(_) | Expr::Field { .. }) {
+            return Ok(None);
+        }
+        let std = crate::compiler::source::source_prelude::PRELUDE_MODULE;
+        if value.def().name != format!("crate::{std}::vec::Vec") {
+            return Ok(None);
+        }
+        let method = match kind {
+            ir::BorrowKind::Shared => "as_slice",
+            ir::BorrowKind::Mut => "as_mut_slice",
+        };
+        let Some(name) = self.prelude_inherent_method(value.def().source_decl, method)? else {
+            return Err(format!(
+                "unsupported: prelude Vec::{method} is not available"
+            ));
+        };
+        let call = Expr::MethodCall {
+            receiver: Box::new(base.clone()),
+            name,
+            type_args: Vec::new(),
+            args: Vec::new(),
+        };
+        let id = self.expr_with_expectation_inner(&call, type_check::Expectation::None)?;
+        self.record_operator(base as *const Expr as usize, id)?;
+        Ok(Some(id))
+    }
+
+    /// Source name of the inherent method `method` declared on `nominal`.
+    fn prelude_inherent_method(
+        &self,
+        nominal: ir::DeclId,
+        method: &str,
+    ) -> Result<Option<AstIdent>, String> {
+        let plan = self.signatures.plan()?;
+        let names = plan.program.names.as_ref();
+        for id in &plan.registry.function_ids {
+            let info = plan.registry.declaration(*id)?;
+            let (Some(owner), DeclItemName::Source(name)) = (&info.path.associated, info.path.item)
+            else {
+                continue;
+            };
+            if owner.trait_decl.is_none()
+                && owner.nominal == nominal
+                && names
+                    .spelling(name)
+                    .map_err(native_adapter::name_diagnostic)?
+                    == method
+            {
+                return Ok(Some(name));
+            }
+        }
+        Ok(None)
+    }
+
     pub(super) fn mut_slice_constant_assignment(
         &mut self,
         place: &Place,

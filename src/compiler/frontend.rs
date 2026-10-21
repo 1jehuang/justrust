@@ -2467,6 +2467,11 @@ impl SourceInventory {
             Expr::RangeIndex {
                 base, start, end, ..
             } => {
+                if matches!(base.as_ref(), Expr::Var(_) | Expr::Field { .. }) {
+                    // A Vec place base may become `base.as_slice()` /
+                    // `base.as_mut_slice()`, recorded at the base occurrence.
+                    self.operator_site(base.as_ref() as *const Expr as usize, node, budget)?;
+                }
                 self.expr(
                     base,
                     &node.child(13, 0, budget)?,

@@ -22,6 +22,7 @@ pub mod v1 {
     pub use super::super::vec::Vec;
     pub use super::super::boxed::Box;
     pub use super::super::string::{StrChars, StrMethods, StrToString, String, ToString};
+    pub use super::super::slice::{SliceContains, SliceMethods, SliceRefMethods, SliceToVec};
     pub use super::super::ptr::{ConstPtr, MutPtr};
     pub use super::super::ops::{Fn, FnMut, FnOnce};
     pub use super::super::cmp::{Eq, Ord, PartialEq, PartialOrd};

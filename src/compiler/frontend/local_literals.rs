@@ -2018,6 +2018,31 @@ impl<'s> Solver<'_, '_, 's> {
                 let index = self.node(Domain::Integer)?;
                 self.operator_index(base, index, false)
             }
+            // `s[a..b]` is the unsized `[T]` of an array, slice or prelude
+            // Vec base; bounds are `usize`. Unknown bases stay unresolved.
+            Expr::RangeIndex {
+                base, start, end, ..
+            } => {
+                let base = self.expr(base, depth + 1)?;
+                for bound in [start, end].into_iter().flatten() {
+                    let bound = self.expr(bound, depth + 1)?;
+                    let usize = self.fixed(ir::Ty::Int(ir::IntTy::Usize))?;
+                    self.unify(bound, usize)?;
+                }
+                let base = self.peel_refs(base);
+                match self.domain(base) {
+                    Domain::Array(element, _) | Domain::Slice(element) => {
+                        self.node(Domain::Slice(element))
+                    }
+                    Domain::Nominal(decl, args) if self.is_prelude_vec(decl)? => {
+                        match args.first() {
+                            Some(&element) => self.node(Domain::Slice(element)),
+                            None => self.fresh(),
+                        }
+                    }
+                    _ => self.fresh(),
+                }
+            }
             Expr::Field { base, field } => {
                 let base = self.expr(base, depth + 1)?;
                 self.field(base, field.clone())
@@ -2109,6 +2134,12 @@ impl<'s> Solver<'_, '_, 's> {
             }
             _ => self.fresh(),
         }
+    }
+    fn is_prelude_vec(&self, decl: ir::DeclId) -> Result<bool, String> {
+        let plan = self.checker.signatures.plan()?;
+        let name = &plan.registry.declaration(decl)?.name;
+        let std = crate::compiler::source::source_prelude::PRELUDE_MODULE;
+        Ok(*name == format!("crate::{std}::vec::Vec"))
     }
     /// Success payload term of a prelude Option/Result carrier term.
     fn try_payload(&self, carrier: Term) -> Result<Option<Term>, String> {
