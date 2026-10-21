@@ -340,10 +340,10 @@ impl DebugStruct {
         let f = unsafe { &mut *fp };
         if f.alternate {
             if self.fields == 0usize {
-                let _ = f.write_str(" {\n");
+                let _ = f.write_str(" {");
             }
             f.indent += 1usize;
-            f.write_indent();
+            let _ = f.write_str("\n");
             let _ = f.write_str(name);
             let _ = f.write_str(": ");
             let old = f.clear_spec();
@@ -351,7 +351,6 @@ impl DebugStruct {
             f.pop_spec(old);
             let _ = f.write_str(",");
             f.indent -= 1usize;
-            let _ = f.write_str("\n");
         } else {
             let _ = f.write_str(if self.fields == 0usize { " { " } else { ", " });
             let _ = f.write_str(name);
@@ -371,7 +370,7 @@ impl DebugStruct {
             return super::result::Result::Ok(());
         }
         if f.alternate {
-            f.write_indent();
+            let _ = f.write_str("\n");
             f.write_str("}")
         } else {
             f.write_str(" }")
@@ -391,16 +390,15 @@ impl DebugTuple {
         let f = unsafe { &mut *fp };
         if f.alternate {
             if self.fields == 0usize {
-                let _ = f.write_str("(\n");
+                let _ = f.write_str("(");
             }
             f.indent += 1usize;
-            f.write_indent();
+            let _ = f.write_str("\n");
             let old = f.clear_spec();
             let _ = Debug::fmt(value, f);
             f.pop_spec(old);
             let _ = f.write_str(",");
             f.indent -= 1usize;
-            let _ = f.write_str("\n");
         } else {
             let _ = f.write_str(if self.fields == 0usize { "(" } else { ", " });
             let _ = Debug::fmt(value, f);
@@ -419,7 +417,7 @@ impl DebugTuple {
             return super::result::Result::Ok(());
         }
         if f.alternate {
-            f.write_indent();
+            let _ = f.write_str("\n");
         } else if self.fields == 1usize && self.empty_name {
             let _ = f.write_str(",");
         }
@@ -438,15 +436,11 @@ impl DebugList {
         let fp = self.f as *mut Formatter;
         let f = unsafe { &mut *fp };
         if f.alternate {
-            if self.entries == 0usize {
-                let _ = f.write_str("\n");
-            }
             f.indent += 1usize;
-            f.write_indent();
+            let _ = f.write_str("\n");
             let _ = Debug::fmt(value, f);
             let _ = f.write_str(",");
             f.indent -= 1usize;
-            let _ = f.write_str("\n");
         } else {
             if self.entries > 0usize {
                 let _ = f.write_str(", ");
@@ -464,7 +458,7 @@ impl DebugList {
         let fp = self.f as *mut Formatter;
         let f = unsafe { &mut *fp };
         if f.alternate && self.entries > 0usize {
-            f.write_indent();
+            let _ = f.write_str("\n");
         }
         f.write_str(if self.set { "}" } else { "]" })
     }
@@ -480,17 +474,13 @@ impl DebugMap {
         let fp = self.f as *mut Formatter;
         let f = unsafe { &mut *fp };
         if f.alternate {
-            if self.entries == 0usize {
-                let _ = f.write_str("\n");
-            }
             f.indent += 1usize;
-            f.write_indent();
+            let _ = f.write_str("\n");
             let _ = Debug::fmt(key, f);
             let _ = f.write_str(": ");
             let _ = Debug::fmt(value, f);
             let _ = f.write_str(",");
             f.indent -= 1usize;
-            let _ = f.write_str("\n");
         } else {
             if self.entries > 0usize {
                 let _ = f.write_str(", ");
@@ -509,7 +499,7 @@ impl DebugMap {
         let fp = self.f as *mut Formatter;
         let f = unsafe { &mut *fp };
         if f.alternate && self.entries > 0usize {
-            f.write_indent();
+            let _ = f.write_str("\n");
         }
         f.write_str("}")
     }

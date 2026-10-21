@@ -382,6 +382,16 @@ fn parse(item: &str) -> Result<Input, String> {
 
 impl Input {
     fn header(&self, trait_path: &str, bound: Option<&str>) -> String {
+        let (g, a) = self.generics(bound);
+        let mut out = format!("impl{g} {trait_path} for {}{a}", self.name);
+        if !self.where_clause.is_empty() {
+            let _ = write!(out, " where {}", self.where_clause);
+        }
+        out
+    }
+    /// Declared generics (with `bound` added to every type parameter) and
+    /// the matching argument list.
+    fn generics(&self, bound: Option<&str>) -> (String, String) {
         let mut generics = Vec::new();
         let mut args = Vec::new();
         for (kind, name, bounds) in &self.params {
@@ -409,19 +419,14 @@ impl Input {
                 }
             }
         }
-        let (g, a) = if generics.is_empty() {
+        if generics.is_empty() {
             (String::new(), String::new())
         } else {
             (
                 format!("<{}>", generics.join(", ")),
                 format!("<{}>", args.join(", ")),
             )
-        };
-        let mut out = format!("impl{g} {trait_path} for {}{a}", self.name);
-        if !self.where_clause.is_empty() {
-            let _ = write!(out, " where {}", self.where_clause);
         }
-        out
     }
     fn self_ty(&self) -> String {
         if self.params.is_empty() {
@@ -521,9 +526,53 @@ fn gen_clone(input: &Input, copy: bool) -> String {
 
 fn gen_eq_chain(binds_a: &[(String, String)], binds_b: &[(String, String)]) -> String {
     let mut out = String::from("true");
-    for ((a, t), (b, _)) in binds_a.iter().zip(binds_b) {
-        let _ = write!(out, " && <{t} as std::cmp::PartialEq>::eq({a}, {b})");
+    // Stock expands to `*a == *b`, so a field without PartialEq is E0369
+    // (binary operation cannot be applied), not E0277.
+    for ((a, _), (b, _)) in binds_a.iter().zip(binds_b) {
+        let _ = write!(out, " && *{a} == *{b}");
     }
+    out
+}
+
+/// `Eq` has no methods, so stock asserts every field type is `Eq`
+/// (`AssertParamIsEq`). The same obligation is expressed as an ordinary
+/// generic requirement function called once per field type from a checker
+/// that carries the impl's generics, so missing field impls are E0277 even
+/// when the type is never used.
+fn gen_eq(input: &Input) -> String {
+    let mut out = format!(
+        "{} {{}}\n",
+        input.header("std::cmp::Eq", Some("std::cmp::Eq"))
+    );
+    let mut calls = String::new();
+    let require = format!(
+        "__justrust_derive_eq_require_{}",
+        input.name.trim_start_matches("r#")
+    );
+    for (_, fields) in variants(input) {
+        let types: Vec<&String> = match fields {
+            Fields::Unit => Vec::new(),
+            Fields::Tuple(t) => t.iter().collect(),
+            Fields::Named(n) => n.iter().map(|(_, t)| t).collect(),
+        };
+        for ty in types {
+            let _ = write!(calls, "{require}::<{ty}>(); ");
+        }
+    }
+    if calls.is_empty() {
+        return out;
+    }
+    let (g, _) = input.generics(Some("std::cmp::Eq"));
+    let where_clause = if input.where_clause.is_empty() {
+        String::new()
+    } else {
+        format!(" where {}", input.where_clause)
+    };
+    let _ = write!(
+        out,
+        "fn {require}<X: std::cmp::Eq>() {{}}\nfn __justrust_derive_eq_assert_{}{g}(){where_clause} {{ {calls}}}\n",
+        input.name.trim_start_matches("r#")
+    );
     out
 }
 
@@ -747,10 +796,7 @@ pub(super) fn expand(item: &str, derives: &[String]) -> Result<String, String> {
             "Clone" => gen_clone(&input, copy),
             "Copy" => format!("{} {{}}\n", input.header("Copy", Some("Copy"))),
             "PartialEq" => gen_partial_eq(&input),
-            "Eq" => format!(
-                "{} {{}}\n",
-                input.header("std::cmp::Eq", Some("std::cmp::Eq"))
-            ),
+            "Eq" => gen_eq(&input),
             "PartialOrd" => gen_ord(&input, true),
             "Ord" => gen_ord(&input, false),
             "Hash" => gen_hash(&input),
@@ -796,7 +842,7 @@ mod tests {
         )
         .unwrap();
         assert!(s.contains("impl<T : Copy+Clone> Clone for P<T>"), "{s}");
-        assert!(s.contains("<T as std::cmp::PartialEq>::eq(a0, b0)"), "{s}");
+        assert!(s.contains("&& *a0 == *b0"), "{s}");
         let e = expand(
             "enum E { A, B(i32, i32), #[default] C { x: i32 } }",
             &["Ord".into(), "Hash".into()],

@@ -5063,17 +5063,21 @@ impl ValidatedTraitWorld {
             context,
             active,
         )?;
+        // A field that is not Copy is stock's E0204, distinct from the E0277
+        // reported for an unproven Clone supertrait above.
         let mut field = |ty: &Ty| -> Result<()> {
-            self.require_in(
-                &Predicate::Implements(TraitRef {
-                    declaration: self.catalog.id(CatalogItem::Copy),
-                    self_ty: ty.clone(),
-                    args: Arc::from([]),
-                }),
-                context,
-                active,
-            )?;
-            Ok(())
+            let predicate = Predicate::Implements(TraitRef {
+                declaration: self.catalog.id(CatalogItem::Copy),
+                self_ty: ty.clone(),
+                args: Arc::from([]),
+            });
+            match self.prove_in(&predicate, context, active)? {
+                ProofOutcome::Proved(_) => Ok(()),
+                ProofOutcome::NotProven => Err(FactsError::unproved(
+                    &self.budget,
+                    "E0204: the trait `Copy` cannot be implemented for this type because a field does not implement `Copy`",
+                )),
+            }
         };
         match actual {
             Ty::Struct(t) => {
