@@ -275,13 +275,33 @@ fn typed_shared_slice_parameters_are_admitted() {
 
 #[test]
 fn rejects_outside_admitted_domain() {
+    let invalid_array_assignment = "fn f() { let s: [u8; 1] = [7]; let b: [u8] = s; }";
+    let error = rejected(invalid_array_assignment, 0);
+    let stock = super::parser_tests::stock_compile(
+        &format!("{invalid_array_assignment} fn main() {{}}"),
+        std::path::Path::new("unused-slice-metadata"),
+        true,
+    );
+    assert!(!stock.status.success());
+    assert!(String::from_utf8_lossy(&stock.stderr).contains("E0308"));
+    assert!(
+        error.contains("expected") && error.contains("got"),
+        "{error}"
+    );
+    for workers in [1, 8] {
+        for check in [true, false] {
+            assert!(
+                super::super::compile(
+                    format!("{invalid_array_assignment} fn main() {{}}"),
+                    workers,
+                    check
+                )
+                .is_err()
+            );
+        }
+    }
     for (source, index, needle) in [
         ("fn f(b: [u8]) {}", 0, "bare by-value slice"),
-        (
-            "fn f() { let s: [u8; 1] = [7]; let b: [u8] = s; }",
-            0,
-            "bare by-value slice",
-        ),
         ("fn f(b: &&[u8]) {}", 0, "slice"),
         ("fn f(b: (&[u8], u8)) {}", 0, "slice"),
         ("struct S { b: &[u8] } fn f(s: S) {}", 0, ""),
@@ -308,7 +328,10 @@ fn rejects_outside_admitted_domain() {
     assert!(!message.is_empty());
     // Usize index is required, without i32 backward inference.
     let message = rejected("fn f(b: &[u8], i: i32) -> u8 { b[i] }", 0);
-    assert!(message.contains("usize"), "{message}");
+    assert!(
+        message.contains("E0308") && message.contains("Usize"),
+        "{message}"
+    );
     // `.len()` with arguments is not the builtin.
     rejected("fn f(b: &[u8]) -> usize { b.len(1) }", 0);
     // Local inference alone does not unsize an array reference.
@@ -592,8 +615,27 @@ fn ordinary_calls_around_len_keep_full_inventory() {
         fn f(a: &[u8]) -> usize { let n = h(a.len()); h(n) + a.len() }";
     let (budget, f) = published(source, 1);
     let original = f.original().source_for_test();
-    assert_eq!(original.calls.len(), 4);
+    assert_eq!(
+        original
+            .calls
+            .iter()
+            .filter(|call| !call.operator_candidate)
+            .count(),
+        4
+    );
+    assert_eq!(
+        original
+            .calls
+            .iter()
+            .filter(|call| call.operator_candidate)
+            .count(),
+        10
+    );
     assert_eq!(original.call_mapping.len(), 2);
+    for (index, _, _) in &original.call_mapping {
+        assert!(!original.calls[*index].operator_candidate);
+        assert!(original.calls[*index].ordinary.is_some());
+    }
     assert_eq!(original.builtin_len_mapping.len(), 2);
     replay(&original, &f, &budget).unwrap();
     let mut dropped = original.clone();

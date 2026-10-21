@@ -3937,6 +3937,23 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
             return Err("resolved declaration is not a module in empty use group".into());
         }
     }
+    // A glob is a declaration even when none of its members are used. Resolve
+    // its owner eagerly so unused self imports cannot disappear behind lazy
+    // candidate lookup. Compare canonical module paths, not written aliases.
+    for glob in &parsed.glob_imports {
+        let Some(target) = resolver.path(&glob.target, glob.module, true, true)? else {
+            return Err(format!(
+                "unresolved glob import {}",
+                resolver.display(&glob.target)?
+            ));
+        };
+        if target.kind == ResolvedKind::Module
+            && let ResolvedPath::Source(source) = &target.path
+            && resolver.key(source)? == resolver.key(&resolver.module_path(glob.module)?)?
+        {
+            return Err("cannot glob-import a module into itself".into());
+        }
+    }
     let paths = resolver.ordered_paths()?;
     for path in &paths {
         let key = resolver.key(path)?;
@@ -4402,6 +4419,28 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
     program.associated_bound_sources = associated_bound_sources.into();
     program.seal_resolved_c_source()?;
     Ok(program)
+}
+
+#[cfg(test)]
+fn assert_noncallable_local_shadow(source: &str) {
+    let error = resolve(&parse_unresolved(source).unwrap()).unwrap_err();
+    // The raw resolver intentionally lacks the prepared Fn prelude. It must
+    // select the local binding rather than capture the same-named outer item.
+    assert!(
+        error.contains("calling a local value requires the prelude Fn trait"),
+        "{error}"
+    );
+    let stock = super::parser_tests::stock_compile(source, std::path::Path::new("unused"), true);
+    assert!(!stock.status.success());
+    assert!(String::from_utf8_lossy(&stock.stderr).contains("E0618"));
+    for workers in [1, 8] {
+        for check in [true, false] {
+            assert!(
+                crate::compiler::compile(source.into(), workers, check).is_err(),
+                "noncallable shadow accepted at workers={workers}, check={check}"
+            );
+        }
+    }
 }
 
 #[cfg(test)]
@@ -4991,8 +5030,7 @@ mod let_else_tests {
                 .unwrap_or_else(|error| panic!("{source}: {error}"));
         }
         let source = "enum E{V(i32),Other}fn x()->i32{7}fn main(){let E::V(x)=E::V(x())else{let z=x();return;};let after=x();}";
-        let error = resolve(&parse_unresolved(source).unwrap()).unwrap_err();
-        assert!(error.contains("local binding is not callable"), "{error}");
+        assert_noncallable_local_shadow(source);
     }
 
     #[test]
@@ -5055,8 +5093,7 @@ mod while_let_tests {
         }
         let source =
             "struct P(i32);fn x()->i32{7}fn main(){while let P(x)=P(x()){let z=x();break;}}";
-        let error = resolve(&parse_unresolved(source).unwrap()).unwrap_err();
-        assert!(error.contains("local binding is not callable"), "{error}");
+        assert_noncallable_local_shadow(source);
     }
 
     #[test]
@@ -5132,8 +5169,7 @@ mod if_let_tests {
         }
         let source =
             "struct P(i32);fn x()->i32{7}fn main(){if let P(x)=P(x()){let z=x();}else{let z=x();}}";
-        let error = resolve(&parse_unresolved(source).unwrap()).unwrap_err();
-        assert!(error.contains("local binding is not callable"), "{error}");
+        assert_noncallable_local_shadow(source);
     }
 
     #[test]
@@ -5517,7 +5553,14 @@ mod unit_shape_tests {
     fn unit_tuple_call_is_not_callable() {
         let parsed = parse_unresolved("struct S;fn main(){let x=S();}").unwrap();
         let error = resolve(&parsed).unwrap_err();
-        assert_eq!(error, "in function crate::main: unresolved function");
+        assert_eq!(error, "in function crate::main: unresolved function S");
+        let stock = super::super::parser_tests::stock_compile(
+            "struct S;fn main(){let x=S();}",
+            std::path::Path::new("unused"),
+            true,
+        );
+        assert!(!stock.status.success());
+        assert!(String::from_utf8_lossy(&stock.stderr).contains("E0618"));
     }
 }
 

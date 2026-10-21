@@ -30,9 +30,13 @@ impl Solver<'_, '_, '_> {
     }
 
     pub(super) fn leave_control(&mut self) -> Result<bool, String> {
+        self.leave_control_result().map(|(has_break, _)| has_break)
+    }
+
+    pub(super) fn leave_control_result(&mut self) -> Result<(bool, Term), String> {
         self.control_targets
             .pop()
-            .map(|target| target.has_break)
+            .map(|target| (target.has_break, target.result))
             .ok_or_else(|| "invalid metadata: missing inference control target".into())
     }
 
@@ -65,7 +69,17 @@ impl Solver<'_, '_, '_> {
     ) -> Result<Term, String> {
         if let Some(index) = self.control_target(label, false)? {
             let result = self.control_targets[index].result;
-            self.coerce(value, result)?;
+            let result = match (self.domain(result), self.domain(value)) {
+                (Domain::Ref(ir::BorrowKind::Shared, _), Domain::Ref(ir::BorrowKind::Mut, _))
+                | (Domain::Ref(ir::BorrowKind::Mut, _), Domain::Ref(ir::BorrowKind::Shared, _)) => {
+                    self.join_branches(result, value)?
+                }
+                _ => {
+                    self.coerce(value, result)?;
+                    result
+                }
+            };
+            self.control_targets[index].result = result;
             // Evaluating the operand precedes the transfer. A diverging
             // operand never reaches this target and supplies no result type.
             // Still visit it above so nested breaks retain their own targets.

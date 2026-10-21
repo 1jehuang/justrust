@@ -8610,9 +8610,6 @@ impl<'a> Checker<'a> {
             if self.builtin_array_iter_receiver(value)?.is_some() {
                 return self.for_array_statement(label, pattern, source, value, body, item_hint);
             }
-            if self.signatures.plan()?.into_iterator_trait_id()?.is_some() {
-                return self.for_iterator_statement(label, pattern, source, value, body);
-            }
             return self.for_array_statement(label, pattern, source, value, body, item_hint);
         };
         let loop_depth = self.loops.len();
@@ -8913,6 +8910,18 @@ impl<'a> Checker<'a> {
                 None => self.expr_expected(source, expected.as_ref())?,
             };
             let flow = self.flow(value);
+            let builtin = match &flow.ty {
+                ir::Ty::Array { .. } => true,
+                ir::Ty::Ref { kind, referent } => {
+                    matches!(referent.as_ref(), ir::Ty::Array { .. })
+                        || (*kind == ir::BorrowKind::Shared
+                            && matches!(referent.as_ref(), ir::Ty::Slice { .. }))
+                }
+                _ => false,
+            };
+            if !builtin && self.signatures.plan()?.into_iterator_trait_id()?.is_some() {
+                return self.for_iterator_statement(label, pattern, for_source, value, body);
+            }
             let (element, len, borrowed) = match &flow.ty {
                 ir::Ty::Array { element, len } => {
                     if !self.facts().must_copy(element)? {
@@ -9752,30 +9761,27 @@ impl<'a> Checker<'a> {
     ) -> Result<ir::ExprId, String> {
         // A castable hint is not a hard result constraint or reference coercion site.
         let expected = expectation.hard();
-        if let Some(ir::Ty::Ref { kind, referent }) = expectation.coercion() {
-            if let Expr::Var(name) = e {
-                let local = self.lookup(name)?;
-                if let ir::Ty::Ref {
-                    kind: ir::BorrowKind::Mut,
-                    referent: actual,
-                } = &self.locals[local.0].ty
-                    && actual == referent
-                {
-                    // Reborrow the original carrier before any value read can move it.
-                    return self.expr_expected(
-                        &Expr::Borrow {
-                            kind: *kind,
-                            place: Place {
-                                local: static_source_place(e)?.local,
-                                fields: vec![FieldSelector::Deref],
-                            },
+        if let Some(ir::Ty::Ref { kind, referent }) = expectation.coercion()
+            && let Expr::Var(name) = e
+        {
+            let local = self.lookup(name)?;
+            if let ir::Ty::Ref {
+                kind: ir::BorrowKind::Mut,
+                referent: actual,
+            } = &self.locals[local.0].ty
+                && actual == referent
+            {
+                // Reborrow the original carrier before any value read can move it.
+                return self.expr_expected(
+                    &Expr::Borrow {
+                        kind: *kind,
+                        place: Place {
+                            local: static_source_place(e)?.local,
+                            fields: vec![FieldSelector::Deref],
                         },
-                        expected,
-                    );
-                }
-            }
-            if matches!(e, Expr::Loop { .. }) {
-                return Err("reference expected-context propagation through loop results is unsupported; use an explicit borrow/reborrow".into());
+                    },
+                    expected,
+                );
             }
         }
         let (kind, flow) = match e {
@@ -10675,8 +10681,10 @@ impl<'a> Checker<'a> {
                 let key = self.label_key(*label)?;
                 self.loops.last_mut().unwrap().label = key;
                 self.loops.last_mut().unwrap().expected = expected.cloned();
+                // Preserve whether the source grants a coercion site even when
+                // the expectation is wrapped in an application or schema.
                 self.loops.last_mut().unwrap().expected_is_inferred =
-                    matches!(expectation, Expectation::Inferred(_));
+                    expectation.coercion().is_none();
                 self.loops.last_mut().unwrap().expected_source_schema = match expectation {
                     Expectation::SourceSchema(_, formal) => Some(formal.clone()),
                     _ => None,
@@ -10743,7 +10751,7 @@ impl<'a> Checker<'a> {
                 frame.label = key;
                 frame.is_block = true;
                 frame.expected = expected.cloned();
-                frame.expected_is_inferred = matches!(expectation, Expectation::Inferred(_));
+                frame.expected_is_inferred = expectation.coercion().is_none();
                 frame.expected_source_schema = match expectation {
                     Expectation::SourceSchema(_, formal) => Some(formal.clone()),
                     _ => None,
@@ -11740,7 +11748,15 @@ mod checked_identity_tests {
             assert!(matches!(raw.signature.result, ir::Ty::AssociatedType(_)));
             assert!(raw.signature.ref_contract.input_regions.is_empty());
             assert!(raw.signature.ref_contract.results.is_empty());
-            assert!(ir::carrier_locations(&raw.signature.result, &budget).is_err());
+            let carriers = ir::carrier_locations(&raw.signature.result, &budget).unwrap();
+            let ir::Ty::AssociatedType(expected) = &raw.signature.result else {
+                panic!("source projection was normalized prematurely");
+            };
+            assert_eq!(carriers.len(), 1);
+            assert!(carriers[0].path.0.is_empty());
+            assert!(
+                matches!(&carriers[0].channel, ir::CarrierChannel::ProjectionTail { projection, prefix: 0 } if projection == expected)
+            );
         }
         let normalized = world.normalized_callable_schema(provided).unwrap();
         assert_eq!(normalized.signature.result, ir::Ty::Int(ir::IntTy::I128));
@@ -11748,19 +11764,18 @@ mod checked_identity_tests {
     }
 
     #[test]
-    fn projected_defaults_and_rigid_callers_remain_unsupported() {
+    fn projected_defaults_and_rigid_callers_preserve_exact_projection() {
         for source in [
             "trait Project{type Out;fn value(x:Self::Out)->Self::Out{x}}fn main(){}",
             "trait Project{type Out;}fn pass<T:Project>(x:<T as Project>::Out)-><T as Project>::Out{x}fn main(){}",
         ] {
-            let error = match parse(source) {
-                Ok(program) => check(&program).unwrap_err(),
-                Err(error) => error,
-            };
-            assert!(
-                error.to_ascii_lowercase().contains("unsupported"),
-                "{source}: {error}"
-            );
+            check(&parse(source).unwrap()).unwrap_or_else(|error| panic!("{source}: {error}"));
+        }
+        for source in [
+            "trait Project{type Out;fn value(x:Self::Out)->Self::Out{x}}struct S;impl Project for S{type Out=i32;}fn main(){println!(\"{}\",<S as Project>::value(42));}",
+            "trait Project{type Out;}struct S;impl Project for S{type Out=i32;}fn pass<T:Project>(x:<T as Project>::Out)-><T as Project>::Out{x}fn main(){println!(\"{}\",pass::<S>(42));}",
+        ] {
+            super::super::parser_tests::stock_native_run(source);
         }
     }
 

@@ -103,7 +103,12 @@ The stock-first corpus retains 28 sources: 13 stock-valid and 15 stock-invalid.
 Native outcomes are 12 runtime, 14 invalid, one stock-valid unsupported and one
 stock-invalid unsupported. The two unsupported cases require choosing among
 multiple trait applications without explicit UFCS, not erased arguments or a
-first-impl choice. Workers 1/8 CHECK/BUILD execute 112 cells and 24 real ELF
+first-impl choice. This boundary retains the queried trait declaration even when
+selection returns a concrete implementation rather than a trait-item call.
+Both early argument inference and final method selection preserve the same
+explicit unsupported outcome. Explicit UFCS remains the supported way to select
+one application; this does not claim general trait-argument inference.
+Workers 1/8 CHECK/BUILD execute 112 cells and 24 real ELF
 images per bootstrap profile, with compiler fallback disabled. Twenty-six public
 authority tests retain original facts through argument, owner, binder, signature
 and source mutations. The historical generic-trait source is promoted unchanged.

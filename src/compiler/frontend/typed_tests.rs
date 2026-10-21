@@ -748,12 +748,17 @@ fn associated_receivers_are_checked_once_and_owning_calls_stay_direct() {
         ir::DeclKind::AssociatedFunction
     );
     check(&p).unwrap();
-    for source in [
-        "struct S{x:i32}impl S{fn take(self)->i32{self.x}}fn main(){let s=S{x:1};let n=s.take();let x=s.x;}",
-        "struct S{x:i32}impl S{fn choose<U>(self,u:U)->U{u}}fn main(){let n=S{x:1}.choose(2);}",
-    ] {
-        assert!(parse(source).and_then(|p| check(&p)).is_err());
-    }
+    let moved = "struct S{x:i32}impl S{fn take(self)->i32{self.x}}fn main(){let s=S{x:1};let n=s.take();let x=s.x;}";
+    assert!(parse(moved).and_then(|p| check(&p)).is_err());
+    let inferred =
+        "struct S{x:i32}impl S{fn choose<U>(self,u:U)->U{u}}fn main(){let n=S{x:1}.choose(2);}";
+    let stock = super::parser_tests::stock_compile(inferred, std::path::Path::new("unused"), true);
+    assert!(
+        stock.status.success(),
+        "{}",
+        String::from_utf8_lossy(&stock.stderr)
+    );
+    check(&parse(inferred).unwrap()).unwrap();
 }
 
 #[test]
@@ -981,8 +986,15 @@ fn compound_statement_tokens_types_and_expression_boundaries() {
         );
     }
     check(&parse("fn main(){let mut b=true;b&=false;b|=true;b^=true;let mut a=[1u8];let i=0usize;a[i]+=2;}").unwrap()).unwrap();
+    let source = "fn main(){let mut x=1;let y=(x+=1);}";
+    let stock = super::parser_tests::stock_compile(source, std::path::Path::new("unused"), true);
+    assert!(
+        stock.status.success(),
+        "{}",
+        String::from_utf8_lossy(&stock.stderr)
+    );
+    check(&parse(source).unwrap()).unwrap();
     for source in [
-        "fn main(){let mut x=1;let y=(x+=1);}",
         "fn main(){let mut x=1;x \"+=\" 1;}",
         "fn main(){let mut x=1u8;x+=1u16;}",
         "fn main(){let mut x=true;x+=false;}",
@@ -2059,6 +2071,107 @@ fn e3_all_input_positions_regions_and_deferred_adjustments_remain_enforced() {
 }
 
 #[test]
+fn e3_branch_join_keeps_mutable_formal_and_emits_shared_reborrow() {
+    for body in [
+        "if b{s}else{m}",
+        "if b{m}else{s}",
+        "if let true=b{s}else{m}",
+        "match b{true=>m,false=>s}",
+    ] {
+        let source =
+            format!("fn pick<'a>(s:&'a i32,m:&'a mut i32,b:bool)->&'a i32{{{body}}}fn main(){{}}");
+        let program = parse(&source).unwrap();
+        let signatures = signature_table(&program).unwrap();
+        let checked = type_function_with_signatures(&program, 0, &signatures)
+            .unwrap_or_else(|error| panic!("{source}: {error}"));
+        assert!(matches!(
+            checked.locals[checked.params[0].0].ty,
+            ir::Ty::Ref {
+                kind: ir::BorrowKind::Shared,
+                ..
+            }
+        ));
+        assert!(matches!(
+            checked.locals[checked.params[1].0].ty,
+            ir::Ty::Ref {
+                kind: ir::BorrowKind::Mut,
+                ..
+            }
+        ));
+        assert!(
+            checked.exprs.iter().any(|expression| matches!(
+                &expression.kind,
+                ir::ExprKind::Borrow { kind: ir::BorrowKind::Shared, place, .. }
+                    if place.local == checked.params[1]
+                        && place.projection == [ir::Projection::Deref]
+            )),
+            "{source}: missing genuine shared reborrow"
+        );
+        checked.validate().unwrap();
+        check(&program).unwrap_or_else(|error| panic!("{source}: {error}"));
+    }
+}
+
+#[test]
+fn loop_reference_context_preserves_break_and_reborrow_authority() {
+    for body in [
+        "loop{break m;}",
+        "loop{if b{break s;}break m;}",
+        "loop{if b{break m;}break s;}",
+        "'out: loop{loop{break 'out m;}}",
+        "'out:{if b{break 'out s;}m}",
+        "if b{loop{}}else{m}",
+    ] {
+        let source =
+            format!("fn pick<'a>(s:&'a i32,m:&'a mut i32,b:bool)->&'a i32{{{body}}}fn main(){{}}");
+        let program = parse(&source).unwrap();
+        check(&program).unwrap_or_else(|error| panic!("{source}: {error}"));
+        let signatures = signature_table(&program).unwrap();
+        let checked = type_function_with_signatures(&program, 0, &signatures).unwrap();
+        checked.validate().unwrap();
+        assert!(
+            checked.exprs.iter().any(|expression| matches!(
+                &expression.kind,
+                ir::ExprKind::Borrow { kind: ir::BorrowKind::Shared, place, .. }
+                    if place.local == checked.params[1]
+                        && place.projection == [ir::Projection::Deref]
+            )),
+            "{source}: loop result must use a real shared reborrow"
+        );
+    }
+    // A substituted reference actual is not a written reference coercion site:
+    // the field is declared as T, so the loop break must move p unchanged.
+    let source = "struct Wrap<T>{value:T}fn main(){let mut n=1;let p=&mut n;let wrapped:Wrap<&mut i32>=Wrap{value:loop{break p;}};let y=*wrapped.value;}";
+    let program = parse(source).unwrap();
+    let signatures = signature_table(&program).unwrap();
+    let checked = type_function_with_signatures(&program, 0, &signatures).unwrap();
+    let carrier = ir::LocalId(
+        checked
+            .locals
+            .iter()
+            .position(|local| local.name == "p")
+            .unwrap(),
+    );
+    assert!(checked.exprs.iter().any(
+        |expression| matches!(expression.kind, ir::ExprKind::Local(local) if local == carrier)
+    ));
+    assert!(!checked.exprs.iter().any(|expression| matches!(&expression.kind, ir::ExprKind::Borrow { place, .. } if place.local == carrier)));
+    check(&program).unwrap();
+    for source in [
+        "fn bad<'a>()->&'a i32{loop{let n=1;break &n;}}fn main(){}",
+        "fn bad<'a>(s:&'a i32)->&'a mut i32{loop{break s;}}fn main(){}",
+        "fn main(){let mut n=1;let p=&mut n;let q=loop{break p;};let x=*p;let y=*q;}",
+        "struct Wrap<T>{value:T}fn main(){let mut n=1;let p=&mut n;let wrapped:Wrap<&mut i32>=Wrap{value:loop{break p;}};let x=*p;let y=*wrapped.value;}",
+        "fn pick<'a>(s:&'a i32,m:&'a mut i32)->&'a i32{loop{break m;}}fn main(){let x=1;let mut n=2;let p=&mut n;let q=pick(&x,p);*p=3;let y=*q;}",
+    ] {
+        let stock =
+            super::parser_tests::stock_compile(source, std::path::Path::new("unused"), true);
+        assert!(!stock.status.success(), "stock accepted {source}");
+        assert!(check(&parse(source).unwrap()).is_err(), "accepted {source}");
+    }
+}
+
+#[test]
 fn e2_implicit_and_explicit_fields_have_identical_ir_and_current_carrier_places() {
     let p=parse("struct S{x:i32,y:i32}fn implicit(r:&mut S){let n=r.x;r.x=n+1;let q=&mut r.y;*q=4;}fn explicit(r:&mut S){let n=(*r).x;(*r).x=n+1;let q=&mut (*r).y;*q=4;}fn main(){}").unwrap();
     let env = signature_table(&p).unwrap();
@@ -2701,7 +2814,15 @@ fn b1_rejects_forbidden_reference_locations_authority_and_implicit_coercions() {
                 | "fn main(){let x=1;let r=&x;let a=[r;0];}"
                 | "fn main(){let x=1;let r=&x;let t=(r,);}"
                 | "fn main(){let r=&1;}"
+                | "fn main(){let a=[1];let i=0usize;let p=&a[i];}"
         ) {
+            let stock =
+                super::parser_tests::stock_compile(source, std::path::Path::new("unused"), true);
+            assert!(
+                stock.status.success(),
+                "{}",
+                String::from_utf8_lossy(&stock.stderr)
+            );
             result.unwrap();
             check(&parse(source).unwrap()).unwrap();
         } else {
@@ -2783,6 +2904,14 @@ fn arrays_contextualize_empty_literals_and_keep_constant_index_projection() {
 
 #[test]
 fn arrays_reject_bounds_types_repeat_moves_and_unsupported_inference() {
+    let source = "fn main(){let a=[1];let i=0;let n=a[i];}";
+    let stock = super::parser_tests::stock_compile(source, std::path::Path::new("unused"), true);
+    assert!(
+        stock.status.success(),
+        "{}",
+        String::from_utf8_lossy(&stock.stderr)
+    );
+    check(&parse(source).unwrap()).unwrap();
     for source in [
         "fn main(){let a=[1,2];let n=a[2];}",
         "fn main(){let a=[1,true];}",
@@ -2791,7 +2920,6 @@ fn arrays_reject_bounds_types_repeat_moves_and_unsupported_inference() {
         "struct S{x:i32}fn main(){let a=[S{x:1}];let s=a[0];}",
         "fn main(){let a=[1;65536];}",
         "fn main(){let a=[];}",
-        "fn main(){let a=[1];let i=0;let n=a[i];}",
     ] {
         assert!(
             parse(source).and_then(|p| check(&p)).is_err(),
@@ -2948,8 +3076,6 @@ fn deferred_declarations_keep_flow_checks_outside_pure_typing() {
         "fn main(){let mut x;}",
         "fn main(){let (x,y):(i32,i32);}",
         "fn main(){let _:i32;}",
-        "fn main(){let x:_;}",
-        "fn main(){let x:!;}",
         "enum E{A}use E::A;fn main(){let A:E;}",
     ] {
         if matches!(source, "fn main(){let x;}" | "fn main(){let mut x;}") {
@@ -2958,6 +3084,43 @@ fn deferred_declarations_keep_flow_checks_outside_pure_typing() {
             assert!(parse(source).is_err(), "accepted {source}");
         }
     }
+    let source = "fn main(){let x:_;}";
+    let stock = super::parser_tests::stock_compile(source, std::path::Path::new("unused"), true);
+    assert!(!stock.status.success());
+    assert!(String::from_utf8_lossy(&stock.stderr).contains("E0282"));
+    let program = parse(source).unwrap();
+    assert!(
+        check(&program)
+            .unwrap_err()
+            .contains("untyped deferred reference declaration remains underconstrained")
+    );
+    let source = "fn main(){let x:!;}";
+    let stock = super::parser_tests::stock_compile(source, std::path::Path::new("unused"), true);
+    assert!(!stock.status.success());
+    assert!(String::from_utf8_lossy(&stock.stderr).contains("E0658"));
+    assert!(parse(source).is_err(), "accepted unstable local never type");
+}
+
+#[test]
+fn admitted_carrier_and_copy_pattern_shapes_match_stock() {
+    for source in [
+        "fn main(){let whole @ (a,b)=(3i32,4i32);assert!(whole.0+whole.1==a+b);println!(\"7\");}",
+        "fn id<T>(x:T)->T{x}fn main(){let n=7;let pair=id::<(&i32,bool)>((&n,true));assert!(*pair.0==7);println!(\"7\");}",
+        "fn id<T>(x:T)->T{x}fn main(){let empty:[&i32;0]=[];let out=id::<[&i32;0]>(empty);assert!(out.len()==0);println!(\"7\");}",
+    ] {
+        let stock =
+            super::parser_tests::stock_compile(source, std::path::Path::new("unused"), true);
+        assert!(
+            stock.status.success(),
+            "{}",
+            String::from_utf8_lossy(&stock.stderr)
+        );
+        super::parser_tests::stock_native_run(source);
+    }
+    let source = "fn main(){let mut n=7;let whole @ (part,)=(&mut n,);let _=whole;let _=part;}";
+    let stock = super::parser_tests::stock_compile(source, std::path::Path::new("unused"), true);
+    assert!(!stock.status.success());
+    assert!(check(&parse(source).unwrap()).is_err());
 }
 
 #[test]

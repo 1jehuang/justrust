@@ -11299,7 +11299,9 @@ mod tests {
                 Ty::Ref { .. }
             ));
         }
-        assert!(validate_root_reference_actual(&components, &budget).is_err());
+        // G3 admits nested carriers structurally; ownership still authorizes use.
+        validate_root_reference_actual(&components, &budget).unwrap();
+        assert!(validate_root_reference_actual(&Ty::Str, &budget).is_err());
         assert!(
             validate_root_reference_actual(&reference(BorrowKind::Mut, Ty::Bool), &budget).is_ok()
         );
@@ -11812,7 +11814,17 @@ mod tests {
         // Internal structural types are admitted independently of ordinary
         // generic-actual syntax. This zero-length value has no carrier slots.
         assert!(carrier_locations(&nested, &budget).unwrap().is_empty());
-        assert!(validate_root_reference_actual(&nested, &budget).is_err());
+        // Zero-length reference arrays are admitted but expose no carrier slots.
+        validate_root_reference_actual(&nested, &budget).unwrap();
+        assert!(
+            validate_root_reference_actual(
+                &Ty::Slice {
+                    element: Arc::new(Ty::Bool)
+                },
+                &budget
+            )
+            .is_err()
+        );
         assert_eq!(
             fixture_derive_return_contract(
                 &[nested],
@@ -12444,14 +12456,14 @@ mod tests {
             len: 0,
         };
         FactsCtx::Universal(&env).validate_ty(&hidden).unwrap();
-        // Structural facts do not grant ordinary aggregate-reference actual
-        // admission, nor invent an element in a zero-length array.
+        // Structural admission does not invent an element in a zero-length array.
         assert!(
             carrier_locations(&hidden, &PlanBudget::default())
                 .unwrap()
                 .is_empty()
         );
-        assert!(validate_root_reference_actual(&hidden, &PlanBudget::default()).is_err());
+        validate_root_reference_actual(&hidden, &PlanBudget::default()).unwrap();
+        assert!(validate_root_reference_actual(&Ty::Str, &PlanBudget::default()).is_err());
         let budget = PlanBudget::new(PlanLimits {
             applications: 4,
             bytes: 16,
@@ -14650,17 +14662,33 @@ mod tests {
             mutable: false,
         });
         invalid[1].local = LocalId(3);
+        // Both overlapping reads are Copy, so duplicating this projection is legal.
+        function.validate_pattern_bindings(&ty, &invalid).unwrap();
+        function.locals[3].ty = ty.clone();
+        invalid[1].projection.clear();
+        function.validate_pattern_bindings(&ty, &invalid).unwrap();
+
+        // A mutable-reference carrier is not Copy: preserve both duplicate-leaf
+        // and whole-value/field overlap rejection with exactly matching types.
+        let noncopy = Ty::Ref {
+            kind: BorrowKind::Mut,
+            referent: Arc::new(Ty::Int(IntTy::I32)),
+        };
+        let noncopy_tuple = Ty::Tuple(Arc::from([noncopy.clone(), Ty::Bool]));
+        function.locals[2].ty = noncopy.clone();
+        function.locals[3].ty = noncopy;
+        invalid[1].projection = vec![Projection::Field(0)];
         assert!(
             function
-                .validate_pattern_bindings(&ty, &invalid)
+                .validate_pattern_bindings(&noncopy_tuple, &invalid)
                 .unwrap_err()
                 .contains("overlapping")
         );
-        function.locals[3].ty = ty.clone();
+        function.locals[3].ty = noncopy_tuple.clone();
         invalid[1].projection.clear();
         assert!(
             function
-                .validate_pattern_bindings(&ty, &invalid)
+                .validate_pattern_bindings(&noncopy_tuple, &invalid)
                 .unwrap_err()
                 .contains("overlapping")
         );

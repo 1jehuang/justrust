@@ -22,6 +22,7 @@ pub mod core_surface {
         pub use super::super::ptr::{null, null_mut, read, write, eq};
     }
     pub use super::slice;
+    pub use super::iter;
     pub mod prelude {
         pub use super::super::prelude::core_v1 as v1;
     }
@@ -46,4 +47,5 @@ pub mod primitive;
 pub mod primitive_constants;
 pub mod ptr;
 pub mod slice;
+pub mod iter;
 pub mod test;

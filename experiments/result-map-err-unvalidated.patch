@@ -1,0 +1,96 @@
+diff --git a/libraries/prelude/result.rs b/libraries/prelude/result.rs
+index 99628e01e..b0e24794c 100644
+--- a/libraries/prelude/result.rs
++++ b/libraries/prelude/result.rs
+@@ -5,6 +5,13 @@ pub enum Result<T, E> {
+ }
+ 
+ impl<T, E> Result<T, E> {
++    pub fn map_err<F, O: FnOnce(E) -> F>(self, op: O) -> Result<T, F> {
++        match self {
++            Result::Ok(value) => Result::Ok(value),
++            Result::Err(error) => Result::Err(op(error)),
++        }
++    }
++
+     pub fn is_ok(&self) -> bool {
+         match self {
+             Result::Ok(_) => true,
+diff --git a/tests/prelude_methods.rs b/tests/prelude_methods.rs
+index fd6cba9f4..90556d310 100644
+--- a/tests/prelude_methods.rs
++++ b/tests/prelude_methods.rs
+@@ -7,6 +7,73 @@ use std::os::unix::fs::PermissionsExt;
+ use std::process::{Command, Output};
+ use std::sync::atomic::{AtomicU64, Ordering};
+ 
++#[path = "support/closure_oracle.rs"]
++mod closure_oracle;
++
++#[test]
++fn result_map_err_matches_stock() {
++    use closure_oracle::{Case, Expect};
++    closure_oracle::check(
++        "result-map-err",
++        &[
++            Case {
++                name: "maps_only_errors_and_preserves_ok",
++                source: r#"
++fn main() {
++    let mut calls = 0;
++    let ok: Result<i32, i32> = Ok(7);
++    let mapped: Result<i32, bool> = ok.map_err(|e: i32| { calls += 1; e > 0 });
++    println!("{} {}", mapped.unwrap(), calls);
++    let err: Result<i32, i32> = Err(9);
++    let mapped: Result<i32, bool> = err.map_err(|e: i32| { calls += 1; e > 0 });
++    println!("{} {}", mapped.unwrap_err(), calls);
++}
++"#,
++                expect: Expect::Run("7 0\ntrue 1\n"),
++            },
++            Case {
++                name: "consumes_noncopy_error_and_once_capture",
++                source: r#"
++struct Value { n: i32 }
++fn main() {
++    let capture = Value { n: 3 };
++    let err: Result<i32, Value> = Err(Value { n: 4 });
++    let mapped = err.map_err(move |e: Value| { let taken = capture; Value { n: e.n + taken.n } });
++    let value = mapped.unwrap_err();
++    println!("{}", value.n);
++    let ok: Result<Value, i32> = Ok(Value { n: 8 });
++    let mapped = ok.map_err(|e: i32| e > 0);
++    let value = mapped.unwrap();
++    println!("{}", value.n);
++}
++"#,
++                expect: Expect::Run("7\n8\n"),
++            },
++            Case {
++                name: "fixture_style_error_to_string_inference",
++                source: r#"
++fn main() {
++    let err: Result<i32, i32> = Err(12);
++    let mapped = err.map_err(|e| e.to_string());
++    println!("{}", mapped.unwrap_err());
++}
++"#,
++                expect: Expect::Run("12\n"),
++            },
++            Case {
++                name: "rejects_wrong_callback_input_even_on_ok",
++                source: "fn bad() { let r: Result<i32, bool> = Ok(1); let _ = r.map_err(|e: i32| e); } fn main() {}",
++                expect: Expect::Invalid("E0631"),
++            },
++            Case {
++                name: "rejects_reusing_consumed_error",
++                source: "struct Value { n: i32 } fn main() { let r: Result<i32, Value> = Err(Value { n: 1 }); let _ = r.map_err(|e: Value| e.n); let _ = r.is_err(); }",
++                expect: Expect::Invalid("E0382"),
++            },
++        ],
++    );
++}
++
+ static NEXT: AtomicU64 = AtomicU64::new(0);
+ 
+ fn differential(source: &str) -> Output {

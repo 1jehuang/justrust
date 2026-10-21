@@ -5,7 +5,7 @@ use super::*;
 fn selection_token_error(error: super::super::token_session::TokenError) -> String {
     super::super::source::SourceError::from_token(error).to_string()
 }
-fn trait_application_ambiguity() -> String {
+pub(super) fn trait_application_ambiguity() -> String {
     super::super::source::SourceError {
         kind: super::super::source::SourceErrorKind::Unsupported,
         primary: None,
@@ -427,6 +427,7 @@ impl PlanCtx {
             return Ok(None);
         }
         let mut selected: Option<(ir::Callee, ir::Signature, ReceiverKind)> = None;
+        let mut selected_trait = None;
         for (application, _) in self
             .method_trait_candidates(owner, name, caller, module, budget)?
             .as_slice()
@@ -440,14 +441,16 @@ impl PlanCtx {
                 filter,
                 budget,
             )? {
-                if let Some((ir::Callee::TraitItem(previous), _, _)) = &selected
-                    && previous.trait_ref.declaration == application.declaration
-                {
+                // Selection may return a concrete implementation target instead
+                // of a TraitItem. Retain the queried trait declaration rather
+                // than inferring it from the physical call representation.
+                if selected_trait == Some(application.declaration) {
                     return Err(trait_application_ambiguity());
                 }
                 if selected.is_some() {
                     return Err("ambiguous in-scope trait item".into());
                 }
+                selected_trait = Some(application.declaration);
                 selected = Some(call);
             }
         }
@@ -654,7 +657,33 @@ mod tests {
                 error.contains("unsupported: multiple trait applications require explicit UFCS"),
                 "{source}: {error}"
             );
+            let stock = super::super::parser_tests::stock_compile(
+                source,
+                std::path::Path::new("unused"),
+                true,
+            );
+            assert!(
+                stock.status.success(),
+                "{}",
+                String::from_utf8_lossy(&stock.stderr)
+            );
+            for workers in [1, 8] {
+                for check in [true, false] {
+                    let error = crate::compiler::compile(source.into(), workers, check)
+                        .err()
+                        .expect("inference boundary must remain explicit");
+                    assert!(
+                        error
+                            .to_string()
+                            .contains("multiple trait applications require explicit UFCS"),
+                        "{error}"
+                    );
+                }
+            }
         }
+        super::super::parser_tests::stock_native_run(
+            "struct Token;trait Convert<T>{fn convert(self)->T;}impl Convert<i32> for Token{fn convert(self)->i32{42}}impl Convert<bool> for Token{fn convert(self)->bool{true}}fn main(){println!(\"{}\",<Token as Convert<i32>>::convert(Token));}",
+        );
     }
 
     #[test]

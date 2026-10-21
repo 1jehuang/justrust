@@ -64,7 +64,12 @@ impl Solver<'_, '_, '_> {
                     ) {
                         continue;
                     }
-                    if applicable.replace((application.clone(), *item)).is_some() {
+                    if let Some((previous, _)) = applicable.replace((application.clone(), *item)) {
+                        if previous.declaration == application.declaration {
+                            return Err(
+                                super::super::trait_selection::trait_application_ambiguity(),
+                            );
+                        }
                         return Err("ambiguous in-scope trait item".into());
                     }
                 }

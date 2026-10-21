@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+#[path = "support/stock_rustc.rs"]
+mod stock_rustc;
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(0);
 struct Scratch(PathBuf);
@@ -373,4 +375,103 @@ fn rejects_legal_unsupported_projected_mutable_borrow_to_shared_result() {
 fn main() { if run() == 7 { println!("mixed returns oracle ok"); } }
 "#,
     );
+}
+
+#[test]
+fn shared_mutable_branch_joins_preserve_reference_authority() {
+    for (body, condition) in [
+        ("if b{s}else{m}", "false"),
+        ("if b{m}else{s}", "true"),
+        ("if let true=b{s}else{m}", "false"),
+        ("match b{true=>m,false=>s}", "true"),
+        ("if b{s}else{if b{s}else{m}}", "false"),
+    ] {
+        let source = format!(
+            "fn pick<'a>(s:&'a i32,m:&'a mut i32,b:bool)->&'a i32{{{body}}}fn main(){{let x=3;let mut y=7;let r=pick(&x,&mut y,{condition});assert!(*r==7);y=9;assert!(y==9);println!(\"7\");}}"
+        );
+        stock_branch_case(&source, true);
+        runs(&source, "7\n");
+        for workers in [1, 8] {
+            let checked =
+                justrust_engine::compiler::compile_observed(source.clone(), workers, true)
+                    .unwrap_or_else(|error| panic!("{source}: {error}"));
+            assert!(checked.report.capture_complete);
+            assert!(
+                checked
+                    .report
+                    .node_evaluations
+                    .iter()
+                    .all(|(key, _)| key.kind != 103)
+            );
+            assert!(checked.executable.is_none());
+            // CHECK stays source-only. BUILD must run the real loan analysis,
+            // rather than treating the inference hint as ownership authority.
+            let built = justrust_engine::compiler::compile_observed(source.clone(), workers, false)
+                .unwrap_or_else(|error| panic!("{source}: {error}"));
+            assert!(built.report.capture_complete);
+            assert!(built.executable.is_some());
+            assert!(!built.analyses.is_empty());
+            assert!(
+                built
+                    .analyses
+                    .iter()
+                    .all(|analysis| analysis.complete && analysis.passed())
+            );
+        }
+    }
+    // The existing expected-reference-through-loop boundary is independent
+    // of branch unification. Preserve the exact stock-valid source and demand
+    // its explicit diagnostic rather than accidentally claiming loop support.
+    let source = "fn pick<'a>(s:&'a i32,m:&'a mut i32,b:bool)->&'a i32{if b{loop{}}else{m}}fn main(){let x=3;let mut y=7;let r=pick(&x,&mut y,false);assert!(*r==7);y=9;assert!(y==9);println!(\"7\");}";
+    stock_branch_case(source, true);
+    for workers in [1, 8] {
+        for check in [true, false] {
+            let failure =
+                justrust_engine::compiler::compile_observed(source.into(), workers, check)
+                    .err()
+                    .expect("reference result through loop remains unsupported");
+            assert!(failure.to_string().contains(
+                "reference expected-context propagation through loop results is unsupported"
+            ));
+            let report = failure.report.unwrap();
+            assert!(report.capture_complete);
+            assert!(!report.published_kind(105));
+        }
+    }
+    for source in [
+        "fn pick<'a>(s:&'a i32,m:&'a mut i32,b:bool)->&'a mut i32{if b{s}else{m}}fn main(){}",
+        "fn pick<'a>(s:&'a i32,m:&'a mut bool,b:bool)->&'a i32{if b{s}else{m}}fn main(){}",
+        "fn pick<'a>(s:&'a i32,m:&'a mut i32,b:bool)->&'a i32{if b{s}else{m}}fn main(){let mut x=7;let r=pick(&x,&mut x,false);assert!(*r==7);}",
+        "fn pick<'a>(s:&'a i32,m:&'a mut i32,b:bool)->&'a i32{if b{s}else{m}}fn main(){let x=3;let mut y=7;let p=&mut y;let r=pick(&x,p,false);*p=9;assert!(*r==7);}",
+        "fn pick<'a>(s:&'a i32,m:&'a mut i32,b:bool)->&'a i32{if b{s}else{m}}fn main(){let x=3;let r;{let mut y=7;r=pick(&x,&mut y,false);}assert!(*r==7);}",
+    ] {
+        stock_branch_case(source, false);
+        rejects("mixed branch authority", source);
+    }
+}
+
+fn stock_branch_case(source: &str, valid: bool) {
+    let scratch = Scratch::new();
+    let input = scratch.source(source);
+    for metadata in [true, false] {
+        let output = scratch.path(if metadata { "metadata" } else { "stock" });
+        let mut command = Command::new(stock_rustc::stock_rustc());
+        command
+            .env_remove("RUSTC_BOOTSTRAP")
+            .args(["--edition=2024", "--crate-name=branch_oracle"]);
+        if metadata {
+            command.arg("--emit=metadata");
+        }
+        command.arg(&input).arg("-o").arg(&output);
+        let result = capture(&mut command, &scratch, 20);
+        assert_eq!(result.status.success(), valid, "stock {source}: {result:?}");
+        if valid && !metadata {
+            let run = capture(&mut Command::new(output), &scratch, 5);
+            assert!(run.status.success());
+            assert_eq!(run.stdout, b"7\n");
+            assert!(run.stderr.is_empty());
+        } else if !valid {
+            assert!(String::from_utf8_lossy(&result.stderr).contains("error[E"));
+        }
+    }
 }

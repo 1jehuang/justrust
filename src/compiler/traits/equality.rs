@@ -559,11 +559,60 @@ impl ValidatedTraitWorld {
             // Symbolic RHS terms are metadata, not executable or concrete
             // assignments. Their contextual membership/Sized proof is checked
             // when the immutable predicate environment is formed or consumed.
-            self.reject_projected_references(rhs, 0)?;
+            self.validate_equality_reference_domain(rhs, 0)?;
             return Ok(());
         }
-        self.reject_projected_references(rhs, 0)?;
+        self.validate_equality_reference_domain(rhs, 0)?;
         self.validate_ty(rhs, env, None, true, 0)
+    }
+
+    // Equality rows describe types, not loans. In particular a shared reference
+    // RHS does not authorize a projected executable return or assign an origin:
+    // those still require the exact callable source regions and carrier proof.
+    // Keep mutable and nested references outside this domain until their
+    // associated equality carrier contract is implemented.
+    fn validate_equality_reference_domain(&self, ty: &Ty, depth: usize) -> Result<()> {
+        charged(&self.budget, self.budget.check_depth(depth))?;
+        charged(&self.budget, self.budget.charge_work(1))?;
+        match ty {
+            Ty::Ref {
+                kind: ir::BorrowKind::Shared,
+                referent,
+            } => self.reject_projected_references(referent, depth + 1),
+            Ty::Ref { .. } | Ty::Slice { .. } => Err(FactsError::unsupported(
+                &self.budget,
+                "unsupported: mutable or nested reference associated equality",
+            )),
+            Ty::Array { element, .. } => {
+                self.validate_equality_reference_domain(element, depth + 1)
+            }
+            Ty::Struct(value) => {
+                for field in value.def().fields.iter() {
+                    self.validate_equality_reference_domain(&field.ty, depth + 1)?;
+                }
+                for argument in type_arguments(ty) {
+                    self.validate_equality_reference_domain(argument, depth + 1)?;
+                }
+                Ok(())
+            }
+            Ty::Enum(value) => {
+                for variant in value.def().variants.iter() {
+                    for field in variant.fields.iter() {
+                        self.validate_equality_reference_domain(&field.ty, depth + 1)?;
+                    }
+                }
+                for argument in type_arguments(ty) {
+                    self.validate_equality_reference_domain(argument, depth + 1)?;
+                }
+                Ok(())
+            }
+            _ => {
+                for argument in type_arguments(ty) {
+                    self.validate_equality_reference_domain(argument, depth + 1)?;
+                }
+                Ok(())
+            }
+        }
     }
 
     pub(super) fn validate_equality_domain_in(
@@ -753,6 +802,9 @@ impl ValidatedTraitWorld {
             let normal = normalization.ty();
             self.validate_equality_domain_in(projection, normal, context, active)?;
             if !self.eq_ty(normal, rhs, 0)? {
+                eprintln!(
+                    "EQUALITY CLOSED MISMATCH projection={projection:?} normal={normal:?} rhs={rhs:?}"
+                );
                 return Ok(ProofOutcome::NotProven);
             }
             return self.evidence(
@@ -764,9 +816,16 @@ impl ValidatedTraitWorld {
         let Some(normal) =
             self.declared_equality_rhs(projection, &context.predicates.predicates, context.env())?
         else {
+            eprintln!(
+                "EQUALITY NO ROW projection={projection:?} rhs={rhs:?} rows={:?}",
+                context.predicates.predicates
+            );
             return Ok(ProofOutcome::NotProven);
         };
         if !self.eq_ty(&normal, rhs, 0)? {
+            eprintln!(
+                "EQUALITY ROW MISMATCH projection={projection:?} normal={normal:?} rhs={rhs:?}"
+            );
             return Ok(ProofOutcome::NotProven);
         }
         self.require_in(

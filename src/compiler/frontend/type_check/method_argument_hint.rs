@@ -102,7 +102,12 @@ impl Checker<'_> {
                         tr::ProofOutcome::NotProven => continue,
                         tr::ProofOutcome::Proved(_) => {}
                     }
-                    if selected.replace(application).is_some() {
+                    if let Some(previous) = selected.replace(application) {
+                        if previous.declaration == application.declaration {
+                            return Err(
+                                super::super::trait_selection::trait_application_ambiguity(),
+                            );
+                        }
                         return Err("ambiguous in-scope trait item".into());
                     }
                 }

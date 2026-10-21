@@ -917,8 +917,8 @@ mod tests {
         let session = source.names.session();
         for (index, ch) in ['@', '#', '?', '~'].into_iter().enumerate() {
             let view = super::super::TokenCursor::new(&buffer).peek(index).unwrap();
-            assert!(view.is_deferred_unsupported());
-            assert!(!view.matches(view.text));
+            assert_eq!(view.is_deferred_unsupported(), matches!(ch, '#' | '~'));
+            assert_eq!(view.matches(view.text), matches!(ch, '@' | '?'));
             assert!(!view.is_ident());
             assert!(!view.string);
             assert!(matches!(actual.node(session, index).unwrap(),
@@ -928,10 +928,13 @@ mod tests {
         let mut isolated = NativeTokenBuffer::expanded(session, &source.admission).unwrap();
         assert!(isolated.current_macro_slice().is_none());
         let span = buffer[0].whole.span;
-        let error = push_punctuation(&mut isolated, session, "@", &[part(session, span).unwrap()])
+        push_punctuation(&mut isolated, session, "@", &[part(session, span).unwrap()]).unwrap();
+        assert_eq!(isolated.len(), 1);
+        assert_eq!(isolated[0].kind, ParserTokenKind::Punct);
+        let error = push_punctuation(&mut isolated, session, "#", &[part(session, span).unwrap()])
             .unwrap_err();
         assert_eq!(error.kind, SourceErrorKind::Unsupported);
-        assert!(isolated.is_empty());
+        assert_eq!(isolated.len(), 1);
     }
 
     #[test]
@@ -1161,7 +1164,8 @@ mod tests {
 
     #[test]
     fn unsupported_expanded_namespaces_literals_and_tuple_metadata_are_explicit() {
-        for output in ["(1,2).0.1", "'a"] {
+        let output = "(1,2).0.1";
+        {
             let mut source = fixture(output);
             let error = run(&mut source).unwrap_err();
             assert_eq!(
@@ -1171,6 +1175,18 @@ mod tests {
             );
             assert!(error.primary.is_some());
             assert!(!error.has_location);
+        }
+        let mut source = fixture("'a");
+        let buffer = run(&mut source).unwrap();
+        let token = super::super::TokenCursor::new(&buffer).current();
+        assert!(token.is_lifetime());
+        assert_eq!(token.text, "'a");
+        assert!(token.name.is_some());
+        assert_eq!(token.provenance, super::super::TokenProvenance::Expanded);
+        assert_eq!(token.bytes, 0..0);
+        assert_eq!(buffer[0].constituents.iter().flatten().count(), 2);
+        for span in buffer[0].constituents.iter().flatten() {
+            source.names.session().original(*span, 512).unwrap();
         }
     }
 

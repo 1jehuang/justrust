@@ -837,6 +837,27 @@ impl<'s> Solver<'_, '_, 's> {
             _ => self.unify(actual, expected),
         }
     }
+    fn join_branches(&mut self, left: Term, right: Term) -> Result<Term, String> {
+        match (self.domain(left), self.domain(right)) {
+            (Domain::Fixed(ir::Ty::Never), _) => Ok(right),
+            (_, Domain::Fixed(ir::Ty::Never)) => Ok(left),
+            (Domain::Ref(ir::BorrowKind::Shared, inner), Domain::Ref(ir::BorrowKind::Mut, _))
+            | (Domain::Ref(ir::BorrowKind::Mut, _), Domain::Ref(ir::BorrowKind::Shared, inner)) => {
+                // The branch result is a coercion target, not an equality of
+                // carrier types. Keep each input's declared capability intact.
+                // Ordinary checking must still emit and validate the genuine
+                // shared reborrow of the mutable branch.
+                let result = self.node(Domain::Ref(ir::BorrowKind::Shared, inner))?;
+                self.coerce(left, result)?;
+                self.coerce(right, result)?;
+                Ok(result)
+            }
+            _ => {
+                self.unify(left, right)?;
+                Ok(left)
+            }
+        }
+    }
     fn peel_refs(&self, mut term: Term) -> Term {
         while let Domain::Ref(_, inner) = self.domain(term) {
             term = inner;
@@ -1848,8 +1869,7 @@ impl<'s> Solver<'_, '_, 's> {
                 self.expr(condition, depth + 1)?;
                 let left = self.block(then_block, depth + 1)?;
                 let right = self.block(else_block, depth + 1)?;
-                self.unify(left, right)?;
-                Ok(left)
+                self.join_branches(left, right)
             }
             Expr::IfLet {
                 pattern,
@@ -1864,13 +1884,13 @@ impl<'s> Solver<'_, '_, 's> {
                 self.scopes.pop();
                 if let Some(right) = else_branch {
                     let right = self.expr(right, depth + 1)?;
-                    self.unify(left, right)?;
+                    return self.join_branches(left, right);
                 }
                 Ok(left)
             }
             Expr::Match { scrutinee, arms } => {
                 let term = self.expr(scrutinee, depth + 1)?;
-                let result = self.fresh()?;
+                let mut result = self.fresh()?;
                 for arm in arms {
                     self.scopes.push(HashMap::new());
                     self.pattern(&arm.pattern, term)?;
@@ -1878,7 +1898,7 @@ impl<'s> Solver<'_, '_, 's> {
                         self.expr(g, depth + 1)?;
                     }
                     let body = self.expr(&arm.body, depth + 1)?;
-                    self.unify(result, body)?;
+                    result = self.join_branches(result, body)?;
                     self.scopes.pop();
                 }
                 Ok(result)
@@ -1936,7 +1956,8 @@ impl<'s> Solver<'_, '_, 's> {
                 let result = self.fresh()?;
                 self.enter_control(*label, result, false)?;
                 self.block(body, depth + 1)?;
-                if self.leave_control()? {
+                let (has_break, result) = self.leave_control_result()?;
+                if has_break {
                     Ok(result)
                 } else {
                     self.fixed(ir::Ty::Never)
@@ -1946,8 +1967,21 @@ impl<'s> Solver<'_, '_, 's> {
                 let result = self.fresh()?;
                 self.enter_control(Some(*label), result, true)?;
                 let tail = self.block(body, depth + 1)?;
-                self.coerce(tail, result)?;
-                let has_break = self.leave_control()?;
+                let (has_break, result) = self.leave_control_result()?;
+                let result = match (self.domain(result), self.domain(tail)) {
+                    (
+                        Domain::Ref(ir::BorrowKind::Shared, _),
+                        Domain::Ref(ir::BorrowKind::Mut, _),
+                    )
+                    | (
+                        Domain::Ref(ir::BorrowKind::Mut, _),
+                        Domain::Ref(ir::BorrowKind::Shared, _),
+                    ) => self.join_branches(result, tail)?,
+                    _ => {
+                        self.coerce(tail, result)?;
+                        result
+                    }
+                };
                 if !has_break && matches!(self.domain(tail), Domain::Fixed(ir::Ty::Never)) {
                     Ok(tail)
                 } else {

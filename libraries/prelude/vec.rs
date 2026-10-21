@@ -39,6 +39,10 @@ impl<T> Vec<T> {
         self.len == 0usize
     }
 
+    pub fn iter<'a>(&'a self) -> super::slice::Iter<'a, T> {
+        super::slice::Iter::new(self)
+    }
+
     /// Borrow element `index` (panics when out of bounds).
     pub fn get_ref(&self, index: usize) -> &T {
         if index >= self.len {
@@ -265,6 +269,14 @@ impl<T> Vec<T> {
 
     pub fn clear(&mut self) {
         self.truncate(0usize);
+    }
+}
+
+impl<'a, T> super::iter::IntoIterator for &'a Vec<T> {
+    type Item = &'a T;
+    type IntoIter = super::slice::Iter<'a, T>;
+    fn into_iter(self) -> super::slice::Iter<'a, T> {
+        self.iter()
     }
 }
 

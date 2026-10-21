@@ -1689,9 +1689,21 @@ mod tests {
                 .kind,
             SourceErrorKind::Syntax
         );
+        let input = inactive_input("/// doc\nunknown!();").unwrap();
+        let (buffer, session, _session_cap) = input.into_parts();
+        let stream = buffer
+            .macro_source()
+            .expect("doc transport keeps actual macro source");
+        let roots = stream.roots(&session).unwrap();
+        let mut seen = Vec::new();
+        tree_texts(&session, stream, &roots, &mut seen);
+        assert!(seen.iter().any(|token| token == "doc"), "{seen:?}");
+        assert!(seen.iter().any(|token| token.contains(" doc")), "{seen:?}");
         assert_eq!(
-            inactive_input("/// doc\nunknown!();").unwrap_err().kind,
-            SourceErrorKind::Unsupported
+            inactive_input("/// doc\nunknown!(\"bad\\q\");")
+                .unwrap_err()
+                .kind,
+            SourceErrorKind::Syntax
         );
     }
 
@@ -1762,12 +1774,28 @@ mod tests {
         let countdown = "fn main(){macro_rules! walk{()=>{40};(@ $($rest:tt)*)=>{walk!($($rest)*)+1};}if walk!(@ @ @)==43{println!(\"ok\");}}";
         let input = super::super::lex(countdown).unwrap();
         assert!(
-            input.tokens.as_slice().iter().any(|token| token.kind
-                == ParserTokenKind::DeferredUnsupported
-                && token.text == "@")
+            input
+                .tokens
+                .as_slice()
+                .iter()
+                .any(|token| token.kind == ParserTokenKind::Punct && token.text == "@")
         );
         super::super::parse_syntax_unprepared(countdown).unwrap();
-        for punctuation in ["@", "#", "?", "~", "$"] {
+        for source in [
+            countdown,
+            "/// documented\nfn value()->i32{42}fn main(){println!(\"{}\",value());}",
+            "fn main(){let x=Some(42);match x{whole @ Some(_)=>{match whole{Some(n)=>println!(\"{}\",n),None=>{}}},None=>{}}}",
+            "fn value()->Result<i32,i32>{let x:Result<i32,i32>=Ok(42);Ok(x?)}fn main(){match value(){Ok(n)=>println!(\"{}\",n),Err(_)=>{}}}",
+            "fn main(){macro_rules! stop{($label:lifetime)=>{break $label;};}'done:loop{stop!('done);}println!(\"{}\",42);}",
+        ] {
+            super::super::parser_tests::stock_native_run(source);
+        }
+        for punctuation in ["@", "?"] {
+            let input = super::super::lex(punctuation).unwrap();
+            assert_eq!(input.tokens.as_slice()[0].kind, ParserTokenKind::Punct);
+            assert_eq!(input.tokens.as_slice()[0].text, punctuation);
+        }
+        for punctuation in ["#", "~", "$"] {
             assert_eq!(
                 super::super::lex(punctuation).unwrap_err().kind,
                 SourceErrorKind::Unsupported
@@ -1778,12 +1806,15 @@ mod tests {
             "fn main(){macro_rules! discard{($x:tt)=>{0};}let _=@;}",
             "fn main(){macro_rules! emit{()=>{@};}let _=emit!();}",
         ] {
-            let error = super::super::parse_syntax_unprepared(source).err().unwrap();
-            assert_eq!(
-                error.kind,
-                SourceErrorKind::Unsupported,
-                "{source}: {error}"
+            let stock = super::super::parser_tests::stock_compile(
+                source,
+                std::path::Path::new("unused"),
+                true,
             );
+            assert!(!stock.status.success(), "stock accepted {source}");
+            assert!(String::from_utf8_lossy(&stock.stderr).contains("error:"));
+            let error = super::super::parse_syntax_unprepared(source).err().unwrap();
+            assert_eq!(error.kind, SourceErrorKind::Syntax, "{source}: {error}");
         }
     }
 

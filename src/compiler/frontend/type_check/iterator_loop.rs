@@ -12,7 +12,7 @@ impl Checker<'_> {
         label: Option<AstIdent>,
         pattern: &Pattern,
         source: &ForSource,
-        value: &Expr,
+        value: ir::ExprId,
         body: &Block,
     ) -> Result<(ir::TypedStmt, bool), String> {
         let loop_depth = self.loops.len();
@@ -20,7 +20,6 @@ impl Checker<'_> {
         let outer_reachable = self.reachable;
         let result = (|| {
             let plan = self.signatures.plan()?.clone();
-            let value = self.expr(value)?;
             let flow = self.flow(value);
             let item_ty = plan
                 .iterator_item_type(&flow.ty, self.facts())?

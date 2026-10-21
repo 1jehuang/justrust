@@ -73,7 +73,8 @@ pub(super) fn stock_native_run(source: &str) {
     assert!(expected.status.success(), "stock runtime: {expected:?}");
     assert!(expected.stderr.is_empty(), "stock runtime: {expected:?}");
     for workers in [1, 8] {
-        let checked = super::super::compile(source.into(), workers, true).unwrap();
+        let checked = super::super::compile(source.into(), workers, true)
+            .unwrap_or_else(|error| panic!("CHECK workers={workers} source={source}: {error}"));
         assert!(checked.executable.is_none());
         assert!(checked.report.capture_complete);
         assert!(
@@ -83,7 +84,8 @@ pub(super) fn stock_native_run(source: &str) {
                 .iter()
                 .all(|(key, _)| !matches!(key.kind, super::super::OBJECT | super::super::BUILD))
         );
-        let built = super::super::compile(source.into(), workers, false).unwrap();
+        let built = super::super::compile(source.into(), workers, false)
+            .unwrap_or_else(|error| panic!("BUILD workers={workers} source={source}: {error}"));
         assert!(built.report.capture_complete);
         let path = directory.join(format!("native-{workers}"));
         std::fs::write(&path, built.executable.unwrap()).unwrap();
@@ -99,6 +101,70 @@ pub(super) fn stock_native_run(source: &str) {
         assert!(actual.stderr.is_empty(), "workers={workers}: {actual:?}");
     }
     std::fs::remove_dir_all(directory).unwrap();
+}
+
+fn stock_native_reject(source: &str) {
+    stock_native_reject_with_diagnostics(source, None);
+}
+
+fn stock_native_reject_with_diagnostics(source: &str, expected: Option<(&str, &str)>) {
+    for metadata in [true, false] {
+        let output = std::env::temp_dir().join(format!(
+            "parser-invalid-{}-{}-{metadata}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let stock = stock_compile(source, &output, metadata);
+        assert!(!stock.status.success(), "stock accepted {source}");
+        if let Some((code, _)) = expected {
+            let diagnostic = String::from_utf8_lossy(&stock.stderr);
+            assert!(diagnostic.contains(code), "stock {source}: {diagnostic}");
+        }
+        assert!(
+            !output.exists(),
+            "stock produced an invalid executable: {source}"
+        );
+        for workers in [1, 8] {
+            let failure = super::super::compile_observed(source.into(), workers, metadata)
+                .err()
+                .unwrap_or_else(|| panic!("native accepted {source}"));
+            let report = failure
+                .report
+                .as_ref()
+                .expect("captured failed compilation");
+            assert!(report.capture_complete, "{failure}");
+            if metadata {
+                assert!(
+                    report.node_evaluations.iter().all(|(key, _)| !matches!(
+                        key.kind,
+                        super::super::OBJECT | super::super::BUILD
+                    )),
+                    "CHECK demanded code generation for {source}: {failure}"
+                );
+            }
+            let diagnostic = failure.error.to_string().to_ascii_lowercase();
+            if let Some((_, message)) = expected {
+                assert!(diagnostic.contains(message), "{source}: {failure}");
+            }
+            for infrastructure in [
+                "invalidmetadata",
+                "invalid metadata",
+                "resource limit",
+                "work limit",
+                "limit exceeded",
+                "budget",
+                "infrastructure:",
+            ] {
+                assert!(
+                    !diagnostic.contains(infrastructure),
+                    "not a source rejection for {source}: {failure}"
+                );
+            }
+        }
+    }
 }
 
 #[test]
@@ -488,9 +554,14 @@ fn literal_output_lexical_shadowing_never_falls_back_to_builtin() {
         let source =
             format!("fn main(){{macro_rules! {name}{{(x)=>{{42}};}}{name}!(\"literal\")}}");
         assert!(parse(&source).is_err(), "{source}");
-        // Module macros remain authoritative even where this slice cannot expand them.
+        // A module macro has the same authority as a local macro. The original
+        // tail-valued main is invalid because it returns i32, not because the
+        // expansion is unavailable.
         let source = format!("macro_rules! {name}{{()=>{{42}};}}fn main(){{{name}!()}}");
-        assert!(parse(&source).is_err(), "{source}");
+        stock_native_reject(&source);
+        stock_native_run(&format!(
+            "macro_rules! {name}{{()=>{{42}};}}fn main(){{assert!({name}!()==42);}}"
+        ));
     }
 }
 
@@ -596,11 +667,8 @@ fn tuple_patterns_preserve_old_scope_and_simultaneous_fresh_bindings() {
             .count(),
         2
     );
-    assert!(
-        parse("fn f()->i32{1} fn main(){let (f,z)=(f(),2);f();}")
-            .unwrap_err()
-            .contains("not callable")
-    );
+    stock_native_reject("fn f()->i32{1} fn main(){let (f,z)=(f(),2);f();}");
+    stock_native_run("fn f()->i32{1} fn main(){let (f,z)=(f(),2);assert!(f+z==3);}");
     check(
         &parse("fn main(){let(x,y)=(1,2);let (z,)=(x,);let ()=();let (mut grouped)=z;grouped=y;}")
             .unwrap(),
@@ -693,9 +761,8 @@ fn never_patterns_use_explicit_shape_and_preserve_dead_value_types() {
 
 #[test]
 fn unsupported_patterns_and_pattern_nesting_are_explicit() {
+    stock_native_run("fn main(){let x @ _=1;}");
     for source in [
-        "fn main(){let x @ _=1;}",
-        "fn main(){let 1=1;}",
         "fn main(){let(mut _)=1;}",
         "struct S{x:i32} fn main(){let S{..,x}=S{x:1};}",
         "struct S{x:i32} fn main(){let S{..,}=S{x:1};}",
@@ -705,6 +772,7 @@ fn unsupported_patterns_and_pattern_nesting_are_explicit() {
     ] {
         assert!(parse(source).is_err(), "accepted {source}");
     }
+    stock_native_reject("fn main(){let 1=1;}");
     let program = parse("fn main(){let(x,y)=(1,2) else {};}").unwrap();
     let error = check(&program).unwrap_err();
     assert!(
@@ -780,12 +848,13 @@ fn struct_initializers_retain_source_order_and_checked_field_indices() {
 
 #[test]
 fn structs_reject_invalid_unused_declarations_and_nominal_mismatches() {
+    stock_native_run("struct A{} fn main(){}");
+    stock_native_run("struct A{}fn identity(a:A)->A{a}fn main(){let A{}=identity(A{});}");
     for source in [
         "struct A{x:A} fn main(){}",
         "struct A{x:(B,)} struct B{x:A} fn main(){}",
         "struct A{x:Missing} fn main(){}",
         "struct A{x:i32,x:bool} fn main(){}",
-        "struct A{} fn main(){}",
         "struct A{x:i32} struct B{x:i32} fn main(){let x:A=B{x:1};}",
         "struct A{x:i32} struct B{x:i32} fn main(){if true{A{x:1}}else{B{x:1}};}",
         "struct A{x:i32} fn main(){A{x:true};}",
@@ -1197,7 +1266,8 @@ fn restricted_visibility_rejects_unused_nonlexical_paths_and_explicit_trait_item
 fn module_arena_capacity_is_retained_until_last_clone_owner() {
     let public = parse("pub fn main(){}").unwrap();
     let budget = public.names.budget().clone();
-    let receipt = crate::compiler::owner_path::published_owner_receipt(&public.names);
+    let receipt = crate::compiler::owner_path::published_owner_receipt(&public.names)
+        + public.struct_sources.receipt_bytes();
     let cloned = public.clone();
     assert!(std::sync::Arc::ptr_eq(&public.modules, &cloned.modules));
     let retained = budget.snapshot().retained_bytes;
@@ -1218,7 +1288,7 @@ fn module_arena_capacity_is_retained_until_last_clone_owner() {
     drop(modules);
     assert_eq!(budget.snapshot().retained_bytes, arena_bytes);
     drop(last_owner);
-    // Only the published owner receipt stays (permanent by design).
+    // Immutable owner and constructor-authority receipts outlive their ledgers.
     assert_eq!(budget.snapshot().retained_bytes, receipt);
 }
 #[test]
@@ -1285,24 +1355,42 @@ fn unsupported_module_forms_are_rejected_explicitly() {
             "type Alias<T> where T:Copy=T;fn main(){}",
             "type alias bounds and where clauses are unsupported",
         ),
-        (
-            "use crate::*; fn main(){}",
-            "glob imports of the crate root namespace are unsupported",
-        ),
-        (
-            "pub use crate::*; fn main(){}",
-            "glob imports of the crate root namespace are unsupported",
-        ),
         ("mod a{} mod a{} fn main(){}", "duplicate item"),
     ] {
         assert!(parse(source).unwrap_err().contains(message), "{source}");
     }
+    stock_native_reject("use crate::*; fn main(){}");
+    stock_native_reject("pub use crate::*; fn main(){}");
     bad("mod a{} fn main(){a();}");
     bad("fn f(){} fn main(){f::g();}");
     bad("fn main(){use crate::a;}");
     let nested = format!("{}{}fn main(){{}}", "mod a{".repeat(300), "}".repeat(300));
     assert!(parse(&nested).unwrap_err().contains("nesting"));
 }
+#[test]
+fn self_glob_imports_reject_unused_and_preserve_parent_child_targets() {
+    for source in [
+        "use crate::*;fn main(){}",
+        "pub use crate::*;fn main(){}",
+        "use crate::{*};fn main(){}",
+        "mod unused{use self::*;}fn main(){}",
+        "mod unused{use super::unused::*;}fn main(){}",
+        "mod unused{use crate::unused as alias;use alias::*;}fn main(){}",
+    ] {
+        stock_native_reject_with_diagnostics(
+            source,
+            Some(("E0432", "cannot glob-import a module into itself")),
+        );
+    }
+    for source in [
+        "mod child{pub fn answer()->i32{42}}use child::*;fn main(){assert!(answer()==42);}",
+        "fn answer()->i32{42}mod child{use super::*;pub fn result()->i32{answer()}}fn main(){assert!(child::result()==42);}",
+        "enum E{V(i32)}use E::*;fn main(){let x=V(42);match x{V(value)=>assert!(value==42)}}",
+    ] {
+        stock_native_run(source);
+    }
+}
+
 #[test]
 fn source_aliases_erase_binders_without_nominal_or_value_declarations() {
     for source in [
@@ -1469,7 +1557,23 @@ fn rejects_invalid() {
 fn literals_and_comments() {
     good("/* a /* b */ */ fn main(){let x=-2147483648; let y:()=(); println!(\"a\\t\\\"\\\\\");}");
     bad("fn main(){println!(\"\\q\");}");
-    assert!(parse("\nfn main(){@}").unwrap_err().starts_with("2:11:"));
+    let prepared = super::super::source::prepare_text(
+        "location.rs",
+        "\nfn main(){@}",
+        &super::super::source::SourceOptions::default(),
+    )
+    .unwrap();
+    let error = parse_prepared(&prepared).unwrap_err();
+    let location = error.location.as_ref().expect("source diagnostic location");
+    assert_eq!((location.line, location.column), (2, 11));
+    assert_eq!(location.path, std::path::Path::new("location.rs"));
+    assert!(error.primary.is_some());
+    assert!(!matches!(
+        error.kind,
+        super::super::source::SourceErrorKind::Contract
+            | super::super::source::SourceErrorKind::Limit
+            | super::super::source::SourceErrorKind::Infrastructure
+    ));
 }
 
 #[test]
@@ -1533,10 +1637,35 @@ fn bounded_panic_family_literals_delimiters_and_locations() {
             ] {
                 let source = format!("fn main(){{\n{name}!{open}{input}{close}\n}}");
                 let program = parse(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
-                let Some(Expr::Panic(panic)) = program.functions[0].body.tail.as_deref() else {
-                    panic!("expected source panic: {source}")
+                let expression = program.functions[0].body.tail.as_deref().unwrap();
+                let panic = match expression {
+                    Expr::Panic(panic) => {
+                        assert!(!panic.preformatted);
+                        assert_eq!(panic.message, format!("{default}{suffix}"));
+                        panic
+                    }
+                    Expr::Block(block) => {
+                        let Some(Expr::Panic(panic)) = block.tail.as_deref() else {
+                            panic!("missing formatted panic tail: {source}")
+                        };
+                        assert!(panic.preformatted);
+                        assert!(panic.message.is_empty());
+                        let Stmt::Expr(Expr::Format {
+                            pieces,
+                            stream,
+                            newline,
+                            ..
+                        }) = &block.statements[0]
+                        else {
+                            panic!("missing panic formatting: {source}")
+                        };
+                        assert_eq!(*stream, ir::OutputStream::PanicStderr);
+                        assert!(*newline);
+                        assert!(pieces.concat().contains(&format!("{default}{suffix}")));
+                        panic
+                    }
+                    _ => panic!("expected source panic: {source}"),
                 };
-                assert_eq!(panic.message, format!("{default}{suffix}"));
                 validate_panic_site(panic, &program.names).unwrap();
                 let original = program.names.session().original(panic.site, 512).unwrap();
                 let (_, line, column) = program
@@ -1563,33 +1692,29 @@ fn bounded_panic_family_literals_delimiters_and_locations() {
 #[test]
 fn bounded_panic_family_exact_grammar_and_diagnostics() {
     for name in ["unreachable", "todo", "unimplemented"] {
-        for (input, diagnostic) in [
-            ("42", "nonliteral arguments"),
-            ("message", "nonliteral arguments"),
-            ("\"{}\"", "formatting placeholders"),
-            ("\"{name}\"", "formatting placeholders"),
-            ("\"message\", 42", "formatting arguments"),
-            ("\"message\",,", "formatting arguments"),
-            ("\"message\" \"extra\"", "formatting arguments"),
+        for input in [
+            "42",
+            "message",
+            "\"{}\"",
+            "\"{name}\"",
+            "\"message\", 42",
+            "\"message\",,",
+            "\"message\" \"extra\"",
         ] {
             for (open, close) in [("(", ")"), ("[", "]"), ("{", "}")] {
                 let source = format!("fn main(){{{name}!{open}{input}{close}}}");
-                let error = parse(&source).unwrap_err();
-                assert!(
-                    error.contains(&format!("{name}! {diagnostic} are unsupported")),
-                    "{source}: {error}"
-                );
+                stock_native_reject(&source);
             }
         }
-        for input in [
-            ",",
-            ",,",
-            "\"message\";",
-            "(\"message\")",
-            "r#\"raw\"#",
-            "b\"bytes\"",
-        ] {
-            assert!(parse(&format!("fn main(){{{name}!({input})}}")).is_err());
+        stock_native_run(&format!(
+            "fn main(){{if false{{{name}!(\"{{{{ok}}}}\\n\",);}}}}"
+        ));
+        stock_native_run(&format!("fn main(){{if false{{{name}!(r#\"raw\"#);}}}}"));
+        for input in [",", ",,", "\"message\";", "(\"message\")", "b\"bytes\""] {
+            assert!(
+                parse(&format!("fn main(){{{name}!({input})}}")).is_err(),
+                "{name} input={input}"
+            );
         }
         good(&format!(
             "#[cfg(any())]fn absent(){{{name}!(unknown + 2);}}fn main(){{}}"
@@ -1608,9 +1733,14 @@ fn bounded_panic_family_shadowing_never_falls_back() {
             program.functions[0].body.tail.as_deref(),
             Some(Expr::Integer(_))
         ));
+        stock_native_reject(&format!(
+            "macro_rules! {name}{{()=>{{42}};}}fn main(){{{name}!()}}"
+        ));
+        stock_native_run(&format!(
+            "macro_rules! {name}{{()=>{{42}};}}fn main(){{assert!({name}!()==42);}}"
+        ));
         for source in [
             format!("fn main(){{macro_rules! {name}{{(other)=>{{42}};}}{name}!()}}"),
-            format!("macro_rules! {name}{{()=>{{42}};}}fn main(){{{name}!()}}"),
             format!("fn main(){{std::{name}!()}}"),
         ] {
             assert!(parse(&source).is_err(), "{source}");
@@ -1703,11 +1833,12 @@ fn panic_shadowing_and_unsupported_arguments_are_not_builtin_fallbacks() {
         program.functions[0].body.tail.as_deref(),
         Some(Expr::Integer(_))
     ));
+    stock_native_reject("macro_rules! panic{()=>{42};}fn main(){panic!()}");
+    stock_native_run("macro_rules! panic{()=>{42};}fn main(){assert!(panic!()==42);}");
+    stock_native_run("fn main(){if false{panic!(\"{}\",42);}println!(\"ok\");}");
     for source in [
-        "macro_rules! panic{()=>{42};}fn main(){panic!()}",
         "fn main(){macro_rules! panic{(x)=>{42};}panic!()}",
         "fn main(){panic!(42)}",
-        "fn main(){panic!(\"{}\", 42)}",
         "fn main(){panic!(\"literal\", 42)}",
     ] {
         assert!(parse(source).is_err(), "{source}");
@@ -1918,40 +2049,30 @@ fn builtin_assert_does_not_reinterpret_shadowing_or_unsupported_messages() {
         "fn main(){assert!(true);{macro_rules! assert{()=>{42};}let x:i32=assert!();}assert!(true);}",
     );
     good("fn main(){macro_rules! panic{()=>{42};}assert!(true);}");
+    stock_native_reject("macro_rules! assert{()=>{42};}fn main(){assert!()}");
+    stock_native_run(
+        "macro_rules! assert{()=>{42};}fn main(){let value=assert!();if value!=42{panic!();}}",
+    );
     for source in [
-        "macro_rules! assert{()=>{42};}fn main(){assert!()}",
         "fn main(){macro_rules! assert{(other)=>{42};}assert!(true)}",
         "fn main(){assert!()}",
         "fn main(){assert!(,)}",
         "fn main(){assert!(true,42)}",
         "fn main(){assert!(true,message)}",
-        "fn main(){assert!(true,\"{}\")}",
-        "fn main(){assert!(true,\"{name}\")}",
-        "fn main(){assert!(true,\"message\",42)}",
         "fn main(){assert!(true,,)}",
     ] {
         assert!(parse(source).is_err(), "{source}");
     }
-    for (source, expected) in [
-        (
-            "fn main(){assert!(true,42)}",
-            "assert! nonliteral messages are unsupported",
-        ),
-        (
-            "fn main(){assert!(true,\"{}\")}",
-            "assert! formatting placeholders are unsupported",
-        ),
-        (
-            "fn main(){assert!(true,\"message\",42)}",
-            "assert! formatting arguments are unsupported",
-        ),
-        (
-            "fn main(){panic!(\"{}\")}",
-            "panic! formatting placeholders are unsupported",
-        ),
+    for source in [
+        "fn main(){assert!(true,42)}",
+        "fn main(){assert!(true,\"{}\")}",
+        "fn main(){assert!(true,\"{name}\")}",
+        "fn main(){assert!(true,\"message\",42)}",
+        "fn main(){panic!(\"{}\")}",
     ] {
-        assert!(parse(source).unwrap_err().contains(expected), "{source}");
+        stock_native_reject(source);
     }
+    stock_native_run("fn main(){assert!(true,\"{}\",42);}");
     // Inactive invocations stay syntax-only, including arguments that the
     // active builtin subset deliberately does not support.
     good("#[cfg(any())]fn absent(){assert!(true,unknown + 2);}fn main(){}");
