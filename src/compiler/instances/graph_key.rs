@@ -159,10 +159,13 @@ fn ty(
             }
             16
         }
-        ir::Ty::Closure(_) => {
-            return Err(
-                "unsupported: canonical closure graph key requires parent metadata replay".into(),
-            );
+        ir::Ty::Closure(value) => {
+            // The provider names the parent-minted template; the ordered owner
+            // actuals are the only free coordinates. Decoding replays them
+            // through the template, never a copied shape.
+            declaration(words, value.provider());
+            types(words, value.owner_args(), budget, depth + 1)?;
+            17
         }
         ir::Ty::Param(_) | ir::Ty::AssociatedType(_) => {
             return Err("instance graph key requires closed actuals".into());
@@ -184,12 +187,29 @@ pub(in crate::compiler) fn decode(
     context: &frontend::PlanCtx,
     budget: &ir::PlanBudget,
 ) -> Result<ir::CallTarget, String> {
+    decode_with_closures(words, context, budget, &|_, _| {
+        Err("unsupported: canonical closure graph key requires parent metadata replay".into())
+    })
+}
+
+/// Closure actual replay: `(provider, ordered owner actuals)` to the exact
+/// substituted parent-minted closure type.
+pub(in crate::compiler) type ClosureReplay<'a> =
+    dyn Fn(ir::DeclId, &[ir::Ty]) -> Result<ir::Ty, String> + 'a;
+
+pub(in crate::compiler) fn decode_with_closures(
+    words: &[u64],
+    context: &frontend::PlanCtx,
+    budget: &ir::PlanBudget,
+    closures: &ClosureReplay<'_>,
+) -> Result<ir::CallTarget, String> {
     budget.charge_work(words.len())?;
     let mut reader = Reader {
         words,
         at: 0,
         context,
         budget,
+        closures,
     };
     if reader.word()? != VERSION {
         return Err("unsupported canonical instance graph key version".into());
@@ -240,6 +260,7 @@ pub(in crate::compiler) fn decode_opaque(
         at: 0,
         context,
         budget,
+        closures: &|_, _| Err("unsupported: closure in opaque graph key".into()),
     };
     if reader.word()? != VERSION {
         return Err("unsupported opaque graph key version".into());
@@ -267,6 +288,7 @@ struct Reader<'a> {
     at: usize,
     context: &'a frontend::PlanCtx,
     budget: &'a ir::PlanBudget,
+    closures: &'a ClosureReplay<'a>,
 }
 impl Reader<'_> {
     fn word(&mut self) -> Result<u64, String> {
@@ -448,6 +470,18 @@ impl Reader<'_> {
                     bounds.into(),
                     regions.into(),
                 )))
+            }
+            17 => {
+                let provider = self.declaration()?;
+                let owner_args = self.types(facts, depth + 1)?;
+                let ty = (self.closures)(provider, &owner_args)?;
+                match &ty {
+                    ir::Ty::Closure(closure)
+                        if closure.provider() == provider
+                            && closure.owner_args().len() == owner_args.len() => {}
+                    _ => return Err("closure graph key replay changed its provider".into()),
+                }
+                ty
             }
             _ => return Err("unsupported instance graph type tag".into()),
         };

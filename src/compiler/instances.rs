@@ -707,6 +707,186 @@ impl Plan {
     }
 }
 
+/// The direct executable demands of one closed instance, read from its own
+/// universally checked template body alone: explicit direct callees, trait
+/// object vtable slots and implicit cleanup destructors. Opaque trait-item
+/// calls are deferred to operation 140 and not listed here.
+#[derive(Default)]
+pub(super) struct DirectDemands {
+    /// Every demanded target in first-occurrence order, deduplicated.
+    pub targets: Vec<ir::CallTarget>,
+    /// The subset demanded by implicit normal-drop cleanup.
+    pub cleanup: Vec<ir::CallTarget>,
+}
+impl DirectDemands {
+    fn call(&mut self, target: ir::CallTarget, budget: &ir::PlanBudget) -> Result<(), String> {
+        budget.charge_work(self.targets.len().max(1))?;
+        if !self.targets.contains(&target) {
+            budget.retain_bytes(2 * std::mem::size_of::<ir::CallTarget>())?;
+            self.targets
+                .try_reserve(1)
+                .map_err(|_| "instance demand allocation failed")?;
+            self.targets.push(target);
+        }
+        Ok(())
+    }
+    fn cleanup(&mut self, target: ir::CallTarget, budget: &ir::PlanBudget) -> Result<(), String> {
+        budget.charge_work(self.cleanup.len().max(1))?;
+        if !self.cleanup.contains(&target) {
+            budget.retain_bytes(2 * std::mem::size_of::<ir::CallTarget>())?;
+            self.cleanup
+                .try_reserve(1)
+                .map_err(|_| "cleanup demand allocation failed")?;
+            self.cleanup.push(target.clone());
+        }
+        self.call(target, budget)
+    }
+}
+
+pub(super) fn direct_demands(
+    target: &ir::CallTarget,
+    source: &ir::CheckedFunction,
+    context: &mut frontend::PlanCtx,
+    budget: &ir::PlanBudget,
+    engine: Option<crate::engine::EngineAuthority>,
+) -> Result<DirectDemands, String> {
+    let mut demands = DirectDemands::default();
+    let schema = context.function_schema(target.declaration)?;
+    let env = schema.env;
+    let closed_facts = context.instance_facts(&target)?;
+    // Implicit cleanup is part of the same closed demand frontier as an
+    // explicit call. Do not rely on nongeneric source-root enumeration.
+    if closed_facts.has_normal_drop_impls() {
+        for ty in source
+            .locals
+            .iter()
+            .map(|local| &local.ty)
+            .chain(source.exprs.iter().map(|expr| &expr.ty))
+            .chain(std::iter::once(&source.result))
+        {
+            budget.charge_work(1)?;
+            // Checked primitive/reference/pointer outer forms cannot acquire
+            // owning Drop through substitution. Nominal and aggregate forms
+            // still require the full closed canonical descriptor below.
+            if matches!(
+                ty,
+                ir::Ty::Int(_)
+                    | ir::Ty::Float(_)
+                    | ir::Ty::Bool
+                    | ir::Ty::Char
+                    | ir::Ty::Unit
+                    | ir::Ty::Never
+                    | ir::Ty::Ref { .. }
+                    | ir::Ty::RawPtr { .. }
+            ) {
+                continue;
+            }
+            let ty = super::nominal_realization::substitution::substitute_ty(
+                ty,
+                &env,
+                &target.type_args,
+                ir::FactsCtx::from_validated(&closed_facts),
+                context,
+                budget,
+                engine,
+            )?;
+            match closed_facts
+                .normal_drop_plan(&ty)
+                .map_err(|e| e.into_legacy_diagnostic(budget))?
+            {
+                traits::NormalDropPlan::Destructor(destructor) => {
+                    for target in destructor.targets() {
+                        demands.cleanup(target, budget)?;
+                    }
+                }
+                traits::NormalDropPlan::Trivial => {}
+                traits::NormalDropPlan::Unresolved => {
+                    return Err("unsupported: unresolved closed Drop demand".into());
+                }
+            }
+        }
+    }
+    for (expression_index, expression) in source.exprs.iter().enumerate() {
+        budget.charge_work(1)?;
+        // --- trait objects (snail): each unsizing site demands every
+        // vtable slot implementation for its exact substituted referent.
+        if let ir::ExprKind::RefToDyn { reference } = &expression.kind {
+            let ir::Ty::Ref { referent, .. } = &expression.ty else {
+                return Err("trait object unsizing result must be a reference".into());
+            };
+            let ir::Ty::Dyn(object) = referent.as_ref() else {
+                return Err("trait object unsizing result must be a trait object".into());
+            };
+            let operand = source
+                .exprs
+                .get(reference.0)
+                .ok_or("trait object unsizing operand outside arena")?;
+            let concrete = super::nominal_realization::substitution::substitute_ty(
+                &operand.ty,
+                &env,
+                &target.type_args,
+                ir::FactsCtx::from_validated(&closed_facts),
+                context,
+                budget,
+                engine,
+            )?;
+            let ir::Ty::Ref { referent, .. } = &concrete else {
+                return Err("trait object unsizing operand must be a reference".into());
+            };
+            for slot in closed_facts
+                .object_vtable_targets(referent, object)
+                .map_err(|e| e.into_legacy_diagnostic(budget))?
+            {
+                demands.call(slot, budget)?;
+            }
+            if closed_facts.has_normal_drop_impls()
+                && let traits::NormalDropPlan::Destructor(destructor) = closed_facts
+                    .normal_drop_plan(referent)
+                    .map_err(|e| e.into_legacy_diagnostic(budget))?
+            {
+                for target in destructor.targets() {
+                    demands.call(target, budget)?;
+                }
+            }
+        }
+        if let ir::ExprKind::Call {
+            target: ir::Callee::Virtual(_),
+            ..
+        } = &expression.kind
+        {
+            // Dispatch targets are demanded at the unsizing sites above.
+            continue;
+        }
+        // --- end trait objects ---
+        if let ir::ExprKind::Call { target: callee, .. } = &expression.kind {
+            if let ir::Callee::TraitItem(call) = callee
+                && matches!(call.trait_ref.self_ty, ir::Ty::Opaque(_))
+            {
+                // The immutable original TraitItem expression is the deferred
+                // edge. OBJECT reads that exact occurrence and operation 140
+                // replays its publication and hidden-representation authority.
+                // No copied side inventory or physical target is queued here.
+                continue;
+            }
+            let resolved = super::nominal_realization::substitution::substitute_callee(
+                callee,
+                &env,
+                &target.type_args,
+                &closed_facts,
+                context,
+                budget,
+                engine,
+            )?;
+            let ir::Callee::Direct(next) = resolved else {
+                return Err("unresolved trait callee in concrete instance frontier".into());
+            };
+            let _ = expression_index;
+            demands.call(next, budget)?;
+        }
+    }
+    Ok(demands)
+}
+
 pub(super) fn build(
     context: &mut frontend::PlanCtx,
     sources: &[Arc<ir::CheckedFunction>],
@@ -929,150 +1109,24 @@ pub(super) fn build(
         let source_index = queue.entries[cursor].source_index;
         let target = queue.entries[cursor].target.clone();
         let depth = queue.depths[cursor];
-        let schema = context.function_schema(target.declaration)?;
-        let env = schema.env;
-        let closed_facts = context.instance_facts(&target)?;
         let source = sources
             .get(source_index)
             .ok_or("missing universally checked declaration body")?;
-        // Implicit cleanup is part of the same closed demand frontier as an
-        // explicit call. Do not rely on nongeneric source-root enumeration.
-        if closed_facts.has_normal_drop_impls() {
-            for ty in source
-                .locals
-                .iter()
-                .map(|local| &local.ty)
-                .chain(source.exprs.iter().map(|expr| &expr.ty))
-                .chain(std::iter::once(&source.result))
-            {
-                budget.charge_work(1)?;
-                // Checked primitive/reference/pointer outer forms cannot acquire
-                // owning Drop through substitution. Nominal and aggregate forms
-                // still require the full closed canonical descriptor below.
-                if matches!(
-                    ty,
-                    ir::Ty::Int(_)
-                        | ir::Ty::Float(_)
-                        | ir::Ty::Bool
-                        | ir::Ty::Char
-                        | ir::Ty::Unit
-                        | ir::Ty::Never
-                        | ir::Ty::Ref { .. }
-                        | ir::Ty::RawPtr { .. }
-                ) {
-                    continue;
-                }
-                let ty = super::nominal_realization::substitution::substitute_ty(
-                    ty,
-                    &env,
-                    &target.type_args,
-                    ir::FactsCtx::from_validated(&closed_facts),
-                    context,
-                    budget,
-                    engine,
-                )?;
-                match closed_facts
-                    .normal_drop_plan(&ty)
-                    .map_err(|e| e.into_legacy_diagnostic(budget))?
-                {
-                    traits::NormalDropPlan::Destructor(destructor) => {
-                        for target in destructor.targets() {
-                            budget.charge_work(cleanup_targets.len())?;
-                            if !cleanup_targets.contains(&target) {
-                                budget.retain_bytes(2 * std::mem::size_of::<ir::CallTarget>())?;
-                                cleanup_targets
-                                    .try_reserve(1)
-                                    .map_err(|_| "cleanup demand allocation failed")?;
-                                cleanup_targets.push(target.clone());
-                            }
-                            queue.add(target, depth + 1, context, budget)?;
-                        }
-                    }
-                    traits::NormalDropPlan::Trivial => {}
-                    traits::NormalDropPlan::Unresolved => {
-                        return Err("unsupported: unresolved closed Drop demand".into());
-                    }
-                }
+        let demands = direct_demands(&target, source, context, budget, engine)?;
+        for next in demands.cleanup {
+            budget.charge_work(cleanup_targets.len())?;
+            if !cleanup_targets.contains(&next) {
+                budget.retain_bytes(2 * std::mem::size_of::<ir::CallTarget>())?;
+                cleanup_targets
+                    .try_reserve(1)
+                    .map_err(|_| "cleanup demand allocation failed")?;
+                cleanup_targets.push(next);
             }
         }
-        for (expression_index, expression) in source.exprs.iter().enumerate() {
-            budget.charge_work(1)?;
-            // --- trait objects (snail): each unsizing site demands every
-            // vtable slot implementation for its exact substituted referent.
-            if let ir::ExprKind::RefToDyn { reference } = &expression.kind {
-                let ir::Ty::Ref { referent, .. } = &expression.ty else {
-                    return Err("trait object unsizing result must be a reference".into());
-                };
-                let ir::Ty::Dyn(object) = referent.as_ref() else {
-                    return Err("trait object unsizing result must be a trait object".into());
-                };
-                let operand = source
-                    .exprs
-                    .get(reference.0)
-                    .ok_or("trait object unsizing operand outside arena")?;
-                let concrete = super::nominal_realization::substitution::substitute_ty(
-                    &operand.ty,
-                    &env,
-                    &target.type_args,
-                    ir::FactsCtx::from_validated(&closed_facts),
-                    context,
-                    budget,
-                    engine,
-                )?;
-                let ir::Ty::Ref { referent, .. } = &concrete else {
-                    return Err("trait object unsizing operand must be a reference".into());
-                };
-                for slot in closed_facts
-                    .object_vtable_targets(referent, object)
-                    .map_err(|e| e.into_legacy_diagnostic(budget))?
-                {
-                    queue.add(slot, depth + 1, context, budget)?;
-                }
-                if closed_facts.has_normal_drop_impls()
-                    && let traits::NormalDropPlan::Destructor(destructor) = closed_facts
-                        .normal_drop_plan(referent)
-                        .map_err(|e| e.into_legacy_diagnostic(budget))?
-                {
-                    for target in destructor.targets() {
-                        queue.add(target, depth + 1, context, budget)?;
-                    }
-                }
-            }
-            if let ir::ExprKind::Call {
-                target: ir::Callee::Virtual(_),
-                ..
-            } = &expression.kind
-            {
-                // Dispatch targets are demanded at the unsizing sites above.
-                continue;
-            }
-            // --- end trait objects ---
-            if let ir::ExprKind::Call { target: callee, .. } = &expression.kind {
-                if let ir::Callee::TraitItem(call) = callee
-                    && matches!(call.trait_ref.self_ty, ir::Ty::Opaque(_))
-                {
-                    // The immutable original TraitItem expression is the deferred
-                    // edge. OBJECT reads that exact occurrence and operation 140
-                    // replays its publication and hidden-representation authority.
-                    // No copied side inventory or physical target is queued here.
-                    continue;
-                }
-                let resolved = super::nominal_realization::substitution::substitute_callee(
-                    callee,
-                    &env,
-                    &target.type_args,
-                    &closed_facts,
-                    context,
-                    budget,
-                    engine,
-                )?;
-                let ir::Callee::Direct(next) = resolved else {
-                    return Err("unresolved trait callee in concrete instance frontier".into());
-                };
-                queue.add(next, depth + 1, context, budget).map_err(|error| {
-                    format!("{error}; MONO_PLAN caller={:?} expr={expression_index} callee-kind={:?}", target.declaration, std::mem::discriminant(callee))
-                })?;
-            }
+        for next in demands.targets {
+            queue
+                .add(next, depth + 1, context, budget)
+                .map_err(|error| format!("{error}; instance caller={:?}", target.declaration))?;
         }
         cursor += 1;
     }
