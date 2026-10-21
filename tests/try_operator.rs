@@ -138,6 +138,11 @@ fn main() {
                 expect: Expect::Run(converted),
             },
             Case {
+                name: "try_payload_inference",
+                source: "fn twice(a: Option<i32>) -> Option<i32> { let x = a?; Some(x + x) }\nfn digit(c: char) -> Result<u32, u8> { let d = c.to_digit(10).ok_or(1u8)?; Ok(d + 1) }\nfn main() { println!(\"{:?} {:?} {:?}\", twice(Some(4)), digit('7'), digit('x')); }",
+                expect: Expect::Run("Some(8) Ok(8) Err(1)\n"),
+            },
+            Case {
                 name: "unused_missing_from",
                 source: "struct A; struct B;\nfn f() -> Result<i32, A> { Err(A) }\nfn unused() -> Result<i32, B> { Ok(f()?) }\nfn main() {}",
                 expect: Expect::Invalid("E0277"),

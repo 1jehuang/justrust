@@ -79,6 +79,8 @@ struct Solver<'a: 's, 'b: 's, 's> {
     delayed_results: Vec<Term>,
     coercions: Vec<(Term, Term)>,
     iterator_items: Vec<iteration::Pending>,
+    /// `(carrier, payload)` for `e?` whose carrier was not yet nominal.
+    tries: Vec<(Term, Term)>,
     patterns: Vec<(&'s Pattern, Term, HashMap<LocalKey, Term>)>,
     pattern_bindings: Option<HashMap<LocalKey, Term>>,
     replaying_pattern: bool,
@@ -182,6 +184,7 @@ fn solve_body_with_seed<'a: 's, 'b: 's, 's>(
         delayed_results: Vec::new(),
         coercions: Vec::new(),
         iterator_items: Vec::new(),
+        tries: Vec::new(),
         patterns: Vec::new(),
         pattern_bindings: None,
         replaying_pattern: false,
@@ -1147,6 +1150,14 @@ impl<'s> Solver<'_, '_, 's> {
             }
             projections = pending;
             progress |= self.solve_iterator_items()?;
+            for (carrier, payload) in std::mem::take(&mut self.tries) {
+                if let Some(inner) = self.try_payload(carrier)? {
+                    self.unify(inner, payload)?;
+                    progress = true;
+                } else {
+                    self.tries.push((carrier, payload));
+                }
+            }
             progress |= self.solve_associated_equalities()?;
             progress |= self.solve_operators()?;
             let coercions = std::mem::take(&mut self.coercions);
@@ -2042,7 +2053,36 @@ impl<'s> Solver<'_, '_, 's> {
                 }
                 self.fixed(ir::Ty::Unit)
             }
+            Expr::Try(operand) => {
+                // `e?` on the prelude Option/Result yields the success
+                // payload: tie the result term to the carrier's `T` so later
+                // uses (`x + x`) see the operand's exact type.
+                let carrier = self.expr(operand, depth + 1)?;
+                if let Some(payload) = self.try_payload(carrier)? {
+                    return Ok(payload);
+                }
+                // Not yet a known carrier: a deferred equality solved in the
+                // same fixed point as pending method results.
+                let payload = self.fresh()?;
+                self.tries.push((carrier, payload));
+                Ok(payload)
+            }
             _ => self.fresh(),
         }
+    }
+    /// Success payload term of a prelude Option/Result carrier term.
+    fn try_payload(&self, carrier: Term) -> Result<Option<Term>, String> {
+        let Domain::Nominal(decl, args) = self.domain(carrier) else {
+            return Ok(None);
+        };
+        let Some(&payload) = args.first() else {
+            return Ok(None);
+        };
+        let plan = self.checker.signatures.plan()?;
+        let name = &plan.registry.declaration(decl)?.name;
+        let std = crate::compiler::source::source_prelude::PRELUDE_MODULE;
+        Ok((*name == format!("crate::{std}::option::Option")
+            || *name == format!("crate::{std}::result::Result"))
+        .then_some(payload))
     }
 }
