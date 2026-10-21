@@ -88,6 +88,13 @@ impl<T> Option<T> {
             Option::None => super::result::Result::Err(err),
         }
     }
+
+    pub fn map<U, F: FnOnce(T) -> U>(self, f: F) -> Option<U> {
+        match self {
+            Option::Some(value) => Option::Some(f(value)),
+            Option::None => Option::None,
+        }
+    }
 }
 
 // TODO: unwrap_or_default once std::default is enabled.

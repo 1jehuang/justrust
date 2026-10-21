@@ -460,8 +460,18 @@ impl<'a> Solver<'a> {
             )?;
             return Ok(Selected::Done(vec![Goal::Trait(tr.clone())]));
         }
-        // Builtin FnOnce::Output for closures and fn pointers.
-        if Some(proj.item) == l.fn_once_output {
+        // Builtin `Output` for closures and fn pointers. The prelude declares
+        // `Output` on each of Fn, FnMut and FnOnce, so any associated type of
+        // a Fn-family trait is the callable's return type.
+        let fn_family = [l.fn_, l.fn_mut, l.fn_once].contains(&Some(tr.trait_id));
+        if Some(proj.item) == l.fn_once_output
+            || (fn_family
+                && self
+                    .db
+                    .trait_data(tr.trait_id)
+                    .assoc_types
+                    .contains(&proj.item))
+        {
             match self_ty.as_ref() {
                 TyKind::Closure(c) => {
                     cx.unify(&c.output, ty)?;
