@@ -961,6 +961,41 @@ impl Debug for f32 {
 
 // ---- containers ----
 
+// Tuples format like an anonymous tuple struct: `(a, b)`, with a trailing
+// comma for one element, matching std (arity 1-4, as cmp.rs).
+impl<A: Debug> Debug for (A,) {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        f.debug_tuple("").field(&(*self).0).finish()
+    }
+}
+impl<A: Debug, B: Debug> Debug for (A, B) {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        f.debug_tuple("")
+            .field(&(*self).0)
+            .field(&(*self).1)
+            .finish()
+    }
+}
+impl<A: Debug, B: Debug, C: Debug> Debug for (A, B, C) {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        f.debug_tuple("")
+            .field(&(*self).0)
+            .field(&(*self).1)
+            .field(&(*self).2)
+            .finish()
+    }
+}
+impl<A: Debug, B: Debug, C: Debug, D: Debug> Debug for (A, B, C, D) {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        f.debug_tuple("")
+            .field(&(*self).0)
+            .field(&(*self).1)
+            .field(&(*self).2)
+            .field(&(*self).3)
+            .finish()
+    }
+}
+
 impl<T: Debug> Debug for super::vec::Vec<T> {
     fn fmt(&self, f: &mut Formatter) -> Result {
         let mut list = f.debug_list();

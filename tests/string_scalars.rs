@@ -135,3 +135,42 @@ fn string_implementation_helpers_remain_private() {
     assert_eq!(actual.stdout, "[é] true true\n".as_bytes());
     fs::remove_dir_all(root).unwrap();
 }
+
+#[path = "support/closure_oracle.rs"]
+mod closure_oracle;
+
+/// `str::chars` decodes UTF-8 (1-4 byte scalars) through the prelude `Chars`
+/// iterator: `next`, `count`, empty input. CHECK/BUILD at workers 1 and 8.
+#[test]
+fn str_chars_decodes_utf8_like_stock() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "str-chars",
+        &[
+            Case {
+                name: "chars_next_count",
+                source: r#"fn main() {
+    let s = "héllo €😀";
+    let mut it = s.chars();
+    while let Some(c) = it.next() {
+        println!("{} {}", c, c as u32);
+    }
+    println!("{}", s.chars().count());
+    let owned = String::from("日本");
+    println!("{}", owned.as_str().chars().count());
+    println!("{}", "".chars().count());
+    let mut e = "".chars();
+    println!("{}", e.next().is_none());
+}"#,
+                expect: Expect::Run(
+                    "h 104\né 233\nl 108\nl 108\no 111\n  32\n€ 8364\n😀 128512\n8\n2\n0\ntrue\n",
+                ),
+            },
+            Case {
+                name: "unused_chars_wrong_item",
+                source: "fn unused(s: &str) -> u8 { let mut it = s.chars(); match it.next() { Some(c) => c, None => 0 } }\nfn main() {}",
+                expect: Expect::Invalid("E0308"),
+            },
+        ],
+    );
+}

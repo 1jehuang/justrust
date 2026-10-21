@@ -2635,7 +2635,14 @@ pub fn validate_root_reference_actual(ty: &Ty, budget: &PlanBudget) -> Result<()
         inner = referent;
     }
     budget.check_depth(depth)?;
-    reject_references(inner, budget)
+    // Unsized referents behind at least one reference (`&str`, `&[T]`,
+    // `&dyn Tr`) are sized actuals, matching the nested-reference rule in
+    // `reject_references`. Bare `str`/`[T]` actuals stay rejected.
+    match inner {
+        Ty::Str | Ty::Dyn(_) if depth > 0 => Ok(()),
+        Ty::Slice { element } if depth > 0 => reject_references(element, budget),
+        _ => reject_references(inner, budget),
+    }
 }
 
 pub fn substitute_ty(

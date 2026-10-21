@@ -565,6 +565,16 @@ impl ValidatedTraitWorld {
         Ok(NormalizedAssociatedType(evidence))
     }
 
+    pub(super) fn validate_staged_projected_dependency(
+        &self,
+        evidence: &NormalizedAssociatedType,
+        proof: ProofContext<'_>,
+        staged: bool,
+    ) -> Result<()> {
+        self.check_context(proof)?;
+        self.validate_normalization_evidence(&evidence.0, NormalizationContext { proof, staged })
+    }
+
     pub(super) fn validate_projected_dependency(
         &self,
         evidence: &NormalizedAssociatedType,

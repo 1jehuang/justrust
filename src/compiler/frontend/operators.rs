@@ -14,6 +14,17 @@ fn overloadable(ty: &ir::Ty) -> bool {
     )
 }
 
+fn constructor_operand(e: &Expr) -> bool {
+    let mut base = e;
+    while let Expr::Apply { value, .. } = base {
+        base = value;
+    }
+    matches!(
+        base,
+        Expr::Struct { .. } | Expr::TupleStruct { .. } | Expr::EnumVariant { .. }
+    )
+}
+
 pub(super) fn binary_trait(op: BinaryOp) -> Option<(&'static str, &'static str, &'static str)> {
     Some(match op {
         BinaryOp::Add => ("ops", "Add", "add"),
@@ -456,7 +467,15 @@ impl type_check::Checker<'_> {
                 if !overloadable(&lhs) {
                     return Ok(None);
                 }
-                let rhs = self.method_receiver_hint(right)?;
+                // A constructor operand (`x == W { a: 1 }`, `x == Some(1)`)
+                // takes its generic arguments from the selected impl, as in
+                // stock. Typing it standalone would apply literal fallback
+                // (`W<i32>`) before the trait candidate is tried.
+                let rhs = if constructor_operand(right) {
+                    None
+                } else {
+                    self.method_receiver_hint(right)?
+                };
                 let id = if spec.0 == "cmp" {
                     let rest = std::slice::from_ref(right.as_ref());
                     let first = First::Borrow(ir::BorrowKind::Shared, left);

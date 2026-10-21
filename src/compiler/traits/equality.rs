@@ -563,6 +563,14 @@ impl ValidatedTraitWorld {
             return Ok(());
         }
         self.validate_equality_reference_domain(rhs, 0)?;
+        if matches!(rhs, Ty::AssociatedType(_)) {
+            // A closed projection RHS (the `Item = <IntoIter as Iterator>::Item`
+            // bound of a concrete `IntoIterator` impl) is metadata here, like a
+            // symbolic RHS: it reduces through the closed impl set when the
+            // equality is consumed, and executable validation still rejects
+            // any closed projection that never normalizes.
+            return Ok(());
+        }
         self.validate_ty(rhs, env, None, true, 0)
     }
 

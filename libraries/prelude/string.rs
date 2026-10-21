@@ -409,3 +409,122 @@ impl super::hash::Hash for String {
         state.write_u8(255u8);
     }
 }
+
+/// `str::chars`: UTF-8 decoding iterator over `char`s. Exposed through a
+/// prelude trait (like `StrToString`) because `str` has no inherent impl here.
+pub trait StrChars {
+    fn chars(&self) -> Chars<'_, ()>;
+}
+impl StrChars for str {
+    fn chars(&self) -> Chars<'_, ()> {
+        let (ptr, len): (usize, usize) = str_parts(self);
+        Chars { text: self, unit: (), ptr, front: 0usize, back: len }
+    }
+}
+
+/// `front..back` is the undecoded byte range of valid UTF-8 at `ptr`.
+pub struct Chars<'a, U> {
+    text: &'a str,
+    // Always `()`: an open parameter keeps projected `IntoIterator` methods
+    // on the generic path (closed reference-bearing ones are a boundary).
+    unit: U,
+    ptr: usize,
+    front: usize,
+    back: usize,
+}
+
+impl<'a, U> Chars<'a, U> {
+    pub fn count(self) -> usize {
+        let mut n: usize = 0usize;
+        let mut at: usize = self.front;
+        while at < self.back {
+            at += utf8_width(read_u8(self.ptr + at));
+            n += 1usize;
+        }
+        n
+    }
+}
+
+impl<'a, U> super::iter::Iterator for Chars<'a, U> {
+    type Item = char;
+    fn next(&mut self) -> Option<char> {
+        if self.front >= self.back {
+            return Option::None;
+        }
+        let at: usize = self.front;
+        self.front += utf8_width(read_u8(self.ptr + at));
+        Option::Some(decode_utf8_at(self.ptr, at))
+    }
+}
+
+impl<'a, U> super::iter::IntoIterator for Chars<'a, U> {
+    type Item = char;
+    type IntoIter = Chars<'a, U>;
+    fn into_iter(self) -> Chars<'a, U> {
+        self
+    }
+}
+
+/// `str` methods that return borrowed iterators. A separate prelude trait,
+/// like `StrToString`, until inherent `impl str` blocks are supported.
+pub trait StrMethods {
+    fn split_whitespace<'a>(&'a self) -> SplitWhitespace<&'a str>;
+}
+
+impl StrMethods for str {
+    fn split_whitespace<'a>(&'a self) -> SplitWhitespace<&'a str> {
+        let (ptr, len) = str_parts(self);
+        SplitWhitespace { ptr, len, at: 0usize, marker: self }
+    }
+}
+
+/// Iterator over the non-empty, ASCII-whitespace-separated words of a `str`.
+/// `S` is always `&'a str`: a generic carrier, because closed
+/// `impl<'a> Iterator for X<'a>` impls with `&'a str` items do not yet
+/// normalize. Words are rebuilt as `S` from (pointer, length) pairs.
+pub struct SplitWhitespace<S> {
+    ptr: usize,
+    len: usize,
+    at: usize,
+    marker: S,
+}
+
+fn is_space(b: u8) -> bool {
+    b == 32u8 || (b >= 9u8 && b <= 13u8)
+}
+
+/// Rebuilds a borrowed `str` carrier from a (pointer, length) pair.
+pub trait StrCarrier {
+    fn from_parts(ptr: usize, len: usize) -> Self;
+}
+
+impl<'a> StrCarrier for &'a str {
+    fn from_parts(ptr: usize, len: usize) -> &'a str {
+        str_from_raw_parts(ptr, len)
+    }
+}
+
+impl<S: StrCarrier> super::iter::Iterator for SplitWhitespace<S> {
+    type Item = S;
+    fn next(&mut self) -> Option<S> {
+        while self.at < self.len && is_space(read_u8(self.ptr + self.at)) {
+            self.at += 1usize;
+        }
+        if self.at >= self.len {
+            return Option::None;
+        }
+        let start = self.at;
+        while self.at < self.len && !is_space(read_u8(self.ptr + self.at)) {
+            self.at += 1usize;
+        }
+        Option::Some(S::from_parts(self.ptr + start, self.at - start))
+    }
+}
+
+impl<S: StrCarrier> super::iter::IntoIterator for SplitWhitespace<S> {
+    type Item = S;
+    type IntoIter = SplitWhitespace<S>;
+    fn into_iter(self) -> SplitWhitespace<S> {
+        self
+    }
+}

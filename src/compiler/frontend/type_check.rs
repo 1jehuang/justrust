@@ -7978,7 +7978,9 @@ impl<'a> Checker<'a> {
                     let (place, _, _) = self.checked_place(&place)?;
                     self.borrow_expression(ir::BorrowKind::Shared, place)?
                 } else {
-                    self.borrow_value(ir::BorrowKind::Shared, source, None)?
+                    // The selected impl fixes the operand type, so a
+                    // constructor operand (`x == W { a: 1 }`) infers from it.
+                    self.borrow_value(ir::BorrowKind::Shared, source, Some(ty))?
                 };
                 (id, None)
             } else if identity {

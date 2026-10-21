@@ -107,8 +107,14 @@ impl ValidatedTraitWorld {
                 "projected subject evidence lost exact normalization",
             ));
         }
+        // Replay validates each reduction under the same staging it was
+        // produced with (pre-finalization owner normalization is staged).
         for reduction in reductions.iter() {
-            self.validate_projected_dependency(reduction, context)?;
+            self.validate_staged_projected_dependency(
+                reduction,
+                context,
+                !self.owner_normalization_finalized,
+            )?;
         }
         Ok(())
     }

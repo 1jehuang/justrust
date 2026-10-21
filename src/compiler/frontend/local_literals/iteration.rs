@@ -30,6 +30,14 @@ impl<'s> Solver<'_, '_, 's> {
                         iterator_source::array_iter_candidate(value, self.checker.names()?)?
                 {
                     let receiver = self.expr(receiver, depth + 1)?;
+                    // A nominal receiver (for example `Vec<T>`) has an
+                    // ordinary declared `iter` method: solve it as a method
+                    // call and project the result's `Iterator::Item`.
+                    let owner = self.peel_refs(receiver);
+                    if let Some(candidate) = self.candidate_for_receiver(owner, name)? {
+                        let iterator = self.callable(candidate, &[], Some(owner), None, &[])?;
+                        return self.iterator_item(iterator);
+                    }
                     let result = self.fresh()?;
                     self.delayed_results.push(result);
                     self.iterator_items.push(Pending::ArrayMethod {

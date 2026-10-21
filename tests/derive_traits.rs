@@ -21,6 +21,18 @@ fn derived_impls_match_stock() {
                 ),
             },
             Case {
+                name: "tuple_fields_and_tuple_generic_args",
+                source: "#[derive(Debug,Clone,PartialEq,Eq)]struct I{t:(u8,bool)}fn f<T:std::fmt::Debug>(t:&T){println!(\"{:?}\",t);}fn main(){let i=I{t:(6,true)};println!(\"{:?} {}\",i.clone(),i==i);println!(\"{:#?}\",i);f(&(1,));f(&(1,2,(3,4)));}",
+                expect: Expect::Run(
+                    "I { t: (6, true) } true\nI {\n    t: (\n        6,\n        true,\n    ),\n}\n(1,)\n(1, 2, (3, 4))\n",
+                ),
+            },
+            Case {
+                name: "generic_eq_constructor_operand",
+                source: "#[derive(PartialEq,PartialOrd,Debug)]struct W<T>{a:T}#[derive(PartialEq)]enum G<T>{N,S(T)}fn main(){let x:W<u8>=W{a:1};let g:G<u16>=G::S(3);println!(\"{} {} {} {} {}\",x==W{a:1},x!=W{a:2},x<W{a:2},g==G::S(3),g==G::N);}",
+                expect: Expect::Run("true true true true false\n"),
+            },
+            Case {
                 name: "generic_eq_field_assertion",
                 source: "#[derive(PartialEq,Eq,Debug)]struct W<T>{a:T,b:i32}#[derive(PartialEq,Eq,Debug)]enum G<T>{N,S(T)}#[derive(Debug)]struct I{a:i32}#[derive(Debug)]struct O{v:I,g:G<i32>}fn main(){let x:W<u8>=W{a:1,b:2};let y:W<u8>=W{a:1,b:3};let p:G<i32>=G::S(4);let q:G<i32>=G::N;println!(\"{} {} {:?} {} {:?} {:?}\",x==y,x==x,x,p==q,p,q);println!(\"{:#?}\",O{v:I{a:1},g:G::S(2)});}",
                 expect: Expect::Run(

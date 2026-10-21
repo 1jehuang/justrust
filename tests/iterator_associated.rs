@@ -59,3 +59,26 @@ fn unused_unconstrained_impl_parameters_still_reject() {
         }
     }
 }
+
+#[test]
+fn typed_vec_iter_loops_preserve_loans() {
+    for source in [
+        // (1) the iterator outlives its vector.
+        "fn main(){let r;{let v:Vec<i32>=vec![1];r=v.iter();}for x in r{println!(\"{}\",*x);}}",
+        // (2) mutation while the loop holds the shared loan.
+        "fn main(){let mut v:Vec<i32>=vec![1];for x in v.iter(){v.push(*x);}}",
+        // (3) a loop item escapes past the vector's scope.
+        "fn main(){let r:&i32;{let v:Vec<i32>=vec![1,2];let mut last:&i32=&0;for x in v.iter(){last=x;}r=last;}println!(\"{}\",*r);}",
+        // Same shapes in an unused function.
+        "fn unused()->i32{let r;{let v:Vec<i32>=vec![1];r=v.iter();}let mut s:i32=0;for x in r{s+=*x;}s} fn main(){}",
+    ] {
+        oracle::stock_and_native_reject(source);
+    }
+}
+
+#[test]
+fn typed_vec_iter_loop_sieve_shape_matches_stock() {
+    oracle::stock_native(
+        "fn main(){let limit:usize=30;let mut is_prime:Vec<bool>=vec![true;limit+1];is_prime[0]=false;is_prime[1]=false;let mut i:usize=2;while i*i<=limit{if is_prime[i]{let mut j:usize=i*i;while j<=limit{is_prime[j]=false;j+=i;}}i+=1;}let mut count:usize=0;for p in is_prime.iter(){if *p{count+=1;}}let mut sum:i32=0;let v:Vec<i32>=vec![2,3,5];for &x in v.iter(){sum+=x;}println!(\"{} {}\",count,sum);}",
+    );
+}

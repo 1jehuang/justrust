@@ -1181,7 +1181,14 @@ impl ValidatedTraitWorld {
                 &selection,
                 index,
                 context,
+            )? && charged(
+                &self.budget,
+                ir::contains_associated_types(ty, &self.budget),
             )? {
+                // A closed, normalized parameter (for example the by-value
+                // `Iter<'a, T>` receiver of `into_iter`) carries its loans
+                // through the ordinary contract derived from the closed
+                // signature above, exactly like a non-projected callable.
                 self.validate_projected_parameter_references(ty, index, item.receiver)?;
             }
         }
