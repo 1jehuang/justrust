@@ -266,16 +266,16 @@ mod tests {
     #[test]
     fn format_call_conversions_keep_occurrence_authority() {
         use crate::compiler::{
-            BODY, BUILD, CANONICAL_BODY, CompilerProvider, Input, InstanceBodyFact, Snapshot,
+            BODY, CANONICAL_BODY, CompilerProvider, Input, InstanceBodyFact, Snapshot,
         };
-        use crate::engine::{Engine, Key};
+        use crate::engine::Engine;
         let source = include_str!("../../../../tests/fixtures/format_macros_basic.rs");
         let engine = Engine::new(CompilerProvider(Arc::new(Snapshot {
             input: Input::Text(source.into()),
             source_options: crate::compiler::source::SourceOptions::default(),
             budget: ir::PlanBudget::default(),
         })));
-        let build = engine.request(Key::new(BUILD, vec![]));
+        let build = engine.request(crate::compiler::keys::BuildRoot.key());
         let report = engine.run(1).unwrap();
         build.completion().unwrap();
         let (body, rows, first, index) = report

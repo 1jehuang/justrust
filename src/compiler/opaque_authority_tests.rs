@@ -169,7 +169,10 @@ fn opaque_representation_requires_exact_body_and_snapshot_witness() {
                 )
                 .map_err(Error::new)?;
                 let _: Arc<OpaqueRepresentationFact> = cx
-                    .read_fact(cx.request(Key::new(OPAQUE_REPRESENTATION, params)).get(0))
+                    .read_fact(
+                        cx.request(crate::compiler::keys::words(OPAQUE_REPRESENTATION, params)?)
+                            .get(0),
+                    )
                     .await?;
                 cx.publish_fact(0, ())
             })
@@ -181,7 +184,7 @@ fn opaque_representation_requires_exact_body_and_snapshot_witness() {
             source_options: source::SourceOptions::default(), budget: budget.clone(),
         });
         let engine = Engine::new(Probe(CompilerProvider(snapshot)));
-        let probe = engine.request(Key::new(9000, vec![0]));
+        let probe = engine.request(crate::compiler::keys::params(9000, 0, vec![]));
         let requests: Vec<_> = (0..4)
             .map(|index| engine.request(crate::compiler::keys::item(TEMPLATE_BODY, index)))
             .collect();
@@ -352,10 +355,11 @@ fn opaque_representation_requires_exact_body_and_snapshot_witness() {
         .is_err()
     );
     // The actual producer consumes both template outputs and publishes this same record.
-    let key = Key::new(
+    let key = crate::compiler::keys::words(
         OPAQUE_REPRESENTATION,
         instances::graph_key::encode_opaque(record.opaque(), &budget).unwrap(),
-    );
+    )
+    .unwrap();
     let actual = engine.fact_of::<OpaqueRepresentationFact>(&key, 0).unwrap();
     assert!(ir::identical_type(actual.record.hidden(), record.hidden(), &budget).unwrap());
     let replayed = actual

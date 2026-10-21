@@ -823,7 +823,7 @@ mod tests {
             }
         }
         let engine = Engine::new(Receipts);
-        let root = engine.request(Key::new(0, vec![]));
+        let root = engine.request(crate::compiler::keys::test_key(0, vec![]));
         assert_eq!(engine.run(1).unwrap().failures, 0);
         assert!(root.result(0).is_ok());
     }

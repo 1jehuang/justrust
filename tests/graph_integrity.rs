@@ -1967,3 +1967,116 @@ fn optimizer_caller_fan_in_grows_exactly_per_direct_callee() {
         "caller fan-in grew by more than added callee summaries and bodies. {RULE}"
     );
 }
+
+/// Raw engine keys (`Key::new`, `Key { .. }` literals) may only be built in
+/// `src/compiler/keys.rs`. Everything else uses typed `Item`/`Params`/
+/// `RootKey` constructors, so a whole-program key cannot be written.
+#[test]
+fn compiler_builds_no_raw_engine_keys() {
+    let root = root();
+    let mut files = Vec::new();
+    rust_files(&root.join("src/compiler"), &mut files);
+    let mut found = Vec::new();
+    for path in &files {
+        if path.ends_with("src/compiler/keys.rs") {
+            continue;
+        }
+        let text = fs::read_to_string(path).unwrap();
+        let code = strip(&text);
+        let code = String::from_utf8_lossy(&code);
+        for (line, l) in code.lines().enumerate() {
+            let raw = raw_key_sites(l);
+            if raw > 0 {
+                let relative = path.strip_prefix(&root).unwrap().display();
+                found.push(format!("  {relative}:{}", line + 1));
+            }
+        }
+    }
+    assert!(
+        found.is_empty(),
+        "raw engine Key construction outside src/compiler/keys.rs:\n{}\nUse keys::Item, \
+         keys::Params, keys::params(kind, head, tail) or a sealed RootKey. {RULE}",
+        found.join("\n")
+    );
+}
+
+fn raw_key_sites(line: &str) -> usize {
+    let b = line.as_bytes();
+    let mut count = 0;
+    for pattern in ["Key::new(", "Key {"] {
+        let mut from = 0;
+        while let Some(at) = line[from..].find(pattern) {
+            let at = from + at;
+            let prev = at.checked_sub(1).map(|i| b[i]);
+            let ident = prev.is_some_and(|c| c.is_ascii_alphanumeric() || c == b'_');
+            let return_type = line[..at].trim_end().ends_with("->");
+            if !ident && !return_type {
+                count += 1;
+            }
+            from = at + pattern.len();
+        }
+    }
+    count
+}
+
+#[test]
+fn raw_key_scan_rejects_injected_construction() {
+    assert_eq!(raw_key_sites("let k = Key::new(BODY, vec![]);"), 1);
+    assert_eq!(raw_key_sites("crate::engine::Key::new(1, v)"), 1);
+    assert_eq!(raw_key_sites("Key { kind: 1, version: 1, params }"), 1);
+    assert_eq!(raw_key_sites("struct NormalizationKey { a: u8 }"), 0);
+    assert_eq!(raw_key_sites("keys::params(BODY, 0, vec![])"), 0);
+    assert_eq!(raw_key_sites("fn source_key(d: DeclId) -> Key {"), 0);
+}
+
+/// Every type implementing `Fact` must be a root of the reachable-mutable-
+/// state scan, so a `Fact` impl cannot bypass the immutability gate.
+///
+/// Ignored pending approval: it exposes pre-existing debt that `fact_roots()`
+/// never discovered because these facts are published outside mod.rs
+/// (CanonicalSourcePublication, FileUnit, UnitFailure, ValidatedTraitWorld
+/// reach budget/PlanCtx Mutexes). Recording that debt needs user approval.
+#[test]
+#[ignore = "exposes undiscovered pre-existing fact debt; needs approval to record"]
+fn every_fact_impl_is_scanned_for_mutable_state() {
+    let (decls, mod_rs) = scanned_type_decls();
+    let discovered = fact_roots(&mod_rs);
+    let impls = fact_impl_types();
+    assert!(impls.len() >= 30, "found only {} Fact impls", impls.len());
+    let roots: BTreeSet<String> = discovered.union(&impls).cloned().collect();
+    let found = reachable_mutable_state(&decls, &roots);
+    let recorded = read_fact_debt();
+    let added: Vec<String> = found
+        .iter()
+        .filter(|(k, _)| !recorded.contains(*k))
+        .map(|((r, c, p), path)| format!("  {r} reaches {p} in {c}: {}", path.join(" -> ")))
+        .collect();
+    assert!(
+        added.is_empty(),
+        "types implementing Fact reach unrecorded mutable state:\n{}\n{RULE}",
+        added.join("\n")
+    );
+}
+
+fn fact_impl_types() -> BTreeSet<String> {
+    let root = root();
+    let mut files = Vec::new();
+    rust_files(&root.join("src/compiler"), &mut files);
+    let mut types = BTreeSet::new();
+    for path in &files {
+        let text = fs::read_to_string(path).unwrap();
+        let code = String::from_utf8_lossy(&strip(&text)).to_string();
+        for l in code.lines() {
+            let l = l.trim();
+            for marker in ["impl crate::engine::Fact for ", "impl Fact for "] {
+                if let Some(rest) = l.strip_prefix(marker) {
+                    let name = rest.trim_end_matches("{}").trim();
+                    if let Some(last) = identifiers(name).last() {
+                        types.insert(last.to_string());
+                    }
+                }
+            }
+        }
+    }
+    types
+}

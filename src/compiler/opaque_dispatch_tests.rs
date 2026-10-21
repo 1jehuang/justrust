@@ -459,7 +459,7 @@ fn opaque_bound_dispatch_reads_exact_representation_before_physical_body() {
                 budget: ir::PlanBudget::default(),
             });
             let engine = Engine::new(Probe(CompilerProvider(snapshot)));
-            let probe = engine.request(Key::new(9001, vec![]));
+            let probe = engine.request(crate::compiler::keys::test_key(9001, vec![]));
             engine.run(workers).unwrap();
             probe.completion().unwrap();
         }

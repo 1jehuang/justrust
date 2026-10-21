@@ -107,7 +107,7 @@ pub(super) async fn read(
             let key = instances::graph_key::encode_opaque(&opaque, budget).map_err(Error::new)?;
             let handle = facts
                 .cx
-                .request(Key::new(OPAQUE_REPRESENTATION, key))
+                .request(crate::compiler::keys::words(OPAQUE_REPRESENTATION, key)?)
                 .get(0);
             let source = types.callable_index(opaque.owner()).map_err(Error::new)?;
             let template = facts

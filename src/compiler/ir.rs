@@ -10509,7 +10509,7 @@ mod local_budget_task_meter_tests {
     }
     fn in_task(body: fn() -> Result<(), String>) -> bool {
         let engine = Engine::new(OneTask(body));
-        let demand = engine.request(Key::new(1, vec![]));
+        let demand = engine.request(crate::compiler::keys::test_key(1, vec![]));
         engine.run(1).unwrap();
         demand.result(0).unwrap() == 1
     }
@@ -10918,7 +10918,7 @@ mod tests {
                 ..PlanLimits::default()
             });
             let engine = crate::Engine::new(Probe(budget.clone()));
-            let demand = engine.request(crate::Key::new(42, vec![7]));
+            let demand = engine.request(crate::compiler::keys::params(42, 7, vec![]));
             let report = engine.run(workers).unwrap();
             assert_eq!(report.failures, 0);
             let failure = budget.first_resource_failure().unwrap();
@@ -11096,7 +11096,7 @@ mod tests {
             }
         }
         let engine = Engine::new(Receipts);
-        let root = engine.request(Key::new(0, vec![]));
+        let root = engine.request(crate::compiler::keys::test_key(0, vec![]));
         let report = engine.run(1).unwrap();
         assert_eq!(report.failures, 0);
         assert!(root.result(0).is_ok());

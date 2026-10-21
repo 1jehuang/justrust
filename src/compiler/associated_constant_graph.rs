@@ -210,7 +210,7 @@ pub(super) fn member_use_key(
     params.extend(caller);
     params.push(path.len() as u64);
     params.extend(path.iter().copied().map(u64::from));
-    Ok(Key::new(kind, params))
+    crate::compiler::keys::words(kind, params)
 }
 
 impl CompilerProvider {
@@ -270,18 +270,17 @@ impl CompilerProvider {
             let member = selected.member();
             let declaration = selected.declaration();
             let member_handle = cx
-                .request(Key::new(
+                .request(crate::compiler::keys::params(
                     ASSOCIATED_CONST_HEADER,
-                    vec![member.snapshot.graph_word(), u64::from(member.index)],
+                    member.snapshot.graph_word(),
+                    vec![u64::from(member.index)],
                 ))
                 .get(0);
             let selected_handle = cx
-                .request(Key::new(
+                .request(crate::compiler::keys::params(
                     ASSOCIATED_CONST_HEADER,
-                    vec![
-                        declaration.snapshot.graph_word(),
-                        u64::from(declaration.index),
-                    ],
+                    declaration.snapshot.graph_word(),
+                    vec![u64::from(declaration.index)],
                 ))
                 .get(0);
             let required: Arc<AssociatedConstantHeaderFact> = cx.read_fact(member_handle).await?;
@@ -298,12 +297,10 @@ impl CompilerProvider {
             cx.publish_fact(0, authorization.as_ref().clone())?;
             let checked: Arc<AssociatedConstantCheckedFact> = cx
                 .read_fact(
-                    cx.request(Key::new(
+                    cx.request(crate::compiler::keys::params(
                         ASSOCIATED_CONST_HEADER,
-                        vec![
-                            declaration.snapshot.graph_word(),
-                            u64::from(declaration.index),
-                        ],
+                        declaration.snapshot.graph_word(),
+                        vec![u64::from(declaration.index)],
                     ))
                     .get(1),
                 )

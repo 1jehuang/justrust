@@ -208,7 +208,7 @@ impl NominalCarrierAuthority {
 mod tests {
     use super::*;
     use crate::compiler::{self, Input, Snapshot, source};
-    use crate::engine::{Engine, Key};
+    use crate::engine::Engine;
 
     fn graph_view(
         workers: usize,
@@ -224,7 +224,7 @@ mod tests {
             budget: PlanBudget::default(),
         });
         let engine = Engine::new(compiler::CompilerProvider(snapshot));
-        let check = engine.request(Key::new(compiler::CHECK, vec![]));
+        let check = engine.request(crate::compiler::keys::CheckRoot.key());
         let report = engine.run(workers).unwrap();
         check.completion().unwrap();
         assert!(report.capture_complete);
@@ -259,7 +259,8 @@ mod tests {
                     let function = engine.fact_of::<Arc<cfg::Function>>(key, 0).unwrap();
                     let body = engine
                         .fact_of::<compiler::InstanceBodyFact>(
-                            &Key::new(compiler::BODY, key.params.clone()),
+                            &crate::compiler::keys::words(compiler::BODY, key.params.clone())
+                                .unwrap(),
                             0,
                         )
                         .unwrap();

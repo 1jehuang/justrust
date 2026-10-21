@@ -57,7 +57,7 @@ fn reject_original_token_range_mutations() {
         }
     }
     let engine = crate::Engine::new(TokenRangeProvider);
-    let output = engine.request(crate::Key::new(1, vec![0]));
+    let output = engine.request(crate::compiler::keys::params(1, 0, vec![]));
     engine.run(1).unwrap();
     assert_eq!(output.result(0).unwrap(), 1);
 }

@@ -26,7 +26,9 @@ impl Provider for IngressProvider {
             return CompilerProvider(self.snapshot.clone()).start(cx, key);
         }
         Box::pin(async move {
-            let handle = cx.request(Key::new(SIGNATURES, vec![])).get(0);
+            let handle = cx
+                .request(crate::compiler::keys::SignaturesDebtRoot.key())
+                .get(0);
             let plan: Arc<PlanCtx> = cx.read_fact(handle).await?;
             let declaration = plan
                 .registry
@@ -68,7 +70,7 @@ fn constructor_ingress_replays_source_application_snapshot_and_actuals() {
         snapshot: snapshot.clone(),
         signatures: None,
     });
-    let demand = engine.request(Key::new(997, vec![]));
+    let demand = engine.request(crate::compiler::keys::test_key(997, vec![]));
     engine.run(1).unwrap();
     demand.completion().unwrap();
     let fixture = demand
@@ -140,7 +142,7 @@ fn constructor_ingress_replays_source_application_snapshot_and_actuals() {
         snapshot,
         signatures: Some(plan.clone()),
     });
-    let foreign_demand = foreign_engine.request(Key::new(997, vec![]));
+    let foreign_demand = foreign_engine.request(crate::compiler::keys::test_key(997, vec![]));
     foreign_engine.run(1).unwrap();
     foreign_demand.completion().unwrap();
     let foreign_fixture = foreign_demand

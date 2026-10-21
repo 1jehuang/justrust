@@ -111,7 +111,7 @@ mod tests {
                         CONST_BODY
                     };
                     cx.read(
-                        cx.request(Key::new(other, vec![0]))
+                        cx.request(crate::compiler::keys::params(other, 0, vec![]))
                             .get(if other == CONST_BODY { 1 } else { 0 }),
                     )
                     .await?;
@@ -143,7 +143,7 @@ mod tests {
                     0,
                 );
                 let cycle = engine.request(crate::compiler::keys::CheckRoot.key());
-                let failure = engine.request(Key::new(900, vec![]));
+                let failure = engine.request(crate::compiler::keys::test_key(900, vec![]));
                 let report = engine.run(workers).unwrap();
                 assert!(report.dependency_cycle().is_some());
                 assert!(!report.capture_complete);

@@ -910,7 +910,7 @@ mod tests {
         for _ in 0..2 {
             let engine = Engine::new(Mint(seen.clone()));
             authorities.push(engine.authority());
-            let demand = engine.request(Key::new(1, vec![]));
+            let demand = engine.request(crate::compiler::keys::test_key(1, vec![]));
             engine.run(1).unwrap();
             demand.completion().unwrap();
         }
@@ -951,7 +951,12 @@ mod tests {
                         OwnerIssuer::new(root, &ExpansionBudget::default()).expect("issuer");
                     // Suspends: the root is moved into the future and owned
                     // across polls; no re-mint happens on resume.
-                    let value = cx.read(cx.request(Key::new(2, vec![])).get(0)).await;
+                    let value = cx
+                        .read(
+                            cx.request(crate::compiler::keys::test_key(2, vec![]))
+                                .get(0),
+                        )
+                        .await;
                     let child = issuer.child(OwnerDomain::TokenSession).expect("child");
                     assert!(child.path().descends_from(issuer.path()));
                     log.lock()
@@ -968,7 +973,7 @@ mod tests {
             let log: Log = Arc::default();
             let engine = Engine::new(Life(log.clone(), fail));
             let authority = engine.authority();
-            let demand = engine.request(Key::new(1, vec![]));
+            let demand = engine.request(crate::compiler::keys::test_key(1, vec![]));
             engine.run(2).unwrap();
             let outcome = demand.completion();
             let log = log.lock().unwrap().clone();
@@ -1100,7 +1105,7 @@ mod tests {
         let seen: Seen = Arc::default();
         for _ in 0..3 {
             let engine = Engine::new(Issue(seen.clone()));
-            let demand = engine.request(Key::new(1, vec![]));
+            let demand = engine.request(crate::compiler::keys::test_key(1, vec![]));
             engine.run(2).unwrap();
             demand.completion().unwrap();
         }

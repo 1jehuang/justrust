@@ -35,16 +35,16 @@ fn rejected(program: &Program) {
 #[test]
 fn primitive_min_check_uses_canonical_declaration_without_codegen() {
     use crate::compiler::{
-        ASSOCIATED_CONST_HEADER, BUILD, CHECK, CompilerProvider, Input, MONO_PLAN, OBJECT, Snapshot,
+        ASSOCIATED_CONST_HEADER, BUILD, CompilerProvider, Input, MONO_PLAN, OBJECT, Snapshot,
     };
-    use crate::engine::{Engine, Key};
+    use crate::engine::Engine;
     for workers in [1, 8] {
         let engine = Engine::new(CompilerProvider(Arc::new(Snapshot {
             input: Input::Text("fn main(){let value:i32=i32::MIN;}".into()),
             source_options: source::SourceOptions::default(),
             budget: ir::PlanBudget::default(),
         })));
-        let root = engine.request(Key::new(CHECK, vec![]));
+        let root = engine.request(crate::compiler::keys::CheckRoot.key());
         let report = engine.run(workers).unwrap();
         root.completion().unwrap();
         assert!(

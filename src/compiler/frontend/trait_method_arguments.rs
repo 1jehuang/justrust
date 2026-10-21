@@ -31,8 +31,8 @@ fn ufcs_method_arguments_remain_separate_and_bounded_source_inputs() {
 fn canonical_method_publication(
     source: &str,
 ) -> (ir::PlanBudget, Arc<sr::CanonicalSourcePublication>) {
-    use crate::compiler::{CompilerProvider, Input, RESOLVE, SIGNATURES, Snapshot};
-    use crate::engine::{Engine, Key};
+    use crate::compiler::{CompilerProvider, Input, Snapshot};
+    use crate::engine::Engine;
     let budget = ir::PlanBudget::default();
     let snapshot = Arc::new(Snapshot {
         input: Input::Text(source.into()),
@@ -40,8 +40,8 @@ fn canonical_method_publication(
         budget: budget.clone(),
     });
     let engine = Engine::new(CompilerProvider(snapshot));
-    let signatures = engine.request(Key::new(SIGNATURES, vec![]));
-    let resolved = engine.request(Key::new(RESOLVE, vec![]));
+    let signatures = engine.request(crate::compiler::keys::SignaturesDebtRoot.key());
+    let resolved = engine.request(crate::compiler::keys::ResolveDebtRoot.key());
     engine.run(2).unwrap();
     signatures.completion().unwrap();
     resolved.completion().unwrap();

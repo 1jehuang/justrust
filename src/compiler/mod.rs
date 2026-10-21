@@ -674,7 +674,7 @@ impl Provider for CompilerProvider {
                         [_] => return Err(Error::new("unknown source root ordinal")),
                         [parent @ .., index] => {
                             let parent: Arc<source::UnitResult> =
-                                facts.get(Key::new(SOURCE, parent.to_vec())).await?;
+                                facts.get(keys::words(SOURCE, parent.to_vec())?).await?;
                             let parent = parent.as_ref().as_ref().map_err(|_| {
                                 Error::new("child module requested from a failed source file")
                             })?;
@@ -691,14 +691,14 @@ impl Provider for CompilerProvider {
                     }
                     let mut assembler = source::SourceAssembler::new(&this.0.source_options);
                     let root_unit: Arc<source::UnitResult> =
-                        facts.get(Key::new(SOURCE, vec![0])).await?;
+                        facts.get(keys::params(SOURCE, 0, vec![])).await?;
                     let mut step = assembler.provide(root_unit);
                     let prepared = loop {
                         match step.map_err(|error| Error::new(error.to_string()))? {
                             source::AssemblyStep::Done(prepared) => break *prepared,
                             source::AssemblyStep::Need(need) => {
                                 let unit: Arc<source::UnitResult> =
-                                    facts.get(Key::new(SOURCE, need.ordinal)).await?;
+                                    facts.get(keys::words(SOURCE, need.ordinal)?).await?;
                                 step = assembler.provide(unit);
                             }
                         }
@@ -902,7 +902,7 @@ impl Provider for CompilerProvider {
                             );
                             parameters.extend(site.node.path.iter().map(|value| u64::from(*value)));
                             let environment: Arc<CaptureEnvironmentFact> =
-                                facts.get(Key::new(CAPTURE_ENV, parameters)).await?;
+                                facts.get(keys::words(CAPTURE_ENV, parameters)?).await?;
                             let environment = &environment.environment;
                             if environment.parent != owner
                                 || environment.declaration != site.declaration
@@ -1116,7 +1116,7 @@ impl Provider for CompilerProvider {
                     let (index, _) = closure_body_index(&key)?;
                     let types = facts.types().await?;
                     let template: Arc<TemplateBodyFact> = facts
-                        .get(Key::new(TEMPLATE_BODY, key.params.clone()))
+                        .get(keys::words(TEMPLATE_BODY, key.params.clone())?)
                         .await?;
                     let declaration = types.callable_decl(index).map_err(Error::new)?;
                     let callable = if let Some(closure) = &template.closure {
@@ -1172,7 +1172,7 @@ impl Provider for CompilerProvider {
                 }
                 UNIVERSAL_ANALYZE => {
                     let (index, _) = closure_body_index(&key)?;
-                    let lower_key = Key::new(UNIVERSAL_LOWER, key.params.clone());
+                    let lower_key = keys::words(UNIVERSAL_LOWER, key.params.clone())?;
                     let lowered_handle = cx.request(lower_key).get(0);
                     let types_handle = cx.request(keys::SignaturesDebtRoot.key()).get(0);
                     let lowered: Arc<cfg::TemplateCfg> = cx.read_fact(lowered_handle).await?;
@@ -1216,7 +1216,7 @@ impl Provider for CompilerProvider {
                         return Err(Error::new("non-universal callable has no admission fact"));
                     }
                     let proof: Arc<UniversalProofFact> = facts
-                        .get(Key::new(UNIVERSAL_ANALYZE, key.params.clone()))
+                        .get(keys::words(UNIVERSAL_ANALYZE, key.params.clone())?)
                         .await?;
                     let mut callee_indices = Vec::new();
                     for expression in &proof.verified.source().exprs {
@@ -1353,7 +1353,7 @@ impl Provider for CompilerProvider {
                             let params = instances::graph_key::encode(&target, &this.0.budget)
                                 .map_err(Error::new)?;
                             let canonical: Arc<InstanceBodyFact> =
-                                facts.get(Key::new(CANONICAL_BODY, params)).await?;
+                                facts.get(keys::words(CANONICAL_BODY, params)?).await?;
                             canonical.validate_current_engine(cx.authority())?;
                             return cx.publish_fact(
                                 0,
@@ -1959,12 +1959,10 @@ impl Provider for CompilerProvider {
                         for declaration in types.associated_constant_declarations() {
                             associated_handles.push((
                                 declaration,
-                                cx.request(Key::new(
+                                cx.request(keys::params(
                                     ASSOCIATED_CONST_HEADER,
-                                    vec![
-                                        declaration.snapshot.graph_word(),
-                                        u64::from(declaration.index),
-                                    ],
+                                    declaration.snapshot.graph_word(),
+                                    vec![u64::from(declaration.index)],
                                 ))
                                 .get(1),
                             ));
@@ -1987,12 +1985,10 @@ impl Provider for CompilerProvider {
                     for index in 0..nominal_count {
                         let declaration = types.nominal_declaration(index).map_err(Error::new)?;
                         nominal_handles.push(
-                            cx.request(Key::new(
+                            cx.request(keys::params(
                                 NOMINAL_DECL_WELL_FORMED,
-                                vec![
-                                    declaration.snapshot.graph_word(),
-                                    u64::from(declaration.index),
-                                ],
+                                declaration.snapshot.graph_word(),
+                                vec![u64::from(declaration.index)],
                             ))
                             .get(0),
                         );
@@ -2011,12 +2007,10 @@ impl Provider for CompilerProvider {
                     for declaration in types.associated_constant_declarations() {
                         associated_handles.push((
                             declaration,
-                            cx.request(Key::new(
+                            cx.request(keys::params(
                                 ASSOCIATED_CONST_HEADER,
-                                vec![
-                                    declaration.snapshot.graph_word(),
-                                    u64::from(declaration.index),
-                                ],
+                                declaration.snapshot.graph_word(),
+                                vec![u64::from(declaration.index)],
                             ))
                             .get(1),
                         ));
@@ -2213,7 +2207,7 @@ fn closure_body_key(
         ir::ClosureKind::FnMut => 1,
         ir::ClosureKind::FnOnce => 2,
     };
-    Key::new(kind, vec![index as u64, mode])
+    keys::params(kind, index as u64, vec![mode])
 }
 fn item_index(key: &Key, missing: &str) -> Result<usize, Error> {
     let [index] = key.params.as_slice() else {
@@ -2360,14 +2354,14 @@ pub fn compile_probe_file_observed_with_options(
 fn retained_analyses(engine: &Engine) -> Vec<(usize, Arc<ownership::Analysis>)> {
     let mut analyses = Vec::new();
     let callables = engine
-        .fact_of::<frontend::PlanCtx>(&Key::new(SIGNATURES, vec![]), 0)
+        .fact_of::<frontend::PlanCtx>(&keys::SignaturesDebtRoot.key(), 0)
         .map_or(0, |types| types.callable_count());
     let instances = engine
-        .fact_of::<PlanFact>(&Key::new(MONO_PLAN, vec![]), 0)
+        .fact_of::<PlanFact>(&keys::MonoPlanDebtRoot.key(), 0)
         .map_or(0, |plan| plan.plan.entries.len());
     for (kind, count) in [(UNIVERSAL_ANALYZE, callables), (ANALYZE, instances)] {
         for index in 0..count {
-            let key = Key::new(kind, vec![index as u64]);
+            let key = keys::params(kind, index as u64, vec![]);
             if let Some(analysis) =
                 engine.fact_of::<Arc<ownership::Analysis>>(&key, ANALYSIS_OUTPUT)
             {
@@ -2425,8 +2419,8 @@ fn compile_input_configured(
         budget,
     });
     let engine = Engine::new(CompilerProvider(snapshot.clone()));
-    let check = engine.request(Key::new(CHECK, vec![]));
-    let build = (!check_only).then(|| engine.request(Key::new(BUILD, vec![])));
+    let check = engine.request(keys::CheckRoot.key());
+    let build = (!check_only).then(|| engine.request(keys::BuildRoot.key()));
     let report = engine.run(workers).map_err(|error| Failure {
         error,
         report: None,
@@ -2468,7 +2462,7 @@ fn compile_input_configured(
         Ok(executable) => executable,
         Err(error) => return Err(failure(error, &report)),
     };
-    let types = engine.fact_of::<frontend::PlanCtx>(&Key::new(SIGNATURES, vec![]), 0);
+    let types = engine.fact_of::<frontend::PlanCtx>(&keys::SignaturesDebtRoot.key(), 0);
     // Public source telemetry remains source-only. Registered recipe bodies are
     // additional universal proof subjects, not newly discovered source functions.
     let functions = (|| -> Result<usize, String> {
@@ -2502,17 +2496,20 @@ fn compile_input_configured(
         Input::Program(_) => (0, 0),
         Input::Text(_) | Input::File(_) | Input::ProbeFile(_, _) => {
             let loaded = engine
-                .fact_of::<source::PreparedSource>(&Key::new(PARSE, vec![]), PREPARED_SOURCE_OUTPUT)
+                .fact_of::<source::PreparedSource>(
+                    &keys::ParseDebtRoot.key(),
+                    PREPARED_SOURCE_OUTPUT,
+                )
                 .ok_or_else(|| failure(Error::new("missing loaded source accounting"), &report))?;
             (loaded.source_bytes, loaded.files)
         }
     };
     let instances = engine
-        .fact_of::<PlanFact>(&Key::new(MONO_PLAN, vec![]), 0)
+        .fact_of::<PlanFact>(&keys::MonoPlanDebtRoot.key(), 0)
         .map_or(0, |plan| plan.plan.entries.len());
     let control_flow: Vec<Arc<cfg::Function>> = (0..instances)
         .filter_map(|index| {
-            engine.fact_of::<Arc<cfg::Function>>(&Key::new(LOWER, vec![index as u64]), 0)
+            engine.fact_of::<Arc<cfg::Function>>(&keys::Item::<{ LOWER }>(index).key(), 0)
         })
         .map(|lowered| lowered.as_ref().clone())
         .collect();
@@ -2536,11 +2533,11 @@ fn compile_input_configured(
             })
             .sum::<usize>();
     }
-    let program = engine.fact_of::<Arc<frontend::Program>>(&Key::new(RESOLVE, vec![]), 0);
+    let program = engine.fact_of::<Arc<frontend::Program>>(&keys::ResolveDebtRoot.key(), 0);
     let analyses = (0..instances)
         .filter_map(|index| {
             engine.fact_of::<Arc<ownership::Analysis>>(
-                &Key::new(ANALYZE, vec![index as u64]),
+                &keys::Item::<{ ANALYZE }>(index).key(),
                 ANALYSIS_OUTPUT,
             )
         })
@@ -2552,7 +2549,7 @@ fn compile_input_configured(
         ..OptimizerReport::default()
     };
     for index in 0..instances {
-        if let Some(fact) = engine.fact_of::<SsaFact>(&Key::new(IPO_OPT, vec![index as u64]), 0) {
+        if let Some(fact) = engine.fact_of::<SsaFact>(&keys::Item::<{ IPO_OPT }>(index).key(), 0) {
             if fact.lowered.is_some() {
                 optimizer.optimized += 1;
             } else {
@@ -2631,7 +2628,7 @@ mod owner_route_tests {
         });
         let engine = Engine::new(CompilerProvider(snapshot));
         let authority = engine.authority().get();
-        let parse = engine.request(Key::new(PARSE, vec![]));
+        let parse = engine.request(keys::ParseDebtRoot.key());
         engine.run(2).unwrap();
         parse.completion().unwrap();
         (parse.fact::<frontend::ParsedProgram>(0).unwrap(), authority)
@@ -2757,7 +2754,7 @@ mod optimizer_resource_tests {
             budget,
         });
         let engine = Engine::new(CompilerProvider(snapshot));
-        let build = engine.request(Key::new(BUILD, vec![]));
+        let build = engine.request(keys::BuildRoot.key());
         let report = engine.run(1);
         let outcome = report.and_then(|report| build.completion().map(|()| report));
         (engine, outcome)
@@ -2765,7 +2762,7 @@ mod optimizer_resource_tests {
 
     fn instances(engine: &Engine) -> usize {
         engine
-            .fact_of::<PlanFact>(&Key::new(MONO_PLAN, vec![]), 0)
+            .fact_of::<PlanFact>(&keys::MonoPlanDebtRoot.key(), 0)
             .map(|plan| plan.plan.entries.len())
             .unwrap_or(0)
     }
@@ -2780,7 +2777,7 @@ mod optimizer_resource_tests {
         let mut unsupported = 0;
         let mut objects_with_receipt = 0;
         for index in 0..count {
-            let key = |kind| Key::new(kind, vec![index as u64]);
+            let key = |kind| keys::params(kind, index as u64, vec![]);
             for kind in [SSA, LOCAL_OPT, IPO_OPT] {
                 let fact = engine
                     .fact_of::<SsaFact>(&key(kind), 0)
@@ -2871,7 +2868,7 @@ mod optimizer_resource_tests {
             assert!(outcome.is_err(), "{limits:?} must fail");
             assert!(
                 engine
-                    .fact_of::<Vec<u8>>(&Key::new(BUILD, vec![]), 0)
+                    .fact_of::<Vec<u8>>(&keys::BuildRoot.key(), 0)
                     .is_none(),
                 "no executable after a resource failure"
             );

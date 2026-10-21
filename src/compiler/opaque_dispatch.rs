@@ -178,7 +178,7 @@ pub(super) fn key(
         opaque.len() as u64,
     ]);
     words.extend(opaque);
-    Ok(Key::new(OPAQUE_CALL_DISPATCH, words))
+    crate::compiler::keys::words(OPAQUE_CALL_DISPATCH, words)
 }
 
 fn original_occurrence(
@@ -359,10 +359,10 @@ pub(super) async fn produce(
         &provider.0.budget,
     )?;
     cx.publish_fact(0, proof)?;
-    let body_key = Key::new(
+    let body_key = crate::compiler::keys::words(
         CANONICAL_BODY,
         instances::graph_key::encode(&physical, &provider.0.budget).map_err(Error::new)?,
-    );
+    )?;
     let body: Arc<InstanceBodyFact> = facts.get(body_key).await?;
     if body.facts.phase() != traits::FactsPhase::Closed || body.facts.target() != Some(&physical) {
         return Err(Error::new(

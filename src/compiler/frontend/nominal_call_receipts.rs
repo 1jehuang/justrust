@@ -303,9 +303,7 @@ mod tests {
     use super::*;
 
     fn graph_publication() -> (ir::PlanBudget, Arc<sr::CanonicalSourcePublication>) {
-        use crate::compiler::{
-            CompilerProvider, Input, RESOLVE, SIGNATURES, Snapshot, TEMPLATE_BODY, TemplateBodyFact,
-        };
+        use crate::compiler::{CompilerProvider, Input, Snapshot, TEMPLATE_BODY, TemplateBodyFact};
         use crate::engine::{Engine, Key, Provider};
         struct PublicationProvider(Arc<Snapshot>);
         impl Provider for PublicationProvider {
@@ -321,8 +319,12 @@ mod tests {
                     return CompilerProvider(self.0.clone()).start(cx, key);
                 }
                 Box::pin(async move {
-                    let signatures = cx.request(Key::new(SIGNATURES, vec![])).get(0);
-                    let resolved = cx.request(Key::new(RESOLVE, vec![])).get(0);
+                    let signatures = cx
+                        .request(crate::compiler::keys::SignaturesDebtRoot.key())
+                        .get(0);
+                    let resolved = cx
+                        .request(crate::compiler::keys::ResolveDebtRoot.key())
+                        .get(0);
                     let plan: Arc<PlanCtx> = cx.read_fact(signatures).await?;
                     let program: Arc<Arc<Program>> = cx.read_fact(resolved).await?;
                     // The unchanged accepted Peek program demands native_heap::release.
@@ -346,7 +348,7 @@ mod tests {
                     );
                     let index = candidates[0];
                     let template = cx
-                        .request(Key::new(TEMPLATE_BODY, vec![index as u64]))
+                        .request(crate::compiler::keys::Item::<{ TEMPLATE_BODY }>(index).key())
                         .get(0);
                     let body: Arc<TemplateBodyFact> = cx.read_fact(template).await?;
                     let publication = body
@@ -369,7 +371,7 @@ mod tests {
             budget: budget.clone(),
         });
         let engine = Engine::new(PublicationProvider(snapshot));
-        let demand = engine.request(Key::new(998, vec![]));
+        let demand = engine.request(crate::compiler::keys::test_key(998, vec![]));
         engine.run(1).unwrap();
         demand.completion().unwrap();
         let publication = demand

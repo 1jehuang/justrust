@@ -8,7 +8,7 @@ fn source_check(source: &str, workers: usize) -> Result<(), String> {
         budget: ir::PlanBudget::default(),
     });
     let engine = Engine::new(CompilerProvider(snapshot));
-    let check = engine.request(Key::new(CHECK, vec![]));
+    let check = engine.request(crate::compiler::keys::CheckRoot.key());
     let report = engine.run(workers).unwrap();
     assert!(report.capture_complete);
     assert!(
@@ -181,7 +181,7 @@ fn opaque_generic_results_do_not_merge_distinct_owner_arguments() {
                 budget: ir::PlanBudget::default(),
             });
             let engine = Engine::new(CompilerProvider(snapshot));
-            let key = Key::new(BUILD, vec![]);
+            let key = crate::compiler::keys::BuildRoot.key();
             let build = engine.request(key.clone());
             engine.run(workers).unwrap();
             assert!(build.completion().is_err(), "built invalid {source}");
@@ -300,7 +300,7 @@ fn native_matches_stock_with_dispatch(source: &str, requires_dispatch: bool) {
             budget: ir::PlanBudget::default(),
         });
         let engine = Engine::new(CompilerProvider(snapshot));
-        let key = Key::new(BUILD, vec![]);
+        let key = crate::compiler::keys::BuildRoot.key();
         let build = engine.request(key.clone());
         let report = engine.run(workers).unwrap();
         assert!(report.capture_complete);
@@ -353,7 +353,7 @@ fn opaque_definitions_require_a_concrete_nonrecursive_hidden_type() {
                 budget: ir::PlanBudget::default(),
             });
             let engine = Engine::new(CompilerProvider(snapshot));
-            let key = Key::new(BUILD, vec![]);
+            let key = crate::compiler::keys::BuildRoot.key();
             let build = engine.request(key.clone());
             engine.run(workers).unwrap();
             assert!(

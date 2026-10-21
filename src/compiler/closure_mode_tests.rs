@@ -22,7 +22,7 @@ fn closure_capability_keys_reject_primary_alias_and_unsupported_mode() {
                 budget: ir::PlanBudget::default(),
             });
             let engine = Engine::new(CompilerProvider(snapshot.clone()));
-            let signatures = engine.request(Key::new(SIGNATURES, vec![]));
+            let signatures = engine.request(crate::compiler::keys::SignaturesDebtRoot.key());
             engine.run(workers).unwrap();
             signatures.completion().unwrap();
             let types = signatures.fact::<frontend::PlanCtx>(0).unwrap();
@@ -35,7 +35,11 @@ fn closure_capability_keys_reject_primary_alias_and_unsupported_mode() {
                 })
                 .unwrap();
             let engine = Engine::new(CompilerProvider(snapshot));
-            let invalid = engine.request(Key::new(TEMPLATE_BODY, vec![index as u64, mode]));
+            let invalid = engine.request(crate::compiler::keys::params(
+                TEMPLATE_BODY,
+                index as u64,
+                vec![mode],
+            ));
             let _ = engine.run(workers);
             let error = invalid
                 .completion()

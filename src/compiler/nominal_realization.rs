@@ -69,10 +69,10 @@ struct NominalSourceFact {
 }
 
 fn source_key(declaration: ir::DeclId) -> Key {
-    Key::new(
+    crate::compiler::keys::params(
         KIND,
+        VERSION,
         vec![
-            VERSION,
             SOURCE_SCHEMA,
             declaration.snapshot.graph_word(),
             u64::from(declaration.index),
@@ -103,12 +103,10 @@ pub(super) async fn run(cx: &Context, key: Key) -> Result<(), Error> {
                 .request(crate::compiler::keys::SignaturesDebtRoot.key())
                 .get(0);
             let proof_handle = cx
-                .request(Key::new(
+                .request(crate::compiler::keys::params(
                     super::NOMINAL_DECL_WELL_FORMED,
-                    vec![
-                        declaration.snapshot.graph_word(),
-                        u64::from(declaration.index),
-                    ],
+                    declaration.snapshot.graph_word(),
+                    vec![u64::from(declaration.index)],
                 ))
                 .get(0);
             let types: Arc<super::frontend::PlanCtx> = cx.read_fact(types_handle).await?;
@@ -220,7 +218,7 @@ impl RealizationKey {
             words.push(argument.len() as u64);
             words.extend_from_slice(argument);
         }
-        Ok(Self(Key::new(KIND, words)))
+        Ok(Self(crate::compiler::keys::words(KIND, words)?))
     }
 }
 
@@ -768,7 +766,7 @@ mod tests {
             fields: Arc::from([]),
         };
         let first = crate::engine::Engine::new(provider.clone());
-        let own = first.request(Key::new(999, vec![0]));
+        let own = first.request(crate::compiler::keys::params(999, 0, vec![]));
         first.run(1).unwrap();
         own.completion().unwrap();
         let successful = first.fact_of::<RealizedNominal>(&key.0, 0).unwrap();
@@ -776,12 +774,12 @@ mod tests {
             stolen: Some(successful),
             ..provider
         });
-        let demand = foreign.request(Key::new(999, vec![0]));
+        let demand = foreign.request(crate::compiler::keys::params(999, 0, vec![]));
         foreign.run(1).unwrap();
         assert!(demand.completion().is_err());
         assert!(
             foreign
-                .fact_of::<usize>(&Key::new(999, vec![0]), 0)
+                .fact_of::<usize>(&crate::compiler::keys::params(999, 0, vec![]), 0)
                 .is_none()
         );
     }
@@ -808,7 +806,7 @@ mod tests {
             fields: Arc::from([]),
         };
         let engine = crate::engine::Engine::new(provider.clone());
-        let demand = engine.request(Key::new(998, vec![0]));
+        let demand = engine.request(crate::compiler::keys::params(998, 0, vec![]));
         engine.run(1).unwrap();
         demand.completion().unwrap();
         let capability = demand.fact::<ReadNominal>(0).unwrap();
@@ -905,7 +903,7 @@ mod tests {
             mutate: |_| {},
             fields: Arc::from([]),
         });
-        let demand = engine.request(Key::new(998, vec![0]));
+        let demand = engine.request(crate::compiler::keys::params(998, 0, vec![]));
         engine.run(1).unwrap();
         demand.completion().unwrap();
         let capability = demand.fact::<ReadNominal>(0).unwrap();
@@ -1006,7 +1004,7 @@ mod tests {
             mutate: |_| {},
             fields: Arc::from([]),
         });
-        let demand = engine.request(Key::new(998, vec![0]));
+        let demand = engine.request(crate::compiler::keys::params(998, 0, vec![]));
         engine.run(1).unwrap();
         demand.completion().unwrap();
         let capability = demand.fact::<ReadNominal>(0).unwrap();
@@ -1051,7 +1049,7 @@ mod tests {
             }
         };
         let foreign = crate::engine::Engine::new(provider(0));
-        let child = foreign.request(Key::new(998, vec![0]));
+        let child = foreign.request(crate::compiler::keys::params(998, 0, vec![]));
         foreign.run(1).unwrap();
         child.completion().unwrap();
         let child_capability = child.fact::<ReadNominal>(0).unwrap();
@@ -1068,7 +1066,7 @@ mod tests {
             normalized: child_capability.definition().unwrap(),
         }]);
         let current = crate::engine::Engine::new(parent_provider);
-        let parent = current.request(Key::new(998, vec![0]));
+        let parent = current.request(crate::compiler::keys::params(998, 0, vec![]));
         current.run(1).unwrap();
         parent.completion().unwrap();
         let capability = parent.fact::<ReadNominal>(0).unwrap();
@@ -1104,7 +1102,7 @@ mod tests {
 
     #[test]
     fn graph_identity_never_falls_back_to_source_slot_or_foreign_engine() {
-        let key = Key::new(KIND, vec![1]);
+        let key = crate::compiler::keys::params(KIND, 1, vec![]);
         let first = crate::engine::Engine::new(IdentityProvider);
         let second = crate::engine::Engine::new(IdentityProvider);
         let _first_demand = first.request(key.clone());

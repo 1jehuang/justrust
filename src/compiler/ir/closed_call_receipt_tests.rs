@@ -7,9 +7,7 @@ pub(in crate::compiler) fn issued_body_fixture(
     Arc<crate::compiler::InstanceBodyFact>,
     crate::engine::EngineAuthority,
 ) {
-    use crate::compiler::{
-        CANONICAL_BODY, CompilerProvider, Input, InstanceBodyFact, RESOLVE, SIGNATURES, Snapshot,
-    };
+    use crate::compiler::{CANONICAL_BODY, CompilerProvider, Input, InstanceBodyFact, Snapshot};
     use crate::engine::{Engine, Key, Provider};
     struct Fixture(Arc<Snapshot>);
     impl Provider for Fixture {
@@ -25,8 +23,12 @@ pub(in crate::compiler) fn issued_body_fixture(
                 return CompilerProvider(self.0.clone()).start(cx, key);
             }
             Box::pin(async move {
-                let signatures = cx.request(Key::new(SIGNATURES, vec![])).get(0);
-                let resolved = cx.request(Key::new(RESOLVE, vec![])).get(0);
+                let signatures = cx
+                    .request(crate::compiler::keys::SignaturesDebtRoot.key())
+                    .get(0);
+                let resolved = cx
+                    .request(crate::compiler::keys::ResolveDebtRoot.key())
+                    .get(0);
                 let plan: Arc<crate::compiler::frontend::PlanCtx> =
                     cx.read_fact(signatures).await?;
                 let program: Arc<Arc<crate::compiler::frontend::Program>> =
@@ -53,7 +55,9 @@ pub(in crate::compiler) fn issued_body_fixture(
                     &self::PlanBudget::default(),
                 )
                 .map_err(crate::engine::Error::new)?;
-                let handle = cx.request(Key::new(CANONICAL_BODY, params)).get(0);
+                let handle = cx
+                    .request(crate::compiler::keys::words(CANONICAL_BODY, params)?)
+                    .get(0);
                 let body: Arc<InstanceBodyFact> = cx.read_fact(handle).await?;
                 body.validate_current_engine(cx.authority())?;
                 cx.publish_fact(0, (body, cx.authority()))
@@ -66,7 +70,7 @@ pub(in crate::compiler) fn issued_body_fixture(
         source_options: crate::compiler::source::SourceOptions::default(),
         budget,
     })));
-    let demand = engine.request(Key::new(997, vec![]));
+    let demand = engine.request(crate::compiler::keys::test_key(997, vec![]));
     engine.run(1).unwrap();
     demand.completion().unwrap();
     let issued = demand

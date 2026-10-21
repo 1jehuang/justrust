@@ -2,8 +2,8 @@
 use super::*;
 
 fn invocation_publication() -> (ir::PlanBudget, Arc<sr::CanonicalSourcePublication>) {
-    use crate::compiler::{CompilerProvider, Input, RESOLVE, SIGNATURES, Snapshot};
-    use crate::engine::{Engine, Key};
+    use crate::compiler::{CompilerProvider, Input, Snapshot};
+    use crate::engine::Engine;
     let budget = ir::PlanBudget::default();
     let snapshot = Arc::new(Snapshot {
         input: Input::Text("fn invoke<F:Fn(i32)->i32>(f:F)->i32{(f)(7)}fn main(){}".into()),
@@ -11,8 +11,8 @@ fn invocation_publication() -> (ir::PlanBudget, Arc<sr::CanonicalSourcePublicati
         budget: budget.clone(),
     });
     let engine = Engine::new(CompilerProvider(snapshot));
-    let signatures = engine.request(Key::new(SIGNATURES, vec![]));
-    let resolved = engine.request(Key::new(RESOLVE, vec![]));
+    let signatures = engine.request(crate::compiler::keys::SignaturesDebtRoot.key());
+    let resolved = engine.request(crate::compiler::keys::ResolveDebtRoot.key());
     engine.run(2).unwrap();
     signatures.completion().unwrap();
     resolved.completion().unwrap();

@@ -29,6 +29,7 @@ impl<const K: u32> Item<K> {
 
 /// A key of node kind `K` with a head parameter and ordered tail.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[allow(dead_code)]
 pub(crate) struct Params<const K: u32>(pub u64, pub Vec<u64>);
 impl<const K: u32> ItemKey for Params<K> {
     const KIND: u32 = K;
@@ -37,6 +38,7 @@ impl<const K: u32> ItemKey for Params<K> {
     }
 }
 
+#[allow(dead_code)]
 impl<const K: u32> Params<K> {
     pub(crate) fn key(&self) -> Key {
         ItemKey::key(self)
@@ -45,17 +47,29 @@ impl<const K: u32> Params<K> {
 
 /// Per-item key whose kind is chosen at runtime among per-item kinds.
 pub(crate) fn item(kind: u32, index: usize) -> Key {
-    params(kind, vec![index as u64])
+    params(kind, index as u64, Vec::new())
 }
 
-/// Keyed node with runtime kind and nonempty canonical parameters. Fails,
-/// rather than minting a whole-program key, when `params` is empty.
-pub(crate) fn params(kind: u32, params: Vec<u64>) -> Key {
-    assert!(
-        !params.is_empty(),
-        "node kind {kind} has a parameterless (whole-program) key; use a RootKey"
-    );
-    Key::new(kind, params)
+/// Keyed node with runtime kind. The head parameter makes a parameterless
+/// key unrepresentable: `params(KIND)` with no head does not compile.
+pub(crate) fn params(kind: u32, head: u64, tail: Vec<u64>) -> Key {
+    let mut words = Vec::with_capacity(1 + tail.len());
+    words.push(head);
+    words.extend(tail);
+    Key::new(kind, words)
+}
+
+/// Keyed node from already-encoded canonical words (a forwarded key or an
+/// identity encoder). Empty words are an explicit error, never a
+/// whole-program key.
+pub(crate) fn words(kind: u32, words: Vec<u64>) -> Result<Key, crate::engine::Error> {
+    let mut words = words.into_iter();
+    let Some(head) = words.next() else {
+        return Err(crate::engine::Error::new(format!(
+            "node kind {kind} has a parameterless (whole-program) key; use a RootKey"
+        )));
+    };
+    Ok(params(kind, head, words.collect()))
 }
 
 #[cfg(test)]
@@ -92,8 +106,15 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "parameterless")]
-    fn empty_params_are_rejected() {
-        params(110, vec![]);
+    fn empty_words_are_rejected() {
+        assert!(words(110, vec![]).is_err());
+        assert_eq!(words(110, vec![4, 5]).unwrap(), Key::new(110, vec![4, 5]));
     }
+}
+
+/// Test-only fixture key with an arbitrary kind and possibly no parameters,
+/// for engine fixtures that are not compiler node kinds.
+#[cfg(test)]
+pub(crate) fn test_key(kind: u32, params: Vec<u64>) -> Key {
+    Key::new(kind, params)
 }
