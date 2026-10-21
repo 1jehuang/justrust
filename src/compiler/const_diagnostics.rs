@@ -24,7 +24,8 @@ pub(super) fn qualification_cycle_error(
     })?;
     budget.charge_work(edges.len()).ok()?;
     let _admission = budget.reserve_bytes(bytes).ok()?;
-    let plan = engine.fact_of::<frontend::PlanCtx>(&Facts::root(SIGNATURES), 0)?;
+    let plan =
+        engine.fact_of::<frontend::PlanCtx>(&crate::compiler::keys::SignaturesDebtRoot.key(), 0)?;
     for (position, edge) in edges.iter().enumerate() {
         let consumer = edge.consumer();
         let producer = edge.producer();
@@ -141,16 +142,19 @@ mod tests {
                     },
                     0,
                 );
-                let cycle = engine.request(Facts::root(CHECK));
+                let cycle = engine.request(crate::compiler::keys::CheckRoot.key());
                 let failure = engine.request(Key::new(900, vec![]));
                 let report = engine.run(workers).unwrap();
                 assert!(report.dependency_cycle().is_some());
                 assert!(!report.capture_complete);
                 let plan = engine
-                    .fact_of::<frontend::PlanCtx>(&Facts::root(SIGNATURES), 0)
+                    .fact_of::<frontend::PlanCtx>(
+                        &crate::compiler::keys::SignaturesDebtRoot.key(),
+                        0,
+                    )
                     .unwrap();
                 let id = plan.constant_decl(0).unwrap();
-                let key = Facts::item(CONST_BODY, id.index as usize);
+                let key = crate::compiler::keys::item(CONST_BODY, id.index as usize);
                 assert!(
                     engine
                         .fact_of::<Arc<const_check::BodyFact>>(&key, 0)
@@ -170,7 +174,7 @@ mod tests {
                 assert!(
                     engine
                         .fact_of::<const_check::ValueFact>(
-                            &Facts::item(CONST_VALUE, id.index as usize),
+                            &crate::compiler::keys::item(CONST_VALUE, id.index as usize),
                             0
                         )
                         .is_none()
@@ -195,8 +199,8 @@ mod tests {
                 },
                 0,
             );
-            let _plan = engine.request(Facts::root(SIGNATURES));
-            let demand = engine.request(Facts::item(CONST_BODY, 0));
+            let _plan = engine.request(crate::compiler::keys::SignaturesDebtRoot.key());
+            let demand = engine.request(crate::compiler::keys::item(CONST_BODY, 0));
             let report = engine.run(workers).unwrap();
             let witness = report.dependency_cycle().unwrap();
             assert!(

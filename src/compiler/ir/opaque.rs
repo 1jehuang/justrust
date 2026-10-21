@@ -567,9 +567,9 @@ mod captured_pack_tests {
         });
         let budget = snapshot.budget.clone();
         let engine = c::Engine::new(c::CompilerProvider(snapshot));
-        let key = c::Facts::item(c::TEMPLATE_BODY, 0);
+        let key = crate::compiler::keys::item(c::TEMPLATE_BODY, 0);
         let requested = engine.request(key.clone());
-        let other_key = c::Facts::item(c::TEMPLATE_BODY, 1);
+        let other_key = crate::compiler::keys::item(c::TEMPLATE_BODY, 1);
         let other_requested = engine.request(other_key.clone());
         engine.run(1).unwrap();
         requested.completion().unwrap();

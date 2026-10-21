@@ -417,7 +417,7 @@ fn field<'a>(
 
 pub(super) async fn run(cx: &Context, key_words: Key) -> Result<(), Error> {
     let types_handle = cx
-        .request(super::super::Facts::root(super::super::SIGNATURES))
+        .request(crate::compiler::keys::SignaturesDebtRoot.key())
         .get(0);
     let types: Arc<super::super::frontend::PlanCtx> = cx.read_fact(types_handle).await?;
     let world = types.trait_world().map_err(Error::new)?;

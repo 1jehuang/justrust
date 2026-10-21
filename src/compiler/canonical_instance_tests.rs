@@ -9,7 +9,7 @@ fn legacy_root_body_is_only_an_alias_to_one_canonical_producer() {
             budget: ir::PlanBudget::default(),
         });
         let engine = Engine::new(CompilerProvider(snapshot));
-        let body = engine.request(Facts::item(BODY, 0));
+        let body = engine.request(crate::compiler::keys::item(BODY, 0));
         let report = engine.run(workers).unwrap();
         body.completion().unwrap();
         let canonical: Vec<_> = report
@@ -25,7 +25,7 @@ fn legacy_root_body_is_only_an_alias_to_one_canonical_producer() {
             MONO_PLAN | BUILD | OBJECT | OPAQUE_REPRESENTATION
         )));
         let alias = engine
-            .fact_of::<InstanceBodyFact>(&Facts::item(BODY, 0), 0)
+            .fact_of::<InstanceBodyFact>(&crate::compiler::keys::item(BODY, 0), 0)
             .unwrap();
         let actual = engine
             .fact_of::<InstanceBodyFact>(&canonical[0].0, 0)

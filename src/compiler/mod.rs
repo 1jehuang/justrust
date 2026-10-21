@@ -17,6 +17,7 @@ pub mod frontend;
 mod hygiene;
 mod instances;
 pub mod ir;
+pub(crate) mod keys;
 mod lexer;
 mod literal_scan;
 mod literal_values;
@@ -416,20 +417,14 @@ struct Facts<'a> {
     cx: &'a Context,
 }
 impl Facts<'_> {
-    fn root(kind: u32) -> Key {
-        Key::new(kind, vec![])
-    }
-    fn item(kind: u32, index: usize) -> Key {
-        Key::new(kind, vec![index as u64])
-    }
     async fn get<T: std::any::Any + Send + Sync>(&self, key: Key) -> Result<Arc<T>, Error> {
         self.cx.read_fact::<T>(self.cx.request(key).get(0)).await
     }
     async fn types(&self) -> Result<Arc<frontend::PlanCtx>, Error> {
-        self.get(Self::root(SIGNATURES)).await
+        self.get(keys::SignaturesDebtRoot.key()).await
     }
     async fn template(&self, index: usize) -> Result<Arc<TemplateBodyFact>, Error> {
-        self.get(Self::item(TEMPLATE_BODY, index)).await
+        self.get(keys::Item::<TEMPLATE_BODY>(index).key()).await
     }
     async fn callee_templates(
         &self,
@@ -444,7 +439,7 @@ impl Facts<'_> {
                 .map_err(Error::new)?
                 .is_some()
             {
-                Some(self.cx.request(Self::item(TEMPLATE_BODY, index)).get(0))
+                Some(self.cx.request(keys::item(TEMPLATE_BODY, index)).get(0))
             } else {
                 None
             };
@@ -464,7 +459,7 @@ impl Facts<'_> {
                 let mode = types.closure_instance_mode(&target).map_err(Error::new)?;
                 closure_body_key(UNIVERSAL_ANALYZE, index, closure.ty.kind(), mode)
             } else {
-                Self::item(UNIVERSAL_ANALYZE, index)
+                keys::item(UNIVERSAL_ANALYZE, index)
             };
             keys.push(key);
         }
@@ -482,7 +477,7 @@ impl Facts<'_> {
         Ok(templates)
     }
     async fn plan(&self) -> Result<Arc<PlanFact>, Error> {
-        self.get(Self::root(MONO_PLAN)).await
+        self.get(keys::MonoPlanDebtRoot.key()).await
     }
     /// The target and source declaration of instance `index`. Nongeneric
     /// Source roots occupy the first plan slots in callable order, so they
@@ -645,8 +640,7 @@ impl Provider for CompilerProvider {
         }
         Box::pin(async move {
             let facts = Facts { cx: &cx };
-            let root = Facts::root;
-            let function = Facts::item;
+            let function = keys::item;
             match key.kind {
                 OPAQUE_CALL_DISPATCH => opaque_dispatch::produce(&this, &cx, &key).await,
                 CONST_DECL | CONST_BODY | CONST_VALUE => this.constant_node(&cx, &key).await,
@@ -732,12 +726,13 @@ impl Provider for CompilerProvider {
                 RESOLVE => {
                     let program = match &this.0.input {
                         Input::Program(program) => {
-                            cx.read(cx.request(root(PARSE)).get(0)).await?;
+                            cx.read(cx.request(keys::ParseDebtRoot.key()).get(0))
+                                .await?;
                             program.clone()
                         }
                         _ => {
                             let parsed: Arc<frontend::ParsedProgram> =
-                                facts.get(root(PARSE)).await?;
+                                facts.get(keys::ParseDebtRoot.key()).await?;
                             this.retain(
                                 std::mem::size_of::<frontend::Program>()
                                     + 2 * std::mem::size_of::<usize>(),
@@ -748,7 +743,8 @@ impl Provider for CompilerProvider {
                     cx.publish_fact(0, program)
                 }
                 SIGNATURES => {
-                    let program: Arc<Arc<frontend::Program>> = facts.get(root(RESOLVE)).await?;
+                    let program: Arc<Arc<frontend::Program>> =
+                        facts.get(keys::ResolveDebtRoot.key()).await?;
                     // Debt: whole-program node. Its input is the whole program,
                     // so its per-task work limit scales with that input.
                     scale_task_work_by_items(&program);
@@ -1178,7 +1174,7 @@ impl Provider for CompilerProvider {
                     let (index, _) = closure_body_index(&key)?;
                     let lower_key = Key::new(UNIVERSAL_LOWER, key.params.clone());
                     let lowered_handle = cx.request(lower_key).get(0);
-                    let types_handle = cx.request(Facts::root(SIGNATURES)).get(0);
+                    let types_handle = cx.request(keys::SignaturesDebtRoot.key()).get(0);
                     let lowered: Arc<cfg::TemplateCfg> = cx.read_fact(lowered_handle).await?;
                     let template_name = lowered.source().name.clone();
                     let types: Arc<frontend::PlanCtx> = cx.read_fact(types_handle).await?;
@@ -2122,7 +2118,7 @@ impl Provider for CompilerProvider {
                     }
                     // The linked artifact is released only after the explicit
                     // "every required check passed" fact.
-                    cx.read(cx.request(root(CHECK)).get(0)).await?;
+                    cx.read(cx.request(keys::CheckRoot.key()).get(0)).await?;
                     let native = &this.0.source_options.native_link;
                     let bytes = if types.has_c_abi()
                         || native.emit_object
@@ -2210,7 +2206,7 @@ fn closure_body_key(
     mode: ir::ClosureKind,
 ) -> Key {
     if primary == mode {
-        return Facts::item(kind, index);
+        return keys::item(kind, index);
     }
     let mode = match mode {
         ir::ClosureKind::Fn => 0,

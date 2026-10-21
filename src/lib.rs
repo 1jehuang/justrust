@@ -10,5 +10,5 @@ pub mod project;
 
 pub use engine::{
     BuildRoot, CheckRoot, Context, Demand, Engine, EngineAuthority, Error, Event, Fact, Handle,
-    Key, NodeKey, Outputs, OwnerRoot, OwnerTag, Provider, Report, TagMint, TaskFuture,
+    ItemKey, Key, Outputs, OwnerRoot, OwnerTag, Provider, Report, RootKey, TagMint, TaskFuture,
 };

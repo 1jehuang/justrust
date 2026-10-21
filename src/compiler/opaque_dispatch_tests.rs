@@ -18,8 +18,9 @@ fn opaque_bound_dispatch_reads_exact_representation_before_physical_body() {
                 let types = facts.types().await?;
                 // make and use_value are the two original free declarations.
                 let source_index = 1;
-                let template: Arc<TemplateBodyFact> =
-                    facts.get(Facts::item(TEMPLATE_BODY, source_index)).await?;
+                let template: Arc<TemplateBodyFact> = facts
+                    .get(crate::compiler::keys::item(TEMPLATE_BODY, source_index))
+                    .await?;
                 let caller = ir::CallTarget {
                     declaration: types.callable_decl(source_index).map_err(Error::new)?,
                     type_args: if types
@@ -323,8 +324,9 @@ fn opaque_bound_dispatch_reads_exact_representation_before_physical_body() {
                         "physical CFG was accepted without borrowed normalization authority",
                     ));
                 }
-                let defining: Arc<TemplateBodyFact> =
-                    facts.get(Facts::item(TEMPLATE_BODY, 0)).await?;
+                let defining: Arc<TemplateBodyFact> = facts
+                    .get(crate::compiler::keys::item(TEMPLATE_BODY, 0))
+                    .await?;
                 let defining_publication = defining.publication.as_ref().unwrap();
                 let ir::Ty::Opaque(defining_opaque) = &specialized_call.trait_ref.self_ty else {
                     return Err(Error::new("fixture lost its original opaque call identity"));

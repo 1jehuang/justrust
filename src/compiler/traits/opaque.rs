@@ -284,13 +284,13 @@ mod capture_declaration_tests {
             budget: ir::PlanBudget::default(),
         });
         let engine = c::Engine::new(c::CompilerProvider(snapshot));
-        let key = c::Facts::item(c::TEMPLATE_BODY, 0);
+        let key = crate::compiler::keys::item(c::TEMPLATE_BODY, 0);
         let requested = engine.request(key.clone());
         engine.run(1).unwrap();
         requested.completion().unwrap();
         let body = engine.fact_of::<c::TemplateBodyFact>(&key, 0).unwrap();
         let types = engine
-            .fact_of::<c::frontend::PlanCtx>(&c::Facts::root(c::SIGNATURES), 0)
+            .fact_of::<c::frontend::PlanCtx>(&crate::compiler::keys::SignaturesDebtRoot.key(), 0)
             .unwrap();
         let world = types.trait_world().unwrap();
         let (opaque, hidden) = body

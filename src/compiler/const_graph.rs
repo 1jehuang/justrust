@@ -14,10 +14,12 @@ impl CompilerProvider {
         let facts = Facts { cx };
         let plan = facts.types().await?;
         let declaration = plan.constant_key_decl(index).map_err(Error::new)?;
-        let node = |kind, id: ir::DeclId| Facts::item(kind, id.index as usize);
+        let node = |kind, id: ir::DeclId| crate::compiler::keys::item(kind, id.index as usize);
         match key.kind {
             CONST_DECL => {
-                let program: Arc<Arc<frontend::Program>> = facts.get(Facts::root(RESOLVE)).await?;
+                let program: Arc<Arc<frontend::Program>> = facts
+                    .get(crate::compiler::keys::ResolveDebtRoot.key())
+                    .await?;
                 let source = plan
                     .publish_constant_declaration(program.as_ref(), declaration, &self.0.budget)
                     .map_err(Error::new)?;

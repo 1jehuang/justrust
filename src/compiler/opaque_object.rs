@@ -49,7 +49,7 @@ pub(super) async fn produce(
         &provider.0.budget,
     )?;
     let admission = cx
-        .request(Facts::item(SOURCE_ADMISSION, source_index))
+        .request(crate::compiler::keys::item(SOURCE_ADMISSION, source_index))
         .get(0);
     let count = source
         .exprs
@@ -141,7 +141,7 @@ pub(super) async fn produce(
         // Exact target replay precedes this demand. Object producers do not wait
         // for one another, so recursive calls cannot create object/body joins.
         // BUILD waits on every declared root object before linking any symbol.
-        cx.request(Facts::item(OBJECT, slot));
+        cx.request(crate::compiler::keys::item(OBJECT, slot));
         calls.push(authorization);
     }
     let original = cfg::lower_source_template(publication, &provider.0.budget)

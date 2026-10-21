@@ -99,7 +99,9 @@ pub(super) async fn run(cx: &Context, key: Key) -> Result<(), Error> {
             if source_key(declaration) != key {
                 return Err(Error::new("noncanonical nominal source schema key"));
             }
-            let types_handle = cx.request(super::Facts::root(super::SIGNATURES)).get(0);
+            let types_handle = cx
+                .request(crate::compiler::keys::SignaturesDebtRoot.key())
+                .get(0);
             let proof_handle = cx
                 .request(Key::new(
                     super::NOMINAL_DECL_WELL_FORMED,

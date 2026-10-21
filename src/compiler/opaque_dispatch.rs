@@ -239,8 +239,12 @@ pub(super) async fn produce(
     let index = types
         .callable_index(caller.declaration)
         .map_err(Error::new)?;
-    let template_handle = cx.request(Facts::item(TEMPLATE_BODY, index)).get(0);
-    let admission_handle = cx.request(Facts::item(SOURCE_ADMISSION, index)).get(0);
+    let template_handle = cx
+        .request(crate::compiler::keys::item(TEMPLATE_BODY, index))
+        .get(0);
+    let admission_handle = cx
+        .request(crate::compiler::keys::item(SOURCE_ADMISSION, index))
+        .get(0);
     let template: Arc<TemplateBodyFact> = cx.read_fact(template_handle).await?;
     cx.read(admission_handle).await?;
     let source = provider.validated_body(&types, index, &template)?;

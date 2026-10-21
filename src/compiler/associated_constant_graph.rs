@@ -390,7 +390,7 @@ impl CompilerProvider {
             body.clone(), proof, &self.0.budget,
             |id| {
                 let facts = Facts { cx };
-                async move { facts.get(Facts::item(CONST_VALUE, id.index as usize)).await }
+                async move { facts.get(crate::compiler::keys::item(CONST_VALUE, id.index as usize)).await }
             },
             |index| {
                 let plan = &plan;
@@ -486,11 +486,11 @@ impl CompilerProvider {
             self.scratch_vec(direct.len())?;
         for id in &direct {
             handles.push(
-                cx.request(Facts::item(CONST_DECL, id.index as usize))
+                cx.request(crate::compiler::keys::item(CONST_DECL, id.index as usize))
                     .get(0),
             );
             qualification_handles.push(
-                cx.request(Facts::item(CONST_BODY, id.index as usize))
+                cx.request(crate::compiler::keys::item(CONST_BODY, id.index as usize))
                     .get(1),
             );
         }

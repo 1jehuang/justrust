@@ -110,7 +110,10 @@ pub(super) async fn read(
                 .request(Key::new(OPAQUE_REPRESENTATION, key))
                 .get(0);
             let source = types.callable_index(opaque.owner()).map_err(Error::new)?;
-            let template = facts.cx.request(Facts::item(TEMPLATE_BODY, source)).get(0);
+            let template = facts
+                .cx
+                .request(crate::compiler::keys::item(TEMPLATE_BODY, source))
+                .get(0);
             demanded.push(opaque.clone());
             frontier.push((opaque, handle, template));
         }

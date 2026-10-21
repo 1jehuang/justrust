@@ -146,49 +146,67 @@ pub struct Key {
     pub params: Vec<u64>,
 }
 
-/// The two sealed parameterless roots. Every other typed key carries
-/// per-file, per-item or per-instance parameters.
-pub const CHECK_ROOT_KIND: u32 = 104;
-pub const BUILD_ROOT_KIND: u32 = 105;
-
-/// Whole-program kinds that still use parameterless keys. Known debt from
-/// docs/compiler/GRAPH-INTEGRITY.md that may only shrink: never add a kind.
-const PARAMLESS_DEBT_KINDS: [u32; 5] = [100, 101, 106, 113, 115];
-
-/// A typed node identity. Each node kind declares one key type that encodes
-/// its canonical ordered parameters. Compiler code builds keys only through
-/// this trait; raw [`Key::new`] is reserved for the engine and its tests.
-pub trait NodeKey {
+/// A typed per-file, per-item or per-instance node identity. `params`
+/// returns a head word plus ordered tail, so a key always has at least one
+/// parameter: a parameterless (whole-program) item key cannot be written.
+pub trait ItemKey {
     const KIND: u32;
-    fn encode(&self, params: &mut Vec<u64>);
-    /// Canonical engine key. Panics for a parameterless key of any kind other
-    /// than the sealed roots and the recorded whole-program debt.
+    fn params(&self) -> (u64, Vec<u64>);
     fn key(&self) -> Key {
-        let mut params = Vec::new();
-        self.encode(&mut params);
-        assert!(
-            !params.is_empty()
-                || matches!(Self::KIND, CHECK_ROOT_KIND | BUILD_ROOT_KIND)
-                || PARAMLESS_DEBT_KINDS.contains(&Self::KIND),
-            "node kind {} has a parameterless (whole-program) key",
-            Self::KIND
-        );
+        let (head, tail) = self.params();
+        let mut params = Vec::with_capacity(1 + tail.len());
+        params.push(head);
+        params.extend(tail);
         Key::new(Self::KIND, params)
     }
 }
 
-/// Sealed graph roots: the only legitimately parameterless node keys.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct CheckRoot;
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct BuildRoot;
-impl NodeKey for CheckRoot {
-    const KIND: u32 = CHECK_ROOT_KIND;
-    fn encode(&self, _: &mut Vec<u64>) {}
+mod sealed {
+    pub trait Sealed {}
 }
-impl NodeKey for BuildRoot {
-    const KIND: u32 = BUILD_ROOT_KIND;
-    fn encode(&self, _: &mut Vec<u64>) {}
+
+/// A parameterless node. Sealed: only the `check`/`build` roots and the
+/// recorded whole-program debt below implement it. Removing debt roots as
+/// nodes are split is the goal; adding one is forbidden.
+pub trait RootKey: sealed::Sealed {
+    const KIND: u32;
+    fn key(&self) -> Key {
+        Key::new(Self::KIND, Vec::new())
+    }
+}
+
+macro_rules! root_keys {
+    ($($(#[$meta:meta])* $name:ident = $kind:expr;)*) => {$(
+        $(#[$meta])*
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        pub struct $name;
+        impl sealed::Sealed for $name {}
+        impl RootKey for $name {
+            const KIND: u32 = $kind;
+        }
+        impl $name {
+            pub fn key(&self) -> Key {
+                RootKey::key(self)
+            }
+        }
+    )*};
+}
+
+root_keys! {
+    /// Sealed `check` root.
+    CheckRoot = 104;
+    /// Sealed `build` root.
+    BuildRoot = 105;
+    /// DEBT (may only shrink): whole-program parse.
+    ParseDebtRoot = 100;
+    /// DEBT (may only shrink): whole-program signatures.
+    SignaturesDebtRoot = 101;
+    /// DEBT (may only shrink): whole-program resolve.
+    ResolveDebtRoot = 106;
+    /// DEBT (may only shrink): whole-program monomorphization plan.
+    MonoPlanDebtRoot = 113;
+    /// DEBT (may only shrink): whole-program effects barrier.
+    EffectsReadyDebtRoot = 115;
 }
 
 impl Key {
@@ -757,8 +775,13 @@ impl Engine {
         }
     }
 
-    /// Attach a demand for a typed node key.
-    pub fn request_key<K: NodeKey>(&self, key: &K) -> Demand {
+    /// Attach a demand for a typed item key.
+    pub fn request_item<K: ItemKey>(&self, key: &K) -> Demand {
+        self.request(key.key())
+    }
+
+    /// Attach a demand for a sealed root key.
+    pub fn request_root<K: RootKey>(&self, key: &K) -> Demand {
         self.request(key.key())
     }
 
@@ -1089,30 +1112,44 @@ impl Context {
         }
     }
 
-    /// Demand a typed node. Equivalent to `request(key.key())`.
-    pub fn request_key<K: NodeKey>(&self, key: &K) -> Outputs {
+    /// Demand a typed item node.
+    pub fn request_item<K: ItemKey>(&self, key: &K) -> Outputs {
+        self.request(key.key())
+    }
+
+    /// Demand a sealed root node.
+    pub fn request_root<K: RootKey>(&self, key: &K) -> Outputs {
         self.request(key.key())
     }
 
     /// Demand every key before any is awaited, returning output `index` of
     /// each. Request-all-then-await keeps independent prerequisites parallel.
-    pub fn request_all<'k, K: NodeKey + 'k>(
+    pub fn request_all<'k, K: ItemKey + 'k>(
         &self,
         keys: impl IntoIterator<Item = &'k K>,
         index: usize,
     ) -> Vec<Handle> {
         keys.into_iter()
-            .map(|key| self.request_key(key).get(index))
+            .map(|key| self.request_item(key).get(index))
             .collect()
     }
 
-    /// Demand a typed node and await its typed fact at output `index`.
-    pub async fn read_key<T: Fact, K: NodeKey>(
+    /// Demand a typed item node and await its typed fact at output `index`.
+    pub async fn read_item<T: Fact, K: ItemKey>(
         &self,
         key: &K,
         index: usize,
     ) -> Result<Arc<T>, Error> {
-        self.read_fact::<T>(self.request_key(key).get(index)).await
+        self.read_fact::<T>(self.request_item(key).get(index)).await
+    }
+
+    /// Demand a sealed root node and await its typed fact at output `index`.
+    pub async fn read_root<T: Fact, K: RootKey>(
+        &self,
+        key: &K,
+        index: usize,
+    ) -> Result<Arc<T>, Error> {
+        self.read_fact::<T>(self.request_root(key).get(index)).await
     }
 
     pub async fn read(&self, handle: Handle) -> Result<u64, Error> {

@@ -9,14 +9,14 @@ fn opaque_pack_rejects_foreign_identity_and_changed_hidden_operand() {
     });
     let budget = snapshot.budget.clone();
     let engine = Engine::new(CompilerProvider(snapshot));
-    let body = engine.request(Facts::item(TEMPLATE_BODY, 0));
+    let body = engine.request(crate::compiler::keys::item(TEMPLATE_BODY, 0));
     engine.run(1).unwrap();
     body.completion().unwrap();
     let template = engine
-        .fact_of::<TemplateBodyFact>(&Facts::item(TEMPLATE_BODY, 0), 0)
+        .fact_of::<TemplateBodyFact>(&crate::compiler::keys::item(TEMPLATE_BODY, 0), 0)
         .unwrap();
     let types = engine
-        .fact_of::<frontend::PlanCtx>(&Facts::root(SIGNATURES), 0)
+        .fact_of::<frontend::PlanCtx>(&crate::compiler::keys::SignaturesDebtRoot.key(), 0)
         .unwrap();
     let publication = template.publication.as_ref().unwrap();
     let facts = ir::FactsCtx::Validated(publication.facts());
@@ -112,11 +112,11 @@ fn opaque_pack_does_not_erase_reference_carriers() {
     });
     let budget = snapshot.budget.clone();
     let engine = Engine::new(CompilerProvider(snapshot));
-    let body = engine.request(Facts::item(TEMPLATE_BODY, 0));
+    let body = engine.request(crate::compiler::keys::item(TEMPLATE_BODY, 0));
     engine.run(1).unwrap();
     body.completion().unwrap();
     let template = engine
-        .fact_of::<TemplateBodyFact>(&Facts::item(TEMPLATE_BODY, 0), 0)
+        .fact_of::<TemplateBodyFact>(&crate::compiler::keys::item(TEMPLATE_BODY, 0), 0)
         .unwrap();
     let publication = template.publication.as_ref().unwrap();
     let (occurrence, opaque, hidden) = template
@@ -158,7 +158,10 @@ fn opaque_representation_requires_exact_body_and_snapshot_witness() {
             let budget = self.0.0.budget.clone();
             Box::pin(async move {
                 let hidden: Arc<OpaqueHiddenTypesFact> = cx
-                    .read_fact(cx.request(Facts::item(TEMPLATE_BODY, 0)).get(2))
+                    .read_fact(
+                        cx.request(crate::compiler::keys::item(TEMPLATE_BODY, 0))
+                            .get(2),
+                    )
                     .await?;
                 let params = instances::graph_key::encode_opaque(
                     hidden.representations[0].opaque(),
@@ -180,7 +183,7 @@ fn opaque_representation_requires_exact_body_and_snapshot_witness() {
         let engine = Engine::new(Probe(CompilerProvider(snapshot)));
         let probe = engine.request(Key::new(9000, vec![0]));
         let requests: Vec<_> = (0..4)
-            .map(|index| engine.request(Facts::item(TEMPLATE_BODY, index)))
+            .map(|index| engine.request(crate::compiler::keys::item(TEMPLATE_BODY, index)))
             .collect();
         engine.run(1).unwrap();
         probe.completion().unwrap();
@@ -188,7 +191,7 @@ fn opaque_representation_requires_exact_body_and_snapshot_witness() {
             request.completion().unwrap();
         }
         let types = engine
-            .fact_of::<frontend::PlanCtx>(&Facts::root(SIGNATURES), 0)
+            .fact_of::<frontend::PlanCtx>(&crate::compiler::keys::SignaturesDebtRoot.key(), 0)
             .unwrap();
         (engine, types)
     }
@@ -197,13 +200,13 @@ fn opaque_representation_requires_exact_body_and_snapshot_witness() {
     let templates: Vec<_> = (0..4)
         .map(|index| {
             engine
-                .fact_of::<TemplateBodyFact>(&Facts::item(TEMPLATE_BODY, index), 0)
+                .fact_of::<TemplateBodyFact>(&crate::compiler::keys::item(TEMPLATE_BODY, index), 0)
                 .unwrap()
         })
         .collect();
     let publication = templates[0].publication.as_ref().unwrap();
     let records = engine
-        .fact_of::<OpaqueHiddenTypesFact>(&Facts::item(TEMPLATE_BODY, 0), 2)
+        .fact_of::<OpaqueHiddenTypesFact>(&crate::compiler::keys::item(TEMPLATE_BODY, 0), 2)
         .unwrap();
     let record = &records.representations[0];
     let proof = ir::OpaqueDefinitionProof::seal(publication.clone(), record, &budget).unwrap();
@@ -214,7 +217,7 @@ fn opaque_representation_requires_exact_body_and_snapshot_witness() {
     assert!(ir::identical_type(closed.hidden(), record.hidden(), &budget).unwrap());
     // The replacement independently satisfies Marker. Bounds alone are insufficient.
     let other_records = engine
-        .fact_of::<OpaqueHiddenTypesFact>(&Facts::item(TEMPLATE_BODY, 1), 2)
+        .fact_of::<OpaqueHiddenTypesFact>(&crate::compiler::keys::item(TEMPLATE_BODY, 1), 2)
         .unwrap();
     let replacement = ir::OpaqueHiddenType::new(
         record.opaque().clone(),
@@ -299,7 +302,7 @@ fn opaque_representation_requires_exact_body_and_snapshot_witness() {
     );
     let (foreign_engine, foreign_types) = fixture(&budget);
     let foreign_template = foreign_engine
-        .fact_of::<TemplateBodyFact>(&Facts::item(TEMPLATE_BODY, 0), 0)
+        .fact_of::<TemplateBodyFact>(&crate::compiler::keys::item(TEMPLATE_BODY, 0), 0)
         .unwrap();
     let foreign_publication = foreign_template.publication.as_ref().unwrap();
     assert!(
