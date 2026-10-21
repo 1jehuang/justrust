@@ -87,7 +87,11 @@ impl PlanCtx {
                                 .transpose()?
                                 .unwrap_or(false)
                             {
-                                return Err("canonical method receiver formal mismatch".into());
+                                return Err(format!(
+                                    "canonical method receiver formal mismatch for `{name:?}`: formal {:?}, receiver {:?}",
+                                    signature.params.first(),
+                                    candidate
+                                ));
                             }
                             ir::root_reference_layers(&candidate)?;
                             return Ok(Some(MethodSelection {

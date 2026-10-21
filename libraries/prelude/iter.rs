@@ -8,6 +8,16 @@ pub trait Iterator: Sized {
     fn enumerate(self) -> Enumerate<Self> {
         Enumerate { iterator: self, count: 0usize }
     }
+
+    fn fold<B, F: FnMut(B, Self::Item) -> B>(mut self, init: B, mut f: F) -> B {
+        let mut acc = init;
+        loop {
+            match self.next() {
+                Option::Some(item) => acc = f(acc, item),
+                Option::None => return acc,
+            }
+        }
+    }
 }
 
 pub trait IntoIterator {

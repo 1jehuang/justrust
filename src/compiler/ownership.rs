@@ -2128,7 +2128,12 @@ impl Paths {
                     let Some(Projection::Field(index)) = projection.next() else {
                         unreachable!("validated downcast has a field")
                     };
-                    self.nodes[node].variant_offsets[variant.index] + index
+                    // A node without tracked variants (for example storage
+                    // reached through a borrowed enum) is one footprint.
+                    let Some(&offset) = self.nodes[node].variant_offsets.get(variant.index) else {
+                        return node;
+                    };
+                    offset + index
                 }
             };
             // Paths below a runtime element are not separately tracked: the
@@ -2580,7 +2585,13 @@ impl Transfer<'_> {
                     let Some(Projection::Field(index)) = projection.next() else {
                         unreachable!("validated downcast has a field")
                     };
-                    self.paths.nodes[node].variant_offsets[variant.index] + index
+                    // An unexpanded node (no tracked variant layout) has no
+                    // child footprint, like a missing child below.
+                    let Some(&offset) = self.paths.nodes[node].variant_offsets.get(variant.index)
+                    else {
+                        return Ok(true);
+                    };
+                    offset + index
                 }
             };
             let Some(&child) = self.paths.nodes[node].children.get(index) else {

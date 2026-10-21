@@ -111,7 +111,7 @@ impl<'s> Solver<'_, '_, 's> {
                         continue;
                     };
                     let plan = self.checker.signatures.plan()?;
-                    let selected = plan.select_method_with_arguments(
+                    let selected = match plan.select_method_with_arguments(
                         &ty,
                         name,
                         self.checker.facts(),
@@ -123,8 +123,43 @@ impl<'s> Solver<'_, '_, 's> {
                                 ),
                             )
                         },
-                        |_, _| Ok(None),
-                    )?;
+                        // Realize graph nominals exactly as ordinary method
+                        // hints do, so `v.iter()` on a realized `Vec<T>`
+                        // compares against the same receiver representation.
+                        |target, signature| {
+                            let checker = self.checker;
+                            if checker.nominal_inputs.is_none() {
+                                return Ok(None);
+                            }
+                            match checker.nominal_call_signature(target, signature.clone())? {
+                                super::super::nominal_calls::NominalCallSignature::Ready {
+                                    signature,
+                                    ..
+                                } => Ok(Some(signature)),
+                                super::super::nominal_calls::NominalCallSignature::Blocked(
+                                    blocked,
+                                ) => {
+                                    *checker.nominal_blocked.borrow_mut() = Some(blocked);
+                                    Err("missing graph input: canonical method signature realization"
+                                        .into())
+                                }
+                            }
+                        },
+                    ) {
+                        // Without nominal inputs this solver cannot realize a
+                        // graph nominal receiver's declaration signature. It
+                        // only supplies inference evidence, so it contributes
+                        // none here and the ordinary loop checker decides.
+                        Err(error)
+                            if self.checker.nominal_inputs.is_none()
+                                && error
+                                    .starts_with("canonical method receiver formal mismatch") =>
+                        {
+                            self.iterator_items.push(pending);
+                            continue;
+                        }
+                        other => other?,
+                    };
                     if let Some(selected) = selected {
                         if selected.signature.params.len() != 1 {
                             return Err(self.user_error("E0061: wrong number of method arguments"));
