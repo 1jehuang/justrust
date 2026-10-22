@@ -304,6 +304,53 @@ impl Default for PreparedSource {
         }
     }
 }
+/// One file's own prepared text for per-file parsing (PARSE-SPLIT.md step
+/// A). Each `mod child;` stays an empty `{}` group; `child_sites[i]` is the
+/// byte offset inside that group where child `i`'s items belong. Spans
+/// render at `base`, the file's depth-first assembly FileId, so diagnostics
+/// keep assembled order and paths.
+#[derive(Debug)]
+pub struct FileView {
+    pub prepared: PreparedSource,
+    pub base: u32,
+    pub child_sites: Vec<usize>,
+}
+impl FileView {
+    /// The shallow view of `unit`, mounted at assembly FileId `base`.
+    pub fn of(unit: &FileUnit, base: u32, options: &SourceOptions) -> Result<Self, SourceError> {
+        let mut prepared = PreparedSource {
+            debug_assertions: options.cfg.debug_assertions(),
+            overflow_checks: options.overflow_checks,
+            ..PreparedSource::default()
+        };
+        let id = prepared
+            .sources
+            .add(unit.path.clone(), unit.contents.clone());
+        prepared.crate_roots.push(id);
+        prepared.source_bytes = unit.contents.len();
+        prepared.files = 1;
+        for segment in &unit.origins {
+            append_segment(
+                &mut prepared,
+                &unit.text[segment.prepared.clone()],
+                segment.origin,
+                segment.synthetic,
+            )?;
+        }
+        for attribute in &unit.attributes {
+            prepared.attributes.push(attribute.clone());
+        }
+        if let Some(error) = &unit.terminal {
+            return Err(copy_error(error, error.primary).with_sources(&prepared.sources));
+        }
+        Ok(Self {
+            prepared,
+            base,
+            child_sites: unit.children.iter().map(|child| child.at).collect(),
+        })
+    }
+}
+
 impl PreparedSource {
     pub(super) fn embedded_issuers(
         &self,
