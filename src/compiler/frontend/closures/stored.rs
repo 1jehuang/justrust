@@ -159,6 +159,7 @@ impl Parser<'_, '_> {
             owner_source: None,
             by_move,
             captures: Vec::new(),
+            item_calls: Vec::new(),
             stored: Some(StoredClosureSyntax {
                 site,
                 params,

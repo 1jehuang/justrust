@@ -50,7 +50,21 @@ impl Resolver<'_> {
                 }
             }
             // Recorded unresolved in the same function, or an unbound name in
-            // a non-macro body, is a genuine source item candidate.
+            // a non-macro body, is a genuine source item candidate. A closure
+            // body cannot see its parent's locals here: record the name so
+            // the parent call site rejects it when a parent local shadows it.
+            if self.anonymous_closure_body
+                && name.anchor() == PathAnchor::Relative
+                && let Some(ident) = name.single()
+                && let Some(source) = self.active_closure.as_mut()
+            {
+                self.alias_budget.charge_work(1)?;
+                source
+                    .item_calls
+                    .try_reserve(1)
+                    .map_err(|_| "closure item call allocation")?;
+                source.item_calls.push(ident);
+            }
             return Ok(false);
         }
         let Expr::Call { name, args } = expr else {

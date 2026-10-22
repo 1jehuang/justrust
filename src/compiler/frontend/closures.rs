@@ -41,6 +41,9 @@ pub(super) struct ClosureSource {
     pub owner_source: Option<CallableSource>,
     pub by_move: bool,
     pub captures: Vec<SourceCapture>,
+    /// Unqualified calls in the body that fell back to item lookup. The
+    /// parent call site rejects any that a parent local shadows.
+    pub item_calls: Vec<AstIdent>,
     pub stored: Option<StoredClosureSyntax>,
 }
 
@@ -206,6 +209,7 @@ impl Parser<'_, '_> {
             owner_source: None,
             by_move,
             captures: Vec::new(),
+            item_calls: Vec::new(),
             stored: None,
         });
         self.lexical.closure_sources = sources;

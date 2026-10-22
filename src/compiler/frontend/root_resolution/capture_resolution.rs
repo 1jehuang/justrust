@@ -215,6 +215,23 @@ impl Resolver<'_> {
             .get(&key)
             .cloned()
             .ok_or("anonymous call has no resolved original closure body")?;
+        // A parent local shadows every same-spelled item (stock E0618 when it
+        // is not callable). Calling a captured binding is not implemented.
+        // Macro-scoped parents key locals by anchored binding, which a child
+        // occurrence cannot name; that case keeps its prior resolution.
+        for ident in source
+            .item_calls
+            .iter()
+            .filter(|_| self.lexical_function.is_none())
+        {
+            let path = self.single_path(*ident)?;
+            if self.local_contains(&path, locals)? {
+                return Err(
+                    "unsupported: closure calls of captured parent bindings are not implemented"
+                        .into(),
+                );
+            }
+        }
         if source.captures.is_empty() {
             return Ok(());
         }
