@@ -586,7 +586,13 @@ impl PlanState {
             .map_err(|_| "generic key allocation failed")?;
         key_args.extend_from_slice(args);
         let application_key = (decl, key_args);
-        if let Some(ty) = self.nominals.applications.get(&application_key) {
+        if let Some(ty) = self
+            .nominals
+            .base
+            .applications
+            .get(&application_key)
+            .or_else(|| self.nominals.applications.get(&application_key))
+        {
             return Ok(ty.clone());
         }
         if let Some((_, back)) = self
@@ -697,7 +703,13 @@ impl PlanState {
             // its ordered actuals, never an interning-order ordinal, so every
             // node computes the same identity for the same application.
             let index = canonical_slot(&application_key);
-            if let Some(existing) = self.nominals.by_slot.get(&index) {
+            if let Some(existing) = self
+                .nominals
+                .base
+                .by_slot
+                .get(&index)
+                .or_else(|| self.nominals.by_slot.get(&index))
+            {
                 let same = match existing {
                     ir::Ty::Struct(t) => t.def().source_decl == decl && *t.def().type_args == *args,
                     ir::Ty::Enum(t) => t.def().source_decl == decl && *t.def().type_args == *args,

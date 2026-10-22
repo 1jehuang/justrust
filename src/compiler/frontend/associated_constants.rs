@@ -250,10 +250,7 @@ impl PlanCtx {
         let owner = self.registry.declaration(owner_id)?;
         let mut bindings = generic_bindings(&self.registry, &info.env, budget)?;
         let caller = ir::FactsCtx::Universal(&info.env);
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| "generic plan context poisoned")?;
+        let mut state = self.scratch();
         let previous = state.source_context;
         let result = (|| {
             state.source_context = Some(self.registry.source_type_context(owner_id)?);

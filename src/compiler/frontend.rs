@@ -16475,7 +16475,7 @@ fn retained_function_projection(
     found |= retained_node_projection(names, DepthNode::Block(&function.body), projection, budget)?;
     Ok(found)
 }
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug)]
 pub enum DeclItemName {
@@ -17120,6 +17120,9 @@ enum NominalSchema {
 }
 #[derive(Debug, Default)]
 pub struct NominalInterner {
+    /// Immutable canonical applications sealed at plan construction, shared
+    /// read-only by every per-call scratch interner.
+    base: Arc<CanonicalNominals>,
     applications: HashMap<(ir::DeclId, Vec<ir::Ty>), ir::Ty>,
     /// Canonical slot (see `canonical_slot`) to its application.
     by_slot: HashMap<usize, ir::Ty>,
@@ -17134,12 +17137,38 @@ struct SourceTypeContext {
     module: ModuleId,
     owner: Option<ir::DeclId>,
 }
+/// Canonical nominal applications interned while the plan was constructed
+/// (every declaration's symbolic application and what it reaches). Immutable.
+#[derive(Debug, Default)]
+struct CanonicalNominals {
+    applications: HashMap<(ir::DeclId, Vec<ir::Ty>), ir::Ty>,
+    by_slot: HashMap<usize, ir::Ty>,
+}
+/// Per-call lowering scratch: the interning memo, current source context and
+/// byte reservations of one computation. Owned by the caller, never stored in
+/// a plan or fact; reservations are released when the scratch is dropped.
 #[derive(Debug)]
 struct PlanState {
     source_context: Option<SourceTypeContext>,
-    schemas: HashMap<ir::DeclId, Arc<NominalSchema>>,
+    schemas: Arc<HashMap<ir::DeclId, Arc<NominalSchema>>>,
     nominals: NominalInterner,
     reservations: Vec<ir::PlanReservation>,
+}
+impl PlanState {
+    fn scratch(
+        schemas: &Arc<HashMap<ir::DeclId, Arc<NominalSchema>>>,
+        base: &Arc<CanonicalNominals>,
+    ) -> Self {
+        Self {
+            source_context: None,
+            schemas: schemas.clone(),
+            nominals: NominalInterner {
+                base: base.clone(),
+                ..NominalInterner::default()
+            },
+            reservations: Vec::new(),
+        }
+    }
 }
 #[derive(Clone, Debug)]
 pub struct PlanCtx {
@@ -17148,7 +17177,10 @@ pub struct PlanCtx {
     world: Option<Arc<tr::ValidatedTraitWorld>>,
     validated: Arc<HashMap<ir::DeclId, ir::GenericSignature>>,
     registry: Arc<DeclRegistry>,
-    state: Arc<Mutex<PlanState>>,
+    /// Immutable nominal source schemas, sealed at construction.
+    nominal_schemas: Arc<HashMap<ir::DeclId, Arc<NominalSchema>>>,
+    /// Immutable canonical applications, sealed at construction.
+    nominals: Arc<CanonicalNominals>,
     /// Immutable per-callable source contexts, sealed at construction.
     contexts: Arc<HashMap<ir::DeclId, CallableContext>>,
     source_schemas: Arc<SourceSchemas>,
@@ -17432,6 +17464,10 @@ fn validate_const_typed_calls(
     Ok(())
 }
 impl PlanCtx {
+    /// Fresh per-call lowering scratch over the immutable canonical base.
+    fn scratch(&self) -> PlanState {
+        PlanState::scratch(&self.nominal_schemas, &self.nominals)
+    }
     pub(super) fn validate_source_bound_path(
         &self,
         declaration: ir::DeclId,
@@ -17474,10 +17510,7 @@ impl PlanCtx {
         // caller binder may execute while source actuals are being interned.
         caller.validate_ty_with_budget(owner, budget)?;
         let application = {
-            let mut state = self
-                .state
-                .lock()
-                .map_err(|_| "generic plan context poisoned")?;
+            let mut state = self.scratch();
             state
                 .source_trait_application(
                     &self.registry,
@@ -17639,12 +17672,7 @@ impl PlanCtx {
             budget,
         )?;
         let mut source_schemas = SourceSchemasBuilder::default();
-        let mut state = PlanState {
-            source_context: None,
-            schemas: HashMap::new(),
-            nominals: NominalInterner::default(),
-            reservations: Vec::new(),
-        };
+        let mut state = PlanState::scratch(&Arc::default(), &Arc::default());
         let mut contexts: HashMap<ir::DeclId, CallableContext> = HashMap::new();
         for entry in catalog_builder.base_declarations() {
             let info = &entry.info;
@@ -17920,8 +17948,7 @@ impl PlanCtx {
                 index,
             )?;
             clone_visibility(&d.visibility, budget)?;
-            state
-                .schemas
+            Arc::make_mut(&mut state.schemas)
                 .insert(id, Arc::new(NominalSchema::Struct(d.clone())));
         }
         for (index, d) in program.enums.iter().enumerate() {
@@ -17940,9 +17967,7 @@ impl PlanCtx {
                 index,
             )?;
             clone_visibility(&d.visibility, budget)?;
-            state
-                .schemas
-                .insert(id, Arc::new(NominalSchema::Enum(d.clone())));
+            Arc::make_mut(&mut state.schemas).insert(id, Arc::new(NominalSchema::Enum(d.clone())));
         }
         // User callables keep their indices; native prelude callables follow.
         let mut prelude_callables: Vec<(ir::DeclId, CallableSource)> = Vec::new();
@@ -18984,13 +19009,28 @@ impl PlanCtx {
         // Consume construction authority once before graph-facing adapters.
         source_schemas.complete_closure_predicates(&registry, budget)?;
         let source_schemas = source_schemas.seal_from_registry(&registry, budget)?;
+        // Construction storage stays charged for the plan's life; the
+        // interned applications become the immutable canonical base.
+        for reservation in std::mem::take(&mut state.reservations) {
+            reservation.retain()?;
+        }
+        let PlanState {
+            schemas: nominal_schemas,
+            nominals,
+            ..
+        } = state;
+        let nominals = Arc::new(CanonicalNominals {
+            applications: nominals.applications,
+            by_slot: nominals.by_slot,
+        });
         let mut plan = Self {
             program: shared.clone(),
             catalog,
             world: None,
             validated: Arc::new(HashMap::new()),
             registry,
-            state: Arc::new(Mutex::new(state)),
+            nominal_schemas,
+            nominals,
             contexts: Arc::new(contexts),
             source_schemas,
             shared_env: None,
@@ -19131,10 +19171,7 @@ impl PlanCtx {
                 index: 0,
             });
             let supertraits = {
-                let mut state = self
-                    .state
-                    .lock()
-                    .map_err(|_| "generic plan context poisoned")?;
+                let mut state = self.scratch();
                 state.source_context = Some(self.registry.source_type_context(id)?);
                 let mut rows = Vec::new();
                 append_implicit_sized(&self.registry, &info.env, &mut rows, budget)?;
@@ -19275,10 +19312,7 @@ impl PlanCtx {
             let mut predicates = Vec::new();
             append_implicit_sized(&self.registry, &info.env, &mut predicates, budget)?;
             let trait_ref = {
-                let mut state = self
-                    .state
-                    .lock()
-                    .map_err(|_| "generic plan context poisoned")?;
+                let mut state = self.scratch();
                 state.source_context = Some(self.registry.source_type_context(declaration)?);
                 append_source_bounds(
                     &mut state,
@@ -19369,7 +19403,8 @@ impl PlanCtx {
             program: self.program.clone(),
             catalog: self.catalog.clone(),
             registry: self.registry.clone(),
-            state: self.state.clone(),
+            nominal_schemas: self.nominal_schemas.clone(),
+            nominals: self.nominals.clone(),
             contexts: self.contexts.clone(),
             source_schemas: self.source_schemas.clone(),
             budget: budget.clone(),
@@ -19686,11 +19721,7 @@ impl PlanCtx {
         )?;
         let args = symbolic_args(&info.param_env, budget)?;
         budget.charge_work(1 + args.len())?;
-        let state = self
-            .state
-            .lock()
-            .map_err(|_| "generic plan context poisoned")?;
-        let ty = state
+        let ty = self
             .nominals
             .applications
             .get(&(decl, args))
@@ -19727,10 +19758,7 @@ impl PlanCtx {
         // Intern structurally under the exact binder, then check the original
         // caller's complete authority after the lexical state guard is gone.
         let out = {
-            let mut state = self
-                .state
-                .lock()
-                .map_err(|_| "generic plan context poisoned")?;
+            let mut state = self.scratch();
             let context = match caller {
                 ir::FactsCtx::Validated(facts) => {
                     Some(self.registry.source_type_context(facts.declaration())?)
@@ -19814,9 +19842,7 @@ impl PlanCtx {
         // nominal through this same state. Intern structurally while locked,
         // then replay the original caller's authority after releasing the guard.
         let out = {
-            self.state
-                .lock()
-                .map_err(|_| "generic plan context poisoned")?
+            self.scratch()
                 .intern(&self.registry, decl, args, structural, budget, 0)?
         };
         caller.validate_ty_metadata_with_budget(&out, budget)?;
@@ -19900,10 +19926,6 @@ impl PlanCtx {
         reason = "PathKey hashes immutable owner/anchor/namespace/name keys only; its shared resource ledger is not semantic identity"
     )]
     fn build_shared_env(&self) -> Result<SharedTypeEnv, String> {
-        let state = self
-            .state
-            .lock()
-            .map_err(|_| "generic plan context poisoned")?;
         let mut environment_bytes = 0usize;
         for info in &self.registry.declarations {
             self.budget.charge_work(1)?;
@@ -19942,7 +19964,7 @@ impl PlanCtx {
             if info.param_env.arity() != 0 {
                 continue;
             }
-            match state.nominals.applications.get(&(*id, Vec::new())) {
+            match self.nominals.applications.get(&(*id, Vec::new())) {
                 Some(ir::Ty::Struct(ty)) => {
                     structs.insert(key.clone(), ty.clone());
                 }
@@ -19976,10 +19998,6 @@ impl PlanCtx {
             self_ty: None,
             facts: None,
         };
-        let state = self
-            .state
-            .lock()
-            .map_err(|_| "generic plan context poisoned")?;
         if let Some(decl) = decl {
             let info = self.declaration(decl)?;
             env.params = generic_bindings(&self.registry, &info.env, &self.budget)?;
@@ -19991,7 +20009,6 @@ impl PlanCtx {
                 env.param_env = Some(info.env.clone());
             }
         }
-        drop(state);
         if let Some(decl) = decl {
             env.facts = Some(self.callable_facts(decl)?);
         }
@@ -20000,11 +20017,7 @@ impl PlanCtx {
 }
 impl ir::SubstitutionCx for PlanCtx {
     fn nominal_application(&self, id: ir::NominalAppId) -> Result<ir::NominalAppInfo, String> {
-        let state = self
-            .state
-            .lock()
-            .map_err(|_| "generic plan context poisoned")?;
-        let ty = state
+        let ty = self
             .nominals
             .by_slot
             .get(&id.index.source_slot().map_err(|error| {
@@ -20049,10 +20062,7 @@ impl ir::SubstitutionCx for PlanCtx {
             // the trait world, so only metadata is checked here.
             caller.validate_ty_metadata_with_budget(arg, budget)?;
         }
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| "generic plan context poisoned")?;
+        let mut state = self.scratch();
         let declaration = request.source_decl();
         state.intern_with_transport(
             &self.registry,
@@ -20437,24 +20447,62 @@ fn append_source_bounds(
     }
     Ok(())
 }
+/// Structural payload equality of two definitions for one canonical
+/// application. Nested nominals compare by identity and are validated by
+/// their own walk step.
+fn same_fields(a: &[ir::FieldDef], b: &[ir::FieldDef]) -> bool {
+    a.len() == b.len()
+        && a.iter().zip(b).all(|(a, b)| {
+            a.name == b.name
+                && a.ty == b.ty
+                && a.visibility == b.visibility
+                && a.lifetime_bound == b.lifetime_bound
+        })
+}
+fn same_struct_def(a: &ir::StructDef, b: &ir::StructDef) -> bool {
+    a.id == b.id
+        && a.source_decl == b.source_decl
+        && a.type_args == b.type_args
+        && a.name == b.name
+        && a.module == b.module
+        && a.visibility == b.visibility
+        && same_fields(&a.fields, &b.fields)
+}
+fn same_enum_def(a: &ir::EnumDef, b: &ir::EnumDef) -> bool {
+    a.id == b.id
+        && a.source_decl == b.source_decl
+        && a.type_args == b.type_args
+        && a.name == b.name
+        && a.module == b.module
+        && a.visibility == b.visibility
+        && a.variants.len() == b.variants.len()
+        && a.variants.iter().zip(b.variants.iter()).all(|(a, b)| {
+            a.name == b.name && a.shape == b.shape && same_fields(&a.fields, &b.fields)
+        })
+}
 #[derive(Debug)]
 struct SchemaAdapter {
     program: Arc<Program>,
     catalog: Arc<tr::CoreCatalog>,
     registry: Arc<DeclRegistry>,
-    state: Arc<Mutex<PlanState>>,
+    nominal_schemas: Arc<HashMap<ir::DeclId, Arc<NominalSchema>>>,
+    nominals: Arc<CanonicalNominals>,
     contexts: Arc<HashMap<ir::DeclId, CallableContext>>,
     source_schemas: Arc<SourceSchemas>,
     budget: ir::PlanBudget,
 }
 impl SchemaAdapter {
+    fn scratch(&self) -> PlanState {
+        PlanState::scratch(&self.nominal_schemas, &self.nominals)
+    }
     fn raw_plan(&self) -> Result<PlanCtx, String> {
         self.budget.retain_bytes(128)?;
         Ok(PlanCtx {
             program: self.program.clone(),
             catalog: self.catalog.clone(),
             registry: self.registry.clone(),
-            state: self.state.clone(),
+            nominal_schemas: self.nominal_schemas.clone(),
+            nominals: self.nominals.clone(),
             contexts: self.contexts.clone(),
             source_schemas: self.source_schemas.clone(),
             budget: self.budget.clone(),
@@ -20791,9 +20839,7 @@ impl tr::SchemaCx for SchemaAdapter {
         } else {
             ir::FactsCtx::Universal(env)
         };
-        self.state
-            .lock()
-            .map_err(|_| self.error("schema interner poisoned".into()))?
+        self.scratch()
             .intern(&self.registry, declaration, arguments, caller, budget, 0)
             .map_err(|e| self.error(e))
     }
@@ -20857,22 +20903,62 @@ impl tr::SchemaCx for SchemaAdapter {
                         return Err("foreign graph nominal source snapshot".into());
                     }
                 } else {
-                    let state = cx.state.lock().map_err(|_| "schema interner poisoned")?;
-                    let canonical = match state.nominals.by_slot.get(&id.index.source_slot()?) {
-                        Some(ir::Ty::Struct(t)) if matches!(ty, ir::Ty::Struct(_)) => {
-                            t.def() as *const _ as usize
-                        }
-                        Some(ir::Ty::Enum(t)) if matches!(ty, ir::Ty::Enum(_)) => {
-                            t.def() as *const _ as usize
-                        }
+                    // The slot is a canonical digest of the definition's own
+                    // resolved declaration and ordered actuals: recompute it.
+                    let (decl, args) = match ty {
+                        ir::Ty::Struct(t) => (t.def().source_decl, t.def().type_args.to_vec()),
+                        ir::Ty::Enum(t) => (t.def().source_decl, t.def().type_args.to_vec()),
                         _ => return Err("noncanonical nominal application".into()),
                     };
-                    if canonical != pointer
+                    if !matches!(
+                        cx.registry.declaration(decl)?.kind,
+                        ir::DeclKind::Struct | ir::DeclKind::Enum
+                    ) || nominal_schema::canonical_slot(&(decl, args))
+                        != id.index.source_slot()?
                         || id.snapshot != cx.registry.declarations[0].id.snapshot
+                        || decl.snapshot != id.snapshot
                     {
                         return Err("noncanonical nominal application".into());
                     }
-                    drop(state);
+                    // The definition payload must equal the canonical one:
+                    // the immutable sealed base by pointer, otherwise a
+                    // deterministic re-interning in per-call scratch.
+                    let canonical = match cx.nominals.by_slot.get(&id.index.source_slot()?) {
+                        Some(base) => base.clone(),
+                        None => {
+                            let caller = if env.total_arity() == 0 {
+                                ir::FactsCtx::Concrete
+                            } else {
+                                ir::FactsCtx::Universal(env)
+                            };
+                            let (decl, args) = match ty {
+                                ir::Ty::Struct(t) => {
+                                    (t.def().source_decl, t.def().type_args.to_vec())
+                                }
+                                ir::Ty::Enum(t) => {
+                                    (t.def().source_decl, t.def().type_args.to_vec())
+                                }
+                                _ => unreachable!(),
+                            };
+                            cx.scratch()
+                                .intern(&cx.registry, decl, &args, caller, b, 0)
+                                .map_err(|_| "noncanonical nominal application")?
+                        }
+                    };
+                    let same = match (&canonical, ty) {
+                        (ir::Ty::Struct(c), ir::Ty::Struct(t)) => {
+                            c.def() as *const _ as usize == pointer
+                                || same_struct_def(c.def(), t.def())
+                        }
+                        (ir::Ty::Enum(c), ir::Ty::Enum(t)) => {
+                            c.def() as *const _ as usize == pointer
+                                || same_enum_def(c.def(), t.def())
+                        }
+                        _ => false,
+                    };
+                    if !same {
+                        return Err("noncanonical nominal application".into());
+                    }
                 }
                 if let Some(height) = memo.get(&id) {
                     b.check_depth(depth + height)?;
@@ -21962,7 +22048,8 @@ mod associated_registry_tests {
             program: plan.program.clone(),
             catalog: plan.catalog.clone(),
             registry: plan.registry.clone(),
-            state: plan.state.clone(),
+            nominal_schemas: plan.nominal_schemas.clone(),
+            nominals: plan.nominals.clone(),
             contexts: plan.contexts.clone(),
             source_schemas: plan.source_schemas.clone(),
             budget: plan.budget.clone(),
@@ -21999,7 +22086,8 @@ mod associated_registry_tests {
             program: plan.program.clone(),
             catalog: plan.catalog.clone(),
             registry: plan.registry.clone(),
-            state: plan.state.clone(),
+            nominal_schemas: plan.nominal_schemas.clone(),
+            nominals: plan.nominals.clone(),
             contexts: plan.contexts.clone(),
             source_schemas: plan.source_schemas.clone(),
             budget: plan.budget.clone(),
@@ -22199,9 +22287,7 @@ mod equality_registry_tests {
             .get(&plan.registry.parameter_key(*parameter).unwrap())
             .unwrap();
         let application = plan
-            .state
-            .lock()
-            .unwrap()
+            .scratch()
             .source_trait_application(
                 &plan.registry,
                 &bound.traits[0],
@@ -22240,9 +22326,7 @@ mod equality_registry_tests {
         segment.args[0] = plan.program.functions[1].params[0].1.clone();
         segment.associated_types[1].name = *parameter;
         let error = plan
-            .state
-            .lock()
-            .unwrap()
+            .scratch()
             .source_trait_application(
                 &plan.registry,
                 &path,

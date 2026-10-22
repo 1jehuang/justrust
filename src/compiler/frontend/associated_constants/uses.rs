@@ -310,10 +310,7 @@ impl PlanCtx {
         // Structural interning must not hold PlanState while validating closed
         // trait membership, since nominal validation can re-enter the plan.
         let application = {
-            let mut state = self
-                .state
-                .lock()
-                .map_err(|_| "generic plan context poisoned")?;
+            let mut state = self.scratch();
             let previous = state.source_context;
             state.source_context = Some(self.registry.source_type_context(declaration)?);
             let result = state.source_trait_application(

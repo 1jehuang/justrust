@@ -2582,10 +2582,7 @@ impl<'a> Checker<'a> {
     ) -> Result<Arc<NominalSchema>, String> {
         let plan = self.signatures.plan()?;
         plan.budget.charge_work(1)?;
-        plan.state
-            .lock()
-            .map_err(|_| "generic plan context poisoned")?
-            .schemas
+        plan.nominal_schemas
             .get(&declaration)
             .cloned()
             .ok_or_else(|| "missing nominal source schema".into())
@@ -3822,10 +3819,12 @@ impl<'a> Checker<'a> {
         if let Some(plan) = &self.signatures.plan {
             plan.budget.charge_nodes(1)?;
             plan.budget.charge_work(1)?;
-            plan.state
-                .lock()
-                .map_err(|_| "generic plan context poisoned")?
-                .retain(&plan.budget, bytes)?;
+            // Body storage stays charged for this node's budget scope.
+            plan.budget.retain_bytes(
+                bytes
+                    .checked_add(4 * std::mem::size_of::<ir::PlanReservation>() + 64)
+                    .ok_or("planning reservation allocation overflow")?,
+            )?;
         }
         Ok(())
     }

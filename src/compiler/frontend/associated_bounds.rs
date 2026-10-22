@@ -112,14 +112,13 @@ fn associated_bounds_registry_callback_is_frozen_ordered_and_lock_free() {
         program: plan.program.clone(),
         catalog: plan.catalog.clone(),
         registry: plan.registry.clone(),
-        state: plan.state.clone(),
+        nominal_schemas: plan.nominal_schemas.clone(),
+        nominals: plan.nominals.clone(),
         contexts: plan.contexts.clone(),
         source_schemas: plan.source_schemas.clone(),
         budget: plan.budget.clone(),
     };
     let member = plan.registry.trait_associated_types[0][0];
-    // Holding this guard would deadlock a callback that reentered PlanState.
-    let _guard = plan.state.lock().unwrap();
     let ids = adapter.associated_type_bounds(member).unwrap();
     assert_eq!(
         &*ids,

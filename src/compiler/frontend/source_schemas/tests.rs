@@ -220,16 +220,12 @@ fn source_schemas_metadata_callbacks_do_not_lock_mutable_nominal_state() {
         program: plan.program.clone(),
         catalog: plan.catalog.clone(),
         registry: plan.registry.clone(),
-        state: plan.state.clone(),
+        nominal_schemas: plan.nominal_schemas.clone(),
+        nominals: plan.nominals.clone(),
         contexts: plan.contexts.clone(),
         source_schemas: plan.source_schemas.clone(),
         budget: b.clone(),
     };
-    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let _guard = plan.state.lock().unwrap();
-        panic!("intentional nominal state poison");
-    }));
-    assert!(plan.state.is_poisoned());
     assert!(adapter.declaration_info(declaration).is_ok());
     assert!(adapter.declaration_schema(declaration).is_ok());
     assert!(Arc::ptr_eq(
@@ -556,7 +552,8 @@ fn source_schemas_projection_hit_replaces_lookup_and_missing_const_uses_registry
         program: plan.program.clone(),
         catalog: plan.catalog.clone(),
         registry: plan.registry.clone(),
-        state: plan.state.clone(),
+        nominal_schemas: plan.nominal_schemas.clone(),
+        nominals: plan.nominals.clone(),
         contexts: plan.contexts.clone(),
         source_schemas: plan.source_schemas.clone(),
         budget: b.clone(),

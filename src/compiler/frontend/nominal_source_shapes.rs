@@ -80,7 +80,7 @@ impl PlanCtx {
                 // assignments are lowered through the canonical dynamic metadata
                 // path and admitted only when no parameter or inference remains.
                 let lowered = {
-                    let mut state = self.state.lock().map_err(|_| "schema interner poisoned")?;
+                    let mut state = self.scratch();
                     state.source_dynamic_type(
                         &self.registry,
                         path,

@@ -76,7 +76,7 @@ impl SchemaAdapter {
             &self.budget,
         )?);
         let bindings = param_bindings(&self.registry, info, &args)?;
-        let mut state = self.state.lock().map_err(|_| "schema interner poisoned")?;
+        let mut state = self.scratch();
         let previous = state.source_context;
         state.source_context = Some(self.registry.source_type_context(declaration)?);
         let result = (|| {
