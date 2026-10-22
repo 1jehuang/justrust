@@ -1343,7 +1343,10 @@ fn bitwise_exact_integer_and_boolean_types_preserve_operand_hints() {
         "fn main(){let x=true | 1;}",
         "fn main(){let x=() ^ ();}",
         "fn main(){let x=(1,2) & (3,4);}",
-        "fn main(){let x=1;let r=&x;let z=r|r;}",
+        // `r|r` (one shared layer) is stock-valid since a2c25ee46. Stock still
+        // rejects mixed depths (E0277) and two layers (E0369).
+        "fn main(){let x=1;let r=&x;let z=r|&r;}",
+        "fn main(){let x=1;let r=&x;let rr=&r;let z=rr|rr;}",
         "fn main(){let x:u8=256 | 0;}",
     ] {
         assert!(
@@ -2786,6 +2789,8 @@ fn b1_rejects_forbidden_reference_locations_authority_and_implicit_coercions() {
                 | "fn main(){let x=1;let r=&x;let t=(r,);}"
                 | "fn main(){let r=&1;}"
                 | "fn main(){let a=[1];let i=0usize;let p=&a[i];}"
+                // a2c25ee46: comparisons peel equal reference depths.
+                | "fn main(){let x=1;let a=&x;let b=&x;let eq=a==b;}"
         ) {
             let stock =
                 super::parser_tests::stock_compile(source, std::path::Path::new("unused"), true);

@@ -2339,7 +2339,10 @@ fn comparison_assertions_shadowing_syntax_and_operand_boundaries() {
             let error = parse(&format!("fn main(){{{name}!({arguments})}}")).unwrap_err();
             assert!(error.contains(diagnostic), "{error}");
         }
-        for operands in ["&1,&1", "(1,true),(1,true)", "[1],[1]", "1,true"] {
+        // Equal shared reference depths compare since a2c25ee46 (stock-valid;
+        // stock `assert_ne!(&1,&1)` type-checks and panics at run time).
+        good(&format!("fn main(){{{name}!(&1,&1);}}"));
+        for operands in ["(1,true),(1,true)", "[1],[1]", "1,true", "&1,1"] {
             let source = format!("fn main(){{{name}!({operands});}}");
             assert!(
                 parse(&source).and_then(|program| check(&program)).is_err(),
