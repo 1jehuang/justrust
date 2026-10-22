@@ -71,6 +71,7 @@ mod format_macros;
 mod int_consts;
 mod item_module;
 mod let_statement;
+pub(super) mod module_declarations;
 pub use format_macros::SourceFormatInto;
 mod associated_constants;
 mod format_spec;
