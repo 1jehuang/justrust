@@ -199,7 +199,7 @@ pub(super) async fn produce(
                 Error::new(analysis_diagnostic(
                     &provider.0.budget,
                     "physical opaque instance",
-                    key_root_slot(key).unwrap_or(usize::MAX),
+                    instance_identity(key, source_index, &physical.function().name),
                     &analysis,
                 ))
             })?;

@@ -458,3 +458,26 @@ fn rejects_resource_expanding_recursive_instances() {
 fn main(){if run()==7{println!("generic oracle ok");}}"#,
     );
 }
+
+#[test]
+fn generic_body_move_error_is_attributed_to_generic_item() {
+    // Stock rustc rejects with E0382 in `twice`, for every instantiation.
+    let source = r#"fn twice<T>(x:T)->(T,T){let a=x;let b=x;(a,b)}
+fn main(){let _=twice::<i32>(1);let _=twice::<String>(String::new());}"#;
+    rejects("generic move error", source);
+    for workers in [1, 8] {
+        let scratch = Scratch::new();
+        let input = scratch.source(source);
+        let output = scratch.path("must-not-exist");
+        let result = capture(&mut compiler(&input, &output, workers, true), &scratch, 20);
+        let stderr = String::from_utf8_lossy(&result.stderr);
+        assert!(
+            stderr.contains("twice"),
+            "not attributed to generic item: {stderr}"
+        );
+        assert!(
+            !stderr.contains(&usize::MAX.to_string()),
+            "sentinel identity leaked: {stderr}"
+        );
+    }
+}

@@ -73,7 +73,7 @@ use std::sync::Arc;
 pub(super) fn analysis_diagnostic(
     budget: &ir::PlanBudget,
     subject: &str,
-    index: usize,
+    index: impl std::fmt::Display,
     analysis: &ownership::Analysis,
 ) -> String {
     struct Writer<'a> {
@@ -597,6 +597,18 @@ fn instance_params(
     instances::graph_key::encode(target, budget).map_err(Error::new)
 }
 /// The closed-root slot named by an instance key, if it is slot-keyed.
+/// Canonical, stable identity of an instance node for diagnostics: the root
+/// slot for closed roots, otherwise the generic definition's name and source
+/// item plus the canonical target words of the instance key.
+fn instance_identity(key: &Key, source_index: usize, name: &str) -> String {
+    match key_root_slot(key) {
+        Some(slot) => slot.to_string(),
+        None => format!(
+            "{name} (generic item {source_index}, target {:x?})",
+            key.params
+        ),
+    }
+}
 fn key_root_slot(key: &Key) -> Option<usize> {
     match key.params.as_slice() {
         [slot] => usize::try_from(*slot).ok(),
@@ -1633,6 +1645,7 @@ impl Provider for CompilerProvider {
                     let body: Arc<InstanceBodyFact> = facts.get(sibling(BODY)?).await?;
                     body.validate_current_engine(cx.authority())?;
                     scale_task_work_by_cfg(&lowered);
+                    let identity = instance_identity(&key, instance_source, &lowered.name);
                     if !Self::universal_body(&types, instance_target.declaration)? {
                         let template = facts.template(instance_source).await?;
                         lowered
@@ -1701,7 +1714,7 @@ impl Provider for CompilerProvider {
                             let message = analysis_diagnostic(
                                 &this.0.budget,
                                 "instance",
-                                key_root_slot(&key).unwrap_or(usize::MAX),
+                                &identity,
                                 &analysis,
                             );
                             cx.publish_fact(ANALYSIS_OUTPUT, Arc::new(analysis))?;
@@ -2873,6 +2886,23 @@ mod owner_route_tests {
 #[cfg(test)]
 mod diagnostic_tests {
     use super::*;
+
+    #[test]
+    fn generic_instance_identity_is_canonical_not_sentinel() {
+        let generic = keys::test_key(ANALYZE, vec![7, 3, 9]);
+        let identity = instance_identity(&generic, 4, "crate::twice");
+        assert!(identity.contains("crate::twice") && identity.contains("generic item 4"));
+        assert!(!identity.contains(&usize::MAX.to_string()));
+        assert_eq!(identity, instance_identity(&generic, 4, "crate::twice"));
+        assert_ne!(
+            identity,
+            instance_identity(&keys::test_key(ANALYZE, vec![7, 3, 10]), 4, "crate::twice")
+        );
+        assert_eq!(
+            instance_identity(&keys::test_key(ANALYZE, vec![2]), 4, "f"),
+            "2"
+        );
+    }
 
     #[test]
     fn analysis_diagnostics_stop_before_rich_payload_limit() {
