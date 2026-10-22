@@ -2817,18 +2817,22 @@ pub trait SubstitutionCx {
         caller: FactsCtx<'_>,
         budget: &PlanBudget,
     ) -> Result<Ty, String> {
-        let info = self.nominal_application(request.original)?;
-        self.intern_nominal(info.source_decl, request.arguments, caller, budget)
+        self.intern_nominal(request.source_decl, request.arguments, caller, budget)
     }
 }
 
 pub struct NominalSubstitutionRequest<'a> {
     original: NominalAppId,
+    /// Resolved declaration of `original`, read from its own definition.
+    source_decl: DeclId,
     arguments: &'a [Ty],
 }
 impl NominalSubstitutionRequest<'_> {
     pub fn original(&self) -> NominalAppId {
         self.original
+    }
+    pub fn source_decl(&self) -> DeclId {
+        self.source_decl
     }
     pub fn arguments(&self) -> &[Ty] {
         self.arguments
@@ -3174,7 +3178,10 @@ fn substitute_ty_walk(
                 }
                 return Ok(ty.clone());
             }
-            let app = cx.nominal_application(value.def().id)?;
+            let app = NominalAppInfo {
+                source_decl: value.def().source_decl,
+                type_args: value.def().type_args.clone(),
+            };
             if app.type_args.len() > 32 {
                 return Err("nominal argument limit exceeded".into());
             }
@@ -3187,6 +3194,7 @@ fn substitute_ty_walk(
             cx.intern_substituted_nominal(
                 &NominalSubstitutionRequest {
                     original: value.def().id,
+                    source_decl: value.def().source_decl,
                     arguments: &arguments,
                 },
                 caller,
@@ -3207,7 +3215,10 @@ fn substitute_ty_walk(
                 }
                 return Ok(ty.clone());
             }
-            let app = cx.nominal_application(value.def().id)?;
+            let app = NominalAppInfo {
+                source_decl: value.def().source_decl,
+                type_args: value.def().type_args.clone(),
+            };
             if app.type_args.len() > 32 {
                 return Err("nominal argument limit exceeded".into());
             }
@@ -3220,6 +3231,7 @@ fn substitute_ty_walk(
             cx.intern_substituted_nominal(
                 &NominalSubstitutionRequest {
                     original: value.def().id,
+                    source_decl: value.def().source_decl,
                     arguments: &arguments,
                 },
                 caller,
@@ -3324,6 +3336,7 @@ pub(in crate::compiler) fn instantiate_checked_with_constants(
         args,
         cx: &mut recording,
         budget,
+        owners: std::collections::HashMap::new(),
     };
     output.result = visitor.ty(&output.result)?;
     for local in &mut output.locals {
@@ -3668,7 +3681,7 @@ impl<C: SubstitutionCx> SubstitutionCx for RecordingSubstitutionCx<'_, C> {
         caller: FactsCtx<'_>,
         budget: &PlanBudget,
     ) -> Result<Ty, String> {
-        let before = self.inner.nominal_application(request.original)?;
+        let before_decl = request.source_decl;
         let output = self
             .inner
             .intern_substituted_nominal(request, caller, budget)?;
@@ -3684,8 +3697,12 @@ impl<C: SubstitutionCx> SubstitutionCx for RecordingSubstitutionCx<'_, C> {
             Ty::Enum(value) => value.def().id,
             _ => return Err("nominal substitution changed kind".into()),
         };
-        let after = self.inner.nominal_application(instantiated)?;
-        if before.source_decl != after.source_decl {
+        let after_decl = match &output {
+            Ty::Struct(value) => value.def().source_decl,
+            Ty::Enum(value) => value.def().source_decl,
+            _ => return Err("nominal substitution changed kind".into()),
+        };
+        if before_decl != after_decl {
             return Err("nominal substitution changed source declaration".into());
         }
         self.record_nominal_mapping(request.original, instantiated, budget)?;
@@ -4093,9 +4110,58 @@ struct Instantiate<'a, C> {
     args: &'a [Ty],
     cx: &'a mut C,
     budget: &'a PlanBudget,
+    /// Node-local: enum applications seen in this body's source types, so a
+    /// downcast owner resolves from its own definition, not a shared table.
+    owners: std::collections::HashMap<NominalAppId, NominalAppInfo>,
 }
 impl<C: SubstitutionCx> Instantiate<'_, C> {
+    fn note_owners(&mut self, ty: &Ty, depth: usize) -> Result<(), String> {
+        self.budget.check_depth(depth)?;
+        match ty {
+            Ty::Enum(value) if !value.is_back_edge() => {
+                let def = value.def();
+                if !self.owners.contains_key(&def.id) {
+                    self.budget.charge_work(1)?;
+                    self.owners.insert(
+                        def.id,
+                        NominalAppInfo {
+                            source_decl: def.source_decl,
+                            type_args: def.type_args.clone(),
+                        },
+                    );
+                    for variant in def.variants.iter() {
+                        for field in variant.fields.iter() {
+                            self.note_owners(&field.ty, depth + 1)?;
+                        }
+                    }
+                }
+                for arg in def.type_args.iter() {
+                    self.note_owners(arg, depth + 1)?;
+                }
+            }
+            Ty::Struct(value) if !value.is_back_edge() => {
+                for field in value.def().fields.iter() {
+                    self.note_owners(&field.ty, depth + 1)?;
+                }
+                for arg in value.def().type_args.iter() {
+                    self.note_owners(arg, depth + 1)?;
+                }
+            }
+            Ty::Ref { referent: t, .. }
+            | Ty::RawPtr { pointee: t, .. }
+            | Ty::Array { element: t, .. }
+            | Ty::Slice { element: t } => self.note_owners(t, depth + 1)?,
+            Ty::Tuple(items) => {
+                for item in items.iter() {
+                    self.note_owners(item, depth + 1)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
     fn ty(&mut self, ty: &Ty) -> Result<Ty, String> {
+        self.note_owners(ty, 0)?;
         substitute_ty(ty, self.env, self.args, self.facts, self.cx, self.budget)
     }
     fn enum_ty(&mut self, ty: &mut EnumTy) -> Result<(), String> {
@@ -4127,7 +4193,10 @@ impl<C: SubstitutionCx> Instantiate<'_, C> {
         self.budget.charge_work(path.len())?;
         for projection in path {
             if let Projection::Downcast(variant) = projection {
-                let application = self.cx.nominal_application(variant.owner)?;
+                let application = match self.owners.get(&variant.owner) {
+                    Some(info) => info.clone(),
+                    None => self.cx.nominal_application(variant.owner)?,
+                };
                 if application.type_args.len() > 32 {
                     return Err("nominal argument limit exceeded".into());
                 }
@@ -4142,6 +4211,7 @@ impl<C: SubstitutionCx> Instantiate<'_, C> {
                 let Ty::Enum(value) = self.cx.intern_substituted_nominal(
                     &NominalSubstitutionRequest {
                         original: variant.owner,
+                        source_decl: application.source_decl,
                         arguments: &args,
                     },
                     self.facts,
@@ -16064,6 +16134,7 @@ mod tests {
             facts: FactsCtx::Concrete,
             cx: &mut context,
             budget: &budget,
+            owners: std::collections::HashMap::new(),
         }
         .pattern(&mut pattern)
         .unwrap();

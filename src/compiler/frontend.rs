@@ -20053,16 +20053,7 @@ impl ir::SubstitutionCx for PlanCtx {
             .state
             .lock()
             .map_err(|_| "generic plan context poisoned")?;
-        let original = state
-            .nominals
-            .by_slot
-            .get(&request.original().index.source_slot()?)
-            .ok_or("substitution request names unknown nominal")?;
-        let declaration = match original {
-            ir::Ty::Struct(ty) if ty.def().id == request.original() => ty.def().source_decl,
-            ir::Ty::Enum(ty) if ty.def().id == request.original() => ty.def().source_decl,
-            _ => return Err("substitution request names foreign nominal".into()),
-        };
+        let declaration = request.source_decl();
         state.intern_with_transport(
             &self.registry,
             declaration,
