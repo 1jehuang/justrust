@@ -149,6 +149,9 @@ pub struct ModuleArena {
     owner: NonZeroU64,
     /// Explicit crate-scoped owner set; exactly `owner` today.
     owners: CrateOwners<NonZeroU64>,
+    /// Frozen sibling file arenas of the same crate (PARSE-SPLIT.md step 1),
+    /// sorted by owner. Their modules are served by them; others are foreign.
+    linked: Arc<[(NonZeroU64, Arc<ModuleArena>)]>,
     source_names: Option<SessionId>,
     source_root: Option<ModuleId>,
     catalog: [ModuleId; 4],
@@ -250,6 +253,7 @@ impl ModuleArenaBuilder {
             arena: ModuleArena {
                 owner,
                 owners: CrateOwners::single(owner),
+                linked: Arc::from([]),
                 source_names,
                 source_root,
                 catalog: [
@@ -357,6 +361,32 @@ impl ModuleArenaBuilder {
         }
         Err(ModuleError::InvalidHandle)
     }
+    /// Link the crate's frozen sibling file arenas. Explicit and fixed once
+    /// linked: only these owners join this arena's own.
+    pub fn link_crate_files(&mut self, arenas: Vec<Arc<ModuleArena>>) -> Result<(), ModuleError> {
+        if !self.arena.linked.is_empty() {
+            return Err(TokenError::InvalidInput("crate sibling arenas already linked").into());
+        }
+        self.arena
+            .budget
+            .charge(Counter::Work, arenas.len() as u64)?;
+        let mut linked: Vec<(NonZeroU64, Arc<ModuleArena>)> = Vec::new();
+        linked
+            .try_reserve_exact(arenas.len())
+            .map_err(|_| self.arena.budget.poison_allocation())?;
+        for arena in arenas {
+            if arena.owner == self.arena.owner {
+                return Err(TokenError::InvalidInput("an arena cannot link itself").into());
+            }
+            linked.push((arena.owner, arena));
+        }
+        linked.sort_unstable_by_key(|(owner, _)| *owner);
+        if linked.windows(2).any(|pair| pair[0].0 == pair[1].0) {
+            return Err(TokenError::InvalidInput("duplicate linked arena owner").into());
+        }
+        self.arena.linked = linked.into();
+        Ok(())
+    }
     pub fn freeze(self) -> Result<Arc<ModuleArena>, ModuleError> {
         self.arena.budget.check()?;
         Ok(Arc::new(self.arena))
@@ -420,7 +450,13 @@ impl ModuleArena {
     fn node(&self, id: ModuleId) -> Result<&ModuleNode, ModuleError> {
         self.budget.charge(Counter::Work, 1)?;
         if !self.owners.admits(id.owner) {
-            return Err(ModuleError::ForeignOwner);
+            return match self
+                .linked
+                .binary_search_by_key(&id.owner, |(owner, _)| *owner)
+            {
+                Ok(index) => self.linked[index].1.node(id),
+                Err(_) => Err(ModuleError::ForeignOwner),
+            };
         }
         self.nodes
             .as_slice()
@@ -517,7 +553,20 @@ impl ModuleArena {
         ident: AstIdent,
     ) -> Result<Option<ModuleId>, ModuleError> {
         let key = self.checked_child_key(names, parent, ident)?;
-        self.find_child(parent, key, self.hasher.hash_one((parent, key)))
+        if let Some(found) = self.find_child(parent, key, self.hasher.hash_one((parent, key)))? {
+            return Ok(Some(found));
+        }
+        // A child interned by a linked sibling file (for example the file
+        // that declares `mod child;` under this parent).
+        for (_, arena) in self.linked.iter() {
+            self.budget.charge(Counter::Work, 1)?;
+            if let Some(found) =
+                arena.find_child(parent, key, arena.hasher.hash_one((parent, key)))?
+            {
+                return Ok(Some(found));
+            }
+        }
+        Ok(None)
     }
 }
 
@@ -627,6 +676,37 @@ mod tests {
         assert!(matches!(
             builder.source_root(),
             Err(ModuleError::SourceUnavailable)
+        ));
+    }
+
+    #[test]
+    fn linked_sibling_arena_serves_its_modules_and_rejects_outsiders() {
+        let arena = |names: &NameStoreBuilder| {
+            ModuleArenaBuilder::for_source(
+                names,
+                crate::compiler::owner_path::standalone_issued(
+                    &names.budget(),
+                    crate::compiler::owner_path::OwnerDomain::ModuleArena,
+                )
+                .unwrap(),
+            )
+            .unwrap()
+        };
+        let (mut b_names, origin) = names(ExpansionBudget::default());
+        let mut b = arena(&b_names);
+        let b_root = b.source_root().unwrap();
+        let child = b_names.intern_root("child", origin).unwrap();
+        let b_child = b.intern_child(&b_names, b_root, child).unwrap();
+        let b = b.freeze().unwrap();
+        let (a_names, _) = names(ExpansionBudget::default());
+        let outside = arena(&a_names).freeze().unwrap();
+        let mut a = arena(&a_names);
+        a.link_crate_files(vec![b.clone()]).unwrap();
+        assert!(a.link_crate_files(vec![b.clone()]).is_err());
+        assert_eq!(a.parent(b_child).unwrap(), Some(b_root));
+        assert!(matches!(
+            a.check(outside.source_root().unwrap()),
+            Err(ModuleError::ForeignOwner)
         ));
     }
 
