@@ -290,7 +290,9 @@ fn main() {}
     let (program, plan) = plan(source);
     frontend::check(&program).unwrap();
     check_callable(&program, &plan, free(&program, &plan, "scalar"));
-    let error = frontend::parse(
+    // Stock: E0277 (`i32: Copy` for the user trait). The user trait spelling
+    // must never resolve to the catalog Copy.
+    let program = frontend::parse(
         r#"
 trait Copy {}
 struct S;
@@ -299,11 +301,9 @@ impl Source for S {type Out=i32;}
 fn main() {}
 "#,
     )
-    .expect_err("user trait associated bound is rejected at source resolution");
-    assert!(
-        error.to_ascii_lowercase().contains("unsupported"),
-        "{error}"
-    );
+    .unwrap();
+    let error = frontend::check(&program).expect_err("stock rejects with E0277");
+    assert!(error.contains("E0277"), "{error}");
 }
 
 #[test]
