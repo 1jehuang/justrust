@@ -680,7 +680,8 @@ fn shared_reference_slice_check_graph_keeps_typed_carriers_without_codegen() {
         assert!(result.report.capture_complete);
         assert!(result.analyses.iter().all(|analysis| analysis.passed()));
         assert!(!result.report.published_kind(103));
-        assert!(result.control_flow.is_empty());
+        // CHECK reports SOURCE_ADMISSION CFGs (606e7aed7) but never demands LOWER.
+        assert!(!result.report.published_kind(108));
         let result = compiler::compile(source.into(), workers, false).unwrap();
         assert!(result.executable.is_some());
         assert!(

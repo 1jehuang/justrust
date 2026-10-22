@@ -10,7 +10,8 @@ fn array_len_uses_real_borrow_and_unsize_without_codegen() {
         assert!(!result.report.published_kind(103));
         assert!(result.report.published_kind(112));
         assert!(!result.report.published_kind(113));
-        assert!(result.control_flow.is_empty());
+        // CHECK reports SOURCE_ADMISSION CFGs (606e7aed7) but never demands LOWER.
+        assert!(!result.report.published_kind(108));
         let result = compiler::compile(source.into(), workers, false).unwrap();
         assert!(result.executable.is_some());
         assert!(result.analyses.iter().all(|a| a.passed()));
@@ -50,7 +51,8 @@ fn explicit_mutable_array_receiver_keeps_both_loan_origins() {
         assert!(!result.report.published_kind(103));
         assert!(result.report.published_kind(112));
         assert!(!result.report.published_kind(113));
-        assert!(result.control_flow.is_empty());
+        // CHECK reports SOURCE_ADMISSION CFGs (606e7aed7) but never demands LOWER.
+        assert!(!result.report.published_kind(108));
         let result = compiler::compile(source.into(), workers, false).unwrap();
         assert!(result.executable.is_some());
         assert!(result.analyses.iter().all(|a| a.passed()));

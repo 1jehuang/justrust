@@ -113,6 +113,17 @@ fn replace_domain(function: &mut CheckedFunction, ty: Ty) {
     function.exprs[0].ty = ty.clone();
     *pattern(function).0 = ty;
 }
+/// Turn binding `index` into `ref mut`, retyping its local to `&mut T`.
+fn mut_borrow(function: &mut CheckedFunction, index: usize) {
+    let binding = &mut pattern(function).1[index];
+    binding.borrow = Some(ir::BorrowKind::Mut);
+    let local = binding.local.0;
+    let ty = function.locals[local].ty.clone();
+    function.locals[local].ty = Ty::Ref {
+        kind: ir::BorrowKind::Mut,
+        referent: Arc::new(ty),
+    };
+}
 fn accept(function: &CheckedFunction) {
     function.validate().expect("valid array IR must validate");
     cfg::lower(function)
@@ -267,6 +278,8 @@ fn array_pattern_bindings_cannot_share_one_local() {
 fn array_pattern_bindings_cannot_overlap_same_index() {
     let mut function = fixture();
     pattern(&mut function).1[1].projection[0] = Projection::ConstantIndex(0);
+    // Duplicate Copy reads are legal (`x @ [y, ..]`); a mutable borrow is not.
+    mut_borrow(&mut function, 1);
     reject(&function);
 }
 
@@ -288,6 +301,7 @@ fn array_pattern_bindings_cannot_overlap_nested_parent_and_child() {
             borrow: None,
         },
     ];
+    mut_borrow(&mut function, 0);
     reject(&function);
 }
 
@@ -296,8 +310,10 @@ fn array_pattern_cannot_bind_entire_root_using_empty_projection() {
     let mut function = fixture();
     function.locals[1].ty = domain();
     let bindings = pattern(&mut function).1;
-    bindings.truncate(1);
     bindings[0].projection.clear();
+    // The whole-root binding overlaps the element binding; with a mutable
+    // borrow of the root that overlap must be rejected.
+    mut_borrow(&mut function, 0);
     reject(&function);
 }
 

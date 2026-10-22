@@ -12,6 +12,9 @@ fn array_lowering_and_analysis_are_shared_by_check_and_build() {
             assert_eq!(compiled.control_flow.len(), 2);
             assert_eq!(compiled.analyses.len(), 2);
             assert!(compiled.analyses.iter().all(|analysis| analysis.passed()));
+            if check {
+                assert!(compiled.report.published_kind(128));
+            }
             for index in 0..2 {
                 for kind in [102, 108, 109] {
                     let key = Key::new(kind, vec![index]);
@@ -21,7 +24,13 @@ fn array_lowering_and_analysis_are_shared_by_check_and_build() {
                         .iter()
                         .filter(|(actual, _)| *actual == key)
                         .collect();
-                    assert_eq!(evaluations.len(), 1);
+                    // CHECK proves via SOURCE_ADMISSION (128) and never
+                    // demands instance BODY/LOWER/ANALYZE (102/108/109).
+                    if check {
+                        assert!(evaluations.is_empty());
+                        continue;
+                    }
+                    assert_eq!(evaluations.len(), 1, "kind {kind} index {index}");
                     assert_eq!(evaluations[0].1, 1);
                 }
             }

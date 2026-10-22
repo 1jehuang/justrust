@@ -2436,7 +2436,13 @@ fn retained_analyses(engine: &Engine) -> Vec<(usize, Arc<ownership::Analysis>)> 
     let instances = engine
         .fact_of::<PlanFact>(&keys::MonoPlanDebtRoot.key(), 0)
         .map_or(0, |plan| plan.plan.entries.len());
-    for (kind, count) in [(UNIVERSAL_ANALYZE, callables), (ANALYZE, instances)] {
+    // CHECK proves source callables through SOURCE_ADMISSION, which publishes
+    // its analysis (success or failure) at ANALYSIS_OUTPUT before failing.
+    for (kind, count) in [
+        (SOURCE_ADMISSION, callables),
+        (UNIVERSAL_ANALYZE, callables),
+        (ANALYZE, instances),
+    ] {
         for index in 0..count {
             let key = keys::params(kind, index as u64, vec![]);
             if let Some(analysis) =
