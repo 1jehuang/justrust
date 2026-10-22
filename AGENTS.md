@@ -102,8 +102,8 @@ values there (100 `PARSE` through 115 `UNIVERSAL_EFFECTS_READY`). docs/compiler/
 
 **Known debt, may only shrink.** `parse`, `resolve` and `signatures` are
 still whole-program nodes (`mono_plan` was replaced by per-instance
-`INSTANCE` on 2026-10-22). `PlanCtx` still carries mutable state reachable
-from facts (budget ledgers became per-node on 2026-10-22). Do not copy these
+`INSTANCE` on 2026-10-22). No mutable state is reachable from facts and no
+process-global state remains (both debt files empty since 2026-10-22). Do not copy these
 patterns into new code. Split or remove them when
 you are nearby. Current numbers live in docs/compiler/GRAPH-INTEGRITY.md.
 

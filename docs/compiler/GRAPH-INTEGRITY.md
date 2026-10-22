@@ -92,7 +92,7 @@ may only move toward the target:
 
 | Debt | Recorded 2026-10-18 | Target |
 |---|---|---|
-| Out-of-graph state primitives | `out_of_graph_state.baseline` (compiler/mod.rs side slots removed 2026-10-18; global budget mutexes and ID counters remain) | none |
+| Out-of-graph state primitives | `out_of_graph_state.baseline`: empty since 2026-10-22 (budget ledgers per node, ID counters issued, `PlanState` mutex removed) | none (reached) |
 | Whole-program nodes | `parse`, `resolve`, `signatures` (`mono_plan` replaced by per-instance `INSTANCE` 2026-10-22, 32e3f6c70; `source` split per file and `concrete_proofs` removed 2026-10-18, `effects_ready` per item, debt root deleted 2026-10-20) | only `check`, `build` |
 | Leaf closure growth 16 to 32 | 1.000 measured 2026-10-22 after 32e3f6c70 (ceiling constant unchanged) | 1.0 |
 | Planning work growth 16 to 32 | 1.008 measured 2026-10-22 (optimizer 1.013; ceilings unchanged) | about 2.0 or better |
@@ -142,10 +142,20 @@ Recorded 2026-10-19: 11 fact roots reach 6 carriers, 62 entries (72 before
 construction-final declared reductions were frozen, 77 before the name-versus-type
 parser fix below):
 
-| Carrier | Mutable field | Owner of removal |
+| Carrier | Mutable field | Status |
 |---|---|---|
-| `PlanCtx` | `state: Arc<Mutex<PlanState>>` | llama (cr-graphunify) |
-| `ValidatedTraitWorld` | `memo`, `projection_memo` | llama |
+| `PlanCtx` | `state: Arc<Mutex<PlanState>>` | removed 2026-10-22 (00a747385) |
+| `ValidatedTraitWorld` | `memo`, `projection_memo` | removed (e74630946, node-local ProofScratch) |
+
+**2026-10-22: `fact_reachable_state.debt` and `out_of_graph_state.baseline`
+are both empty.** `PlanCtx`/`SchemaAdapter` no longer hold `PlanState` behind
+a mutex: canonical nominals and source schemas are sealed immutable fields,
+and the interning memo, source context and reservations are per-call scratch.
+Nominal identity is a canonical digest of (resolved declaration, ordered
+actuals), not an interning-order ordinal (56bcecc5b). Every process-global ID
+counter was replaced by owners issued from the producing node's
+`OwnerIssuer` (a7cb0b967, 2b8954723, 9293e01f8, 03a46dc28, 3f7d7517d,
+e1c447312). Any new entry in either file now needs explicit user approval.
 
 Budget carriers removed 2026-10-22 (31 entries). `PlanBudget`,
 `PlanReservation`, `ExpansionBudget`, `InvocationBudget`, `ByteLease` and
