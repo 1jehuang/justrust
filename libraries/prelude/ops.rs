@@ -90,6 +90,9 @@ pub trait Deref {
     type Target;
     fn deref(&self) -> &Self::Target;
 }
+pub trait DerefMut: Deref {
+    fn deref_mut(&mut self) -> &mut Self::Target;
+}
 // Callable traits. `Fn(A, B) -> R` sugar parses to `Fn<(A, B), Output = R>`
 // and `f(a, b)` on a callable value lowers to `Fn::call(&f, (a, b))`.
 // Each trait carries its own `Output` (no supertrait projection yet).

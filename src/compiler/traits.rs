@@ -7395,10 +7395,30 @@ impl TraitCx for ValidatedTraitWorld {
             };
             return_matches = self.return_refines(&signature.ref_contract, &concrete)?;
         }
-        if !self.eq_types(&signature.params, &direct.signature.params, 0)?
-            || !self.eq_ty(&signature.result, &direct.signature.result, 0)?
-            || !return_matches
-        {
+        let types_match = self.eq_types(&signature.params, &direct.signature.params, 0)?
+            && self.eq_ty(&signature.result, &direct.signature.result, 0)?;
+        if types_match && !return_matches {
+            // The required signature may name a graph-realized nominal whose
+            // field layout is not visible here, deriving an empty origin set.
+            // The types are proven equal, so the canonical required contract
+            // is the same derivation over the provider's equal types under the
+            // required region structure. Nothing else is relaxed.
+            let results = charged(
+                &self.budget,
+                ir::derive_return_contracts(
+                    &direct.signature.params,
+                    &direct.signature.result,
+                    &signature.ref_contract,
+                    &self.budget,
+                ),
+            )?;
+            let required = ir::RefContract {
+                results,
+                ..(*signature.ref_contract).clone()
+            };
+            return_matches = self.return_refines(&required, &direct.signature.ref_contract)?;
+        }
+        if !types_match || !return_matches {
             return Err(FactsError::invalid(
                 &self.budget,
                 "resolved implementation signature disagrees with trait declaration",

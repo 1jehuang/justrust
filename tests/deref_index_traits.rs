@@ -103,3 +103,45 @@ fn main() { let s = Sorted { v: 3 }; let e: E<i32> = E::A(4); let n = match e { 
         .expect("accepted unused ill-formed signature");
     assert!(error.to_string().contains("E0277"), "{error}");
 }
+
+#[test]
+fn explicit_deref_of_nominal_target() {
+    // `*p`, `(*p).field`, `&*p` with a struct Target (stock: "4 4 4").
+    run(
+        "#[derive(Clone, Copy)]
+struct W { v: i32 }
+struct P { w: W }
+impl std::ops::Deref for P { type Target = W; fn deref(&self) -> &W { &self.w } }
+fn main() { let p = P { w: W { v: 4 } }; let c = *p; let f = (*p).v; let r = &*p; println!(\"{} {} {}\", c.v, f, r.v); }",
+        "4 4 4\n",
+    );
+}
+
+#[test]
+fn deref_borrow_without_impl_is_rejected() {
+    let source =
+        "struct P { v: i32 } fn main() { let p = P { v: 1 }; let r = &*p; println!(\"{}\", r.v); }";
+    assert!(compiler::compile(source.into(), 1, true).is_err());
+}
+
+#[test]
+fn method_and_field_autoderef_through_deref() {
+    // Stock rustc 1.98.1: "4 4 9 9".
+    run(
+        "struct W { v: i32 }
+impl W { fn get(&self) -> i32 { self.v } }
+struct P { w: W }
+impl std::ops::Deref for P { type Target = W; fn deref(&self) -> &W { &self.w } }
+fn main() { let p = P { w: W { v: 4 } }; let a = p.get(); let b = p.v; let x = Box::new(W { v: 9 }); let c = x.get(); let d = x.v; println!(\"{} {} {} {}\", a, b, c, d); }",
+        "4 4 9 9\n",
+    );
+}
+
+#[test]
+fn autoderef_without_member_is_rejected() {
+    let source = "struct W { v: i32 }
+struct P { w: W }
+impl std::ops::Deref for P { type Target = W; fn deref(&self) -> &W { &self.w } }
+fn main() { let p = P { w: W { v: 4 } }; let b = p.missing; println!(\"{}\", b); }";
+    assert!(compiler::compile(source.into(), 1, true).is_err());
+}

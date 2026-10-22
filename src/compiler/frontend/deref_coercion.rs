@@ -133,3 +133,57 @@ impl type_check::Checker<'_> {
         Ok(None)
     }
 }
+
+impl type_check::Checker<'_> {
+    /// One overloaded autoderef step of a method/field receiver: when the
+    /// written receiver (or the nominal behind one reference) has no direct
+    /// candidate, `recv.m()` / `recv.f` reads through its exact canonical
+    /// `Deref::deref(&recv)` (or `DerefMut::deref_mut(&mut recv)`), recorded
+    /// at the receiver's first inventoried coercion site. Returns the checked
+    /// `&Target`/`&mut Target` carrier, or `None` when no impl applies.
+    pub(super) fn receiver_overloaded_deref(
+        &mut self,
+        receiver: &Expr,
+        receiver_ty: &ir::Ty,
+        kind: ir::BorrowKind,
+    ) -> Result<Option<ir::ExprId>, String> {
+        if !candidate(receiver) {
+            return Ok(None);
+        }
+        let (owner, behind_ref) = match receiver_ty {
+            ir::Ty::Ref { referent, .. } => (referent.as_ref().clone(), true),
+            ty => (ty.clone(), false),
+        };
+        if !matches!(owner, ir::Ty::Struct(_) | ir::Ty::Enum(_))
+            || self.deref_target_hint(&owner)?.is_none()
+        {
+            return Ok(None);
+        }
+        let spec = if kind == ir::BorrowKind::Mut {
+            ("ops", "DerefMut", "deref_mut")
+        } else {
+            ("ops", "Deref", "deref")
+        };
+        let first = if behind_ref {
+            if kind == ir::BorrowKind::Mut
+                && !matches!(
+                    receiver_ty,
+                    ir::Ty::Ref {
+                        kind: ir::BorrowKind::Mut,
+                        ..
+                    }
+                )
+            {
+                return Err(
+                    "E0596: cannot borrow data behind a shared reference as mutable".into(),
+                );
+            }
+            super::operators::First::Value(receiver)
+        } else {
+            super::operators::First::Borrow(kind, receiver)
+        };
+        let call = self.operator_call(spec, owner, None, first, &[])?;
+        self.record_operator(site(receiver as *const Expr as usize, 1), call)?;
+        Ok(Some(call))
+    }
+}

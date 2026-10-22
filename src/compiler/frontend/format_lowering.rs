@@ -208,9 +208,15 @@ impl Checker<'_> {
                     ir::validate_format_ty(mode, &flow.ty, Some(&self.signatures.plan()?.budget))?;
                 }
             }
+            let through_deref = matches!(
+                &self.exprs[id.0].kind,
+                ir::ExprKind::Field { base, .. }
+                    if matches!(&self.exprs[base.0].kind, ir::ExprKind::Deref { value }
+                        if matches!(self.exprs[value.0].kind, ir::ExprKind::Call { .. }))
+            );
             let place = static_source_place(argument)
                 .ok()
-                .filter(|_| place_expression(argument));
+                .filter(|_| place_expression(argument) && !through_deref);
             let indexed_reference = checked_index_reference.or_else(|| {
                 if matches!(argument, Expr::Index { .. } | Expr::DynamicIndex { .. }) {
                     match self.exprs[id.0].kind {

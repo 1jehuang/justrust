@@ -9,6 +9,8 @@ pub(super) enum Kind {
     Unary(UnaryOp),
     Assign(BinaryOp),
     Index(bool),
+    /// Explicit `*x`: builtin for references/raw pointers, else `Deref`.
+    Deref,
 }
 pub(super) struct Operation {
     kind: Kind,
@@ -50,6 +52,10 @@ impl Solver<'_, '_, '_> {
         self.queue_operator(Kind::Binary(op), left, Some(right))
     }
 
+    pub(super) fn operator_deref(&mut self, value: Term) -> Result<Term, String> {
+        self.queue_operator(Kind::Deref, value, None)
+    }
+
     pub(super) fn operator_unary(&mut self, op: UnaryOp, value: Term) -> Result<Term, String> {
         self.queue_operator(Kind::Unary(op), value, None)
     }
@@ -71,7 +77,11 @@ impl Solver<'_, '_, '_> {
         right: Option<Term>,
     ) -> Result<Term, String> {
         let result = self.fresh()?;
-        self.delayed_results.push(result);
+        // A deref result is a place, never a coercion producer; keeping it
+        // out of delayed results preserves the prior unconstrained behavior.
+        if !matches!(kind, Kind::Deref) {
+            self.delayed_results.push(result);
+        }
         self.operators.push(Operation {
             kind,
             left,
@@ -106,6 +116,16 @@ impl Solver<'_, '_, '_> {
         } else {
             left
         };
+        if matches!(kind, Kind::Deref) {
+            match self.domain(left) {
+                Domain::Unknown => return Ok(false),
+                Domain::Ref(_, element) | Domain::RawPtr(_, element) => {
+                    self.unify(result, element)?;
+                    return Ok(true);
+                }
+                _ => {}
+            }
+        }
         if matches!(self.domain(left), Domain::Unknown) {
             if matches!(kind, Kind::Index(_)) {
                 return Ok(false);
@@ -159,7 +179,10 @@ impl Solver<'_, '_, '_> {
             return Ok(true);
         }
         let Some(receiver) = self.resolve(left, 0)? else {
-            return Ok(false);
+            // An overloaded deref with an open receiver adds no evidence.
+            // Leaving the result unconstrained matches the prior solver
+            // behavior; checked lowering still selects and proves the call.
+            return Ok(matches!(kind, Kind::Deref));
         };
         let spec = match kind {
             Kind::Binary(op) => super::super::operators::binary_trait(op),
@@ -169,6 +192,7 @@ impl Solver<'_, '_, '_> {
                 .map(|(name, method)| ("ops", name, method)),
             Kind::Index(false) => Some(("ops", "Index", "index")),
             Kind::Index(true) => Some(("ops", "IndexMut", "index_mut")),
+            Kind::Deref => Some(("ops", "Deref", "deref")),
         };
         let Some((module, name, method)) = spec else {
             return Ok(false);
@@ -235,9 +259,9 @@ impl Solver<'_, '_, '_> {
             let formal = self.fixed(formal.clone())?;
             self.coerce(right, formal)?;
         }
-        let output = if matches!(kind, Kind::Index(_)) {
+        let output = if matches!(kind, Kind::Index(_) | Kind::Deref) {
             let ir::Ty::Ref { referent, .. } = signature.result else {
-                return Err("invalid metadata: index method result is not a reference".into());
+                return Err("invalid metadata: place operator result is not a reference".into());
             };
             self.fixed((*referent).clone())?
         } else {

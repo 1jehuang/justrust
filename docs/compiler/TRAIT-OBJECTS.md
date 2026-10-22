@@ -29,6 +29,24 @@ BUILD at workers 1 and 8 through `jr-rust`).
   object types are checked too. By-value `self` calls on objects are E0161.
   Missing impls are E0277, `&dyn` to `&mut dyn` is E0308.
 
+- Closed nongeneric `dyn P` is a rigid leaf in nominal source recipes, so
+  callables taking `&dyn P`/`&mut dyn P` pass graph nominal preparation
+  (regression fixed 2026-10-21; generic/associated principals stay explicit
+  `unsupported: generic dynamic source nominal recipe`).
+
+## Overloaded Deref receivers (2026-10-21, `tests/deref_index_traits.rs`)
+
+- `*p`, `&*p`, `&mut *p` on nominal `p` select `Deref::deref`/`DerefMut::deref_mut`
+  in both the local solver (`Kind::Deref`) and checked lowering. `DerefMut` and
+  `impl DerefMut for Box<T>` are in the prelude.
+- Method and field autoderef: `p.m()` / `p.f` read through one exact
+  `Deref::Target` step when `p` has no direct candidate (incl. `Box<W>`).
+  Each step is a proven trait call recorded at the receiver's inventoried
+  coercion site. Required/provided return-origin contracts re-derive over
+  proven-equal types when the required nominal is graph-realized.
+- Remaining: autoderef fields directly inside `format!` args (explicit
+  unsupported diagnostic), by-value receivers through Deref, multi-step chains.
+
 ## Explicitly unsupported (boundary fixtures)
 
 `dyn T<Assoc = X>`, `dyn A + 'static`/auto traits, `where Self: Sized`

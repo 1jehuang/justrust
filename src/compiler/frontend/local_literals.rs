@@ -63,6 +63,8 @@ struct Method {
     actuals: Vec<Term>,
     args: Vec<Term>,
     result: Term,
+    /// Overloaded `Deref` steps already taken from the written receiver.
+    depth: usize,
 }
 struct Projection {
     base: Term,
@@ -834,8 +836,13 @@ impl<'s> Solver<'_, '_, 's> {
                         _ => return Ok(()),
                     }
                 }
+                // `&T -> &dyn P` unsizing is proven by the checker.
+                if matches!(self.domain(b), Domain::Fixed(ir::Ty::Dyn(_))) {
+                    return Ok(());
+                }
                 self.coerce(a, b)
             }
+            (Domain::Array(a, n), Domain::Array(b, m)) if n == m => self.coerce(a, b),
             (Domain::Array(a, _), Domain::Slice(b)) => self.unify(a, b),
             _ => self.unify(actual, expected),
         }
@@ -1153,6 +1160,23 @@ impl<'s> Solver<'_, '_, 's> {
                             }
                         }
                     }
+                    // Every reference/autoref step of this nominal receiver
+                    // failed: continue the autoderef chain through its exact
+                    // `Deref::Target`, as stock probing does. Checked lowering
+                    // reselects the same chain and records each deref call.
+                    if method.depth < deref_coercion::MAX_DEREF_STEPS
+                        && matches!(ty, ir::Ty::Struct(_) | ir::Ty::Enum(_))
+                        && let Some(target) = self.checker.deref_target_hint(&ty)?
+                    {
+                        let receiver = self.fixed(target)?;
+                        pending.push(Method {
+                            receiver,
+                            depth: method.depth + 1,
+                            ..method
+                        });
+                        progress = true;
+                        continue;
+                    }
                     // No declaration of this name exists anywhere, so no
                     // autoderef step of this final receiver can select it.
                     if !final_receiver_has_inference(&ty)
@@ -1264,6 +1288,17 @@ impl<'s> Solver<'_, '_, 's> {
                 FieldSelector::ConstantIndex(_),
             ) => Ok(Some(element)),
             (Domain::Nominal(decl, args), FieldSelector::Tuple(_) | FieldSelector::Named(_)) => {
+                if !self.checker.has_member(decl, field)? {
+                    // Field autoderef through the exact `Deref::Target`.
+                    let Some(owner) = self.resolve(base, 0)? else {
+                        return Ok(None);
+                    };
+                    let Some(target) = self.checker.deref_target_hint(&owner)? else {
+                        return Err("unknown nominal field".into());
+                    };
+                    let target = self.fixed(target)?;
+                    return self.project(target, field);
+                }
                 if self.preparation.is_some() {
                     return self.prepare_field(decl, &args, field);
                 }
@@ -1317,6 +1352,11 @@ impl<'s> Solver<'_, '_, 's> {
             term = if matches!(field, FieldSelector::ConstantIndex(_)) {
                 let index = self.node(Domain::Integer)?;
                 self.operator_index(term, index, false)?
+            } else if matches!(field, FieldSelector::Deref)
+                && !matches!(self.domain(term), Domain::Ref(..) | Domain::RawPtr(..))
+            {
+                // Builtin once the carrier is known, otherwise overloaded Deref.
+                self.operator_deref(term)?
             } else {
                 self.field(term, field.clone())?
             };
@@ -1943,6 +1983,7 @@ impl<'s> Solver<'_, '_, 's> {
                     actuals,
                     args,
                     result,
+                    depth: 0,
                 });
                 Ok(result)
             }
@@ -1993,7 +2034,14 @@ impl<'s> Solver<'_, '_, 's> {
                 let item = self.fresh()?;
                 for e in elements {
                     let t = self.expr(e, depth + 1)?;
-                    self.unify(item, t)?;
+                    // Elements are coercion sites (e.g. `[&a, &b]` to `[&dyn P; 2]`).
+                    if matches!(self.domain(t), Domain::Ref(..))
+                        && matches!(self.domain(item), Domain::Ref(..))
+                    {
+                        self.coerce(t, item)?;
+                    } else {
+                        self.unify(item, t)?;
+                    }
                 }
                 self.node(Domain::Array(item, elements.len()))
             }
@@ -2051,7 +2099,7 @@ impl<'s> Solver<'_, '_, 's> {
                 let base = self.expr(value, depth + 1)?;
                 match self.domain(base) {
                     Domain::Ref(_, t) | Domain::RawPtr(_, t) => Ok(t),
-                    _ => self.fresh(),
+                    _ => self.operator_deref(base),
                 }
             }
             Expr::BorrowValue { kind, value } => {

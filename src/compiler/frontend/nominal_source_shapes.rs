@@ -75,7 +75,37 @@ impl PlanCtx {
                 Shape::Nominal(declaration,args.into())
             }
             Type::Projection(_) => return Err("unsupported: source projection recipe needs retained occurrence lowering capability".into()),
-            Type::Dyn(_) => return Err("unsupported: dynamic source nominal recipe".into()),
+            Type::Dyn(path) => {
+                // A closed nongeneric principal is a rigid leaf: no actuals
+                // or associated assignments can carry solver inference. The
+                // checked type is still lowered and validated independently.
+                let generic = match path.as_ref() {
+                    TraitPath::Source(path) => path
+                        .segments
+                        .iter()
+                        .any(|s| !s.args.is_empty() || !s.associated_types.is_empty()),
+                    _ => true,
+                };
+                let principal = self.registry.resolve_trait_path(path)?;
+                let index = self
+                    .registry
+                    .trait_ids
+                    .iter()
+                    .position(|id| *id == principal)
+                    .ok_or("dynamic principal has no source declaration")?;
+                if generic
+                    || !self.registry.trait_associated_types[index].is_empty()
+                    || !self.registry.source_trait(principal)?.self_defaults.is_empty()
+                {
+                    return Err("unsupported: generic dynamic source nominal recipe".into());
+                }
+                self.registry.check_dyn_compatible(principal, &self.budget, 0)?;
+                Shape::Leaf(ir::Ty::Dyn(Arc::new(ir::DynTy {
+                    principal,
+                    args: Arc::from([]),
+                    associated_types: Arc::from([]),
+                })))
+            }
             Type::Opaque(_) => return Err("unsupported: opaque source nominal recipe".into()),
             Type::Infer => return Err("unsupported: unresolved source type recipe requires solver-owned inference".into()),
         })

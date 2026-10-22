@@ -57,3 +57,9 @@ impl<T> super::ops::Deref for Box<T> {
         unsafe { &*self.ptr }
     }
 }
+
+impl<T> super::ops::DerefMut for Box<T> {
+    fn deref_mut(&mut self) -> &mut T {
+        unsafe { &mut *self.ptr }
+    }
+}

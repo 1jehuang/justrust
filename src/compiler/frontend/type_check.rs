@@ -3635,6 +3635,22 @@ impl<'a> Checker<'a> {
         }
         Ok(out)
     }
+    /// Whether a named/positional field exists on a struct declaration.
+    pub(super) fn has_member(
+        &self,
+        declaration: ir::DeclId,
+        field: &FieldSelector,
+    ) -> Result<bool, String> {
+        Ok(match field {
+            FieldSelector::Tuple(index) => *index < self.source_fields(declaration, None)?.len(),
+            FieldSelector::Named(name) => match self.member_index(declaration, None, *name) {
+                Ok(_) => true,
+                Err(error) if error == "unknown nominal field" => false,
+                Err(error) => return Err(error),
+            },
+            _ => true,
+        })
+    }
     fn member_index(
         &self,
         declaration: ir::DeclId,
@@ -4613,7 +4629,11 @@ impl<'a> Checker<'a> {
             Expr::Deref { value } => match self.scalar_hint(value)? {
                 Some(ir::Ty::Ref { referent, .. }) => Some(referent.as_ref().clone()),
                 Some(ir::Ty::RawPtr { pointee, .. }) => Some(pointee.as_ref().clone()),
-                _ => None,
+                Some(owner) => self.deref_target_hint(&owner)?,
+                None => match self.method_receiver_hint(value)? {
+                    Some(owner) => self.deref_target_hint(&owner)?,
+                    None => None,
+                },
             },
             Expr::BorrowValue { kind, value } => {
                 self.scalar_hint(value)?.map(|referent| ir::Ty::Ref {
@@ -4691,7 +4711,14 @@ impl<'a> Checker<'a> {
                     } else {
                         &ty
                     };
-                    Some(self.field_type(receiver, field)?.1)
+                    if let ir::Ty::Struct(nominal) = receiver
+                        && !self.has_member(nominal.def().source_decl, field)?
+                        && let Some(target) = self.deref_target_hint(receiver)?
+                    {
+                        Some(self.field_type(&target, field)?.1)
+                    } else {
+                        Some(self.field_type(receiver, field)?.1)
+                    }
                 } else {
                     None
                 }
@@ -8104,9 +8131,11 @@ impl<'a> Checker<'a> {
         let ty = self
             .method_receiver_hint(receiver)?
             .ok_or("unsupported unresolved receiver type")?;
-        let selected = self
-            .method_selection_with_inference(&ty, name, type_args, args, expected)?
-            .ok_or("no applicable method or unresolved method generic arguments")?;
+        let Some(selected) =
+            self.method_selection_with_inference(&ty, name, type_args, args, expected)?
+        else {
+            return self.method_through_deref(receiver, &ty, name, type_args, args, expected);
+        };
         let region_offset = match &selected.target {
             ir::Callee::Direct(target) => target.type_args.len().saturating_sub(type_args.len()),
             ir::Callee::TraitItem(_) | ir::Callee::Virtual(_) => 0,
@@ -8304,6 +8333,73 @@ impl<'a> Checker<'a> {
             args,
             self.type_actual_regions(type_args, region_offset)?,
             Some(adjusted),
+        )
+    }
+    /// Method autoderef through one overloaded `Deref` step: the call is
+    /// selected on the exact `Target` and receives the checked deref result.
+    fn method_through_deref(
+        &mut self,
+        receiver: &Expr,
+        ty: &ir::Ty,
+        name: &AstIdent,
+        type_args: &[Type],
+        args: &[Expr],
+        expected: Option<&ir::Ty>,
+    ) -> Result<ir::ExprId, String> {
+        const MISSING: &str = "no applicable method or unresolved method generic arguments";
+        let owner = match ty {
+            ir::Ty::Ref { referent, .. } => referent.as_ref(),
+            ty => ty,
+        };
+        let Some(target) = self.deref_target_hint(owner)? else {
+            return Err(MISSING.into());
+        };
+        let carrier = ir::Ty::Ref {
+            kind: ir::BorrowKind::Shared,
+            referent: Arc::new(target.clone()),
+        };
+        let selected = self
+            .method_selection_with_inference(&carrier, name, type_args, args, expected)?
+            .ok_or(MISSING)?;
+        let kind = match (selected.mode, selected.depth, selected.adjustment) {
+            (
+                ReceiverKind::Borrowed {
+                    kind: ir::BorrowKind::Shared,
+                },
+                0,
+                ReceiverAdjustment::Identity,
+            ) => ir::BorrowKind::Shared,
+            (
+                ReceiverKind::Borrowed {
+                    kind: ir::BorrowKind::Mut,
+                },
+                1,
+                ReceiverAdjustment::MutAutoref,
+            ) => ir::BorrowKind::Mut,
+            _ => {
+                return Err(
+                    "unsupported: by-value or multi-step receiver through an overloaded Deref"
+                        .into(),
+                );
+            }
+        };
+        let deref = self
+            .receiver_overloaded_deref(receiver, ty, kind)?
+            .ok_or(MISSING)?;
+        let region_offset = match &selected.target {
+            ir::Callee::Direct(target) => target.type_args.len().saturating_sub(type_args.len()),
+            ir::Callee::TraitItem(_) | ir::Callee::Virtual(_) => 0,
+        };
+        self.finish_checked_call(
+            selected.target,
+            name,
+            selected.original_signature.unwrap_or(selected.signature),
+            args,
+            self.type_actual_regions(type_args, region_offset)?,
+            Some((
+                deref,
+                (kind == ir::BorrowKind::Mut).then_some(ir::ImplicitBorrowKind::MutableReceiver),
+            )),
         )
     }
     pub(super) fn associated_expression(
@@ -10383,37 +10479,74 @@ impl<'a> Checker<'a> {
             Expr::Field { base, field } => {
                 self.reject_noncopy_slice_field(e)?;
                 let receiver = base.as_ref();
-                let mut base = self.expr(base)?;
-                let mut flow = self.flow(base);
-                if let ir::Ty::Ref { referent, .. } = &flow.ty {
-                    if !matches!(receiver, Expr::Var(_)) && !genuine_call(receiver) {
-                        // A projected carrier has the same authority as any other
-                        // static place. Validate its dereference without creating a
-                        // local or borrow, then read the already evaluated base once.
-                        let mut source = static_source_place(receiver)?;
-                        source.fields.push(FieldSelector::Deref);
-                        self.checked_place(&source)?;
+                let local_hint = match static_source_place(receiver) {
+                    Ok(place) => self.checked_place(&place).ok().map(|(_, ty, _)| ty),
+                    Err(_) => None,
+                };
+                if let Some(hint) =
+                    local_hint.or_else(|| self.method_receiver_hint(receiver).ok().flatten())
+                    && let ir::Ty::Struct(nominal) = match &hint {
+                        ir::Ty::Ref { referent, .. } => referent.as_ref(),
+                        ty => ty,
                     }
-                    let ty = referent.as_ref().clone();
-                    self.accessible(&ty)?;
-                    let deref = ir::ExprId(self.exprs.len());
+                    && !self.has_member(nominal.def().source_decl, field)?
+                    && let Some(deref) =
+                        self.receiver_overloaded_deref(receiver, &hint, ir::BorrowKind::Shared)?
+                {
+                    // `recv.f` through `Deref::Target` when `recv` has no `f`.
+                    let ir::Ty::Ref { referent, .. } = self.exprs[deref.0].ty.clone() else {
+                        return Err("overloaded deref must return a reference".into());
+                    };
+                    let completion = self.exprs[deref.0].completion;
+                    let target = ir::ExprId(self.exprs.len());
                     self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
                     self.exprs.push(ir::TypedExpr {
-                        ty: ty.clone(),
-                        completion: self.exprs[base.0].completion,
-                        kind: ir::ExprKind::Deref { value: base },
+                        ty: referent.as_ref().clone(),
+                        completion,
+                        kind: ir::ExprKind::Deref { value: deref },
                     });
-                    base = deref;
-                    flow.ty = ty;
+                    let (index, ty) = self.field_type(&referent, field)?;
+                    let completes = completion == ir::Completion::Returns;
+                    (
+                        ir::ExprKind::Field {
+                            base: target,
+                            index,
+                        },
+                        Flow { ty, completes },
+                    )
+                } else {
+                    let mut base = self.expr(base)?;
+                    let mut flow = self.flow(base);
+                    if let ir::Ty::Ref { referent, .. } = &flow.ty {
+                        if !matches!(receiver, Expr::Var(_)) && !genuine_call(receiver) {
+                            // A projected carrier has the same authority as any other
+                            // static place. Validate its dereference without creating a
+                            // local or borrow, then read the already evaluated base once.
+                            let mut source = static_source_place(receiver)?;
+                            source.fields.push(FieldSelector::Deref);
+                            self.checked_place(&source)?;
+                        }
+                        let ty = referent.as_ref().clone();
+                        self.accessible(&ty)?;
+                        let deref = ir::ExprId(self.exprs.len());
+                        self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
+                        self.exprs.push(ir::TypedExpr {
+                            ty: ty.clone(),
+                            completion: self.exprs[base.0].completion,
+                            kind: ir::ExprKind::Deref { value: base },
+                        });
+                        base = deref;
+                        flow.ty = ty;
+                    }
+                    let (index, ty) = self.field_type(&flow.ty, field)?;
+                    (
+                        ir::ExprKind::Field { base, index },
+                        Flow {
+                            ty,
+                            completes: flow.completes,
+                        },
+                    )
                 }
-                let (index, ty) = self.field_type(&flow.ty, field)?;
-                (
-                    ir::ExprKind::Field { base, index },
-                    Flow {
-                        ty,
-                        completes: flow.completes,
-                    },
-                )
             }
             Expr::Integer(literal) => {
                 let value = expectation.literal(literal, false)?;

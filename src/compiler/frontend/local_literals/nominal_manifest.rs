@@ -653,6 +653,12 @@ impl<'s> Solver<'_, '_, 's> {
                 | ir::Ty::Int(_)
                 | ir::Ty::Float(_)
                 | ir::Ty::Param(_) => Domain::Fixed(ty.clone()),
+                // Closed nongeneric object principal (nominal_source_shapes).
+                ir::Ty::Dyn(object)
+                    if object.args.is_empty() && object.associated_types.is_empty() =>
+                {
+                    Domain::Fixed(ty.clone())
+                }
                 _ => return Err("invalid metadata: non-leaf source recipe".into()),
             },
             Shape::Nominal(declaration, arguments) => Domain::Nominal(

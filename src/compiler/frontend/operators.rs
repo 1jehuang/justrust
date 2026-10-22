@@ -63,7 +63,7 @@ pub(super) fn assign_trait(op: BinaryOp) -> Option<(&'static str, &'static str)>
     })
 }
 
-enum First<'e> {
+pub(super) enum First<'e> {
     Value(&'e Expr),
     Borrow(ir::BorrowKind, &'e Expr),
     Place(ir::BorrowKind, &'e Place),
@@ -106,6 +106,33 @@ impl type_check::Checker<'_> {
         Ok(None)
     }
 
+    /// `Deref::Target` of a nominal owner through the exact canonical impl,
+    /// or `None` when no impl is selected. Grants no type authority; the
+    /// checked `*x` reselects and discharges the same trait call.
+    pub(super) fn deref_target_hint(&self, owner: &ir::Ty) -> Result<Option<ir::Ty>, String> {
+        if !overloadable(owner) || matches!(owner, ir::Ty::Tuple(_)) {
+            return Ok(None);
+        }
+        let Ok((declaration, name)) = self.operator_trait("ops", "Deref", "deref") else {
+            return Ok(None);
+        };
+        let plan = self.signatures.plan()?;
+        let reference = ir::TraitRef {
+            declaration,
+            self_ty: owner.clone(),
+            args: Arc::from([]),
+        };
+        Ok(
+            match plan.select_trait(&reference, &name, &[], self.facts(), false, &plan.budget)? {
+                Some((_, signature, _)) => match signature.result {
+                    ir::Ty::Ref { referent, .. } => Some(referent.as_ref().clone()),
+                    _ => None,
+                },
+                None => None,
+            },
+        )
+    }
+
     pub(super) fn static_index_parts(place: &Place) -> Option<(Place, Expr)> {
         let (FieldSelector::ConstantIndex(index), fields) = place.fields.split_last()? else {
             return None;
@@ -137,6 +164,29 @@ impl type_check::Checker<'_> {
         expression: &Expr,
     ) -> Result<Option<ir::ExprId>, String> {
         let (kind, value) = match expression {
+            Expr::Borrow { kind, place }
+                if matches!(place.fields.last(), Some(FieldSelector::Deref)) =>
+            {
+                // `&*p` / `&mut *p` on a nominal `p` is exactly
+                // `Deref::deref(&p)` / `DerefMut::deref_mut(&mut p)`.
+                let base = Place {
+                    local: place.local,
+                    fields: place.fields[..place.fields.len() - 1].to_vec(),
+                };
+                let (_, owner, _) = self.checked_place(&base)?;
+                if !overloadable(&owner) || matches!(owner, ir::Ty::Tuple(_)) {
+                    return Ok(None);
+                }
+                let spec = if *kind == ir::BorrowKind::Mut {
+                    ("ops", "DerefMut", "deref_mut")
+                } else {
+                    ("ops", "Deref", "deref")
+                };
+                let call =
+                    self.operator_call(spec, owner, None, First::Place(*kind, &base), &[])?;
+                self.record_operator(expression as *const Expr as usize, call)?;
+                return Ok(Some(call));
+            }
             Expr::Borrow { kind, place } => {
                 let Some((base, index)) = Self::static_index_parts(place) else {
                     return Ok(None);
@@ -369,7 +419,7 @@ impl type_check::Checker<'_> {
         ))
     }
 
-    fn operator_call(
+    pub(super) fn operator_call(
         &mut self,
         (module, name, method): (&str, &str, &str),
         self_ty: ir::Ty,
