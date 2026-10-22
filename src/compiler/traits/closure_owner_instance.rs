@@ -45,6 +45,18 @@ impl ValidatedFacts {
         for argument in owner_arguments {
             world.validate_executable_actual(argument, self.env())?;
         }
+        if owner.env.total_arity() == 0 {
+            // A non-generic owner has no parameters to substitute: the sealed
+            // template is already the exact closed type. Re-running the kernel
+            // would only re-derive closed graph nominals it may not retain.
+            world.validate_closure_metadata(original, self.env())?;
+            world.require_closure_owner_predicates(
+                original,
+                ProofContext::from_facts(self),
+                &mut ProofScratch::default(),
+            )?;
+            return Ok(original.clone());
+        }
         // This local schema is only a container for the existing simultaneous
         // metadata substitution kernel. It is never published as a declaration,
         // signature or executable proof. That kernel independently replays each
