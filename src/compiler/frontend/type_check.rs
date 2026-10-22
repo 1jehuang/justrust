@@ -1474,8 +1474,11 @@ impl<'s> Checker<'s> {
             .iter()
             .filter_map(|predicate| match predicate {
                 // Bare-parameter RHS is already covered by projected formals.
+                // A bare projection RHS (`IntoIter: Iterator<Item = Self::Item>`)
+                // names no slot; it is proven as an obligation, not evidence.
                 ir::Predicate::ProjectionEq { projection, ty }
-                    if !matches!(ty, ir::Ty::Param(_)) && inferred_owner::mentions_param(ty) =>
+                    if !matches!(ty, ir::Ty::Param(_) | ir::Ty::AssociatedType(_))
+                        && inferred_owner::mentions_param(ty) =>
                 {
                     Some((ir::Ty::AssociatedType(Arc::new(projection.clone())), ty))
                 }
