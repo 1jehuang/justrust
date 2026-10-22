@@ -115,7 +115,8 @@ impl ClosedReceipt {
             original: original.clone(),
             mapped: mapped.clone(),
         };
-        validate(&receipt, facts, budget).map_err(|e| e.into_legacy_diagnostic(budget))?;
+        validate(&receipt, facts, budget, &mut tr::TraitScratch::default())
+            .map_err(|e| e.into_legacy_diagnostic(budget))?;
         let output = Self {
             receipt,
             selection: selection.clone(),
@@ -126,7 +127,13 @@ impl ClosedReceipt {
         Ok(output)
     }
     fn validate(&self, facts: &tr::ValidatedFacts, budget: &ir::PlanBudget) -> Result<(), String> {
-        validate(&self.receipt, facts, budget).map_err(|e| e.into_legacy_diagnostic(budget))?;
+        validate(
+            &self.receipt,
+            facts,
+            budget,
+            &mut tr::TraitScratch::default(),
+        )
+        .map_err(|e| e.into_legacy_diagnostic(budget))?;
         let selected = match &self.selection {
             ir::Callee::Direct(target) => ir::Callee::Direct(
                 facts

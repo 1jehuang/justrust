@@ -235,8 +235,17 @@ impl ValidatedTraitWorld {
         depth: usize,
         replays: &mut NominalReplays,
     ) -> Result<()> {
-        self.validate_ty_metadata_walk(ty, env, depth, &mut TypeWalk::default(), replays)
-            .map(|_| ())
+        charged(&self.budget, self.budget.check_depth(depth))?;
+        charged(&self.budget, self.budget.charge_work(1))?;
+        if let Some(height) = replays.validated_type(self, ty, env)? {
+            return charged(
+                &self.budget,
+                self.budget.check_depth(depth.saturating_add(height)),
+            );
+        }
+        let height =
+            self.validate_ty_metadata_walk(ty, env, depth, &mut TypeWalk::default(), replays)?;
+        replays.record_type(ty, env, height, &self.budget)
     }
 
     fn validate_ty_metadata_walk(
@@ -1222,6 +1231,7 @@ impl ValidatedTraitWorld {
         };
         for (old, _) in &stack.active {
             if self.normalization_key_equal(old, &key)? {
+                stack.obligations.cycles += 1;
                 return Err(FactsError::cycle(
                     &self.budget,
                     "associated type normalization cycle",
@@ -1244,6 +1254,7 @@ impl ValidatedTraitWorld {
             return Ok(evidence);
         }
         stack.obligations.charge_obligation(&self.budget)?;
+        let cycles_before = stack.obligations.cycles;
         let mut child_dependencies = Vec::new();
         let selected_goal = TraitRef {
             declaration: projection.trait_ref.declaration,
@@ -1256,7 +1267,12 @@ impl ValidatedTraitWorld {
             )?,
             args: projection.trait_ref.args.clone(),
         };
-        self.validate_ref_in(&selected_goal, context.proof.env(), None)?;
+        self.validate_ref_with(
+            &selected_goal,
+            context.proof.env(),
+            None,
+            &mut stack.obligations.replays,
+        )?;
         if let Some(raw_rhs) = self.dynamic_associated_binding(
             &ir::AssociatedTypeProjection {
                 trait_ref: selected_goal.clone(),
@@ -1451,6 +1467,7 @@ impl ValidatedTraitWorld {
         // closed-only RHS language. Catch it before spending the depth/resource allowance.
         for (old, owner) in &stack.active {
             if *owner == implementation && old.projection.item == projection.item {
+                stack.obligations.cycles += 1;
                 return Err(FactsError::cycle(
                     &self.budget,
                     "growing associated type assignment cycle",
@@ -1556,6 +1573,12 @@ impl ValidatedTraitWorld {
             Ok(evidence)
         })();
         stack.active.pop();
+        // Cycle-dependent or resource outcomes are provisional: never reuse.
+        if stack.obligations.cycles != cycles_before
+            || matches!(&result, Err(e) if matches!(e.kind(), FactsErrorKind::Cycle | FactsErrorKind::Resource))
+        {
+            return result;
+        }
         stack.obligations.projections.push(NormalizationMemo {
             key,
             result: result.clone(),

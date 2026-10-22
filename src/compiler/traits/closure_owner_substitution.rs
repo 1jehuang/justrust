@@ -128,11 +128,12 @@ impl ValidatedTraitWorld {
     ) -> Result<()> {
         self.replay_closure_owner_substitution(closure, context.env())?;
         let schema = self.callable_schema(closure.owner())?;
-        let instantiated = self.instantiate_in(
+        let instantiated = self.instantiate_scratch(
             &schema,
             closure.owner_args(),
             context,
             Some(closure.owner()),
+            &mut active.replays,
         )?;
         for predicate in instantiated.predicates.iter() {
             self.require_in(predicate, context, active)?;

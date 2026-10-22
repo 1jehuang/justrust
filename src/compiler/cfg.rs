@@ -1767,8 +1767,11 @@ impl Function {
             Ok(())
         }
         budget.charge_work(self.locals.len())?;
+        // Local to this validation pass: identical type allocations are
+        // validated once.
+        let mut validated = super::traits::ValidatedTypes::default();
         for local in &self.locals {
-            facts.validate_ty_with_budget(&local.ty, budget)?;
+            validated.check(&local.ty, |ty| facts.validate_ty_with_budget(ty, budget))?;
         }
         facts.validate_ty_with_budget(&self.result, budget)?;
         for site in &self.loan_sites {
@@ -2597,8 +2600,9 @@ impl Function {
         {
             return Err("schema facts cannot validate executable CFG".into());
         }
+        let mut validated = super::traits::ValidatedTypes::default();
         for local in &self.locals {
-            facts.validate_ty(&local.ty)?;
+            validated.check(&local.ty, |ty| facts.validate_ty(ty))?;
         }
         facts.validate_ty(&self.result)?;
         for local in &self.locals {

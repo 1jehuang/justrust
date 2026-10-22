@@ -976,6 +976,31 @@ impl ValidatedFacts {
     ) -> Result<()> {
         TraitCx::validate_signature(self.world.as_ref(), subject, signature, self)
     }
+    /// As `validate_signature`, sharing a node-local scratch across calls.
+    pub fn validate_signature_with(
+        &self,
+        subject: SignatureSubject<'_>,
+        signature: &Signature,
+        scratch: &mut TraitScratch,
+    ) -> Result<()> {
+        self.world
+            .validate_signature_with(subject, signature, self, scratch)
+    }
+    /// As `validate_ty_metadata_with_budget`, sharing a node-local scratch.
+    pub fn validate_ty_metadata_scratch(
+        &self,
+        ty: &Ty,
+        budget: &PlanBudget,
+        scratch: &mut TraitScratch,
+    ) -> Result<()> {
+        if !self.budget().same_authority(budget) {
+            return Err(FactsError::invalid(
+                budget,
+                "metadata facts changed planning budget authority",
+            ));
+        }
+        self.world.validate_ty_metadata_scratch(ty, self, scratch)
+    }
     pub fn callee_receiver(&self, callee: &Callee) -> Result<ReceiverMode> {
         TraitCx::callee_receiver(self.world.as_ref(), callee, self)
     }
@@ -1210,6 +1235,12 @@ struct ProofScratch {
     active: Vec<GoalKey>,
     replays: NominalReplays,
     memo: Vec<MemoEntry>,
+    /// Structural-hash prefilter into `memo`. A bucket hit is still
+    /// confirmed by `same_key`; a miss only costs a recomputation.
+    memo_index: std::collections::HashMap<u64, Vec<usize>>,
+    /// Cycle detections so far. A goal whose subtree hit a cycle is
+    /// provisional (it depended on its ancestry) and is not memoized.
+    cycles: usize,
     projections: Vec<associated_types::NormalizationMemo>,
 }
 /// Realized nominal facts whose world replay already succeeded inside this
@@ -1223,6 +1254,79 @@ pub(in crate::compiler) struct NominalReplays {
     // identity can never be reused by a different fact.
     facts: Vec<super::nominal_realization::ReadNominal>,
     inputs: Vec<Arc<[Predicate]>>,
+    /// Types whose metadata walk already succeeded, with the environment and
+    /// height. Clones pin the identities compared by `same_type_allocation`.
+    types: Vec<(Ty, GenericEnv, usize)>,
+    type_index: std::collections::HashMap<usize, Vec<usize>>,
+}
+/// Types already fully validated by one local computation (for example one
+/// CFG validation pass). Owned by the caller, never published or shared;
+/// clones pin the compared allocations. Only successes are recorded.
+#[derive(Default)]
+pub struct ValidatedTypes {
+    types: Vec<Ty>,
+    index: std::collections::HashMap<usize, Vec<usize>>,
+}
+impl ValidatedTypes {
+    /// Run `validate` unless an identical allocation already passed.
+    pub fn check<E>(
+        &mut self,
+        ty: &Ty,
+        validate: impl FnOnce(&Ty) -> std::result::Result<(), E>,
+    ) -> std::result::Result<(), E> {
+        let Some(address) = type_allocation(ty) else {
+            return validate(ty);
+        };
+        if let Some(candidates) = self.index.get(&address)
+            && candidates
+                .iter()
+                .any(|&index| same_type_allocation(&self.types[index], ty))
+        {
+            return Ok(());
+        }
+        validate(ty)?;
+        if self.types.len() < MAX_SCRATCH_OBLIGATIONS && self.types.try_reserve(1).is_ok() {
+            self.index
+                .entry(address)
+                .or_default()
+                .push(self.types.len());
+            self.types.push(ty.clone());
+        }
+        Ok(())
+    }
+}
+/// Allocation identity of a type root, or None for leaves not worth caching.
+fn type_allocation(ty: &Ty) -> Option<usize> {
+    Some(match ty {
+        Ty::Struct(t) => t.def() as *const ir::StructDef as usize,
+        Ty::Enum(t) => t.def() as *const ir::EnumDef as usize,
+        Ty::Tuple(t) => t.as_ptr() as usize,
+        Ty::Array { element, .. } | Ty::Slice { element } => Arc::as_ptr(element) as usize,
+        Ty::Ref { referent, .. } => Arc::as_ptr(referent) as usize,
+        _ => return None,
+    })
+}
+fn same_type_allocation(a: &Ty, b: &Ty) -> bool {
+    match (a, b) {
+        (Ty::Struct(x), Ty::Struct(y)) => std::ptr::eq(x.def(), y.def()) && x.id() == y.id(),
+        (Ty::Enum(x), Ty::Enum(y)) => std::ptr::eq(x.def(), y.def()) && x.id() == y.id(),
+        (Ty::Tuple(x), Ty::Tuple(y)) => Arc::ptr_eq(x, y),
+        (Ty::Array { element: x, len: a }, Ty::Array { element: y, len: b }) => {
+            a == b && Arc::ptr_eq(x, y)
+        }
+        (Ty::Slice { element: x }, Ty::Slice { element: y }) => Arc::ptr_eq(x, y),
+        (
+            Ty::Ref {
+                referent: x,
+                kind: a,
+            },
+            Ty::Ref {
+                referent: y,
+                kind: b,
+            },
+        ) => a == b && Arc::ptr_eq(x, y),
+        _ => false,
+    }
 }
 impl NominalReplays {
     pub(in crate::compiler) fn contains_fact(
@@ -1248,6 +1352,52 @@ impl NominalReplays {
     fn record_input(&mut self, input: &ClosedNominalInput, budget: &PlanBudget) -> Result<()> {
         self.admit(budget)?;
         self.inputs.push(input.obligation_identity().clone());
+        Ok(())
+    }
+    /// Height of a previously validated identical type under the same
+    /// environment, if any.
+    fn validated_type(
+        &self,
+        world: &ValidatedTraitWorld,
+        ty: &Ty,
+        env: &GenericEnv,
+    ) -> Result<Option<usize>> {
+        let Some(address) = type_allocation(ty) else {
+            return Ok(None);
+        };
+        if let Some(candidates) = self.type_index.get(&address) {
+            for &index in candidates {
+                let (old, old_env, height) = &self.types[index];
+                if same_type_allocation(old, ty) && world.same_env(old_env, env)? {
+                    return Ok(Some(*height));
+                }
+            }
+        }
+        Ok(None)
+    }
+    fn record_type(
+        &mut self,
+        ty: &Ty,
+        env: &GenericEnv,
+        height: usize,
+        budget: &PlanBudget,
+    ) -> Result<()> {
+        let Some(address) = type_allocation(ty) else {
+            return Ok(());
+        };
+        if self.types.len() >= MAX_SCRATCH_OBLIGATIONS {
+            // Memo full: correctness is unaffected, later walks just repeat.
+            return Ok(());
+        }
+        charged(budget, budget.charge_work(1))?;
+        self.types
+            .try_reserve(1)
+            .map_err(|_| FactsError::resource(budget, "type memo allocation failed"))?;
+        self.type_index
+            .entry(address)
+            .or_default()
+            .push(self.types.len());
+        self.types.push((ty.clone(), env.clone(), height));
         Ok(())
     }
     fn admit(&mut self, budget: &PlanBudget) -> Result<()> {
@@ -5706,8 +5856,24 @@ impl ValidatedTraitWorld {
         facts: ProofContext<'_>,
         declaration: Option<DeclId>,
     ) -> Result<InstantiatedSchema> {
+        self.instantiate_scratch(
+            schema,
+            args,
+            facts,
+            declaration,
+            &mut NominalReplays::default(),
+        )
+    }
+    fn instantiate_scratch(
+        &self,
+        schema: &GenericSchema,
+        args: &[Ty],
+        facts: ProofContext<'_>,
+        declaration: Option<DeclId>,
+        replays: &mut NominalReplays,
+    ) -> Result<InstantiatedSchema> {
         for argument in args {
-            self.validate_ty_metadata_in(argument, facts.env(), 0)?;
+            self.validate_ty_metadata_with(argument, facts.env(), 0, replays)?;
         }
         if args.len() != schema.env.total_arity() {
             return Err(FactsError::invalid(
@@ -6528,26 +6694,58 @@ impl ValidatedTraitWorld {
             finalized: self.owner_normalization_finalized,
             goal: predicate.clone(),
         };
-        for old in active.iter() {
+        for old in active.active.iter() {
             if self.same_key(old, &key)? {
+                active.cycles += 1;
                 return Err(FactsError::cycle(
                     &self.budget,
                     "ordinary trait obligation cycle is not self-justifying evidence",
                 ));
             }
         }
-        for entry in active.memo.iter() {
-            if self.same_key(&entry.key, &key)? {
-                return entry.result.clone();
+        let bucket = {
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            key.environment.hash(&mut hasher);
+            key.phase.hash(&mut hasher);
+            key.finalized.hash(&mut hasher);
+            key.goal.hash(&mut hasher);
+            hasher.finish()
+        };
+        if let Some(candidates) = active.memo_index.get(&bucket) {
+            for &index in candidates {
+                let entry = &active.memo[index];
+                if self.same_key(&entry.key, &key)? {
+                    return entry.result.clone();
+                }
             }
         }
         active.charge_obligation(&self.budget)?;
         // Transient DFS ancestry, popped below and bounded by check_depth.
         active.active.push(key.clone());
+        let cycles_before = active.cycles;
         let result = self.prove_uncached(predicate, facts, active);
         active.active.pop();
+        if active.cycles != cycles_before {
+            return result;
+        }
+        // Cycle and resource outcomes are provisional: they depend on the
+        // ancestry or remaining budget at this point, so never reuse them.
+        if let Err(error) = &result
+            && matches!(
+                error.kind(),
+                FactsErrorKind::Cycle | FactsErrorKind::Resource
+            )
+        {
+            return result;
+        }
         // Transient node-local scratch, bounded by MAX_SCRATCH_OBLIGATIONS
         // and dropped with the computation, so it retains no ledger bytes.
+        active
+            .memo_index
+            .entry(bucket)
+            .or_default()
+            .push(active.memo.len());
         active.memo.push(MemoEntry {
             key,
             result: result.clone(),
@@ -6779,7 +6977,8 @@ impl ValidatedTraitWorld {
                 },
                 predicates: implementation.predicates.clone(),
             };
-            let instantiated = self.instantiate_in(&schema, &args, facts, None)?;
+            let instantiated =
+                self.instantiate_scratch(&schema, &args, facts, None, &mut active.replays)?;
             let head_self = match (
                 &implementation.trait_ref.self_ty,
                 &instantiated.signature.result,
@@ -6935,11 +7134,24 @@ impl ValidatedTraitWorld {
         call: &TraitCall,
         context: ProofContext<'_>,
     ) -> Result<(Signature, Option<Arc<SignatureTopologyProof>>)> {
-        self.validate_ty_metadata_in(&call.trait_ref.self_ty, context.env(), 0)?;
+        self.trait_signature_scratch(call, context, &mut ProofScratch::default())
+    }
+    fn trait_signature_scratch(
+        &self,
+        call: &TraitCall,
+        context: ProofContext<'_>,
+        scratch: &mut ProofScratch,
+    ) -> Result<(Signature, Option<Arc<SignatureTopologyProof>>)> {
+        self.validate_ty_metadata_with(
+            &call.trait_ref.self_ty,
+            context.env(),
+            0,
+            &mut scratch.replays,
+        )?;
         for argument in call.trait_ref.args.iter().chain(call.method_args.iter()) {
-            self.validate_ty_metadata_in(argument, context.env(), 0)?;
+            self.validate_ty_metadata_with(argument, context.env(), 0, &mut scratch.replays)?;
         }
-        self.validate_ref_in(&call.trait_ref, context.env(), None)?;
+        self.validate_ref_with(&call.trait_ref, context.env(), None, &mut scratch.replays)?;
         let item = self.item_header(call.item)?;
         if item.trait_decl != call.trait_ref.declaration {
             return Err(FactsError::invalid(
@@ -6957,7 +7169,7 @@ impl ValidatedTraitWorld {
         self.require_in(
             &Predicate::Implements(call.trait_ref.clone()),
             context,
-            &mut ProofScratch::default(),
+            scratch,
         )?;
         let (instantiated, topology) = if method_arity == 0 {
             self.instantiate_item(item, &call.trait_ref, context)?
@@ -6968,7 +7180,7 @@ impl ValidatedTraitWorld {
             )
         };
         for predicate in instantiated.predicates.iter() {
-            self.require_in(predicate, context, &mut ProofScratch::default())?;
+            self.require_in(predicate, context, scratch)?;
         }
         Ok((instantiated.signature, topology))
     }
@@ -6985,11 +7197,12 @@ impl ValidatedTraitWorld {
         self.ensure_provider(target.declaration)?;
         self.validate_closure_direct(target, context)?;
         let schema = self.callable_schema(target.declaration)?;
-        let instantiated = self.instantiate_in(
+        let instantiated = self.instantiate_scratch(
             &schema,
             &target.type_args,
             context,
             Some(target.declaration),
+            &mut scratch.replays,
         )?;
         self.validate_owner_callable_instantiation(target, &instantiated.signature, context)?;
         let mut evidence = Vec::new();
@@ -7105,6 +7318,57 @@ impl ValidatedTraitWorld {
             }
         }
         Ok(true)
+    }
+}
+
+impl ValidatedTraitWorld {
+    /// `validate_signature` sharing the caller's node-local proof scratch.
+    pub(in crate::compiler) fn validate_signature_with(
+        &self,
+        subject: SignatureSubject<'_>,
+        signature: &Signature,
+        facts: &ValidatedFacts,
+        scratch: &mut TraitScratch,
+    ) -> Result<()> {
+        self.check_facts(facts, true)?;
+        let expected = match subject {
+            SignatureSubject::Call(Callee::Direct(target)) => {
+                self.discharge_direct_with(target, facts, scratch)?
+                    .signature
+            }
+            SignatureSubject::Call(
+                Callee::TraitItem(call) | Callee::Virtual(ir::VirtualCall { call }),
+            ) if !(self.schema_contains_projection(&self.item_header(call.item)?.schema)?
+                && !self.goal_is_closed(&call.trait_ref, facts.env())?
+                && !matches!(&call.trait_ref.self_ty, Ty::Dyn(_))) =>
+            {
+                self.trait_signature_scratch(
+                    call,
+                    ProofContext::from_facts(facts),
+                    scratch.for_world(self.id),
+                )?
+                .0
+            }
+            _ => return TraitCx::validate_signature(self, subject, signature, facts),
+        };
+        if !self.eq_signature(&expected, signature)? {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "signature differs from its exact canonical world subject",
+            ));
+        }
+        self.validate_signature_shape(signature, facts.env(), None)
+    }
+    /// Metadata validation sharing the caller's node-local replay memo.
+    pub(in crate::compiler) fn validate_ty_metadata_scratch(
+        &self,
+        ty: &Ty,
+        facts: &ValidatedFacts,
+        scratch: &mut TraitScratch,
+    ) -> Result<()> {
+        self.check_facts(facts, false)?;
+        let proofs = scratch.for_world(self.id);
+        self.validate_ty_metadata_with(ty, facts.env(), 0, &mut proofs.replays)
     }
 }
 
@@ -7256,7 +7520,7 @@ impl TraitCx for ValidatedTraitWorld {
                 _required: Some(required),
             });
         }
-        let (signature, caller_topology) = self.trait_signature_with_topology(call, caller)?;
+        let (signature, caller_topology) = self.trait_signature_scratch(call, caller, scratch)?;
         let predicate = Predicate::Implements(call.trait_ref.clone());
         // Closedness covers the whole call: the trait goal AND the ordered
         // method actuals. A concrete Self with an open method actual (a

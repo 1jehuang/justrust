@@ -1735,6 +1735,9 @@ pub(super) struct Checker<'a> {
     // Local suspension inventory propagated to the owning graph consumer.
     pub(in crate::compiler::frontend) nominal_blocked:
         std::cell::RefCell<Option<NominalPreparation>>,
+    // Proof/replay memo for this checking node only: dropped with the
+    // checker, never published or shared with another node.
+    pub(in crate::compiler::frontend) trait_scratch: std::cell::RefCell<tr::TraitScratch>,
     // Set only for closure bodies sharing the parent's nominal inputs.
     pub(in crate::compiler::frontend) nominal_closure_body: bool,
     // Node-local ordinal table for closure-bearing nominal applications.
@@ -3741,6 +3744,7 @@ impl<'a> Checker<'a> {
             nominal_closure_body: false,
             parent_local_nominals: std::cell::RefCell::new(Vec::new()),
             nominal_blocked: std::cell::RefCell::new(None),
+            trait_scratch: std::cell::RefCell::new(tr::TraitScratch::default()),
             scopes: vec![HashMap::new()],
             lexical_scope: None,
             checked_closures: Vec::new(),
@@ -7904,13 +7908,19 @@ impl<'a> Checker<'a> {
                 .facts()
                 .validated()
                 .ok_or("trait call evidence requires validated facts")?;
+            let mut scratch = self.trait_scratch.borrow_mut();
             facts
-                .validate_signature(ir::SignatureSubject::Call(&target), &signature)
+                .validate_signature_with(
+                    ir::SignatureSubject::Call(&target),
+                    &signature,
+                    &mut scratch,
+                )
                 .map_err(|e| e.into_legacy_diagnostic(&plan.budget))?;
             let resolved = facts
                 .service()
-                .resolve_trait_call(call, facts)
+                .resolve_trait_call_with(call, facts, &mut scratch)
                 .map_err(|e| e.into_legacy_diagnostic(&plan.budget))?;
+            drop(scratch);
             let signature = resolved.signature();
             plan.budget.charge_work(
                 signature
@@ -8097,6 +8107,7 @@ impl<'a> Checker<'a> {
                     &realization.target,
                     realization.original,
                     realization.mapped,
+                    &mut self.trait_scratch.borrow_mut(),
                 )?;
         }
         let traces = arguments

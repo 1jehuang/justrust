@@ -34,7 +34,11 @@ impl Checker<'_> {
             .validated()
             .ok_or("nominal call signature requires validated caller facts")?;
         facts
-            .validate_signature(ir::SignatureSubject::Call(target), &signature)
+            .validate_signature_with(
+                ir::SignatureSubject::Call(target),
+                &signature,
+                &mut self.trait_scratch.borrow_mut(),
+            )
             .map_err(|e| e.into_legacy_diagnostic(&plan.budget))?;
         self.infer_storage(signature.params.len())?;
         let mut missing = Vec::new();
@@ -68,7 +72,11 @@ impl Checker<'_> {
                 .map_err(|e| e.into_legacy_diagnostic(&plan.budget))?;
         }
         facts
-            .validate_signature(ir::SignatureSubject::Call(target), &mapped)
+            .validate_signature_with(
+                ir::SignatureSubject::Call(target),
+                &mapped,
+                &mut self.trait_scratch.borrow_mut(),
+            )
             .map_err(|e| e.into_legacy_diagnostic(&plan.budget))?;
         Ok(NominalCallSignature::Ready {
             signature: mapped.clone(),

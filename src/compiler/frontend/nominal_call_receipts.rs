@@ -100,12 +100,18 @@ fn validate(
     receipt: &Receipt,
     facts: &tr::ValidatedFacts,
     budget: &ir::PlanBudget,
+    scratch: &mut tr::TraitScratch,
 ) -> Result<(), FactsError> {
-    facts.validate_signature(
+    facts.validate_signature_with(
         ir::SignatureSubject::Call(&receipt.target),
         &receipt.original,
+        scratch,
     )?;
-    facts.validate_signature(ir::SignatureSubject::Call(&receipt.target), &receipt.mapped)?;
+    facts.validate_signature_with(
+        ir::SignatureSubject::Call(&receipt.target),
+        &receipt.mapped,
+        scratch,
+    )?;
     if !Arc::ptr_eq(&receipt.original.ref_contract, &receipt.mapped.ref_contract)
         || receipt.original.params.len() != receipt.mapped.params.len()
     {
@@ -124,8 +130,8 @@ fn validate(
             &receipt.mapped.result,
         )))
     {
-        facts.validate_ty_metadata_with_budget(source, budget)?;
-        facts.validate_ty_metadata_with_budget(mapped, budget)?;
+        facts.validate_ty_metadata_scratch(source, budget, scratch)?;
+        facts.validate_ty_metadata_scratch(mapped, budget, scratch)?;
         if !facts
             .world()
             .types_equal(std::slice::from_ref(source), std::slice::from_ref(mapped))?
@@ -146,6 +152,7 @@ impl CanonicalSourceCapability {
         target: &ir::Callee,
         original: ir::Signature,
         mapped: ir::Signature,
+        scratch: &mut tr::TraitScratch,
     ) -> Result<(), String> {
         let budget = &self.plan.budget;
         let receipt = Receipt {
@@ -154,7 +161,7 @@ impl CanonicalSourceCapability {
             original,
             mapped,
         };
-        validate(&receipt, &self.facts, budget).map_err(|e| self.render(e))?;
+        validate(&receipt, &self.facts, budget, scratch).map_err(|e| self.render(e))?;
         let mut inventory = self.nominal_call_realizations.borrow_mut();
         let rows = inventory
             .as_mut()
@@ -193,7 +200,7 @@ impl CanonicalSourceCapability {
                     "nominal call realization omitted before canonical rebuild",
                 )
             })?;
-        validate(row, &self.facts, budget)?;
+        validate(row, &self.facts, budget, &mut tr::TraitScratch::default())?;
         validate_original_callee(&row.target, target, budget)?;
         self.facts
             .validate_signature(ir::SignatureSubject::Call(target), canonical)?;
@@ -261,6 +268,8 @@ pub(super) fn replay(
             "nominal call realization inventory incomplete",
         ));
     }
+    // One proof/replay scratch for this replay computation only.
+    let mut scratch = tr::TraitScratch::default();
     for (row, (_, expression, target)) in rows.iter().zip(&source.call_mapping) {
         sr::work(budget, 1)?;
         if row.expression != *expression {
@@ -285,7 +294,7 @@ pub(super) fn replay(
             ));
         };
         validate_original_callee(target, &row.target, budget)?;
-        validate(row, facts, budget)?;
+        validate(row, facts, budget, &mut scratch)?;
         if !ir::identical_call_types(&row.target, &row.mapped, actual_target, signature, budget)
             .map_err(|e| source_error(budget, &e))?
         {
