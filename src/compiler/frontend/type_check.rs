@@ -2369,6 +2369,23 @@ pub(super) fn canonical_ref_contract(
     }))
 }
 
+/// The shared `&[T]` carrier stock's unsizing probe step reaches from an
+/// array (or a reference to one) receiver.
+pub(super) fn array_unsize_carrier(ty: &ir::Ty) -> Option<ir::Ty> {
+    let element = match ty {
+        ir::Ty::Array { element, .. } => element.clone(),
+        ir::Ty::Ref { referent, .. } => match referent.as_ref() {
+            ir::Ty::Array { element, .. } => element.clone(),
+            _ => return None,
+        },
+        _ => return None,
+    };
+    Some(ir::Ty::Ref {
+        kind: ir::BorrowKind::Shared,
+        referent: Arc::new(ir::Ty::Slice { element }),
+    })
+}
+
 /// A slice carrier is admitted only as an exact shared or mutable root reference.
 fn admit_slice_value_shape(ty: &ir::Ty) -> Result<(), String> {
     if ty.contains_slice() && ty.slice_ref_element().is_none() {
