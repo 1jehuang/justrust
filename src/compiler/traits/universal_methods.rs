@@ -517,6 +517,9 @@ impl ValidatedTraitWorld {
                 self.eq_predicate(&left.0.goal, &right.0.goal)?
             }
             (ProofOrigin::Builtin { item: a }, ProofOrigin::Builtin { item: b }) => a == b,
+            (ProofOrigin::FnItem { kind: a }, ProofOrigin::FnItem { kind: b }) => {
+                a == b && self.eq_predicate(&left.0.goal, &right.0.goal)?
+            }
             (ProofOrigin::Closure { kind: a }, ProofOrigin::Closure { kind: b }) => {
                 a == b && self.eq_predicate(&left.0.goal, &right.0.goal)?
             }

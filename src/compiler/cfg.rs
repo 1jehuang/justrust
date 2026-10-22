@@ -4677,6 +4677,14 @@ impl Lowerer<'_> {
                     .collect::<Result<Vec<_>, _>>()?;
                 self.assign(destination.clone(), Rvalue::NativeSyscall(operands), origin);
             }
+            ir::ExprKind::FnItem => self.assign(
+                destination.clone(),
+                Rvalue::Aggregate {
+                    ty: expression.ty.clone(),
+                    fields: Vec::new(),
+                },
+                origin,
+            ),
             ir::ExprKind::Tuple(fields) => {
                 let operands = fields
                     .iter()

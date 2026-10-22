@@ -27,6 +27,7 @@ mod closures;
 mod constant_members;
 mod dynamic_objects;
 mod equality;
+mod fn_items;
 mod generic_methods;
 mod impl_constraints;
 mod inherent_constants;
@@ -1110,6 +1111,10 @@ impl ValidatedFacts {
 enum ProofOrigin {
     OpaqueDeclared,
     Closure {
+        kind: ir::ClosureKind,
+    },
+    /// Builtin Fn/FnMut/FnOnce for a zero-sized function item type.
+    FnItem {
         kind: ir::ClosureKind,
     },
     ProjectedSubject {
@@ -2783,6 +2788,8 @@ impl ValidatedTraitWorld {
                 && self.eq_types(&a.trait_ref.args, &b.trait_ref.args, depth + 1)?),
             (Ty::Opaque(a), Ty::Opaque(b)) => a.try_eq(b, |a, b| self.eq_ty(a, b, depth + 1)),
             (Ty::Closure(a), Ty::Closure(b)) => a.try_eq(b, |a, b| self.eq_ty(a, b, depth + 1)),
+            (Ty::FnItem(a), Ty::FnItem(b)) => Ok(a.declaration == b.declaration
+                && self.eq_types(&a.type_args, &b.type_args, depth + 1)?),
             (Ty::Param(a), Ty::Param(b)) => Ok(a == b),
             (Ty::Int(a), Ty::Int(b)) => Ok(a == b),
             (Ty::Float(a), Ty::Float(b)) => Ok(a == b),
@@ -6838,6 +6845,9 @@ impl ValidatedTraitWorld {
         if let Some(proof) = self.prove_closure(predicate, context, active)? {
             return Ok(Some(proof));
         }
+        if let Some(proof) = self.prove_fn_item(predicate, context)? {
+            return Ok(Some(proof));
+        }
         let item = if goal.declaration == self.catalog.id(CatalogItem::Sized) {
             CatalogItem::Sized
         } else if goal.declaration == self.catalog.id(CatalogItem::Clone) {
@@ -7316,6 +7326,12 @@ impl TraitCx for ValidatedTraitWorld {
             });
         }
         let mut target = None;
+        if matches!(&evidence.0.origin, ProofOrigin::FnItem { .. }) {
+            return Err(FactsError::unsupported(
+                &self.budget,
+                "unsupported: invoking a function item through a callable trait requires the untupling call form",
+            ));
+        }
         if let ProofOrigin::Closure { kind } = &evidence.0.origin {
             let Ty::Closure(closure) = &call.trait_ref.self_ty else {
                 return Err(FactsError::invalid(

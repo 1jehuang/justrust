@@ -1138,6 +1138,12 @@ impl ValidatedTraitWorld {
             },
             &mut ProofScratch::default(),
         )?;
+        if matches!(&selection.0.origin, ProofOrigin::FnItem { .. }) {
+            return Err(FactsError::unsupported(
+                &self.budget,
+                "unsupported: invoking a function item through a callable bound requires the untupling call form",
+            ));
+        }
         if !matches!(
             &selection.0.origin,
             ProofOrigin::Implementation { .. }

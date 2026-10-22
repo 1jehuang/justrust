@@ -1887,6 +1887,11 @@ impl<'s> Solver<'_, '_, 's> {
                 if let Some(term) = self.stored_callable(path, depth + 1)? {
                     return Ok(term);
                 }
+                if !is_local_shaped_path(path)
+                    && let Some(ty) = self.checker.fn_item_value(path)?
+                {
+                    return self.fixed(ty);
+                }
                 if matches!(
                     (path.anchor(), path.segments()),
                     (PathAnchor::Relative, [_]) | (PathAnchor::SelfModule, [])

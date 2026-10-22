@@ -1397,6 +1397,31 @@ impl ValidatedTraitWorld {
             self.validate_normalization_evidence(&evidence, context)?;
             return Ok(evidence);
         }
+        if let Some(ProofOutcome::Proved(membership)) = self.prove_fn_item(
+            &Predicate::Implements(selected_goal.clone()),
+            selection_context,
+        )? {
+            let Ty::FnItem(item) = &selected_goal.self_ty else {
+                unreachable!()
+            };
+            let raw_rhs = self.fn_item_signature(item, selection_context)?.result;
+            let normal =
+                self.normalize_type_in(&raw_rhs, context, stack, &mut child_dependencies, 0)?;
+            retain::<NormalizationEvidence>(&self.budget, 1)?;
+            let evidence = Arc::new(NormalizationEvidence {
+                world: self.id,
+                key,
+                membership,
+                selected_goal: selected_goal.clone(),
+                implementation: NormalizationOrigin::Implementation(item.declaration),
+                arguments: item.type_args.clone(),
+                raw_rhs,
+                normal,
+                dependencies: child_dependencies.into(),
+            });
+            self.validate_normalization_evidence(&evidence, context)?;
+            return Ok(evidence);
+        }
         let membership = match self.prove_implementation_in(
             &Predicate::Implements(selected_goal.clone()),
             selection_context,
@@ -1587,6 +1612,14 @@ impl ValidatedTraitWorld {
                     ));
                 }
             }
+            (Ty::FnItem(left), Ty::FnItem(right))
+                if left.declaration == right.declaration
+                    && left.type_args.len() == right.type_args.len() =>
+            {
+                for (left, right) in left.type_args.iter().zip(right.type_args.iter()) {
+                    child(left, right)?;
+                }
+            }
             (Ty::Closure(left), Ty::Closure(right)) => {
                 return self.validate_closure_rhs_substitution(
                     left,
@@ -1740,12 +1773,14 @@ impl ValidatedTraitWorld {
     ) -> Result<()> {
         self.check_normalization_budget()?;
         charged(&self.budget, self.budget.charge_work(1))?;
-        let caller_membership =
-            matches!(
-                &evidence.implementation,
-                NormalizationOrigin::Dynamic(_) | NormalizationOrigin::Opaque(_)
-            ) || (matches!(&evidence.membership.0.origin, ProofOrigin::Closure { .. })
-                && !self.goal_is_closed(&evidence.selected_goal, context.proof.env())?);
+        let caller_membership = matches!(
+            &evidence.implementation,
+            NormalizationOrigin::Dynamic(_) | NormalizationOrigin::Opaque(_)
+        ) || (matches!(
+            &evidence.membership.0.origin,
+            ProofOrigin::Closure { .. } | ProofOrigin::FnItem { .. }
+        ) && !self
+            .goal_is_closed(&evidence.selected_goal, context.proof.env())?);
         if evidence.world != self.id
             || evidence.key.environment != context.proof.predicates.index
             || evidence.key.phase != context.proof.phase
@@ -1773,6 +1808,33 @@ impl ValidatedTraitWorld {
                 &self.budget,
                 "associated normalization evidence lost world/environment/phase authority",
             ));
+        }
+        if let ProofOrigin::FnItem { kind } = &evidence.membership.0.origin {
+            let Ty::FnItem(item) = &evidence.selected_goal.self_ty else {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "function item normalization lost its item type",
+                ));
+            };
+            let result = self.fn_item_signature(item, context.proof)?.result;
+            if self
+                .schema
+                .closure_trait_kind(evidence.selected_goal.declaration)?
+                != Some(*kind)
+                || !matches!(&evidence.implementation, NormalizationOrigin::Implementation(declaration) if *declaration == item.declaration)
+                || !self.eq_types(&evidence.arguments, &item.type_args, 0)?
+                || !self.eq_ty(&evidence.raw_rhs, &result, 0)?
+                || self
+                    .associated_header(evidence.key.projection.item)?
+                    .trait_decl
+                    != evidence.selected_goal.declaration
+            {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "function item Output normalization differs from its signature",
+                ));
+            }
+            return Ok(());
         }
         if let ProofOrigin::Closure { kind } = &evidence.membership.0.origin {
             let Ty::Closure(closure) = &evidence.selected_goal.self_ty else {

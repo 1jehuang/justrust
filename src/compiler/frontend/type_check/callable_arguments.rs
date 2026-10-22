@@ -15,6 +15,9 @@ impl Checker<'_> {
         {
             return self.prepared_closure_type(path);
         }
+        if !is_local_shaped_path(path) {
+            return self.fn_item_value(path);
+        }
         Ok(self
             .lookup_optional(path)?
             .map(|local| self.locals[local.0].ty.clone()))

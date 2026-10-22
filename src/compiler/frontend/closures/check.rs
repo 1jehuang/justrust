@@ -178,8 +178,17 @@ impl PlanCtx {
         name: &AstIdent,
         caller: ir::FactsCtx<'_>,
     ) -> Result<Option<MethodSelection>, String> {
-        let ir::Ty::Closure(closure) = receiver else {
-            return self.bounded_closure_method_selection(receiver, name, caller);
+        let (kind, params) = match receiver {
+            ir::Ty::Closure(closure) => (closure.kind(), closure.params().to_vec()),
+            // Direct invocation of a function item value needs the untupling
+            // call form (FNITEM slice 3); never approximate it.
+            ir::Ty::FnItem(_) => {
+                return Err(
+                    "unsupported: calling a function item value directly requires the untupling call form"
+                        .into(),
+                );
+            }
+            _ => return self.bounded_closure_method_selection(receiver, name, caller),
         };
         if self
             .program
@@ -190,7 +199,6 @@ impl PlanCtx {
         {
             return Ok(None);
         }
-        let kind = closure.kind();
         let world = self.trait_world()?;
         for (index, declaration) in self.registry.trait_ids.iter().enumerate() {
             if world
@@ -203,10 +211,10 @@ impl PlanCtx {
             let item = *self.registry.trait_items[index]
                 .first()
                 .ok_or("callable trait lacks call item")?;
-            let arguments = if closure.params().is_empty() {
+            let arguments = if params.is_empty() {
                 ir::Ty::Unit
             } else {
-                ir::Ty::Tuple(closure.params().into())
+                ir::Ty::Tuple(params.clone().into())
             };
             let call = ir::TraitCall {
                 trait_ref: ir::TraitRef {

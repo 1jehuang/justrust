@@ -12,6 +12,8 @@ mod byte_strings;
 mod callable_arguments;
 #[path = "type_check/constructor_expectations.rs"]
 mod constructor_expectations;
+#[path = "type_check/fn_item_values.rs"]
+mod fn_item_values;
 #[path = "format_lowering.rs"]
 mod format_lowering;
 #[path = "type_check/generic_placeholders.rs"]
@@ -10602,6 +10604,10 @@ impl<'a> Checker<'a> {
                     canonical.constant_kind(e)?,
                     Flow::value(canonical.constant_type(e)?),
                 )
+            }
+            Expr::Var(n) if !is_local_shaped_path(n) && self.fn_item_value(n)?.is_some() => {
+                let ty = self.fn_item_value(n)?.ok_or("function item vanished")?;
+                (ir::ExprKind::FnItem, Flow::value(ty))
             }
             Expr::Var(n) => {
                 let local = self.lookup(n)?;

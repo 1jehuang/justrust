@@ -505,3 +505,47 @@ fn closure_nesting_has_a_live_per_task_depth_gate() {
     let source = format!("fn main() {{ {} }}", "(|| -> i32 { 1 })();".repeat(32));
     compiler::compile(source, 8, true).expect("sibling closures restore live depth");
 }
+
+/// Function items as values (FNITEM slices 1-2): CHECK admits a plain
+/// function passed to a callable bound and rejects mismatches like stock.
+/// BUILD and direct invocation stay explicitly unsupported until the
+/// untupling call form lands.
+#[test]
+fn function_item_values_check_and_reject_like_stock() {
+    oracle::check(
+        "fn-item-values",
+        &[
+            Case {
+                name: "fn_item_wrong_argument",
+                source: "fn dbl(x: i32) -> i32 { x * 2 } fn ap<F: Fn(i64) -> i64>(f: F, v: i64) -> i64 { f(v) } fn main() { println!(\"{}\", ap(dbl, 4)); }",
+                expect: Expect::Invalid("E0277"),
+            },
+            Case {
+                name: "fn_item_wrong_output",
+                source: "fn dbl(x: i32) -> i32 { x * 2 } fn ap<F: Fn(i32) -> bool>(f: F, v: i32) -> bool { f(v) } fn main() { println!(\"{}\", ap(dbl, 4)); }",
+                expect: Expect::Invalid("E0271"),
+            },
+        ],
+    );
+    let accepted = [
+        "fn dbl(x: i32) -> i32 { x * 2 } fn ap<F: Fn(i32) -> i32>(f: F, v: i32) -> i32 { f(v) } fn main() { println!(\"{}\", ap(dbl, 4)); }",
+        "fn dbl(x: i32) -> i32 { x * 2 } fn add(a: i32, b: i32) -> i32 { a + b } fn ap<F: FnMut(i32) -> i32>(mut f: F, v: i32) -> i32 { f(v) } fn ap2<F: FnOnce(i32, i32) -> i32>(f: F) -> i32 { f(3, 4) } fn main() { let g = dbl; println!(\"{} {}\", ap(g, 4), ap2(add)); }",
+        "fn dbl(x: i32) -> i32 { x * 2 } fn ap<F: Fn(i32) -> i32>(f: F, v: i32) -> i32 { f(v) } fn main() { let dbl = |x: i32| -> i32 { x + 100 }; println!(\"{}\", ap(dbl, 4)); }",
+    ];
+    for workers in [1, 8] {
+        for source in accepted {
+            compiler::compile_observed(source.into(), workers, true)
+                .unwrap_or_else(|failure| panic!("{}\n{source}", failure.error));
+        }
+        let built = compiler::compile_observed(accepted[0].into(), workers, false)
+            .err()
+            .expect("function item dispatch build must stay unsupported");
+        assert!(built.to_string().contains("unsupported"), "{built}");
+        let direct =
+            "fn dbl(x: i32) -> i32 { x * 2 } fn main() { let f = dbl; let y: i32 = f(4); }";
+        let failure = compiler::compile_observed(direct.into(), workers, true)
+            .err()
+            .expect("direct function item invocation must stay unsupported");
+        assert!(failure.to_string().contains("unsupported"), "{failure}");
+    }
+}

@@ -3523,6 +3523,16 @@ impl Resolver<'_> {
                     };
                     return Ok(());
                 }
+                if let Some(item) = &value_item
+                    && item.kind == ResolvedKind::Function
+                    && !self.local_contains(name, locals)?
+                    && !closures::anonymous_path(name, self.names())?
+                {
+                    // Function item value: canonical declaration path, typed
+                    // later as the zero-sized `Ty::FnItem` of that declaration.
+                    *name = self.resolved_use(item.source()?, name)?;
+                    return Ok(());
+                }
                 if value_item
                     .as_ref()
                     .is_some_and(|item| item.kind == ResolvedKind::Struct)
