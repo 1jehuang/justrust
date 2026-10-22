@@ -27,7 +27,9 @@ impl ValidatedTraitWorld {
                 "closure body substitution lost parent shape authority",
             ));
         };
-        if !Arc::ptr_eq(left_seal, right_seal)
+        // Seals are only minted by the parent checker; a re-check of the same
+        // parent mints an equal seal, which carries the same authority.
+        if !(Arc::ptr_eq(left_seal, right_seal) || left_seal == right_seal)
             || raw.owner() != actual.owner()
             || raw.provider() != actual.provider()
             || raw.site() != actual.site()

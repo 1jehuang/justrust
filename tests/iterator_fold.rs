@@ -147,3 +147,60 @@ fn main() {
         ],
     );
 }
+
+/// `Iterator::filter` source adapter: `Filter<I, P>` with the
+/// `P: FnMut(&I::Item) -> bool` projection, consumed by `next()`. The parent
+/// may re-check and re-mint an equal closure shape seal.
+#[test]
+fn iterator_filter_matches_stock() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "iterator-filter",
+        &[
+            Case {
+                name: "filter_owned_items_next",
+                source: r#"
+fn main() {
+    let v: Vec<i32> = vec![1, 2, 3, 4];
+    let mut m = v.iter().copied().filter(|x: &i32| *x % 2 == 0);
+    println!("{:?}", m.next());
+}
+"#,
+                expect: Expect::Run("Some(2)\n"),
+            },
+            Case {
+                name: "map_then_next",
+                source: r#"
+fn main() {
+    let v: Vec<i32> = vec![5, 6];
+    let mut m = v.iter().map(|x: &i32| *x * 2);
+    println!("{:?}", m.next());
+}
+"#,
+                expect: Expect::Run("Some(10)\n"),
+            },
+            Case {
+                name: "filter_predicate_not_bool",
+                source: r#"
+fn main() {
+    let v: Vec<i32> = vec![1, 2];
+    let mut m = v.iter().copied().filter(|x: &i32| *x);
+    println!("{:?}", m.next());
+}
+"#,
+                expect: Expect::Invalid("E0308"),
+            },
+            Case {
+                name: "filter_predicate_takes_item_by_value",
+                source: r#"
+fn main() {
+    let v: Vec<i32> = vec![1, 2];
+    let mut m = v.iter().copied().filter(|x: i32| x > 1);
+    println!("{:?}", m.next());
+}
+"#,
+                expect: Expect::Invalid("E0277"),
+            },
+        ],
+    );
+}
