@@ -5,11 +5,11 @@ use super::*;
 pub(super) async fn produce(
     provider: &CompilerProvider,
     cx: &Context,
-    index: usize,
+    key: &Key,
 ) -> Result<Option<backend::Object>, Error> {
     let facts = Facts { cx };
     let types = facts.types().await?;
-    let (target, source_index) = facts.instance(index).await?;
+    let (target, source_index) = facts.instance_of(key, &provider.0.budget).await?;
     let template = facts.template(source_index).await?;
     let source = provider.validated_body(&types, source_index, &template)?;
     let mut encountered = false;
@@ -199,7 +199,7 @@ pub(super) async fn produce(
                 Error::new(analysis_diagnostic(
                     &provider.0.budget,
                     "physical opaque instance",
-                    index,
+                    key_root_slot(key).unwrap_or(usize::MAX),
                     &analysis,
                 ))
             })?;

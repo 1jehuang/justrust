@@ -6,7 +6,7 @@
 
 #[allow(unused_imports)]
 pub(crate) use crate::engine::{
-    BuildRoot, CheckRoot, MonoPlanDebtRoot, ParseDebtRoot, ResolveDebtRoot, SignaturesDebtRoot,
+    BuildRoot, CheckRoot, ParseDebtRoot, ResolveDebtRoot, SignaturesDebtRoot,
 };
 use crate::engine::{ItemKey, Key};
 
@@ -86,10 +86,6 @@ mod tests {
         assert_eq!(
             ResolveDebtRoot.key(),
             Key::new(super::super::RESOLVE, vec![])
-        );
-        assert_eq!(
-            MonoPlanDebtRoot.key(),
-            Key::new(super::super::MONO_PLAN, vec![])
         );
         assert_eq!(ParseDebtRoot.key(), Key::new(super::super::PARSE, vec![]));
         assert_eq!(Params::<110>(3, vec![1]).key(), Key::new(110, vec![3, 1]));

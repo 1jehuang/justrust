@@ -35,7 +35,7 @@ fn rejected(program: &Program) {
 #[test]
 fn primitive_min_check_uses_canonical_declaration_without_codegen() {
     use crate::compiler::{
-        ASSOCIATED_CONST_HEADER, BUILD, CompilerProvider, Input, MONO_PLAN, OBJECT, Snapshot,
+        ASSOCIATED_CONST_HEADER, BUILD, CompilerProvider, INSTANCE, Input, OBJECT, Snapshot,
     };
     use crate::engine::Engine;
     for workers in [1, 8] {
@@ -57,7 +57,7 @@ fn primitive_min_check_uses_canonical_declaration_without_codegen() {
             !report
                 .node_evaluations
                 .iter()
-                .any(|(key, _)| matches!(key.kind, BUILD | MONO_PLAN | OBJECT)),
+                .any(|(key, _)| matches!(key.kind, BUILD | INSTANCE | OBJECT)),
             "primitive MIN CHECK demanded executable work"
         );
     }

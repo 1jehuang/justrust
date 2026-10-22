@@ -620,7 +620,7 @@ fn kind_name(kind: u32) -> String {
         110 => "template_body",
         111 => "universal_lower",
         112 => "universal_analyze",
-        113 => "mono_plan",
+        142 => "instance",
         114 => "concrete_proofs",
         115 => "universal_admission",
         116 => "body_lexical",
@@ -642,7 +642,7 @@ const PERMANENT_WHOLE_PROGRAM: &[&str] = &["check", "build"];
 
 /// Whole-program nodes that exist today and must be split into per-file or
 /// per-item facts. This list may only shrink.
-const WHOLE_PROGRAM_DEBT: &[&str] = &["parse", "resolve", "signatures", "mono_plan"];
+const WHOLE_PROGRAM_DEBT: &[&str] = &["parse", "resolve", "signatures"];
 
 /// Ceiling on how much the transitive dependency closure of an independent leaf
 /// function grows when the program doubles from 16 to 32 functions. A value

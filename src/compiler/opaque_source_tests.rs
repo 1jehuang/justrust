@@ -15,7 +15,7 @@ fn source_check(source: &str, workers: usize) -> Result<(), String> {
         !report.node_evaluations.iter().any(|(key, _)| {
             matches!(
                 key.kind,
-                BUILD | OBJECT | OPAQUE_REPRESENTATION | OPAQUE_CALL_DISPATCH | MONO_PLAN
+                BUILD | OBJECT | OPAQUE_REPRESENTATION | OPAQUE_CALL_DISPATCH | INSTANCE
             )
         }),
         "source CHECK demanded physical instance or executable facts"

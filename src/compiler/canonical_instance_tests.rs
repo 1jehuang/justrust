@@ -20,10 +20,12 @@ fn legacy_root_body_is_only_an_alias_to_one_canonical_producer() {
         assert_eq!(canonical.len(), 1);
         assert_eq!(canonical[0].1, 1);
         assert!(!canonical[0].0.params.is_empty());
-        assert!(!report.node_evaluations.iter().any(|(key, _)| matches!(
-            key.kind,
-            MONO_PLAN | BUILD | OBJECT | OPAQUE_REPRESENTATION
-        )));
+        assert!(
+            !report.node_evaluations.iter().any(|(key, _)| matches!(
+                key.kind,
+                INSTANCE | BUILD | OBJECT | OPAQUE_REPRESENTATION
+            ))
+        );
         let alias = engine
             .fact_of::<InstanceBodyFact>(&crate::compiler::keys::item(BODY, 0), 0)
             .unwrap();

@@ -212,7 +212,9 @@ const ANALYZE: u32 = 109;
 const TEMPLATE_BODY: u32 = 110;
 const UNIVERSAL_LOWER: u32 = 111;
 const UNIVERSAL_ANALYZE: u32 = 112;
-const MONO_PLAN: u32 = 113;
+/// Per-instance direct demand frontier (`instances::DirectDemands`), keyed
+/// like every executable instance node by `instance_params`.
+const INSTANCE: u32 = 142;
 const UNIVERSAL_EFFECTS_READY: u32 = 115;
 const BODY_LEXICAL: u32 = 116;
 const CAPTURE_ENV: u32 = 117;
@@ -288,10 +290,6 @@ struct CaptureEnvironmentFact {
 /// `UNIVERSAL_ANALYZE` output: the successful verified template proof.
 struct UniversalProofFact {
     verified: ownership::VerifiedTemplateCfg,
-}
-/// `MONO_PLAN` output.
-struct PlanFact {
-    plan: instances::Plan,
 }
 /// `BODY` output: exact closed facts and the instantiated checked body.
 struct InstanceBodyFact {
@@ -542,25 +540,67 @@ impl Facts<'_> {
         }
         Ok(templates)
     }
-    async fn plan(&self) -> Result<Arc<PlanFact>, Error> {
-        self.get(keys::MonoPlanDebtRoot.key()).await
-    }
-    /// The target and source declaration of instance `index`. Nongeneric
-    /// Source roots occupy the first plan slots in callable order, so they
-    /// are derived from SIGNATURES alone; only demanded generic instances
-    /// read the whole-program instance plan.
-    async fn instance(&self, index: usize) -> Result<(ir::CallTarget, usize), Error> {
+    /// The target and source declaration of an instance-keyed node. Closed
+    /// roots are keyed by their SIGNATURES slot; every other instance by its
+    /// canonical graph-key words (`instance_params`). Decoding replays closure
+    /// actuals and rejects a words key that names a closed root.
+    async fn instance_of(
+        &self,
+        key: &Key,
+        budget: &ir::PlanBudget,
+    ) -> Result<(ir::CallTarget, usize), Error> {
         let types = self.types().await?;
-        if let Some(root) = root_instance(&types, index)? {
-            return Ok(root);
+        if let [slot] = key.params.as_slice() {
+            let slot = usize::try_from(*slot).map_err(|_| Error::new("invalid instance slot"))?;
+            return root_instance(&types, slot)?
+                .ok_or_else(|| Error::new("instance slot is not a closed root"));
         }
-        let plan = self.plan().await?;
-        let instance = plan
-            .plan
-            .entries
-            .get(index)
-            .ok_or_else(|| Error::new("invalid instance slot"))?;
-        Ok((instance.target.clone(), instance.source_index))
+        let target = self.decode_instance(&key.params, &types, budget).await?;
+        if root_slot_of(&types, &target)?.is_some() {
+            return Err(Error::new(
+                "noncanonical instance key: closed roots are keyed by slot",
+            ));
+        }
+        let source = types
+            .callable_index(target.declaration)
+            .map_err(Error::new)?;
+        Ok((target, source))
+    }
+}
+/// The closed-root slot of `target`, if it is a nongeneric Source root.
+fn root_slot_of(
+    types: &frontend::PlanCtx,
+    target: &ir::CallTarget,
+) -> Result<Option<usize>, Error> {
+    if !target.type_args.is_empty() {
+        return Ok(None);
+    }
+    let callable = types
+        .callable_index(target.declaration)
+        .map_err(Error::new)?;
+    Ok(types
+        .closed_roots()
+        .iter()
+        .position(|root| *root == callable))
+}
+/// Canonical key parameters of an executable instance: the closed-root slot
+/// (derived from SIGNATURES alone) or the canonical graph-key words. Exactly
+/// one form exists per target, so equivalent instances share one node.
+fn instance_params(
+    types: &frontend::PlanCtx,
+    target: &ir::CallTarget,
+    budget: &ir::PlanBudget,
+) -> Result<Vec<u64>, Error> {
+    if let Some(slot) = root_slot_of(types, target)? {
+        return Ok(vec![slot as u64]);
+    }
+    instances::graph_key::encode(target, budget).map_err(Error::new)
+}
+/// The closed-root slot named by an instance key, if it is slot-keyed.
+fn key_root_slot(key: &Key) -> Option<usize> {
+    match key.params.as_slice() {
+        [slot] => usize::try_from(*slot).ok(),
+        _ => None,
     }
 }
 /// Nongeneric Source callables in callable order are the plan's root slots
@@ -707,6 +747,8 @@ impl Provider for CompilerProvider {
         Box::pin(async move {
             let facts = Facts { cx: &cx };
             let function = keys::item;
+            // The same instance under another per-instance node kind.
+            let sibling = |kind: u32| keys::words(kind, key.params.clone());
             match key.kind {
                 OPAQUE_CALL_DISPATCH => opaque_dispatch::produce(&this, &cx, &key).await,
                 CONST_DECL | CONST_BODY | CONST_VALUE => this.constant_node(&cx, &key).await,
@@ -1329,30 +1371,23 @@ impl Provider for CompilerProvider {
                     .map_err(Error::new)?;
                     cx.publish(0, 1)
                 }
-                MONO_PLAN => {
+                INSTANCE => {
                     let types = facts.types().await?;
-                    let callable_count = types.callable_count();
-                    let (mut sources, _sources_reservation) = this.scratch_vec(callable_count)?;
-                    // Request every template before awaiting any, so the
-                    // per-callable bodies are demanded together instead of
-                    // one at a time behind the previous await.
-                    let (mut handles, _handles_reservation) = this.scratch_vec(callable_count)?;
-                    for index in 0..callable_count {
-                        handles.push(cx.request(function(TEMPLATE_BODY, index)).get(0));
-                    }
-                    for (index, handle) in handles.into_iter().enumerate() {
-                        let template: Arc<TemplateBodyFact> = cx.read_fact(handle).await?;
-                        sources.push(this.validated_body(&types, index, &template)?);
-                    }
+                    let (target, source_index) = facts.instance_of(&key, &this.0.budget).await?;
+                    let template = facts.template(source_index).await?;
+                    let source = this.validated_body(&types, source_index, &template)?;
                     let mut context = types.as_ref().clone();
-                    let plan = instances::build(
+                    let demands = instances::direct_demands(
+                        &target,
+                        &source,
                         &mut context,
-                        &sources,
                         &this.0.budget,
                         Some(cx.authority()),
                     )
-                    .map_err(Error::new)?;
-                    cx.publish_fact(0, PlanFact { plan })
+                    .map_err(|error| {
+                        Error::new(format!("{error}; instance caller={:?}", target.declaration))
+                    })?;
+                    cx.publish_fact(0, demands)
                 }
                 OPAQUE_REPRESENTATION => {
                     let types = facts.types().await?;
@@ -1397,39 +1432,31 @@ impl Provider for CompilerProvider {
                         .map_err(Error::new)?;
                     cx.publish_fact(0, OpaqueRepresentationFact { record, definition })
                 }
-                BODY | CANONICAL_BODY => {
+                BODY => {
+                    // BODY is the instance-keyed alias of exactly one canonical
+                    // target-keyed producer.
+                    let (target, _) = facts.instance_of(&key, &this.0.budget).await?;
+                    let params = instances::graph_key::encode(&target, &this.0.budget)
+                        .map_err(Error::new)?;
+                    let canonical: Arc<InstanceBodyFact> =
+                        facts.get(keys::words(CANONICAL_BODY, params)?).await?;
+                    canonical.validate_current_engine(cx.authority())?;
+                    cx.publish_fact(
+                        0,
+                        InstanceBodyFact {
+                            facts: canonical.facts.clone(),
+                            checked: canonical.checked.clone(),
+                        },
+                    )
+                }
+                CANONICAL_BODY => {
                     let types = facts.types().await?;
-                    let (instance_target, instance_source) = if key.kind == CANONICAL_BODY {
-                        let target =
-                            instances::graph_key::decode(&key.params, &types, &this.0.budget)
-                                .map_err(Error::new)?;
-                        let source = types
-                            .callable_index(target.declaration)
-                            .map_err(Error::new)?;
-                        (target, source)
-                    } else {
-                        let index = item_index(&key, "missing instance index")?;
-                        let (target, source) = facts.instance(index).await?;
-                        // First migration: nongeneric roots share exactly one
-                        // canonical producer independently of the global plan.
-                        // Generic closure actuals still use the existing path
-                        // until their parent metadata key replay is available.
-                        if target.type_args.is_empty() {
-                            let params = instances::graph_key::encode(&target, &this.0.budget)
-                                .map_err(Error::new)?;
-                            let canonical: Arc<InstanceBodyFact> =
-                                facts.get(keys::words(CANONICAL_BODY, params)?).await?;
-                            canonical.validate_current_engine(cx.authority())?;
-                            return cx.publish_fact(
-                                0,
-                                InstanceBodyFact {
-                                    facts: canonical.facts.clone(),
-                                    checked: canonical.checked.clone(),
-                                },
-                            );
-                        }
-                        (target, source)
-                    };
+                    let instance_target = facts
+                        .decode_instance(&key.params, &types, &this.0.budget)
+                        .await?;
+                    let instance_source = types
+                        .callable_index(instance_target.declaration)
+                        .map_err(Error::new)?;
                     let mut template = facts.template(instance_source).await?;
                     let mut proof_key = function(UNIVERSAL_ANALYZE, instance_source);
                     if let Some(closure) = &template.closure {
@@ -1576,10 +1603,10 @@ impl Provider for CompilerProvider {
                     cx.publish_fact(0, demand)
                 }
                 LOWER => {
-                    let index = item_index(&key, "missing instance index")?;
                     let types = facts.types().await?;
-                    let (instance_target, instance_source) = facts.instance(index).await?;
-                    let body: Arc<InstanceBodyFact> = facts.get(function(BODY, index)).await?;
+                    let (instance_target, instance_source) =
+                        facts.instance_of(&key, &this.0.budget).await?;
+                    let body: Arc<InstanceBodyFact> = facts.get(sibling(BODY)?).await?;
                     body.validate_current_engine(cx.authority())?;
                     let lowered = if !Self::universal_body(&types, instance_target.declaration)? {
                         let template = facts.template(instance_source).await?;
@@ -1598,13 +1625,12 @@ impl Provider for CompilerProvider {
                     cx.publish_fact(0, Arc::new(lowered))
                 }
                 ANALYZE => {
-                    let index = item_index(&key, "missing instance index")?;
                     let types = facts.types().await?;
-                    let (instance_target, instance_source) = facts.instance(index).await?;
-                    let lowered: Arc<Arc<cfg::Function>> =
-                        facts.get(function(LOWER, index)).await?;
+                    let (instance_target, instance_source) =
+                        facts.instance_of(&key, &this.0.budget).await?;
+                    let lowered: Arc<Arc<cfg::Function>> = facts.get(sibling(LOWER)?).await?;
                     let lowered = lowered.as_ref().clone();
-                    let body: Arc<InstanceBodyFact> = facts.get(function(BODY, index)).await?;
+                    let body: Arc<InstanceBodyFact> = facts.get(sibling(BODY)?).await?;
                     body.validate_current_engine(cx.authority())?;
                     scale_task_work_by_cfg(&lowered);
                     if !Self::universal_body(&types, instance_target.declaration)? {
@@ -1619,18 +1645,17 @@ impl Provider for CompilerProvider {
                             .map_err(|error| source_fact_error(error, &this.0.budget))?;
                     }
                     if has_drop(&lowered) {
-                        if root_instance(&types, index)?.is_some() {
+                        if let Some(index) = key_root_slot(&key) {
                             let demand: Arc<root_cleanup::RootCleanupDemand> =
                                 facts.get(function(ROOT_CLEANUP_DEMAND, index)).await?;
                             demand
                                 .validate(&instance_target, &lowered, &this.0.budget)
                                 .map_err(Error::new)?;
                         } else {
-                            facts
-                                .plan()
-                                .await?
-                                .plan
-                                .validate_cleanup_dependencies(&lowered)
+                            let demands: Arc<instances::DirectDemands> =
+                                facts.get(sibling(INSTANCE)?).await?;
+                            demands
+                                .validate_cleanup(&lowered, &this.0.budget)
                                 .map_err(Error::new)?;
                         }
                     }
@@ -1673,37 +1698,44 @@ impl Provider for CompilerProvider {
                             cx.publish_fact(0, ConcreteProofFact { concrete })
                         }
                         Err(analysis) => {
-                            let message =
-                                analysis_diagnostic(&this.0.budget, "instance", index, &analysis);
+                            let message = analysis_diagnostic(
+                                &this.0.budget,
+                                "instance",
+                                key_root_slot(&key).unwrap_or(usize::MAX),
+                                &analysis,
+                            );
                             cx.publish_fact(ANALYSIS_OUTPUT, Arc::new(analysis))?;
                             Err(Error::new(message))
                         }
                     }
                 }
                 OBJECT => {
-                    let index = item_index(&key, "missing instance index")?;
-                    if let Some(object) = opaque_object::produce(&this, &cx, index).await? {
+                    if let Some(object) = opaque_object::produce(&this, &cx, &key).await? {
                         return cx.publish_fact(0, object);
                     }
                     // Only this instance's own proof is required. Executable
                     // publication is gated on every check by BUILD (via CHECK),
                     // so object code for a ready function overlaps unrelated
                     // checking (ARCHITECTURE.md section 17).
-                    let proof: Arc<ConcreteProofFact> = facts.get(function(ANALYZE, index)).await?;
+                    let proof: Arc<ConcreteProofFact> = facts.get(sibling(ANALYZE)?).await?;
+                    let root = key_root_slot(&key);
                     if has_drop(proof.concrete.function()) {
                         let types = facts.types().await?;
-                        if let Some((target, _)) = root_instance(&types, index)? {
+                        if let Some((target, _)) = root
+                            .map(|index| root_instance(&types, index))
+                            .transpose()?
+                            .flatten()
+                        {
                             let demand: Arc<root_cleanup::RootCleanupDemand> =
-                                facts.get(function(ROOT_CLEANUP_DEMAND, index)).await?;
+                                facts.get(sibling(ROOT_CLEANUP_DEMAND)?).await?;
                             demand
                                 .validate(&target, proof.concrete.function(), &this.0.budget)
                                 .map_err(Error::new)?;
                         } else {
-                            facts
-                                .plan()
-                                .await?
-                                .plan
-                                .validate_cleanup_dependencies(proof.concrete.function())
+                            let demands: Arc<instances::DirectDemands> =
+                                facts.get(sibling(INSTANCE)?).await?;
+                            demands
+                                .validate_cleanup(proof.concrete.function(), &this.0.budget)
                                 .map_err(Error::new)?;
                         }
                     }
@@ -1711,7 +1743,11 @@ impl Provider for CompilerProvider {
                     // against the sealed plan, which rejects any unplanned
                     // symbol, so this needs no whole-program read.
                     let types = facts.types().await?;
-                    let c_boundary = if let Some((target, _)) = root_instance(&types, index)? {
+                    let c_boundary = if let Some((target, _)) = root
+                        .map(|index| root_instance(&types, index))
+                        .transpose()?
+                        .flatten()
+                    {
                         types
                             .c_abi_for(target.declaration)
                             .map_err(Error::new)?
@@ -1726,7 +1762,7 @@ impl Provider for CompilerProvider {
                         return cx.publish_fact(0, object);
                     }
                     if this.0.source_options.opt != ssa::OptMode::Off && c_boundary.is_none() {
-                        let optimized: Arc<SsaFact> = facts.get(function(IPO_OPT, index)).await?;
+                        let optimized: Arc<SsaFact> = facts.get(sibling(IPO_OPT)?).await?;
                         if let Some(lowered) = &optimized.lowered {
                             let meter = ssa::meter::Meter::new(&this.0.budget);
                             let types = lowered
@@ -1760,11 +1796,13 @@ impl Provider for CompilerProvider {
                     cx.publish_fact(0, object)
                 }
                 SSA => {
-                    let index = item_index(&key, "missing instance index")?;
-                    let proof: Arc<ConcreteProofFact> = facts.get(function(ANALYZE, index)).await?;
+                    let proof: Arc<ConcreteProofFact> = facts.get(sibling(ANALYZE)?).await?;
                     let types = facts.types().await?;
                     let meter = ssa::meter::Meter::new(&this.0.budget);
-                    if let Some((target, _)) = root_instance(&types, index)?
+                    if let Some((target, _)) = key_root_slot(&key)
+                        .map(|index| root_instance(&types, index))
+                        .transpose()?
+                        .flatten()
                         && types
                             .c_abi_for(target.declaration)
                             .map_err(Error::new)?
@@ -1797,8 +1835,7 @@ impl Provider for CompilerProvider {
                     cx.publish_fact(0, fact)
                 }
                 LOCAL_OPT => {
-                    let index = item_index(&key, "missing instance index")?;
-                    let input: Arc<SsaFact> = facts.get(function(SSA, index)).await?;
+                    let input: Arc<SsaFact> = facts.get(sibling(SSA)?).await?;
                     let meter = ssa::meter::Meter::new(&this.0.budget);
                     let fact = match &input.lowered {
                         Some(lowered) => SsaFact::publish(local_opt(lowered, &meter)?, 0, &meter)?,
@@ -1809,8 +1846,7 @@ impl Provider for CompilerProvider {
                     cx.publish_fact(0, fact)
                 }
                 SUMMARY => {
-                    let index = item_index(&key, "missing instance index")?;
-                    let body: Arc<SsaFact> = facts.get(function(LOCAL_OPT, index)).await?;
+                    let body: Arc<SsaFact> = facts.get(sibling(LOCAL_OPT)?).await?;
                     let meter = ssa::meter::Meter::new(&this.0.budget);
                     // Summary is Copy and owns no heap storage; its fact
                     // envelope is admitted before publication and kept as
@@ -1834,8 +1870,7 @@ impl Provider for CompilerProvider {
                     )
                 }
                 IPO_OPT => {
-                    let index = item_index(&key, "missing instance index")?;
-                    let body: Arc<SsaFact> = facts.get(function(LOCAL_OPT, index)).await?;
+                    let body: Arc<SsaFact> = facts.get(sibling(LOCAL_OPT)?).await?;
                     let meter = ssa::meter::Meter::new(&this.0.budget);
                     let Some(lowered) = body.lowered.clone() else {
                         return cx.publish_fact(
@@ -1850,21 +1885,22 @@ impl Provider for CompilerProvider {
                     // its exact capacity and held across the awaits that use it.
                     let types = facts.types().await?;
                     let count = lowered.callees.len();
-                    let mut slots = meter.list::<Option<usize>>(count).map_err(Error::new)?;
+                    let mut slots = meter.list::<Option<Vec<u64>>>(count).map_err(Error::new)?;
                     for callee in &lowered.callees {
                         meter.work(1).map_err(Error::new)?;
                         slots
-                            .push(instance_slot(&facts, &types, &callee.target).await?)
+                            .push(instance_params(&types, &callee.target, &this.0.budget).ok())
                             .map_err(Error::new)?;
                     }
                     let mut summary_handles = meter.list(count).map_err(Error::new)?;
                     for slot in slots.iter() {
-                        summary_handles
-                            .push(
-                                slot.filter(|slot| *slot != index)
-                                    .map(|slot| cx.request(function(SUMMARY, slot)).get(0)),
-                            )
-                            .map_err(Error::new)?;
+                        let handle = match slot.as_ref().filter(|slot| **slot != key.params) {
+                            Some(slot) => {
+                                Some(cx.request(keys::words(SUMMARY, slot.clone())?).get(0))
+                            }
+                            None => None,
+                        };
+                        summary_handles.push(handle).map_err(Error::new)?;
                     }
                     let mut summaries = meter
                         .table::<Option<ssa::inline::Summary>>(count, None)
@@ -1889,9 +1925,10 @@ impl Provider for CompilerProvider {
                     let mut body_handles = meter.list(chosen.len()).map_err(Error::new)?;
                     for callee in chosen.iter() {
                         let slot = slots[*callee]
+                            .clone()
                             .ok_or_else(|| Error::new("chosen callee has no slot"))?;
                         body_handles
-                            .push(cx.request(function(LOCAL_OPT, slot)).get(0))
+                            .push(cx.request(keys::words(LOCAL_OPT, slot)?).get(0))
                             .map_err(Error::new)?;
                     }
                     let mut bodies = meter
@@ -2033,10 +2070,8 @@ impl Provider for CompilerProvider {
                     )
                 }
                 CHECK | BUILD => {
-                    // Closed source roots have stable slots from SIGNATURES.
-                    // Demand them before sealing the additional generic frontier:
-                    // otherwise MONO_PLAN becomes a scheduling barrier even
-                    // though these pipelines do not depend on its output.
+                    // Closed source roots have stable slots from SIGNATURES;
+                    // BUILD discovers the generic frontier per instance.
                     let types = facts.types().await?;
                     // Item checks fan out through per-module inventory facts,
                     // never a scan of whole-program item counts.
@@ -2117,13 +2152,75 @@ impl Provider for CompilerProvider {
                     }
                     let root_count = types.closed_roots().len();
                     let nominal_handles = cx.request_all(&nominal_keys, 0);
-                    let kind = if key.kind == BUILD { OBJECT } else { ANALYZE };
-                    let (mut root_handles, _root_handles_reservation) =
-                        this.scratch_vec(root_count)?;
+                    // Link inventory is the closed direct-demand frontier from
+                    // the closed roots: each round requests every new
+                    // instance's INSTANCE and OBJECT before awaiting any, so
+                    // object code overlaps discovery. Equivalent targets share
+                    // one canonical key, and one symbol names one object.
+                    let mut seen: std::collections::HashSet<Vec<u64>> =
+                        std::collections::HashSet::new();
+                    let mut symbols: std::collections::HashMap<String, ir::CallTarget> =
+                        std::collections::HashMap::new();
+                    let mut frontier = Vec::new();
                     for index in 0..root_count {
-                        root_handles.push(cx.request(function(kind, index)).get(0));
+                        let (target, _) = root_instance(&types, index)?
+                            .ok_or_else(|| Error::new("closed root slot out of range"))?;
+                        frontier.push((vec![index as u64], target));
                     }
-                    let plan = facts.plan().await?;
+                    let mut pending = Vec::new();
+                    let mut pending_symbols: Vec<String> = Vec::new();
+                    let mut depth = 0usize;
+                    while !frontier.is_empty() {
+                        this.0.budget.check_depth(depth).map_err(Error::new)?;
+                        let mut round = Vec::new();
+                        for (params, target) in std::mem::take(&mut frontier) {
+                            this.0
+                                .budget
+                                .charge_work(params.len())
+                                .map_err(Error::new)?;
+                            if !seen.insert(params.clone()) {
+                                continue;
+                            }
+                            let symbol = instances::symbol_of(&target, &types, &this.0.budget)
+                                .map_err(Error::new)?;
+                            if let Some(previous) = symbols.get(&symbol) {
+                                if instances::admit_representation_alias(
+                                    previous,
+                                    &target,
+                                    &types,
+                                    &this.0.budget,
+                                )
+                                .map_err(Error::new)?
+                                {
+                                    continue;
+                                }
+                                return Err(Error::new(
+                                    "generic canonical instance identity collision",
+                                ));
+                            }
+                            symbols.insert(symbol.clone(), target.clone());
+                            let demands = cx.request(keys::words(INSTANCE, params.clone())?).get(0);
+                            let object = cx.request(keys::words(OBJECT, params)?).get(0);
+                            round.push((demands, target, symbol));
+                            pending.push(object);
+                        }
+                        for (handle, target, _) in &round {
+                            let demands: Arc<instances::DirectDemands> =
+                                cx.read_fact(handle.clone()).await?;
+                            for next in demands.targets.iter() {
+                                let params = instance_params(&types, next, &this.0.budget)
+                                    .map_err(|error| {
+                                        Error::new(format!(
+                                            "{error}; instance caller={:?}",
+                                            target.declaration
+                                        ))
+                                    })?;
+                                frontier.push((params, next.clone()));
+                            }
+                        }
+                        pending_symbols.extend(round.into_iter().map(|(_, _, symbol)| symbol));
+                        depth += 1;
+                    }
                     for handle in nominal_handles {
                         let _: Arc<traits::NominalDeclarationProof> = cx.read_fact(handle).await?;
                     }
@@ -2135,33 +2232,8 @@ impl Provider for CompilerProvider {
                             cx.read_fact(handle).await?;
                         checked.validate(&types, declaration, &this.0.budget)?;
                     }
-
-                    let additional = plan
-                        .plan
-                        .entries
-                        .len()
-                        .checked_sub(root_count)
-                        .ok_or_else(|| Error::new("instance plan omitted a closed source root"))?;
-                    let (mut handles, _handles_reservation) = this.scratch_vec(additional)?;
-                    for index in root_count..plan.plan.entries.len() {
-                        handles.push(cx.request(function(kind, index)).get(0));
-                    }
-                    let handles = root_handles.into_iter().chain(handles);
-                    if key.kind == CHECK {
-                        for handle in handles {
-                            let proof: Arc<ConcreteProofFact> = cx.read_fact(handle).await?;
-                            if has_drop(proof.concrete.function()) {
-                                // Owner-local admission is not executable inventory authority.
-                                plan.plan
-                                    .validate_cleanup_dependencies(proof.concrete.function())
-                                    .map_err(Error::new)?;
-                            }
-                        }
-                        return cx.publish(0, 1);
-                    }
-                    let (mut objects, _objects_reservation) =
-                        this.scratch_vec(plan.plan.entries.len())?;
-                    for (handle, instance) in handles.zip(plan.plan.entries.iter()) {
+                    let (mut objects, _objects_reservation) = this.scratch_vec(pending.len())?;
+                    for (handle, symbol) in pending.into_iter().zip(pending_symbols) {
                         let object: Arc<backend::Object> = cx.read_fact(handle).await?;
                         let mut bytes = object.code.len();
                         for (_, name) in &object.calls {
@@ -2184,10 +2256,7 @@ impl Provider for CompilerProvider {
                         }
                         this.0.budget.retain_bytes(bytes).map_err(Error::new)?;
                         this.0.budget.charge_work(bytes).map_err(Error::new)?;
-                        objects.push((
-                            plan.plan.symbol(&instance.target).map_err(Error::new)?,
-                            object.as_ref().clone(),
-                        ));
+                        objects.push((symbol, object.as_ref().clone()));
                     }
                     // The linked artifact is released only after the explicit
                     // "every required check passed" fact.
@@ -2229,30 +2298,6 @@ fn local_opt(
     .map_err(Error::new)
 }
 
-/// The instance slot of a direct call target, if it is a planned instance.
-/// Nongeneric roots resolve from SIGNATURES alone; generic targets read the
-/// sealed instance plan, which these optimizer nodes already depend on
-/// transitively through ANALYZE.
-async fn instance_slot(
-    facts: &Facts<'_>,
-    types: &frontend::PlanCtx,
-    target: &ir::CallTarget,
-) -> Result<Option<usize>, Error> {
-    if target.type_args.is_empty() {
-        let callable = types
-            .callable_index(target.declaration)
-            .map_err(Error::new)?;
-        if let Some(slot) = types
-            .closed_roots()
-            .iter()
-            .position(|root| *root == callable)
-        {
-            return Ok(Some(slot));
-        }
-    }
-    let plan = facts.plan().await?;
-    Ok(plan.plan.slot(target))
-}
 fn has_drop(function: &cfg::Function) -> bool {
     function
         .blocks
@@ -2430,20 +2475,16 @@ pub fn compile_probe_file_observed_with_options(
 /// Every analysis the graph published, from the analysis nodes' second output,
 /// paired with its declaration or instance index. Reads facts only; demands
 /// no new work.
-fn retained_analyses(engine: &Engine) -> Vec<(usize, Arc<ownership::Analysis>)> {
+fn retained_analyses(engine: &Engine, report: &Report) -> Vec<(usize, Arc<ownership::Analysis>)> {
     let mut analyses = Vec::new();
     let callables = engine
         .fact_of::<frontend::PlanCtx>(&keys::SignaturesDebtRoot.key(), 0)
         .map_or(0, |types| types.callable_count());
-    let instances = engine
-        .fact_of::<PlanFact>(&keys::MonoPlanDebtRoot.key(), 0)
-        .map_or(0, |plan| plan.plan.entries.len());
     // CHECK proves source callables through SOURCE_ADMISSION, which publishes
     // its analysis (success or failure) at ANALYSIS_OUTPUT before failing.
     for (kind, count) in [
         (SOURCE_ADMISSION, callables),
         (UNIVERSAL_ANALYZE, callables),
-        (ANALYZE, instances),
     ] {
         for index in 0..count {
             let key = keys::params(kind, index as u64, vec![]);
@@ -2454,7 +2495,34 @@ fn retained_analyses(engine: &Engine) -> Vec<(usize, Arc<ownership::Analysis>)> 
             }
         }
     }
+    for (position, key) in discovered_instances(report, ANALYZE)
+        .into_iter()
+        .enumerate()
+    {
+        if let Some(analysis) = engine.fact_of::<Arc<ownership::Analysis>>(&key, ANALYSIS_OUTPUT) {
+            analyses.push((
+                key_root_slot(&key).unwrap_or(position),
+                analysis.as_ref().clone(),
+            ));
+        }
+    }
     analyses
+}
+/// Post-run: every discovered instance node of `kind`, closed roots first in
+/// slot order, then the generic frontier in canonical key order. Reporting
+/// only; reads the finished report, never the graph.
+fn discovered_instances(report: &Report, kind: u32) -> Vec<Key> {
+    let mut found: Vec<Key> = report
+        .node_evaluations
+        .iter()
+        .filter(|(key, _)| key.kind == kind)
+        .map(|(key, _)| key.clone())
+        .collect();
+    found.sort_by(|left, right| {
+        (left.params.len() > 1, &left.params).cmp(&(right.params.len() > 1, &right.params))
+    });
+    found.dedup();
+    found
 }
 
 fn compile_input(input: Input, workers: usize, check_only: bool) -> Result<Compilation, Failure> {
@@ -2521,7 +2589,7 @@ fn compile_input_configured(
         )
         .unwrap_or(error),
         report: Some(Box::new(report.clone())),
-        analyses: retained_analyses(&engine),
+        analyses: retained_analyses(&engine, report),
         resource_usage: Box::new(metered_usage(&engine, &snapshot.budget, report)),
     };
     let outcome = (|| -> Result<Option<Arc<Vec<u8>>>, Error> {
@@ -2589,9 +2657,9 @@ fn compile_input_configured(
             (loaded.source_bytes, loaded.files)
         }
     };
-    let instances = engine
-        .fact_of::<PlanFact>(&keys::MonoPlanDebtRoot.key(), 0)
-        .map_or(0, |plan| plan.plan.entries.len());
+    let lowered_instances = discovered_instances(&report, LOWER);
+    let analyzed_instances = discovered_instances(&report, ANALYZE);
+    let optimized_instances = discovered_instances(&report, IPO_OPT);
     // BUILD reports executable instance CFGs (LOWER). CHECK never demands the
     // instance plan, so it reports the per-source-callable CFG that
     // SOURCE_ADMISSION analyzed.
@@ -2619,10 +2687,9 @@ fn compile_input_configured(
             .map(|lowered| lowered.as_ref().clone())
             .collect()
     } else {
-        (0..instances)
-            .filter_map(|index| {
-                engine.fact_of::<Arc<cfg::Function>>(&keys::Item::<{ LOWER }>(index).key(), 0)
-            })
+        lowered_instances
+            .iter()
+            .filter_map(|key| engine.fact_of::<Arc<cfg::Function>>(key, 0))
             .map(|lowered| lowered.as_ref().clone())
             .collect()
     };
@@ -2661,13 +2728,9 @@ fn compile_input_configured(
             .map(|analysis| analysis.as_ref().clone())
             .collect()
     } else {
-        (0..instances)
-            .filter_map(|index| {
-                engine.fact_of::<Arc<ownership::Analysis>>(
-                    &keys::Item::<{ ANALYZE }>(index).key(),
-                    ANALYSIS_OUTPUT,
-                )
-            })
+        analyzed_instances
+            .iter()
+            .filter_map(|key| engine.fact_of::<Arc<ownership::Analysis>>(key, ANALYSIS_OUTPUT))
             .map(|analysis| analysis.as_ref().clone())
             .collect()
     };
@@ -2676,8 +2739,8 @@ fn compile_input_configured(
         mode: snapshot.source_options.opt,
         ..OptimizerReport::default()
     };
-    for index in 0..instances {
-        if let Some(fact) = engine.fact_of::<SsaFact>(&keys::Item::<{ IPO_OPT }>(index).key(), 0) {
+    for key in &optimized_instances {
+        if let Some(fact) = engine.fact_of::<SsaFact>(key, 0) {
             if fact.lowered.is_some() {
                 optimizer.optimized += 1;
             } else {
@@ -2898,24 +2961,22 @@ mod optimizer_resource_tests {
         (engine, outcome)
     }
 
-    fn instances(engine: &Engine) -> usize {
-        engine
-            .fact_of::<PlanFact>(&keys::MonoPlanDebtRoot.key(), 0)
-            .map(|plan| plan.plan.entries.len())
-            .unwrap_or(0)
+    fn instances(report: &Report) -> Vec<Key> {
+        discovered_instances(report, OBJECT)
     }
 
     #[test]
     fn every_optimizer_node_publishes_exact_receipts() {
         let (engine, outcome) = run(ir::PlanBudget::default());
-        outcome.expect("optimizer build succeeds at default limits");
-        let count = instances(&engine);
+        let report = outcome.expect("optimizer build succeeds at default limits");
+        let instance_keys = instances(&report);
+        let count = instance_keys.len();
         assert!(count >= 4);
         let mut lowered = 0;
         let mut unsupported = 0;
         let mut objects_with_receipt = 0;
-        for index in 0..count {
-            let key = |kind| keys::params(kind, index as u64, vec![]);
+        for (index, instance) in instance_keys.iter().enumerate() {
+            let key = |kind| keys::words(kind, instance.params.clone()).unwrap();
             for kind in [SSA, LOCAL_OPT, IPO_OPT] {
                 let fact = engine
                     .fact_of::<SsaFact>(&key(kind), 0)
@@ -3029,7 +3090,7 @@ impl crate::engine::Fact for OpaqueHiddenTypesFact {}
 
 impl crate::engine::Fact for OpaqueRepresentationFact {}
 
-impl crate::engine::Fact for PlanFact {}
+impl crate::engine::Fact for instances::DirectDemands {}
 
 impl crate::engine::Fact for SsaFact {}
 

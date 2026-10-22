@@ -15,8 +15,6 @@ ParsedProgram PlanCtx Mutex  # ParsedProgram -> Program -> Function -> Generated
 ParsedProgram SchemaAdapter Mutex  # ParsedProgram -> Program -> Function -> GeneratedCfgShape -> ValidatedTraitWorld -> dyn SchemaCx -> SchemaAdapter -> Mutex
 PlanCtx PlanCtx Mutex  # PlanCtx -> Mutex
 PlanCtx SchemaAdapter Mutex  # PlanCtx -> ValidatedTraitWorld -> dyn SchemaCx -> SchemaAdapter -> Mutex
-PlanFact PlanCtx Mutex  # PlanFact -> Plan -> CarrierEffects -> CallCarrierBinding -> ValidatedCallEvidence -> ValidatedOriginalCalls -> OriginalBody -> OriginalSource -> PlanCtx -> Mutex
-PlanFact SchemaAdapter Mutex  # PlanFact -> Plan -> ValidatedFacts -> ValidatedTraitWorld -> dyn SchemaCx -> SchemaAdapter -> Mutex
 Program PlanCtx Mutex  # Program -> Function -> GeneratedCfgShape -> CanonicalSourcePublication -> OriginalBody -> OriginalSource -> PlanCtx -> Mutex
 Program SchemaAdapter Mutex  # Program -> Function -> GeneratedCfgShape -> ValidatedTraitWorld -> dyn SchemaCx -> SchemaAdapter -> Mutex
 TemplateBodyFact PlanCtx Mutex  # TemplateBodyFact -> CanonicalSourcePublication -> OriginalBody -> OriginalSource -> PlanCtx -> Mutex

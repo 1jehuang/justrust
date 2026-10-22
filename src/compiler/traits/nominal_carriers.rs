@@ -230,7 +230,7 @@ mod tests {
         assert!(report.capture_complete);
         assert!(!report.node_evaluations.iter().any(|(key, _)| matches!(
             key.kind,
-            compiler::BUILD | compiler::OBJECT | compiler::MONO_PLAN
+            compiler::BUILD | compiler::OBJECT | compiler::INSTANCE
         )));
         for (key, _) in &report.node_evaluations {
             let (function, facts) = match key.kind {

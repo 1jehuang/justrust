@@ -112,7 +112,7 @@ fn phase(kind: u32) -> &'static str {
         110 => "template_body",
         111 => "universal_lower",
         112 => "universal_analyze",
-        113 => "mono_plan",
+        142 => "instance",
         114 => "concrete_proofs",
         115 => "effects_ready",
         _ => "other",

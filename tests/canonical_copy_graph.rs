@@ -71,9 +71,15 @@ fn canonical_recipe_universal_proofs_and_inner_origins_precede_every_object() {
                     .iter()
                     .filter(|(key, _)| key.kind == kind && key.params == [*index as u64])
                     .collect();
+                // Library templates and their universal proofs are demand-driven
+                // (no whole-program plan reads every template): never
+                // duplicated, absent when unreached.
                 if kind == 110 || universal {
-                    assert_eq!(evaluations.len(), 1, "missing or duplicated {kind}:{index}");
-                    assert_eq!(evaluations[0].1, 1, "repeated {kind}:{index}");
+                    assert!(evaluations.len() <= 1, "duplicated {kind}:{index}");
+                    assert!(
+                        evaluations.iter().all(|e| e.1 == 1),
+                        "repeated {kind}:{index}"
+                    );
                 } else {
                     assert!(
                         evaluations.is_empty(),
@@ -116,9 +122,18 @@ fn canonical_recipe_universal_proofs_and_inner_origins_precede_every_object() {
                 .unwrap()
                 .at_ns
         };
-        for index in 0..compiled.control_flow.len() {
-            let object = publish_of(Key::new(103, vec![index as u64]));
-            assert!(object >= publish_of(Key::new(109, vec![index as u64])));
+        // Instances are keyed by root slot or canonical target words.
+        let objects: Vec<_> = compiled
+            .report
+            .node_evaluations
+            .iter()
+            .filter(|(key, _)| key.kind == 103)
+            .map(|(key, _)| key.params.clone())
+            .collect();
+        assert_eq!(objects.len(), compiled.control_flow.len());
+        for params in objects {
+            let object = publish_of(Key::new(103, params.clone()));
+            assert!(object >= publish_of(Key::new(109, params)));
         }
     }
 }

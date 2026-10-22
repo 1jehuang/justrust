@@ -374,8 +374,6 @@ root_keys! {
     SignaturesDebtRoot = 101;
     /// DEBT (may only shrink): whole-program resolve.
     ResolveDebtRoot = 106;
-    /// DEBT (may only shrink): whole-program monomorphization plan.
-    MonoPlanDebtRoot = 113;
 }
 
 impl Key {

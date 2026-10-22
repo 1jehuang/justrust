@@ -10,6 +10,7 @@ const SEMANTICS: &[u8] =
 
 pub(super) struct InstanceIdentity {
     pub symbol: String,
+    #[cfg_attr(not(test), allow(dead_code))]
     pub canonical: Arc<[u8]>,
     _reservations: Vec<ir::PlanReservation>,
 }
@@ -568,8 +569,10 @@ pub(super) fn identity(
     })
 }
 
+#[cfg(test)]
 use std::collections::HashMap;
 
+#[cfg(test)]
 fn charge_target_lookup(target: &ir::CallTarget, budget: &ir::PlanBudget) -> Result<(), String> {
     fn walk(value: &ir::Ty, depth: usize, budget: &ir::PlanBudget) -> Result<(), String> {
         budget.check_depth(depth)?;
@@ -635,7 +638,7 @@ fn charge_target_lookup(target: &ir::CallTarget, budget: &ir::PlanBudget) -> Res
 /// trait world proves their ordered arguments equal (canonical declaration and
 /// arguments, both representations validated). Anything else stays a
 /// collision error: differing authorization never merges.
-fn admit_representation_alias(
+pub(super) fn admit_representation_alias(
     previous: &ir::CallTarget,
     next: &ir::CallTarget,
     context: &frontend::PlanCtx,
@@ -665,12 +668,14 @@ fn admit_representation_alias(
     Ok(true)
 }
 
+#[cfg(test)]
 pub(super) struct Instance {
     pub target: ir::CallTarget,
     pub source_index: usize,
     pub identity: InstanceIdentity,
 }
 
+#[cfg(test)]
 pub(super) struct Plan {
     pub entries: Vec<Instance>,
     cleanup_targets: Vec<ir::CallTarget>,
@@ -679,6 +684,7 @@ pub(super) struct Plan {
     budget: ir::PlanBudget,
 }
 
+#[cfg(test)]
 impl Plan {
     pub fn validate_cleanup_dependencies(
         &self,
@@ -742,6 +748,26 @@ pub(super) struct DirectDemands {
     pub cleanup: Vec<ir::CallTarget>,
 }
 impl DirectDemands {
+    /// Every implicit cleanup destructor in `function` must be one of this
+    /// instance's own sealed cleanup demands, so BUILD links it.
+    pub fn validate_cleanup(
+        &self,
+        function: &super::cfg::Function,
+        budget: &ir::PlanBudget,
+    ) -> Result<(), String> {
+        for block in &function.blocks {
+            budget.charge_work(1)?;
+            if let super::cfg::Terminator::Drop { cleanup, .. } = &block.terminator.value {
+                for target in cleanup.destructor().targets() {
+                    budget.charge_work(self.cleanup.len().max(1))?;
+                    if !self.cleanup.contains(&target) {
+                        return Err("cleanup target lacks sealed implicit instance demand".into());
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
     fn call(&mut self, target: ir::CallTarget, budget: &ir::PlanBudget) -> Result<(), String> {
         budget.charge_work(self.targets.len().max(1))?;
         if !self.targets.contains(&target) {
@@ -919,6 +945,7 @@ pub(super) fn direct_demands(
     Ok(demands)
 }
 
+#[cfg(test)]
 pub(super) fn build(
     context: &mut frontend::PlanCtx,
     sources: &[Arc<ir::CheckedFunction>],
