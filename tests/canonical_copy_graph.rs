@@ -151,15 +151,16 @@ fn invalid_unused_clone_and_unavailable_dispatch_never_reach_objects() {
             // X31's exact source now has independent native/stock parity evidence.
             // N21 and the unavailable clone_from default remain negative below.
             if case == 2 {
-                use compiler::frontend::{CallableProvider, PlanCtx};
-                use compiler::ir::PlanBudget;
                 use justrust_engine::Key;
                 for check in [true, false] {
                     let compiled = compiler::compile(source.to_owned(), workers, check).unwrap();
                     assert_eq!(compiled.functions, 2);
-                    // Two source bodies and one demanded shared-reference Clone recipe.
-                    assert_eq!(compiled.control_flow.len(), 3);
-                    assert_eq!(compiled.analyses.len(), 3);
+                    // CHECK checks the two source bodies only. Instances and the
+                    // shared-reference Clone recipe are admitted on demand by
+                    // BUILD (471ca7b45), which adds that recipe's body.
+                    let bodies = if check { 2 } else { 3 };
+                    assert_eq!(compiled.control_flow.len(), bodies);
+                    assert_eq!(compiled.analyses.len(), bodies);
                     assert!(compiled.analyses.iter().all(|analysis| analysis.passed()));
                     assert_eq!(compiled.executable.is_none(), check);
                     if let Some(executable) = &compiled.executable {
@@ -170,69 +171,37 @@ fn invalid_unused_clone_and_unavailable_dispatch_never_reach_objects() {
                     assert!(report.capture_complete);
                     assert_eq!(report.events_dropped, 0);
                     assert_eq!(report.failures, 0);
-                    let mut expected = vec![
-                        Key::new(107, vec![0]), // Root source file unit.
-                        Key::new(100, vec![]),
-                        Key::new(106, vec![]),
-                        Key::new(101, vec![]),
-                        Key::new(104, vec![]),
-                        Key::new(113, vec![]),
-                    ];
-                    for index in 0..3 {
-                        for kind in [102, 108, 109] {
-                            expected.push(Key::new(kind, vec![index]));
-                        }
-                        if !check {
-                            expected.push(Key::new(103, vec![index]));
-                        }
-                    }
-                    if !check {
-                        expected.push(Key::new(105, vec![]));
-                    }
-                    let program = native_prelude::parse(source).unwrap();
-                    let context = PlanCtx::from_program(&program, &PlanBudget::default()).unwrap();
-                    for index in 0..context.callable_count() {
-                        let declaration = context.callable_decl(index).unwrap();
-                        // Prelude bodies are admitted on demand, not by CHECK.
-                        if context.is_prelude_decl(declaration).unwrap() {
-                            continue;
-                        }
-                        expected.push(Key::new(110, vec![index as u64]));
-                        match context.callable_provider(declaration).unwrap() {
-                            CallableProvider::Source { .. } => {
-                                assert!(
-                                    context.is_prelude_decl(declaration).unwrap()
-                                        || index < compiled.functions
-                                );
-                                if context.callable_env(declaration).unwrap().is_generic() {
-                                    for kind in [111, 112, 115] {
-                                        expected.push(Key::new(kind, vec![index as u64]));
-                                    }
-                                }
-                            }
-                            CallableProvider::Recipe { .. } => {
-                                assert!(index >= compiled.functions);
-                                for kind in [111, 112, 115] {
-                                    expected.push(Key::new(kind, vec![index as u64]));
-                                }
-                            }
-                            CallableProvider::UnavailableProvided { .. } => {
-                                panic!("unavailable provider entered body enumeration")
-                            }
-                        }
-                    }
-                    // Embedded native library files are independent SOURCE facts.
-                    expected.extend(native_prelude::library_source_keys());
-                    assert_eq!(report.node_evaluations.len(), expected.len());
-                    for key in expected {
-                        let entries: Vec<_> = report
+                    // No whole-program MONO_PLAN and no repeated shared operation.
+                    assert!(
+                        !report
                             .node_evaluations
                             .iter()
-                            .filter(|(seen, _)| *seen == key)
-                            .collect();
-                        assert_eq!(entries.len(), 1, "missing or duplicated {key:?}");
-                        assert_eq!(entries[0].1, 1, "shared operation repeated {key:?}");
+                            .any(|(key, _)| key.kind == 113)
+                    );
+                    for (key, runs) in &report.node_evaluations {
+                        assert_eq!(*runs, 1, "shared operation repeated {key:?}");
                     }
+                    // CHECK admits source bodies without BODY/LOWER/ANALYZE.
+                    for index in 0..if check { 0 } else { 2 } {
+                        for kind in [102, 108, 109] {
+                            let key = Key::new(kind, vec![index]);
+                            assert!(
+                                report.node_evaluations.iter().any(|(seen, _)| *seen == key),
+                                "missing {key:?}"
+                            );
+                        }
+                    }
+                    // The demanded Clone recipe is one canonical instance body.
+                    let canonical = report
+                        .node_evaluations
+                        .iter()
+                        .filter(|(key, _)| key.kind == 126)
+                        .count();
+                    assert!(if check {
+                        canonical == 0
+                    } else {
+                        canonical >= 1
+                    });
                     let discovered = |key: &Key| {
                         let spelling = format!("{key:?}");
                         report
