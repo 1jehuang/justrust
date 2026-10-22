@@ -124,6 +124,9 @@ struct State {
     authority: ExpansionAuthority,
     limits: ExpansionLimits,
     snapshot: BudgetSnapshot,
+    /// Per-invocation counters, indexed by invocation id. Held inside the one
+    /// session ledger so an invocation carries no lock of its own.
+    invocations: Vec<InvocationState>,
 }
 impl State {
     fn latch(&mut self, failure: BudgetFailure) -> BudgetFailure {
@@ -277,6 +280,7 @@ impl ExpansionBudget {
                     reservations: ReservationAccounting::default(),
                     failure,
                 },
+                invocations: Vec::new(),
             })),
         }
     }
@@ -407,12 +411,16 @@ impl ExpansionBudget {
     }
     pub fn begin_invocation(&self) -> Result<InvocationBudget, BudgetFailure> {
         self.charge(Counter::Invocations, 1)?;
+        let mut state = self.lock();
+        let id = state.invocations.len();
+        state.invocations.push(InvocationState {
+            output: 0,
+            states: 0,
+        });
+        drop(state);
         Ok(InvocationBudget {
             budget: self.clone(),
-            state: Arc::new(Mutex::new(InvocationState {
-                output: 0,
-                states: 0,
-            })),
+            id,
         })
     }
 }
@@ -550,7 +558,7 @@ impl Drop for ByteLease {
         state.snapshot.reservations.release(self.bytes as usize);
     }
 }
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 struct InvocationState {
     output: u64,
     states: u64,
@@ -558,21 +566,23 @@ struct InvocationState {
 #[derive(Clone, Debug)]
 pub struct InvocationBudget {
     budget: ExpansionBudget,
-    state: Arc<Mutex<InvocationState>>,
+    id: usize,
 }
 impl InvocationBudget {
-    fn lock<'a>(&'a self, session: &mut State) -> MutexGuard<'a, InvocationState> {
-        match self.state.lock() {
-            Ok(s) => s,
-            Err(e) => {
-                session.latch(infrastructure());
-                e.into_inner()
-            }
-        }
+    fn local(&self, session: &State) -> InvocationState {
+        session.invocations[self.id]
+    }
+    #[cfg(test)]
+    fn live_states(&self) -> u64 {
+        self.local(&self.budget.lock()).states
+    }
+    #[cfg(test)]
+    fn output(&self) -> u64 {
+        self.local(&self.budget.lock()).output
     }
     pub fn emit(&self, n: u64) -> Result<(), BudgetFailure> {
         let mut s = self.budget.lock();
-        let mut local = self.lock(&mut s);
+        let local = self.local(&s);
         s.healthy()?;
         let limit = s.limits.invocation_output;
         let output = s.checked(BudgetResource::InvocationOutput, local.output, n, limit)?;
@@ -585,7 +595,7 @@ impl InvocationBudget {
             n,
             limit,
         )?;
-        local.output = output;
+        s.invocations[self.id].output = output;
         s.snapshot.counters[i] = total;
         Ok(())
     }
@@ -597,7 +607,7 @@ impl InvocationBudget {
         let bytes;
         {
             let mut s = self.budget.lock();
-            let mut local = self.lock(&mut s);
+            let local = self.local(&s);
             s.healthy()?;
             let limit = s.limits.bytes;
             bytes = n.checked_mul(bytes_per_state).ok_or_else(|| {
@@ -616,7 +626,7 @@ impl InvocationBudget {
             let used = s.snapshot.counters[i];
             let limit = s.limits.counters[i];
             let work = s.checked(BudgetResource::Counter(Counter::Work), used, n, limit)?;
-            local.states = states;
+            s.invocations[self.id].states = states;
             s.snapshot.counters[i] = work;
             s.add_bytes(Storage::Temporary, bytes, total);
             s.snapshot.reservations.record(bytes as usize, false);
@@ -637,9 +647,9 @@ pub struct StateLease {
 impl Drop for StateLease {
     fn drop(&mut self) {
         let mut s = self.invocation.budget.lock();
-        let mut local = self.invocation.lock(&mut s);
-        if let Some(next) = local.states.checked_sub(self.states) {
-            local.states = next;
+        let id = self.invocation.id;
+        if let Some(next) = s.invocations[id].states.checked_sub(self.states) {
+            s.invocations[id].states = next;
         } else {
             s.latch(infrastructure());
         }
@@ -1190,7 +1200,7 @@ mod tests {
         );
         assert_eq!(budget.snapshot().temporary_bytes, 0);
         assert_eq!(budget.snapshot().counters[Counter::Work as usize], 4);
-        assert_eq!(invocation.state.lock().unwrap().states, 0);
+        assert_eq!(invocation.live_states(), 0);
     }
     #[test]
     fn flat_lease_drop_runs_on_an_ordinary_small_stack() {
@@ -1327,8 +1337,8 @@ mod tests {
         c.emit(2).unwrap();
         let e = c.emit(1).unwrap_err();
         assert_eq!(e.resource, BudgetResource::Counter(Counter::OutputTokens));
-        assert_eq!(c.state.lock().unwrap().output, 2);
-        assert_eq!(a.state.lock().unwrap().output, 3);
+        assert_eq!(c.output(), 2);
+        assert_eq!(a.output(), 3);
         assert_eq!(b.snapshot().counters[Counter::OutputTokens as usize], 5);
         let b = ExpansionBudget::new(small());
         let a = b.begin_invocation().unwrap();
@@ -1356,7 +1366,7 @@ mod tests {
             let i = b.begin_invocation().unwrap();
             let e = i.reserve_states(2, 1).unwrap_err();
             assert_eq!(e.resource, resource);
-            assert_eq!(i.state.lock().unwrap().states, 0);
+            assert_eq!(i.live_states(), 0);
             assert_eq!(b.snapshot().temporary_bytes, 0);
             assert_eq!(b.snapshot().counters[Counter::Work as usize], 0);
         }
@@ -1366,7 +1376,7 @@ mod tests {
             i.reserve_states(u64::MAX, 2).unwrap_err().kind,
             BudgetFailureKind::Overflow
         );
-        assert_eq!(i.state.lock().unwrap().states, 0);
+        assert_eq!(i.live_states(), 0);
         assert_eq!(b.snapshot().temporary_bytes, 0);
     }
     #[test]
@@ -1378,7 +1388,7 @@ mod tests {
         let a = i.clone().reserve_states(4, 1).unwrap();
         drop(a);
         assert_eq!(b.snapshot().counters[Counter::Work as usize], 8);
-        assert_eq!(i.state.lock().unwrap().states, 0);
+        assert_eq!(i.live_states(), 0);
         assert_eq!(b.snapshot().temporary_bytes, 0);
         assert_eq!(
             i.reserve_states(1, 1).unwrap_err().resource,
@@ -1484,24 +1494,6 @@ mod tests {
             panic!("test existing poison");
         });
         assert_eq!(b.check(), Err(first));
-    }
-    #[test]
-    fn invocation_mutex_poison_does_not_refund_or_block_drop() {
-        let b = ExpansionBudget::new(small());
-        let i = b.begin_invocation().unwrap();
-        let lease = i.reserve_states(2, 2).unwrap();
-        let shared = i.clone();
-        let _ = std::panic::catch_unwind(move || {
-            let _guard = shared.state.lock().unwrap();
-            panic!("test local poison");
-        });
-        assert_eq!(
-            i.emit(0).unwrap_err().kind,
-            BudgetFailureKind::Infrastructure
-        );
-        drop(lease);
-        assert_eq!(b.snapshot().temporary_bytes, 0);
-        assert_eq!(b.snapshot().counters[Counter::Work as usize], 2);
     }
     #[test]
     fn leases_release_on_unwind_and_cross_thread_drop() {
