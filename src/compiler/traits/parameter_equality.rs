@@ -163,7 +163,30 @@ impl CarrierContractView {
         actual_signature: &ir::Signature,
         result_location: &ir::CarrierLocation,
     ) -> Result<()> {
-        self.validate_for(facts)?;
+        self.validate_result_flow_with(
+            facts,
+            actual_subject,
+            actual_signature,
+            result_location,
+            &mut false,
+        )
+    }
+
+    /// As `validate_result_flow`; `view_validated` is caller-local state for
+    /// one loop over this same view and facts. The complete view replay runs
+    /// once per loop; subject, signature and location checks run every time.
+    pub(in crate::compiler) fn validate_result_flow_with(
+        &self,
+        facts: &ValidatedFacts,
+        actual_subject: ir::SignatureSubject<'_>,
+        actual_signature: &ir::Signature,
+        result_location: &ir::CarrierLocation,
+        view_validated: &mut bool,
+    ) -> Result<()> {
+        if !*view_validated {
+            self.validate_for(facts)?;
+            *view_validated = true;
+        }
         let world = facts.world();
         let subject = world.equality_result_subject(actual_subject, facts)?;
         if !world.same_equality_result_subject(&self.result_subject, &subject)?
@@ -770,6 +793,7 @@ impl ValidatedTraitWorld {
                 facts,
             )? {
                 let sources = self.expand_carrier_sources(
+                    &result.location.channel,
                     &result.sources,
                     output.component.as_ref(),
                     &canonical.env,

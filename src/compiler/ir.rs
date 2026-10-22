@@ -421,6 +421,20 @@ pub fn validate_callee(
     signature: &Signature,
     facts: FactsCtx<'_>,
 ) -> Result<(), String> {
+    validate_callee_scratch(
+        target,
+        signature,
+        facts,
+        &mut super::traits::TraitScratch::default(),
+    )
+}
+/// `validate_callee` sharing a node-local trait scratch.
+pub fn validate_callee_scratch(
+    target: &Callee,
+    signature: &Signature,
+    facts: FactsCtx<'_>,
+    scratch: &mut super::traits::TraitScratch,
+) -> Result<(), String> {
     if target.type_arguments().len() > 32 {
         return Err("generic call argument limit exceeded".into());
     }
@@ -430,7 +444,7 @@ pub fn validate_callee(
         return Err("trait argument limit exceeded".into());
     }
     for ty in target.metadata_types() {
-        facts.validate_ty(ty)?;
+        facts.validate_ty_scratch(ty, scratch)?;
     }
     if let Some(authority) = facts.validated() {
         if authority.phase() == super::traits::FactsPhase::Closed
@@ -439,8 +453,7 @@ pub fn validate_callee(
             return Err("unresolved trait call in closed body".into());
         }
         authority
-            .service()
-            .validate_signature(SignatureSubject::Call(target), signature, authority)
+            .validate_signature_with(SignatureSubject::Call(target), signature, scratch)
             .map_err(|e| e.into_legacy_diagnostic(authority.budget()))?;
     } else if matches!(target, Callee::TraitItem(_)) {
         return Err("trait call requires validated facts".into());
@@ -3783,9 +3796,11 @@ fn canonicalize_call_metadata(
             target, signature, ..
         } = &mut expression.kind
         {
-            facts
-                .service()
-                .validate_signature(SignatureSubject::Call(target), signature, facts)?;
+            facts.validate_signature_with(
+                SignatureSubject::Call(target),
+                signature,
+                &mut scratch,
+            )?;
             budget
                 .retain_bytes(
                     signature
@@ -8603,7 +8618,11 @@ impl CheckedFunction {
                     bindings: values,
                     ..
                 } => {
-                    facts.validate_ty_with_budget_scratch(&Ty::Enum(ty.clone()), budget, scratch)?;
+                    facts.validate_ty_with_budget_scratch(
+                        &Ty::Enum(ty.clone()),
+                        budget,
+                        scratch,
+                    )?;
                     bindings(values, budget)?;
                 }
                 MatchPattern::Aggregate {
@@ -8623,7 +8642,11 @@ impl CheckedFunction {
                     for test in tests {
                         path(&test.projection, budget)?;
                         if let PatternTestKind::EnumVariant { ty, .. } = &test.kind {
-                            facts.validate_value_ty_with_budget_scratch(&Ty::Enum(ty.clone()), budget, scratch)?;
+                            facts.validate_value_ty_with_budget_scratch(
+                                &Ty::Enum(ty.clone()),
+                                budget,
+                                scratch,
+                            )?;
                         }
                     }
                     bindings(values, budget)?;
@@ -8665,7 +8688,9 @@ impl CheckedFunction {
                         facts.validate_value_ty_with_budget_scratch(ty, budget, scratch)?;
                         pattern_storage(pattern, facts, budget, scratch)?;
                     }
-                    TypedStmt::While { body, .. } => block(body, facts, budget, depth + 1, scratch)?,
+                    TypedStmt::While { body, .. } => {
+                        block(body, facts, budget, depth + 1, scratch)?
+                    }
                     TypedStmt::Declare { .. }
                     | TypedStmt::Let { .. }
                     | TypedStmt::Assign { .. }
@@ -8719,17 +8744,29 @@ impl CheckedFunction {
             facts.validate_value_ty_with_budget_scratch(&expression.ty, budget, scratch)?;
             match &expression.kind {
                 ExprKind::OpaqueWrap { opaque, .. } => {
-                    facts.validate_ty_with_budget_scratch(&Ty::Opaque(opaque.clone()), budget, scratch)?;
+                    facts.validate_ty_with_budget_scratch(
+                        &Ty::Opaque(opaque.clone()),
+                        budget,
+                        scratch,
+                    )?;
                 }
                 ExprKind::Borrow { place, .. } | ExprKind::BoundsCheck { array: place, .. } => {
                     path(&place.projection, budget)?
                 }
                 ExprKind::Struct { ty, fields } => {
-                    facts.validate_ty_with_budget_scratch(&Ty::Struct(ty.clone()), budget, scratch)?;
+                    facts.validate_ty_with_budget_scratch(
+                        &Ty::Struct(ty.clone()),
+                        budget,
+                        scratch,
+                    )?;
                     storage(budget, fields.len(), std::mem::size_of::<(usize, ExprId)>())?;
                 }
                 ExprKind::EnumVariant { ty, fields, .. } => {
-                    facts.validate_ty_with_budget_scratch(&Ty::Enum(ty.clone()), budget, scratch)?;
+                    facts.validate_ty_with_budget_scratch(
+                        &Ty::Enum(ty.clone()),
+                        budget,
+                        scratch,
+                    )?;
                     storage(budget, fields.len(), std::mem::size_of::<(usize, ExprId)>())?;
                 }
                 ExprKind::Match { arms, .. } => {
@@ -8768,7 +8805,9 @@ impl CheckedFunction {
                 }
                 ExprKind::Block(value)
                 | ExprKind::Loop { body: value, .. }
-                | ExprKind::LabeledBlock { body: value, .. } => block(value, facts, budget, 0, scratch)?,
+                | ExprKind::LabeledBlock { body: value, .. } => {
+                    block(value, facts, budget, 0, scratch)?
+                }
                 ExprKind::TypeAlignment(query) => query.validate(facts, budget)?,
                 ExprKind::NativeSyscall(values)
                 | ExprKind::RawSlice { args: values, .. }
@@ -9305,6 +9344,8 @@ impl CheckedFunction {
         policy: CallEvidencePolicy<'_>,
     ) -> Result<(), String> {
         self.validate_all_type_metadata(facts, facts.validated().map(|f| f.budget()))?;
+        // Proof/type memo local to this validation only.
+        let scratch = &mut super::traits::TraitScratch::default();
         if let Some(authority) = facts.validated() {
             if let Some(proof) = &self.body_substitution {
                 proof.validate(self, authority, authority.budget())?;
@@ -10216,9 +10257,9 @@ impl CheckedFunction {
                         .chain(signature.params.iter())
                         .chain(std::iter::once(&signature.result))
                     {
-                        facts.validate_ty(ty)?;
+                        facts.validate_ty_scratch(ty, scratch)?;
                     }
-                    validate_callee(target, signature, facts)?;
+                    validate_callee_scratch(target, signature, facts, scratch)?;
                     if facts.validated().is_none() {
                         signature
                             .ref_contract

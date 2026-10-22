@@ -2888,7 +2888,7 @@ impl Function {
                     if let Some(physical) = physical {
                         physical.validate_call(item.terminator.origin, target, signature)?;
                     } else {
-                        ir::validate_callee(target, signature, facts)?;
+                        ir::validate_callee_scratch(target, signature, facts, scratch)?;
                     }
                     if target.type_arguments().len() > 32 {
                         return Err("generic call argument limit exceeded".into());

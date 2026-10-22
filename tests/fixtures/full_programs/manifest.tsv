@@ -17,7 +17,7 @@
 01_hello	pass
 02_fizzbuzz	pass
 03_collatz	pass
-04_primes_sieve	fail	fmt-display,for,vec,iter,match-ergonomics
+04_primes_sieve	pass
 05_gcd_fib	pass
 06_matrix	fail	fmt-display,for,autoderef,vec,iter,closure,string
 07_bank_account	pass

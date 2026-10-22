@@ -803,6 +803,7 @@ fn result_flow_problem(
     subject: ir::SignatureSubject<'_>,
     signature: &ir::Signature,
     location: &CarrierLocation,
+    view_validated: &mut bool,
 ) -> Result<Option<Problem>, Exhausted> {
     let Some(facts) = facts else {
         // Concrete legacy fixtures have no declaration authority to replay.
@@ -813,7 +814,7 @@ fn result_flow_problem(
             "carrier result has no validated declaration view".into(),
         )));
     };
-    match view.validate_result_flow(facts, subject, signature, location) {
+    match view.validate_result_flow_with(facts, subject, signature, location, view_validated) {
         Ok(()) => Ok(None),
         Err(error) if error.is_resource() => Err(Exhausted),
         Err(error) => Ok(Some(Problem::Invalid(
@@ -2460,6 +2461,7 @@ impl<'a, 'b> CarrierBuilder<'a, 'b> {
             match body_view {
                 Ok(view) => {
                     let mut valid = true;
+                    let mut view_validated = false;
                     for result in view.contract().results.iter() {
                         if let Some(problem) = result_flow_problem(
                             Some(&view),
@@ -2467,6 +2469,7 @@ impl<'a, 'b> CarrierBuilder<'a, 'b> {
                             ir::SignatureSubject::Body,
                             &signature,
                             &result.location,
+                            &mut view_validated,
                         )? {
                             builder.problem(f.entry, None, problem)?;
                             valid = false;
@@ -2509,6 +2512,7 @@ impl<'a, 'b> CarrierBuilder<'a, 'b> {
                     match call_view {
                         Ok(view) => {
                             let mut valid = true;
+                            let mut view_validated = false;
                             for result in view.contract().results.iter() {
                                 if let Some(problem) = result_flow_problem(
                                     Some(&view),
@@ -2516,6 +2520,7 @@ impl<'a, 'b> CarrierBuilder<'a, 'b> {
                                     ir::SignatureSubject::Call(target),
                                     signature,
                                     &result.location,
+                                    &mut view_validated,
                                 )? {
                                     builder.problem(BlockId(index), None, problem)?;
                                     valid = false;
@@ -3201,6 +3206,7 @@ impl CarrierBuilder<'_, '_> {
             return Ok(());
         }
         if let Some(view) = &view {
+            let mut view_validated = false;
             for result in view.contract().results.iter() {
                 if let Some(problem) = result_flow_problem(
                     Some(view),
@@ -3208,6 +3214,7 @@ impl CarrierBuilder<'_, '_> {
                     ir::SignatureSubject::Call(&target),
                     &signature,
                     &result.location,
+                    &mut view_validated,
                 )? {
                     self.problem(block, None, problem)?;
                     return Ok(());
@@ -3225,6 +3232,7 @@ impl CarrierBuilder<'_, '_> {
                 result_values.push((result.location.clone(), value));
             }
         }
+        let mut view_validated = false;
         for (location, row) in rows {
             if let Some(problem) = result_flow_problem(
                 view.as_deref(),
@@ -3232,6 +3240,7 @@ impl CarrierBuilder<'_, '_> {
                 ir::SignatureSubject::Call(&target),
                 &signature,
                 &location,
+                &mut view_validated,
             )? {
                 self.problem(block, None, problem)?;
                 return Ok(());
@@ -5515,6 +5524,7 @@ impl Plan {
                     }
                 }
             }
+            let mut view_validated = false;
             for row in body.contract().results.iter() {
                 if let Some(problem) = result_flow_problem(
                     Some(body),
@@ -5522,6 +5532,7 @@ impl Plan {
                     ir::SignatureSubject::Body,
                     signature,
                     &row.location,
+                    &mut view_validated,
                 )? {
                     return Ok(Some(problem));
                 }
@@ -6195,6 +6206,7 @@ mod parameter_equality_tests {
                     ir::SignatureSubject::Call(target),
                     signature,
                     &row.location,
+                    &mut false,
                 )
                 .unwrap()
                 .is_none()
@@ -6206,6 +6218,7 @@ mod parameter_equality_tests {
                     ir::SignatureSubject::Call(target),
                     signature,
                     &row.location,
+                    &mut false,
                 )
                 .unwrap(),
                 Some(Problem::Invalid(_))
@@ -6217,6 +6230,7 @@ mod parameter_equality_tests {
                     ir::SignatureSubject::Body,
                     signature,
                     &row.location,
+                    &mut false,
                 )
                 .unwrap(),
                 Some(Problem::Invalid(_))
@@ -6230,6 +6244,7 @@ mod parameter_equality_tests {
                     ir::SignatureSubject::Call(target),
                     &wrong_signature,
                     &row.location,
+                    &mut false,
                 )
                 .unwrap(),
                 Some(Problem::Invalid(_))
@@ -6243,6 +6258,7 @@ mod parameter_equality_tests {
                     ir::SignatureSubject::Call(target),
                     signature,
                     &wrong_location,
+                    &mut false,
                 )
                 .unwrap(),
                 Some(Problem::Invalid(_))
@@ -6299,6 +6315,7 @@ mod parameter_equality_tests {
                     ir::SignatureSubject::Call(target),
                     signature,
                     &view.contract().results[0].location,
+                    &mut false,
                 )
                 .unwrap()
                 .is_none()

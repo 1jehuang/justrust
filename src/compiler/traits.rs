@@ -1361,6 +1361,26 @@ fn type_allocation(ty: &Ty) -> Option<usize> {
     ty.hash(&mut hasher);
     Some(hasher.finish() as usize)
 }
+fn same_types(a: &[Ty], b: &[Ty]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).all(|(a, b)| same_type_allocation(a, b))
+}
+fn same_trait_call(a: &TraitCall, b: &TraitCall) -> bool {
+    a.item == b.item
+        && a.trait_ref.declaration == b.trait_ref.declaration
+        && same_type_allocation(&a.trait_ref.self_ty, &b.trait_ref.self_ty)
+        && same_types(&a.trait_ref.args, &b.trait_ref.args)
+        && same_types(&a.method_args, &b.method_args)
+}
+fn same_callee(a: &Callee, b: &Callee) -> bool {
+    match (a, b) {
+        (Callee::Direct(a), Callee::Direct(b)) => {
+            a.declaration == b.declaration && same_types(&a.type_args, &b.type_args)
+        }
+        (Callee::TraitItem(a), Callee::TraitItem(b)) => same_trait_call(a, b),
+        (Callee::Virtual(a), Callee::Virtual(b)) => same_trait_call(&a.call, &b.call),
+        _ => false,
+    }
+}
 /// Equality that is faithful to validation inputs: nominal applications must
 /// share the exact retained definition and realization capability (identity
 /// alone is not authority); other structure compares recursively. Variants
@@ -1551,6 +1571,9 @@ pub struct TraitScratch {
     valid: ValidatedTypes,
     copy: Vec<(Ty, bool)>,
     copy_index: std::collections::HashMap<usize, Vec<usize>>,
+    /// Successful call-signature validations (subject callee, signature).
+    signatures: Vec<(Callee, Signature)>,
+    signature_index: std::collections::HashMap<u64, Vec<usize>>,
     /// The facts identity these answers belong to (environment + phase).
     facts_key: Option<(usize, FactsPhase, DeclId)>,
 }
@@ -1572,6 +1595,8 @@ impl TraitScratch {
             self.valid = ValidatedTypes::default();
             self.copy.clear();
             self.copy_index.clear();
+            self.signatures.clear();
+            self.signature_index.clear();
         }
     }
 }
@@ -4289,6 +4314,7 @@ impl ValidatedTraitWorld {
                 self.expand_carrier(&result.location, &raw.env, &arguments, &nominals, facts)?
             {
                 let sources = self.expand_carrier_sources(
+                    &result.location.channel,
                     &result.sources,
                     output.component.as_ref(),
                     &raw.env,
@@ -4329,6 +4355,7 @@ impl ValidatedTraitWorld {
                     continue;
                 }
                 let sources = self.expand_carrier_sources(
+                    &write.destination.location.channel,
                     &write.sources,
                     destination.component.as_ref(),
                     &raw.env,
@@ -4490,8 +4517,10 @@ impl ValidatedTraitWorld {
             "transport lost an original fixed region",
         ))
     }
+    #[allow(clippy::too_many_arguments)]
     fn expand_carrier_sources(
         &self,
+        destination: &ir::CarrierChannel,
         sources: &[ir::InputCarrier],
         component: Option<&ir::CarrierLocation>,
         env: &GenericEnv,
@@ -4522,6 +4551,21 @@ impl ValidatedTraitWorld {
                         // only through exact declaration capture substitution.
                         self.opaque_captures_parameter(opaque, *parameter)?
                     }
+                    // A projection's realized carriers are produced by the
+                    // selected impl from data of the parameters it mentions;
+                    // which concrete component maps where is impl-internal,
+                    // so every carrier of such a parameter is an eligible
+                    // source (conservative: more loans, never fewer).
+                    _ if matches!(
+                        (destination, &source.location.channel),
+                        (
+                            ir::CarrierChannel::ProjectionTail { projection, .. },
+                            ir::CarrierChannel::ParamTail { parameter, .. },
+                        ) if self.projection_mentions_parameter(projection, *parameter)?
+                    ) =>
+                    {
+                        true
+                    }
                     (Some(a), Some(b)) => self.same_location(a, b)?,
                     (None, None) => true,
                     _ => false,
@@ -4539,6 +4583,58 @@ impl ValidatedTraitWorld {
             }
         }
         Ok(output.into())
+    }
+    fn projection_mentions_parameter(
+        &self,
+        projection: &ir::AssociatedTypeProjection,
+        parameter: ParamId,
+    ) -> Result<bool> {
+        fn mentions(
+            ty: &Ty,
+            parameter: ParamId,
+            budget: &PlanBudget,
+            depth: usize,
+        ) -> Result<bool> {
+            charged(budget, budget.check_depth(depth))?;
+            charged(budget, budget.charge_work(1))?;
+            let all = |types: &[Ty]| -> Result<bool> {
+                for ty in types {
+                    if mentions(ty, parameter, budget, depth + 1)? {
+                        return Ok(true);
+                    }
+                }
+                Ok(false)
+            };
+            Ok(match ty {
+                Ty::Param(p) => *p == parameter,
+                Ty::AssociatedType(projection) => {
+                    mentions(&projection.trait_ref.self_ty, parameter, budget, depth + 1)?
+                        || all(&projection.trait_ref.args)?
+                }
+                Ty::Tuple(parts) => all(parts)?,
+                Ty::Array { element, .. } | Ty::Slice { element } => {
+                    mentions(element, parameter, budget, depth + 1)?
+                }
+                Ty::Ref { referent, .. }
+                | Ty::RawPtr {
+                    pointee: referent, ..
+                } => mentions(referent, parameter, budget, depth + 1)?,
+                Ty::Struct(n) => all(&n.def().type_args)?,
+                Ty::Enum(n) => all(&n.def().type_args)?,
+                // Opaque, closure, object and fn-item payloads: conservative.
+                Ty::Opaque(_) | Ty::Closure(_) | Ty::Dyn(_) | Ty::FnItem(_) => true,
+                _ => false,
+            })
+        }
+        if mentions(&projection.trait_ref.self_ty, parameter, &self.budget, 0)? {
+            return Ok(true);
+        }
+        for argument in projection.trait_ref.args.iter() {
+            if mentions(argument, parameter, &self.budget, 0)? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
     fn expand_carrier(
         &self,
@@ -5304,6 +5400,13 @@ impl ValidatedTraitWorld {
                 ir::CarrierChannel::ParamTail { parameter: a, .. },
                 ir::CarrierChannel::ParamTail { parameter: b, .. },
             ) => Ok(a == b),
+            // A projection is determined by its trait arguments, so its value
+            // carriers can only originate in data whose type mentions one of
+            // those parameters (`self.it: I` returning `I::Item`).
+            (
+                ir::CarrierChannel::ProjectionTail { projection, .. },
+                ir::CarrierChannel::ParamTail { parameter, .. },
+            ) if write.is_none() => self.projection_mentions_parameter(projection, *parameter),
             (ir::CarrierChannel::Fixed(position), ir::CarrierChannel::Fixed(source_position)) => {
                 if let Some(destination_param) = write {
                     if !self.eq_ty(a, b, 0)? {
@@ -7454,6 +7557,8 @@ impl ValidatedTraitWorld {
 
 impl ValidatedTraitWorld {
     /// `validate_signature` sharing the caller's node-local proof scratch.
+    /// A call subject already validated with a faithfully identical
+    /// signature under the same facts subject is not re-derived.
     pub(in crate::compiler) fn validate_signature_with(
         &self,
         subject: SignatureSubject<'_>,
@@ -7462,6 +7567,51 @@ impl ValidatedTraitWorld {
         scratch: &mut TraitScratch,
     ) -> Result<()> {
         self.check_facts(facts, true)?;
+        let SignatureSubject::Call(callee) = subject else {
+            return self.validate_signature_uncached(subject, signature, facts, scratch);
+        };
+        scratch.for_facts(facts);
+        let bucket = {
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            callee.hash(&mut hasher);
+            signature.params.hash(&mut hasher);
+            signature.result.hash(&mut hasher);
+            hasher.finish()
+        };
+        if let Some(candidates) = scratch.signature_index.get(&bucket) {
+            for &index in candidates {
+                let (old_callee, old) = &scratch.signatures[index];
+                charged(&self.budget, self.budget.charge_work(1))?;
+                if same_callee(old_callee, callee)
+                    && Arc::ptr_eq(&old.ref_contract, &signature.ref_contract)
+                    && same_types(&old.params, &signature.params)
+                    && same_type_allocation(&old.result, &signature.result)
+                {
+                    return Ok(());
+                }
+            }
+        }
+        self.validate_signature_uncached(subject, signature, facts, scratch)?;
+        if scratch.signatures.len() < MAX_SCRATCH_OBLIGATIONS
+            && scratch.signatures.try_reserve(1).is_ok()
+        {
+            scratch
+                .signature_index
+                .entry(bucket)
+                .or_default()
+                .push(scratch.signatures.len());
+            scratch.signatures.push((callee.clone(), signature.clone()));
+        }
+        Ok(())
+    }
+    fn validate_signature_uncached(
+        &self,
+        subject: SignatureSubject<'_>,
+        signature: &Signature,
+        facts: &ValidatedFacts,
+        scratch: &mut TraitScratch,
+    ) -> Result<()> {
         let expected = match subject {
             SignatureSubject::Call(Callee::Direct(target)) => {
                 self.discharge_direct_with(target, facts, scratch)?
