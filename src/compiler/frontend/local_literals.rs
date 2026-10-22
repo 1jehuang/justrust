@@ -1961,8 +1961,24 @@ impl<'s> Solver<'_, '_, 's> {
                 self.operator_binary(*op, left, right)
             }
             Expr::Cast { value, target } => {
-                self.expr(value, depth + 1)?;
-                self.source_ty(target)
+                // Cast chains (`x as u8 as u8 ...`) are linear: walk them
+                // iteratively so long chains do not grow the native stack by
+                // one large solver frame per cast.
+                let mut targets = vec![target];
+                let mut operand: &'s Expr = value;
+                let mut operand_depth = depth + 1;
+                while let Expr::Cast { value, target } = operand {
+                    self.checker.infer_work(operand_depth)?;
+                    targets.push(target);
+                    operand = value;
+                    operand_depth += 1;
+                }
+                self.expr(operand, operand_depth)?;
+                let mut result = None;
+                for target in targets.into_iter().rev() {
+                    result = Some(self.source_ty(target)?);
+                }
+                Ok(result.expect("cast chain has at least one target"))
             }
             Expr::Call { name, args } => {
                 let args = args
