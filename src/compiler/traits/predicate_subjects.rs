@@ -125,10 +125,19 @@ impl ValidatedTraitWorld {
         env: &GenericEnv,
         maybe_unsized: Option<ParamId>,
     ) -> Result<()> {
+        self.validate_predicate_ref_with(goal, env, maybe_unsized, &mut NominalReplays::default())
+    }
+    pub(super) fn validate_predicate_ref_with(
+        &self,
+        goal: &TraitRef,
+        env: &GenericEnv,
+        maybe_unsized: Option<ParamId>,
+        replays: &mut NominalReplays,
+    ) -> Result<()> {
         if !matches!(goal.self_ty, Ty::AssociatedType(_)) {
-            return self.validate_ref_in(goal, env, maybe_unsized);
+            return self.validate_ref_with(goal, env, maybe_unsized, replays);
         }
-        self.validate_ty_metadata_in(&goal.self_ty, env, 0)?;
+        self.validate_ty_metadata_with(&goal.self_ty, env, 0, replays)?;
         let info = self.info(goal.declaration)?;
         let header = self.trait_header(goal.declaration)?;
         if info.kind != DeclKind::Trait
@@ -140,7 +149,7 @@ impl ValidatedTraitWorld {
             ));
         }
         for argument in goal.args.iter() {
-            self.validate_ty_metadata_in(argument, env, 0)?;
+            self.validate_ty_metadata_with(argument, env, 0, replays)?;
             self.validate_actual(argument, env)?;
             charged(&self.budget, ir::reject_references(argument, &self.budget))?;
         }

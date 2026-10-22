@@ -11,7 +11,31 @@ pub(in crate::compiler) struct ClosedNominalInput {
     obligations: Arc<[Predicate]>,
 }
 
+impl ClosedNominalInput {
+    /// Allocation identity of this exact closed input (node-local memo only).
+    pub(super) fn obligation_identity(&self) -> &Arc<[Predicate]> {
+        &self.obligations
+    }
+}
+
 impl ValidatedTraitWorld {
+    /// Discharge `predicate` with a fresh proof ancestry that shares the
+    /// caller's node-local nominal replay memo.
+    fn require_sharing(
+        &self,
+        predicate: &Predicate,
+        context: ProofContext<'_>,
+        replays: &mut NominalReplays,
+    ) -> Result<ProofEvidence> {
+        let mut scratch = ProofScratch {
+            replays: std::mem::take(replays),
+            ..ProofScratch::default()
+        };
+        let result = self.require_in(predicate, context, &mut scratch);
+        *replays = std::mem::take(&mut scratch.replays);
+        result
+    }
+
     pub(in crate::compiler) fn replay_nominal_call_selection(
         &self,
         original: &ir::Callee,
@@ -94,8 +118,18 @@ impl ValidatedTraitWorld {
         input: &ClosedNominalInput,
         parameter: &ir::ParamId,
     ) -> Result<Ty> {
-        self.replay_closed_nominal_input(input)?;
+        self.nominal_realization_parameter_with(&mut NominalReplays::default(), input, parameter)
+    }
+
+    fn nominal_realization_parameter_with(
+        &self,
+        replays: &mut NominalReplays,
+        input: &ClosedNominalInput,
+        parameter: &ir::ParamId,
+    ) -> Result<Ty> {
+        self.replay_closed_nominal_input_with(replays, input)?;
         self.close_nominal_bound_term(
+            replays,
             &Ty::Param(*parameter),
             &input.source.schema().env,
             &input.actuals,
@@ -107,11 +141,22 @@ impl ValidatedTraitWorld {
         &self,
         input: &ClosedNominalInput,
     ) -> Result<()> {
+        self.replay_closed_nominal_input_with(&mut NominalReplays::default(), input)
+    }
+
+    fn replay_closed_nominal_input_with(
+        &self,
+        replays: &mut NominalReplays,
+        input: &ClosedNominalInput,
+    ) -> Result<()> {
         if input.world != self.id || input.declaration != input.source.schema().declaration {
             return Err(FactsError::invalid(
                 &self.budget,
                 "foreign closed nominal input",
             ));
+        }
+        if replays.contains_input(input) {
+            return Ok(());
         }
         self.replay_nominal_declaration(input.declaration, &input.source)?;
         if input.actuals.len() != input.source.schema().env.total_arity()
@@ -123,7 +168,7 @@ impl ValidatedTraitWorld {
             ));
         }
         for actual in input.actuals.iter() {
-            self.validate_ty_metadata_in(actual, &self.empty.env, 0)?;
+            self.validate_ty_metadata_with(actual, &self.empty.env, 0, replays)?;
             if !self.raw_associated_ty_is_closed(actual, 0)? {
                 return Err(FactsError::invalid(
                     &self.budget,
@@ -145,17 +190,21 @@ impl ValidatedTraitWorld {
             self.budget
                 .charge_work(1)
                 .map_err(|e| FactsError::from_message(&self.budget, &e))?;
-            let expected =
-                self.close_nominal_predicate(source, &input.source.schema().env, &input.actuals)?;
+            let expected = self.close_nominal_predicate(
+                replays,
+                source,
+                &input.source.schema().env,
+                &input.actuals,
+            )?;
             if !self.eq_predicate(&expected, retained)? {
                 return Err(FactsError::invalid(
                     &self.budget,
                     "closed nominal obligation order or terms changed",
                 ));
             }
-            self.require_in(&expected, context, &mut ProofScratch::default())?;
+            self.require_sharing(&expected, context, replays)?;
         }
-        Ok(())
+        replays.record_input(input, &self.budget)
     }
 
     pub(in crate::compiler) fn close_nominal_input(
@@ -186,7 +235,12 @@ impl ValidatedTraitWorld {
         };
         let mut obligations = Vec::new();
         for original in source.schema().predicates.iter() {
-            let goal = self.close_nominal_predicate(original, &source.schema().env, actuals)?;
+            let goal = self.close_nominal_predicate(
+                &mut NominalReplays::default(),
+                original,
+                &source.schema().env,
+                actuals,
+            )?;
             // Declared source assumptions are not copied into this empty context.
             // Every actual implementation/equality is independently discharged.
             self.require_in(&goal, context, &mut ProofScratch::default())?;
@@ -212,13 +266,14 @@ impl ValidatedTraitWorld {
 
     pub(in crate::compiler) fn replay_closed_nominal_application(
         &self,
+        replays: &mut NominalReplays,
         input: &ClosedNominalInput,
         declaration: DeclId,
         proof: &NominalDeclarationProof,
         source: &Ty,
         actuals: &[Ty],
     ) -> Result<()> {
-        self.replay_closed_nominal_input(input)?;
+        self.replay_closed_nominal_input_with(replays, input)?;
         self.replay_nominal_declaration(declaration, proof)?;
         if input.declaration != declaration || !self.eq_types(&input.actuals, actuals, 0)? {
             return Err(FactsError::invalid(
@@ -226,7 +281,7 @@ impl ValidatedTraitWorld {
                 "nominal realization input application changed",
             ));
         }
-        self.validate_ty_metadata_in(source, &proof.schema().env, 0)?;
+        self.validate_ty_metadata_with(source, &proof.schema().env, 0, replays)?;
         let (source_declaration, source_actuals) = match source {
             Ty::Struct(n) => (n.def().source_decl, &n.def().type_args),
             Ty::Enum(n) => (n.def().source_decl, &n.def().type_args),
@@ -261,6 +316,7 @@ impl ValidatedTraitWorld {
 
     pub(in crate::compiler) fn replay_nominal_field_term(
         &self,
+        replays: &mut NominalReplays,
         input: &ClosedNominalInput,
         source: &Ty,
         realized: &Ty,
@@ -274,16 +330,19 @@ impl ValidatedTraitWorld {
             .map_err(|e| FactsError::from_message(&self.budget, &e))?;
         let valid = match (source, realized) {
             (Ty::Param(parameter), _) => {
-                let expected = self.nominal_realization_parameter(input, parameter)?;
+                let expected =
+                    self.nominal_realization_parameter_with(replays, input, parameter)?;
                 self.eq_ty(&expected, realized, depth + 1)?
             }
             (Ty::AssociatedType(projection), _) => {
-                let (expected, _) = self.normalize_nominal_field_projection(input, projection)?;
+                let (expected, _) =
+                    self.normalize_nominal_field_projection_with(replays, input, projection)?;
                 self.eq_ty(&expected, realized, depth + 1)?
             }
             (Ty::Struct(a), Ty::Struct(b)) => {
                 a.def().source_decl == b.def().source_decl
                     && self.replay_nominal_field_arguments(
+                        replays,
                         input,
                         &a.def().type_args,
                         &b.def().type_args,
@@ -293,6 +352,7 @@ impl ValidatedTraitWorld {
             (Ty::Enum(a), Ty::Enum(b)) => {
                 a.def().source_decl == b.def().source_decl
                     && self.replay_nominal_field_arguments(
+                        replays,
                         input,
                         &a.def().type_args,
                         &b.def().type_args,
@@ -322,24 +382,24 @@ impl ValidatedTraitWorld {
                 if a != b {
                     false
                 } else {
-                    self.replay_nominal_field_term(input, x, y, depth + 1)?;
+                    self.replay_nominal_field_term(replays, input, x, y, depth + 1)?;
                     true
                 }
             }
             (Ty::Slice { element: a }, Ty::Slice { element: b }) => {
-                self.replay_nominal_field_term(input, a, b, depth + 1)?;
+                self.replay_nominal_field_term(replays, input, a, b, depth + 1)?;
                 true
             }
             (Ty::Array { element: a, len: x }, Ty::Array { element: b, len: y }) => {
                 if x != y {
                     false
                 } else {
-                    self.replay_nominal_field_term(input, a, b, depth + 1)?;
+                    self.replay_nominal_field_term(replays, input, a, b, depth + 1)?;
                     true
                 }
             }
             (Ty::Tuple(a), Ty::Tuple(b)) => {
-                self.replay_nominal_field_arguments(input, a, b, depth + 1)?
+                self.replay_nominal_field_arguments(replays, input, a, b, depth + 1)?
             }
             (Ty::Closure(_), _) => {
                 return Err(FactsError::unsupported(
@@ -360,6 +420,7 @@ impl ValidatedTraitWorld {
 
     fn replay_nominal_field_arguments(
         &self,
+        replays: &mut NominalReplays,
         input: &ClosedNominalInput,
         source: &[Ty],
         actual: &[Ty],
@@ -369,19 +430,21 @@ impl ValidatedTraitWorld {
             return Ok(false);
         }
         for (source, actual) in source.iter().zip(actual) {
-            self.replay_nominal_field_term(input, source, actual, depth + 1)?;
+            self.replay_nominal_field_term(replays, input, source, actual, depth + 1)?;
         }
         Ok(true)
     }
 
     pub(in crate::compiler) fn replay_nominal_normalizations(
         &self,
+        replays: &mut NominalReplays,
         input: &ClosedNominalInput,
         source: &Ty,
         dependencies: &[NormalizedAssociatedType],
     ) -> Result<()> {
         fn walk(
             world: &ValidatedTraitWorld,
+            replays: &mut NominalReplays,
             input: &ClosedNominalInput,
             source: &Ty,
             dependencies: &[NormalizedAssociatedType],
@@ -398,8 +461,8 @@ impl ValidatedTraitWorld {
                 .map_err(|e| FactsError::from_message(&world.budget, &e))?;
             match source {
                 Ty::AssociatedType(projection) => {
-                    let (_, expected) =
-                        world.normalize_nominal_field_projection(input, projection)?;
+                    let (_, expected) = world
+                        .normalize_nominal_field_projection_with(replays, input, projection)?;
                     for receipt in &expected {
                         let actual = dependencies.get(*cursor).ok_or_else(|| {
                             FactsError::invalid(
@@ -425,27 +488,71 @@ impl ValidatedTraitWorld {
                 }
                 Ty::Struct(nominal) => {
                     for argument in nominal.def().type_args.iter() {
-                        walk(world, input, argument, dependencies, cursor, depth + 1)?;
+                        walk(
+                            world,
+                            replays,
+                            input,
+                            argument,
+                            dependencies,
+                            cursor,
+                            depth + 1,
+                        )?;
                     }
                 }
                 Ty::Enum(nominal) => {
                     for argument in nominal.def().type_args.iter() {
-                        walk(world, input, argument, dependencies, cursor, depth + 1)?;
+                        walk(
+                            world,
+                            replays,
+                            input,
+                            argument,
+                            dependencies,
+                            cursor,
+                            depth + 1,
+                        )?;
                     }
                 }
                 Ty::Tuple(fields) => {
                     for field in fields.iter() {
-                        walk(world, input, field, dependencies, cursor, depth + 1)?;
+                        walk(
+                            world,
+                            replays,
+                            input,
+                            field,
+                            dependencies,
+                            cursor,
+                            depth + 1,
+                        )?;
                     }
                 }
-                Ty::Ref { referent, .. } => {
-                    walk(world, input, referent, dependencies, cursor, depth + 1)?
-                }
-                Ty::RawPtr { pointee, .. } => {
-                    walk(world, input, pointee, dependencies, cursor, depth + 1)?
-                }
+                Ty::Ref { referent, .. } => walk(
+                    world,
+                    replays,
+                    input,
+                    referent,
+                    dependencies,
+                    cursor,
+                    depth + 1,
+                )?,
+                Ty::RawPtr { pointee, .. } => walk(
+                    world,
+                    replays,
+                    input,
+                    pointee,
+                    dependencies,
+                    cursor,
+                    depth + 1,
+                )?,
                 Ty::Array { element, .. } | Ty::Slice { element } => {
-                    walk(world, input, element, dependencies, cursor, depth + 1)?;
+                    walk(
+                        world,
+                        replays,
+                        input,
+                        element,
+                        dependencies,
+                        cursor,
+                        depth + 1,
+                    )?;
                 }
                 _ => {}
             }
@@ -455,13 +562,29 @@ impl ValidatedTraitWorld {
         match source {
             Ty::Struct(nominal) => {
                 for field in nominal.def().fields.iter() {
-                    walk(self, input, &field.ty, dependencies, &mut cursor, 0)?;
+                    walk(
+                        self,
+                        replays,
+                        input,
+                        &field.ty,
+                        dependencies,
+                        &mut cursor,
+                        0,
+                    )?;
                 }
             }
             Ty::Enum(nominal) => {
                 for variant in nominal.def().variants.iter() {
                     for field in variant.fields.iter() {
-                        walk(self, input, &field.ty, dependencies, &mut cursor, 0)?;
+                        walk(
+                            self,
+                            replays,
+                            input,
+                            &field.ty,
+                            dependencies,
+                            &mut cursor,
+                            0,
+                        )?;
                     }
                 }
             }
@@ -486,7 +609,20 @@ impl ValidatedTraitWorld {
         input: &ClosedNominalInput,
         original: &ir::AssociatedTypeProjection,
     ) -> Result<(Ty, Vec<NormalizedAssociatedType>)> {
-        self.replay_closed_nominal_input(input)?;
+        self.normalize_nominal_field_projection_with(
+            &mut NominalReplays::default(),
+            input,
+            original,
+        )
+    }
+
+    fn normalize_nominal_field_projection_with(
+        &self,
+        replays: &mut NominalReplays,
+        input: &ClosedNominalInput,
+        original: &ir::AssociatedTypeProjection,
+    ) -> Result<(Ty, Vec<NormalizedAssociatedType>)> {
+        self.replay_closed_nominal_input_with(replays, input)?;
         let mut found = false;
         for retained in input.source.schema().projections.iter() {
             self.budget
@@ -505,6 +641,7 @@ impl ValidatedTraitWorld {
         }
         let projection = ir::AssociatedTypeProjection {
             trait_ref: self.close_nominal_trait_ref(
+                replays,
                 &original.trait_ref,
                 &input.source.schema().env,
                 &input.actuals,
@@ -515,10 +652,10 @@ impl ValidatedTraitWorld {
             predicates: &self.empty,
             phase: FactsPhase::Schema,
         };
-        self.require_in(
+        self.require_sharing(
             &Predicate::Implements(projection.trait_ref.clone()),
             context,
-            &mut ProofScratch::default(),
+            replays,
         )?;
         let (normalized, dependencies) = self.normalize_closed_projected_type(
             &Ty::AssociatedType(Arc::new(projection)),
@@ -539,26 +676,33 @@ impl ValidatedTraitWorld {
 
     fn close_nominal_predicate(
         &self,
+        replays: &mut NominalReplays,
         predicate: &Predicate,
         env: &GenericEnv,
         actuals: &[Ty],
     ) -> Result<Predicate> {
         Ok(match predicate {
             Predicate::Implements(goal) => {
-                Predicate::Implements(self.close_nominal_trait_ref(goal, env, actuals)?)
+                Predicate::Implements(self.close_nominal_trait_ref(replays, goal, env, actuals)?)
             }
             Predicate::ProjectionEq { projection, ty } => Predicate::ProjectionEq {
                 projection: ir::AssociatedTypeProjection {
-                    trait_ref: self.close_nominal_trait_ref(&projection.trait_ref, env, actuals)?,
+                    trait_ref: self.close_nominal_trait_ref(
+                        replays,
+                        &projection.trait_ref,
+                        env,
+                        actuals,
+                    )?,
                     item: projection.item,
                 },
-                ty: self.close_nominal_bound_term(ty, env, actuals, 0)?,
+                ty: self.close_nominal_bound_term(replays, ty, env, actuals, 0)?,
             },
         })
     }
 
     fn close_nominal_trait_ref(
         &self,
+        replays: &mut NominalReplays,
         goal: &TraitRef,
         env: &GenericEnv,
         actuals: &[Ty],
@@ -571,17 +715,18 @@ impl ValidatedTraitWorld {
             FactsError::resource(&self.budget, "nominal trait argument allocation failed")
         })?;
         for argument in goal.args.iter() {
-            args.push(self.close_nominal_bound_term(argument, env, actuals, 0)?);
+            args.push(self.close_nominal_bound_term(replays, argument, env, actuals, 0)?);
         }
         Ok(TraitRef {
             declaration: goal.declaration,
-            self_ty: self.close_nominal_bound_term(&goal.self_ty, env, actuals, 0)?,
+            self_ty: self.close_nominal_bound_term(replays, &goal.self_ty, env, actuals, 0)?,
             args: args.into(),
         })
     }
 
     fn close_nominal_bound_term(
         &self,
+        replays: &mut NominalReplays,
         ty: &Ty,
         env: &GenericEnv,
         actuals: &[Ty],
@@ -615,6 +760,7 @@ impl ValidatedTraitWorld {
             Ty::Ref { kind, referent } => Ty::Ref {
                 kind: *kind,
                 referent: Arc::new(self.close_nominal_bound_term(
+                    replays,
                     referent,
                     env,
                     actuals,
@@ -624,6 +770,7 @@ impl ValidatedTraitWorld {
             Ty::RawPtr { kind, pointee } => Ty::RawPtr {
                 kind: *kind,
                 pointee: Arc::new(self.close_nominal_bound_term(
+                    replays,
                     pointee,
                     env,
                     actuals,
@@ -632,6 +779,7 @@ impl ValidatedTraitWorld {
             },
             Ty::Slice { element } => Ty::Slice {
                 element: Arc::new(self.close_nominal_bound_term(
+                    replays,
                     element,
                     env,
                     actuals,
@@ -641,6 +789,7 @@ impl ValidatedTraitWorld {
             Ty::Array { element, len } => Ty::Array {
                 len: *len,
                 element: Arc::new(self.close_nominal_bound_term(
+                    replays,
                     element,
                     env,
                     actuals,
@@ -656,7 +805,13 @@ impl ValidatedTraitWorld {
                     FactsError::resource(&self.budget, "nominal tuple argument allocation failed")
                 })?;
                 for field in fields.iter() {
-                    out.push(self.close_nominal_bound_term(field, env, actuals, depth + 1)?);
+                    out.push(self.close_nominal_bound_term(
+                        replays,
+                        field,
+                        env,
+                        actuals,
+                        depth + 1,
+                    )?);
                 }
                 Ty::Tuple(out.into())
             }
@@ -671,7 +826,7 @@ impl ValidatedTraitWorld {
             // supplied by an explicit child139 realization read, never reminted.
             _ => ty.clone(),
         };
-        self.validate_ty_metadata_in(&result, &self.empty.env, depth)?;
+        self.validate_ty_metadata_with(&result, &self.empty.env, depth, replays)?;
         Ok(result)
     }
 }
@@ -782,18 +937,33 @@ mod tests {
         assert!(!receipts.is_empty());
         let template = plan.nominal_realization_template(declaration).unwrap();
         world
-            .replay_nominal_normalizations(&input, &template, &receipts)
+            .replay_nominal_normalizations(
+                &mut NominalReplays::default(),
+                &input,
+                &template,
+                &receipts,
+            )
             .unwrap();
         assert!(
             world
-                .replay_nominal_normalizations(&input, &template, &[])
+                .replay_nominal_normalizations(
+                    &mut NominalReplays::default(),
+                    &input,
+                    &template,
+                    &[]
+                )
                 .is_err()
         );
         let mut duplicated = receipts.clone();
         duplicated.extend(receipts.iter().cloned());
         assert!(
             world
-                .replay_nominal_normalizations(&input, &template, &duplicated)
+                .replay_nominal_normalizations(
+                    &mut NominalReplays::default(),
+                    &input,
+                    &template,
+                    &duplicated
+                )
                 .is_err()
         );
         assert!(

@@ -514,7 +514,34 @@ impl ReadNominal {
         ty: &ir::Ty,
         world: &traits::ValidatedTraitWorld,
     ) -> Result<(), Error> {
+        self.replay_with(ty, world, &mut traits::NominalReplays::default())
+    }
+
+    /// Replay against `world`, skipping the world proof replay when this
+    /// node's computation already replayed the same retained fact. The exact
+    /// definition check always runs. Only successes are recorded.
+    pub(super) fn replay_with(
+        &self,
+        ty: &ir::Ty,
+        world: &traits::ValidatedTraitWorld,
+        replays: &mut traits::NominalReplays,
+    ) -> Result<(), Error> {
         self.check_definition(ty)?;
+        if replays.contains_fact(self) {
+            return Ok(());
+        }
+        self.replay_uncached(world, replays)?;
+        replays
+            .record_fact(self, world.budget())
+            .map_err(|e| Error::new(e.into_legacy_diagnostic(world.budget())))
+    }
+
+    fn replay_uncached(
+        &self,
+        world: &traits::ValidatedTraitWorld,
+        replays: &mut traits::NominalReplays,
+    ) -> Result<(), Error> {
+        let ty = &self.fact.definition;
         let budget = world.budget();
         let error = |e: traits::FactsError| Error::new(e.into_legacy_diagnostic(budget));
         let mut actual_terms = Vec::new();
@@ -545,6 +572,7 @@ impl ReadNominal {
         }
         world
             .replay_closed_nominal_application(
+                replays,
                 &self.fact.input,
                 self.fact.declaration,
                 &self.fact.declaration_proof,
@@ -568,6 +596,7 @@ impl ReadNominal {
         }
         world
             .replay_nominal_normalizations(
+                replays,
                 &self.fact.input,
                 &self.fact.source_definition,
                 &self.fact.normalization,
@@ -600,7 +629,7 @@ impl ReadNominal {
                     ));
                 }
                 world
-                    .replay_nominal_field_term(&self.fact.input, &source.ty, &actual.ty, 0)
+                    .replay_nominal_field_term(replays, &self.fact.input, &source.ty, &actual.ty, 0)
                     .map_err(error)?;
                 ordinal += 1;
             }
@@ -636,6 +665,11 @@ impl ReadNominal {
             return Err(Error::new("realized nominal contains extra field receipts"));
         }
         Ok(())
+    }
+
+    /// Same retained immutable fact allocation (node-local replay dedup only).
+    pub(super) fn same_fact(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.fact, &other.fact)
     }
 
     pub(super) fn source_application(&self) -> ir::NominalAppId {

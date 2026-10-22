@@ -223,7 +223,19 @@ impl ValidatedTraitWorld {
         env: &GenericEnv,
         depth: usize,
     ) -> Result<()> {
-        self.validate_ty_metadata_walk(ty, env, depth, &mut TypeWalk::default())
+        self.validate_ty_metadata_with(ty, env, depth, &mut NominalReplays::default())
+    }
+
+    /// As `validate_ty_metadata_in`, skipping world replay of realized
+    /// nominal facts this computation already replayed successfully.
+    pub(in crate::compiler) fn validate_ty_metadata_with(
+        &self,
+        ty: &Ty,
+        env: &GenericEnv,
+        depth: usize,
+        replays: &mut NominalReplays,
+    ) -> Result<()> {
+        self.validate_ty_metadata_walk(ty, env, depth, &mut TypeWalk::default(), replays)
             .map(|_| ())
     }
 
@@ -233,6 +245,7 @@ impl ValidatedTraitWorld {
         env: &GenericEnv,
         depth: usize,
         walk: &mut TypeWalk,
+        replays: &mut NominalReplays,
     ) -> Result<usize> {
         charged(&self.budget, self.budget.check_depth(depth))?;
         charged(&self.budget, self.budget.charge_work(1))?;
@@ -251,9 +264,9 @@ impl ValidatedTraitWorld {
             return Ok(height);
         }
         let mut height = 0usize;
-        let mut child = |value: &Ty| -> Result<()> {
+        let mut child = |value: &Ty, replays: &mut NominalReplays| -> Result<()> {
             height = height.max(
-                self.validate_ty_metadata_walk(value, env, depth + 1, walk)?
+                self.validate_ty_metadata_walk(value, env, depth + 1, walk, replays)?
                     .saturating_add(1),
             );
             Ok(())
@@ -262,20 +275,20 @@ impl ValidatedTraitWorld {
             Ty::Opaque(opaque) => {
                 self.validate_opaque_metadata(opaque, env)?;
                 for ty in opaque.types() {
-                    child(ty)?;
+                    child(ty, replays)?;
                 }
             }
             Ty::Closure(closure) => {
                 self.info(closure.owner())?;
                 self.info(closure.provider())?;
                 for ty in closure.types() {
-                    child(ty)?;
+                    child(ty, replays)?;
                 }
             }
             Ty::FnItem(item) => {
                 self.info(item.declaration)?;
                 for ty in item.type_args.iter() {
-                    child(ty)?;
+                    child(ty, replays)?;
                 }
             }
             Ty::Param(parameter) => {
@@ -288,9 +301,9 @@ impl ValidatedTraitWorld {
                 self.info(parameter.owner.declaration)?;
             }
             Ty::AssociatedType(projection) => {
-                child(&projection.trait_ref.self_ty)?;
+                child(&projection.trait_ref.self_ty, replays)?;
                 for argument in projection.trait_ref.args.iter() {
-                    child(argument)?;
+                    child(argument, replays)?;
                 }
                 let owner = self.trait_header(projection.trait_ref.declaration)?;
                 let item = self.associated_header(projection.item)?;
@@ -315,7 +328,7 @@ impl ValidatedTraitWorld {
                     ));
                 }
                 for part in parts.iter() {
-                    child(part)?;
+                    child(part, replays)?;
                 }
             }
             Ty::Array { element, len } => {
@@ -325,14 +338,14 @@ impl ValidatedTraitWorld {
                         "array metadata length limit exceeded",
                     ));
                 }
-                child(element)?;
+                child(element, replays)?;
             }
             Ty::Ref { referent, .. }
             | Ty::RawPtr {
                 pointee: referent, ..
             }
             | Ty::Slice { element: referent } => {
-                child(referent)?;
+                child(referent, replays)?;
             }
             Ty::Dyn(object) => {
                 let header = self.trait_header(object.principal)?;
@@ -343,7 +356,7 @@ impl ValidatedTraitWorld {
                     ));
                 }
                 for argument in object.args.iter() {
-                    child(argument)?;
+                    child(argument, replays)?;
                 }
                 let mut previous = None;
                 for (item, value) in object.associated_types.iter() {
@@ -362,7 +375,7 @@ impl ValidatedTraitWorld {
                         ));
                     }
                     previous = Some(item.index);
-                    child(value)?;
+                    child(value, replays)?;
                 }
                 let applications = self.object_applications(object, &Ty::Unit, env)?;
                 for application in applications {
@@ -394,15 +407,15 @@ impl ValidatedTraitWorld {
                 validate_nominal_modules(ty, self.catalog.modules(), &self.budget)?;
                 self.schema.validate_nominal(ty, env, &self.budget)?;
                 if let Some(capability) = value.realization() {
-                    capability.replay(ty, self).map_err(|error| {
+                    capability.replay_with(ty, self, replays).map_err(|error| {
                         FactsError::from_message(&self.budget, &error.to_string())
                     })?;
                 }
                 for argument in value.def().type_args.iter() {
-                    child(argument)?;
+                    child(argument, replays)?;
                 }
                 for field in value.def().fields.iter() {
-                    child(&field.ty)?;
+                    child(&field.ty, replays)?;
                 }
             }
             Ty::Enum(value) => {
@@ -417,16 +430,16 @@ impl ValidatedTraitWorld {
                 validate_nominal_modules(ty, self.catalog.modules(), &self.budget)?;
                 self.schema.validate_nominal(ty, env, &self.budget)?;
                 if let Some(capability) = value.realization() {
-                    capability.replay(ty, self).map_err(|error| {
+                    capability.replay_with(ty, self, replays).map_err(|error| {
                         FactsError::from_message(&self.budget, &error.to_string())
                     })?;
                 }
                 for argument in value.def().type_args.iter() {
-                    child(argument)?;
+                    child(argument, replays)?;
                 }
                 for variant in value.def().variants.iter() {
                     for field in variant.fields.iter() {
-                        child(&field.ty)?;
+                        child(&field.ty, replays)?;
                     }
                 }
             }

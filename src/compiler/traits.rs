@@ -1203,8 +1203,64 @@ struct MemoEntry {
 #[derive(Default)]
 struct ProofScratch {
     active: Vec<GoalKey>,
+    replays: NominalReplays,
     memo: Vec<MemoEntry>,
     projections: Vec<associated_types::NormalizationMemo>,
+}
+/// Realized nominal facts whose world replay already succeeded inside this
+/// node's computation, keyed by the retained immutable fact allocation. Owned
+/// by the caller's scratch and dropped with it; never in a fact or shared.
+/// Failures are never recorded, so a failing replay is always re-reported.
+/// Bounded by the distinct nominal facts the node itself read.
+#[derive(Default)]
+pub(in crate::compiler) struct NominalReplays {
+    // Clones pin each allocation for the memo's lifetime, so pointer
+    // identity can never be reused by a different fact.
+    facts: Vec<super::nominal_realization::ReadNominal>,
+    inputs: Vec<Arc<[Predicate]>>,
+}
+impl NominalReplays {
+    pub(in crate::compiler) fn contains_fact(
+        &self,
+        fact: &super::nominal_realization::ReadNominal,
+    ) -> bool {
+        self.facts.iter().any(|old| old.same_fact(fact))
+    }
+    pub(in crate::compiler) fn record_fact(
+        &mut self,
+        fact: &super::nominal_realization::ReadNominal,
+        budget: &PlanBudget,
+    ) -> Result<()> {
+        self.admit(budget)?;
+        self.facts.push(fact.clone());
+        Ok(())
+    }
+    fn contains_input(&self, input: &ClosedNominalInput) -> bool {
+        self.inputs
+            .iter()
+            .any(|old| Arc::ptr_eq(old, input.obligation_identity()))
+    }
+    fn record_input(&mut self, input: &ClosedNominalInput, budget: &PlanBudget) -> Result<()> {
+        self.admit(budget)?;
+        self.inputs.push(input.obligation_identity().clone());
+        Ok(())
+    }
+    fn admit(&mut self, budget: &PlanBudget) -> Result<()> {
+        if self.facts.len() + self.inputs.len() >= MAX_SCRATCH_OBLIGATIONS {
+            return Err(FactsError::resource(
+                budget,
+                "nominal replay memo limit for one computation exceeded",
+            ));
+        }
+        charged(budget, budget.charge_work(1))?;
+        if self.facts.try_reserve(1).is_err() || self.inputs.try_reserve(1).is_err() {
+            return Err(FactsError::resource(
+                budget,
+                "nominal replay memo allocation failed",
+            ));
+        }
+        Ok(())
+    }
 }
 /// Distinct goals one proof computation may memoize. Per scratch (per
 /// node), never a shared whole-world ledger.
@@ -2019,9 +2075,18 @@ impl ValidatedTraitWorld {
         env: &GenericEnv,
         maybe_unsized: Option<ParamId>,
     ) -> Result<()> {
-        self.validate_ty_metadata_in(&goal.self_ty, env, 0)?;
+        self.validate_ref_with(goal, env, maybe_unsized, &mut NominalReplays::default())
+    }
+    fn validate_ref_with(
+        &self,
+        goal: &TraitRef,
+        env: &GenericEnv,
+        maybe_unsized: Option<ParamId>,
+        replays: &mut NominalReplays,
+    ) -> Result<()> {
+        self.validate_ty_metadata_with(&goal.self_ty, env, 0, replays)?;
         for argument in goal.args.iter() {
-            self.validate_ty_metadata_in(argument, env, 0)?;
+            self.validate_ty_metadata_with(argument, env, 0, replays)?;
         }
         let declaration = self.info(goal.declaration)?;
         if declaration.kind != DeclKind::Trait {
@@ -6444,7 +6509,7 @@ impl ValidatedTraitWorld {
         self.check_normalization_budget()?;
         match predicate {
             Predicate::Implements(goal) => {
-                self.validate_predicate_ref_in(goal, facts.env(), None)?
+                self.validate_predicate_ref_with(goal, facts.env(), None, &mut active.replays)?
             }
             Predicate::ProjectionEq { projection, ty } => {
                 self.validate_equality_domain(projection, ty, facts.env())?
