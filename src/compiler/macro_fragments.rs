@@ -202,7 +202,7 @@ mod tests {
         assert!(
             matches!(recaptured.node(&session, 0).unwrap(), Node::Leaf(Token { kind: TokenKind::Opaque(actual), .. }) if *actual == id)
         );
-        let other = MacroCursor::new(&session, opaque.subslice(&session, 0..1).unwrap()).unwrap();
+        let other = MacroCursor::new(&session, opaque.subslice(&session, 0..0).unwrap()).unwrap();
         let before = cursor.mark(&session).unwrap();
         assert!(matches!(
             cursor.restore(&session, other.mark(&session).unwrap()),
