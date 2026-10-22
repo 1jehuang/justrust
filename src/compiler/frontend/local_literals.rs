@@ -606,7 +606,7 @@ impl<'s> Solver<'_, '_, 's> {
             }
             _ => {
                 return Err(self.user_error(&format!(
-                    "E0308: local inference constraint {x:?} does not match {y:?}"
+                    "E0308: mismatched types: expected {x:?}, found {y:?}"
                 )));
             }
         };
@@ -831,8 +831,10 @@ impl<'s> Solver<'_, '_, 's> {
             self.coercions.push((actual, expected));
             return Ok(());
         }
-        if matches!(self.domain(actual), Domain::Ref(_, inner)
+        if (matches!(self.domain(actual), Domain::Ref(_, inner)
                 if !matches!(self.domain(inner), Domain::Unknown))
+            || matches!(self.domain(actual), Domain::Nominal(_, ref xs)
+                if xs.len() == 1 && !matches!(self.domain(xs[0]), Domain::Unknown | Domain::Fixed(ir::Ty::Dyn(_)))))
             && matches!(self.domain(expected), Domain::Unknown)
         {
             self.lazy_coercions.push((actual, expected));
@@ -863,6 +865,20 @@ impl<'s> Solver<'_, '_, 's> {
                     return Ok(());
                 }
                 self.coerce(a, b)
+            }
+            // `Box<T> -> Box<dyn P>` unsizing is proven by the checker; the
+            // source pointee stays independent of the object type.
+            (Domain::Nominal(a, ref xs), Domain::Nominal(b, ref ys))
+                if a == b
+                    && xs.len() == 1
+                    && ys.len() == 1
+                    && matches!(self.domain(ys[0]), Domain::Fixed(ir::Ty::Dyn(_)))
+                    && !matches!(
+                        self.domain(xs[0]),
+                        Domain::Fixed(ir::Ty::Dyn(_)) | Domain::Unknown
+                    ) =>
+            {
+                Ok(())
             }
             (Domain::Array(a, n), Domain::Array(b, m)) if n == m => self.coerce(a, b),
             (Domain::Array(a, _), Domain::Slice(b)) => self.unify(a, b),
@@ -1150,6 +1166,32 @@ impl<'s> Solver<'_, '_, 's> {
                                 continue;
                             }
                             Err(error) => {
+                                // Stock's final probe step unsizes `[T; N]` to
+                                // `[T]`. Checked lowering admits only the shared
+                                // `&[T]` carrier and reselects the same method.
+                                if let Some(carrier) = type_check::array_unsize_carrier(&ty) {
+                                    if let Ok(selected) = plan.select_method(
+                                        &carrier,
+                                        &method.name,
+                                        &[],
+                                        self.checker.facts(),
+                                        &self.checker.module,
+                                        &plan.budget,
+                                    ) {
+                                        for (arg, param) in method
+                                            .args
+                                            .iter()
+                                            .zip(selected.signature.params.iter().skip(1))
+                                        {
+                                            let param = self.fixed(param.clone())?;
+                                            self.coerce(*arg, param)?;
+                                        }
+                                        let result = self.fixed(selected.signature.result)?;
+                                        self.unify(result, method.result)?;
+                                        progress = true;
+                                        continue;
+                                    }
+                                }
                                 // Once an exact scalar's ordinary method lookup
                                 // has failed, a known primitive name is not an
                                 // unresolved nominal dependency. Preserve the
@@ -2297,7 +2339,8 @@ impl<'s> Solver<'_, '_, 's> {
                 }
                 let checker = self.checker;
                 let plan = checker.signatures.plan()?;
-                let Ok(owner) = super::type_check::checked_local_ty(owner, checker.signatures) else {
+                let Ok(owner) = super::type_check::checked_local_ty(owner, checker.signatures)
+                else {
                     return self.fresh();
                 };
                 let Ok(trait_ref) = plan.resolve_trait_use(
@@ -2309,14 +2352,8 @@ impl<'s> Solver<'_, '_, 's> {
                 ) else {
                     return self.fresh();
                 };
-                match plan.select_trait(
-                    &trait_ref,
-                    name,
-                    &[],
-                    checker.facts(),
-                    false,
-                    &plan.budget,
-                ) {
+                match plan.select_trait(&trait_ref, name, &[], checker.facts(), false, &plan.budget)
+                {
                     Ok(Some((_, signature, _)))
                         if signature.result.is_closed_shallow()
                             && !generic_nominal(&signature.result) =>

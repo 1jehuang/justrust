@@ -553,8 +553,8 @@ For more information about this error, try `rustc --explain E0425`.
             source_bytes: 110,
             source_fingerprint: 13823337796330751864,
             source_sha256: r###"c6449caca0c7b2bca50ec3a1f42577030789673ce956abf53188620861ff5d34"###,
-            native: Native::Unsupported,
-            boundary: r###"unsupported macro fragment kind"###,
+            native: Native::Live,
+            boundary: r###""###,
             stock_compile_code: 0,
             stock_code: Some(0),
             stock_stdout: r###"shadow
@@ -574,8 +574,8 @@ after
             source_bytes: 125,
             source_fingerprint: 4171389741908241265,
             source_sha256: r###"ed1dadf5d47cbe9eee1c670a2e75e9f45bf2f22509e3a8062a36e6d4b55c294f"###,
-            native: Native::Unsupported,
-            boundary: r###"unsupported macro fragment kind"###,
+            native: Native::Live,
+            boundary: r###""###,
             stock_compile_code: 0,
             stock_code: Some(0),
             stock_stdout: r###"shadow
@@ -595,8 +595,8 @@ after
             source_bytes: 143,
             source_fingerprint: 18085575626397160728,
             source_sha256: r###"421f636b8c529c86b860bc0f6113d1f33766a97f36943eff596939cae530ca02"###,
-            native: Native::Unsupported,
-            boundary: r###"unsupported macro fragment kind"###,
+            native: Native::Live,
+            boundary: r###""###,
             stock_compile_code: 0,
             stock_code: Some(0),
             stock_stdout: r###"module shadow
@@ -615,8 +615,8 @@ after
             source_bytes: 45,
             source_fingerprint: 10406089384949838343,
             source_sha256: r###"313b64dacb13abc3a4212a5f1cea39d7d97b2b77c9bb8ce85e0bfb214e49725a"###,
-            native: Native::Unsupported,
-            boundary: r###"assert! formatting placeholders are unsupported"###,
+            native: Native::Abort,
+            boundary: r###""###,
             stock_compile_code: 0,
             stock_code: Some(-6),
             stock_stdout: r###""###,
@@ -718,8 +718,8 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
             source_bytes: 106,
             source_fingerprint: 10099125556028923527,
             source_sha256: r###"b15f173b46463cab3c7ebcac88670b63c3cdc3c81ca0b787ba9255e6f5d4f65c"###,
-            native: Native::Unsupported,
-            boundary: r###"assert! formatting placeholders are unsupported"###,
+            native: Native::Live,
+            boundary: r###""###,
             stock_compile_code: 0,
             stock_code: Some(0),
             stock_stdout: r###"after
@@ -1110,7 +1110,7 @@ fn frozen_assertion_sources_and_phase_partitions() {
         }
     }
     assert_eq!(groups, [30, 3]);
-    assert_eq!(partition, [10, 13, 4, 6]);
+    assert_eq!(partition, [14, 14, 4, 1]);
     assert_eq!(stock, [14, 14, 5]);
     let joined: String = all.iter().map(|case| case.source).collect();
     assert_eq!(fingerprint(&joined), 6894148404861029812);
@@ -1364,7 +1364,7 @@ fn cli_all() {
         }
     }
     assert_eq!(cells, 132);
-    failures.check("runtime count", || assert_eq!(runtimes, 46));
+    failures.check("runtime count", || assert_eq!(runtimes, 56));
     failures.finish();
 }
 fn graph_all() {
@@ -1424,7 +1424,7 @@ fn graph_all() {
         }
     }
     assert_eq!(cells, 132);
-    failures.check("graph runtime count", || assert_eq!(runtimes, 46));
+    failures.check("graph runtime count", || assert_eq!(runtimes, 56));
     failures.finish();
 }
 fn isolated(name: &str, marker: &str, run: fn()) {
