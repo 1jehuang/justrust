@@ -9,6 +9,17 @@ pub trait Iterator: Sized {
         Enumerate { iterator: self, count: 0usize }
     }
 
+    fn count(self) -> usize {
+        let mut iterator = self;
+        let mut count = 0usize;
+        loop {
+            match iterator.next() {
+                Option::Some(_) => count += 1usize,
+                Option::None => return count,
+            }
+        }
+    }
+
     fn fold<B, F: FnMut(B, Self::Item) -> B>(mut self, init: B, mut f: F) -> B {
         let mut acc = init;
         loop {

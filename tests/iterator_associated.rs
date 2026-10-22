@@ -95,3 +95,22 @@ fn typed_vec_ref_into_iter_loops_match_stock_and_preserve_loans() {
         oracle::stock_and_native_reject(source);
     }
 }
+
+#[test]
+fn source_iterator_count_and_bound_from_iterator() {
+    // Default `count` is ordinary prelude source. A generic trait method
+    // reached as `B::mk(..)` through a `B: Mk<A>` bound (the `B::from_iter`
+    // shape) infers its own method actuals from the unique trait candidate.
+    oracle::stock_native(
+        "fn main(){let v=vec![1i32,2,3];println!(\"{}\",v.iter().count());let e:Vec<i32>=Vec::new();println!(\"{}\",e.iter().count());}",
+    );
+    oracle::stock_native(
+        "trait Mk<A>{fn mk<X:Copy>(a:A,x:X)->Self;} struct N(i32); impl Mk<i32> for N{fn mk<X:Copy>(a:i32,_x:X)->N{N(a)}} fn build<A,B:Mk<A>>(a:A)->B{B::mk(a,1u8)} fn main(){let n:N=build(7i32);println!(\"{}\",n.0);}",
+    );
+    oracle::stock_and_native_reject(
+        "trait Mk<A>{fn mk<X:Copy>(a:A,x:X)->Self;} struct N(i32); impl Mk<i32> for N{fn mk<X:Copy>(a:i32,_x:X)->N{N(a)}} fn build<A,B:Mk<A>>(a:A)->B{B::mk(a,String::new())} fn main(){let n:N=build(7i32);println!(\"{}\",n.0);}",
+    );
+    oracle::stock_and_native_reject(
+        "fn main(){let v=vec![1i32];let n:i32=v.iter().count();println!(\"{}\",n);}",
+    );
+}

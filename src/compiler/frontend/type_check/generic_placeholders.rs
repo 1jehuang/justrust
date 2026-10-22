@@ -80,6 +80,11 @@ impl Checker<'_> {
             if let Some(inferred) = inferred {
                 return Ok(inferred);
             }
+            if type_args.is_empty()
+                && let Some(inferred) = self.trait_candidate_actuals(owner, name, args, expected)?
+            {
+                return Ok(inferred);
+            }
             if partial {
                 return Err("E0282: type annotations needed for method generic arguments".into());
             }
@@ -89,6 +94,37 @@ impl Checker<'_> {
             .iter()
             .map(|ty| self.checked_type_actual(ty))
             .collect()
+    }
+
+    /// Generic trait methods reached through `Owner::method(..)` (for example
+    /// a bound `B: FromIterator<A>` calling `B::from_iter(it)`) infer their own
+    /// method actuals through the exact in-scope trait application. Only a
+    /// unique generic candidate is used; selection rediscovers and discharges
+    /// it independently, so this hint grants no membership.
+    fn trait_candidate_actuals(
+        &self,
+        owner: &ir::Ty,
+        name: &AstIdent,
+        args: &[Expr],
+        expected: Option<&ir::Ty>,
+    ) -> Result<Option<Vec<ir::Ty>>, String> {
+        let plan = self.signatures.plan()?;
+        let candidates =
+            plan.method_trait_candidates(owner, name, self.facts(), &self.module, &plan.budget)?;
+        let mut found: Option<Vec<ir::Ty>> = None;
+        for (application, _item) in candidates.as_slice() {
+            self.infer_work(0)?;
+            let Some(actuals) =
+                self.inferred_trait_method_actuals(application, name, &[], args, expected, false)?
+            else {
+                continue;
+            };
+            if found.is_some() {
+                return Ok(None);
+            }
+            found = Some(actuals);
+        }
+        Ok(found)
     }
 
     /// The application path remains canonical and unchanged. Only its `_`
