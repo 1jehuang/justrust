@@ -101,6 +101,13 @@ graph-integrity evidence are recorded in the feature contracts. G0-G12 remain op
 - [ ] Per-file parse, per-module declaration index, per-item resolve and
       signatures (PARSE/RESOLVE/SIGNATURES remain whole-program; parsing shares
       one NameStore/ModuleArena, and resolve memoizes imports/aliases program-wide).
+      SIGNATURES split progress (2026-10-22): source `DeclId`s are canonical
+      (`SOURCE_BIT | module-path key | kind | per-module ordinal`, 519041cad),
+      so any node can derive a declaration's owning module from its identity;
+      registry and schema storage are identity-keyed, not positional
+      (2285fbe2f, bec557ef2, 0c0a82c85, 4f44c29f1). Next: per-module
+      declaration fact keyed by module-path key, TRAIT_IMPLS from it, move
+      `facts.types()` consumers kind by kind, then delete SIGNATURES.
 - [x] Scalar checked-function IR shared directly by checking and native emission.
 - [x] Unlabelled loop values, break/continue and exact native temporary cleanup.
 - [x] Separate semantic Never typing from completion, including typed dead tails.
