@@ -17083,7 +17083,6 @@ struct PlanState {
     source_context: Option<SourceTypeContext>,
     schemas: HashMap<ir::DeclId, Arc<NominalSchema>>,
     nominals: NominalInterner,
-    contexts: HashMap<ir::DeclId, CallableContext>,
     reservations: Vec<ir::PlanReservation>,
 }
 #[derive(Clone, Debug)]
@@ -17094,6 +17093,8 @@ pub struct PlanCtx {
     validated: Arc<HashMap<ir::DeclId, ir::GenericSignature>>,
     registry: Arc<DeclRegistry>,
     state: Arc<Mutex<PlanState>>,
+    /// Immutable per-callable source contexts, sealed at construction.
+    contexts: Arc<HashMap<ir::DeclId, CallableContext>>,
     source_schemas: Arc<SourceSchemas>,
     /// Immutable whole-program signature and nominal lookup maps, built once
     /// when the trait world is published and shared by every body check.
@@ -17565,9 +17566,9 @@ impl PlanCtx {
             source_context: None,
             schemas: HashMap::new(),
             nominals: NominalInterner::default(),
-            contexts: HashMap::new(),
             reservations: Vec::new(),
         };
+        let mut contexts: HashMap<ir::DeclId, CallableContext> = HashMap::new();
         for entry in catalog_builder.base_declarations() {
             let info = &entry.info;
             budget.charge_work(1)?;
@@ -18213,7 +18214,7 @@ impl PlanCtx {
                 &[trait_env.clone(), info.param_env.clone()],
                 budget,
             )?);
-            state.contexts.insert(
+            contexts.insert(
                 id,
                 CallableContext {
                     module,
@@ -18490,7 +18491,7 @@ impl PlanCtx {
                     .path
                     .associated = Some(owner);
                 budget.retain_bytes(512)?;
-                state.contexts.insert(
+                contexts.insert(
                     *id,
                     CallableContext {
                         module: block.module,
@@ -18504,7 +18505,7 @@ impl PlanCtx {
         Arc::get_mut(&mut registry)
             .ok_or("closure provider domains shared before source schema completion")?
             .install_closure_provider_domains(budget)?;
-        state.install_closure_source_contexts(&registry, budget)?;
+        provider_source_context::install_closure_source_contexts(&mut contexts, &registry, budget)?;
         for (index, id) in registry.function_ids.iter().copied().enumerate() {
             let f = match registry.callable_sources[index] {
                 CallableSource::Free(i) => &program.functions[i],
@@ -18521,8 +18522,7 @@ impl PlanCtx {
             let info = registry.declaration(id)?;
             state.source_context = Some(registry.source_type_context(id)?);
             let mut bindings = generic_bindings(&registry, &info.env, budget)?;
-            let context = state
-                .contexts
+            let context = contexts
                 .entry(id)
                 .or_insert_with(|| CallableContext {
                     module: info.path.module,
@@ -18904,6 +18904,7 @@ impl PlanCtx {
             validated: Arc::new(HashMap::new()),
             registry,
             state: Arc::new(Mutex::new(state)),
+            contexts: Arc::new(contexts),
             source_schemas,
             shared_env: None,
             closed_roots: Arc::from([]),
@@ -19254,6 +19255,7 @@ impl PlanCtx {
             catalog: self.catalog.clone(),
             registry: self.registry.clone(),
             state: self.state.clone(),
+            contexts: self.contexts.clone(),
             source_schemas: self.source_schemas.clone(),
             budget: budget.clone(),
         });
@@ -19508,10 +19510,7 @@ impl PlanCtx {
         Ok(self.declaration(decl)?.env.clone())
     }
     pub fn callable_context(&self, decl: ir::DeclId) -> Result<CallableContext, String> {
-        self.state
-            .lock()
-            .map_err(|_| "generic plan context poisoned")?
-            .contexts
+        self.contexts
             .get(&decl)
             .cloned()
             .ok_or_else(|| "missing callable context".into())
@@ -19868,7 +19867,7 @@ impl PlanCtx {
         if let Some(decl) = decl {
             let info = self.declaration(decl)?;
             env.params = generic_bindings(&self.registry, &info.env, &self.budget)?;
-            env.self_ty = state.contexts.get(&decl).and_then(|c| c.self_ty.clone());
+            env.self_ty = self.contexts.get(&decl).and_then(|c| c.self_ty.clone());
             if let Some(ty) = &env.self_ty {
                 env.params.insert(GenericBindingKey::SelfType, ty.clone());
             }
@@ -20337,6 +20336,7 @@ struct SchemaAdapter {
     catalog: Arc<tr::CoreCatalog>,
     registry: Arc<DeclRegistry>,
     state: Arc<Mutex<PlanState>>,
+    contexts: Arc<HashMap<ir::DeclId, CallableContext>>,
     source_schemas: Arc<SourceSchemas>,
     budget: ir::PlanBudget,
 }
@@ -20348,6 +20348,7 @@ impl SchemaAdapter {
             catalog: self.catalog.clone(),
             registry: self.registry.clone(),
             state: self.state.clone(),
+            contexts: self.contexts.clone(),
             source_schemas: self.source_schemas.clone(),
             budget: self.budget.clone(),
             world: None,
@@ -21797,6 +21798,7 @@ mod associated_registry_tests {
             catalog: plan.catalog.clone(),
             registry: plan.registry.clone(),
             state: plan.state.clone(),
+            contexts: plan.contexts.clone(),
             source_schemas: plan.source_schemas.clone(),
             budget: plan.budget.clone(),
         };
@@ -21833,6 +21835,7 @@ mod associated_registry_tests {
             catalog: plan.catalog.clone(),
             registry: plan.registry.clone(),
             state: plan.state.clone(),
+            contexts: plan.contexts.clone(),
             source_schemas: plan.source_schemas.clone(),
             budget: plan.budget.clone(),
         };

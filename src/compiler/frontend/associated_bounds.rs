@@ -113,6 +113,7 @@ fn associated_bounds_registry_callback_is_frozen_ordered_and_lock_free() {
         catalog: plan.catalog.clone(),
         registry: plan.registry.clone(),
         state: plan.state.clone(),
+        contexts: plan.contexts.clone(),
         source_schemas: plan.source_schemas.clone(),
         budget: plan.budget.clone(),
     };

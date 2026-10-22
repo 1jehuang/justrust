@@ -280,6 +280,7 @@ fn packed_query_authority_alternate_schema_default_denies() {
         catalog: plan.catalog.clone(),
         registry: plan.registry.clone(),
         state: plan.state.clone(),
+        contexts: plan.contexts.clone(),
         source_schemas: plan.source_schemas.clone(),
         budget: plan.budget.clone(),
     };

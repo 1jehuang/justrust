@@ -221,6 +221,7 @@ fn source_schemas_metadata_callbacks_do_not_lock_mutable_nominal_state() {
         catalog: plan.catalog.clone(),
         registry: plan.registry.clone(),
         state: plan.state.clone(),
+        contexts: plan.contexts.clone(),
         source_schemas: plan.source_schemas.clone(),
         budget: b.clone(),
     };
@@ -556,6 +557,7 @@ fn source_schemas_projection_hit_replaces_lookup_and_missing_const_uses_registry
         catalog: plan.catalog.clone(),
         registry: plan.registry.clone(),
         state: plan.state.clone(),
+        contexts: plan.contexts.clone(),
         source_schemas: plan.source_schemas.clone(),
         budget: b.clone(),
     };
