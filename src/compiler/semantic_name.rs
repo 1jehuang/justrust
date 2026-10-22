@@ -434,6 +434,16 @@ impl NameStoreBuilder {
             .map_err(|error| super::owner_path::owner_token_error(error).into())
     }
 
+    /// Link the crate's frozen sibling file stores (PARSE-SPLIT.md step 1),
+    /// so their occurrences and spans are served through this store. The
+    /// set is explicit and fixed once linked; other owners stay foreign.
+    pub(crate) fn link_crate_files(
+        &mut self,
+        stores: Vec<Arc<NameStore>>,
+    ) -> Result<(), NameError> {
+        Ok(self.store.session.link(stores)?)
+    }
+
     /// Issue the next builder-local macro driver identity. Fails closed at
     /// exhaustion and never reuses an ordinal.
     pub(super) fn issue_driver_id(&mut self) -> Result<std::num::NonZeroU64, NameError> {
@@ -666,7 +676,11 @@ impl NameStore {
     fn record(&self, ident: AstIdent) -> Result<&NameData, NameError> {
         self.budget().charge(Counter::Work, 1)?;
         if !self.session.admits(ident.owner) {
-            return Err(TokenError::ForeignHandle.into());
+            // A linked crate sibling serves its own occurrences.
+            return match self.session.linked_store(ident.owner)? {
+                Some(store) => store.record(ident),
+                None => Err(TokenError::ForeignHandle.into()),
+            };
         }
         self.records
             .as_slice()

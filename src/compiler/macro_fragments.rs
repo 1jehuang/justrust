@@ -59,7 +59,10 @@ impl TokenSession {
     pub fn fragment(&self, id: FragmentId) -> Result<&FragmentPayload, TokenError> {
         self.budget().check()?;
         if id.session != self.id() {
-            return Err(TokenError::ForeignHandle);
+            return match self.linked_store(id.session)? {
+                Some(store) => store.session().fragment(id),
+                None => Err(TokenError::ForeignHandle),
+            };
         }
         self.fragments
             .as_slice()

@@ -182,6 +182,43 @@ mod tests {
     }
 
     #[test]
+    fn linked_sibling_store_serves_its_handles_and_rejects_outsiders() {
+        let (b, b_names, _) = file("b.rs", &["helper"], None);
+        let (outside, outside_names, _) = file("c.rs", &["x"], None);
+        let budget = ExpansionBudget::default();
+        let source = SourceSnapshot::from_text(
+            Path::new("a.rs"),
+            "a\n",
+            &budget,
+            crate::compiler::owner_path::standalone_issued(
+                &budget,
+                crate::compiler::owner_path::OwnerDomain::SourceSnapshot,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let (session, cap) = TokenSession::standalone(source, budget).unwrap();
+        let mut builder = NameStoreBuilder::new(session, cap, Edition::E2024).unwrap();
+        builder.link_crate_files(vec![b.clone()]).unwrap();
+        assert!(builder.link_crate_files(vec![b.clone()]).is_err());
+        assert_eq!(builder.spelling(b_names[0]).unwrap(), "helper");
+        let span = b.span(b_names[0]).unwrap();
+        assert!(builder.session().span(span).is_ok());
+        assert!(matches!(
+            builder.check(outside_names[0]),
+            Err(NameError::Token(TokenError::ForeignHandle))
+        ));
+        let key = b
+            .key(
+                b_names[0],
+                LookupClass::Item(super::super::Namespace::Value),
+            )
+            .unwrap();
+        assert_eq!(builder.atom_text(key.atom).unwrap(), "helper");
+        drop(outside);
+    }
+
+    #[test]
     fn handles_from_outside_the_crate_are_hard_foreign_errors() {
         let (a, _, _) = file("a.rs", &["x"], None);
         let (outside, outside_names, _) = file("c.rs", &["x"], None);

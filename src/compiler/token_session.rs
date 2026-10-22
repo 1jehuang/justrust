@@ -129,6 +129,21 @@ impl<T: Copy + Eq> CrateOwners<T> {
     }
 }
 
+/// Immutable crate sibling stores linked into one session, sorted by owner.
+#[derive(Default)]
+struct LinkedStores {
+    stores: Arc<[(SessionId, Arc<super::semantic_name::NameStore>)]>,
+    _lease: Option<ByteLease>,
+}
+impl LinkedStores {
+    fn get(&self, owner: SessionId) -> Result<&super::semantic_name::NameStore, TokenError> {
+        self.stores
+            .binary_search_by_key(&owner.0, |(id, _)| id.0)
+            .map(|index| &*self.stores[index].1)
+            .map_err(|_| TokenError::ForeignHandle)
+    }
+}
+
 macro_rules! session_handle {
     ($($name:ident),+ $(,)?) => {$(
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -656,6 +671,10 @@ pub struct TokenSession {
     id: SessionId,
     /// Owners whose handles this session admits; exactly `id` today.
     crate_owners: CrateOwners<SessionId>,
+    /// Frozen sibling file stores of the same crate (PARSE-SPLIT.md blocker
+    /// 1), sorted by owner and unique. A handle owned by one of them is
+    /// served by that store; any other foreign owner is a hard error.
+    linked: LinkedStores,
     sources: SourceSnapshot,
     budget: ExpansionBudget,
     symbols: BudgetVec<SymbolEntry>,
@@ -772,6 +791,7 @@ impl TokenSession {
             _lease: lease,
             id,
             crate_owners: CrateOwners::single(id),
+            linked: LinkedStores::default(),
             sources,
             symbols: BudgetVec::new(&budget, Storage::Retained)?,
             symbol_slots: BudgetVec::new(&budget, Storage::Retained)?,
@@ -814,6 +834,60 @@ impl TokenSession {
             Ok(())
         }
     }
+    /// The linked sibling store owning `owner`, `None` for this session's
+    /// own handles, or a hard foreign error for any other owner.
+    pub(super) fn linked_store(
+        &self,
+        owner: SessionId,
+    ) -> Result<Option<&super::semantic_name::NameStore>, TokenError> {
+        if self.admits(owner) {
+            return Ok(None);
+        }
+        self.budget.charge(Counter::Work, 1)?;
+        self.linked.get(owner).map(Some)
+    }
+    /// The session serving `owner`'s handles: this one or a linked sibling.
+    fn serving(&self, owner: SessionId) -> Result<&TokenSession, TokenError> {
+        match self.linked_store(owner)? {
+            Some(store) => Ok(store.session()),
+            None => Ok(self),
+        }
+    }
+    /// Link the crate's frozen sibling file stores. Only before any sibling
+    /// is linked: the set is explicit and immutable once built.
+    pub(super) fn link(
+        &mut self,
+        stores: Vec<Arc<super::semantic_name::NameStore>>,
+    ) -> Result<(), TokenError> {
+        if !self.linked.stores.is_empty() {
+            return Err(TokenError::InvalidInput("crate siblings already linked"));
+        }
+        self.budget.charge(Counter::Work, stores.len() as u64)?;
+        let _lease = self.budget.reserve(
+            Storage::Retained,
+            (stores.len() * size_of::<(SessionId, usize)>()) as u64,
+        )?;
+        let mut linked = Vec::new();
+        linked
+            .try_reserve_exact(stores.len())
+            .map_err(|_| self.budget.poison_allocation())?;
+        for store in stores {
+            let owner = store.session().id;
+            if owner == self.id {
+                return Err(TokenError::InvalidInput("a store cannot link itself"));
+            }
+            linked.push((owner, store));
+        }
+        linked.sort_unstable_by_key(|(owner, _)| owner.0);
+        if linked.windows(2).any(|pair| pair[0].0 == pair[1].0) {
+            return Err(TokenError::InvalidInput("duplicate linked file owner"));
+        }
+        self.linked = LinkedStores {
+            stores: linked.into(),
+            _lease: Some(_lease),
+        };
+        Ok(())
+    }
     fn index(&self, index: usize) -> Result<u32, TokenError> {
         Ok(self.budget.checked_u32(index as u64)?)
     }
@@ -824,6 +898,9 @@ impl TokenSession {
         SyntaxContextId::ROOT
     }
     pub fn symbol(&self, id: SymbolId) -> Result<&str, TokenError> {
+        if id.session != self.id {
+            return self.serving(id.session)?.symbol(id);
+        }
         self.check_owner(id.session)?;
         self.symbols
             .as_slice()
@@ -833,6 +910,9 @@ impl TokenSession {
     }
     /// Content fingerprint of an interned symbol, equal across sessions.
     pub fn fingerprint(&self, id: SymbolId) -> Result<AtomFingerprint, TokenError> {
+        if id.session != self.id {
+            return self.serving(id.session)?.fingerprint(id);
+        }
         self.check_owner(id.session)?;
         self.symbols
             .as_slice()
@@ -846,13 +926,13 @@ impl TokenSession {
         self.budget.check()?;
         let count = self.symbol_slots.len();
         if count == 0 {
-            return Err(TokenError::ForeignHandle);
+            return self.linked_fingerprint_text(fingerprint);
         }
         let mut slot = fingerprint.table_hash() as usize & (count - 1);
         loop {
             self.budget.charge(Counter::Work, 1)?;
             let Some(index) = self.symbol_slots.as_slice()[slot] else {
-                return Err(TokenError::ForeignHandle);
+                return self.linked_fingerprint_text(fingerprint);
             };
             let entry = &self.symbols.as_slice()[index as usize];
             if entry.fingerprint == fingerprint {
@@ -860,6 +940,17 @@ impl TokenSession {
             }
             slot = (slot + 1) & (count - 1);
         }
+    }
+    /// An atom interned by a linked sibling file, in owner order. Atoms are
+    /// content fingerprints, so any sibling that interned it has the text.
+    fn linked_fingerprint_text(&self, fingerprint: AtomFingerprint) -> Result<&str, TokenError> {
+        for (_, store) in self.linked.stores.iter() {
+            self.budget.charge(Counter::Work, 1)?;
+            if let Ok(text) = store.session().fingerprint_text(fingerprint) {
+                return Ok(text);
+            }
+        }
+        Err(TokenError::ForeignHandle)
     }
     /// Exact byte interning keyed by the content fingerprint. Distinct
     /// spellings sharing a fingerprint are rejected, never aliased.
@@ -994,6 +1085,9 @@ impl TokenSession {
         })
     }
     pub fn span(&self, id: SpanId) -> Result<&SpanData, TokenError> {
+        if id.session != self.id {
+            return self.serving(id.session)?.span(id);
+        }
         self.check_owner(id.session)?;
         self.spans
             .as_slice()
@@ -1076,6 +1170,9 @@ impl TokenSession {
             self.budget.check()?;
             return Ok(&ContextData::Root);
         }
+        if id.session != self.id {
+            return self.serving(id.session)?.context(id);
+        }
         self.check_owner(id.session)?;
         self.contexts
             .as_slice()
@@ -1131,6 +1228,9 @@ impl TokenSession {
         })
     }
     pub fn crate_root(&self, id: CrateId) -> Result<SourceFileHandle, TokenError> {
+        if id.session != self.id {
+            return self.serving(id.session)?.crate_root(id);
+        }
         self.check_owner(id.session)?;
         self.crates
             .as_slice()
@@ -1139,6 +1239,9 @@ impl TokenSession {
             .ok_or(TokenError::InvalidHandle)
     }
     pub fn expansion(&self, id: ExpansionId) -> Result<&ExpansionRecord, TokenError> {
+        if id.session != self.id {
+            return self.serving(id.session)?.expansion(id);
+        }
         self.check_owner(id.session)?;
         self.expansions
             .as_slice()
