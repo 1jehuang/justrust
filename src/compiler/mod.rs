@@ -236,6 +236,8 @@ const LOCAL_OPT: u32 = 131;
 const SUMMARY: u32 = 132;
 const IPO_OPT: u32 = 133;
 const NOMINAL_DECL_WELL_FORMED: u32 = 138;
+/// Per-callable immutable generic signature (keyed by callable index).
+const SIGNATURE: u32 = 143;
 /// Per-module item inventory (keyed by inventory ordinal): the callables,
 /// constants, nominals and associated constants that module owns.
 const ITEM_INVENTORY: u32 = 141;
@@ -873,6 +875,19 @@ impl Provider for CompilerProvider {
                     )
                     .map_err(Error::new)?;
                     cx.publish_fact(0, context)
+                }
+                SIGNATURE => {
+                    let index = item_index(&key, "missing signature callable")?;
+                    let types = facts.types().await?;
+                    let declaration = types.callable_decl(index).map_err(Error::new)?;
+                    let signature = types.signature(declaration).map_err(Error::new)?;
+                    cx.publish_fact(
+                        0,
+                        SignatureFact {
+                            declaration,
+                            signature,
+                        },
+                    )
                 }
                 BODY_LEXICAL => {
                     let index = item_index(&key, "missing lexical owner declaration")?;
@@ -2356,6 +2371,13 @@ fn closure_body_key(
     };
     keys::params(kind, index as u64, vec![mode])
 }
+/// One callable's immutable generic signature.
+#[derive(Debug)]
+pub(crate) struct SignatureFact {
+    pub declaration: ir::DeclId,
+    pub signature: ir::GenericSignature,
+}
+impl crate::engine::Fact for SignatureFact {}
 fn item_index(key: &Key, missing: &str) -> Result<usize, Error> {
     let [index] = key.params.as_slice() else {
         return Err(Error::new(missing));

@@ -630,6 +630,7 @@ fn kind_name(kind: u32) -> String {
         132 => "summary",
         133 => "ipo_opt",
         141 => "item_inventory",
+        143 => "signature",
         _ => return format!("kind{kind}"),
     }
     .to_string()
