@@ -432,13 +432,13 @@ fn main() { if run() == 7 { println!("array oracle ok"); } }
 }
 
 #[test]
-fn rejects_legal_unsupported_array_len_method() {
-    // Stock accepts and runs this fixture, outside this bounded native slice.
-    rejects(
-        "array_len_method",
+fn accepts_array_len_method() {
+    // Stock accepts and prints "array oracle ok"; now native via slice len.
+    runs(
         r#"fn run()->i32{let a=[3,7];if a.len()==2{7}else{0}}
 fn main() { if run() == 7 { println!("array oracle ok"); } }
 "#,
+        "array oracle ok\n",
     );
 }
 
@@ -454,13 +454,13 @@ fn main() { run(); }
 }
 
 #[test]
-fn rejects_legal_unsupported_later_inferred_empty_literal() {
-    // Stock accepts and runs this fixture, outside this bounded native slice.
-    rejects(
-        "later_inferred_empty_literal",
+fn accepts_later_inferred_empty_literal() {
+    // Stock accepts and prints "array oracle ok"; now native.
+    runs(
         r#"fn take(a:[i32;0])->i32{7} fn run()->i32{let a=[];take(a)}
 fn main() { if run() == 7 { println!("array oracle ok"); } }
 "#,
+        "array oracle ok\n",
     );
 }
 
