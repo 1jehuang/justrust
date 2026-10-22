@@ -17,6 +17,14 @@ pub trait Iterator: Sized {
         Cloned { iterator: self }
     }
 
+    fn map<B, F: FnMut(Self::Item) -> B>(self, f: F) -> Map<Self, F> {
+        Map { iterator: self, f }
+    }
+
+    fn filter<P: FnMut(&Self::Item) -> bool>(self, predicate: P) -> Filter<Self, P> {
+        Filter { iterator: self, predicate }
+    }
+
     fn any<F: FnMut(Self::Item) -> bool>(&mut self, mut f: F) -> bool {
         loop {
             match self.next() {
@@ -138,6 +146,44 @@ impl<'a, T: Clone, I: Iterator<Item = &'a T>> Iterator for Cloned<I> {
         match self.iterator.next() {
             Option::Some(item) => Option::Some(item.clone()),
             Option::None => Option::None,
+        }
+    }
+}
+
+pub struct Map<I, F> {
+    iterator: I,
+    f: F,
+}
+
+impl<A, B, I: Iterator<Item = A>, F: FnMut(A) -> B> Iterator for Map<I, F> {
+    type Item = B;
+
+    fn next(&mut self) -> Option<B> {
+        match self.iterator.next() {
+            Option::Some(item) => Option::Some((self.f)(item)),
+            Option::None => Option::None,
+        }
+    }
+}
+
+pub struct Filter<I, P> {
+    iterator: I,
+    predicate: P,
+}
+
+impl<A, I: Iterator<Item = A>, P: FnMut(&A) -> bool> Iterator for Filter<I, P> {
+    type Item = A;
+
+    fn next(&mut self) -> Option<A> {
+        loop {
+            match self.iterator.next() {
+                Option::Some(item) => {
+                    if (self.predicate)(&item) {
+                        return Option::Some(item);
+                    }
+                }
+                Option::None => return Option::None,
+            }
         }
     }
 }

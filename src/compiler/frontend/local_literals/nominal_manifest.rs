@@ -367,12 +367,23 @@ fn preparation_status(
             unresolved_constraints: true,
         });
     }
+    // Results of method calls on closure-bearing receivers are typed by the
+    // parent's checked selection, which owns the finalized closure type.
+    // Nominals waiting only on those results are left to checked lowering.
+    let mut closure_methods = !solver.methods.is_empty();
+    for method in &solver.methods {
+        if !solver.contains_callable(solver.peel_refs(method.receiver), 0)? {
+            closure_methods = false;
+            break;
+        }
+    }
     for term in 0..solver.variables.len() {
         solver.checker.infer_work(0)?;
         if solver.root(term) == term
             && let Domain::Nominal(_, arguments) = solver.domain(term)
             && !solver.contains_callable(term, 0)?
             && !solver.manifest_ready(&arguments, 1)?
+            && !closure_methods
         {
             return Ok(Preparation::Blocked {
                 nominals: solver.pending_nominals()?,
@@ -382,19 +393,22 @@ fn preparation_status(
             });
         }
     }
-    let manifest = solver.solved_nominal_manifest()?;
+    let manifest = solver.solved_nominal_manifest(closure_methods)?;
     for demand in manifest.demands() {
         if (inputs.nominal_type)(demand)?.is_none() {
             solver.record_missing_nominal(demand.clone())?;
         }
     }
-    let unresolved_constraints = !solver.methods.is_empty()
-        || !solver.operators.is_empty()
-        || !solver.projections.is_empty()
-        || !solver.iterator_items.is_empty()
-        || !solver.associated_equalities.is_empty()
-        || !solver.coercions.is_empty()
-        || !solver.patterns.is_empty();
+    // With closure-receiver calls deferred, constraints that read their
+    // results are also typed (and diagnosed) by checked lowering.
+    let unresolved_constraints = !closure_methods
+        && (!solver.methods.is_empty()
+            || !solver.operators.is_empty()
+            || !solver.projections.is_empty()
+            || !solver.iterator_items.is_empty()
+            || !solver.associated_equalities.is_empty()
+            || !solver.coercions.is_empty()
+            || !solver.patterns.is_empty());
     let missing = solver.pending_nominals()?;
     if !missing.is_empty() || unresolved_constraints {
         Ok(Preparation::Blocked {
@@ -747,7 +761,7 @@ impl<'s> Solver<'_, '_, 's> {
     /// Never call `resolve`, `intern_nominal`, or inspect nominal field layouts.
     /// Source-region authority is retained by the owning source/caller facts,
     /// not reconstructed from these erased type shapes.
-    pub(super) fn solved_nominal_manifest(&self) -> Result<Manifest, String> {
+    pub(super) fn solved_nominal_manifest(&self, skip_unready: bool) -> Result<Manifest, String> {
         let mut demands: Vec<Demand> = Vec::new();
         for term in 0..self.variables.len() {
             self.checker.infer_work(0)?;
@@ -759,7 +773,9 @@ impl<'s> Solver<'_, '_, 's> {
             };
             // Closure-bearing applications are realized parent-locally from the
             // parent's own finalized ClosureTy, never through a graph demand.
-            if self.contains_callable(term, 0)? {
+            if self.contains_callable(term, 0)?
+                || (skip_unready && !self.manifest_ready(&arguments, 1)?)
+            {
                 continue;
             }
             let arguments = self.manifest_children(&arguments, 1)?;

@@ -81,6 +81,46 @@ impl Checker<'_> {
             let evidence = self.inference_evidence(argument, 0)?;
             solver.constrain(&formal, &evidence, 0)?;
         }
+        // `F: FnMut(Self::Item) -> B`: once the closure argument and the
+        // owner's Self are known, the normalized `Output` is evidence for B.
+        for predicate in schema.predicates.iter() {
+            if let ir::Predicate::ProjectionEq { projection, ty } = predicate
+                && !matches!(ty, ir::Ty::AssociatedType(_))
+                && inferred_owner::mentions_param(ty)
+            {
+                let projection = bind_owner(
+                    &ir::Ty::AssociatedType(Arc::new(projection.clone())),
+                    &bindings,
+                );
+                solver.constrain_projection_equality(&projection, ty, true)?;
+            }
+        }
         solver.finish(true)
+    }
+}
+
+/// Replace enclosing trait-owner parameters (Self and trait arguments) with
+/// the selected application's actuals. Method-own parameters stay slots.
+fn bind_owner(ty: &ir::Ty, bindings: &HashMap<ir::ParamId, ir::Ty>) -> ir::Ty {
+    let child = |t: &ir::Ty| Arc::new(bind_owner(t, bindings));
+    match ty {
+        ir::Ty::Param(p) => bindings.get(p).cloned().unwrap_or_else(|| ty.clone()),
+        ir::Ty::Ref { kind, referent } => ir::Ty::Ref {
+            kind: *kind,
+            referent: child(referent),
+        },
+        ir::Ty::Tuple(ts) => ir::Ty::Tuple(ts.iter().map(|t| bind_owner(t, bindings)).collect()),
+        ir::Ty::AssociatedType(p) => {
+            let mut p = p.as_ref().clone();
+            p.trait_ref.self_ty = bind_owner(&p.trait_ref.self_ty, bindings);
+            p.trait_ref.args = p
+                .trait_ref
+                .args
+                .iter()
+                .map(|t| bind_owner(t, bindings))
+                .collect();
+            ir::Ty::AssociatedType(Arc::new(p))
+        }
+        other => other.clone(),
     }
 }

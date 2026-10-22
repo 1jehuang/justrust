@@ -23,7 +23,7 @@ fn nominal_recipe_selectors_reject_non_fields_and_out_of_range_fields() {
     let nominal_type = |_: &Demand| Ok(None);
     let inputs = Inputs::new(&declaration_schema, &primitive_source, &nominal_type);
     let mut solver = solve_body(&checker, &function.body, None, Some(&inputs)).unwrap();
-    let manifest = solver.solved_nominal_manifest().unwrap();
+    let manifest = solver.solved_nominal_manifest(false).unwrap();
     let declaration = manifest.demands()[0].declaration;
     let actual = solver.fixed(ir::Ty::Int(ir::IntTy::U8)).unwrap();
     for selector in [FieldSelector::ConstantIndex(0), FieldSelector::Deref] {

@@ -102,3 +102,48 @@ fn main() {
         ],
     );
 }
+
+/// `Iterator::map` source adapter: a closure-bearing `Map<I, F>` realized by
+/// the parent body, consumed by `fold` and by direct `next()`.
+#[test]
+fn iterator_map_matches_stock() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "iterator-map",
+        &[
+            Case {
+                name: "map_then_fold",
+                source: r#"
+fn main() {
+    let v: Vec<i32> = vec![1, 2, 3];
+    let s = v.iter().map(|x: &i32| *x * 2).fold(0i32, |a: i32, b: i32| a + b);
+    println!("{}", s);
+}
+"#,
+                expect: Expect::Run("12\n"),
+            },
+            Case {
+                name: "map_changes_item_type_with_capture",
+                source: r#"
+fn main() {
+    let v: Vec<u8> = vec![3, 4, 5];
+    let k = 10u64;
+    let m = v.iter().map(|x: &u8| *x as u64 * k);
+    println!("{}", m.fold(0u64, |a: u64, b: u64| a + b));
+}
+"#,
+                expect: Expect::Run("120\n"),
+            },
+            Case {
+                name: "map_result_mismatch_rejected",
+                source: r#"
+fn main() {
+    let v: Vec<i32> = vec![1, 2, 3];
+    let s: bool = v.iter().map(|x: &i32| *x * 2).fold(0i32, |a: i32, b: i32| a + b);
+}
+"#,
+                expect: Expect::Invalid("E0308"),
+            },
+        ],
+    );
+}
