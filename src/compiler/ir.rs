@@ -5116,6 +5116,24 @@ pub struct DynTy {
     pub associated_types: Arc<[(DeclId, Ty)]>,
 }
 impl DynTy {
+    /// Rigid closed object: actuals and associated assignments are built only
+    /// from primitive types and references/tuples/arrays/slices of them, so no
+    /// parameter, projection or inference can hide inside a recipe leaf.
+    pub fn is_closed_leaf(&self) -> bool {
+        fn closed(ty: &Ty, depth: usize) -> bool {
+            if depth > 32 {
+                return false;
+            }
+            match ty {
+                Ty::Unit | Ty::Bool | Ty::Char | Ty::Str | Ty::Int(_) | Ty::Float(_) => true,
+                Ty::Ref { referent, .. } => closed(referent, depth + 1),
+                Ty::Array { element, .. } | Ty::Slice { element } => closed(element, depth + 1),
+                Ty::Tuple(values) => values.iter().all(|v| closed(v, depth + 1)),
+                _ => false,
+            }
+        }
+        self.types().all(|ty| closed(ty, 0))
+    }
     pub fn types(&self) -> impl Iterator<Item = &Ty> {
         self.args
             .iter()

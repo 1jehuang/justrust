@@ -32,6 +32,8 @@ pub(super) enum Term {
     Array(Box<Term>, usize),
     Slice(Box<Term>),
     Nominal(ir::DeclId, Vec<Term>),
+    /// Closed trait object: principal, ordered actuals, ordered assignments.
+    Dyn(ir::DeclId, Vec<Term>, Vec<(ir::DeclId, Term)>),
 }
 impl Term {
     pub(super) fn contains_nominal(&self) -> bool {
@@ -97,9 +99,20 @@ impl Term {
                     "unsupported: opaque nominal realization coordinate",
                 ));
             }
+            ir::Ty::Dyn(object) if object.is_closed_leaf() => {
+                let mut assigned = Vec::new();
+                for (item, ty) in object.associated_types.iter() {
+                    assigned.push((*item, Self::from_ty(ty, b, depth + 1)?));
+                }
+                Self::Dyn(
+                    object.principal,
+                    Self::from_types(&object.args, b, depth + 1)?,
+                    assigned,
+                )
+            }
             ir::Ty::Dyn(_) => {
                 return Err(Error::new(
-                    "unsupported: dynamic nominal realization coordinate",
+                    "unsupported: generic dynamic nominal realization coordinate",
                 ));
             }
         })
@@ -183,6 +196,22 @@ impl Term {
                     ts.len() as u64,
                 ]);
                 for t in ts {
+                    t.write(out, b, d + 1)?;
+                }
+            }
+            Self::Dyn(id, args, assigned) => {
+                out.extend([
+                    14,
+                    id.snapshot.graph_word(),
+                    u64::from(id.index),
+                    args.len() as u64,
+                ]);
+                for t in args {
+                    t.write(out, b, d + 1)?;
+                }
+                out.push(assigned.len() as u64);
+                for (item, t) in assigned {
+                    out.extend([item.snapshot.graph_word(), u64::from(item.index)]);
                     t.write(out, b, d + 1)?;
                 }
             }
@@ -287,6 +316,30 @@ impl Reader<'_> {
                 let index = u32::try_from(self.word()?)
                     .map_err(|_| Error::new("nominal declaration index overflow"))?;
                 Term::Nominal(ir::DeclId { snapshot, index }, self.terms(d + 1)?)
+            }
+            14 => {
+                let snapshot = ir::SnapshotId::from_graph_word(self.word()?);
+                let index = u32::try_from(self.word()?)
+                    .map_err(|_| Error::new("dynamic principal index overflow"))?;
+                let args = self.terms(d + 1)?;
+                let count = self.size()?;
+                if count > self.words.len().saturating_sub(self.at) {
+                    return Err(Error::new("dynamic coordinate arity exceeds input"));
+                }
+                let mut assigned = Vec::new();
+                for _ in 0..count {
+                    let snapshot = ir::SnapshotId::from_graph_word(self.word()?);
+                    let item = u32::try_from(self.word()?)
+                        .map_err(|_| Error::new("dynamic item index overflow"))?;
+                    assigned.push((
+                        ir::DeclId {
+                            snapshot,
+                            index: item,
+                        },
+                        self.term(d + 1)?,
+                    ));
+                }
+                Term::Dyn(ir::DeclId { snapshot, index }, args, assigned)
             }
             _ => return Err(Error::new("unknown nominal type coordinate tag")),
         })

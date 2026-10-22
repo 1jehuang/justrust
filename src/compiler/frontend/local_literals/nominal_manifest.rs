@@ -98,7 +98,8 @@ fn primitive_leaf(ty: &ir::Ty) -> bool {
             | ir::Ty::Int(_)
             | ir::Ty::Float(_)
             | ir::Ty::Param(_)
-    )
+    ) || matches!(ty, ir::Ty::Dyn(object)
+        if object.is_closed_leaf())
 }
 
 fn same_children(
@@ -656,7 +657,7 @@ impl<'s> Solver<'_, '_, 's> {
                 | ir::Ty::Param(_) => Domain::Fixed(ty.clone()),
                 // Closed nongeneric object principal (nominal_source_shapes).
                 ir::Ty::Dyn(object)
-                    if object.args.is_empty() && object.associated_types.is_empty() =>
+                    if object.is_closed_leaf() =>
                 {
                     Domain::Fixed(ty.clone())
                 }
@@ -829,6 +830,13 @@ impl<'s> Solver<'_, '_, 's> {
                 | ir::Ty::Int(_)
                 | ir::Ty::Float(_)
                 | ir::Ty::Param(_) => Shape::Leaf(ty),
+                // Closed nongeneric object principal: a rigid leaf with no
+                // inference-bearing children (nominal_source_shapes).
+                ir::Ty::Dyn(ref object)
+                    if object.is_closed_leaf() =>
+                {
+                    Shape::Leaf(ty)
+                }
                 _ => {
                     return Err(
                         "unsupported: compound fixed type needs an explicit manifest recipe".into(),

@@ -310,7 +310,7 @@ fn type_shape(checker: &Checker<'_>, ty: &ir::Ty, depth: usize) -> Result<Nomina
             receiver: Arc::new(type_shape(checker, &p.trait_ref.self_ty, depth + 1)?),
             arguments: children(&p.trait_ref.args)?,
         },
-        ir::Ty::Dyn(object) if object.args.is_empty() && object.associated_types.is_empty() => NominalShape::Leaf(ty.clone()),
+        ir::Ty::Dyn(object) if object.is_closed_leaf() => NominalShape::Leaf(ty.clone()),
         ir::Ty::Closure(_) | ir::Ty::Dyn(_) => return Err("unsupported: nominal ingress requires independently authenticated closure or dynamic metadata".into()),
         leaf => NominalShape::Leaf(leaf.clone()),
     })
@@ -334,7 +334,7 @@ fn recipe_type(
             | ir::Ty::Int(_)
             | ir::Ty::Float(_)
             | ir::Ty::Param(_) => ty.clone(),
-            ir::Ty::Dyn(object) if object.args.is_empty() && object.associated_types.is_empty() => {
+            ir::Ty::Dyn(object) if object.is_closed_leaf() => {
                 ty.clone()
             }
             _ => return Err("invalid metadata: non-leaf nominal ingress recipe".into()),

@@ -272,6 +272,28 @@ fn resolve<'a>(
                 .await?
                 .into(),
             ),
+            // Decoding grants no trait authority: the realized definition is
+            // still validated (metadata, dyn compatibility) by its consumers.
+            Term::Dyn(principal, args, assigned) => {
+                let args = all(args
+                    .into_iter()
+                    .map(|t| resolve(cx, t, world, b, depth + 1))
+                    .collect())
+                .await?;
+                let mut associated_types = Vec::new();
+                for (item, t) in assigned {
+                    associated_types.push((item, resolve(cx, t, world, b, depth + 1).await?));
+                }
+                let object = ir::DynTy {
+                    principal,
+                    args: args.into(),
+                    associated_types: associated_types.into(),
+                };
+                if !object.is_closed_leaf() {
+                    return Err(Error::new("invalid dynamic nominal coordinate"));
+                }
+                ir::Ty::Dyn(Arc::new(object))
+            }
             Term::Nominal(declaration, args) => {
                 let key = key(world, declaration, &args, b)?;
                 let mut read = read_manifest(cx, &[key]).await?;
