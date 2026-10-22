@@ -135,13 +135,34 @@ pub struct ParamId {
 pub struct ParamEnv {
     binder: BinderId,
     arity: usize,
+    /// Parameters declared `?Sized` at this binder (bit per index). Immutable
+    /// declaration metadata: the implicit `Sized` row is omitted only here.
+    relaxed_sized: u32,
 }
 impl ParamEnv {
     pub(super) fn new(binder: BinderId, arity: usize) -> Result<Self, String> {
+        Self::with_relaxed_sized(binder, arity, 0)
+    }
+    pub(super) fn with_relaxed_sized(
+        binder: BinderId,
+        arity: usize,
+        relaxed_sized: u32,
+    ) -> Result<Self, String> {
         if arity > 32 {
             return Err("generic parameter limit exceeded".into());
         }
-        Ok(Self { binder, arity })
+        if arity < 32 && relaxed_sized >> arity != 0 {
+            return Err("relaxed Sized parameter outside its binder".into());
+        }
+        Ok(Self {
+            binder,
+            arity,
+            relaxed_sized,
+        })
+    }
+    /// Whether `param` was declared `?Sized` by this binder.
+    pub fn relaxed_sized(&self, param: ParamId) -> bool {
+        self.contains(param) && self.relaxed_sized & (1u32 << param.index) != 0
     }
     pub fn binder(&self) -> BinderId {
         self.binder
@@ -188,6 +209,10 @@ impl GenericEnv {
     }
     pub fn scopes(&self) -> &[Arc<ParamEnv>] {
         &self.scopes
+    }
+    /// Whether `param` is declared `?Sized` by its owning binder in this env.
+    pub fn relaxed_sized(&self, param: ParamId) -> bool {
+        self.scopes.iter().any(|scope| scope.relaxed_sized(param))
     }
     pub fn contains(&self, param: ParamId) -> bool {
         self.scopes.iter().any(|scope| scope.contains(param))
@@ -2658,6 +2683,9 @@ pub fn validate_root_reference_actual(ty: &Ty, budget: &PlanBudget) -> Result<()
     // `reject_references`. Bare `str`/`[T]` actuals stay rejected.
     match inner {
         Ty::Str | Ty::Dyn(_) if depth > 0 => Ok(()),
+        // A bare `str` actual is admitted only by shape here. Its implicit
+        // `Sized` obligation is proven (and rejected) unless the binder is `?Sized`.
+        Ty::Str => Ok(()),
         Ty::Slice { element } if depth > 0 => reject_references(element, budget),
         _ => reject_references(inner, budget),
     }

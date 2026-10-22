@@ -620,6 +620,13 @@ cleanup failures.
 
 ### G4. Traits, generics, methods and suspended computations
 
+- [x] `?Sized` type parameters: binders record relaxed parameters and omit only
+      their implicit `Sized` row; `T := str` is admitted only there (E0277
+      otherwise, including inferred actuals). Native instances of `&T`/`&&T`
+      with `T := str` keep the two-word (data, len) carrier through loads,
+      `&**r` reborrows, calls and returns. Stock CHECK/BUILD/run at workers 1/8
+      in `reference_self_generic_methods`/`where_clauses`. Open: `[T]`/`dyn`
+      actuals, `str::as_bytes`.
 - [x] Closure bodies inside graph-realized nominal callables share the parent's
       nominal inputs and propagate suspension; nominal operator/trait calls in a
       closure body (`fold(V{..}, |acc, &p| acc + p)`) use the validated mapped

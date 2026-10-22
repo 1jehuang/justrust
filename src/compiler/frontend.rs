@@ -17649,6 +17649,7 @@ impl PlanCtx {
                           module: ModuleId,
                           item: DeclItemName,
                           params: &[AstIdent],
+                          bounds: &[TypeBound],
                           kind: ir::DeclKind,
                           source_index: usize|
          -> Result<ir::DeclId, String> {
@@ -17707,7 +17708,34 @@ impl PlanCtx {
             if arity > budget.limits().params {
                 return Err("generic parameter resource limit exceeded".into());
             }
-            let param_env = Arc::new(ir::ParamEnv::new(ir::BinderId { declaration: id }, arity)?);
+            // `?Sized` on a parameter of this binder removes its implicit
+            // `Sized` row everywhere the environment is rebuilt.
+            let first = usize::from(kind == ir::DeclKind::Trait);
+            let mut relaxed = 0u32;
+            for bound in bounds.iter().filter(|bound| bound.maybe_unsized) {
+                budget.charge_work(params.len())?;
+                let Type::Param(subject) = &bound.subject else {
+                    continue;
+                };
+                let subject = program
+                    .names
+                    .key(*subject, LookupClass::TypeParameter)
+                    .map_err(native_adapter::name_diagnostic)?;
+                for (index, parameter) in params.iter().enumerate() {
+                    let key = program
+                        .names
+                        .key(*parameter, LookupClass::TypeParameter)
+                        .map_err(native_adapter::name_diagnostic)?;
+                    if key == subject {
+                        relaxed |= 1u32 << (index + first);
+                    }
+                }
+            }
+            let param_env = Arc::new(ir::ParamEnv::with_relaxed_sized(
+                ir::BinderId { declaration: id },
+                arity,
+                relaxed,
+            )?);
             if matches!(
                 kind,
                 ir::DeclKind::Function
@@ -17776,6 +17804,7 @@ impl PlanCtx {
                 d.module,
                 DeclItemName::Source(item),
                 &d.type_params,
+                &d.bounds,
                 ir::DeclKind::Struct,
                 index,
             )?;
@@ -17795,6 +17824,7 @@ impl PlanCtx {
                 d.module,
                 DeclItemName::Source(item),
                 &d.type_params,
+                &d.bounds,
                 ir::DeclKind::Enum,
                 index,
             )?;
@@ -17816,6 +17846,7 @@ impl PlanCtx {
                 f.module,
                 DeclItemName::Source(item),
                 &f.type_params,
+                &f.bounds,
                 ir::DeclKind::Function,
                 index,
             )?;
@@ -17849,6 +17880,7 @@ impl PlanCtx {
                 declaration.module,
                 DeclItemName::Source(item),
                 &declaration.type_params,
+                &declaration.bounds,
                 ir::DeclKind::Trait,
                 index,
             )?;
@@ -17873,6 +17905,7 @@ impl PlanCtx {
                     declaration.module,
                     DeclItemName::Source(method.signature.name),
                     &method.signature.type_params,
+                    &method.signature.bounds,
                     ir::DeclKind::TraitItem,
                     item,
                 )?);
@@ -17882,6 +17915,7 @@ impl PlanCtx {
                         declaration.module,
                         DeclItemName::Source(method.signature.name),
                         &method.signature.type_params,
+                        &method.signature.bounds,
                         ir::DeclKind::AssociatedFunction,
                         item,
                     )?;
@@ -17933,6 +17967,7 @@ impl PlanCtx {
                     declaration.module,
                     DeclItemName::Source(associated.name),
                     &[],
+                    &[],
                     ir::DeclKind::AssociatedType,
                     item,
                 )?);
@@ -17943,6 +17978,7 @@ impl PlanCtx {
                     None,
                     declaration.module,
                     DeclItemName::Source(constant.name),
+                    &[],
                     &[],
                     ir::DeclKind::AssociatedConst,
                     item,
@@ -17963,6 +17999,7 @@ impl PlanCtx {
                 block.module,
                 DeclItemName::Impl,
                 &block.type_params,
+                &block.bounds,
                 kind,
                 implementation,
             )?;
@@ -17979,6 +18016,7 @@ impl PlanCtx {
                     block.module,
                     DeclItemName::Source(name),
                     &method.function.type_params,
+                    &method.function.bounds,
                     ir::DeclKind::AssociatedFunction,
                     item,
                 )?;
@@ -18001,6 +18039,7 @@ impl PlanCtx {
                     block.module,
                     DeclItemName::Source(constant.name),
                     &[],
+                    &[],
                     ir::DeclKind::AssociatedConst,
                     item,
                 )?);
@@ -18018,6 +18057,7 @@ impl PlanCtx {
                 Some(&declaration.name),
                 declaration.module,
                 DeclItemName::Source(item),
+                &[],
                 &[],
                 ir::DeclKind::Const,
                 index,
@@ -21299,6 +21339,12 @@ fn append_implicit_sized(
         let first = usize::from(declaration.kind == ir::DeclKind::Trait);
         for index in first..scope.arity() {
             budget.charge_work(1)?;
+            if scope.relaxed_sized(ir::ParamId {
+                owner: scope.binder(),
+                index: index as u16,
+            }) {
+                continue;
+            }
             if rows.len() >= 256 {
                 return Err("predicate limit exceeded".into());
             }

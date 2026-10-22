@@ -390,12 +390,12 @@ fn main(){if run()==3{println!("where oracle ok");}}
 }
 
 #[test]
-fn boundary_relaxed_sized_where() {
-    rejects(
-        "relaxed_sized_where",
+fn accepts_relaxed_sized_where() {
+    runs(
         r###"struct S{x:i32}struct W<A>{x:A}trait T{fn v(self)->i32;}trait U{fn u(self)->i32;}impl T for S{fn v(self)->i32{self.x}}impl U for S{fn u(self)->i32{self.x*10}}fn g<X>()->i32 where X:?Sized{3}fn run()->i32{g::<S>()}
 fn main(){if run()==3{println!("where oracle ok");}}
 "###,
+        "where oracle ok\n",
     );
 }
 

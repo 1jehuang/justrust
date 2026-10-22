@@ -53,23 +53,65 @@ impl type_check::Checker<'_> {
             NominalSchema::Struct(d) => (&d.type_params, &d.bounds),
             NominalSchema::Enum(d) => (&d.type_params, &d.bounds),
         };
+        // Implicit `Sized` on every parameter not declared `?Sized`. Concrete
+        // unsized actuals are never Sized; rigid parameters must be proven.
+        let plan = self.signatures.plan()?;
+        let facts = self
+            .signatures
+            .facts
+            .as_deref()
+            .ok_or("nominal bounds require validated facts")?;
+        let binder = plan.declaration(source_decl)?.param_env.clone();
+        let sized = *plan
+            .registry
+            .traits
+            .get(&TraitLookupKey::Builtin(BuiltinTrait::Sized))
+            .ok_or("missing canonical Sized identity")?;
+        for (index, actual) in args.iter().enumerate() {
+            plan.budget.charge_work(1)?;
+            let parameter = ir::ParamId {
+                owner: binder.binder(),
+                index: u16::try_from(index).map_err(|_| "nominal arity overflow")?,
+            };
+            if binder.relaxed_sized(parameter)
+                || !matches!(
+                    actual,
+                    ir::Ty::Param(_) | ir::Ty::Str | ir::Ty::Slice { .. } | ir::Ty::Dyn(_)
+                )
+            {
+                continue;
+            }
+            let goal = ir::Predicate::Implements(ir::TraitRef {
+                declaration: sized,
+                self_ty: actual.clone(),
+                args: Arc::from([]),
+            });
+            let proved = matches!(actual, ir::Ty::Param(_))
+                && matches!(
+                    facts
+                        .service()
+                        .prove_goal(&goal, facts)
+                        .map_err(|e| e.into_legacy_diagnostic(facts.budget()))?,
+                    super::super::traits::ProofOutcome::Proved(_)
+                );
+            if !proved {
+                return Err(format!(
+                    "E0277: the size for values of type `{actual:?}` cannot be known at compilation time (required by {})",
+                    plan.declaration(source_decl)?.name,
+                ));
+            }
+        }
         if bounds.is_empty() {
             return Ok(());
         }
         if params.len() != args.len() {
             return Err("contract: nominal bound arity mismatch".into());
         }
-        let plan = self.signatures.plan()?;
         let mut env = self.signatures.clone();
         for (param, actual) in params.iter().zip(args.iter()) {
             env.params
                 .insert(plan.registry.parameter_key(*param)?, actual.clone());
         }
-        let facts = self
-            .signatures
-            .facts
-            .as_deref()
-            .ok_or("nominal bounds require validated facts")?;
         for bound in bounds {
             let mut inspect = |node: &DepthNode<'_>, _| {
                 if matches!(node, DepthNode::Type(Type::Projection(_))) {

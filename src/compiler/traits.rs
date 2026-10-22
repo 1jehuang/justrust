@@ -2132,6 +2132,12 @@ impl ValidatedTraitWorld {
         .map(|_| ())
     }
     fn validate_actual(&self, ty: &Ty, env: &GenericEnv) -> Result<()> {
+        // A bare `str` root actual is well-formed metadata. The binder's
+        // implicit `Sized` row rejects it unless the parameter is `?Sized`.
+        if matches!(ty, Ty::Str) {
+            charged(&self.budget, self.budget.charge_work(1))?;
+            return Ok(());
+        }
         self.validate_ty_inner(ty, env, 0, TypeUse::Actual, &mut TypeWalk::default())
             .map(|_| ())
     }
@@ -3561,7 +3567,9 @@ impl ValidatedTraitWorld {
     }
     fn implicit_sized(&self, env: &GenericEnv, predicates: &mut Vec<Predicate>) -> Result<()> {
         for p in env.ordered_params() {
-            if self.info(p.owner.declaration)?.kind == DeclKind::Trait && p.index == 0 {
+            if (self.info(p.owner.declaration)?.kind == DeclKind::Trait && p.index == 0)
+                || env.relaxed_sized(p)
+            {
                 continue;
             }
             self.append_predicate(
@@ -6644,14 +6652,18 @@ impl ValidatedTraitWorld {
             {
                 continue;
             }
-            // Generic impl parameters are instantiated only with sized
-            // actuals (unsized generic instantiation is not supported). An
-            // implicitly-Sized parameter cannot bind `str`/`[T]`/`dyn` anyway,
-            // so such a candidate does not apply rather than erroring.
+            // Generic impl parameters bind unsized actuals only when declared
+            // `?Sized`, and only `str` among unsized actuals so far. An
+            // implicitly-Sized parameter cannot bind `str`/`[T]`/`dyn`, so
+            // such a candidate does not apply rather than erroring.
             if slots
                 .iter()
-                .flatten()
-                .any(|actual| matches!(actual, Ty::Str | Ty::Slice { .. } | Ty::Dyn(_)))
+                .zip(implementation.schema_env.ordered_params())
+                .any(|(actual, parameter)| match actual {
+                    Some(Ty::Str) => !implementation.schema_env.relaxed_sized(parameter),
+                    Some(Ty::Slice { .. } | Ty::Dyn(_)) => true,
+                    _ => false,
+                })
             {
                 continue;
             }

@@ -2624,18 +2624,22 @@ impl Emitter<'_> {
                     .loan_sites
                     .get(loan.0)
                     .ok_or("invalid checked loan site")?;
-                if let [ir::Projection::Deref] = site.place.projection.as_slice()
+                if let Some((ir::Projection::Deref, carrier)) = site.place.projection.split_last()
                     && {
                         let carrier = self.function().place_ty(&ir::Place {
                             local: site.place.local,
-                            projection: Vec::new(),
+                            projection: carrier.to_vec(),
                         })?;
-                        trait_object_ref(carrier).is_some() || carrier.slice_ref_element().is_some()
+                        trait_object_ref(carrier).is_some()
+                            || carrier.slice_ref_element().is_some()
+                            || carrier.is_shared_str()
                     }
                 {
-                    // Whole-object reborrow `&*d` / `&*s`: copy both carrier words.
-                    let local = self.local_offset(site.place.local)?;
-                    self.address(local);
+                    // Whole-object reborrow `&*d` / `&*s` / `&**r` (including
+                    // `&T` instances with `T := str`): the fat carrier's
+                    // address is the place before its final dereference, and
+                    // both words (data, metadata) are copied.
+                    self.place_address_parts(site.place.local, carrier)?;
                     self.copy_slice_to_frame(FAT_LAYOUT, self.aggregate_scratch)?;
                 } else {
                     self.place_address(&site.place)?;
