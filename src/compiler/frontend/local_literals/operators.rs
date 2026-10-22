@@ -118,8 +118,21 @@ impl Solver<'_, '_, '_> {
         };
         if matches!(kind, Kind::Deref) {
             match self.domain(left) {
-                Domain::Unknown => return Ok(false),
+                // A carrier still open in the final round adds no evidence:
+                // before d658dd6e1 this was an unconstrained fresh term.
+                // Checked lowering still types and proves the dereference.
+                Domain::Unknown => return Ok(self.projection_defaults),
                 Domain::Ref(_, element) | Domain::RawPtr(_, element) => {
+                    self.unify(result, element)?;
+                    return Ok(true);
+                }
+                Domain::Fixed(
+                    ir::Ty::Ref { referent, .. }
+                    | ir::Ty::RawPtr {
+                        pointee: referent, ..
+                    },
+                ) => {
+                    let element = self.fixed(referent.as_ref().clone())?;
                     self.unify(result, element)?;
                     return Ok(true);
                 }

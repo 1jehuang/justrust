@@ -1119,8 +1119,16 @@ impl<'s> Solver<'_, '_, 's> {
                         continue;
                     }
                     if method.actuals.is_empty() {
+                        // Stock probing starts at the receiver as written:
+                        // `s.shout()` with `s: &str` selects `impl Tr for &str`
+                        // before peeling to `str`. Use the written type when it
+                        // is known; selection itself autoderefs from there.
+                        let written = match self.resolve(method.receiver, 0)? {
+                            Some(written @ ir::Ty::Ref { .. }) if method.depth == 0 => written,
+                            _ => ty.clone(),
+                        };
                         match plan.select_method(
-                            &ty,
+                            &written,
                             &method.name,
                             &[],
                             self.checker.facts(),
@@ -2225,6 +2233,51 @@ impl<'s> Solver<'_, '_, 's> {
                 self.tries.push((carrier, payload));
                 Ok(payload)
             }
+            // `<T as Trait>::item(args)` with an explicit closed owner and no
+            // turbofish: the selected impl signature's closed result is exact
+            // evidence. Anything open stays unconstrained for checked lowering,
+            // which reselects and proves the same call.
+            Expr::TraitCall {
+                owner,
+                trait_path,
+                name,
+                type_args,
+                args,
+            } if !matches!(owner, Type::Infer) && type_args.is_empty() => {
+                for argument in args {
+                    self.expr(argument, depth + 1)?;
+                }
+                let checker = self.checker;
+                let plan = checker.signatures.plan()?;
+                let Ok(owner) = super::type_check::checked_local_ty(owner, checker.signatures) else {
+                    return self.fresh();
+                };
+                let Ok(trait_ref) = plan.resolve_trait_use(
+                    &owner,
+                    trait_path,
+                    checker.signatures,
+                    checker.facts(),
+                    &plan.budget,
+                ) else {
+                    return self.fresh();
+                };
+                match plan.select_trait(
+                    &trait_ref,
+                    name,
+                    &[],
+                    checker.facts(),
+                    false,
+                    &plan.budget,
+                ) {
+                    Ok(Some((_, signature, _)))
+                        if signature.result.is_closed_shallow()
+                            && !generic_nominal(&signature.result) =>
+                    {
+                        self.fixed(signature.result)
+                    }
+                    _ => self.fresh(),
+                }
+            }
             _ => self.fresh(),
         }
     }
@@ -2386,4 +2439,20 @@ fn diagnostic_ty(ty: &ir::Ty, plan: &PlanCtx) -> String {
 /// boundary.
 fn is_bound_failure(error: &str) -> bool {
     error.starts_with("E0599") || error.starts_with("E0277")
+}
+
+/// A generic nominal application in a selected signature result is a schema
+/// application, not the caller's realized identity; it must come from graph
+/// realization, never be fixed directly as local evidence.
+fn generic_nominal(ty: &ir::Ty) -> bool {
+    match ty {
+        ir::Ty::Struct(n) => !n.def().type_args.is_empty(),
+        ir::Ty::Enum(n) => !n.def().type_args.is_empty(),
+        ir::Ty::Tuple(parts) => parts.iter().any(generic_nominal),
+        ir::Ty::Ref { referent: t, .. }
+        | ir::Ty::RawPtr { pointee: t, .. }
+        | ir::Ty::Array { element: t, .. }
+        | ir::Ty::Slice { element: t } => generic_nominal(t),
+        _ => false,
+    }
 }
