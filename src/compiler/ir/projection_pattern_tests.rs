@@ -32,7 +32,7 @@ fn opaque_pattern_equality_requires_exact_universal_authority() {
         match mutation {
             0 => forged.item.snapshot = SnapshotId::standalone().unwrap(),
             1 => forged.trait_ref.args = Arc::from([Ty::Bool, Ty::Int(IntTy::I32)]),
-            _ => forged.trait_ref.declaration.index = u32::MAX,
+            _ => forged.trait_ref.declaration.index = u64::MAX,
         }
         let forged = Ty::AssociatedType(Arc::new(forged));
         assert!(

@@ -30,7 +30,7 @@ fn universal_call_types_require_exact_projection_environment() {
         match mutation {
             0 => altered.item.snapshot = ir::SnapshotId::standalone().unwrap(),
             1 => altered.trait_ref.args = Arc::from([ir::Ty::Bool, ir::Ty::Int(ir::IntTy::I32)]),
-            _ => altered.trait_ref.declaration.index = u32::MAX,
+            _ => altered.trait_ref.declaration.index = u64::MAX,
         }
         let mut forged = checked.clone();
         forged.exprs[call].ty = ir::Ty::AssociatedType(Arc::new(altered));

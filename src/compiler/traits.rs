@@ -2280,7 +2280,9 @@ impl ValidatedTraitWorld {
                     "catalog declaration metadata spoofed by registry",
                 ));
             }
-        } else if id.index < self.catalog.source_start() || id.index >= self.catalog.source_end() {
+        } else if id.index < u64::from(self.catalog.source_start())
+            || id.index >= u64::from(self.catalog.source_end())
+        {
             return Err(FactsError::invalid(
                 &self.budget,
                 "source declaration overlaps or escapes frozen catalog layout",
@@ -8600,15 +8602,19 @@ pub(crate) mod test_support {
             .chain(schema.nominals.iter().filter_map(nominal_decl))
         {
             charged(budget, budget.charge_work(1))?;
-            if decl.index < builder.source_start() {
+            if decl.index < u64::from(builder.source_start()) {
                 return Err(FactsError::invalid(
                     budget,
                     "fixture source declaration collides with canonical catalog prefix",
                 ));
             }
-            end = end.max(decl.index.checked_add(1).ok_or_else(|| {
-                FactsError::resource(budget, "fixture source declaration index overflow")
-            })?);
+            let next = u32::try_from(decl.index)
+                .ok()
+                .and_then(|index| index.checked_add(1))
+                .ok_or_else(|| {
+                    FactsError::resource(budget, "fixture source declaration index overflow")
+                })?;
+            end = end.max(next);
         }
         schema.catalog = Some(builder.finish(end, RecipeShapeInventory::new(), budget)?);
         Ok(Arc::new(schema))

@@ -17878,7 +17878,7 @@ impl PlanCtx {
             }
             let id = ir::DeclId {
                 snapshot,
-                index: u32::try_from(registry.declarations.len())
+                index: u64::try_from(registry.declarations.len())
                     .map_err(|_| "generic declaration count overflow")?,
             };
             let arity = params
@@ -19003,7 +19003,7 @@ impl PlanCtx {
         let registry_mut =
             Arc::get_mut(&mut registry).ok_or("registry shared before catalog seal")?;
         for entry in catalog.declarations() {
-            if entry.declaration.index < source_end {
+            if entry.declaration.index < u64::from(source_end) {
                 continue;
             }
             budget.charge_work(1)?;

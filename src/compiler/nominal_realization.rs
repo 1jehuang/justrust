@@ -93,8 +93,7 @@ pub(super) async fn run(cx: &Context, key: Key) -> Result<(), Error> {
             }
             let declaration = ir::DeclId {
                 snapshot: ir::SnapshotId::from_graph_word(key.params[2]),
-                index: u32::try_from(key.params[3])
-                    .map_err(|_| Error::new("nominal source declaration index overflow"))?,
+                index: key.params[3],
             };
             if source_key(declaration) != key {
                 return Err(Error::new("noncanonical nominal source schema key"));

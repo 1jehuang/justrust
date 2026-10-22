@@ -313,14 +313,12 @@ impl Reader<'_> {
             12 => Term::Slice(Box::new(self.term(d + 1)?)),
             13 => {
                 let snapshot = ir::SnapshotId::from_graph_word(self.word()?);
-                let index = u32::try_from(self.word()?)
-                    .map_err(|_| Error::new("nominal declaration index overflow"))?;
+                let index = self.word()?;
                 Term::Nominal(ir::DeclId { snapshot, index }, self.terms(d + 1)?)
             }
             14 => {
                 let snapshot = ir::SnapshotId::from_graph_word(self.word()?);
-                let index = u32::try_from(self.word()?)
-                    .map_err(|_| Error::new("dynamic principal index overflow"))?;
+                let index = self.word()?;
                 let args = self.terms(d + 1)?;
                 let count = self.size()?;
                 if count > self.words.len().saturating_sub(self.at) {
@@ -329,8 +327,7 @@ impl Reader<'_> {
                 let mut assigned = Vec::new();
                 for _ in 0..count {
                     let snapshot = ir::SnapshotId::from_graph_word(self.word()?);
-                    let item = u32::try_from(self.word()?)
-                        .map_err(|_| Error::new("dynamic item index overflow"))?;
+                    let item = self.word()?;
                     assigned.push((
                         ir::DeclId {
                             snapshot,

@@ -320,7 +320,7 @@ fn implementation_equality_replay_rejects_forged_and_foreign_membership() {
         }),
         forge(&|r| {
             if let ProofOrigin::Implementation { declaration, .. } = &mut r.origin {
-                declaration.index = u32::MAX;
+                declaration.index = u64::MAX;
             }
         }),
     ];

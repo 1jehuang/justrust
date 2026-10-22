@@ -50,8 +50,8 @@ fn projection_family_actual_replays_open_and_closed_authority() {
         for mutation in 0..3 {
             let mut forged = projection.as_ref().clone();
             match mutation {
-                0 => forged.item.index = u32::MAX,
-                1 => forged.trait_ref.declaration.index = u32::MAX,
+                0 => forged.item.index = u64::MAX,
+                1 => forged.trait_ref.declaration.index = u64::MAX,
                 _ => forged.item.snapshot = ir::SnapshotId::standalone().unwrap(),
             }
             assert!(

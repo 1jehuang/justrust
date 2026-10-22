@@ -40,7 +40,7 @@ fn opaque_projection_move_shape_requires_exact_universal_world() {
             1 => {
                 forged.trait_ref.args = Arc::from([Ty::Bool, Ty::Int(super::super::ir::IntTy::I32)])
             }
-            _ => forged.trait_ref.declaration.index = u32::MAX,
+            _ => forged.trait_ref.declaration.index = u64::MAX,
         }
         assert!(
             MoveShape::of(

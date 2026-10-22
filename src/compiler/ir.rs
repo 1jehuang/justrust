@@ -135,7 +135,7 @@ pub struct NominalAppId {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct DeclId {
     pub snapshot: SnapshotId,
-    pub index: u32,
+    pub index: u64,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum DeclKind {

@@ -348,8 +348,7 @@ impl Reader<'_> {
     fn declaration(&mut self) -> Result<ir::DeclId, String> {
         let id = ir::DeclId {
             snapshot: ir::SnapshotId::from_graph_word(self.word()?),
-            index: u32::try_from(self.word()?)
-                .map_err(|_| "instance declaration index overflow")?,
+            index: self.word()?,
         };
         self.context.declaration(id)?;
         Ok(id)

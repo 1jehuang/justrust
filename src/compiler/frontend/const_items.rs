@@ -35,7 +35,7 @@ impl PlanCtx {
         let snapshot = self.registry_snapshot_id()?;
         let id = ir::DeclId {
             snapshot,
-            index: u32::try_from(index).map_err(
+            index: u64::try_from(index).map_err(
                 |_| "contract: constant graph key is not a current constant declaration",
             )?,
         };

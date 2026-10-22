@@ -18,7 +18,7 @@ fn run<T>(future: impl Future<Output = T>) -> T {
         Poll::Pending => panic!("standalone test resolver must be immediately ready"),
     }
 }
-fn id(index: u32) -> DeclId {
+fn id(index: u64) -> DeclId {
     DeclId {
         snapshot: snapshot(),
         index,

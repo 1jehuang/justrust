@@ -757,8 +757,7 @@ impl Provider for CompilerProvider {
                 }
                 let declaration = ir::DeclId {
                     snapshot: ir::SnapshotId::from_graph_word(key.params[0]),
-                    index: u32::try_from(key.params[1])
-                        .map_err(|_| Error::new("nominal declaration index overflow"))?,
+                    index: key.params[1],
                 };
                 let facts = Facts { cx: &cx };
                 let types = facts.types().await?;
@@ -2479,7 +2478,7 @@ fn decl_param(key: &Key, what: &str) -> Result<ir::DeclId, Error> {
     };
     Ok(ir::DeclId {
         snapshot: ir::SnapshotId::from_graph_word(*snapshot),
-        index: u32::try_from(*index).map_err(|_| Error::new("declaration index overflow"))?,
+        index: *index,
     })
 }
 fn item_index(key: &Key, missing: &str) -> Result<usize, Error> {

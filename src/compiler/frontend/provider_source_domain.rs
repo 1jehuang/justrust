@@ -21,10 +21,8 @@ impl DeclRegistry {
         }
         for (id, domain) in domains {
             let info = self
-                .declarations
-                .get_mut(id.index as usize)
-                .filter(|info| info.id == id)
-                .ok_or("closure source domain lost its canonical declaration")?;
+                .declaration_mut(id)
+                .map_err(|_| "closure source domain lost its canonical declaration")?;
             info.env = domain;
         }
         Ok(())

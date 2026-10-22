@@ -1,6 +1,6 @@
 use super::*;
 
-fn row(snapshot: SnapshotId, index: u32) -> DeclaredEqualityReduction {
+fn row(snapshot: SnapshotId, index: u64) -> DeclaredEqualityReduction {
     let world = WorldId(snapshot);
     DeclaredEqualityReduction {
         world,

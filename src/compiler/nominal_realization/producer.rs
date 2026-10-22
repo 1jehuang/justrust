@@ -73,8 +73,7 @@ fn decode(key: &Key, b: &ir::PlanBudget) -> Result<(u64, ir::DeclId, Vec<Term>),
     }
     let declaration = ir::DeclId {
         snapshot: ir::SnapshotId::from_graph_word(key.params[3]),
-        index: u32::try_from(key.params[4])
-            .map_err(|_| Error::new("nominal declaration index overflow"))?,
+        index: key.params[4],
     };
     let count =
         usize::try_from(key.params[5]).map_err(|_| Error::new("nominal actual count overflow"))?;

@@ -175,7 +175,7 @@ impl std::fmt::Debug for CoreCatalog {
 fn id(snapshot: SnapshotId, item: CatalogItem) -> DeclId {
     DeclId {
         snapshot,
-        index: item.base_index().expect("private base catalog item"),
+        index: item.base_index().expect("private base catalog item").into(),
     }
 }
 fn scope(declaration: DeclId, arity: usize, budget: &PlanBudget) -> Result<Arc<ParamEnv>> {
@@ -566,7 +566,7 @@ impl CoreCatalogBuilder {
             }
             let declaration = DeclId {
                 snapshot: self.snapshot,
-                index,
+                index: index.into(),
             };
             index = index.checked_add(1).ok_or_else(|| {
                 FactsError::resource(budget, "catalog declaration index overflow")
@@ -746,12 +746,12 @@ impl CoreCatalog {
         }
         // Catalog allocation has two disjoint ranges, but range is never the
         // authority: exact retained declaration identity still must match.
-        if id.index < BASE_COUNT {
+        if id.index < u64::from(BASE_COUNT) {
             self.declarations
                 .get(id.index as usize)
                 .filter(|d| d.declaration == id)
         } else {
-            let i = usize::try_from(id.index.checked_sub(self.source_end)?)
+            let i = usize::try_from(id.index.checked_sub(u64::from(self.source_end))?)
                 .ok()?
                 .checked_add(BASE_COUNT as usize)?;
             self.declarations.get(i).filter(|d| d.declaration == id)
@@ -818,7 +818,10 @@ pub(super) fn fixture_source_decl(
     let index = BASE_COUNT
         .checked_add(ordinal)
         .ok_or_else(|| FactsError::resource(budget, "fixture source declaration index overflow"))?;
-    Ok(DeclId { snapshot, index })
+    Ok(DeclId {
+        snapshot,
+        index: index.into(),
+    })
 }
 
 #[cfg(test)]

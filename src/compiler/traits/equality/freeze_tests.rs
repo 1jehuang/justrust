@@ -47,7 +47,7 @@ fn declared_reductions_final_replay_rejects_foreign_stale_owner_rhs_and_rows() {
             2 => {
                 context.reductions.values[0].declaration = DeclId {
                     snapshot: declaration.snapshot,
-                    index: u32::MAX,
+                    index: u64::MAX,
                 }
             }
             3 => context.reductions.values[0].rhs = Ty::Bool,
@@ -98,7 +98,7 @@ fn declared_reductions_result_admission_is_atomic_for_foreign_stage_owner_and_pa
             2 => {
                 result.declaration = DeclId {
                     snapshot: declaration.snapshot,
-                    index: u32::MAX,
+                    index: u64::MAX,
                 }
             }
             3 => result.reductions.values[0].world = foreign,

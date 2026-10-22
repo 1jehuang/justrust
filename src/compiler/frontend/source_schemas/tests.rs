@@ -1,6 +1,6 @@
 use super::*;
 
-fn id(snapshot: ir::SnapshotId, index: u32) -> ir::DeclId {
+fn id(snapshot: ir::SnapshotId, index: u64) -> ir::DeclId {
     ir::DeclId { snapshot, index }
 }
 // Unit fixtures deliberately bypass registry minting to exercise rejection.
@@ -242,7 +242,7 @@ fn source_schemas_metadata_callbacks_do_not_lock_mutable_nominal_state() {
     );
     assert!(
         adapter
-            .declaration_info(id(declaration.snapshot, u32::MAX))
+            .declaration_info(id(declaration.snapshot, u64::MAX))
             .is_err()
     );
 }

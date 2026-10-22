@@ -12,7 +12,7 @@ pub use super::super::ir::{FloatTy, IntTy};
 
 /// Declaration identity as seen by the semantic core. The adapter maps graph
 /// declaration identities to these dense numbers for one body check.
-pub type DefId = u32;
+pub type DefId = u64;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TyVid(pub u32);

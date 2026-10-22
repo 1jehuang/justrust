@@ -2434,7 +2434,7 @@ mod tests {
         assert!(world.normalized_declaration_schema(foreign_decl).is_err());
         let missing = DeclId {
             snapshot: world.registry,
-            index: u32::MAX,
+            index: u64::MAX,
         };
         assert!(world.normalized_declaration_schema(missing).is_err());
     }

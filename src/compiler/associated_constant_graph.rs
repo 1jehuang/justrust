@@ -443,8 +443,7 @@ impl CompilerProvider {
         };
         let declaration = ir::DeclId {
             snapshot: ir::SnapshotId::from_graph_word(*snapshot),
-            index: u32::try_from(*index)
-                .map_err(|_| Error::new("associated constant declaration key overflow"))?,
+            index: *index,
         };
         let facts = Facts { cx };
         let plan = facts.types().await?;
