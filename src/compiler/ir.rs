@@ -137,6 +137,27 @@ pub struct DeclId {
     pub snapshot: SnapshotId,
     pub index: u64,
 }
+impl DeclId {
+    /// Source declarations occupy the high half of the index space; the
+    /// core catalog and its recipe suffix stay below it.
+    pub const SOURCE_BIT: u64 = 1 << 63;
+    /// Canonical source identity: a stable hash of the owning module's
+    /// resolved path, the declaration kind and the item's ordinal among
+    /// same-kind items of that module. Never whole-program insertion order,
+    /// so a module's identities are computable from that module alone.
+    pub fn source_index(module_key: u64, kind: DeclKind, ordinal: u64) -> Result<u64, String> {
+        if ordinal >= 1 << 16 {
+            return Err("unsupported: more than 65535 same-kind items in one module".into());
+        }
+        Ok(Self::SOURCE_BIT
+            | ((module_key & ((1 << 43) - 1)) << 20)
+            | ((kind as u64) << 16)
+            | ordinal)
+    }
+    pub fn is_source(self) -> bool {
+        self.index & Self::SOURCE_BIT != 0
+    }
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum DeclKind {
     Function,

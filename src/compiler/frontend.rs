@@ -17141,6 +17141,46 @@ impl DeclRegistry {
         decl_mut(&self.slots, &mut self.declarations, id)
     }
 }
+/// Stable key of a module's canonical resolved path (FNV-1a over segment
+/// spellings, root to leaf). It depends only on the path, never on arena
+/// handles or the order other modules were declared in.
+fn canonical_module_key(
+    modules: &ModuleArena,
+    names: &NameStore,
+    module: ModuleId,
+) -> Result<u64, String> {
+    let mut segments = Vec::new();
+    let mut current = Some(module);
+    while let Some(id) = current {
+        segments.push(modules.segment(id).map_err(module_diagnostic)?);
+        current = modules.parent(id).map_err(module_diagnostic)?;
+        if segments.len() > 4096 {
+            return Err("module path depth limit exceeded".into());
+        }
+    }
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut mix = |bytes: &[u8]| {
+        for byte in bytes {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(0x0100_0000_01b3);
+        }
+        hash ^= 0xff;
+        hash = hash.wrapping_mul(0x0100_0000_01b3);
+    };
+    for segment in segments.iter().rev() {
+        match segment {
+            super::module_identity::ModuleSegment::SourceRoot => mix(b"\0crate"),
+            super::module_identity::ModuleSegment::Catalog(item) => {
+                mix(format!("\0core{item:?}").as_bytes())
+            }
+            super::module_identity::ModuleSegment::Source(ident) => mix(names
+                .spelling(*ident)
+                .map_err(native_adapter::name_diagnostic)?
+                .as_bytes()),
+        }
+    }
+    Ok(hash)
+}
 /// Identity-checked mutable registry access that borrows only the
 /// declaration storage, so callers may hold other registry fields.
 fn decl_mut<'a>(
@@ -17825,6 +17865,7 @@ impl PlanCtx {
             }
         }
         state.retain(budget, source_storage)?;
+        let mut module_ordinals: HashMap<(u64, u8), u64> = HashMap::new();
         let mut insert = |path: Option<&AstPath>,
                           module: ModuleId,
                           item: DeclItemName,
@@ -17876,11 +17917,17 @@ impl PlanCtx {
                     return Err("duplicate generic parameter".into());
                 }
             }
+            // Canonical identity: (module path, kind, ordinal among the
+            // module's same-kind items), never whole-program insertion order.
+            let module_key = canonical_module_key(&program.modules, &program.names, module)?;
+            let ordinal = module_ordinals
+                .entry((module_key, kind as u8))
+                .or_insert(0u64);
             let id = ir::DeclId {
                 snapshot,
-                index: u64::try_from(registry.declarations.len())
-                    .map_err(|_| "generic declaration count overflow")?,
+                index: ir::DeclId::source_index(module_key, kind, *ordinal)?,
             };
+            *ordinal += 1;
             let arity = params
                 .len()
                 .checked_add(usize::from(kind == ir::DeclKind::Trait))
@@ -18994,8 +19041,9 @@ impl PlanCtx {
         if !has_main {
             return Err("main must exist, take no arguments and return ()".into());
         }
-        let source_end = u32::try_from(registry.declarations.len())
-            .map_err(|_| "source declaration count overflow")?;
+        // Recipe declarations follow the catalog prefix in the catalog's own
+        // (non-source) index range; source identities carry SOURCE_BIT.
+        let source_end = catalog_builder.source_start();
         let inventory = recipes::inventory(program, budget)?;
         let catalog = catalog_builder
             .finish(source_end, inventory, budget)
@@ -19008,9 +19056,6 @@ impl PlanCtx {
             }
             budget.charge_work(1)?;
             budget.retain_bytes(1024 + entry.name.len() * 4)?;
-            if entry.declaration.index as usize != registry_mut.declarations.len() {
-                return Err("recipe suffix identity mismatch".into());
-            }
             registry_mut.push_declaration(catalog_decl_info(entry, budget)?)?;
             if let Some(schema) = &entry.schema {
                 source_schemas.functions.insert(

@@ -820,7 +820,7 @@ pub(super) fn fixture_source_decl(
         .ok_or_else(|| FactsError::resource(budget, "fixture source declaration index overflow"))?;
     Ok(DeclId {
         snapshot,
-        index: index.into(),
+        index: DeclId::SOURCE_BIT | u64::from(index),
     })
 }
 
