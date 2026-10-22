@@ -16988,6 +16988,17 @@ impl DeclRegistry {
                 .spelling(head.name)
                 .map_err(native_adapter::name_diagnostic)?
                 .to_owned();
+            // `where Self: Sized` excludes the method from the vtable, so it
+            // does not affect dyn compatibility (stock rustc rule).
+            if head.bounds.iter().any(|bound| {
+                matches!(bound.subject, Type::SelfType)
+                    && bound
+                        .traits
+                        .iter()
+                        .any(|t| matches!(t, TraitPath::Builtin(BuiltinTrait::Sized)))
+            }) {
+                continue;
+            }
             if matches!(item.receiver, ReceiverKind::None) {
                 return not_compatible(&format!(
                     "associated function `{method}` has no `self` parameter"
