@@ -26,3 +26,6 @@ path = "src/compiler_cli.rs"
 
 [profile.release]
 debug = 1
+
+[profile.dev]
+opt-level = 1
