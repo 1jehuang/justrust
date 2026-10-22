@@ -101,7 +101,9 @@ fn bounded(name: &str, run: impl FnOnce()) {
     command
         .args(["--exact", name, "--nocapture"])
         .env(CHILD, name);
-    capture(&mut command, &scratch, 30);
+    // Hang guard only: debug compiles admit the full prelude (~16s each at
+    // workers=1), and each acceptance child runs several compiles.
+    capture(&mut command, &scratch, 300);
 }
 fn checked_function(
     source: &str,
@@ -558,15 +560,24 @@ fn cfg_native_emission_preserves_order_snapshots_recursion_and_control_edges() {
                     assert_eq!(result.control_flow.len(), functions.len());
                     assert_eq!(result.analyses.len(), result.functions);
                     assert!(result.analyses.iter().all(|analysis| analysis.passed()));
+                    // CHECK proves source callables (SOURCE_ADMISSION, 128)
+                    // without the instance plan; BUILD proves instances (ANALYZE, 109).
+                    let proof_kind = if check { 128 } else { 109 };
                     let analyses = result
                         .report
                         .node_evaluations
                         .iter()
-                        .filter(|(key, _)| key.kind == 109)
+                        .filter(|(key, _)| key.kind == proof_kind)
                         .collect::<Vec<_>>();
-                    assert_eq!(analyses.len(), result.functions);
-                    for index in 0..result.functions {
-                        let key = justrust_engine::Key::new(109, vec![index as u64]);
+                    // CHECK admits prelude callables too; each still runs once.
+                    if check {
+                        assert!(analyses.len() >= result.functions);
+                        assert!(analyses.iter().all(|(_, count)| *count == 1));
+                    } else {
+                        assert_eq!(analyses.len(), result.functions);
+                    }
+                    for index in (0..result.functions).filter(|_| !check) {
+                        let key = justrust_engine::Key::new(proof_kind, vec![index as u64]);
                         assert_eq!(
                             analyses
                                 .iter()
@@ -648,7 +659,7 @@ fn cfg_cli_graph_trace_is_explicit_and_normal_output_remains_json() {
                             command.arg("--trace").arg(&trace);
                         }
                         let stdout =
-                            String::from_utf8(capture(&mut command, &scratch, 20)).unwrap();
+                            String::from_utf8(capture(&mut command, &scratch, 120)).unwrap();
                         assert!(
                             stdout.starts_with('{') && stdout.ends_with("}\n"),
                             "CLI stdout must remain one JSON object: {stdout}"

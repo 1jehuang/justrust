@@ -184,7 +184,8 @@ fn dyn_drop_owner_preserves_all_body_proofs_and_object_gates() {
                     };
                     for index in 0..result.functions as u64 {
                         assert!(id(110, index).is_some(), "missing checked body {index}");
-                        let proof = id(109, index).expect("missing concrete body proof");
+                        let proof = id(if check_only { 128 } else { 109 }, index)
+                            .expect("missing body proof");
                         if check_only {
                             assert!(id(103, index).is_none());
                         } else {

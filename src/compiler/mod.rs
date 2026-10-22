@@ -411,6 +411,9 @@ struct SummaryFact {
 /// complete analysis, published on success and on failure (before the node
 /// fails), for diagnostics and reporting. Compiler work reads only output 0.
 const ANALYSIS_OUTPUT: usize = 1;
+/// `SOURCE_ADMISSION` third output: the CFG it analyzed (generic template CFG
+/// for universal callables). CHECK-mode CFG accounting reads this, never LOWER.
+const SOURCE_CFG_OUTPUT: usize = 2;
 /// `PARSE` outputs: the parsed program, and the assembled prepared source it
 /// was parsed from (for source accounting and diagnostics).
 const PARSE_OUTPUTS: usize = 2;
@@ -618,7 +621,7 @@ impl Provider for CompilerProvider {
             | ASSOCIATED_CONST_HEADER
             | ASSOCIATED_CONST_SELECT
             | OPAQUE_CALL_DISPATCH => 2,
-            TEMPLATE_BODY => 3,
+            TEMPLATE_BODY | SOURCE_ADMISSION => 3,
             PARSE => PARSE_OUTPUTS,
             _ => 1,
         }
@@ -1878,8 +1881,16 @@ impl Provider for CompilerProvider {
                             publication.facts().phase() == traits::FactsPhase::Universal
                         });
                     if abstract_source || Self::universal_body(&types, declaration)? {
-                        cx.read(cx.request(function(UNIVERSAL_EFFECTS_READY, index)).get(0))
-                            .await?;
+                        let effects = cx.request(function(UNIVERSAL_EFFECTS_READY, index)).get(0);
+                        let proof = cx
+                            .request(function(UNIVERSAL_ANALYZE, index))
+                            .get(ANALYSIS_OUTPUT);
+                        let lowered = cx.request(function(UNIVERSAL_LOWER, index)).get(0);
+                        cx.read(effects).await?;
+                        let analysis: Arc<Arc<ownership::Analysis>> = cx.read_fact(proof).await?;
+                        let lowered: Arc<cfg::TemplateCfg> = cx.read_fact(lowered).await?;
+                        cx.publish_fact(ANALYSIS_OUTPUT, analysis.as_ref().clone())?;
+                        cx.publish_fact(SOURCE_CFG_OUTPUT, lowered.function().clone())?;
                     } else {
                         let publication = template.publication.as_ref().ok_or_else(|| {
                             Error::new("closed source admission omitted its canonical publication")
@@ -1887,12 +1898,11 @@ impl Provider for CompilerProvider {
                         let lowered = cfg::lower_source_closed(publication, &this.0.budget)
                             .map_err(|error| source_fact_error(error, &this.0.budget))?;
                         scale_task_work_by_cfg(&lowered);
-                        let closed = cfg::close(
-                            Arc::new(lowered),
-                            publication.facts().clone(),
-                            &this.0.budget,
-                        )
-                        .map_err(Error::new)?;
+                        let lowered = Arc::new(lowered);
+                        cx.publish_fact(SOURCE_CFG_OUTPUT, lowered.clone())?;
+                        let closed =
+                            cfg::close(lowered, publication.facts().clone(), &this.0.budget)
+                                .map_err(Error::new)?;
                         let mut callees = Vec::new();
                         for block in &closed.function().blocks {
                             this.0.budget.charge_work(1).map_err(Error::new)?;
@@ -1926,19 +1936,25 @@ impl Provider for CompilerProvider {
                         let const_context =
                             types.callable_constness(declaration).map_err(Error::new)?
                                 == frontend::Constness::Const;
-                        ownership::analyze_closed_with_effects_in_const_context(
+                        match ownership::analyze_closed_with_effects_in_const_context(
                             closed,
                             &effects,
                             const_context,
-                        )
-                        .map_err(|analysis| {
-                            Error::new(analysis_diagnostic(
-                                &this.0.budget,
-                                "source declaration",
-                                index,
-                                &analysis,
-                            ))
-                        })?;
+                        ) {
+                            Ok(concrete) => {
+                                cx.publish_fact(ANALYSIS_OUTPUT, concrete.analysis().clone())?;
+                            }
+                            Err(analysis) => {
+                                let message = analysis_diagnostic(
+                                    &this.0.budget,
+                                    "source declaration",
+                                    index,
+                                    &analysis,
+                                );
+                                cx.publish_fact(ANALYSIS_OUTPUT, Arc::new(analysis))?;
+                                return Err(Error::new(message));
+                            }
+                        }
                     }
                     cx.publish(0, 1)
                 }
@@ -2518,12 +2534,40 @@ fn compile_input_configured(
     let instances = engine
         .fact_of::<PlanFact>(&keys::MonoPlanDebtRoot.key(), 0)
         .map_or(0, |plan| plan.plan.entries.len());
-    let control_flow: Vec<Arc<cfg::Function>> = (0..instances)
-        .filter_map(|index| {
-            engine.fact_of::<Arc<cfg::Function>>(&keys::Item::<{ LOWER }>(index).key(), 0)
-        })
-        .map(|lowered| lowered.as_ref().clone())
-        .collect();
+    // BUILD reports executable instance CFGs (LOWER). CHECK never demands the
+    // instance plan, so it reports the per-source-callable CFG that
+    // SOURCE_ADMISSION analyzed.
+    let source_callables: Vec<usize> = types.as_ref().map_or(Vec::new(), |types| {
+        (0..types.callable_count())
+            .filter(|&index| {
+                types.callable_decl(index).is_ok_and(|declaration| {
+                    matches!(
+                        types.callable_provider(declaration),
+                        Ok(frontend::CallableProvider::Source { .. })
+                    ) && types.is_prelude_decl(declaration) == Ok(false)
+                })
+            })
+            .collect()
+    });
+    let control_flow: Vec<Arc<cfg::Function>> = if check_only {
+        source_callables
+            .iter()
+            .filter_map(|&index| {
+                engine.fact_of::<Arc<cfg::Function>>(
+                    &keys::Item::<{ SOURCE_ADMISSION }>(index).key(),
+                    SOURCE_CFG_OUTPUT,
+                )
+            })
+            .map(|lowered| lowered.as_ref().clone())
+            .collect()
+    } else {
+        (0..instances)
+            .filter_map(|index| {
+                engine.fact_of::<Arc<cfg::Function>>(&keys::Item::<{ LOWER }>(index).key(), 0)
+            })
+            .map(|lowered| lowered.as_ref().clone())
+            .collect()
+    };
     let mut cfg_blocks = 0;
     let mut cfg_edges = 0;
     let mut cfg_locals = 0;
@@ -2545,15 +2589,30 @@ fn compile_input_configured(
             .sum::<usize>();
     }
     let program = engine.fact_of::<Arc<frontend::Program>>(&keys::ResolveDebtRoot.key(), 0);
-    let analyses = (0..instances)
-        .filter_map(|index| {
-            engine.fact_of::<Arc<ownership::Analysis>>(
-                &keys::Item::<{ ANALYZE }>(index).key(),
-                ANALYSIS_OUTPUT,
-            )
-        })
-        .map(|analysis| analysis.as_ref().clone())
-        .collect();
+    // BUILD proves every executable instance (ANALYZE). CHECK never demands
+    // the instance plan: it proves each source callable via SOURCE_ADMISSION.
+    let analyses = if check_only {
+        source_callables
+            .iter()
+            .filter_map(|&index| {
+                engine.fact_of::<Arc<ownership::Analysis>>(
+                    &keys::Item::<{ SOURCE_ADMISSION }>(index).key(),
+                    ANALYSIS_OUTPUT,
+                )
+            })
+            .map(|analysis| analysis.as_ref().clone())
+            .collect()
+    } else {
+        (0..instances)
+            .filter_map(|index| {
+                engine.fact_of::<Arc<ownership::Analysis>>(
+                    &keys::Item::<{ ANALYZE }>(index).key(),
+                    ANALYSIS_OUTPUT,
+                )
+            })
+            .map(|analysis| analysis.as_ref().clone())
+            .collect()
+    };
     let resource_usage = metered_usage(&snapshot.budget, &report);
     let mut optimizer = OptimizerReport {
         mode: snapshot.source_options.opt,
