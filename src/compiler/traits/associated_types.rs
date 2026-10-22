@@ -790,22 +790,10 @@ impl ValidatedTraitWorld {
                     }
                 }
             }
-            Ty::Struct(value) => {
-                for field in value.def().fields.iter() {
-                    if !self.raw_associated_ty_is_closed(&field.ty, depth + 1)? {
-                        return Ok(false);
-                    }
-                }
-            }
-            Ty::Enum(value) => {
-                for variant in value.def().variants.iter() {
-                    for field in variant.fields.iter() {
-                        if !self.raw_associated_ty_is_closed(&field.ty, depth + 1)? {
-                            return Ok(false);
-                        }
-                    }
-                }
-            }
+            // A nominal application's fields mention only its own ordered
+            // actuals, so closedness is decided by `type_arguments` below.
+            // Walking fields would revisit recursive types (`Box<List>`)
+            // until the depth limit.
             Ty::AssociatedType(projection) => {
                 if !self.raw_associated_ty_is_closed(&projection.trait_ref.self_ty, depth + 1)? {
                     return Ok(false);
