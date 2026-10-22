@@ -1597,6 +1597,38 @@ impl<'s> Solver<'_, '_, 's> {
                 let tuple = self.node(Domain::Tuple(terms))?;
                 self.unify(term, tuple)
             }
+            Pattern::Array(_) | Pattern::ArrayRest(_) => {
+                // `[a, b]` / `[a, .., z]` bind elements of an array or slice
+                // referent. An unknown exact-length referent is an array;
+                // rest patterns leave the container shape to the checker.
+                let (term, mode) = self.pattern_referent(term);
+                let element = match self.domain(term) {
+                    Domain::Array(element, _) | Domain::Slice(element) => element,
+                    _ => {
+                        let element = self.fresh()?;
+                        if let Pattern::Array(fields) = pattern
+                            && matches!(self.domain(term), Domain::Unknown)
+                        {
+                            let array = self.node(Domain::Array(element, fields.len()))?;
+                            self.unify(term, array)?;
+                        }
+                        element
+                    }
+                };
+                let fields: Vec<&'s Pattern> = match pattern {
+                    Pattern::Array(fields) => fields.iter().collect(),
+                    Pattern::ArrayRest(rest) => rest.prefix.iter().chain(&rest.suffix).collect(),
+                    _ => unreachable!(),
+                };
+                for field in fields {
+                    let binding = match mode {
+                        Some(kind) => self.node(Domain::Ref(kind, element))?,
+                        None => element,
+                    };
+                    self.pattern(field, binding)?;
+                }
+                Ok(())
+            }
             Pattern::Apply { pattern, .. } => self.pattern(pattern, term),
             Pattern::Alternatives(patterns) => {
                 for p in patterns {
