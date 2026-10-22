@@ -727,6 +727,12 @@ pub struct TokenSession {
     /// 1), sorted by owner and unique. A handle owned by one of them is
     /// served by that store; any other foreign owner is a hard error.
     linked: LinkedStores,
+    /// Canonical crate identity for semantic keys (PARSE-SPLIT.md step 1e):
+    /// the crate root file's session. Every file of one crate shares it, so
+    /// structural path keys from sibling files compare equal; independent
+    /// parses keep distinct crate keys. Equals `id` until a file is placed
+    /// into a crate by `join_crate`.
+    crate_key: SessionId,
     sources: SourceSnapshot,
     budget: ExpansionBudget,
     symbols: BudgetVec<SymbolEntry>,
@@ -844,6 +850,7 @@ impl TokenSession {
             id,
             crate_owners: CrateOwners::single(id),
             linked: LinkedStores::default(),
+            crate_key: id,
             sources,
             symbols: BudgetVec::new(&budget, Storage::Retained)?,
             symbol_slots: BudgetVec::new(&budget, Storage::Retained)?,
@@ -897,6 +904,23 @@ impl TokenSession {
         }
         self.budget.charge(Counter::Work, 1)?;
         self.linked.get(owner).map(Some)
+    }
+    /// Canonical crate identity of this file's semantic keys.
+    pub(super) fn crate_key(&self) -> SessionId {
+        self.crate_key
+    }
+    /// Place this file into the crate whose root session is `root`, which
+    /// must already be linked: crate identity is never asserted unlinked.
+    pub(super) fn join_crate(&mut self, root: SessionId) -> Result<(), TokenError> {
+        if self.crate_key != self.id {
+            return Err(TokenError::InvalidInput("file already joined a crate"));
+        }
+        let store = self.linked.get(root)?;
+        if store.session().crate_key != root {
+            return Err(TokenError::InvalidInput("crate root is not its own crate"));
+        }
+        self.crate_key = root;
+        Ok(())
     }
     /// Whether `owner` is this session or one of its linked crate siblings.
     pub(super) fn serves(&self, owner: SessionId) -> bool {

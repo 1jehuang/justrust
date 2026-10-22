@@ -443,6 +443,11 @@ impl NameStoreBuilder {
     ) -> Result<(), NameError> {
         Ok(self.store.session.link(stores)?)
     }
+    /// Join the crate rooted at the linked store `root` (see
+    /// `TokenSession::join_crate`).
+    pub(crate) fn join_crate(&mut self, root: &NameStore) -> Result<(), NameError> {
+        Ok(self.store.session.join_crate(root.session().id())?)
+    }
 
     /// Issue the next builder-local macro driver identity. Fails closed at
     /// exhaustion and never reuses an ordinal.

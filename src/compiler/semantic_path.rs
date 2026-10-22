@@ -233,7 +233,7 @@ impl AstPath {
         Ok(Self {
             anchor,
             data: Arc::new(PathData {
-                owner: names.session().id(),
+                owner: names.session().crate_key(),
                 receiver: None,
                 segments,
                 keys,
@@ -246,7 +246,7 @@ impl AstPath {
     pub fn check(&self, names: &impl NameAccess) -> Result<(), NameError> {
         names.budget().check()?;
         names.budget().charge(Counter::Work, 1)?;
-        if !names.session().serves(self.data.owner) {
+        if names.session().crate_key() != self.data.owner {
             return Err(TokenError::ForeignHandle.into());
         }
         if let Some(origin) = &self.resolved_use
