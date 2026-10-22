@@ -848,6 +848,13 @@ cleanup failures.
       replay controls. A cyclic assignment control rejects at the earlier closed
       projection boundary, not a cycle-specific proof. Unchanged matrix corpus
       E0282 remains open at its iterator-map closure (`CLOSURES.md`).
+      Corpus 11 no longer stops at E0282. The current first stop is the
+      implicit associated constant `i32::MIN` in a generic fold. Source
+      `Iterator::count` and bound-owner generic trait method actuals
+      (`B::mk(..)` under `B: Mk<A>`) pass worker-1/8 stock differential tests
+      (`tests/iterator_associated.rs`). Still missing: source `map`/`filter`/
+      `cloned`/`collect`/`sum` adapters, which are blocked by `&i32 * &i32`
+      reference operators and by closure metadata in nominal realization.
       Stored parameter patterns retain actual source binders and ordinary checked
       entry destructuring. Three positives and seven unused invalid cases pass
       explicit stock/native CHECK/BUILD at workers 1 and 8, with successful runs
