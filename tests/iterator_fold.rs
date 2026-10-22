@@ -45,6 +45,51 @@ fn main() {
 "#,
                 expect: Expect::Run("40\n11\n"),
             },
+            // A graph-realized nominal accumulator: the closure body shares the
+            // parent's nominal identity authority (corpus 19 reduction).
+            Case {
+                name: "nominal_accumulator_with_derived_debug",
+                source: r#"
+#[derive(Clone, Copy, Debug)]
+struct V { x: i32 }
+fn main() {
+    let v = vec![V { x: 1 }, V { x: 2 }];
+    let s = v.iter().fold(V { x: 0 }, |acc, &p| V { x: acc.x + p.x });
+    println!("{:?}", s);
+}
+"#,
+                expect: Expect::Run("V { x: 3 }\n"),
+            },
+            // A user `Add` impl called inside the closure body: the realized
+            // nominal call is typed in the closure's own arena (corpus 19).
+            Case {
+                name: "nominal_operator_trait_call_in_closure_body",
+                source: r#"
+use std::ops::Add;
+#[derive(Clone, Copy, Debug)]
+struct V { x: i32 }
+impl Add for V { type Output = V; fn add(self, o: V) -> V { V { x: self.x + o.x } } }
+fn main() {
+    let v = vec![V { x: 1 }, V { x: 2 }];
+    let s = v.iter().fold(V { x: 0 }, |acc, &p| acc + p);
+    println!("{:?}", s);
+}
+"#,
+                expect: Expect::Run("V { x: 3 }\n"),
+            },
+            Case {
+                name: "nominal_operator_without_impl_in_closure_body_rejects",
+                source: r#"
+#[derive(Clone, Copy, Debug)]
+struct V { x: i32 }
+fn main() {
+    let v = vec![V { x: 1 }];
+    let s = v.iter().fold(V { x: 0 }, |acc, &p| acc + p);
+    println!("{:?}", s);
+}
+"#,
+                expect: Expect::Invalid(""),
+            },
             // A by-value `mut acc` closure parameter that calls `&mut self`
             // methods (`|mut acc, x| { acc.push(..); acc }`) is rejected by
             // the current checker ("canonical method receiver formal

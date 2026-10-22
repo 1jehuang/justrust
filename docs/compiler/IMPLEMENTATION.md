@@ -620,6 +620,12 @@ cleanup failures.
 
 ### G4. Traits, generics, methods and suspended computations
 
+- [x] Closure bodies inside graph-realized nominal callables share the parent's
+      nominal inputs and propagate suspension; nominal operator/trait calls in a
+      closure body (`fold(V{..}, |acc, &p| acc + p)`) use the validated mapped
+      signature without a parent-arena receipt. Stock CHECK/BUILD/run at workers
+      1/8 and missing-impl rejection in `tests/iterator_fold.rs`. Unchanged
+      `19_operator_overloading` now passes: full-program corpus 8/20.
 - [x] Bounded source trait type parameters and complete checked applications in
       impls, bounds, supertraits, UFCS, unique dot dispatch and defaults under
       GENERIC-TRAITS.md. Same Self with distinct trait actuals retains separate

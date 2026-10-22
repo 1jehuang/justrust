@@ -28,7 +28,7 @@ not a fresh measurement of today's diagnostics. Subsequent source-prelude,
 formatting, pointer, pattern, closure and borrowed-iteration slices are tracked
 in `IMPLEMENTATION.md` and their scoped feature documents.
 
-6/20 pass: `01_hello`, `02_fizzbuzz`, `03_collatz`, `05_gcd_fib`,
+8/20 pass (adds `09_vec_stack`, `19_operator_overloading`): `01_hello`, `02_fizzbuzz`, `03_collatz`, `05_gcd_fib`,
 `07_bank_account` and `08_enum_state_machine` check, build and execute with
 exact stock stdout (manifest ratchet). The unchanged 08 was additionally
 stock-differential CHECKed, BUILT and run at workers 1 and 8 by

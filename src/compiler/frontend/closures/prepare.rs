@@ -73,6 +73,10 @@ impl Checker<'_> {
         child.declaration = Some(provider);
         child.inferred_closure_result = matches!(syntax.result, Type::Infer);
         child.closure_source_recipe = self.closure_source_recipe.clone();
+        // The closure body is typed inside its parent's graph-realized call:
+        // the same authenticated nominal inputs decide source/realized identity.
+        child.nominal_inputs = self.nominal_inputs;
+        child.nominal_closure_body = self.nominal_inputs.is_some();
         child.install_lexical_scope(syntax.lexical_scope)?;
         child.capture_parent_scope = self.lexical_scope;
         let receiver = child.temporary("closure self", ir::Ty::Unit, false)?;
@@ -158,7 +162,11 @@ impl Checker<'_> {
             Some(ty) => Expectation::HasType(ty),
             None => Expectation::None,
         };
-        let (mut body, flow) = child.block_with_expectation(&syntax.body, expectation)?;
+        let checked = child.block_with_expectation(&syntax.body, expectation);
+        if let Some(blocked) = child.nominal_blocked.borrow_mut().take() {
+            *self.nominal_blocked.borrow_mut() = Some(blocked);
+        }
+        let (mut body, flow) = checked?;
         let result = result_hint.unwrap_or(flow.ty.clone());
         let result_receipt =
             child.restricted_closure_result(owner, provider, syntax.site, &body, &result)?;

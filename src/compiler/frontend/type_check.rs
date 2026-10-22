@@ -1719,10 +1719,14 @@ pub(super) struct Checker<'a> {
     pub(super) signatures: &'a Signatures,
     pub(super) canonical: Option<&'a CanonicalSourceCapability>,
     // Borrowed only within this checking node. Child callable owners do not
-    // inherit this capability adapter implicitly.
-    nominal_inputs: Option<&'a NominalPreparationInputs<'a>>,
+    // inherit this capability adapter implicitly. Closure bodies are part of
+    // the same checking node and share it (closures/prepare.rs).
+    pub(in crate::compiler::frontend) nominal_inputs: Option<&'a NominalPreparationInputs<'a>>,
     // Local suspension inventory propagated to the owning graph consumer.
-    nominal_blocked: std::cell::RefCell<Option<NominalPreparation>>,
+    pub(in crate::compiler::frontend) nominal_blocked:
+        std::cell::RefCell<Option<NominalPreparation>>,
+    // Set only for closure bodies sharing the parent's nominal inputs.
+    pub(in crate::compiler::frontend) nominal_closure_body: bool,
     pub(super) scopes: Vec<HashMap<LocalKey, ir::LocalId>>,
     pub(super) lexical_scope: Option<super::super::semantic_scope::ScopeId>,
     pub(super) checked_closures: Vec<closures::check::CheckedClosure>,
@@ -3705,6 +3709,7 @@ impl<'a> Checker<'a> {
             runtime_sites: Vec::new(),
             signatures,
             nominal_inputs: None,
+            nominal_closure_body: false,
             nominal_blocked: std::cell::RefCell::new(None),
             scopes: vec![HashMap::new()],
             lexical_scope: None,
@@ -8037,7 +8042,13 @@ impl<'a> Checker<'a> {
                 reason,
             };
         }
-        if let Some(realization) = nominal_realization {
+        // A closure body owns its own expression arena and is never rebuilt by
+        // the parent's canonical source transform; its mapped signature was
+        // validated by `nominal_call_signature` and is re-proven by closure
+        // call evidence at lowering. Every other body requires the receipt.
+        if let Some(realization) = nominal_realization
+            && !(self.canonical.is_none() && self.nominal_closure_body)
+        {
             self.canonical
                 .ok_or("nominal call realization requires canonical source publication")?
                 .record_nominal_call_realization(

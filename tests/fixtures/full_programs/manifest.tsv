@@ -32,5 +32,5 @@
 16_sorting	fail	fmt-display,fmt-debug,fmt-float,str,for,vec,iter,closure,generic-bounds,prim-methods,slice
 17_hashmap_word_count	fail	fmt-display,fmt-debug,str,string,for,vec,iter,closure,std-paths,hashmap,option-result
 18_tokenizer_calculator	fail	fmt-display,fmt-debug,fmt-float,str,string,vec,iter,closure,derive,format-macro,option-result,try,or-pat,prim-methods,match-ergonomics,slice
-19_operator_overloading	fail	fmt-display,fmt-debug,for,vec,iter,closure,derive,std-paths,user-fmt,ops-traits,prim-methods
+19_operator_overloading	pass
 20_inventory_system	fail	fmt-display,fmt-debug,fmt-spec,str,string,for,vec,iter,closure,derive,std-paths,user-fmt,hashmap,rc-refcell,dyn,unsize,format-macro,option-result,try,match-ergonomics,slice,array-iter
