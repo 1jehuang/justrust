@@ -202,6 +202,10 @@ const PARSE: u32 = 100;
 const SIGNATURES: u32 = 101;
 const BODY: u32 = 102;
 const OBJECT: u32 = 103;
+/// BUILD discovery rounds whose OBJECTs are requested while discovery
+/// continues. Real programs close their instance frontier well within this;
+/// deeper rounds defer codegen until the frontier is proven closed.
+const OVERLAP_ROUNDS: usize = 16;
 const SOURCE_ADMISSION: u32 = 128;
 const CHECK: u32 = 104;
 const BUILD: u32 = 105;
@@ -2180,8 +2184,9 @@ impl Provider for CompilerProvider {
                     let nominal_handles = cx.request_all(&nominal_keys, 0);
                     // Link inventory is the closed direct-demand frontier from
                     // the closed roots: each round requests every new
-                    // instance's INSTANCE before awaiting any; OBJECTs are
-                    // requested together once the frontier closes. Equivalent targets share
+                    // instance's INSTANCE (and, in early rounds, OBJECT)
+                    // before awaiting any, and awaits INSTANCEs before any
+                    // OBJECT so failure surfaces first. Equivalent targets share
                     // one canonical key, and one symbol names one object.
                     let mut seen: std::collections::HashSet<Vec<u64>> =
                         std::collections::HashSet::new();
@@ -2232,7 +2237,17 @@ impl Provider for CompilerProvider {
                             symbols.insert(symbol.clone(), target.clone());
                             let demands = cx.request(keys::words(INSTANCE, params.clone())?).get(0);
                             round.push((demands, target, symbol));
-                            pending.push(params);
+                            // Early rounds overlap codegen with discovery. A
+                            // frontier still growing past OVERLAP_ROUNDS is
+                            // deferred until it closes, so a non-terminating
+                            // chain fails at its INSTANCE limit without
+                            // lowering every level (the engine keeps running
+                            // orphan work after BUILD fails).
+                            if depth < OVERLAP_ROUNDS {
+                                pending.push(Err(cx.request(keys::words(OBJECT, params)?).get(0)));
+                            } else {
+                                pending.push(Ok(params));
+                            }
                         }
                         for (handle, target, _) in &round {
                             let demands: Arc<instances::DirectDemands> =
@@ -2262,12 +2277,14 @@ impl Provider for CompilerProvider {
                             cx.read_fact(handle).await?;
                         checked.validate(&types, declaration, &this.0.budget)?;
                     }
-                    // Objects are requested only once the frontier is closed:
-                    // a non-terminating instance chain then fails at its
-                    // INSTANCE recursion limit before any codegen runs.
+                    // Deferred objects of deep rounds are requested together
+                    // once the frontier is closed and every INSTANCE succeeded.
                     let mut object_handles = Vec::with_capacity(pending.len());
-                    for params in pending {
-                        object_handles.push(cx.request(keys::words(OBJECT, params)?).get(0));
+                    for entry in pending {
+                        object_handles.push(match entry {
+                            Err(handle) => handle,
+                            Ok(params) => cx.request(keys::words(OBJECT, params)?).get(0),
+                        });
                     }
                     let (mut objects, _objects_reservation) =
                         this.scratch_vec(object_handles.len())?;
