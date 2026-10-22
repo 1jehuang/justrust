@@ -750,6 +750,22 @@ impl ValidatedTraitWorld {
             Ty::Ref { referent, .. } | Ty::Slice { element: referent } => {
                 self.validate_raw_associated_ty(referent, env, depth + 1)?;
             }
+            // A raw header such as `Option<Self::Item>` (or its impl-side
+            // `Option<<C as It>::Item>`) carries a projection as a nominal
+            // actual. Validate the application's metadata, then each actual
+            // as raw, exactly as tuples and references do above. Executable
+            // types still meet the strict validator after normalization.
+            Ty::Struct(_) | Ty::Enum(_) if self.type_contains_projection(ty, depth + 1)? => {
+                self.validate_ty_metadata_in(ty, env, depth)?;
+                let arguments = match ty {
+                    Ty::Struct(value) => value.def().type_args.clone(),
+                    Ty::Enum(value) => value.def().type_args.clone(),
+                    _ => unreachable!(),
+                };
+                for argument in arguments.iter() {
+                    self.validate_raw_associated_ty(argument, env, depth + 1)?;
+                }
+            }
             _ => self.validate_ty(ty, env, None, true, depth)?,
         }
         Ok(())
