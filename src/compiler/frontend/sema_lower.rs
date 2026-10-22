@@ -1162,6 +1162,7 @@ impl<'a> Lower<'a> {
                 self.push(h::HirExpr::AssocConst { self_ty, name })
             }
             Expr::AssociatedConst(_) => return un("trait associated constant"),
+            Expr::AssociatedFn(_) => return un("associated function value"),
             Expr::TraitCall {
                 owner,
                 trait_path,

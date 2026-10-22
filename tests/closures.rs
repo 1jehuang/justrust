@@ -534,6 +534,16 @@ fn function_item_values_match_stock() {
                 expect: Expect::Run("104\n"),
             },
             Case {
+                name: "inherent_associated_function_values",
+                source: "struct S; struct T; impl S { const K: i32 = 3; fn f(x: i32) -> i32 { x + Self::K } } impl T { fn k(x: i32) -> i32 { x * 10 } } fn ap<F: Fn(i32) -> i32>(f: F, v: i32) -> i32 { f(v) } fn main() { let g = S::f; println!(\"{} {} {} {}\", ap(S::f, 4), S::K, ap(T::k, 2), g(1)); }",
+                expect: Expect::Run("7 3 20 4\n"),
+            },
+            Case {
+                name: "primitive_trait_method_values",
+                source: "fn main() { let v = vec![3i32, 9, 2]; let m = v.iter().copied().fold(i32::MIN, i32::max); let g = i64::max; let y: i64 = g(3, 8); println!(\"{} {}\", m, y); }",
+                expect: Expect::Run("9 8\n"),
+            },
+            Case {
                 name: "fn_item_wrong_argument",
                 source: "fn dbl(x: i32) -> i32 { x * 2 } fn ap<F: Fn(i64) -> i64>(f: F, v: i64) -> i64 { f(v) } fn main() { println!(\"{}\", ap(dbl, 4)); }",
                 expect: Expect::Invalid("E0277"),
@@ -546,7 +556,7 @@ fn function_item_values_match_stock() {
         ],
     );
     // Explicit worker counts: native build and run at workers 1 and 8.
-    let source = "fn dbl(x: i32) -> i32 { x * 2 } fn add(a: i32, b: i32) -> i32 { a + b } fn ap<F: Fn(i32) -> i32>(f: F, v: i32) -> i32 { f(v) } fn ap2<F: FnOnce(i32, i32) -> i32>(f: F) -> i32 { f(3, 4) } fn main() { let f = dbl; println!(\"{} {} {}\", ap(dbl, 4), ap2(add), f(5)); }";
+    let source = "fn dbl(x: i32) -> i32 { x * 2 } fn add(a: i32, b: i32) -> i32 { a + b } fn ap<F: Fn(i32) -> i32>(f: F, v: i32) -> i32 { f(v) } fn ap2<F: FnOnce(i32, i32) -> i32>(f: F) -> i32 { f(3, 4) } struct S; impl S { fn inc(x: i32) -> i32 { x + 1 } } fn main() { let f = dbl; println!(\"{} {} {} {}\", ap(dbl, 4), ap2(add), f(5), ap(S::inc, 1)); }";
     let dir = std::env::temp_dir().join(format!("jr-fn-item-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     for workers in [1, 8] {
@@ -558,7 +568,7 @@ fn function_item_values_match_stock() {
         std::fs::set_permissions(&image, std::fs::Permissions::from_mode(0o755)).unwrap();
         let output = std::process::Command::new(&image).output().unwrap();
         assert!(output.status.success(), "workers {workers}");
-        assert_eq!(String::from_utf8_lossy(&output.stdout), "8 7 10\n");
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "8 7 10 2\n");
     }
     std::fs::remove_dir_all(&dir).ok();
 }

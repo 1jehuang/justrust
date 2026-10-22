@@ -35,3 +35,53 @@ impl Checker<'_> {
         }))))
     }
 }
+
+impl Checker<'_> {
+    /// `Owner::name` as a value: the exact associated function selected for the
+    /// checked owner type, as a zero-sized function item. Method generics are
+    /// never inferred here.
+    pub(super) fn associated_fn_item(&self, value: &AssociatedConstUse) -> Result<ir::Ty, String> {
+        if value.trait_path.is_some() {
+            return Err("unsupported: trait-qualified associated function values".into());
+        }
+        let plan = self.signatures.plan()?;
+        let owner = checked_local_ty(&value.owner, self.signatures)?;
+        let (callee, _, _) = plan.select_associated(
+            &owner,
+            &value.name,
+            &[],
+            self.facts(),
+            &self.module,
+            false,
+            &plan.budget,
+        )?;
+        // `i32::max`: a trait item selected for a closed owner resolves to its
+        // exact implementation or provided default body, never a dispatch.
+        let target = match callee {
+            ir::Callee::Direct(target) => target,
+            ir::Callee::TraitItem(call) => {
+                let ir::FactsCtx::Validated(facts) = self.facts() else {
+                    return Err("associated function value requires validated facts".into());
+                };
+                match facts
+                    .service()
+                    .resolve_trait_call(&call, facts)
+                    .map_err(|e| e.into_legacy_diagnostic(&plan.budget))?
+                    .callee()
+                {
+                    ir::Callee::Direct(target) => target.clone(),
+                    _ => {
+                        return Err(
+                            "unsupported: associated function value through an open trait bound"
+                                .into(),
+                        );
+                    }
+                }
+            }
+            _ => {
+                return Err("unsupported: trait-dispatched associated function values".into());
+            }
+        };
+        Ok(ir::Ty::FnItem(std::sync::Arc::new(target)))
+    }
+}

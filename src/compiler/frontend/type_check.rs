@@ -1093,6 +1093,10 @@ impl<'s> Checker<'s> {
                     .constant_type(expr)?;
                 self.infer_node(InferKind::Rigid(ty))?
             }
+            Expr::AssociatedFn(value) => {
+                let ty = self.associated_fn_item(value)?;
+                self.infer_type_term(&ty, None, depth + 1)?
+            }
             Expr::Var(name) => match self.callable_value_hint(name)? {
                 Some(ty) => self.infer_type_term(&ty, None, depth + 1)?,
                 None => self.infer_node(InferKind::Unknown(false))?,
@@ -4682,6 +4686,7 @@ impl<'a> Checker<'a> {
             ),
             Expr::Tuple(fields) if fields.is_empty() => Some(ir::Ty::Unit),
             Expr::Var(name) => self.callable_value_hint(name)?,
+            Expr::AssociatedFn(value) => Some(self.associated_fn_item(value)?),
             Expr::Call { name, args } => {
                 let key = self.path_key(name, Namespace::Value)?;
                 let plan = self
@@ -10624,6 +10629,10 @@ impl<'a> Checker<'a> {
                     canonical.constant_kind(e)?,
                     Flow::value(canonical.constant_type(e)?),
                 )
+            }
+            Expr::AssociatedFn(value) => {
+                let ty = self.associated_fn_item(value)?;
+                (ir::ExprKind::FnItem, Flow::value(ty))
             }
             Expr::Var(n) if !is_local_shaped_path(n) && self.fn_item_value(n)?.is_some() => {
                 let ty = self.fn_item_value(n)?.ok_or("function item vanished")?;

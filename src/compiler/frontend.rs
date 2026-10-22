@@ -2148,6 +2148,8 @@ impl SourceInventory {
                     budget,
                 )?;
             }
+            // A function item value has no runtime operands or call site.
+            Expr::AssociatedFn(_) => {}
             Expr::UnexpandedMacro(_) => {
                 return Err(source_error(
                     budget,
@@ -6807,6 +6809,9 @@ pub enum Expr {
     /// Resolved module constant, never a local binding or mutable place.
     ConstItem(AstPath),
     AssociatedConst(Box<AssociatedConstUse>),
+    /// `Owner::name` naming an associated function as a value. Checking
+    /// selects the exact declaration and types it as `Ty::FnItem`.
+    AssociatedFn(Box<AssociatedConstUse>),
     Unary {
         op: UnaryOp,
         value: Box<Expr>,
@@ -15723,7 +15728,7 @@ fn walk_depth_inspecting(
             Ok(())
         };
         match node {
-            DepthNode::Expr(Expr::AssociatedConst(value)) => {
+            DepthNode::Expr(Expr::AssociatedConst(value) | Expr::AssociatedFn(value)) => {
                 if let Some(names) = names {
                     names
                         .check(value.name)

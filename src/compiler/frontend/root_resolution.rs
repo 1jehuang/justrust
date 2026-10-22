@@ -282,6 +282,49 @@ impl Resolver<'_> {
     fn names(&self) -> &NameStore {
         self.program.names.as_ref()
     }
+    /// True when some impl or trait declares an associated function with this
+    /// member name and no associated constant shares it. Selection of the exact
+    /// owner and declaration happens during checking.
+    fn names_associated_function(&self, name: AstIdent) -> Result<bool, String> {
+        let names = self.names();
+        let key = names
+            .key(name, LookupClass::Member)
+            .map_err(native_adapter::name_diagnostic)?;
+        let same = |other: AstIdent| -> Result<bool, String> {
+            Ok(names
+                .key(other, LookupClass::Member)
+                .map_err(native_adapter::name_diagnostic)?
+                == key)
+        };
+        let mut function = false;
+        for block in &self.program.impls {
+            for constant in &block.associated_constants {
+                if same(constant.name)? {
+                    return Ok(false);
+                }
+            }
+            for item in &block.items {
+                if let Some(last) = item.function.name.segments().last()
+                    && same(*last)?
+                {
+                    function = true;
+                }
+            }
+        }
+        for declaration in &self.program.traits {
+            for constant in &declaration.associated_constants {
+                if same(constant.name)? {
+                    return Ok(false);
+                }
+            }
+            for item in &declaration.items {
+                if same(item.signature.name)? {
+                    function = true;
+                }
+            }
+        }
+        Ok(function)
+    }
     fn key(&self, path: &AstPath) -> Result<PathKey, String> {
         name_scope::path_key(self.names(), path, Namespace::Type)
     }
@@ -3473,7 +3516,7 @@ impl Resolver<'_> {
                     self.expr(bound, module, locals)?;
                 }
             }
-            Expr::AssociatedConst(value) => {
+            Expr::AssociatedConst(value) | Expr::AssociatedFn(value) => {
                 self.ty(&mut value.owner, module)?;
                 if let Some(path) = &mut value.trait_path {
                     self.trait_path(path, module)?;
@@ -3483,6 +3526,23 @@ impl Resolver<'_> {
                 if !self.local_contains(name, locals)? {
                     let path = self.alias_source_path(name)?;
                     if let Some((owner, name, actuals)) = self.associated_path(&path, module)? {
+                        // The value namespace has one meaning per member name:
+                        // an associated function is a function item value,
+                        // never an associated constant lookup.
+                        if self.names_associated_function(name)? {
+                            if !actuals.is_empty() {
+                                return Err(
+                                    "unsupported: explicit generic arguments on function item values"
+                                        .into(),
+                                );
+                            }
+                            *expr = Expr::AssociatedFn(Box::new(AssociatedConstUse {
+                                owner,
+                                trait_path: None,
+                                name,
+                            }));
+                            return Ok(());
+                        }
                         if !actuals.is_empty() {
                             return Err(
                                 "associated constants cannot take method generic arguments".into(),

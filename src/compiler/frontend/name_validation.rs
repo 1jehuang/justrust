@@ -1044,7 +1044,7 @@ impl<'a> Validator<'a> {
                 }
             },
             Visit::Expr(expression) => match expression {
-                Expr::AssociatedConst(value) => {
+                Expr::AssociatedConst(value) | Expr::AssociatedFn(value) => {
                     self.push(Visit::Ident(value.name, LookupClass::Member))?;
                     self.push(Visit::Type(&value.owner))?;
                     if let Some(path) = &value.trait_path {

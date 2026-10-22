@@ -176,7 +176,7 @@ pub(super) fn preflight_clone_node(
             Expr::UnexpandedMacro(_) => {
                 return Err("unexpanded macro syntax cannot enter active AST cloning".into());
             }
-            Expr::AssociatedConst(value) => {
+            Expr::AssociatedConst(value) | Expr::AssociatedFn(value) => {
                 budget.retain_bytes(std::mem::size_of::<AssociatedConstUse>())?;
                 if let Some(path) = &value.trait_path {
                     clone_trait_path_shallow(path, budget)?;

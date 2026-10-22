@@ -182,16 +182,11 @@ impl PlanCtx {
             ir::Ty::Closure(closure) => (closure.kind(), closure.params().to_vec()),
             // `f(x)` on a function item value selects builtin `Fn` dispatch
             // through a shared autoref; it resolves to `Callee::Untupled`.
-            ir::Ty::FnItem(item) if item.type_args.is_empty() => (
+            ir::Ty::FnItem(item) => (
                 ir::ClosureKind::Fn,
-                self.function_schema(item.declaration)?
-                    .signature
-                    .params
-                    .clone(),
+                self.instantiate_signature(item, caller, &self.budget)?
+                    .params,
             ),
-            ir::Ty::FnItem(_) => {
-                return Err("unsupported: calling a generic function item value".into());
-            }
             _ => return self.bounded_closure_method_selection(receiver, name, caller),
         };
         if self

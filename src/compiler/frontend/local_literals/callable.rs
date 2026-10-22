@@ -185,22 +185,19 @@ impl<'a: 's, 'b: 's, 's> Solver<'a, 'b, 's> {
                 self.fixed(closure.result().clone()).map(Some)
             }
             Domain::Fixed(ir::Ty::FnItem(item)) => {
-                if !item.type_args.is_empty() {
-                    return Ok(None);
-                }
-                let schema = self
-                    .checker
-                    .signatures
-                    .plan()?
-                    .function_schema(item.declaration)?;
-                if schema.signature.params.len() != args.len() {
+                let signature = self.checker.signatures.plan()?.instantiate_signature(
+                    &item,
+                    self.checker.facts(),
+                    &self.checker.signatures.plan()?.budget,
+                )?;
+                if signature.params.len() != args.len() {
                     return Err(self.user_error("E0057: wrong number of function arguments"));
                 }
-                for (actual, expected) in args.iter().zip(&schema.signature.params) {
+                for (actual, expected) in args.iter().zip(&signature.params) {
                     let expected = self.fixed(expected.clone())?;
                     self.coerce(*actual, expected)?;
                 }
-                self.fixed(schema.signature.result.clone()).map(Some)
+                self.fixed(signature.result.clone()).map(Some)
             }
             _ => Ok(None),
         }

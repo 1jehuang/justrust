@@ -1893,6 +1893,10 @@ impl<'s> Solver<'_, '_, 's> {
                     .constant_value(expr)?;
                 self.fixed(const_inputs::scalar_ir_type(value.ty()))
             }
+            Expr::AssociatedFn(value) => {
+                let ty = self.checker.associated_fn_item(value)?;
+                self.fixed(ty)
+            }
             Expr::Var(path) => {
                 if let Some(term) = self.stored_callable(path, depth + 1)? {
                     return Ok(term);
