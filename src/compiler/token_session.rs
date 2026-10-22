@@ -227,6 +227,9 @@ impl SourceStorage {
 #[derive(Clone)]
 pub struct SourceSnapshot {
     inner: Arc<SealedSources>,
+    /// Sibling file snapshots of the same crate (PARSE-SPLIT.md step 1d),
+    /// sorted by id. Their file handles are served by them; others foreign.
+    linked: Arc<[SourceSnapshot]>,
 }
 
 impl SourceSnapshot {
@@ -479,7 +482,50 @@ impl SourceSnapshot {
                 crate_roots,
                 _lease: lease,
             }),
+            linked: Arc::from([]),
         })
+    }
+
+    /// A snapshot over the same sealed files that also serves the file
+    /// handles of the crate's sibling snapshots. Explicit and fixed: only
+    /// the given siblings join, never "any" snapshot.
+    pub fn linked_with(
+        &self,
+        siblings: Vec<SourceSnapshot>,
+        budget: &ExpansionBudget,
+    ) -> Result<Self, TokenError> {
+        if !self.linked.is_empty() {
+            return Err(TokenError::InvalidInput("source siblings already linked"));
+        }
+        budget.charge(Counter::Work, siblings.len() as u64 + 1)?;
+        let mut linked = Vec::new();
+        linked
+            .try_reserve_exact(siblings.len())
+            .map_err(|_| budget.poison_allocation())?;
+        for sibling in siblings {
+            if sibling.inner.id == self.inner.id {
+                return Err(TokenError::InvalidInput("a snapshot cannot link itself"));
+            }
+            linked.push(sibling);
+        }
+        linked.sort_unstable_by_key(|s| s.inner.id.0);
+        if linked.windows(2).any(|p| p[0].inner.id == p[1].inner.id) {
+            return Err(TokenError::InvalidInput("duplicate linked source snapshot"));
+        }
+        Ok(Self {
+            inner: Arc::clone(&self.inner),
+            linked: linked.into(),
+        })
+    }
+    /// The linked sibling owning `file`, `None` for this snapshot's own files.
+    fn linked_owner(&self, file: SourceFileHandle) -> Result<Option<&SourceSnapshot>, TokenError> {
+        if file.source == self.inner.id {
+            return Ok(None);
+        }
+        self.linked
+            .binary_search_by_key(&file.source.0, |s| s.inner.id.0)
+            .map(|index| Some(&self.linked[index]))
+            .map_err(|_| TokenError::ForeignHandle)
     }
 
     pub fn file(&self, index: usize) -> Result<SourceFileHandle, TokenError> {
@@ -491,8 +537,8 @@ impl SourceSnapshot {
     }
 
     pub fn text(&self, file: SourceFileHandle) -> Result<&str, TokenError> {
-        if file.source != self.inner.id {
-            return Err(TokenError::ForeignHandle);
+        if let Some(sibling) = self.linked_owner(file)? {
+            return sibling.text(file);
         }
         Ok(self.inner.storage.view(file.index as usize)?.contents)
     }
@@ -503,6 +549,9 @@ impl SourceSnapshot {
         &self,
         file: SourceFileHandle,
     ) -> Result<SourceFileHandle, TokenError> {
+        if let Some(sibling) = self.linked_owner(file)? {
+            return sibling.source_crate_root(file);
+        }
         self.text(file)?;
         let root = if self.inner.crate_roots.is_empty() {
             0
@@ -545,6 +594,9 @@ impl SourceSnapshot {
         &self,
         span: OriginalSpan,
     ) -> Result<(&std::path::Path, usize, usize), TokenError> {
+        if let Some(sibling) = self.linked_owner(span.file)? {
+            return sibling.location(span);
+        }
         let raw = self.render_span(span)?;
         let file = self.inner.storage.view(raw.file.0 as usize)?;
         let line = file
@@ -1366,6 +1418,33 @@ mod owner_defect_tests {
             .unwrap(),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn linked_snapshot_serves_sibling_files_and_rejects_outsiders() {
+        let budget = ExpansionBudget::default();
+        let issue = || {
+            crate::compiler::owner_path::standalone_issued(&budget, OwnerDomain::SourceSnapshot)
+                .unwrap()
+        };
+        let parent =
+            SourceSnapshot::from_text(Path::new("a.rs"), "mod b;\n", &budget, issue()).unwrap();
+        let child =
+            SourceSnapshot::from_text(Path::new("b.rs"), "fn f(){}\n", &budget, issue()).unwrap();
+        let outside =
+            SourceSnapshot::from_text(Path::new("c.rs"), "x\n", &budget, issue()).unwrap();
+        let linked = parent.linked_with(vec![child.clone()], &budget).unwrap();
+        assert!(linked.linked_with(vec![child.clone()], &budget).is_err());
+        assert!(parent.linked_with(vec![parent.clone()], &budget).is_err());
+        let file = child.file(0).unwrap();
+        assert_eq!(linked.text(file).unwrap(), "fn f(){}\n");
+        let span = linked.span(file, 3, 4).unwrap();
+        assert_eq!(linked.location(span).unwrap().0, Path::new("b.rs"));
+        assert!(matches!(
+            linked.text(outside.file(0).unwrap()),
+            Err(TokenError::ForeignHandle)
+        ));
+        assert!(matches!(parent.text(file), Err(TokenError::ForeignHandle)));
     }
 
     /// An owner paid under one budget cannot back a session charged to
