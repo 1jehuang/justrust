@@ -5994,6 +5994,36 @@ impl<'f> FactsCtx<'f> {
         }
         Ok(())
     }
+    /// `validate_ty_with_budget` sharing a node-local trait scratch.
+    pub fn validate_ty_with_budget_scratch(
+        self,
+        root: &Ty,
+        budget: &PlanBudget,
+        scratch: &mut super::traits::TraitScratch,
+    ) -> Result<(), String> {
+        if let Self::Validated(facts) = self
+            && facts.budget().same_authority(budget)
+        {
+            return facts
+                .validate_ty_scratch(root, scratch)
+                .map_err(|e| e.into_legacy_diagnostic(budget));
+        }
+        self.validate_ty_with_budget(root, budget)
+    }
+    fn validate_value_ty_with_budget_scratch(
+        self,
+        root: &Ty,
+        budget: &PlanBudget,
+        scratch: &mut super::traits::TraitScratch,
+    ) -> Result<(), String> {
+        self.validate_ty_with_budget_scratch(root, budget, scratch)?;
+        if let (Self::Validated(facts), Ty::Param(_)) = (self, root) {
+            facts
+                .require_sized(root)
+                .map_err(|e| e.into_legacy_diagnostic(budget))?;
+        }
+        Ok(())
+    }
     fn validate_value_ty_with_budget(self, root: &Ty, budget: &PlanBudget) -> Result<(), String> {
         self.validate_ty_with_budget(root, budget)?;
         if let (Self::Validated(facts), Ty::Param(_)) = (self, root) {
@@ -6015,6 +6045,32 @@ impl<'f> FactsCtx<'f> {
         budget: Option<&PlanBudget>,
     ) -> Result<bool, String> {
         type_metadata_walk(root, budget, Some(self))
+    }
+    /// `validate_ty` sharing a node-local trait scratch when validated.
+    pub fn validate_ty_scratch(
+        self,
+        root: &Ty,
+        scratch: &mut super::traits::TraitScratch,
+    ) -> Result<(), String> {
+        if let Self::Validated(facts) = self {
+            return facts
+                .validate_ty_scratch(root, scratch)
+                .map_err(|e| e.into_legacy_diagnostic(facts.budget()));
+        }
+        self.validate_ty(root)
+    }
+    /// `must_copy` sharing a node-local trait scratch when validated.
+    pub fn must_copy_scratch(
+        self,
+        ty: &Ty,
+        scratch: &mut super::traits::TraitScratch,
+    ) -> Result<bool, String> {
+        if let Self::Validated(facts) = self {
+            return facts
+                .must_copy_scratch(ty, scratch)
+                .map_err(|e| e.into_legacy_diagnostic(facts.budget()));
+        }
+        self.must_copy(ty)
     }
     pub fn must_copy(self, ty: &Ty) -> Result<bool, String> {
         if let Self::Validated(facts) = self {
@@ -8407,6 +8463,8 @@ impl CheckedFunction {
         Ok(())
     }
     pub fn preflight_plan(&self, facts: FactsCtx<'_>, budget: &PlanBudget) -> Result<(), String> {
+        // Proof/type memo local to this preflight only.
+        let scratch = &mut super::traits::TraitScratch::default();
         self.validate_all_type_metadata(facts, Some(budget))?;
         fn storage(budget: &PlanBudget, count: usize, width: usize) -> Result<(), String> {
             budget.charge_work(count)?;
@@ -8435,19 +8493,20 @@ impl CheckedFunction {
             pattern: &MatchPattern,
             facts: FactsCtx<'_>,
             budget: &PlanBudget,
+            scratch: &mut super::traits::TraitScratch,
         ) -> Result<(), String> {
             match pattern {
                 MatchPattern::Or { ty, rows } => {
                     grouped_or::validate_or_rows(rows)?;
-                    facts.validate_value_ty_with_budget(ty, budget)?;
+                    facts.validate_value_ty_with_budget_scratch(ty, budget, scratch)?;
                     storage(budget, rows.capacity(), std::mem::size_of::<MatchPattern>())?;
                     for row in rows {
-                        pattern_storage(row, facts, budget)?;
+                        pattern_storage(row, facts, budget, scratch)?;
                     }
                 }
                 MatchPattern::Alternatives { ty, rows } => {
                     validate_alternative_domain(ty, Some(budget))?;
-                    facts.validate_value_ty_with_budget(ty, budget)?;
+                    facts.validate_value_ty_with_budget_scratch(ty, budget, scratch)?;
                     storage(
                         budget,
                         rows.capacity(),
@@ -8470,14 +8529,14 @@ impl CheckedFunction {
                     bindings: values,
                     ..
                 } => {
-                    facts.validate_ty_with_budget(&Ty::Enum(ty.clone()), budget)?;
+                    facts.validate_ty_with_budget_scratch(&Ty::Enum(ty.clone()), budget, scratch)?;
                     bindings(values, budget)?;
                 }
                 MatchPattern::Aggregate {
                     ty,
                     bindings: values,
                 } => {
-                    facts.validate_value_ty_with_budget(ty, budget)?;
+                    facts.validate_value_ty_with_budget_scratch(ty, budget, scratch)?;
                     bindings(values, budget)?;
                 }
                 MatchPattern::Decision {
@@ -8486,11 +8545,11 @@ impl CheckedFunction {
                     bindings: values,
                 } => {
                     storage(budget, tests.len(), std::mem::size_of::<PatternTest>())?;
-                    facts.validate_value_ty_with_budget(ty, budget)?;
+                    facts.validate_value_ty_with_budget_scratch(ty, budget, scratch)?;
                     for test in tests {
                         path(&test.projection, budget)?;
                         if let PatternTestKind::EnumVariant { ty, .. } = &test.kind {
-                            facts.validate_value_ty_with_budget(&Ty::Enum(ty.clone()), budget)?;
+                            facts.validate_value_ty_with_budget_scratch(&Ty::Enum(ty.clone()), budget, scratch)?;
                         }
                     }
                     bindings(values, budget)?;
@@ -8504,6 +8563,7 @@ impl CheckedFunction {
             facts: FactsCtx<'_>,
             budget: &PlanBudget,
             depth: usize,
+            scratch: &mut super::traits::TraitScratch,
         ) -> Result<(), String> {
             budget.check_depth(depth)?;
             budget.charge_nodes(value.statements.len())?;
@@ -8524,14 +8584,14 @@ impl CheckedFunction {
                         bindings: values,
                         ..
                     } => {
-                        facts.validate_ty_with_budget(ty, budget)?;
+                        facts.validate_ty_with_budget_scratch(ty, budget, scratch)?;
                         bindings(values, budget)?;
                     }
                     TypedStmt::LetElse { ty, pattern, .. } => {
-                        facts.validate_value_ty_with_budget(ty, budget)?;
-                        pattern_storage(pattern, facts, budget)?;
+                        facts.validate_value_ty_with_budget_scratch(ty, budget, scratch)?;
+                        pattern_storage(pattern, facts, budget, scratch)?;
                     }
-                    TypedStmt::While { body, .. } => block(body, facts, budget, depth + 1)?,
+                    TypedStmt::While { body, .. } => block(body, facts, budget, depth + 1, scratch)?,
                     TypedStmt::Declare { .. }
                     | TypedStmt::Let { .. }
                     | TypedStmt::Assign { .. }
@@ -8541,7 +8601,7 @@ impl CheckedFunction {
             }
             Ok(())
         }
-        facts.validate_value_ty_with_budget(&self.result, budget)?;
+        facts.validate_value_ty_with_budget_scratch(&self.result, budget, scratch)?;
         budget.charge_nodes(
             self.locals
                 .len()
@@ -8578,30 +8638,30 @@ impl CheckedFunction {
             }
         }
         for local in &self.locals {
-            facts.validate_value_ty_with_budget(&local.ty, budget)?;
+            facts.validate_value_ty_with_budget_scratch(&local.ty, budget, scratch)?;
             storage(budget, local.name.len(), 1)?;
         }
         for expression in &self.exprs {
-            facts.validate_value_ty_with_budget(&expression.ty, budget)?;
+            facts.validate_value_ty_with_budget_scratch(&expression.ty, budget, scratch)?;
             match &expression.kind {
                 ExprKind::OpaqueWrap { opaque, .. } => {
-                    facts.validate_ty_with_budget(&Ty::Opaque(opaque.clone()), budget)?;
+                    facts.validate_ty_with_budget_scratch(&Ty::Opaque(opaque.clone()), budget, scratch)?;
                 }
                 ExprKind::Borrow { place, .. } | ExprKind::BoundsCheck { array: place, .. } => {
                     path(&place.projection, budget)?
                 }
                 ExprKind::Struct { ty, fields } => {
-                    facts.validate_ty_with_budget(&Ty::Struct(ty.clone()), budget)?;
+                    facts.validate_ty_with_budget_scratch(&Ty::Struct(ty.clone()), budget, scratch)?;
                     storage(budget, fields.len(), std::mem::size_of::<(usize, ExprId)>())?;
                 }
                 ExprKind::EnumVariant { ty, fields, .. } => {
-                    facts.validate_ty_with_budget(&Ty::Enum(ty.clone()), budget)?;
+                    facts.validate_ty_with_budget_scratch(&Ty::Enum(ty.clone()), budget, scratch)?;
                     storage(budget, fields.len(), std::mem::size_of::<(usize, ExprId)>())?;
                 }
                 ExprKind::Match { arms, .. } => {
                     storage(budget, arms.len(), std::mem::size_of::<TypedMatchArm>())?;
                     for arm in arms {
-                        pattern_storage(&arm.pattern, facts, budget)?;
+                        pattern_storage(&arm.pattern, facts, budget, scratch)?;
                     }
                 }
                 ExprKind::Call {
@@ -8621,7 +8681,7 @@ impl CheckedFunction {
                         .chain(signature.params.iter())
                         .chain(std::iter::once(&signature.result))
                     {
-                        facts.validate_ty_with_budget(ty, budget)?;
+                        facts.validate_ty_with_budget_scratch(ty, budget, scratch)?;
                     }
                 }
                 ExprKind::If {
@@ -8629,12 +8689,12 @@ impl CheckedFunction {
                     else_block,
                     ..
                 } => {
-                    block(then_block, facts, budget, 0)?;
-                    block(else_block, facts, budget, 0)?;
+                    block(then_block, facts, budget, 0, scratch)?;
+                    block(else_block, facts, budget, 0, scratch)?;
                 }
                 ExprKind::Block(value)
                 | ExprKind::Loop { body: value, .. }
-                | ExprKind::LabeledBlock { body: value, .. } => block(value, facts, budget, 0)?,
+                | ExprKind::LabeledBlock { body: value, .. } => block(value, facts, budget, 0, scratch)?,
                 ExprKind::TypeAlignment(query) => query.validate(facts, budget)?,
                 ExprKind::NativeSyscall(values)
                 | ExprKind::RawSlice { args: values, .. }
@@ -8694,7 +8754,7 @@ impl CheckedFunction {
                 | ExprKind::Continue { .. } => {}
             }
         }
-        block(&self.body, facts, budget, 0)
+        block(&self.body, facts, budget, 0, scratch)
     }
     #[cfg(test)]
     pub(super) fn validate_match(

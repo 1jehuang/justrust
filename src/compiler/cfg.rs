@@ -5,6 +5,7 @@
 //! dataflow is established separately by the analyzer before native emission.
 use super::frontend::{BinaryOp, UnaryOp};
 use super::ir::{self, ExprId, IntTy, IntValue, LocalId, LoopId, Place, Projection, Ty};
+use super::traits::TraitScratch;
 mod closure_template;
 mod drop_normal;
 pub(super) use closure_template::lower_closure_template;
@@ -1767,13 +1768,12 @@ impl Function {
             Ok(())
         }
         budget.charge_work(self.locals.len())?;
-        // Local to this validation pass: identical type allocations are
-        // validated once.
-        let mut validated = super::traits::ValidatedTypes::default();
+        // Proof/type memo local to this preflight only.
+        let scratch = &mut TraitScratch::default();
         for local in &self.locals {
-            validated.check(&local.ty, |ty| facts.validate_ty_with_budget(ty, budget))?;
+            facts.validate_ty_with_budget_scratch(&local.ty, budget, scratch)?;
         }
-        facts.validate_ty_with_budget(&self.result, budget)?;
+        facts.validate_ty_with_budget_scratch(&self.result, budget, scratch)?;
         for site in &self.loan_sites {
             path(&site.place, budget)?;
         }
@@ -1834,7 +1834,7 @@ impl Function {
                                 }
                             }
                             Rvalue::Repeat { ty, value } => {
-                                facts.validate_ty_with_budget(ty, budget)?;
+                                facts.validate_ty_with_budget_scratch(ty, budget, scratch)?;
                                 operand(value, budget, facts)?;
                             }
                             Rvalue::Binary { left, right, .. } => {
@@ -1842,7 +1842,7 @@ impl Function {
                                 operand(right, budget, facts)?;
                             }
                             Rvalue::Aggregate { ty, fields } => {
-                                facts.validate_ty_with_budget(ty, budget)?;
+                                facts.validate_ty_with_budget_scratch(ty, budget, scratch)?;
                                 for value in fields {
                                     operand(value, budget, facts)?;
                                 }
@@ -1855,7 +1855,11 @@ impl Function {
                                 }
                             }
                             Rvalue::EnumVariant { ty, fields, .. } => {
-                                facts.validate_ty_with_budget(&Ty::Enum(ty.clone()), budget)?;
+                                facts.validate_ty_with_budget_scratch(
+                                    &Ty::Enum(ty.clone()),
+                                    budget,
+                                    scratch,
+                                )?;
                                 for value in fields {
                                     operand(value, budget, facts)?;
                                 }
@@ -1900,7 +1904,7 @@ impl Function {
                         .chain(signature.params.iter())
                         .chain(std::iter::once(&signature.result))
                     {
-                        facts.validate_ty_with_budget(ty, budget)?;
+                        facts.validate_ty_with_budget_scratch(ty, budget, scratch)?;
                     }
                     for value in args {
                         operand(value, budget, facts)?;
@@ -1944,17 +1948,23 @@ impl Function {
         &self,
         operand: &Operand,
         facts: ir::FactsCtx<'_>,
+        scratch: &mut TraitScratch,
     ) -> Result<(), String> {
-        let ty = self.operand_ty_with_facts(operand, facts)?;
-        facts.validate_ty(&ty)
+        let ty = self.operand_ty_with_facts(operand, facts, scratch)?;
+        facts.validate_ty_scratch(&ty, scratch)
     }
     pub fn operand_ty(&self, operand: &Operand) -> Result<Ty, String> {
-        self.operand_ty_with_facts(operand, ir::FactsCtx::Concrete)
+        self.operand_ty_with_facts(
+            operand,
+            ir::FactsCtx::Concrete,
+            &mut TraitScratch::default(),
+        )
     }
     pub(super) fn operand_ty_with_facts(
         &self,
         operand: &Operand,
         facts: ir::FactsCtx<'_>,
+        scratch: &mut TraitScratch,
     ) -> Result<Ty, String> {
         match operand {
             Operand::Constant(Constant::AssociatedConst(operand)) => Ok(operand.ty().clone()),
@@ -1984,7 +1994,7 @@ impl Function {
             }
             Operand::Copy(place) => {
                 let ty = self.place_ty(place)?;
-                if !facts.must_copy(ty)? {
+                if !facts.must_copy_scratch(ty, scratch)? {
                     return Err("CFG Copy operand requires a Copy type".into());
                 }
                 Ok(ty.clone())
@@ -1996,7 +2006,7 @@ impl Function {
                 let raw = ir::raw_deref_index(&self.locals[place.local.0].ty, &place.projection)
                     .is_some();
                 if !raw
-                    && !facts.must_copy(ty)?
+                    && !facts.must_copy_scratch(ty, scratch)?
                     && place.projection.iter().any(|part| {
                         matches!(part, Projection::ConstantIndex(_) | Projection::Deref)
                     })
@@ -2007,7 +2017,7 @@ impl Function {
                 }
                 if !raw
                     && !place.projection.is_empty()
-                    && !facts.must_copy(ty)?
+                    && !facts.must_copy_scratch(ty, scratch)?
                     && let Some(validated) = facts.validated()
                     && validated.has_normal_drop_impls()
                 {
@@ -2041,8 +2051,9 @@ impl Function {
         value: &Operand,
         want: &Ty,
         facts: ir::FactsCtx<'_>,
+        scratch: &mut TraitScratch,
     ) -> Result<(), String> {
-        let got = self.operand_ty_with_facts(value, facts)?;
+        let got = self.operand_ty_with_facts(value, facts, scratch)?;
         if coerces(&got, want) {
             Ok(())
         } else {
@@ -2061,27 +2072,33 @@ impl Function {
         start: &Operand,
         end: Option<&Operand>,
         facts: ir::FactsCtx<'_>,
+        scratch: &mut TraitScratch,
     ) -> Result<Ty, String> {
-        let source = self.slice_operand_ty(slice, facts)?;
+        let source = self.slice_operand_ty(slice, facts, scratch)?;
         let (_, element) = source
             .slice_ref_element()
             .ok_or("CFG subslice requires slice reference")?;
         ir::validate_shared_slice_element_with_facts(element, facts)?;
-        self.require_operand_with_facts(start, &Ty::Int(IntTy::Usize), facts)?;
+        self.require_operand_with_facts(start, &Ty::Int(IntTy::Usize), facts, scratch)?;
         if let Some(end) = end {
-            self.require_operand_with_facts(end, &Ty::Int(IntTy::Usize), facts)?;
+            self.require_operand_with_facts(end, &Ty::Int(IntTy::Usize), facts, scratch)?;
         }
         Ok(source)
     }
 
-    fn slice_operand_ty(&self, value: &Operand, facts: ir::FactsCtx<'_>) -> Result<Ty, String> {
+    fn slice_operand_ty(
+        &self,
+        value: &Operand,
+        facts: ir::FactsCtx<'_>,
+        scratch: &mut TraitScratch,
+    ) -> Result<Ty, String> {
         let (Operand::Copy(place) | Operand::Move(place)) = value else {
             return Err("CFG slice operand requires a whole local".into());
         };
         if !place.projection.is_empty() {
             return Err("CFG slice operand must copy a whole local".into());
         }
-        self.operand_ty_with_facts(value, facts)
+        self.operand_ty_with_facts(value, facts, scratch)
     }
 
     fn indexed_element_ty(
@@ -2089,8 +2106,9 @@ impl Function {
         array: &Place,
         index: &Operand,
         facts: ir::FactsCtx<'_>,
+        scratch: &mut TraitScratch,
     ) -> Result<&Ty, String> {
-        self.require_operand_with_facts(index, &Ty::Int(IntTy::Usize), facts)?;
+        self.require_operand_with_facts(index, &Ty::Int(IntTy::Usize), facts, scratch)?;
         let array_ty = self.indexed_array_place_ty(array)?;
         if let Ty::Slice { element } = array_ty {
             // `*s` of a slice carrier (MUTABLE-SLICES.md): only the exact
@@ -2104,7 +2122,7 @@ impl Function {
         if facts.validated().is_none() {
             validate_type(array_ty, 0)?;
         }
-        facts.validate_ty(array_ty)?;
+        facts.validate_ty_scratch(array_ty, scratch)?;
         let Ty::Array { element, .. } = array_ty else {
             return Err("dynamic indexing requires array place".into());
         };
@@ -2204,8 +2222,9 @@ impl Function {
         target: &Ty,
         value: &Operand,
         facts: ir::FactsCtx<'_>,
+        scratch: &mut TraitScratch,
     ) -> Result<(), String> {
-        let right = self.operand_ty_with_facts(value, facts)?;
+        let right = self.operand_ty_with_facts(value, facts, scratch)?;
         if !matches!(
             op,
             BinaryOp::Add
@@ -2236,7 +2255,12 @@ impl Function {
     fn rvalue_ty(&self, value: &Rvalue) -> Result<Ty, String> {
         self.rvalue_ty_with_facts(value, ir::FactsCtx::Concrete)
     }
-    fn rvalue_ty_with_facts(&self, value: &Rvalue, facts: ir::FactsCtx<'_>) -> Result<Ty, String> {
+    fn rvalue_ty_with_facts(
+        &self,
+        value: &Rvalue,
+        facts: ir::FactsCtx<'_>,
+        scratch: &mut TraitScratch,
+    ) -> Result<Ty, String> {
         match value {
             Rvalue::Intrinsic { intrinsic, args } => {
                 let signature = intrinsic
@@ -2246,42 +2270,48 @@ impl Function {
                     return Err("CFG primitive method arity mismatch".into());
                 }
                 for (arg, param) in args.iter().zip(&signature.params) {
-                    self.require_operand_with_facts(arg, param, facts)?;
+                    self.require_operand_with_facts(arg, param, facts, scratch)?;
                 }
                 Ok(signature.result)
             }
             Rvalue::CharToInt { value, to } => {
-                if self.operand_ty_with_facts(value, facts)? != Ty::Char {
+                if self.operand_ty_with_facts(value, facts, scratch)? != Ty::Char {
                     return Err("CFG character cast requires char source".into());
                 }
                 Ok(Ty::Int(*to))
             }
             Rvalue::U8ToChar { value } => {
-                if self.operand_ty_with_facts(value, facts)? != Ty::Int(IntTy::U8) {
+                if self.operand_ty_with_facts(value, facts, scratch)? != Ty::Int(IntTy::U8) {
                     return Err("CFG character cast requires u8 source".into());
                 }
                 Ok(Ty::Char)
             }
             Rvalue::PtrCast { value, to } => {
-                if !ir::ptr_cast_valid(&self.operand_ty_with_facts(value, facts)?, to) {
+                if !ir::ptr_cast_valid(&self.operand_ty_with_facts(value, facts, scratch)?, to) {
                     return Err("CFG pointer cast requires a supported pointer pair".into());
                 }
                 Ok(to.clone())
             }
             Rvalue::LeadingZeros { value } => {
-                if !matches!(self.operand_ty_with_facts(value, facts)?, Ty::Int(_)) {
+                if !matches!(
+                    self.operand_ty_with_facts(value, facts, scratch)?,
+                    Ty::Int(_)
+                ) {
                     return Err("CFG leading zeros requires integer source".into());
                 }
                 Ok(Ty::Int(IntTy::U32))
             }
             Rvalue::IntCast { value, to } => {
-                if !matches!(self.operand_ty_with_facts(value, facts)?, Ty::Int(_)) {
+                if !matches!(
+                    self.operand_ty_with_facts(value, facts, scratch)?,
+                    Ty::Int(_)
+                ) {
                     return Err("CFG integer cast requires integer source".into());
                 }
                 Ok(Ty::Int(*to))
             }
             Rvalue::FloatCast { value, to } => {
-                let from = ir::NumTy::of(&self.operand_ty_with_facts(value, facts)?)
+                let from = ir::NumTy::of(&self.operand_ty_with_facts(value, facts, scratch)?)
                     .ok_or("CFG float cast requires numeric source")?;
                 if !matches!(
                     (from, to),
@@ -2301,12 +2331,12 @@ impl Function {
                 if facts.validated().is_none() {
                     ir::reference_layers(&ty)?;
                 }
-                facts.validate_ty(&ty)?;
+                facts.validate_ty_scratch(&ty, scratch)?;
                 Ok(ty)
             }
             Rvalue::IndexCopy { array, index } => {
-                let element = self.indexed_element_ty(array, index, facts)?;
-                if !facts.must_copy(element)? {
+                let element = self.indexed_element_ty(array, index, facts, scratch)?;
+                if !facts.must_copy_scratch(element, scratch)? {
                     return Err("unsupported: non-Copy dynamic array element extraction".into());
                 }
                 Ok(element.clone())
@@ -2315,12 +2345,12 @@ impl Function {
                 if facts.validated().is_none() {
                     validate_type(ty, 0)?;
                 }
-                facts.validate_ty(ty)?;
+                facts.validate_ty_scratch(ty, scratch)?;
                 let Ty::Array { element, len } = ty else {
                     return Err("CFG repeat requires array type".into());
                 };
-                self.require_operand_with_facts(value, element, facts)?;
-                if *len > 1 && !facts.must_copy(element)? {
+                self.require_operand_with_facts(value, element, facts, scratch)?;
+                if *len > 1 && !facts.must_copy_scratch(element, scratch)? {
                     return Err(
                         "CFG array repeat requires Copy element for length greater than one".into(),
                     );
@@ -2335,7 +2365,7 @@ impl Function {
                 if facts.validated().is_none() {
                     validate_type(&Ty::Enum(ty.clone()), 0)?;
                 }
-                facts.validate_ty(&Ty::Enum(ty.clone()))?;
+                facts.validate_ty_scratch(&Ty::Enum(ty.clone()), scratch)?;
                 let def = ty
                     .def()
                     .variants
@@ -2345,7 +2375,7 @@ impl Function {
                     return Err("CFG enum initializer arity mismatch".into());
                 }
                 for (field, declaration) in fields.iter().zip(def.fields.iter()) {
-                    self.require_operand_with_facts(field, &declaration.ty, facts)?;
+                    self.require_operand_with_facts(field, &declaration.ty, facts, scratch)?;
                 }
                 Ok(Ty::Enum(ty.clone()))
             }
@@ -2357,16 +2387,16 @@ impl Function {
                 Ok(Ty::Int(IntTy::I32))
             }
             Rvalue::OpaquePack { value, proof } => {
-                let hidden = self.operand_ty_with_facts(value, facts)?;
+                let hidden = self.operand_ty_with_facts(value, facts, scratch)?;
                 let authority = facts
                     .validated()
                     .ok_or("opaque pack requires canonical caller facts")?;
                 proof.validate_shape(&hidden, facts, authority.budget())?;
                 Ok(Ty::Opaque(proof.opaque().clone()))
             }
-            Rvalue::Use(operand) => self.operand_ty_with_facts(operand, facts),
+            Rvalue::Use(operand) => self.operand_ty_with_facts(operand, facts, scratch),
             Rvalue::ArrayToSlice { reference } => {
-                let source = self.slice_operand_ty(reference, facts)?;
+                let source = self.slice_operand_ty(reference, facts, scratch)?;
                 let (kind, element, _) = source
                     .array_ref_element_len()
                     .ok_or("CFG array-to-slice requires array reference")?;
@@ -2391,7 +2421,8 @@ impl Function {
                 })
             }
             Rvalue::RefToDyn { reference, object } => {
-                let Ty::Ref { kind, referent } = self.operand_ty_with_facts(reference, facts)?
+                let Ty::Ref { kind, referent } =
+                    self.operand_ty_with_facts(reference, facts, scratch)?
                 else {
                     return Err("CFG trait object unsizing requires a reference".into());
                 };
@@ -2404,7 +2435,7 @@ impl Function {
                 })
             }
             Rvalue::SliceLen { slice } => {
-                let source = self.slice_operand_ty(slice, facts)?;
+                let source = self.slice_operand_ty(slice, facts, scratch)?;
                 if !source.is_shared_str() {
                     let element = source
                         .shared_slice_element()
@@ -2414,26 +2445,29 @@ impl Function {
                 Ok(Ty::Int(IntTy::Usize))
             }
             Rvalue::SliceIndex { slice, index } => {
-                let source = self.slice_operand_ty(slice, facts)?;
+                let source = self.slice_operand_ty(slice, facts, scratch)?;
                 let element = source
                     .shared_slice_element()
                     .ok_or("CFG slice index requires shared slice")?;
                 ir::validate_shared_slice_element_with_facts(element, facts)?;
-                self.require_operand_with_facts(index, &Ty::Int(IntTy::Usize), facts)?;
-                if !facts.must_copy(element)? {
+                self.require_operand_with_facts(index, &Ty::Int(IntTy::Usize), facts, scratch)?;
+                if !facts.must_copy_scratch(element, scratch)? {
                     return Err("CFG slice index cannot copy a non-Copy element".into());
                 }
                 Ok(element.clone())
             }
             Rvalue::Subslice {
                 slice, start, end, ..
-            } => self.subslice_ty(slice, start, end.as_ref(), facts),
+            } => self.subslice_ty(slice, start, end.as_ref(), facts, scratch),
             Rvalue::RawSlice { kind, args } => {
                 if args.len() != 2 {
                     return Err("CFG raw slice arity mismatch".into());
                 }
-                let ty = ir::raw_slice_ty(*kind, &self.operand_ty_with_facts(&args[0], facts)?)?;
-                self.require_operand_with_facts(&args[1], &Ty::Int(IntTy::Usize), facts)?;
+                let ty = ir::raw_slice_ty(
+                    *kind,
+                    &self.operand_ty_with_facts(&args[0], facts, scratch)?,
+                )?;
+                self.require_operand_with_facts(&args[1], &Ty::Int(IntTy::Usize), facts, scratch)?;
                 validate_slice_position(&ty, facts)?;
                 Ok(ty)
             }
@@ -2450,7 +2484,12 @@ impl Function {
                     return Err("CFG native syscall arity mismatch".into());
                 }
                 for argument in arguments {
-                    self.require_operand_with_facts(argument, &Ty::Int(IntTy::Usize), facts)?;
+                    self.require_operand_with_facts(
+                        argument,
+                        &Ty::Int(IntTy::Usize),
+                        facts,
+                        scratch,
+                    )?;
                 }
                 Ok(Ty::Int(IntTy::Usize))
             }
@@ -2465,7 +2504,7 @@ impl Function {
                     return Err("format argument count mismatch".into());
                 }
                 for (argument, &mode) in arguments.iter().zip(modes) {
-                    let ty = self.operand_ty_with_facts(argument, facts)?;
+                    let ty = self.operand_ty_with_facts(argument, facts, scratch)?;
                     ir::validate_format_ty(
                         mode,
                         &ty,
@@ -2477,7 +2516,7 @@ impl Function {
             Rvalue::Str(_) => Ok(Ty::shared_str_ty()),
             Rvalue::ByteStr(bytes) => Ok(Ty::byte_string_ty(bytes.len())),
             Rvalue::Unary { op, value } => {
-                let ty = self.operand_ty_with_facts(value, facts)?;
+                let ty = self.operand_ty_with_facts(value, facts, scratch)?;
                 match (op, &ty) {
                     (UnaryOp::Neg, Ty::Int(integer)) if integer.is_signed() => Ok(ty),
                     (UnaryOp::Neg, Ty::Float(_)) => Ok(ty),
@@ -2487,8 +2526,8 @@ impl Function {
                 }
             }
             Rvalue::Binary { op, left, right } => {
-                let left_ty = self.operand_ty_with_facts(left, facts)?;
-                let right_ty = self.operand_ty_with_facts(right, facts)?;
+                let left_ty = self.operand_ty_with_facts(left, facts, scratch)?;
+                let right_ty = self.operand_ty_with_facts(right, facts, scratch)?;
                 Self::binary_ty(
                     *op,
                     left_ty,
@@ -2503,13 +2542,13 @@ impl Function {
                 if facts.validated().is_none() {
                     validate_type(ty, 0)?;
                 }
-                facts.validate_ty(ty)?;
+                facts.validate_ty_scratch(ty, scratch)?;
                 if let Ty::Array { element, len } = ty {
                     if fields.len() != *len {
                         return Err("CFG array aggregate length mismatch".into());
                     }
                     for field in fields {
-                        self.require_operand_with_facts(field, element, facts)?;
+                        self.require_operand_with_facts(field, element, facts, scratch)?;
                     }
                     return Ok(ty.clone());
                 }
@@ -2524,6 +2563,7 @@ impl Function {
                         value,
                         ty.field_ty(index).ok_or("invalid CFG aggregate field")?,
                         facts,
+                        scratch,
                     )?;
                 }
                 Ok(ty.clone())
@@ -2595,6 +2635,8 @@ impl Function {
         facts: ir::FactsCtx<'_>,
         physical: Option<&super::opaque_physical::PhysicalValidation<'_>>,
     ) -> Result<(), String> {
+        // Proof/type memo local to this validation pass only.
+        let scratch = &mut TraitScratch::default();
         if let Some(authority) = facts.validated()
             && authority.phase() == super::traits::FactsPhase::Schema
         {
@@ -2602,9 +2644,9 @@ impl Function {
         }
         let mut validated = super::traits::ValidatedTypes::default();
         for local in &self.locals {
-            validated.check(&local.ty, |ty| facts.validate_ty(ty))?;
+            validated.check(&local.ty, |ty| facts.validate_ty_scratch(ty, scratch))?;
         }
-        facts.validate_ty(&self.result)?;
+        facts.validate_ty_scratch(&self.result, scratch)?;
         for local in &self.locals {
             validate_slice_position(&local.ty, facts)?;
         }
@@ -2720,9 +2762,9 @@ impl Function {
         for item in &self.blocks {
             for statement in &item.statements {
                 statement.value.visit_operands(&mut |operand| {
-                    self.validate_operand_facts(operand, facts)?;
+                    self.validate_operand_facts(operand, facts, scratch)?;
                     if let Operand::Constant(Constant::Enum { ty, .. }) = operand {
-                        facts.validate_ty(&Ty::Enum(ty.clone()))?;
+                        facts.validate_ty_scratch(&Ty::Enum(ty.clone()), scratch)?;
                     }
                     Ok(())
                 })?;
@@ -2734,8 +2776,8 @@ impl Function {
                         op,
                     } => {
                         self.indexed_mutation_ty(array)?;
-                        let element = self.indexed_element_ty(array, index, facts)?;
-                        self.compound_ty(*op, element, value, facts)?;
+                        let element = self.indexed_element_ty(array, index, facts, scratch)?;
+                        self.compound_ty(*op, element, value, facts, scratch)?;
                     }
                     Statement::IndexAssign {
                         array,
@@ -2745,18 +2787,18 @@ impl Function {
                         if matches!(self.indexed_array_place_ty(array)?, Ty::Slice { .. }) {
                             self.indexed_mutation_ty(array)?;
                         }
-                        let element = self.indexed_element_ty(array, index, facts)?;
+                        let element = self.indexed_element_ty(array, index, facts, scratch)?;
                         if matches!(self.indexed_array_place_ty(array)?, Ty::Slice { .. })
-                            && !facts.must_copy(element)?
+                            && !facts.must_copy_scratch(element, scratch)?
                         {
                             return Err(
                                 "unsupported: mutable slice assignment of non-Copy elements".into(),
                             );
                         }
-                        self.require_operand_with_facts(value, element, facts)?;
+                        self.require_operand_with_facts(value, element, facts, scratch)?;
                     }
                     Statement::IndexInspect { array, index } => {
-                        self.indexed_element_ty(array, index, facts)?;
+                        self.indexed_element_ty(array, index, facts, scratch)?;
                     }
                     Statement::Inspect(place) => {
                         self.place_ty(place)?;
@@ -2775,8 +2817,8 @@ impl Function {
                                 return Err("CFG loan site used more than once".into());
                             }
                         }
-                        let got = self.rvalue_ty_with_facts(value, facts)?;
-                        facts.validate_ty(&got)?;
+                        let got = self.rvalue_ty_with_facts(value, facts, scratch)?;
+                        facts.validate_ty_scratch(&got, scratch)?;
                         let want = self.place_ty(destination)?;
                         if !coerces(&got, want) {
                             return Err("CFG assignment type mismatch".into());
@@ -2785,9 +2827,9 @@ impl Function {
                 }
             }
             item.terminator.value.visit_operands(&mut |operand| {
-                self.validate_operand_facts(operand, facts)?;
+                self.validate_operand_facts(operand, facts, scratch)?;
                 if let Operand::Constant(Constant::Enum { ty, .. }) = operand {
-                    facts.validate_ty(&Ty::Enum(ty.clone()))?;
+                    facts.validate_ty_scratch(&Ty::Enum(ty.clone()), scratch)?;
                 }
                 Ok(())
             })?;
@@ -2824,7 +2866,7 @@ impl Function {
                     then_block,
                     else_block,
                 } => {
-                    self.require_operand_with_facts(condition, &Ty::Bool, facts)?;
+                    self.require_operand_with_facts(condition, &Ty::Bool, facts, scratch)?;
                     block(*then_block)?;
                     block(*else_block)?;
                 }
@@ -2856,7 +2898,7 @@ impl Function {
                         .chain(signature.params.iter())
                         .chain(std::iter::once(&signature.result))
                     {
-                        facts.validate_ty(ty)?;
+                        facts.validate_ty_scratch(ty, scratch)?;
                     }
                     if signature.params.len() != args.len() {
                         return Err("CFG call arity mismatch".into());
@@ -2865,19 +2907,19 @@ impl Function {
                         if facts.validated().is_none() {
                             validate_type(ty, 0)?;
                         }
-                        facts.validate_ty(ty)?;
+                        facts.validate_ty_scratch(ty, scratch)?;
                     }
                     if facts.validated().is_none() {
                         validate_type(&signature.result, 0)?;
                     }
-                    facts.validate_ty(&signature.result)?;
+                    facts.validate_ty_scratch(&signature.result, scratch)?;
                     if facts.validated().is_none() {
                         signature
                             .ref_contract
                             .validate(&signature.params, &signature.result)?;
                     }
                     for (arg, ty) in args.iter().zip(&signature.params) {
-                        self.require_operand_with_facts(arg, ty, facts)?;
+                        self.require_operand_with_facts(arg, ty, facts, scratch)?;
                     }
                     let want = self.place_ty(destination)?;
                     if !coerces(&signature.result, want) {
@@ -2986,6 +3028,8 @@ struct LoopTarget {
 struct Lowerer<'a> {
     publication: Option<&'a std::sync::Arc<super::source_replay::CanonicalSourcePublication>>,
     facts: ir::FactsCtx<'a>,
+    // Proof/type memo for this lowering computation only; never published.
+    scratch: std::cell::RefCell<TraitScratch>,
     budget: Option<&'a ir::PlanBudget>,
     resource_error: Option<String>,
     runtime_sites: Vec<runtime_sites::Row>,
@@ -3774,7 +3818,10 @@ impl Lowerer<'_> {
     }
 
     fn consume(&self, place: Place) -> Result<Operand, String> {
-        if self.facts.must_copy(self.result.place_ty(&place)?)? {
+        if self.facts.must_copy_scratch(
+            self.result.place_ty(&place)?,
+            &mut self.scratch.borrow_mut(),
+        )? {
             Ok(Operand::Copy(place))
         } else {
             Ok(Operand::Move(place))
@@ -3812,8 +3859,12 @@ impl Lowerer<'_> {
             return Err("dynamic indexing requires array or slice place".into());
         }
         let index = self.expression(index)?;
-        self.result
-            .require_operand_with_facts(&index, &Ty::Int(IntTy::Usize), self.facts)?;
+        self.result.require_operand_with_facts(
+            &index,
+            &Ty::Int(IntTy::Usize),
+            self.facts,
+            &mut self.scratch.borrow_mut(),
+        )?;
         Ok((array, index))
     }
 
@@ -4370,7 +4421,11 @@ impl Lowerer<'_> {
         match &expression.kind {
             ir::ExprKind::OpaqueWrap { opaque, value } => {
                 let value = self.expression(*value)?;
-                let hidden = self.result.operand_ty_with_facts(&value, self.facts)?;
+                let hidden = self.result.operand_ty_with_facts(
+                    &value,
+                    self.facts,
+                    &mut self.scratch.borrow_mut(),
+                )?;
                 let budget = self
                     .budget
                     .ok_or("opaque pack requires canonical lowering budget")?;
@@ -4501,7 +4556,11 @@ impl Lowerer<'_> {
             ir::ExprKind::Deref { .. } => {
                 let source = self.pattern_source(id)?;
                 let operand = self.consume(source)?;
-                self.result.operand_ty_with_facts(&operand, self.facts)?;
+                self.result.operand_ty_with_facts(
+                    &operand,
+                    self.facts,
+                    &mut self.scratch.borrow_mut(),
+                )?;
                 self.assign(destination.clone(), Rvalue::Use(operand), origin);
             }
             ir::ExprKind::BoundsCheck { array, index } => {
@@ -4521,7 +4580,10 @@ impl Lowerer<'_> {
                 );
             }
             ir::ExprKind::DynamicIndex { base, index } => {
-                if !self.facts.must_copy(&expression.ty)? {
+                if !self
+                    .facts
+                    .must_copy_scratch(&expression.ty, &mut self.scratch.borrow_mut())?
+                {
                     return Err("unsupported: non-Copy dynamic array element extraction; only direct let _ is supported".into());
                 }
                 let (array, index) = self.dynamic_source(*base, *index)?;
@@ -5394,6 +5456,7 @@ fn lower_internal_with_source(
             SourceLowering::Legacy => None,
         },
         facts,
+        scratch: std::cell::RefCell::new(TraitScratch::default()),
         budget,
         resource_error: None,
         runtime_sites: Vec::new(),
@@ -5773,6 +5836,7 @@ mod panic_terminal_tests {
         let mut lowerer = Lowerer {
             publication: Some(&publication),
             facts: ir::FactsCtx::from_validated(publication.facts()),
+            scratch: std::cell::RefCell::new(TraitScratch::default()),
             budget: Some(&budget),
             resource_error: None,
             runtime_sites: Vec::new(),
@@ -8885,6 +8949,7 @@ mod tests {
         let mut budget = Lowerer {
             publication: None,
             facts: ir::FactsCtx::Concrete,
+            scratch: std::cell::RefCell::new(TraitScratch::default()),
             budget: None,
             resource_error: None,
             runtime_sites: Vec::new(),
@@ -10169,6 +10234,7 @@ mod tests {
         Lowerer {
             publication: None,
             facts: ir::FactsCtx::Concrete,
+            scratch: std::cell::RefCell::new(TraitScratch::default()),
             budget: Some(budget),
             resource_error: None,
             runtime_sites: Vec::new(),

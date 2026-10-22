@@ -1104,6 +1104,57 @@ impl ValidatedFacts {
         )?;
         Ok(())
     }
+    /// `validate_ty` memoized in a node-local scratch.
+    pub fn validate_ty_scratch(&self, ty: &Ty, scratch: &mut TraitScratch) -> Result<()> {
+        scratch.for_facts(self);
+        scratch.valid.check(ty, |ty| self.validate_ty(ty))
+    }
+    /// `must_copy` memoized in a node-local scratch, sharing its proof memo.
+    pub fn must_copy_scratch(&self, ty: &Ty, scratch: &mut TraitScratch) -> Result<bool> {
+        if self.phase() == FactsPhase::Schema {
+            return self.must_copy(ty);
+        }
+        scratch.for_facts(self);
+        let address = type_allocation(ty);
+        if let Some(address) = address
+            && let Some(candidates) = scratch.copy_index.get(&address)
+        {
+            for &index in candidates {
+                let (old, answer) = &scratch.copy[index];
+                if same_type_allocation(old, ty) {
+                    return Ok(*answer);
+                }
+            }
+        }
+        self.validate_ty_scratch(ty, scratch)?;
+        if matches!(
+            ty,
+            Ty::Int(_) | Ty::Float(_) | Ty::Char | Ty::Bool | Ty::Unit | Ty::Never
+        ) {
+            return Ok(true);
+        }
+        let predicate = Predicate::Implements(TraitRef {
+            declaration: self.world.catalog.id(CatalogItem::Copy),
+            self_ty: ty.clone(),
+            args: Arc::from([]),
+        });
+        let answer = matches!(
+            self.world.prove_goal_with(&predicate, self, scratch)?,
+            ProofOutcome::Proved(_)
+        );
+        if let Some(address) = address
+            && scratch.copy.len() < MAX_SCRATCH_OBLIGATIONS
+            && scratch.copy.try_reserve(1).is_ok()
+        {
+            scratch
+                .copy_index
+                .entry(address)
+                .or_default()
+                .push(scratch.copy.len());
+            scratch.copy.push((ty.clone(), answer));
+        }
+        Ok(answer)
+    }
     pub fn must_copy(&self, ty: &Ty) -> Result<bool> {
         if self.phase() == FactsPhase::Schema {
             return Err(FactsError::invalid(
@@ -1297,24 +1348,55 @@ impl ValidatedTypes {
 }
 /// Allocation identity of a type root, or None for leaves not worth caching.
 fn type_allocation(ty: &Ty) -> Option<usize> {
-    Some(match ty {
-        Ty::Struct(t) => t.def() as *const ir::StructDef as usize,
-        Ty::Enum(t) => t.def() as *const ir::EnumDef as usize,
-        Ty::Tuple(t) => t.as_ptr() as usize,
-        Ty::Array { element, .. } | Ty::Slice { element } => Arc::as_ptr(element) as usize,
-        Ty::Ref { referent, .. } => Arc::as_ptr(referent) as usize,
-        _ => return None,
-    })
-}
-fn same_type_allocation(a: &Ty, b: &Ty) -> bool {
-    match (a, b) {
-        (Ty::Struct(x), Ty::Struct(y)) => std::ptr::eq(x.def(), y.def()) && x.id() == y.id(),
-        (Ty::Enum(x), Ty::Enum(y)) => std::ptr::eq(x.def(), y.def()) && x.id() == y.id(),
-        (Ty::Tuple(x), Ty::Tuple(y)) => Arc::ptr_eq(x, y),
-        (Ty::Array { element: x, len: a }, Ty::Array { element: y, len: b }) => {
-            a == b && Arc::ptr_eq(x, y)
+    use std::hash::{Hash, Hasher};
+    match ty {
+        Ty::Int(_) | Ty::Float(_) | Ty::Char | Ty::Bool | Ty::Unit | Ty::Never | Ty::Str => {
+            return None;
         }
-        (Ty::Slice { element: x }, Ty::Slice { element: y }) => Arc::ptr_eq(x, y),
+        _ => {}
+    }
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    ty.hash(&mut hasher);
+    Some(hasher.finish() as usize)
+}
+/// Equality that is faithful to validation inputs: nominal applications must
+/// share the exact retained definition and realization capability (identity
+/// alone is not authority); other structure compares recursively. Variants
+/// carrying opaque, closure, object or projection payloads only match the
+/// same allocation.
+fn same_type_allocation(a: &Ty, b: &Ty) -> bool {
+    fn nominal_same<T>(
+        x: &T,
+        y: &T,
+        realization: impl Fn(&T) -> Option<&super::nominal_realization::ReadNominal>,
+    ) -> bool {
+        match (realization(x), realization(y)) {
+            (None, None) => true,
+            (Some(x), Some(y)) => x.same_fact(y),
+            _ => false,
+        }
+    }
+    fn all(a: &[Ty], b: &[Ty]) -> bool {
+        a.len() == b.len() && a.iter().zip(b).all(|(a, b)| same_type_allocation(a, b))
+    }
+    match (a, b) {
+        (Ty::Struct(x), Ty::Struct(y)) => {
+            x.id() == y.id()
+                && std::ptr::eq(x.def(), y.def())
+                && nominal_same(x, y, |t| t.realization())
+        }
+        (Ty::Enum(x), Ty::Enum(y)) => {
+            x.id() == y.id()
+                && std::ptr::eq(x.def(), y.def())
+                && nominal_same(x, y, |t| t.realization())
+        }
+        (Ty::Tuple(x), Ty::Tuple(y)) => Arc::ptr_eq(x, y) || all(x, y),
+        (Ty::Array { element: x, len: a }, Ty::Array { element: y, len: b }) => {
+            a == b && (Arc::ptr_eq(x, y) || same_type_allocation(x, y))
+        }
+        (Ty::Slice { element: x }, Ty::Slice { element: y }) => {
+            Arc::ptr_eq(x, y) || same_type_allocation(x, y)
+        }
         (
             Ty::Ref {
                 referent: x,
@@ -1324,7 +1406,30 @@ fn same_type_allocation(a: &Ty, b: &Ty) -> bool {
                 referent: y,
                 kind: b,
             },
-        ) => a == b && Arc::ptr_eq(x, y),
+        )
+        | (
+            Ty::RawPtr {
+                pointee: x,
+                kind: a,
+            },
+            Ty::RawPtr {
+                pointee: y,
+                kind: b,
+            },
+        ) => a == b && (Arc::ptr_eq(x, y) || same_type_allocation(x, y)),
+        (Ty::Param(x), Ty::Param(y)) => x == y,
+        (Ty::Int(x), Ty::Int(y)) => x == y,
+        (Ty::Float(x), Ty::Float(y)) => x == y,
+        (Ty::Char, Ty::Char)
+        | (Ty::Bool, Ty::Bool)
+        | (Ty::Unit, Ty::Unit)
+        | (Ty::Never, Ty::Never)
+        | (Ty::Str, Ty::Str) => true,
+        (Ty::Opaque(x), Ty::Opaque(y)) => Arc::ptr_eq(x, y),
+        (Ty::Closure(x), Ty::Closure(y)) => Arc::ptr_eq(x, y),
+        (Ty::FnItem(x), Ty::FnItem(y)) => Arc::ptr_eq(x, y),
+        (Ty::AssociatedType(x), Ty::AssociatedType(y)) => Arc::ptr_eq(x, y),
+        (Ty::Dyn(x), Ty::Dyn(y)) => Arc::ptr_eq(x, y),
         _ => false,
     }
 }
@@ -1439,14 +1544,33 @@ impl ProofScratch {
 pub struct TraitScratch {
     world: Option<WorldId>,
     proofs: ProofScratch,
+    /// Executable type validation (`validate_ty`) successes and Copy
+    /// answers for identical type allocations under one facts subject.
+    valid: ValidatedTypes,
+    copy: Vec<(Ty, bool)>,
+    copy_index: std::collections::HashMap<usize, Vec<usize>>,
+    /// The facts identity these answers belong to (environment + phase).
+    facts_key: Option<(usize, FactsPhase, DeclId)>,
 }
 impl TraitScratch {
     fn for_world(&mut self, world: WorldId) -> &mut ProofScratch {
         if self.world != Some(world) {
-            self.world = Some(world);
-            self.proofs = ProofScratch::default();
+            *self = TraitScratch {
+                world: Some(world),
+                ..TraitScratch::default()
+            };
         }
         &mut self.proofs
+    }
+    fn for_facts(&mut self, facts: &ValidatedFacts) {
+        self.for_world(facts.world.id);
+        let key = (facts.predicates.index, facts.phase(), facts.declaration());
+        if self.facts_key != Some(key) {
+            self.facts_key = Some(key);
+            self.valid = ValidatedTypes::default();
+            self.copy.clear();
+            self.copy_index.clear();
+        }
     }
 }
 impl std::ops::Deref for ProofScratch {

@@ -437,6 +437,7 @@ pub(super) fn normalize(
                         .operand_ty_with_facts(
                             operand,
                             ir::FactsCtx::from_validated(publication.facts()),
+                            &mut super::traits::TraitScratch::default(),
                         )
                         .map_err(Error::new)?;
                     let actual = specialization.ty(&actual)?;
