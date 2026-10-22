@@ -123,7 +123,11 @@ impl Solver<'_, '_, '_> {
                     self.unify(result, element)?;
                     return Ok(true);
                 }
-                _ => {}
+                // Only nominal/parameter carriers may overload `Deref`. A
+                // scalar, array or other builtin carrier has no target: leave
+                // it unresolved for the checker's E0614, never `*x: typeof x`.
+                Domain::Nominal(..) | Domain::Fixed(ir::Ty::Param(_)) => {}
+                _ => return Ok(false),
             }
         }
         if matches!(self.domain(left), Domain::Unknown) {

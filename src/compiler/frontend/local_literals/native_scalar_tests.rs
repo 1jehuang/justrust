@@ -104,7 +104,8 @@ fn inspect(source: &str, malformed_arity: bool) -> Result<(usize, Vec<ir::Ty>), 
     }
     solver.block(&function.body, 0)?;
     solver.solve()?;
-    let pending = solver.projections.len() + solver.coercions.len();
+    // Builtin `*place` is an operator constraint since d658dd6e1.
+    let pending = solver.projections.len() + solver.coercions.len() + solver.operators.len();
     let mut types = Vec::new();
     for (_, term) in &solver.sites {
         if let Some(ty) = solver.resolve(*term, 0)? {
