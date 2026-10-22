@@ -17112,6 +17112,24 @@ impl DeclRegistry {
             .filter(|d| d.id == id)
             .ok_or_else(|| "foreign generic declaration identity".into())
     }
+    /// Identity-checked mutable access during registration. Callers never
+    /// index storage by `DeclId.index` directly, so the identity scheme can
+    /// change without touching them.
+    fn declaration_mut(&mut self, id: ir::DeclId) -> Result<&mut DeclInfo, String> {
+        decl_mut(&mut self.declarations, id)
+    }
+}
+/// Identity-checked mutable registry access that borrows only the
+/// declaration storage, so callers may hold other registry fields.
+fn decl_mut(
+    declarations: &mut [DeclInfo],
+    id: impl std::borrow::Borrow<ir::DeclId>,
+) -> Result<&mut DeclInfo, String> {
+    let id = *id.borrow();
+    declarations
+        .get_mut(id.index as usize)
+        .filter(|d| d.id == id)
+        .ok_or_else(|| "foreign generic declaration identity".into())
 }
 #[derive(Clone, Debug)]
 enum NominalSchema {
@@ -18227,7 +18245,7 @@ impl PlanCtx {
             let key =
                 name_scope::path_key(program.names.as_ref(), &declaration.name, Namespace::Value)?;
             let id = registry.constants[&key];
-            registry.declarations[id.index as usize].visibility = declaration.visibility.clone();
+            decl_mut(&mut registry.declarations, id)?.visibility = declaration.visibility.clone();
         }
         for declaration in &program.structs {
             clone_visibility(&declaration.visibility, budget)?;
@@ -18236,7 +18254,7 @@ impl PlanCtx {
                 &declaration.name,
                 Namespace::Type,
             )?];
-            registry.declarations[id.index as usize].visibility = declaration.visibility.clone();
+            decl_mut(&mut registry.declarations, id)?.visibility = declaration.visibility.clone();
         }
         for declaration in &program.enums {
             clone_visibility(&declaration.visibility, budget)?;
@@ -18245,7 +18263,7 @@ impl PlanCtx {
                 &declaration.name,
                 Namespace::Type,
             )?];
-            registry.declarations[id.index as usize].visibility = declaration.visibility.clone();
+            decl_mut(&mut registry.declarations, id)?.visibility = declaration.visibility.clone();
         }
         for (position, source) in registry.callable_sources.iter().enumerate() {
             let CallableSource::Free(index) = *source else {
@@ -18254,36 +18272,36 @@ impl PlanCtx {
             let function = &program.functions[index];
             clone_visibility(&function.visibility, budget)?;
             let id = registry.function_ids[position];
-            registry.declarations[id.index as usize].visibility = function.visibility.clone();
+            decl_mut(&mut registry.declarations, id)?.visibility = function.visibility.clone();
             if let Some(receipt) = &function.embedded_source {
                 let bound = function_source::bind_registration(
                     receipt,
                     program,
-                    &registry.declarations[id.index as usize],
+                    registry.declaration(id)?,
                     index,
                     id,
                     budget,
                 )?;
-                registry.declarations[id.index as usize].embedded_function = Some(bound);
+                decl_mut(&mut registry.declarations, id)?.embedded_function = Some(bound);
             }
         }
         associated_constants::seal_registry_owners(&mut registry, program, budget)?;
         for (index, declaration) in program.traits.iter().enumerate() {
             let id = registry.trait_ids[index];
             clone_visibility(&declaration.visibility, budget)?;
-            registry.declarations[id.index as usize].visibility = declaration.visibility.clone();
-            let trait_env = registry.declarations[id.index as usize].param_env.clone();
-            let inherited_env = registry.declarations[id.index as usize].env.clone();
+            decl_mut(&mut registry.declarations, id)?.visibility = declaration.visibility.clone();
+            let trait_env = registry.declaration(id)?.param_env.clone();
+            let inherited_env = registry.declaration(id)?.env.clone();
             for item in &registry.trait_associated_types[index] {
                 clone_visibility(&declaration.visibility, budget)?;
-                let info = &mut registry.declarations[item.index as usize];
+                let info = decl_mut(&mut registry.declarations, item)?;
                 info.owner = Some(id);
                 info.visibility = declaration.visibility.clone();
                 info.env = inherited_env.clone();
             }
             for (ii, item) in registry.trait_items[index].iter().enumerate() {
                 clone_visibility(&declaration.visibility, budget)?;
-                let info = &mut registry.declarations[item.index as usize];
+                let info = decl_mut(&mut registry.declarations, item)?;
                 info.receiver = declaration.items[ii].receiver;
                 info.owner = Some(id);
                 info.visibility = declaration.visibility.clone();
@@ -18295,19 +18313,17 @@ impl PlanCtx {
         }
         for (implementation, block) in program.impls.iter().enumerate() {
             let id = registry.impl_ids[implementation];
-            registry.declarations[id.index as usize].path.module = block.module;
+            decl_mut(&mut registry.declarations, id)?.path.module = block.module;
         }
         for (index, source) in registry.callable_sources.iter().enumerate() {
             let CallableSource::TraitDefault { trait_index, item } = *source else {
                 continue;
             };
             let owner = registry.trait_ids[trait_index];
-            let trait_env = registry.declarations[owner.index as usize]
-                .param_env
-                .clone();
-            let module = registry.declarations[owner.index as usize].path.module;
+            let trait_env = registry.declaration(owner)?.param_env.clone();
+            let module = registry.declaration(owner)?.path.module;
             let id = registry.function_ids[index];
-            let info = &mut registry.declarations[id.index as usize];
+            let info = decl_mut(&mut registry.declarations, id)?;
             info.owner = Some(owner);
             info.receiver = program.traits[trait_index].items[item].receiver;
             clone_visibility(&program.traits[trait_index].visibility, budget)?;
@@ -18330,11 +18346,12 @@ impl PlanCtx {
             );
         }
         for (implementation, ids) in registry.associated_ids.iter().enumerate() {
-            let impl_env = registry.declarations[registry.impl_ids[implementation].index as usize]
+            let impl_env = registry
+                .declaration(registry.impl_ids[implementation])?
                 .param_env
                 .clone();
             for id in ids {
-                let info = &mut registry.declarations[id.index as usize];
+                let info = decl_mut(&mut registry.declarations, id)?;
                 info.env = Arc::new(ir::GenericEnv::new(
                     &[impl_env.clone(), info.param_env.clone()],
                     budget,
@@ -18562,8 +18579,7 @@ impl PlanCtx {
                             budget.charge_work(1)?;
                             if *trait_id == tid {
                                 for item_id in &registry.trait_items[ti] {
-                                    let item_name =
-                                        &registry.declarations[item_id.index as usize].path.item;
+                                    let item_name = &registry.declaration(*item_id)?.path.item;
                                     budget.charge_work(1)?;
                                     let method_name = method
                                         .function
@@ -18589,7 +18605,7 @@ impl PlanCtx {
                 };
                 Arc::get_mut(&mut registry)
                     .ok_or("registry unexpectedly shared before seal")?
-                    .declarations[id.index as usize]
+                    .declaration_mut(*id)?
                     .path
                     .associated = Some(owner);
                 budget.retain_bytes(512)?;

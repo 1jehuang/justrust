@@ -44,12 +44,12 @@ pub(super) fn seal_registry_owners(
 ) -> Result<(), String> {
     for (owner_index, constants) in registry.associated_constants.traits.iter().enumerate() {
         let owner = registry.trait_ids[owner_index];
-        let env = registry.declarations[owner.index as usize].env.clone();
+        let env = registry.declaration(owner)?.env.clone();
         for (index, declaration) in constants.iter().enumerate() {
             budget.charge_work(1)?;
             let source = &program.traits[owner_index].associated_constants[index];
             clone_visibility(&source.visibility, budget)?;
-            let info = &mut registry.declarations[declaration.index as usize];
+            let info = decl_mut(&mut registry.declarations, declaration)?;
             info.owner = Some(owner);
             info.env = env.clone();
             info.visibility = source.visibility.clone();
@@ -86,12 +86,12 @@ pub(super) fn seal_registry_owners(
             }
         }
         let owner = registry.impl_ids[owner_index];
-        let env = registry.declarations[owner.index as usize].env.clone();
+        let env = registry.declaration(owner)?.env.clone();
         for (index, declaration) in constants.iter().enumerate() {
             budget.charge_work(1)?;
             let source = &program.impls[owner_index].associated_constants[index];
             clone_visibility(&source.visibility, budget)?;
-            let info = &mut registry.declarations[declaration.index as usize];
+            let info = decl_mut(&mut registry.declarations, declaration)?;
             info.owner = Some(owner);
             info.env = env.clone();
             info.visibility = source.visibility.clone();
