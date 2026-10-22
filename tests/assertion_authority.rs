@@ -212,16 +212,26 @@ fn nonbool_conditions_and_nonunit_results_fail_semantically_not_as_unsupported()
 
 #[test]
 fn formatting_and_nonliteral_messages_remain_explicit_parse_boundaries() {
+    // Stock: "format argument must be a string literal". Still an explicit
+    // parse boundary here.
+    let error = frontend::parse("fn main(){assert!(true, 1i32)}")
+        .expect_err("unsupported messages must fail during parsing");
+    assert!(error.to_ascii_lowercase().contains("unsupported"), "{error}");
+    // Stock accepts formatted messages; they are native now.
+    let program = frontend::parse("fn main(){assert!(true, \"{}\", 1i32)}").unwrap();
+    frontend::check(&program).unwrap();
+    // Stock rejects these (E0425, "argument never used"): they must be
+    // rejected with a real diagnostic, not an unsupported boundary.
     for source in [
-        "fn main(){assert!(true, 1i32)}",
-        "fn main(){assert!(true, \"{}\", 1i32)}",
         "fn main(){assert!(true, \"value {value}\")}",
         "fn main(){assert!(true, \"literal\", 1i32)}",
     ] {
-        let error =
-            frontend::parse(source).expect_err("unsupported messages must fail during parsing");
+        let error = match frontend::parse(source) {
+            Err(error) => error,
+            Ok(program) => frontend::check(&program).expect_err("stock rejects this assertion"),
+        };
         assert!(
-            error.to_ascii_lowercase().contains("unsupported"),
+            !error.to_ascii_lowercase().contains("unsupported"),
             "{source}: {error}"
         );
     }
@@ -391,12 +401,12 @@ fn main(){}
                 .passed()
         );
     }
-    let error = frontend::parse("macro_rules! assert {()=>{23i32};} fn main(){assert!()}")
-        .expect_err("known module macro must not fall back to builtin");
-    assert!(
-        error.contains("module macros in expression position are unsupported"),
-        "{error}"
-    );
+    // A module `assert!` shadows the builtin (stock: E0308, `23i32` in a unit
+    // tail). It must expand the user macro, never the builtin.
+    let program = frontend::parse("macro_rules! assert {()=>{23i32};} fn main(){assert!()}")
+        .expect("module macro expands");
+    let error = frontend::check(&program).expect_err("stock rejects with E0308");
+    assert!(error.contains("E0308"), "{error}");
 }
 
 #[test]
