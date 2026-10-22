@@ -11401,7 +11401,9 @@ mod tests {
         }
         // G3 admits nested carriers structurally; ownership still authorizes use.
         validate_root_reference_actual(&components, &budget).unwrap();
-        assert!(validate_root_reference_actual(&Ty::Str, &budget).is_err());
+        // A bare `str` is admitted by shape only (025791b22). Its implicit
+        // `Sized` obligation rejects it unless the binder is `?Sized` (E0277).
+        assert!(validate_root_reference_actual(&Ty::Str, &budget).is_ok());
         assert!(
             validate_root_reference_actual(&reference(BorrowKind::Mut, Ty::Bool), &budget).is_ok()
         );
@@ -12563,7 +12565,8 @@ mod tests {
                 .is_empty()
         );
         validate_root_reference_actual(&hidden, &PlanBudget::default()).unwrap();
-        assert!(validate_root_reference_actual(&Ty::Str, &PlanBudget::default()).is_err());
+        // Shape-only admission; the Sized proof owns the E0277 rejection.
+        assert!(validate_root_reference_actual(&Ty::Str, &PlanBudget::default()).is_ok());
         let budget = PlanBudget::new(PlanLimits {
             applications: 4,
             bytes: 16,
