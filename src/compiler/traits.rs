@@ -1574,6 +1574,9 @@ pub struct TraitScratch {
     /// Successful call-signature validations (subject callee, signature).
     signatures: Vec<(Callee, Signature)>,
     signature_index: std::collections::HashMap<u64, Vec<usize>>,
+    /// Successful direct-call discharges under the current facts subject.
+    directs: Vec<DirectCallProof>,
+    direct_index: std::collections::HashMap<u64, Vec<usize>>,
     /// The facts identity these answers belong to (environment + phase).
     facts_key: Option<(usize, FactsPhase, DeclId)>,
 }
@@ -1597,6 +1600,8 @@ impl TraitScratch {
             self.copy_index.clear();
             self.signatures.clear();
             self.signature_index.clear();
+            self.directs.clear();
+            self.direct_index.clear();
         }
     }
 }
@@ -7776,11 +7781,40 @@ impl TraitCx for ValidatedTraitWorld {
         scratch: &mut TraitScratch,
     ) -> Result<DirectCallProof> {
         self.check_facts(facts, true)?;
-        self.discharge_in(
+        scratch.for_facts(facts);
+        let bucket = {
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            target.hash(&mut hasher);
+            hasher.finish()
+        };
+        if let Some(candidates) = scratch.direct_index.get(&bucket) {
+            for &index in candidates {
+                charged(&self.budget, self.budget.charge_work(1))?;
+                let old = &scratch.directs[index];
+                if old.target.declaration == target.declaration
+                    && same_types(&old.target.type_args, &target.type_args)
+                {
+                    retain::<DirectCallProof>(&self.budget, 1)?;
+                    return Ok(old.clone());
+                }
+            }
+        }
+        let proof = self.discharge_in(
             target,
             ProofContext::from_facts(facts),
             scratch.for_world(self.id),
-        )
+        )?;
+        if scratch.directs.len() < MAX_SCRATCH_OBLIGATIONS && scratch.directs.try_reserve(1).is_ok()
+        {
+            scratch
+                .direct_index
+                .entry(bucket)
+                .or_default()
+                .push(scratch.directs.len());
+            scratch.directs.push(proof.clone());
+        }
+        Ok(proof)
     }
     fn resolve_trait_call(
         &self,
