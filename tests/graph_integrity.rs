@@ -661,12 +661,13 @@ const OPTIMIZER_WORK_GROWTH_CEILING: f64 = 1.81;
 
 /// The largest generated program that must compile. Raise as fixed; the
 /// architectural target is no fixed program-size ceiling at all.
-const REQUIRED_FUNCTIONS: usize = 2000;
+const REQUIRED_FUNCTIONS: usize = 3000;
 /// Known to fail today because whole-compilation budgets cap total program
 /// size. When it compiles, this test fails until the constant is raised.
 /// None: budgets are per-node ledgers (no shared plan/expansion ledger) and
-/// scale with each node's own input. Larger counts hit the per-function
-/// ownership state cap of the single generated `main`, a per-task limit.
+/// scale with each node's own input. Larger counts hit only the ownership
+/// structural cap of the single generated `main` (3500 calls lower to over
+/// 16,384 blocks in one function), a per-function limit, not program size.
 const KNOWN_FAILING_FUNCTIONS: Option<usize> = None;
 
 struct Graph {

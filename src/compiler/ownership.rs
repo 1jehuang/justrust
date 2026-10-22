@@ -3568,7 +3568,7 @@ fn analyze_with_context(
                     physical,
                     effect_table,
                     &mut budget,
-                    limits.state_bytes - bytes,
+                    state_bytes - bytes,
                 )?
             } else {
                 borrow::Plan::build_validated(
@@ -3576,7 +3576,7 @@ fn analyze_with_context(
                     authority,
                     effect_table,
                     &mut budget,
-                    limits.state_bytes - bytes,
+                    state_bytes - bytes,
                 )?
             })
         } else {
@@ -3584,12 +3584,12 @@ fn analyze_with_context(
                 f,
                 facts,
                 &mut budget,
-                limits.state_bytes - bytes,
+                state_bytes - bytes,
             )?)
         };
         *effect_output = loans.as_ref().and_then(|loans| loans.effects().cloned());
         if let Some(loans) = &loans {
-            if bytes.checked_add(loans.bytes).ok_or(Exhausted)? > limits.state_bytes {
+            if bytes.checked_add(loans.bytes).ok_or(Exhausted)? > state_bytes {
                 return Err(Exhausted);
             }
             for (block, statement, problem) in &loans.problems {
