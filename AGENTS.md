@@ -100,10 +100,11 @@ values there (100 `PARSE` through 115 `UNIVERSAL_EFFECTS_READY`). docs/compiler/
   declaration identities and ordered type arguments, never display names.
 - Local `Cell`/`RefCell`/loops inside one node's computation are fine.
 
-**Known debt, may only shrink.** `parse`, `resolve`, `signatures`,
-and `mono_plan` are still whole-program nodes. `PlanCtx`,
-`ValidatedTraitWorld` and the budget types still carry mutable state reachable
-from facts. Do not copy these patterns into new code. Split or remove them when
+**Known debt, may only shrink.** `parse`, `resolve` and `signatures` are
+still whole-program nodes (`mono_plan` was replaced by per-instance
+`INSTANCE` on 2026-10-22). `PlanCtx` still carries mutable state reachable
+from facts (budget ledgers became per-node on 2026-10-22). Do not copy these
+patterns into new code. Split or remove them when
 you are nearby. Current numbers live in docs/compiler/GRAPH-INTEGRITY.md.
 
 **Correctness contract (docs/compiler/RUST-COMPATIBILITY.md).** Edition 2024, Linux x86-64.

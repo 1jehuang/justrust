@@ -54,7 +54,7 @@ follow these rules now, even before the API enforces them:
    its input. No shared budget handle may be stored in a fact or node state.
 
 Lanes (coordinator: shark): typed-key API first, then in parallel
-`MONO_PLAN` -> per-instance `INSTANCE`, `CHECK` fan-in via per-file item
+`MONO_PLAN` -> per-instance `INSTANCE` (done 2026-10-22), `CHECK` fan-in via per-file item
 facts, `parse`/`resolve`/`signatures` split, `PlanCtx`/`ValidatedTraitWorld`
 memo state into keyed nodes, budgets per node. Coordinate with shark before
 editing `src/engine.rs` or the dispatch in `src/compiler/mod.rs`.
@@ -93,10 +93,10 @@ may only move toward the target:
 | Debt | Recorded 2026-10-18 | Target |
 |---|---|---|
 | Out-of-graph state primitives | `out_of_graph_state.baseline` (compiler/mod.rs side slots removed 2026-10-18; global budget mutexes and ID counters remain) | none |
-| Whole-program nodes | `parse`, `resolve`, `signatures`, `mono_plan` (`source` split per file and `concrete_proofs` removed 2026-10-18, `effects_ready` per item, debt root deleted 2026-10-20) | only `check`, `build` |
-| Leaf closure growth 16 to 32 | 1.205 (ceiling 1.23, was 1.481) | 1.0 |
-| Work growth 16 to 32 | 1.757 (ceiling 1.81, was 1.92; six fixed source-library method proofs lower the ratio, not an algorithmic speedup) | about 2.0 |
-| Largest compiling flat program | 1208 functions (1209 fails at the unchanged 32,000,000 work limit; immutable normalized-schema index reuse removes repeated full callable scans, was 1165/1166) | no fixed ceiling |
+| Whole-program nodes | `parse`, `resolve`, `signatures` (`mono_plan` replaced by per-instance `INSTANCE` 2026-10-22, 32e3f6c70; `source` split per file and `concrete_proofs` removed 2026-10-18, `effects_ready` per item, debt root deleted 2026-10-20) | only `check`, `build` |
+| Leaf closure growth 16 to 32 | 1.000 measured 2026-10-22 after 32e3f6c70 (ceiling constant unchanged) | 1.0 |
+| Planning work growth 16 to 32 | 1.008 measured 2026-10-22 (optimizer 1.013; ceilings unchanged) | about 2.0 or better |
+| Required flat program size | 2000 functions; the shared 32,000,000 work cap was removed with per-node budgets (61429d595). 3000 currently hits a subtract overflow at ownership.rs state_bytes | no fixed ceiling |
 
 When a change improves a number, the tests fail until it is recorded:
 
