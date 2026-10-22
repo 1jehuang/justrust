@@ -239,3 +239,20 @@ impl Inference<'_, '_> {
         Ok(true)
     }
 }
+
+impl Inference<'_, '_> {
+    /// `Proj = Rhs`: once `Proj` normalizes from solved slots, its normal
+    /// form is evidence for the slots of `Rhs`. Unsolved inputs add nothing.
+    pub(super) fn constrain_projection_equality(
+        &mut self,
+        projection: &ir::Ty,
+        rhs: &ir::Ty,
+        fallback: bool,
+    ) -> Result<(), String> {
+        let Some(normal) = self.projected_schema(projection, 0, fallback)? else {
+            return Ok(());
+        };
+        let rhs = self.schema(rhs, 0)?;
+        self.constrain(&rhs, &normal, 0)
+    }
+}

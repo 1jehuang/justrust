@@ -1465,8 +1465,31 @@ impl<'s> Checker<'s> {
             }
             projected_constraints.push((formal, evidence));
         }
+        // A declared `Proj = Rhs` bound is evidence for slots in `Rhs` once
+        // the projection's inputs are solved: normalize the projection and
+        // unify it with the schema of `Rhs` (e.g. `C: Tr<Item = Vec<T>>`).
+        let equalities: Vec<(ir::Ty, &ir::Ty)> = schema
+            .predicates
+            .predicates()
+            .iter()
+            .filter_map(|predicate| match predicate {
+                // Bare-parameter RHS is already covered by projected formals.
+                ir::Predicate::ProjectionEq { projection, ty }
+                    if !matches!(ty, ir::Ty::Param(_)) && inferred_owner::mentions_param(ty) =>
+                {
+                    Some((ir::Ty::AssociatedType(Arc::new(projection.clone())), ty))
+                }
+                _ => None,
+            })
+            .collect();
+        self.infer_storage(equalities.len())?;
         if !solver.constrain_projected_formals(projected_constraints, fallback)? {
             return Ok(None);
+        }
+        // Equalities whose projection inputs stay unsolved add no evidence;
+        // the obligation itself is still checked against the final actuals.
+        for (projection, rhs) in &equalities {
+            solver.constrain_projection_equality(projection, rhs, fallback)?;
         }
         solver.finish(fallback)
     }

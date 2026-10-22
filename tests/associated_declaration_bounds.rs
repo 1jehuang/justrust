@@ -68,3 +68,26 @@ fn main() { println!("{}", first(Source) + second(Source)); }
 "#,
     );
 }
+
+#[test]
+fn composite_equality_rhs_supplies_inference_evidence() {
+    // `C: Container<Item = Vec<T>>` infers `T` from the normalized projection.
+    oracle::stock_native(
+        r#"
+trait Container { type Item; fn get(&self) -> Self::Item; }
+struct W<T>(Vec<T>);
+impl<T: Clone> Container for W<T> { type Item = Vec<T>; fn get(&self) -> Vec<T> { self.0.clone() } }
+fn count<T, C: Container<Item = Vec<T>>>(c: &C) -> usize { c.get().len() }
+fn main() { let v: Vec<u8> = vec![7, 2]; let w = W(v); println!("{}", count(&w)); }
+"#,
+    );
+    oracle::stock_and_native_reject(
+        r#"
+trait Container { type Item; }
+struct W;
+impl Container for W { type Item = Vec<u8>; }
+fn count<T, C: Container<Item = Option<T>>>(_c: &C) {}
+fn main() { count(&W); }
+"#,
+    );
+}
