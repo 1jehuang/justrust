@@ -618,7 +618,7 @@ impl<'s> Solver<'_, '_, 's> {
     /// Whether a term's solved structure holds a closure type. Closure types
     /// have no source-spellable resolution here; like a bare closure local,
     /// such bindings are left to ordinary checking rather than rejected.
-    fn contains_callable(&self, term: Term, depth: usize) -> Result<bool, String> {
+    pub(super) fn contains_callable(&self, term: Term, depth: usize) -> Result<bool, String> {
         self.checker.infer_work(depth)?;
         Ok(match self.domain(term) {
             Domain::Callable(_) => true,
@@ -634,6 +634,13 @@ impl<'s> Solver<'_, '_, 's> {
             | Domain::RawPtr(_, inner)
             | Domain::Array(inner, _)
             | Domain::Slice(inner) => self.contains_callable(inner, depth + 1)?,
+            // A finalized closure (or a parent-local application holding one)
+            // is realized by the parent, never through a graph demand.
+            Domain::Fixed(ty) => super::type_check::nominal_inputs::parent_local::contains_closure(
+                std::slice::from_ref(&ty),
+                &self.checker.signatures.plan()?.budget,
+                depth + 1,
+            )?,
             _ => false,
         })
     }
@@ -658,6 +665,9 @@ impl<'s> Solver<'_, '_, 's> {
             }
             Domain::Nominal(decl, args) => {
                 if let Some(inputs) = self.preparation {
+                    if self.contains_callable(term, depth + 1)? {
+                        return Ok(None);
+                    }
                     if !self.manifest_ready(&args, depth + 1)? {
                         self.preparation_needs_actuals.set(true);
                         return Ok(None);
@@ -1886,11 +1896,6 @@ impl<'s> Solver<'_, '_, 's> {
             Expr::Var(path) => {
                 if let Some(term) = self.stored_callable(path, depth + 1)? {
                     return Ok(term);
-                }
-                if !is_local_shaped_path(path)
-                    && let Some(ty) = self.checker.fn_item_value(path)?
-                {
-                    return self.fixed(ty);
                 }
                 if matches!(
                     (path.anchor(), path.segments()),

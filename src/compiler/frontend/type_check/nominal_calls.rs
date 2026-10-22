@@ -90,6 +90,15 @@ fn call_type(
 ) -> Result<Option<ir::Ty>, String> {
     checker.infer_work(depth)?;
     if let Some((declaration, arguments)) = nominal_parts(source) {
+        if super::nominal_inputs::parent_local::contains_closure(
+            arguments,
+            &checker.signatures.plan()?.budget,
+            depth,
+        )? {
+            return checker
+                .mint_parent_local_nominal(declaration, arguments)
+                .map(Some);
+        }
         let demand = checker.nominal_input_demand(declaration, arguments)?;
         if let Some(ty) = (inputs.nominal_type)(&demand)? {
             return Ok(Some(ty));

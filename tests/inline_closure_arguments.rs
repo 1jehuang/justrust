@@ -51,6 +51,31 @@ fn closures_stored_in_generic_structs_through_let_bindings() {
                 expect: Expect::Run("6\n"),
             },
             Case {
+                name: "local_literal_field_call",
+                source: "struct W<F>{f:F}fn main(){let k=3;let w=W{f:|x:i32|x+k};println!(\"{}\",(w.f)(4));}",
+                expect: Expect::Run("7\n"),
+            },
+            Case {
+                name: "distinct_closures_distinct_applications",
+                source: "struct W<F>{f:F}fn main(){let a=W{f:|x:u32|x+1};let b=W{f:|x:u32|x*10};println!(\"{} {}\",(a.f)(1),(b.f)(2));}",
+                expect: Expect::Run("2 20\n"),
+            },
+            Case {
+                name: "move_capture_with_scalar_field",
+                source: "struct W<F>{f:F,n:i32}fn main(){let k=5;let w=W{f:move|x:i32|x+k,n:2};println!(\"{}\",(w.f)(w.n));}",
+                expect: Expect::Run("7\n"),
+            },
+            Case {
+                name: "distinct_closures_do_not_merge",
+                source: "struct W<F>{f:F}fn main(){let mut a=W{f:|x:u32|x+1};a=W{f:|x:u32|x+2};}",
+                expect: Expect::Invalid("E0308"),
+            },
+            Case {
+                name: "closure_application_is_not_scalar_application",
+                source: "struct W<F>{f:F}fn main(){let a=W{f:|x:u32|x+1};let b:W<u32>=a;}",
+                expect: Expect::Invalid("E0308"),
+            },
+            Case {
                 name: "unconstrained_still_rejected",
                 source: "struct W<T>{t:T}fn mk<T>()->W<T>{loop{}}fn main(){let w=mk();}",
                 expect: Expect::Invalid("E0282"),

@@ -370,6 +370,7 @@ fn preparation_status(
         solver.checker.infer_work(0)?;
         if solver.root(term) == term
             && let Domain::Nominal(_, arguments) = solver.domain(term)
+            && !solver.contains_callable(term, 0)?
             && !solver.manifest_ready(&arguments, 1)?
         {
             return Ok(Preparation::Blocked {
@@ -755,6 +756,11 @@ impl<'s> Solver<'_, '_, 's> {
             let Domain::Nominal(declaration, arguments) = self.domain(term) else {
                 continue;
             };
+            // Closure-bearing applications are realized parent-locally from the
+            // parent's own finalized ClosureTy, never through a graph demand.
+            if self.contains_callable(term, 0)? {
+                continue;
+            }
             let arguments = self.manifest_children(&arguments, 1)?;
             let mut duplicate = false;
             for previous in &demands {

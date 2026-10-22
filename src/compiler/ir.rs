@@ -84,6 +84,33 @@ impl SnapshotId {
 pub enum NominalIndex {
     SourceSlot(usize),
     GraphRealization(crate::engine::OutputIdentity),
+    /// Realized inside one parent checking node from its own finalized
+    /// closure actuals (frontend nominal_inputs/parent_local.rs). Never a
+    /// graph key and never valid outside the owning parent's facts.
+    ParentLocal {
+        owner: DeclId,
+        ordinal: u32,
+    },
+}
+impl Ty {
+    /// No type parameter or projection anywhere in this type, including
+    /// closure owner arguments, parameters, result and captures.
+    pub(in crate::compiler) fn is_closed_shallow(&self) -> bool {
+        match self {
+            Ty::Param(_) | Ty::AssociatedType(_) | Ty::Opaque(_) => false,
+            Ty::Closure(c) => c.types().all(Ty::is_closed_shallow),
+            Ty::Struct(n) => {
+                n.is_back_edge() || n.def().type_args.iter().all(Ty::is_closed_shallow)
+            }
+            Ty::Enum(n) => n.is_back_edge() || n.def().type_args.iter().all(Ty::is_closed_shallow),
+            Ty::Tuple(t) => t.iter().all(Ty::is_closed_shallow),
+            Ty::Ref { referent: t, .. }
+            | Ty::RawPtr { pointee: t, .. }
+            | Ty::Array { element: t, .. }
+            | Ty::Slice { element: t } => t.is_closed_shallow(),
+            _ => true,
+        }
+    }
 }
 impl NominalIndex {
     /// Source-schema consumers cannot use graph coordinates as interner slots.
@@ -92,6 +119,9 @@ impl NominalIndex {
             Self::SourceSlot(index) => Ok(index),
             Self::GraphRealization(_) => {
                 Err("graph nominal requires an explicit typed realization capability".into())
+            }
+            Self::ParentLocal { .. } => {
+                Err("parent-local closure nominal has no source interner slot".into())
             }
         }
     }
@@ -1441,13 +1471,6 @@ pub(super) fn identical_type(a: &Ty, b: &Ty, budget: &PlanBudget) -> Result<bool
         ) => an == bn && Arc::ptr_eq(a, b),
         (Ty::Opaque(a), Ty::Opaque(b)) => Arc::ptr_eq(a, b),
         (Ty::Closure(a), Ty::Closure(b)) => Arc::ptr_eq(a, b),
-        (Ty::FnItem(a), Ty::FnItem(b)) => {
-            Arc::ptr_eq(a, b)
-                || (a.declaration == b.declaration && Arc::ptr_eq(&a.type_args, &b.type_args))
-                || (a.declaration == b.declaration
-                    && a.type_args.is_empty()
-                    && b.type_args.is_empty())
-        }
         (Ty::AssociatedType(a), Ty::AssociatedType(b)) => Arc::ptr_eq(a, b),
         (Ty::Tuple(a), Ty::Tuple(b)) => Arc::ptr_eq(a, b),
         (Ty::Struct(a), Ty::Struct(b)) => std::ptr::eq(a.def(), b.def()),
@@ -3002,6 +3025,16 @@ fn substitute_ty_walk(
             if matches!(value.def().id.index, NominalIndex::GraphRealization(_)) {
                 return cx.retain_realized_nominal(ty, caller, budget);
             }
+            if matches!(value.def().id.index, NominalIndex::ParentLocal { .. }) {
+                // Parent-local closure applications are closed in their own
+                // parent; a generic parent would need re-minting, not reuse.
+                if !value.def().type_args.iter().all(Ty::is_closed_shallow) {
+                    return Err(
+                        "unsupported: generic parent-local closure nominal substitution".into(),
+                    );
+                }
+                return Ok(ty.clone());
+            }
             let app = cx.nominal_application(value.def().id)?;
             if app.type_args.len() > 32 {
                 return Err("nominal argument limit exceeded".into());
@@ -3024,6 +3057,16 @@ fn substitute_ty_walk(
         Ty::Enum(value) => {
             if matches!(value.def().id.index, NominalIndex::GraphRealization(_)) {
                 return cx.retain_realized_nominal(ty, caller, budget);
+            }
+            if matches!(value.def().id.index, NominalIndex::ParentLocal { .. }) {
+                // Parent-local closure applications are closed in their own
+                // parent; a generic parent would need re-minting, not reuse.
+                if !value.def().type_args.iter().all(Ty::is_closed_shallow) {
+                    return Err(
+                        "unsupported: generic parent-local closure nominal substitution".into(),
+                    );
+                }
+                return Ok(ty.clone());
             }
             let app = cx.nominal_application(value.def().id)?;
             if app.type_args.len() > 32 {
@@ -3231,8 +3274,7 @@ pub(in crate::compiler) fn instantiate_checked_with_constants(
             | ExprKind::Loop { body: block, .. }
             | ExprKind::LabeledBlock { body: block, .. } => visitor.block(block, 0)?,
             ExprKind::TypeAlignment(query) => query.substitute(visitor.ty(query.queried_type())?),
-            ExprKind::FnItem
-            | ExprKind::CharToInt { .. }
+            ExprKind::CharToInt { .. }
             | ExprKind::U8ToChar { .. }
             | ExprKind::PtrCast { .. }
             | ExprKind::Intrinsic { .. }
@@ -4282,6 +4324,9 @@ impl EnumTy {
     pub(super) fn new(def: EnumDef) -> Self {
         Self(NominalRef::Strong(Arc::new(def)), None)
     }
+    pub(in crate::compiler) fn new_parent_local(def: EnumDef) -> Self {
+        Self(NominalRef::Strong(Arc::new(def)), None)
+    }
     pub fn from_ref(r: NominalRef<EnumDef>) -> Self {
         Self(r, None)
     }
@@ -4811,6 +4856,9 @@ impl StructTy {
     /// The declaration builder must validate the entire by-value dependency DAG
     /// before constructing definitions in dependency-first order.
     pub(super) fn new(def: StructDef) -> Self {
+        Self(NominalRef::Strong(Arc::new(def)), None)
+    }
+    pub(in crate::compiler) fn new_parent_local(def: StructDef) -> Self {
         Self(NominalRef::Strong(Arc::new(def)), None)
     }
     pub fn from_ref(r: NominalRef<StructDef>) -> Self {
@@ -5514,7 +5562,6 @@ impl Ty {
     pub fn field_count(&self) -> Option<usize> {
         match self {
             Self::Closure(closure) => Some(closure.captures().len()),
-            Self::FnItem(_) => Some(0),
             Self::Tuple(fields) => Some(fields.len()),
             Self::Struct(ty) => Some(ty.def().fields.len()),
             _ => None,
@@ -7884,9 +7931,6 @@ pub enum ExprKind {
     Local(LocalId),
     /// Elements are evaluated left to right into a new value snapshot.
     Tuple(Vec<ExprId>),
-    /// Zero-sized function item value. Its exact identity is the expression's
-    /// `Ty::FnItem` type, so substitution maps it through the type only.
-    FnItem,
     /// Initializers retain source evaluation order. Each index names a field in
     /// declaration order; lowering permutes snapshots, never source evaluation.
     Struct {
@@ -8614,7 +8658,6 @@ impl CheckedFunction {
                 | ExprKind::U8ToChar { .. }
                 | ExprKind::PtrCast { .. }
                 | ExprKind::LeadingZeros { .. }
-                | ExprKind::FnItem
                 | ExprKind::IntCast { .. }
                 | ExprKind::FloatCast { .. }
                 | ExprKind::Char(_)
@@ -9780,12 +9823,6 @@ impl CheckedFunction {
                     if (value.completion == Completion::Returns) != completes {
                         return Err("native syscall completion mismatch".into());
                     }
-                }
-                ExprKind::FnItem => {
-                    let Ty::FnItem(item) = &value.ty else {
-                        return Err("function item value lost its item type".into());
-                    };
-                    facts.validate_ty(&Ty::FnItem(item.clone()))?;
                 }
                 ExprKind::Tuple(elements) => {
                     for &id in elements {
@@ -11420,9 +11457,7 @@ mod tests {
         }
         // G3 admits nested carriers structurally; ownership still authorizes use.
         validate_root_reference_actual(&components, &budget).unwrap();
-        // A bare `str` is admitted by shape only (025791b22). Its implicit
-        // `Sized` obligation rejects it unless the binder is `?Sized` (E0277).
-        assert!(validate_root_reference_actual(&Ty::Str, &budget).is_ok());
+        assert!(validate_root_reference_actual(&Ty::Str, &budget).is_err());
         assert!(
             validate_root_reference_actual(&reference(BorrowKind::Mut, Ty::Bool), &budget).is_ok()
         );
@@ -12584,8 +12619,7 @@ mod tests {
                 .is_empty()
         );
         validate_root_reference_actual(&hidden, &PlanBudget::default()).unwrap();
-        // Shape-only admission; the Sized proof owns the E0277 rejection.
-        assert!(validate_root_reference_actual(&Ty::Str, &PlanBudget::default()).is_ok());
+        assert!(validate_root_reference_actual(&Ty::Str, &PlanBudget::default()).is_err());
         let budget = PlanBudget::new(PlanLimits {
             applications: 4,
             bytes: 16,

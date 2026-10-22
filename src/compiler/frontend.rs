@@ -20701,7 +20701,16 @@ impl tr::SchemaCx for SchemaAdapter {
                 _ => None,
             };
             if let Some((id, pointer)) = nominal {
-                if matches!(id.index, ir::NominalIndex::GraphRealization(_)) {
+                if let ir::NominalIndex::ParentLocal { owner, .. } = id.index {
+                    // Minted by the owning parent from its own closure actuals;
+                    // children (actuals, fields) are walked below.
+                    if id.snapshot != cx.registry.declarations[0].id.snapshot
+                        || owner.snapshot != id.snapshot
+                        || cx.registry.declaration(owner)?.kind != ir::DeclKind::Function
+                    {
+                        return Err("foreign parent-local nominal".into());
+                    }
+                } else if matches!(id.index, ir::NominalIndex::GraphRealization(_)) {
                     let capability = match ty {
                         ir::Ty::Struct(n) => n.realization(),
                         ir::Ty::Enum(n) => n.realization(),

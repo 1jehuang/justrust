@@ -5,6 +5,7 @@ use super::*;
 
 #[cfg(test)]
 mod authority_tests;
+pub(in crate::compiler::frontend) mod parent_local;
 
 impl Checker<'_> {
     /// Representation tokens authenticate graph reads and source slots separately.
@@ -91,6 +92,9 @@ impl Checker<'_> {
         let Some(inputs) = self.nominal_inputs else {
             return plan.intern_nominal(declaration, actuals, self.facts(), &plan.budget);
         };
+        if parent_local::contains_closure(actuals, &plan.budget, 0)? {
+            return self.mint_parent_local_nominal(declaration, actuals);
+        }
         let demand = self.nominal_input_demand(declaration, actuals)?;
         if let Some(ty) = (inputs.nominal_type)(&demand)? {
             return Ok(ty);
@@ -132,6 +136,9 @@ impl Checker<'_> {
                 .ok_or_else(|| {
                     "invalid metadata: graph constructor realization is missing".into()
                 });
+        }
+        if parent_local::contains_closure(arguments, budget, 0)? {
+            return self.mint_parent_local_nominal(declaration, arguments);
         }
         let realized = self.materialize_nominal_input(declaration, arguments)?;
         let Some((owner, actuals)) = nominal_parts(&realized) else {

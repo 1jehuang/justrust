@@ -12,8 +12,6 @@ mod byte_strings;
 mod callable_arguments;
 #[path = "type_check/constructor_expectations.rs"]
 mod constructor_expectations;
-#[path = "type_check/fn_item_values.rs"]
-mod fn_item_values;
 #[path = "format_lowering.rs"]
 mod format_lowering;
 #[path = "type_check/generic_placeholders.rs"]
@@ -35,7 +33,7 @@ mod method_argument_hint;
 #[path = "type_check/method_owner.rs"]
 mod method_owner;
 mod nominal_calls;
-mod nominal_inputs;
+pub(in crate::compiler::frontend) mod nominal_inputs;
 #[path = "type_check/opaque_returns.rs"]
 mod opaque_returns;
 #[path = "type_check/partial_annotation.rs"]
@@ -940,6 +938,14 @@ impl<'c, 's> Inference<'c, 's> {
     ) -> Result<ir::Ty, FactsError> {
         let plan = self.checker.signatures.plan.as_ref().unwrap();
         if let Some(inputs) = self.checker.nominal_inputs {
+            if nominal_inputs::parent_local::contains_closure(actuals, &plan.budget, 0)
+                .map_err(|e| source_error(&plan.budget, &e))?
+            {
+                return self
+                    .checker
+                    .mint_parent_local_nominal(declaration, actuals)
+                    .map_err(|e| source_error(&plan.budget, &e));
+            }
             let demand = self
                 .checker
                 .nominal_input_demand(declaration, actuals)
@@ -1476,11 +1482,8 @@ impl<'s> Checker<'s> {
             .iter()
             .filter_map(|predicate| match predicate {
                 // Bare-parameter RHS is already covered by projected formals.
-                // A bare projection RHS (`IntoIter: Iterator<Item = Self::Item>`)
-                // names no slot; it is proven as an obligation, not evidence.
                 ir::Predicate::ProjectionEq { projection, ty }
-                    if !matches!(ty, ir::Ty::Param(_) | ir::Ty::AssociatedType(_))
-                        && inferred_owner::mentions_param(ty) =>
+                    if !matches!(ty, ir::Ty::Param(_)) && inferred_owner::mentions_param(ty) =>
                 {
                     Some((ir::Ty::AssociatedType(Arc::new(projection.clone())), ty))
                 }
@@ -1732,6 +1735,9 @@ pub(super) struct Checker<'a> {
         std::cell::RefCell<Option<NominalPreparation>>,
     // Set only for closure bodies sharing the parent's nominal inputs.
     pub(in crate::compiler::frontend) nominal_closure_body: bool,
+    // Node-local ordinal table for closure-bearing nominal applications.
+    pub(in crate::compiler::frontend) parent_local_nominals:
+        std::cell::RefCell<Vec<nominal_inputs::parent_local::ParentLocalApplication>>,
     pub(super) scopes: Vec<HashMap<LocalKey, ir::LocalId>>,
     pub(super) lexical_scope: Option<super::super::semantic_scope::ScopeId>,
     pub(super) checked_closures: Vec<closures::check::CheckedClosure>,
@@ -3731,6 +3737,7 @@ impl<'a> Checker<'a> {
             signatures,
             nominal_inputs: None,
             nominal_closure_body: false,
+            parent_local_nominals: std::cell::RefCell::new(Vec::new()),
             nominal_blocked: std::cell::RefCell::new(None),
             scopes: vec![HashMap::new()],
             lexical_scope: None,
@@ -10604,10 +10611,6 @@ impl<'a> Checker<'a> {
                     canonical.constant_kind(e)?,
                     Flow::value(canonical.constant_type(e)?),
                 )
-            }
-            Expr::Var(n) if !is_local_shaped_path(n) && self.fn_item_value(n)?.is_some() => {
-                let ty = self.fn_item_value(n)?.ok_or("function item vanished")?;
-                (ir::ExprKind::FnItem, Flow::value(ty))
             }
             Expr::Var(n) => {
                 let local = self.lookup(n)?;

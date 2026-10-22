@@ -125,6 +125,11 @@ fn pair(
             }
             return Ok(());
         }
+        if let ir::NominalIndex::ParentLocal { .. } = mapped_id.index {
+            // Parent-local closure application: declaration, arity and every
+            // ordered actual were paired above; no graph capability exists.
+            return Ok(());
+        }
         if source_id != mapped_id {
             return Err("closed call realization changed source nominal identity".into());
         }
