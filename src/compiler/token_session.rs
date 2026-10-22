@@ -227,6 +227,10 @@ impl SourceStorage {
 #[derive(Clone)]
 pub struct SourceSnapshot {
     inner: Arc<SealedSources>,
+    /// Crate-wide assembly FileId of this snapshot's file 0 (PARSE-SPLIT.md
+    /// step 1g). Per-file snapshots render spans with their depth-first
+    /// assembly FileId, so diagnostics keep assembled order and paths.
+    base: u32,
     /// Sibling file snapshots of the same crate (PARSE-SPLIT.md step 1d),
     /// sorted by id. Their file handles are served by them; others foreign.
     linked: Arc<[SourceSnapshot]>,
@@ -483,6 +487,7 @@ impl SourceSnapshot {
                 _lease: lease,
             }),
             linked: Arc::from([]),
+            base: 0,
         })
     }
 
@@ -515,6 +520,7 @@ impl SourceSnapshot {
         Ok(Self {
             inner: Arc::clone(&self.inner),
             linked: linked.into(),
+            base: self.base,
         })
     }
     /// The linked sibling owning `file`, `None` for this snapshot's own files.
@@ -581,10 +587,29 @@ impl SourceSnapshot {
         Ok(OriginalSpan { file, lo, hi })
     }
 
+    /// The same sealed files rendered at crate assembly FileId `base`.
+    /// Only before linking, and only once: the base is part of identity.
+    pub fn at_assembly_base(&self, base: u32) -> Result<Self, TokenError> {
+        if self.base != 0 || !self.linked.is_empty() {
+            return Err(TokenError::InvalidInput("source base already assigned"));
+        }
+        Ok(Self {
+            inner: Arc::clone(&self.inner),
+            linked: Arc::from([]),
+            base,
+        })
+    }
     pub fn render_span(&self, span: OriginalSpan) -> Result<SourceSpan, TokenError> {
+        if let Some(sibling) = self.linked_owner(span.file)? {
+            return sibling.render_span(span);
+        }
         self.span(span.file, span.lo, span.hi)?;
         Ok(SourceSpan {
-            file: FileId(span.file.index),
+            file: FileId(
+                self.base
+                    .checked_add(span.file.index)
+                    .ok_or(TokenError::InvalidRange)?,
+            ),
             lo: span.lo,
             hi: span.hi,
         })
@@ -598,7 +623,7 @@ impl SourceSnapshot {
             return sibling.location(span);
         }
         let raw = self.render_span(span)?;
-        let file = self.inner.storage.view(raw.file.0 as usize)?;
+        let file = self.inner.storage.view(span.file.index as usize)?;
         let line = file
             .line_starts
             .partition_point(|&start| start <= raw.lo)
@@ -1457,6 +1482,8 @@ mod owner_defect_tests {
             SourceSnapshot::from_text(Path::new("b.rs"), "fn f(){}\n", &budget, issue()).unwrap();
         let outside =
             SourceSnapshot::from_text(Path::new("c.rs"), "x\n", &budget, issue()).unwrap();
+        let child = child.at_assembly_base(3).unwrap();
+        assert!(child.at_assembly_base(4).is_err());
         let linked = parent.linked_with(vec![child.clone()], &budget).unwrap();
         assert!(linked.linked_with(vec![child.clone()], &budget).is_err());
         assert!(parent.linked_with(vec![parent.clone()], &budget).is_err());
@@ -1464,6 +1491,7 @@ mod owner_defect_tests {
         assert_eq!(linked.text(file).unwrap(), "fn f(){}\n");
         let span = linked.span(file, 3, 4).unwrap();
         assert_eq!(linked.location(span).unwrap().0, Path::new("b.rs"));
+        assert_eq!(linked.render_span(span).unwrap().file.0, 3);
         assert!(matches!(
             linked.text(outside.file(0).unwrap()),
             Err(TokenError::ForeignHandle)
