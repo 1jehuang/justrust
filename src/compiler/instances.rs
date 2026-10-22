@@ -274,6 +274,15 @@ impl Encoder<'_> {
                 }
                 Ok(())
             }
+            ir::Ty::FnItem(item) => {
+                self.append(b"F")?;
+                self.declaration(item.declaration)?;
+                self.count(item.type_args.len())?;
+                for ty in item.type_args.iter() {
+                    self.pattern(ty, env, depth + 1)?;
+                }
+                Ok(())
+            }
             ir::Ty::Param(param) => {
                 if !env.contains(*param) {
                     return Err("associated instance pattern has foreign parameter".into());
@@ -388,6 +397,15 @@ impl Encoder<'_> {
                 self.count(closure.captures().len())?;
                 self.append(&[closure.kind() as u8])?;
                 for ty in closure.types() {
+                    self.ty(ty, depth + 1)?;
+                }
+                Ok(())
+            }
+            ir::Ty::FnItem(item) => {
+                self.append(b"F")?;
+                self.declaration(item.declaration)?;
+                self.count(item.type_args.len())?;
+                for ty in item.type_args.iter() {
                     self.ty(ty, depth + 1)?;
                 }
                 Ok(())
@@ -565,6 +583,11 @@ fn charge_target_lookup(target: &ir::CallTarget, budget: &ir::PlanBudget) -> Res
             }
             ir::Ty::Closure(closure) => {
                 for ty in closure.types() {
+                    walk(ty, depth + 1, budget)?;
+                }
+            }
+            ir::Ty::FnItem(item) => {
+                for ty in item.type_args.iter() {
                     walk(ty, depth + 1, budget)?;
                 }
             }

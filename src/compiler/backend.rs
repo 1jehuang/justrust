@@ -192,6 +192,8 @@ pub(super) fn indirect(ty: &ir::Ty) -> Result<bool, String> {
             Ok(true)
         }
         ir::Ty::Enum(ty) => Ok(ty.has_payload()),
+        // Zero-sized; no native ABI is admitted until the call form exists.
+        ir::Ty::FnItem(_) => Err("unsupported: function item values have no native ABI yet".into()),
         ir::Ty::Int(_)
         | ir::Ty::Float(_)
         | ir::Ty::Char

@@ -1854,6 +1854,7 @@ impl<'a> MoveShape<'a> {
                 ty,
                 fields: closure.captures().len(),
             },
+            Ty::FnItem(_) => Self::Product { ty, fields: 0 },
             Ty::Tuple(fields) => Self::Product {
                 ty,
                 fields: fields.len(),

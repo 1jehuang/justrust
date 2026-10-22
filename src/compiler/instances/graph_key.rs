@@ -167,6 +167,11 @@ fn ty(
             types(words, value.owner_args(), budget, depth + 1)?;
             17
         }
+        ir::Ty::FnItem(value) => {
+            declaration(words, value.declaration);
+            types(words, &value.type_args, budget, depth + 1)?;
+            18
+        }
         ir::Ty::Param(_) | ir::Ty::AssociatedType(_) => {
             return Err("instance graph key requires closed actuals".into());
         }
@@ -482,6 +487,14 @@ impl Reader<'_> {
                     _ => return Err("closure graph key replay changed its provider".into()),
                 }
                 ty
+            }
+            18 => {
+                let declaration = self.declaration()?;
+                let type_args = self.types(facts, depth + 1)?;
+                ir::Ty::FnItem(Arc::new(ir::CallTarget {
+                    declaration,
+                    type_args: type_args.into(),
+                }))
             }
             _ => return Err("unsupported instance graph type tag".into()),
         };

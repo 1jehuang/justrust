@@ -2192,6 +2192,12 @@ impl ValidatedTraitWorld {
                     child(ty, TypeUse::Root)?;
                 }
             }
+            Ty::FnItem(item) => {
+                self.info(item.declaration)?;
+                for ty in item.type_args.iter() {
+                    child(ty, TypeUse::Root)?;
+                }
+            }
             Ty::AssociatedType(projection) => {
                 self.validate_universal_projection(projection, env)?;
                 walk.has_parameters = true;
@@ -6785,6 +6791,7 @@ impl ValidatedTraitWorld {
                 }
                 true
             }
+            Ty::FnItem(_) => true,
             Ty::Param(_) => return Ok(Some(ProofOutcome::NotProven)),
             Ty::Struct(t) if item == CatalogItem::Sized => {
                 for f in t.def().fields.iter() {

@@ -74,7 +74,7 @@ fn walk_alignment(
         ir::Ty::Str | ir::Ty::Slice { .. } | ir::Ty::Dyn(_) => {
             Err("unsupported: target alignment requires a Sized type".into())
         }
-        ir::Ty::Enum(_) | ir::Ty::Closure(_) | ir::Ty::Never => {
+        ir::Ty::Enum(_) | ir::Ty::Closure(_) | ir::Ty::FnItem(_) | ir::Ty::Never => {
             Err("unsupported: target alignment for this type is not implemented".into())
         }
     }

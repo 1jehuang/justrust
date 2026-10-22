@@ -272,6 +272,12 @@ impl ValidatedTraitWorld {
                     child(ty)?;
                 }
             }
+            Ty::FnItem(item) => {
+                self.info(item.declaration)?;
+                for ty in item.type_args.iter() {
+                    child(ty)?;
+                }
+            }
             Ty::Param(parameter) => {
                 if !env.contains(*parameter) {
                     return Err(FactsError::invalid(

@@ -274,6 +274,11 @@ fn collect(
                 collect(component, output, budget, depth + 1)?;
             }
         }
+        ir::Ty::FnItem(value) => {
+            for component in value.type_args.iter() {
+                collect(component, output, budget, depth + 1)?;
+            }
+        }
         ir::Ty::Dyn(value) => {
             for component in value.types() {
                 collect(component, output, budget, depth + 1)?;

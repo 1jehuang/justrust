@@ -2330,7 +2330,9 @@ fn diagnostic_ty(ty: &ir::Ty, plan: &PlanCtx) -> String {
             Ok(info) => format!("dyn {}", nominal(&info.name, &d.args)),
             Err(_) => "dyn _".into(),
         },
-        ir::Ty::Opaque(_) | ir::Ty::Closure(_) | ir::Ty::AssociatedType(_) => "_".into(),
+        ir::Ty::Opaque(_) | ir::Ty::Closure(_) | ir::Ty::FnItem(_) | ir::Ty::AssociatedType(_) => {
+            "_".into()
+        }
     }
 }
 

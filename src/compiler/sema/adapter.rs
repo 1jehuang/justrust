@@ -163,6 +163,7 @@ impl TyMap<'_> {
             }
             ir::Ty::Opaque(_) => un("opaque type in the semantic core"),
             ir::Ty::Closure(_) => un("closure type in a declaration"),
+            ir::Ty::FnItem(_) => un("function item type in a declaration"),
             ir::Ty::Dyn(_) => un("trait object type in the semantic core"),
         }
     }

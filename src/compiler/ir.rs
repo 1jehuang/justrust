@@ -585,7 +585,7 @@ pub fn carrier_locations(ty: &Ty, budget: &PlanBudget) -> Result<Arc<[CarrierLoc
             Ok(())
         };
         match ty {
-            Ty::Opaque(_) => {}
+            Ty::Opaque(_) | Ty::FnItem(_) => {}
             Ty::Closure(closure) => {
                 for ty in closure.captures() {
                     child(ty)?;
@@ -754,6 +754,7 @@ pub fn carrier_locations(ty: &Ty, budget: &PlanBudget) -> Result<Arc<[CarrierLoc
                             "unsupported: opaque carrier requires its defining body fact".into(),
                         );
                     }
+                    Ty::FnItem(_) => {}
                     Ty::Closure(closure) => {
                         for (index, ty) in closure.captures().iter().enumerate() {
                             child(CarrierStep::Field(index), ty)?;
@@ -2830,6 +2831,21 @@ fn substitute_ty_walk(
                 substitute_ty_walk(ty, env, args, caller, cx, budget, depth + 1)
             })?))
         }
+        Ty::FnItem(item) => {
+            budget.retain_bytes(
+                std::mem::size_of::<CallTarget>()
+                    + item.type_args.len() * std::mem::size_of::<Ty>(),
+            )?;
+            let type_args = item
+                .type_args
+                .iter()
+                .map(|ty| substitute_ty_walk(ty, env, args, caller, cx, budget, depth + 1))
+                .collect::<Result<Arc<[Ty]>, String>>()?;
+            Ty::FnItem(Arc::new(CallTarget {
+                declaration: item.declaration,
+                type_args,
+            }))
+        }
         Ty::AssociatedType(projection) => {
             if projection.trait_ref.args.len() > 32 {
                 return Err("trait argument limit exceeded".into());
@@ -3800,6 +3816,11 @@ pub(super) fn reject_references(root: &Ty, budget: &PlanBudget) -> Result<(), St
             }
             Ty::Closure(closure) => {
                 for ty in closure.types() {
+                    walk(ty, budget, depth + 1)?;
+                }
+            }
+            Ty::FnItem(item) => {
+                for ty in item.type_args.iter() {
                     walk(ty, budget, depth + 1)?;
                 }
             }
@@ -4899,6 +4920,8 @@ pub struct LoopId(pub usize);
 pub enum Ty {
     Opaque(Arc<OpaqueTy>),
     Closure(Arc<ClosureTy>),
+    /// Zero-sized function item type: exact declaration and ordered actuals.
+    FnItem(Arc<CallTarget>),
     AssociatedType(Arc<AssociatedTypeProjection>),
     Param(ParamId),
     Int(IntTy),
@@ -5106,6 +5129,7 @@ fn type_metadata_walk(
         let key = match ty {
             Ty::Opaque(opaque) => (9, Arc::as_ptr(opaque) as usize),
             Ty::Closure(closure) => (8, Arc::as_ptr(closure) as usize),
+            Ty::FnItem(item) => (10, Arc::as_ptr(item) as usize),
             Ty::AssociatedType(value) => {
                 if value.trait_ref.args.len() > 32 {
                     return Err("trait argument limit exceeded".into());
@@ -5197,6 +5221,11 @@ fn type_metadata_walk(
             }
             Ty::Closure(closure) => {
                 for ty in closure.types() {
+                    child(ty)?;
+                }
+            }
+            Ty::FnItem(item) => {
+                for ty in item.type_args.iter() {
                     child(ty)?;
                 }
             }
@@ -5424,6 +5453,7 @@ impl Ty {
                         pending.extend(closure.captures());
                     }
                 }
+                Self::FnItem(_) => {}
                 Self::AssociatedType(projection) => {
                     if seen.insert(Arc::as_ptr(projection) as usize) {
                         pending.push(&projection.trait_ref.self_ty);
@@ -5500,6 +5530,7 @@ impl Ty {
             | Self::Bool
             | Self::Unit
             | Self::Never
+            | Self::FnItem(_)
             | Self::RawPtr { .. } => true,
             Self::Opaque(_)
             | Self::AssociatedType(_)
@@ -6491,7 +6522,7 @@ fn ref_type_walk(
             Ok(())
         };
         match ty {
-            Ty::Opaque(_) => {}
+            Ty::Opaque(_) | Ty::FnItem(_) => {}
             Ty::Closure(closure) => {
                 for ty in closure.captures() {
                     child(ty)?;
@@ -6602,6 +6633,14 @@ fn ref_types_equal(
         let equal = match (left, right) {
             (Ty::Opaque(a), Ty::Opaque(b)) => a.try_eq(b, &mut child)?,
             (Ty::Closure(a), Ty::Closure(b)) => a.try_eq(b, &mut child)?,
+            (Ty::FnItem(a), Ty::FnItem(b)) => {
+                let mut equal =
+                    a.declaration == b.declaration && a.type_args.len() == b.type_args.len();
+                for (a, b) in a.type_args.iter().zip(b.type_args.iter()) {
+                    equal = equal && child(a, b)?;
+                }
+                equal
+            }
             (Ty::AssociatedType(a), Ty::AssociatedType(b)) => {
                 if a.trait_ref.args.len() > 32 || b.trait_ref.args.len() > 32 {
                     return Err("trait argument limit exceeded".into());

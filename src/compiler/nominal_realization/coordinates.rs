@@ -82,6 +82,11 @@ impl Term {
                     "nominal realization key requires normalized closed actuals",
                 ));
             }
+            ir::Ty::FnItem(_) => {
+                return Err(Error::new(
+                    "unsupported: function item types as nominal generic arguments",
+                ));
+            }
             ir::Ty::Closure(_) => {
                 return Err(Error::new(
                     "unsupported: nominal realization requires genuine early closure metadata",

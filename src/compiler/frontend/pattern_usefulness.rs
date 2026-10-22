@@ -197,6 +197,7 @@ impl<'facts> CoverageMatrix<'facts> {
             match ty {
                 Ty::Opaque(_)
                 | Ty::Closure(_)
+                | Ty::FnItem(_)
                 | Ty::Never
                 | Ty::Slice { .. }
                 | Ty::Str
