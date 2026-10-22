@@ -5523,8 +5523,11 @@ impl ProgramBuilder {
         let input = super::source::PreparedLexInput::identity(name, source, budget)
             .map_err(|error| error.to_string())?;
         // Direct fixture builder, never reached from a graph node.
-        let owner =
-            super::owner_path::standalone_issued(budget).map_err(|error| error.to_string())?;
+        let owner = super::owner_path::standalone_issued(
+            budget,
+            super::owner_path::OwnerDomain::TokenSession,
+        )
+        .map_err(|error| error.to_string())?;
         let (mut session, cap) = super::token_session::TokenSession::with_owner(
             input.snapshot().clone(),
             budget.clone(),
@@ -5537,7 +5540,7 @@ impl ProgramBuilder {
         let mut names = NameStoreBuilder::new(session, cap, super::token::Edition::E2024)
             .map_err(|error| error.to_string())?;
         let symbols = ProgramSymbols::new(&mut names).map_err(native_adapter::name_diagnostic)?;
-        let modules = ModuleArenaBuilder::for_source(&names).map_err(module_diagnostic)?;
+        let modules = ModuleArenaBuilder::for_builder(&mut names).map_err(module_diagnostic)?;
         Ok(Self {
             names,
             modules,
@@ -7190,7 +7193,8 @@ fn lex(source: &str) -> Result<NativeParserInput, ParseError> {
     )
     .map_err(native_adapter::source_error)?;
     let owner =
-        super::owner_path::standalone_issued(&budget).map_err(native_adapter::transport_error)?;
+        super::owner_path::standalone_issued(&budget, super::owner_path::OwnerDomain::TokenSession)
+            .map_err(native_adapter::transport_error)?;
     native_input(&projection, budget, owner)
 }
 fn native_input(
@@ -7260,7 +7264,11 @@ mod local_macro_parser_tests {
             let (tokens, session, owner) = native_input(
                 &projection,
                 budget.clone(),
-                super::super::owner_path::standalone_issued(&budget).unwrap(),
+                super::super::owner_path::standalone_issued(
+                    &budget,
+                    super::super::owner_path::OwnerDomain::TokenSession,
+                )
+                .unwrap(),
             )
             .unwrap()
             .into_parts();
@@ -7290,7 +7298,11 @@ mod local_macro_parser_tests {
         parse_syntax_tokens(native_input(
             &input,
             budget.clone(),
-            super::super::owner_path::standalone_issued(budget).unwrap(),
+            super::super::owner_path::standalone_issued(
+                budget,
+                super::super::owner_path::OwnerDomain::TokenSession,
+            )
+            .unwrap(),
         )?)
     }
     #[test]
@@ -9588,7 +9600,7 @@ impl<'input, 'names> Parser<'input, 'names> {
         }
         if self.lexical.scopes.is_none() {
             self.lexical.scopes = Some(
-                super::semantic_scope::ScopeArenaBuilder::for_names(self.names)
+                super::semantic_scope::ScopeArenaBuilder::for_builder(self.names)
                     .map_err(scope_parse_error)?,
             );
         }
@@ -9633,7 +9645,7 @@ impl<'input, 'names> Parser<'input, 'names> {
         names: &'names mut NameStoreBuilder,
         purpose: ParserPurpose,
     ) -> Result<Self, ParseError> {
-        let modules = ModuleArenaBuilder::for_source(names).map_err(module_parse_error)?;
+        let modules = ModuleArenaBuilder::for_builder(names).map_err(module_parse_error)?;
         let module = modules.source_root().map_err(module_parse_error)?;
         let modules = ParserState::owned(modules, names.budget())?;
         let mut state = ParserLexicalState::default();
@@ -10896,7 +10908,7 @@ impl<'input, 'names> Parser<'input, 'names> {
         if self.purpose == ParserPurpose::Active && self.input.macro_source().is_some() {
             if self.lexical.scopes.is_none() {
                 self.lexical.scopes = Some(
-                    super::semantic_scope::ScopeArenaBuilder::for_names(self.names)
+                    super::semantic_scope::ScopeArenaBuilder::for_builder(self.names)
                         .map_err(scope_parse_error)?,
                 );
             }
@@ -14366,7 +14378,8 @@ pub(super) fn validate_inactive_syntax(
     )
     .map_err(native_adapter::source_error)?;
     let owner =
-        super::owner_path::standalone_issued(&budget).map_err(native_adapter::transport_error)?;
+        super::owner_path::standalone_issued(&budget, super::owner_path::OwnerDomain::TokenSession)
+            .map_err(native_adapter::transport_error)?;
     let (mut session, cap) = super::token_session::TokenSession::with_owner(
         projection.snapshot().clone(),
         budget,
@@ -15329,8 +15342,9 @@ pub fn parse_prepared(
     source: &super::source::PreparedSource,
 ) -> Result<ParsedProgram, super::source::SourceError> {
     let budget = super::expansion_budget::ExpansionBudget::default();
-    let owner = super::owner_path::standalone_issued(&budget)
-        .map_err(super::source::SourceError::from_token)?;
+    let owner =
+        super::owner_path::standalone_issued(&budget, super::owner_path::OwnerDomain::TokenSession)
+            .map_err(super::source::SourceError::from_token)?;
     parse_prepared_owned(source, budget, owner)
 }
 

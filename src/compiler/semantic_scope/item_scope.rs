@@ -965,7 +965,15 @@ mod tests {
             span: session.reissue_span(original, context, foreign).unwrap(),
         };
         let names = NameStoreBuilder::new(session, session_cap, Edition::E2024).unwrap();
-        let modules = ModuleArenaBuilder::for_source(&names).unwrap();
+        let modules = ModuleArenaBuilder::for_source(
+            &names,
+            crate::compiler::owner_path::standalone_issued(
+                &names.budget(),
+                crate::compiler::owner_path::OwnerDomain::ModuleArena,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         Fixture {
             names,
             modules,
@@ -992,7 +1000,15 @@ mod tests {
         let child_name = f.names.intern_root("child", f.original).unwrap();
         let root = f.modules.source_root().unwrap();
         let child = f.modules.intern_child(&f.names, root, child_name).unwrap();
-        let mut scopes = ScopeArenaBuilder::for_names(&f.names).unwrap();
+        let mut scopes = ScopeArenaBuilder::for_names(
+            &f.names,
+            crate::compiler::owner_path::standalone_issued(
+                &f.names.budget(),
+                crate::compiler::owner_path::OwnerDomain::ScopeArena,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         let early = scopes
             .module_root(&f.names, &f.modules, root, None)
             .unwrap();
@@ -1019,7 +1035,15 @@ mod tests {
     #[test]
     fn parameter_textual_keys_require_real_item_expansion_admission() {
         let mut f = fixture();
-        let mut scopes = ScopeArenaBuilder::for_names(&f.names).unwrap();
+        let mut scopes = ScopeArenaBuilder::for_names(
+            &f.names,
+            crate::compiler::owner_path::standalone_issued(
+                &f.names.budget(),
+                crate::compiler::owner_path::OwnerDomain::ScopeArena,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         let proof = anchor(&f, &mut scopes);
         let admitted = f
             .names
@@ -1051,7 +1075,15 @@ mod tests {
     #[test]
     fn item_mark_miss_never_captures_root_parameter_but_exact_binders_work() {
         let mut f = fixture();
-        let mut scopes = ScopeArenaBuilder::for_names(&f.names).unwrap();
+        let mut scopes = ScopeArenaBuilder::for_names(
+            &f.names,
+            crate::compiler::owner_path::standalone_issued(
+                &f.names.budget(),
+                crate::compiler::owner_path::OwnerDomain::ScopeArena,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         let proof = anchor(&f, &mut scopes);
         let module = f.modules.source_root().unwrap();
         let item_name = f
@@ -1187,7 +1219,15 @@ mod tests {
     #[test]
     fn sealed_product_requires_exact_actual_function_coverage_even_when_empty() {
         let mut f = fixture();
-        let mut scopes = ScopeArenaBuilder::for_names(&f.names).unwrap();
+        let mut scopes = ScopeArenaBuilder::for_names(
+            &f.names,
+            crate::compiler::owner_path::standalone_issued(
+                &f.names.budget(),
+                crate::compiler::owner_path::OwnerDomain::ScopeArena,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         let proof = anchor(&f, &mut scopes);
         let declaration = f
             .names
@@ -1244,11 +1284,27 @@ mod tests {
     #[test]
     fn item_anchors_reject_foreign_owners_and_freeze_rejects_unconsumed_output() {
         let f = fixture();
-        let mut scopes = ScopeArenaBuilder::for_names(&f.names).unwrap();
+        let mut scopes = ScopeArenaBuilder::for_names(
+            &f.names,
+            crate::compiler::owner_path::standalone_issued(
+                &f.names.budget(),
+                crate::compiler::owner_path::OwnerDomain::ScopeArena,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         let proof = anchor(&f, &mut scopes);
         let foreign = fixture();
         assert!(proof.check_names(&foreign.names).is_err());
-        let same_names_foreign_modules = ModuleArenaBuilder::for_source(&f.names).unwrap();
+        let same_names_foreign_modules = ModuleArenaBuilder::for_source(
+            &f.names,
+            crate::compiler::owner_path::standalone_issued(
+                &f.names.budget(),
+                crate::compiler::owner_path::OwnerDomain::ModuleArena,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         assert!(
             proof
                 .check_modules(&f.names, &same_names_foreign_modules)
@@ -1260,7 +1316,15 @@ mod tests {
     #[test]
     fn empty_item_output_requires_explicit_close_and_rejects_second_close_or_append() {
         let mut f = fixture();
-        let mut scopes = ScopeArenaBuilder::for_names(&f.names).unwrap();
+        let mut scopes = ScopeArenaBuilder::for_names(
+            &f.names,
+            crate::compiler::owner_path::standalone_issued(
+                &f.names.budget(),
+                crate::compiler::owner_path::OwnerDomain::ScopeArena,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         let proof = anchor(&f, &mut scopes);
         assert!(scopes.check_item_function_coverage(&[]).is_err());
         assert!(
@@ -1294,7 +1358,15 @@ mod tests {
     #[test]
     fn sibling_products_need_distinct_occurrences_all_seals_and_exact_closed_coverage() {
         let mut f = fixture();
-        let mut scopes = ScopeArenaBuilder::for_names(&f.names).unwrap();
+        let mut scopes = ScopeArenaBuilder::for_names(
+            &f.names,
+            crate::compiler::owner_path::standalone_issued(
+                &f.names.budget(),
+                crate::compiler::owner_path::OwnerDomain::ScopeArena,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         let proof = anchor(&f, &mut scopes);
         let first = f
             .names
@@ -1388,7 +1460,15 @@ mod tests {
     fn item_authority_preserves_latched_resource_failure_and_releases_storage() {
         let f = fixture();
         let budget = f.names.budget().clone();
-        let mut scopes = ScopeArenaBuilder::for_names(&f.names).unwrap();
+        let mut scopes = ScopeArenaBuilder::for_names(
+            &f.names,
+            crate::compiler::owner_path::standalone_issued(
+                &f.names.budget(),
+                crate::compiler::owner_path::OwnerDomain::ScopeArena,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         let proof = anchor(&f, &mut scopes);
         let failure = budget.charge(Counter::Work, u64::MAX).unwrap_err();
         assert!(

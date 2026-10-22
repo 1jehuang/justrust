@@ -510,12 +510,14 @@ impl OwnerPath {
     }
 }
 
-/// One session owner under a fresh standalone root, for independent direct
-/// tooling (`TokenSession::standalone`). Graph code never calls this; it
-/// receives an `Issued` from its producer's issuer. Everything is paid by the
-/// caller's budget, and admission is checked before any root is minted.
-pub(super) fn standalone_issued(
+/// One owner of `domain` under a fresh standalone root, for independent
+/// direct tooling (`TokenSession::standalone`, catalog arenas). Graph code
+/// never calls this; it receives an `Issued` from its producer's issuer.
+/// Everything is paid by the caller's budget, and admission is checked before
+/// any root is minted. The tag is engine-minted, so it never collides.
+pub fn standalone_issued(
     budget: &ExpansionBudget,
+    domain: OwnerDomain,
 ) -> Result<Issued, super::token_session::TokenError> {
     // Admit the whole owner cost first, so an exhausted or zero caller budget
     // rejects before an engine id is consumed or anything is allocated. The
@@ -525,14 +527,12 @@ pub(super) fn standalone_issued(
     let root =
         OwnerRoot::standalone().map_err(|_| super::token_session::TokenError::IdExhausted)?;
     let mut issuer = OwnerIssuer::new(root, budget).map_err(owner_token_error)?;
-    issuer
-        .issue(OwnerDomain::TokenSession)
-        .map_err(owner_token_error)
+    issuer.issue(domain).map_err(owner_token_error)
 }
 
 /// Exact conversion: budget failures keep their typed resource and kind;
 /// only real id-space exhaustion becomes `IdExhausted`.
-fn owner_token_error(error: OwnerError) -> super::token_session::TokenError {
+pub(super) fn owner_token_error(error: OwnerError) -> super::token_session::TokenError {
     match error {
         OwnerError::Budget(failure) => failure.into(),
         OwnerError::OrdinalExhausted | OwnerError::TagExhausted => {

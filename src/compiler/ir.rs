@@ -11176,6 +11176,11 @@ mod tests {
     fn fixture_modules() -> std::sync::Arc<super::super::module_identity::ModuleArena> {
         super::super::module_identity::ModuleArenaBuilder::for_catalog(
             super::super::expansion_budget::ExpansionBudget::default(),
+            crate::compiler::owner_path::standalone_issued(
+                &super::super::expansion_budget::ExpansionBudget::default(),
+                crate::compiler::owner_path::OwnerDomain::ModuleArena,
+            )
+            .unwrap(),
         )
         .unwrap()
         .freeze()
@@ -11195,7 +11200,15 @@ mod tests {
         let (mut session, session_cap) = TokenSession::standalone(source, budget).unwrap();
         let origin = session.original_span(origin).unwrap();
         let mut names = NameStoreBuilder::new(session, session_cap, Edition::E2024).unwrap();
-        let mut builder = ModuleArenaBuilder::for_source(&names).unwrap();
+        let mut builder = ModuleArenaBuilder::for_source(
+            &names,
+            crate::compiler::owner_path::standalone_issued(
+                &names.budget(),
+                crate::compiler::owner_path::OwnerDomain::ModuleArena,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         let root = builder.source_root().unwrap();
         let mut child = |parent, text| {
             let ident = names.intern_root(text, origin).unwrap();

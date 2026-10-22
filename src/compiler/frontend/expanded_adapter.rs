@@ -558,10 +558,25 @@ mod tests {
             .unwrap();
         let expansion = expanded.expansion(names.session()).unwrap();
         let tokens = expanded.tokens(names.session()).unwrap();
-        let modules =
-            crate::compiler::module_identity::ModuleArenaBuilder::for_source(&names).unwrap();
+        let modules = crate::compiler::module_identity::ModuleArenaBuilder::for_source(
+            &names,
+            crate::compiler::owner_path::standalone_issued(
+                &names.budget(),
+                crate::compiler::owner_path::OwnerDomain::ModuleArena,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         let module = modules.source_root().unwrap();
-        let mut scopes = ScopeArenaBuilder::for_names(&names).unwrap();
+        let mut scopes = ScopeArenaBuilder::for_names(
+            &names,
+            crate::compiler::owner_path::standalone_issued(
+                &names.budget(),
+                crate::compiler::owner_path::OwnerDomain::ScopeArena,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         let frontier = scopes.module_root(&names, &modules, module, None).unwrap();
         let admission = scopes
             .anchor_item_expansion(&names, &modules, expansion, frontier, frontier)
@@ -652,9 +667,15 @@ mod tests {
             .tokens
             .subslice(source.names.session(), 0..0)
             .unwrap();
-        let foreign_modules =
-            crate::compiler::module_identity::ModuleArenaBuilder::for_source(&source.names)
-                .unwrap();
+        let foreign_modules = crate::compiler::module_identity::ModuleArenaBuilder::for_source(
+            &source.names,
+            crate::compiler::owner_path::standalone_issued(
+                &source.names.budget(),
+                crate::compiler::owner_path::OwnerDomain::ModuleArena,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         assert_eq!(
             lower_item(
                 empty.clone(),
@@ -759,7 +780,15 @@ mod tests {
             .unwrap();
         let expansion = expanded.expansion(names.session()).unwrap();
         let tokens = expanded.tokens(names.session()).unwrap();
-        let mut scopes = ScopeArenaBuilder::for_names(&names).unwrap();
+        let mut scopes = ScopeArenaBuilder::for_names(
+            &names,
+            crate::compiler::owner_path::standalone_issued(
+                &names.budget(),
+                crate::compiler::owner_path::OwnerDomain::ScopeArena,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         let frontier = scopes.function_root(&names).unwrap();
         let admission = scopes
             .anchor_expansion(&names, expansion, frontier, frontier)

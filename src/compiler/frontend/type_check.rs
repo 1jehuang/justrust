@@ -13309,7 +13309,15 @@ mod checked_identity_tests {
         let unresolved = builder.ident("missing").unwrap();
         let unrecorded = builder.ident("x").unwrap();
         let foreign_function_reference = builder.ident("missing").unwrap();
-        let mut scopes = ScopeArenaBuilder::for_names(builder.names()).unwrap();
+        let mut scopes = ScopeArenaBuilder::for_names(
+            builder.names(),
+            crate::compiler::owner_path::standalone_issued(
+                builder.names().budget(),
+                crate::compiler::owner_path::OwnerDomain::ScopeArena,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         let root = scopes.function_root(builder.names()).unwrap();
         let function = scopes.function(root).unwrap();
         let (definition, outer_binding) = scopes.bind(builder.names(), root, outer).unwrap();

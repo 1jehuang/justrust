@@ -6179,10 +6179,17 @@ mod tests {
                 .unwrap();
         let (session, session_cap) = TokenSession::standalone(sources, budget).unwrap();
         let names = NameStoreBuilder::new(session, session_cap, Edition::E2024).unwrap();
-        let modules = ModuleArenaBuilder::for_source(&names)
-            .unwrap()
-            .freeze()
-            .unwrap();
+        let modules = ModuleArenaBuilder::for_source(
+            &names,
+            crate::compiler::owner_path::standalone_issued(
+                &names.budget(),
+                crate::compiler::owner_path::OwnerDomain::ModuleArena,
+            )
+            .unwrap(),
+        )
+        .unwrap()
+        .freeze()
+        .unwrap();
         (names.freeze().unwrap(), modules)
     }
     #[test]

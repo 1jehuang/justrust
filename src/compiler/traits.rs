@@ -9001,6 +9001,11 @@ mod tests {
     fn fixture_modules() -> Arc<ModuleArena> {
         super::super::module_identity::ModuleArenaBuilder::for_catalog(
             super::super::expansion_budget::ExpansionBudget::default(),
+            crate::compiler::owner_path::standalone_issued(
+                &super::super::expansion_budget::ExpansionBudget::default(),
+                crate::compiler::owner_path::OwnerDomain::ModuleArena,
+            )
+            .unwrap(),
         )
         .unwrap()
         .freeze()

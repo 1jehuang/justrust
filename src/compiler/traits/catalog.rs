@@ -830,6 +830,11 @@ mod wide_tests {
         let budget = PlanBudget::default();
         let modules = crate::compiler::module_identity::ModuleArenaBuilder::for_catalog(
             crate::compiler::expansion_budget::ExpansionBudget::default(),
+            crate::compiler::owner_path::standalone_issued(
+                &crate::compiler::expansion_budget::ExpansionBudget::default(),
+                crate::compiler::owner_path::OwnerDomain::ModuleArena,
+            )
+            .unwrap(),
         )
         .unwrap()
         .freeze()
@@ -868,11 +873,17 @@ mod wide_tests {
     #[test]
     fn catalog_preserves_poisoned_expansion_authority_as_resource() {
         let expansion = crate::compiler::expansion_budget::ExpansionBudget::default();
-        let modules =
-            crate::compiler::module_identity::ModuleArenaBuilder::for_catalog(expansion.clone())
-                .unwrap()
-                .freeze()
-                .unwrap();
+        let modules = crate::compiler::module_identity::ModuleArenaBuilder::for_catalog(
+            expansion.clone(),
+            crate::compiler::owner_path::standalone_issued(
+                &expansion.clone(),
+                crate::compiler::owner_path::OwnerDomain::ModuleArena,
+            )
+            .unwrap(),
+        )
+        .unwrap()
+        .freeze()
+        .unwrap();
         assert!(
             expansion
                 .charge(crate::compiler::expansion_budget::Counter::Work, u64::MAX)

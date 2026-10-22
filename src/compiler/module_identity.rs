@@ -9,12 +9,13 @@ use std::hash::BuildHasher;
 use std::mem::size_of;
 use std::num::NonZeroU64;
 use std::sync::Arc;
-use std::sync::atomic::AtomicU64;
 
 use super::expansion_budget::{BudgetFailure, ByteLease, Counter, ExpansionBudget, Storage};
+use super::owner_path::{Issued, OwnerDomain};
+use super::semantic_name::NameStoreBuilder;
 use super::semantic_name::{AstIdent, LookupClass, NameError, NameKey, Namespace};
 use super::semantic_path::NameAccess;
-use super::token_session::{BudgetVec, CrateOwners, SessionId, TokenError, allocate_identity};
+use super::token_session::{BudgetVec, CrateOwners, SessionId, TokenError};
 
 /// An opaque module in one arena. Equality alone never validates ownership.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -173,16 +174,29 @@ pub struct ModuleArenaBuilder {
 }
 
 impl ModuleArenaBuilder {
-    pub fn for_source(names: &impl NameAccess) -> Result<Self, ModuleError> {
-        Self::new(names.budget().clone(), Some(names.session().id()))
+    /// A source arena owned by a child issued from the session's own issuer
+    /// (the graph route: PARSE's issuer reaches here through the builder).
+    pub fn for_builder(names: &mut NameStoreBuilder) -> Result<Self, ModuleError> {
+        let owner = names.issue_owner(OwnerDomain::ModuleArena)?;
+        Self::new(names.budget().clone(), Some(names.session().id()), owner)
     }
-    pub fn for_catalog(budget: ExpansionBudget) -> Result<Self, ModuleError> {
-        Self::new(budget, None)
+    /// A source arena for direct tooling over any name view: its owner is
+    /// issued under a fresh standalone root, never a compiler counter.
+    /// Direct tooling passes an owner it was issued (for example by
+    /// `owner_path::standalone_issued`); this never mints one itself.
+    pub fn for_source(names: &impl NameAccess, owner: Issued) -> Result<Self, ModuleError> {
+        Self::new(names.budget().clone(), Some(names.session().id()), owner)
     }
-    fn new(budget: ExpansionBudget, source_names: Option<SessionId>) -> Result<Self, ModuleError> {
-        static NEXT: AtomicU64 = AtomicU64::new(1);
+    pub fn for_catalog(budget: ExpansionBudget, owner: Issued) -> Result<Self, ModuleError> {
+        Self::new(budget, None, owner)
+    }
+    fn new(
+        budget: ExpansionBudget,
+        source_names: Option<SessionId>,
+        owner: Issued,
+    ) -> Result<Self, ModuleError> {
         budget.check()?;
-        let owner = allocate_identity(&NEXT)?;
+        let owner = owner.tag().bits();
         // Stable std cannot fallibly allocate this fixed-size Arc control block.
         let bytes = size_of::<ModuleArena>()
             .checked_add(2 * size_of::<usize>())
@@ -531,7 +545,15 @@ mod tests {
     fn empty_source_owner_is_checked_before_and_after_name_freeze() {
         let (names, _) = names(ExpansionBudget::default());
         let (foreign, _) = self::names(ExpansionBudget::default());
-        let builder = ModuleArenaBuilder::for_source(&names).unwrap();
+        let builder = ModuleArenaBuilder::for_source(
+            &names,
+            crate::compiler::owner_path::standalone_issued(
+                &names.budget(),
+                crate::compiler::owner_path::OwnerDomain::ModuleArena,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         builder.check_names(&names).unwrap();
         assert!(matches!(
             builder.check_names(&foreign),
@@ -544,7 +566,15 @@ mod tests {
             modules.check_names(&foreign),
             Err(ModuleError::ForeignNames)
         ));
-        let catalog = ModuleArenaBuilder::for_catalog(ExpansionBudget::default()).unwrap();
+        let catalog = ModuleArenaBuilder::for_catalog(
+            ExpansionBudget::default(),
+            crate::compiler::owner_path::standalone_issued(
+                &ExpansionBudget::default(),
+                crate::compiler::owner_path::OwnerDomain::ModuleArena,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         assert!(matches!(
             catalog.check_names(&foreign),
             Err(ModuleError::SourceUnavailable)
@@ -553,7 +583,15 @@ mod tests {
 
     #[test]
     fn private_forged_indices_and_foreign_owners_are_not_public_roots() {
-        let builder = ModuleArenaBuilder::for_catalog(ExpansionBudget::default()).unwrap();
+        let builder = ModuleArenaBuilder::for_catalog(
+            ExpansionBudget::default(),
+            crate::compiler::owner_path::standalone_issued(
+                &ExpansionBudget::default(),
+                crate::compiler::owner_path::OwnerDomain::ModuleArena,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         let core = builder.core_root();
         assert!(matches!(
             builder.check(ModuleId {
@@ -562,7 +600,15 @@ mod tests {
             }),
             Err(ModuleError::InvalidHandle)
         ));
-        let foreign = ModuleArenaBuilder::for_catalog(ExpansionBudget::default()).unwrap();
+        let foreign = ModuleArenaBuilder::for_catalog(
+            ExpansionBudget::default(),
+            crate::compiler::owner_path::standalone_issued(
+                &ExpansionBudget::default(),
+                crate::compiler::owner_path::OwnerDomain::ModuleArena,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         assert!(matches!(
             builder.is_descendant(core, foreign.core_root()),
             Err(ModuleError::ForeignOwner)
@@ -577,7 +623,15 @@ mod tests {
     #[test]
     fn forced_hash_collisions_keep_exact_parent_and_name_identity() {
         let (mut names, origin) = names(ExpansionBudget::default());
-        let mut builder = ModuleArenaBuilder::for_source(&names).unwrap();
+        let mut builder = ModuleArenaBuilder::for_source(
+            &names,
+            crate::compiler::owner_path::standalone_issued(
+                &names.budget(),
+                crate::compiler::owner_path::OwnerDomain::ModuleArena,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         let root = builder.source_root().unwrap();
         let mut expected = Vec::new();
         for index in 0..64 {
@@ -612,15 +666,29 @@ mod tests {
             ..ExpansionLimits::default()
         });
         assert!(matches!(
-            ModuleArenaBuilder::for_catalog(zero.clone()),
+            ModuleArenaBuilder::for_catalog(
+                zero.clone(),
+                crate::compiler::owner_path::standalone_issued(
+                    &zero.clone(),
+                    crate::compiler::owner_path::OwnerDomain::ModuleArena
+                )
+                .unwrap()
+            ),
             Err(ModuleError::Token(TokenError::Budget(_)))
         ));
         assert_eq!(zero.snapshot().retained_bytes, 0);
         let budget = ExpansionBudget::default();
-        let modules = ModuleArenaBuilder::for_catalog(budget.clone())
-            .unwrap()
-            .freeze()
-            .unwrap();
+        let modules = ModuleArenaBuilder::for_catalog(
+            budget.clone(),
+            crate::compiler::owner_path::standalone_issued(
+                &budget.clone(),
+                crate::compiler::owner_path::OwnerDomain::ModuleArena,
+            )
+            .unwrap(),
+        )
+        .unwrap()
+        .freeze()
+        .unwrap();
         let clone = Arc::clone(&modules);
         let retained = budget.snapshot().retained_bytes;
         assert!(retained > 0);
@@ -633,10 +701,17 @@ mod tests {
     #[test]
     fn poisoned_owner_association_preserves_first_failure() {
         let (names, _) = names(ExpansionBudget::default());
-        let modules = ModuleArenaBuilder::for_source(&names)
-            .unwrap()
-            .freeze()
-            .unwrap();
+        let modules = ModuleArenaBuilder::for_source(
+            &names,
+            crate::compiler::owner_path::standalone_issued(
+                &names.budget(),
+                crate::compiler::owner_path::OwnerDomain::ModuleArena,
+            )
+            .unwrap(),
+        )
+        .unwrap()
+        .freeze()
+        .unwrap();
         let error = names
             .budget()
             .charge(

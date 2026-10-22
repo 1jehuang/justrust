@@ -2712,17 +2712,31 @@ mod tests {
         let mut input = builder().finish().unwrap();
         let foreign = builder().finish().unwrap();
         input.scopes = Some(
-            ScopeArenaBuilder::for_names(foreign.names.as_ref())
-                .unwrap()
-                .freeze()
+            ScopeArenaBuilder::for_names(
+                foreign.names.as_ref(),
+                crate::compiler::owner_path::standalone_issued(
+                    foreign.names.as_ref().budget(),
+                    crate::compiler::owner_path::OwnerDomain::ScopeArena,
+                )
                 .unwrap(),
+            )
+            .unwrap()
+            .freeze()
+            .unwrap(),
         );
         assert!(validate_program_names(&input).is_err());
         input.scopes = Some(
-            ScopeArenaBuilder::for_names(input.names.as_ref())
-                .unwrap()
-                .freeze()
+            ScopeArenaBuilder::for_names(
+                input.names.as_ref(),
+                crate::compiler::owner_path::standalone_issued(
+                    input.names.as_ref().budget(),
+                    crate::compiler::owner_path::OwnerDomain::ScopeArena,
+                )
                 .unwrap(),
+            )
+            .unwrap()
+            .freeze()
+            .unwrap(),
         );
         validate_program_names(&input).unwrap();
         let clone = input.clone();
@@ -2742,7 +2756,15 @@ mod tests {
         let reference = source.path("local").unwrap();
         let unrecorded = source.path("local").unwrap();
         let unresolved_elsewhere = source.path("missing").unwrap();
-        let mut scopes = ScopeArenaBuilder::for_names(source.names()).unwrap();
+        let mut scopes = ScopeArenaBuilder::for_names(
+            source.names(),
+            crate::compiler::owner_path::standalone_issued(
+                source.names().budget(),
+                crate::compiler::owner_path::OwnerDomain::ScopeArena,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         let root = scopes.function_root(source.names()).unwrap();
         let function_scope = scopes.function(root).unwrap();
         let nested = scopes.enter(source.names(), root).unwrap();

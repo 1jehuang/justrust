@@ -73,7 +73,15 @@ fn budget_failure(error: ScopeError) -> BudgetFailure {
 #[test]
 fn visibility_requires_the_exact_captured_frontier_and_function() {
     let (names, ids) = names("x x x", &ExpansionBudget::default());
-    let mut scopes = ScopeArenaBuilder::for_names(names.as_ref()).unwrap();
+    let mut scopes = ScopeArenaBuilder::for_names(
+        names.as_ref(),
+        justrust_engine::compiler::owner_path::standalone_issued(
+            names.as_ref().budget(),
+            justrust_engine::compiler::owner_path::OwnerDomain::ScopeArena,
+        )
+        .unwrap(),
+    )
+    .unwrap();
     let root = scopes.function_root(names.as_ref()).unwrap();
     let (first, _) = scopes.bind(names.as_ref(), root, ids[0]).unwrap();
     let child = scopes.enter(names.as_ref(), first).unwrap();
@@ -94,7 +102,15 @@ fn visibility_requires_the_exact_captured_frontier_and_function() {
         rejected(scopes.check_function(scopes.binding(binding).unwrap().scope)),
         ScopeError::InvalidHandle
     ));
-    let mut foreign = ScopeArenaBuilder::for_names(names.as_ref()).unwrap();
+    let mut foreign = ScopeArenaBuilder::for_names(
+        names.as_ref(),
+        justrust_engine::compiler::owner_path::standalone_issued(
+            names.as_ref().budget(),
+            justrust_engine::compiler::owner_path::OwnerDomain::ScopeArena,
+        )
+        .unwrap(),
+    )
+    .unwrap();
     let foreign_root = foreign.function_root(names.as_ref()).unwrap();
     assert!(matches!(
         rejected(scopes.visible_from(first, foreign_root)),
@@ -112,7 +128,15 @@ fn visibility_requires_the_exact_captured_frontier_and_function() {
 #[test]
 fn recorded_reference_projection_retains_exact_frontier_function_and_class() {
     let (names, ids) = names("x x x x", &ExpansionBudget::default());
-    let mut scopes = ScopeArenaBuilder::for_names(names.as_ref()).unwrap();
+    let mut scopes = ScopeArenaBuilder::for_names(
+        names.as_ref(),
+        justrust_engine::compiler::owner_path::standalone_issued(
+            names.as_ref().budget(),
+            justrust_engine::compiler::owner_path::OwnerDomain::ScopeArena,
+        )
+        .unwrap(),
+    )
+    .unwrap();
     let root = scopes.function_root(names.as_ref()).unwrap();
     let function = scopes.function(root).unwrap();
     assert_eq!(
@@ -192,7 +216,15 @@ fn recorded_reference_projection_retains_exact_frontier_function_and_class() {
 #[test]
 fn source_order_shadowing_keeps_prior_frontiers_and_unresolved_references_exact() {
     let (names, ids) = names("x x x x x x", &ExpansionBudget::default());
-    let mut scopes = ScopeArenaBuilder::for_names(names.as_ref()).unwrap();
+    let mut scopes = ScopeArenaBuilder::for_names(
+        names.as_ref(),
+        justrust_engine::compiler::owner_path::standalone_issued(
+            names.as_ref().budget(),
+            justrust_engine::compiler::owner_path::OwnerDomain::ScopeArena,
+        )
+        .unwrap(),
+    )
+    .unwrap();
     let root = scopes.function_root(names.as_ref()).unwrap();
     assert_eq!(
         scopes
@@ -257,7 +289,15 @@ fn source_order_shadowing_keeps_prior_frontiers_and_unresolved_references_exact(
 #[test]
 fn child_scope_captures_exact_entry_frontier_not_later_parent_shadowing() {
     let (names, ids) = names("x x x x x x x", &ExpansionBudget::default());
-    let mut scopes = ScopeArenaBuilder::for_names(names.as_ref()).unwrap();
+    let mut scopes = ScopeArenaBuilder::for_names(
+        names.as_ref(),
+        justrust_engine::compiler::owner_path::standalone_issued(
+            names.as_ref().budget(),
+            justrust_engine::compiler::owner_path::OwnerDomain::ScopeArena,
+        )
+        .unwrap(),
+    )
+    .unwrap();
     let root = scopes.function_root(names.as_ref()).unwrap();
     let function = scopes.function(root).unwrap();
     let (parent, original) = scopes.bind(names.as_ref(), root, ids[0]).unwrap();
@@ -308,7 +348,15 @@ fn child_scope_captures_exact_entry_frontier_not_later_parent_shadowing() {
 #[test]
 fn separate_functions_never_inherit_each_others_same_atom_binders() {
     let (names, ids) = names("x x x x", &ExpansionBudget::default());
-    let mut scopes = ScopeArenaBuilder::for_names(names.as_ref()).unwrap();
+    let mut scopes = ScopeArenaBuilder::for_names(
+        names.as_ref(),
+        justrust_engine::compiler::owner_path::standalone_issued(
+            names.as_ref().budget(),
+            justrust_engine::compiler::owner_path::OwnerDomain::ScopeArena,
+        )
+        .unwrap(),
+    )
+    .unwrap();
     let first_root = scopes.function_root(names.as_ref()).unwrap();
     let second_root = scopes.function_root(names.as_ref()).unwrap();
     let first_function = scopes.function(first_root).unwrap();
@@ -350,7 +398,15 @@ fn equal_span_and_atom_do_not_replace_checked_occurrence_or_binding_identity() {
         names.key(second, LookupClass::Local).unwrap()
     );
     let names = names.freeze().unwrap();
-    let mut scopes = ScopeArenaBuilder::for_names(names.as_ref()).unwrap();
+    let mut scopes = ScopeArenaBuilder::for_names(
+        names.as_ref(),
+        justrust_engine::compiler::owner_path::standalone_issued(
+            names.as_ref().budget(),
+            justrust_engine::compiler::owner_path::OwnerDomain::ScopeArena,
+        )
+        .unwrap(),
+    )
+    .unwrap();
     let root = scopes.function_root(names.as_ref()).unwrap();
     let (first_point, first_binding) = scopes.bind(names.as_ref(), root, first).unwrap();
     assert!(matches!(
@@ -372,7 +428,15 @@ fn equal_span_and_atom_do_not_replace_checked_occurrence_or_binding_identity() {
 #[test]
 fn unrecorded_occurrence_is_not_an_explicitly_recorded_unresolved_reference() {
     let (names, ids) = names("x x x", &ExpansionBudget::default());
-    let mut scopes = ScopeArenaBuilder::for_names(names.as_ref()).unwrap();
+    let mut scopes = ScopeArenaBuilder::for_names(
+        names.as_ref(),
+        justrust_engine::compiler::owner_path::standalone_issued(
+            names.as_ref().budget(),
+            justrust_engine::compiler::owner_path::OwnerDomain::ScopeArena,
+        )
+        .unwrap(),
+    )
+    .unwrap();
     let root = scopes.function_root(names.as_ref()).unwrap();
     assert!(matches!(
         scopes.reference_for(names.as_ref(), ids[0]),
@@ -403,7 +467,15 @@ fn unrecorded_occurrence_is_not_an_explicitly_recorded_unresolved_reference() {
 #[test]
 fn conflicting_reference_reassociation_and_rebinding_do_not_overwrite_prior_facts() {
     let (names, ids) = names("x x x", &ExpansionBudget::default());
-    let mut scopes = ScopeArenaBuilder::for_names(names.as_ref()).unwrap();
+    let mut scopes = ScopeArenaBuilder::for_names(
+        names.as_ref(),
+        justrust_engine::compiler::owner_path::standalone_issued(
+            names.as_ref().budget(),
+            justrust_engine::compiler::owner_path::OwnerDomain::ScopeArena,
+        )
+        .unwrap(),
+    )
+    .unwrap();
     let root = scopes.function_root(names.as_ref()).unwrap();
     let (first_point, first) = scopes.bind(names.as_ref(), root, ids[0]).unwrap();
     assert_eq!(
@@ -439,8 +511,24 @@ fn conflicting_reference_reassociation_and_rebinding_do_not_overwrite_prior_fact
 #[test]
 fn arena_owner_is_checked_even_when_name_session_and_allocation_order_match() {
     let (names, ids) = names("x x", &ExpansionBudget::default());
-    let mut first = ScopeArenaBuilder::for_names(names.as_ref()).unwrap();
-    let mut second = ScopeArenaBuilder::for_names(names.as_ref()).unwrap();
+    let mut first = ScopeArenaBuilder::for_names(
+        names.as_ref(),
+        justrust_engine::compiler::owner_path::standalone_issued(
+            names.as_ref().budget(),
+            justrust_engine::compiler::owner_path::OwnerDomain::ScopeArena,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let mut second = ScopeArenaBuilder::for_names(
+        names.as_ref(),
+        justrust_engine::compiler::owner_path::standalone_issued(
+            names.as_ref().budget(),
+            justrust_engine::compiler::owner_path::OwnerDomain::ScopeArena,
+        )
+        .unwrap(),
+    )
+    .unwrap();
     let first_root = first.function_root(names.as_ref()).unwrap();
     let second_root = second.function_root(names.as_ref()).unwrap();
     let first_function = first.function(first_root).unwrap();
@@ -489,7 +577,15 @@ fn name_session_is_checked_independently_from_shared_budget_and_equal_spelling()
     let budget = ExpansionBudget::default();
     let (own_names, own) = names("x x", &budget);
     let (foreign_names, foreign) = names("x x", &budget);
-    let mut scopes = ScopeArenaBuilder::for_names(own_names.as_ref()).unwrap();
+    let mut scopes = ScopeArenaBuilder::for_names(
+        own_names.as_ref(),
+        justrust_engine::compiler::owner_path::standalone_issued(
+            own_names.as_ref().budget(),
+            justrust_engine::compiler::owner_path::OwnerDomain::ScopeArena,
+        )
+        .unwrap(),
+    )
+    .unwrap();
     let root = scopes.function_root(own_names.as_ref()).unwrap();
     let (_, binding) = scopes.bind(own_names.as_ref(), root, own[0]).unwrap();
     assert!(matches!(
@@ -535,7 +631,15 @@ fn name_session_is_checked_independently_from_shared_budget_and_equal_spelling()
 fn foreign_occurrence_cannot_be_smuggled_through_the_correct_name_store_argument() {
     let (own_names, own) = names("x", &ExpansionBudget::default());
     let (foreign_names, foreign) = names("x", &ExpansionBudget::default());
-    let mut scopes = ScopeArenaBuilder::for_names(own_names.as_ref()).unwrap();
+    let mut scopes = ScopeArenaBuilder::for_names(
+        own_names.as_ref(),
+        justrust_engine::compiler::owner_path::standalone_issued(
+            own_names.as_ref().budget(),
+            justrust_engine::compiler::owner_path::OwnerDomain::ScopeArena,
+        )
+        .unwrap(),
+    )
+    .unwrap();
     let root = scopes.function_root(own_names.as_ref()).unwrap();
     assert!(matches!(
         scopes.bind(own_names.as_ref(), root, foreign[0]),
@@ -574,7 +678,15 @@ fn foreign_occurrence_cannot_be_smuggled_through_the_correct_name_store_argument
 fn empty_arena_still_retains_exact_name_owner_association() {
     let (own, _) = names("", &ExpansionBudget::default());
     let (foreign, _) = names("", &ExpansionBudget::default());
-    let scopes = ScopeArenaBuilder::for_names(own.as_ref()).unwrap();
+    let scopes = ScopeArenaBuilder::for_names(
+        own.as_ref(),
+        justrust_engine::compiler::owner_path::standalone_issued(
+            own.as_ref().budget(),
+            justrust_engine::compiler::owner_path::OwnerDomain::ScopeArena,
+        )
+        .unwrap(),
+    )
+    .unwrap();
     scopes.check_names(own.as_ref()).unwrap();
     assert!(matches!(
         scopes.check_names(foreign.as_ref()),
@@ -591,7 +703,15 @@ fn empty_arena_still_retains_exact_name_owner_association() {
 #[test]
 fn recorded_binding_metadata_retains_the_actual_declaration_occurrence() {
     let (names, ids) = names("x x", &ExpansionBudget::default());
-    let mut scopes = ScopeArenaBuilder::for_names(names.as_ref()).unwrap();
+    let mut scopes = ScopeArenaBuilder::for_names(
+        names.as_ref(),
+        justrust_engine::compiler::owner_path::standalone_issued(
+            names.as_ref().budget(),
+            justrust_engine::compiler::owner_path::OwnerDomain::ScopeArena,
+        )
+        .unwrap(),
+    )
+    .unwrap();
     let root = scopes.function_root(names.as_ref()).unwrap();
     let (_, binding) = scopes.bind(names.as_ref(), root, ids[0]).unwrap();
     let scopes = scopes.freeze().unwrap();
@@ -612,7 +732,15 @@ fn transition_limit_rejects_before_allocating_and_latches_exact_failure() {
     let budget = ExpansionBudget::default();
     let (names, ids) = names("x", &budget);
     let receipt = exact_owner_receipt(&names);
-    let mut scopes = ScopeArenaBuilder::for_names(names.as_ref()).unwrap();
+    let mut scopes = ScopeArenaBuilder::for_names(
+        names.as_ref(),
+        justrust_engine::compiler::owner_path::standalone_issued(
+            names.as_ref().budget(),
+            justrust_engine::compiler::owner_path::OwnerDomain::ScopeArena,
+        )
+        .unwrap(),
+    )
+    .unwrap();
     let root = scopes.function_root(names.as_ref()).unwrap();
     let used = budget.snapshot().counters[Counter::ScopeTransitions as usize];
     budget
@@ -655,13 +783,27 @@ fn constructor_byte_admission_rejects_before_allocating_scope_payload() {
         )
         .unwrap();
     let before = budget.snapshot();
-    let failure = budget_failure(rejected(ScopeArenaBuilder::for_names(names.as_ref())));
+    let failure = budget_failure(rejected(ScopeArenaBuilder::for_names(
+        names.as_ref(),
+        justrust_engine::compiler::owner_path::standalone_issued(
+            &ExpansionBudget::default(),
+            justrust_engine::compiler::owner_path::OwnerDomain::ScopeArena,
+        )
+        .unwrap(),
+    )));
     assert_eq!(failure.kind, BudgetFailureKind::Limit);
     assert_eq!(failure.resource, BudgetResource::Bytes);
     assert_eq!(budget.snapshot().retained_bytes, before.retained_bytes);
     assert_eq!(budget.snapshot().temporary_bytes, before.temporary_bytes);
     assert_eq!(
-        budget_failure(rejected(ScopeArenaBuilder::for_names(names.as_ref()))),
+        budget_failure(rejected(ScopeArenaBuilder::for_names(
+            names.as_ref(),
+            justrust_engine::compiler::owner_path::standalone_issued(
+                &ExpansionBudget::default(),
+                justrust_engine::compiler::owner_path::OwnerDomain::ScopeArena
+            )
+            .unwrap()
+        ))),
         failure
     );
     drop(ballast);
@@ -677,7 +819,15 @@ fn poisoned_frozen_arena_preserves_failure_but_id_equality_and_hash_are_pure() {
     let budget = ExpansionBudget::default();
     let (names, ids) = names("x x", &budget);
     let receipt = exact_owner_receipt(&names);
-    let mut scopes = ScopeArenaBuilder::for_names(names.as_ref()).unwrap();
+    let mut scopes = ScopeArenaBuilder::for_names(
+        names.as_ref(),
+        justrust_engine::compiler::owner_path::standalone_issued(
+            names.as_ref().budget(),
+            justrust_engine::compiler::owner_path::OwnerDomain::ScopeArena,
+        )
+        .unwrap(),
+    )
+    .unwrap();
     let root = scopes.function_root(names.as_ref()).unwrap();
     let function = scopes.function(root).unwrap();
     let (point, binding) = scopes.bind(names.as_ref(), root, ids[0]).unwrap();
@@ -726,7 +876,15 @@ fn frozen_clone_keeps_flat_scope_storage_alive_until_last_owner_drops() {
     let (names, ids) = names("x", &budget);
     let receipt = exact_owner_receipt(&names);
     let names_only = budget.snapshot().retained_bytes;
-    let mut scopes = ScopeArenaBuilder::for_names(names.as_ref()).unwrap();
+    let mut scopes = ScopeArenaBuilder::for_names(
+        names.as_ref(),
+        justrust_engine::compiler::owner_path::standalone_issued(
+            names.as_ref().budget(),
+            justrust_engine::compiler::owner_path::OwnerDomain::ScopeArena,
+        )
+        .unwrap(),
+    )
+    .unwrap();
     let mut frontier = scopes.function_root(names.as_ref()).unwrap();
     for _ in 0..512 {
         frontier = scopes.enter(names.as_ref(), frontier).unwrap();
@@ -816,7 +974,15 @@ fn public_name_gate_cannot_mint_unproved_marked_or_expanded_scope_occurrences() 
         Err(NameError::Unsupported(UnsupportedName::ExpandedOccurrence))
     ));
     let original_name = names.from_token(original, Edition::E2024).unwrap();
-    let mut scopes = ScopeArenaBuilder::for_names(&names).unwrap();
+    let mut scopes = ScopeArenaBuilder::for_names(
+        &names,
+        justrust_engine::compiler::owner_path::standalone_issued(
+            &names.budget(),
+            justrust_engine::compiler::owner_path::OwnerDomain::ScopeArena,
+        )
+        .unwrap(),
+    )
+    .unwrap();
     let root = scopes.function_root(&names).unwrap();
     let (_, binding) = scopes.bind(&names, root, original_name).unwrap();
     assert_eq!(

@@ -235,7 +235,15 @@ mod tests {
             .reissue_span(opaque.span, context, expansion)
             .unwrap();
         let names = NameStoreBuilder::new(session, session_cap, Edition::E2024).unwrap();
-        let mut scopes = ScopeArenaBuilder::for_names(&names).unwrap();
+        let mut scopes = ScopeArenaBuilder::for_names(
+            &names,
+            crate::compiler::owner_path::standalone_issued(
+                &names.budget(),
+                crate::compiler::owner_path::OwnerDomain::ScopeArena,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         let frontier = scopes.function_root(&names).unwrap();
         let proof = scopes
             .anchor_expansion(&names, expansion, frontier, frontier)

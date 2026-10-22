@@ -661,10 +661,17 @@ mod tests {
 
     #[test]
     fn visibility_clone_is_inline_and_does_not_retain_scope_text() {
-        let modules = ModuleArenaBuilder::for_catalog(ExpansionBudget::default())
-            .unwrap()
-            .freeze()
-            .unwrap();
+        let modules = ModuleArenaBuilder::for_catalog(
+            ExpansionBudget::default(),
+            crate::compiler::owner_path::standalone_issued(
+                &ExpansionBudget::default(),
+                crate::compiler::owner_path::OwnerDomain::ModuleArena,
+            )
+            .unwrap(),
+        )
+        .unwrap()
+        .freeze()
+        .unwrap();
         let budget = ir::PlanBudget::new(ir::PlanLimits {
             bytes: 0,
             ..Default::default()
@@ -710,11 +717,17 @@ mod tests {
             .unwrap()
             .finish()
             .unwrap();
-        let scopes =
-            crate::compiler::semantic_scope::ScopeArenaBuilder::for_names(program.names.as_ref())
-                .unwrap()
-                .freeze()
-                .unwrap();
+        let scopes = crate::compiler::semantic_scope::ScopeArenaBuilder::for_names(
+            program.names.as_ref(),
+            crate::compiler::owner_path::standalone_issued(
+                program.names.as_ref().budget(),
+                crate::compiler::owner_path::OwnerDomain::ScopeArena,
+            )
+            .unwrap(),
+        )
+        .unwrap()
+        .freeze()
+        .unwrap();
         program.scopes = Some(scopes);
         let before = source_budget.snapshot();
         let budget = ir::PlanBudget::new(ir::PlanLimits::default());
@@ -1004,9 +1017,15 @@ mod tests {
         // The live program holds refundable name, module and symbol storage
         // beyond its exact permanent name and struct authority receipts.
         assert!(baseline > receipt);
-        let mut scopes =
-            crate::compiler::semantic_scope::ScopeArenaBuilder::for_names(program.names.as_ref())
-                .unwrap();
+        let mut scopes = crate::compiler::semantic_scope::ScopeArenaBuilder::for_names(
+            program.names.as_ref(),
+            crate::compiler::owner_path::standalone_issued(
+                program.names.as_ref().budget(),
+                crate::compiler::owner_path::OwnerDomain::ScopeArena,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         scopes.function_root(program.names.as_ref()).unwrap();
         program.scopes = Some(scopes.freeze().unwrap());
         let retained = source_budget.snapshot().retained_bytes;

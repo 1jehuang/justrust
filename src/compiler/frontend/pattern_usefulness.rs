@@ -854,10 +854,17 @@ mod tests {
         ir::EnumTy,
         Arc<super::super::super::module_identity::ModuleArena>,
     ) {
-        let modules = ModuleArenaBuilder::for_catalog(ExpansionBudget::default())
-            .unwrap()
-            .freeze()
-            .unwrap();
+        let modules = ModuleArenaBuilder::for_catalog(
+            ExpansionBudget::default(),
+            crate::compiler::owner_path::standalone_issued(
+                &ExpansionBudget::default(),
+                crate::compiler::owner_path::OwnerDomain::ModuleArena,
+            )
+            .unwrap(),
+        )
+        .unwrap()
+        .freeze()
+        .unwrap();
         let snapshot = ir::SnapshotId::allocate().unwrap();
         let source_decl = super::super::super::traits::test_support::source_decl(
             snapshot,

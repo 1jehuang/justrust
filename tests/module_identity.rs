@@ -36,7 +36,15 @@ fn names(text: &str, budget: &ExpansionBudget) -> (NameStoreBuilder, Vec<AstIden
 fn source_and_catalog_roots_are_real_disjoint_checked_modules() {
     let budget = ExpansionBudget::default();
     let (names, _) = names("item", &budget);
-    let builder = ModuleArenaBuilder::for_source(&names).unwrap();
+    let builder = ModuleArenaBuilder::for_source(
+        &names,
+        justrust_engine::compiler::owner_path::standalone_issued(
+            &names.budget(),
+            justrust_engine::compiler::owner_path::OwnerDomain::ModuleArena,
+        )
+        .unwrap(),
+    )
+    .unwrap();
     assert!(builder.budget().same_authority(&budget));
     let source = builder.source_root().unwrap();
     let core = builder.core_root();
@@ -72,7 +80,15 @@ fn source_and_catalog_roots_are_real_disjoint_checked_modules() {
 #[test]
 fn catalog_only_owner_has_no_source_sentinel_or_implicit_budget() {
     let budget = ExpansionBudget::default();
-    let builder = ModuleArenaBuilder::for_catalog(budget.clone()).unwrap();
+    let builder = ModuleArenaBuilder::for_catalog(
+        budget.clone(),
+        justrust_engine::compiler::owner_path::standalone_issued(
+            &budget.clone(),
+            justrust_engine::compiler::owner_path::OwnerDomain::ModuleArena,
+        )
+        .unwrap(),
+    )
+    .unwrap();
     assert!(builder.budget().same_authority(&budget));
     assert!(matches!(
         builder.source_root(),
@@ -93,7 +109,15 @@ fn catalog_only_owner_has_no_source_sentinel_or_implicit_budget() {
 fn child_identity_is_parent_plus_checked_name_not_occurrence_or_spelling_alone() {
     let budget = ExpansionBudget::default();
     let (names, ids) = names("left right leaf leaf", &budget);
-    let mut modules = ModuleArenaBuilder::for_source(&names).unwrap();
+    let mut modules = ModuleArenaBuilder::for_source(
+        &names,
+        justrust_engine::compiler::owner_path::standalone_issued(
+            &names.budget(),
+            justrust_engine::compiler::owner_path::OwnerDomain::ModuleArena,
+        )
+        .unwrap(),
+    )
+    .unwrap();
     let root = modules.source_root().unwrap();
     let left = modules.intern_child(&names, root, ids[0]).unwrap();
     let right = modules.intern_child(&names, root, ids[1]).unwrap();
@@ -128,8 +152,24 @@ fn child_identity_is_parent_plus_checked_name_not_occurrence_or_spelling_alone()
 fn same_source_name_owner_does_not_merge_independent_module_arenas() {
     let budget = ExpansionBudget::default();
     let (names, ids) = names("child", &budget);
-    let mut first = ModuleArenaBuilder::for_source(&names).unwrap();
-    let mut second = ModuleArenaBuilder::for_source(&names).unwrap();
+    let mut first = ModuleArenaBuilder::for_source(
+        &names,
+        justrust_engine::compiler::owner_path::standalone_issued(
+            &names.budget(),
+            justrust_engine::compiler::owner_path::OwnerDomain::ModuleArena,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let mut second = ModuleArenaBuilder::for_source(
+        &names,
+        justrust_engine::compiler::owner_path::standalone_issued(
+            &names.budget(),
+            justrust_engine::compiler::owner_path::OwnerDomain::ModuleArena,
+        )
+        .unwrap(),
+    )
+    .unwrap();
     let a = first.source_root().unwrap();
     let b = second.source_root().unwrap();
     assert_ne!(a, b);
@@ -170,7 +210,15 @@ fn foreign_name_store_cannot_supply_same_spelling_module_authority() {
     let budget = ExpansionBudget::default();
     let (own, ids) = names("child", &budget);
     let (foreign, other) = names("child", &budget);
-    let mut modules = ModuleArenaBuilder::for_source(&own).unwrap();
+    let mut modules = ModuleArenaBuilder::for_source(
+        &own,
+        justrust_engine::compiler::owner_path::standalone_issued(
+            &own.budget(),
+            justrust_engine::compiler::owner_path::OwnerDomain::ModuleArena,
+        )
+        .unwrap(),
+    )
+    .unwrap();
     let root = modules.source_root().unwrap();
     let child = modules.intern_child(&own, root, ids[0]).unwrap();
     assert!(matches!(
@@ -206,7 +254,15 @@ fn foreign_name_store_cannot_supply_same_spelling_module_authority() {
 fn source_children_cannot_attach_to_catalog_roots_or_descendants() {
     let budget = ExpansionBudget::default();
     let (names, ids) = names("child", &budget);
-    let mut modules = ModuleArenaBuilder::for_source(&names).unwrap();
+    let mut modules = ModuleArenaBuilder::for_source(
+        &names,
+        justrust_engine::compiler::owner_path::standalone_issued(
+            &names.budget(),
+            justrust_engine::compiler::owner_path::OwnerDomain::ModuleArena,
+        )
+        .unwrap(),
+    )
+    .unwrap();
     for parent in [
         modules.core_root(),
         modules.catalog_module(CatalogModule::Marker),
@@ -228,7 +284,15 @@ fn source_children_cannot_attach_to_catalog_roots_or_descendants() {
 fn privacy_restrictions_require_same_root_ancestor_at_schema_admission() {
     let budget = ExpansionBudget::default();
     let (names, ids) = names("left right leaf", &budget);
-    let mut modules = ModuleArenaBuilder::for_source(&names).unwrap();
+    let mut modules = ModuleArenaBuilder::for_source(
+        &names,
+        justrust_engine::compiler::owner_path::standalone_issued(
+            &names.budget(),
+            justrust_engine::compiler::owner_path::OwnerDomain::ModuleArena,
+        )
+        .unwrap(),
+    )
+    .unwrap();
     let root = modules.source_root().unwrap();
     let left = modules.intern_child(&names, root, ids[0]).unwrap();
     let right = modules.intern_child(&names, root, ids[1]).unwrap();
@@ -273,7 +337,15 @@ fn privacy_restrictions_require_same_root_ancestor_at_schema_admission() {
 fn reexport_cannot_widen_restricted_audience_or_cross_roots() {
     let budget = ExpansionBudget::default();
     let (names, ids) = names("left right leaf", &budget);
-    let mut modules = ModuleArenaBuilder::for_source(&names).unwrap();
+    let mut modules = ModuleArenaBuilder::for_source(
+        &names,
+        justrust_engine::compiler::owner_path::standalone_issued(
+            &names.budget(),
+            justrust_engine::compiler::owner_path::OwnerDomain::ModuleArena,
+        )
+        .unwrap(),
+    )
+    .unwrap();
     let root = modules.source_root().unwrap();
     let left = modules.intern_child(&names, root, ids[0]).unwrap();
     let right = modules.intern_child(&names, root, ids[1]).unwrap();
@@ -310,14 +382,28 @@ fn reexport_cannot_widen_restricted_audience_or_cross_roots() {
 #[test]
 fn public_visibility_never_shortcuts_foreign_module_validation() {
     let budget = ExpansionBudget::default();
-    let own = ModuleArenaBuilder::for_catalog(budget.clone())
-        .unwrap()
-        .freeze()
-        .unwrap();
-    let other = ModuleArenaBuilder::for_catalog(budget.clone())
-        .unwrap()
-        .freeze()
-        .unwrap();
+    let own = ModuleArenaBuilder::for_catalog(
+        budget.clone(),
+        justrust_engine::compiler::owner_path::standalone_issued(
+            &budget.clone(),
+            justrust_engine::compiler::owner_path::OwnerDomain::ModuleArena,
+        )
+        .unwrap(),
+    )
+    .unwrap()
+    .freeze()
+    .unwrap();
+    let other = ModuleArenaBuilder::for_catalog(
+        budget.clone(),
+        justrust_engine::compiler::owner_path::standalone_issued(
+            &budget.clone(),
+            justrust_engine::compiler::owner_path::OwnerDomain::ModuleArena,
+        )
+        .unwrap(),
+    )
+    .unwrap()
+    .freeze()
+    .unwrap();
     let foreign = other.core_root();
     let local = own.core_root();
     assert!(matches!(
@@ -347,7 +433,15 @@ fn public_visibility_never_shortcuts_foreign_module_validation() {
 fn deep_flat_ancestry_has_no_new_semantic_depth_cap() {
     let budget = ExpansionBudget::default();
     let (names, ids) = names("child", &budget);
-    let mut modules = ModuleArenaBuilder::for_source(&names).unwrap();
+    let mut modules = ModuleArenaBuilder::for_source(
+        &names,
+        justrust_engine::compiler::owner_path::standalone_issued(
+            &names.budget(),
+            justrust_engine::compiler::owner_path::OwnerDomain::ModuleArena,
+        )
+        .unwrap(),
+    )
+    .unwrap();
     let root = modules.source_root().unwrap();
     let mut deepest = root;
     for _ in 0..600 {
@@ -367,10 +461,17 @@ fn deep_flat_ancestry_has_no_new_semantic_depth_cap() {
 fn last_module_arc_releases_owned_storage_and_clone_preserves_authority() {
     let budget = ExpansionBudget::default();
     let baseline = budget.snapshot();
-    let arena = ModuleArenaBuilder::for_catalog(budget.clone())
-        .unwrap()
-        .freeze()
-        .unwrap();
+    let arena = ModuleArenaBuilder::for_catalog(
+        budget.clone(),
+        justrust_engine::compiler::owner_path::standalone_issued(
+            &budget.clone(),
+            justrust_engine::compiler::owner_path::OwnerDomain::ModuleArena,
+        )
+        .unwrap(),
+    )
+    .unwrap()
+    .freeze()
+    .unwrap();
     let root = arena.core_root();
     let held = budget.snapshot();
     assert!(held.retained_bytes > baseline.retained_bytes);
@@ -396,9 +497,14 @@ fn catalog_allocation_failure_and_raised_configuration_are_typed_not_fallback() 
         bytes: 0,
         ..ExpansionLimits::default()
     });
-    let Err(ModuleError::Token(TokenError::Budget(failure))) =
-        ModuleArenaBuilder::for_catalog(zero.clone())
-    else {
+    let Err(ModuleError::Token(TokenError::Budget(failure))) = ModuleArenaBuilder::for_catalog(
+        zero.clone(),
+        justrust_engine::compiler::owner_path::standalone_issued(
+            &ExpansionBudget::default(),
+            justrust_engine::compiler::owner_path::OwnerDomain::ModuleArena,
+        )
+        .unwrap(),
+    ) else {
         panic!("zero bytes must fail as typed resource failure");
     };
     assert_eq!(failure.kind, BudgetFailureKind::Limit);
@@ -410,9 +516,14 @@ fn catalog_allocation_failure_and_raised_configuration_are_typed_not_fallback() 
         ..ExpansionLimits::default()
     };
     let raised = ExpansionBudget::new(limits);
-    let Err(ModuleError::Token(TokenError::Budget(failure))) =
-        ModuleArenaBuilder::for_catalog(raised.clone())
-    else {
+    let Err(ModuleError::Token(TokenError::Budget(failure))) = ModuleArenaBuilder::for_catalog(
+        raised.clone(),
+        justrust_engine::compiler::owner_path::standalone_issued(
+            &ExpansionBudget::default(),
+            justrust_engine::compiler::owner_path::OwnerDomain::ModuleArena,
+        )
+        .unwrap(),
+    ) else {
         panic!("raised limit cannot create authority");
     };
     assert_eq!(failure.resource, BudgetResource::Limits);
@@ -422,10 +533,17 @@ fn catalog_allocation_failure_and_raised_configuration_are_typed_not_fallback() 
 #[test]
 fn shared_ledger_poison_blocks_existing_checked_module_and_privacy_operations() {
     let budget = ExpansionBudget::default();
-    let arena = ModuleArenaBuilder::for_catalog(budget.clone())
-        .unwrap()
-        .freeze()
-        .unwrap();
+    let arena = ModuleArenaBuilder::for_catalog(
+        budget.clone(),
+        justrust_engine::compiler::owner_path::standalone_issued(
+            &budget.clone(),
+            justrust_engine::compiler::owner_path::OwnerDomain::ModuleArena,
+        )
+        .unwrap(),
+    )
+    .unwrap()
+    .freeze()
+    .unwrap();
     let root = arena.core_root();
     let used = budget.snapshot().counters[Counter::Work as usize];
     let remaining = ExpansionLimits::default().counters[Counter::Work as usize] - used;

@@ -696,22 +696,24 @@ pub struct TokenSession {
 #[derive(Debug)]
 pub struct SessionOwnerCap {
     session: SessionId,
-    path: super::owner_path::BuilderOwnedPath,
+    issuer: super::owner_path::OwnerIssuer,
 }
 impl SessionOwnerCap {
-    /// Consume the cap for exactly the session it was issued with.
+    /// Consume the cap for exactly the session it was issued with. Returns
+    /// the session's issuer, which issues the session's child owners
+    /// (module and scope arenas) and is frozen into the store's path.
     pub(super) fn bind(
         self,
         session: &TokenSession,
-    ) -> Result<super::owner_path::BuilderOwnedPath, TokenError> {
+    ) -> Result<super::owner_path::OwnerIssuer, TokenError> {
         if self.session != session.id {
             return Err(TokenError::ForeignHandle);
         }
-        Ok(self.path)
+        Ok(self.issuer)
     }
     /// The builder owner path, for structural checks only.
     pub fn path(&self) -> &super::owner_path::BuilderOwnedPath {
-        &self.path
+        self.issuer.path()
     }
 }
 
@@ -740,7 +742,7 @@ impl TokenSession {
             session,
             SessionOwnerCap {
                 session: id,
-                path: issuer.into_path(),
+                issuer,
             },
         ))
     }
@@ -752,7 +754,10 @@ impl TokenSession {
         sources: SourceSnapshot,
         budget: ExpansionBudget,
     ) -> Result<(Self, SessionOwnerCap), TokenError> {
-        let owner = super::owner_path::standalone_issued(&budget)?;
+        let owner = super::owner_path::standalone_issued(
+            &budget,
+            super::owner_path::OwnerDomain::TokenSession,
+        )?;
         Self::with_owner(sources, budget, owner)
     }
 

@@ -332,8 +332,24 @@ mod tests {
         let mut names = NameStoreBuilder::new(session, cap, Edition::E2024).unwrap();
         let name0 = names.intern_root("arbitrary", span0).unwrap();
         let name1 = names.intern_root("arbitrary", span1).unwrap();
-        let modules = ModuleArenaBuilder::for_source(&names).unwrap();
-        let mut scopes = ScopeArenaBuilder::for_names(&names).unwrap();
+        let modules = ModuleArenaBuilder::for_source(
+            &names,
+            crate::compiler::owner_path::standalone_issued(
+                &names.budget(),
+                crate::compiler::owner_path::OwnerDomain::ModuleArena,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let mut scopes = ScopeArenaBuilder::for_names(
+            &names,
+            crate::compiler::owner_path::standalone_issued(
+                &names.budget(),
+                crate::compiler::owner_path::OwnerDomain::ScopeArena,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         let point = scopes
             .module_root(&names, &modules, modules.source_root().unwrap(), None)
             .unwrap();
@@ -425,9 +441,25 @@ mod tests {
             .unwrap();
         let mut names = NameStoreBuilder::new(session, session_cap, Edition::E2024).unwrap();
         let name = names.intern_root("make", span).unwrap();
-        let modules = ModuleArenaBuilder::for_source(&names).unwrap();
+        let modules = ModuleArenaBuilder::for_source(
+            &names,
+            crate::compiler::owner_path::standalone_issued(
+                &names.budget(),
+                crate::compiler::owner_path::OwnerDomain::ModuleArena,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         let module = modules.source_root().unwrap();
-        let mut scopes = ScopeArenaBuilder::for_names(&names).unwrap();
+        let mut scopes = ScopeArenaBuilder::for_names(
+            &names,
+            crate::compiler::owner_path::standalone_issued(
+                &names.budget(),
+                crate::compiler::owner_path::OwnerDomain::ScopeArena,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         let point = scopes.module_root(&names, &modules, module, None).unwrap();
         let mut driver = SourceItemMacroDriver::new(stream.clone(), &mut names).unwrap();
         let site = DefinitionSite {

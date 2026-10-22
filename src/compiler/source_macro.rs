@@ -292,7 +292,15 @@ mod tests {
             .unwrap();
         let mut names = NameStoreBuilder::new(session, session_cap, Edition::E2024).unwrap();
         let name = names.intern_root("value", span).unwrap();
-        let mut scopes = ScopeArenaBuilder::for_names(&names).unwrap();
+        let mut scopes = ScopeArenaBuilder::for_names(
+            &names,
+            crate::compiler::owner_path::standalone_issued(
+                &names.budget(),
+                crate::compiler::owner_path::OwnerDomain::ScopeArena,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         let at = scopes.function_root(&names).unwrap();
         let owner = scopes.function(at).unwrap();
         let driver = LocalMacroDriver::new(stream, owner, &mut names).unwrap();

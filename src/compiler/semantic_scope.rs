@@ -6,7 +6,6 @@ use std::hash::BuildHasher;
 use std::mem::size_of;
 use std::num::NonZeroU64;
 use std::sync::Arc;
-use std::sync::atomic::AtomicU64;
 
 use super::expansion_budget::{BudgetFailure, ByteLease, Counter, Depth, ExpansionBudget, Storage};
 use super::expansion_span::ExpansionId;
@@ -15,7 +14,7 @@ use super::semantic_name::{self, AstIdent, LookupClass, NameError, NameKey};
 use super::semantic_path::NameAccess;
 use super::token::Token;
 use super::token_session::{
-    BudgetVec, SessionId, SpanId, SyntaxContextId, TokenError, TokenSession, allocate_identity,
+    BudgetVec, SessionId, SpanId, SyntaxContextId, TokenError, TokenSession,
 };
 
 mod item_scope;
@@ -304,8 +303,26 @@ pub struct ScopeArenaBuilder {
 }
 
 impl ScopeArenaBuilder {
-    pub fn for_names(names: &impl NameAccess) -> Result<Self, ScopeError> {
-        static NEXT: AtomicU64 = AtomicU64::new(1);
+    /// A scope arena owned by a child issued from the session's own issuer
+    /// (the graph route: PARSE's issuer reaches here through the builder).
+    pub fn for_builder(names: &mut semantic_name::NameStoreBuilder) -> Result<Self, ScopeError> {
+        let owner = names.issue_owner(super::owner_path::OwnerDomain::ScopeArena)?;
+        Self::with_owner(&*names, owner)
+    }
+    /// A scope arena for direct tooling over any name view: its owner is
+    /// issued under a fresh standalone root, never a compiler counter.
+    /// Direct tooling passes an owner it was issued (for example by
+    /// `owner_path::standalone_issued`); this never mints one itself.
+    pub fn for_names(
+        names: &impl NameAccess,
+        owner: super::owner_path::Issued,
+    ) -> Result<Self, ScopeError> {
+        Self::with_owner(names, owner)
+    }
+    fn with_owner(
+        names: &impl NameAccess,
+        owner: super::owner_path::Issued,
+    ) -> Result<Self, ScopeError> {
         let budget = names.budget().clone();
         budget.check()?;
         let lease = budget.reserve(
@@ -315,7 +332,7 @@ impl ScopeArenaBuilder {
         Ok(Self {
             metadata_builder: item_scope::MetadataBuilder::new(&budget)?,
             arena: ScopeArena {
-                owner: allocate_identity(&NEXT)?,
+                owner: owner.tag().bits(),
                 names: names.session().id(),
                 scopes: BudgetVec::new(&budget, Storage::Retained)?,
                 frontiers: BudgetVec::new(&budget, Storage::Retained)?,
@@ -1292,7 +1309,15 @@ mod tests {
     #[test]
     fn nested_capture_keeps_outer_binder_and_inner_literal_keeps_definition_binding() {
         let mut f = nested_fixture();
-        let mut scopes = ScopeArenaBuilder::for_names(&f.names).unwrap();
+        let mut scopes = ScopeArenaBuilder::for_names(
+            &f.names,
+            crate::compiler::owner_path::standalone_issued(
+                &f.names.budget(),
+                crate::compiler::owner_path::OwnerDomain::ScopeArena,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         let root = scopes.function_root(&f.names).unwrap();
         let x = f.names.intern_root("x", f.original).unwrap();
         let (definition, source_binding) = scopes.bind(&f.names, root, x).unwrap();
@@ -1335,7 +1360,15 @@ mod tests {
     #[test]
     fn ancestor_context_never_admits_old_occurrence_sibling_or_stacked_context() {
         let f = nested_fixture();
-        let mut scopes = ScopeArenaBuilder::for_names(&f.names).unwrap();
+        let mut scopes = ScopeArenaBuilder::for_names(
+            &f.names,
+            crate::compiler::owner_path::standalone_issued(
+                &f.names.budget(),
+                crate::compiler::owner_path::OwnerDomain::ScopeArena,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         let root = scopes.function_root(&f.names).unwrap();
         let parent = scopes
             .anchor_expansion(&f.names, f.parent.0, root, root)
@@ -1365,7 +1398,15 @@ mod tests {
     #[test]
     fn nested_anchor_checks_exact_parent_arena_call_and_function() {
         let f = nested_fixture();
-        let mut scopes = ScopeArenaBuilder::for_names(&f.names).unwrap();
+        let mut scopes = ScopeArenaBuilder::for_names(
+            &f.names,
+            crate::compiler::owner_path::standalone_issued(
+                &f.names.budget(),
+                crate::compiler::owner_path::OwnerDomain::ScopeArena,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         let root = scopes.function_root(&f.names).unwrap();
         let parent = scopes
             .anchor_expansion(&f.names, f.parent.0, root, root)
@@ -1390,7 +1431,15 @@ mod tests {
             scopes.anchor_nested_expansion(&f.names, f.child.0, root, root, &forged),
             Err(ScopeError::ConflictingAssociation)
         ));
-        let mut foreign = ScopeArenaBuilder::for_names(&f.names).unwrap();
+        let mut foreign = ScopeArenaBuilder::for_names(
+            &f.names,
+            crate::compiler::owner_path::standalone_issued(
+                &f.names.budget(),
+                crate::compiler::owner_path::OwnerDomain::ScopeArena,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         let foreign_root = foreign.function_root(&f.names).unwrap();
         assert!(matches!(
             foreign.anchor_nested_expansion(
@@ -1429,7 +1478,15 @@ mod tests {
     #[test]
     fn ancestor_validation_work_is_charged_before_chain_read() {
         let f = nested_fixture();
-        let mut scopes = ScopeArenaBuilder::for_names(&f.names).unwrap();
+        let mut scopes = ScopeArenaBuilder::for_names(
+            &f.names,
+            crate::compiler::owner_path::standalone_issued(
+                &f.names.budget(),
+                crate::compiler::owner_path::OwnerDomain::ScopeArena,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         let root = scopes.function_root(&f.names).unwrap();
         let parent = scopes
             .anchor_expansion(&f.names, f.parent.0, root, root)
@@ -1498,7 +1555,15 @@ mod tests {
     #[test]
     fn mixed_site_locals_select_definition_and_captures_select_current_frontier() {
         let (mut names, span, expansion, literal, capture) = fixture();
-        let mut scopes = ScopeArenaBuilder::for_names(&names).unwrap();
+        let mut scopes = ScopeArenaBuilder::for_names(
+            &names,
+            crate::compiler::owner_path::standalone_issued(
+                &names.budget(),
+                crate::compiler::owner_path::OwnerDomain::ScopeArena,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         let root = scopes.function_root(&names).unwrap();
         let definition_x = names.intern_root("x", span).unwrap();
         let (definition, original) = scopes.bind(&names, root, definition_x).unwrap();
@@ -1577,7 +1642,15 @@ mod tests {
     #[test]
     fn introduced_captured_and_marked_binders_are_seen_before_anchor_projection() {
         let (mut names, span, expansion, literal, capture) = fixture();
-        let mut scopes = ScopeArenaBuilder::for_names(&names).unwrap();
+        let mut scopes = ScopeArenaBuilder::for_names(
+            &names,
+            crate::compiler::owner_path::standalone_issued(
+                &names.budget(),
+                crate::compiler::owner_path::OwnerDomain::ScopeArena,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         let definition = scopes.function_root(&names).unwrap();
         let original_x = names.intern_root("x", span).unwrap();
         let (call, _) = scopes.bind(&names, definition, original_x).unwrap();
@@ -1620,7 +1693,15 @@ mod tests {
     #[test]
     fn definition_frontier_cannot_see_later_call_site_binding() {
         let (mut names, span, expansion, literal, _) = fixture();
-        let mut scopes = ScopeArenaBuilder::for_names(&names).unwrap();
+        let mut scopes = ScopeArenaBuilder::for_names(
+            &names,
+            crate::compiler::owner_path::standalone_issued(
+                &names.budget(),
+                crate::compiler::owner_path::OwnerDomain::ScopeArena,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         let definition = scopes.function_root(&names).unwrap();
         let later = names.intern_root("x", span).unwrap();
         let (call, _) = scopes.bind(&names, definition, later).unwrap();
@@ -1643,7 +1724,15 @@ mod tests {
             names.from_token(literal, Edition::E2024),
             Err(NameError::Unsupported(UnsupportedName::NonRootContext))
         ));
-        let mut scopes = ScopeArenaBuilder::for_names(&names).unwrap();
+        let mut scopes = ScopeArenaBuilder::for_names(
+            &names,
+            crate::compiler::owner_path::standalone_issued(
+                &names.budget(),
+                crate::compiler::owner_path::OwnerDomain::ScopeArena,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         let first = scopes.function_root(&names).unwrap();
         let second = scopes.function_root(&names).unwrap();
         assert!(matches!(
@@ -1684,7 +1773,15 @@ mod tests {
             scopes.resolve_reference(&names, second, name),
             Err(ScopeError::FunctionMismatch)
         ));
-        let mut other = ScopeArenaBuilder::for_names(&names).unwrap();
+        let mut other = ScopeArenaBuilder::for_names(
+            &names,
+            crate::compiler::owner_path::standalone_issued(
+                &names.budget(),
+                crate::compiler::owner_path::OwnerDomain::ScopeArena,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         let foreign_root = other.function_root(&names).unwrap();
         assert!(matches!(
             other.resolve_reference(&names, foreign_root, name),

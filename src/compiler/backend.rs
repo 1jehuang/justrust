@@ -3833,6 +3833,11 @@ mod tests {
     fn fixture_modules() -> std::sync::Arc<super::super::module_identity::ModuleArena> {
         super::super::module_identity::ModuleArenaBuilder::for_catalog(
             super::super::token_primitives::ExpansionBudget::default(),
+            crate::compiler::owner_path::standalone_issued(
+                &super::super::token_primitives::ExpansionBudget::default(),
+                crate::compiler::owner_path::OwnerDomain::ModuleArena,
+            )
+            .unwrap(),
         )
         .unwrap()
         .freeze()
