@@ -58,7 +58,7 @@ fn fixture() -> Fixture {
         .unwrap()
         .ty
         .clone();
-    let main = plan.callable_decl(plan.closed_roots()[0]).unwrap();
+    let main = plan.callable_decl(plan.closed_roots().unwrap()[0]).unwrap();
     let facts = plan
         .instance_facts(&CallTarget {
             declaration: main,

@@ -17105,9 +17105,6 @@ pub struct PlanCtx {
     /// Previously each body copied every signature, which made checking
     /// quadratic in program size in both time and retained bytes.
     shared_env: Option<Arc<SharedTypeEnv>>,
-    /// Callable indices of nongeneric Source callables in callable order:
-    /// exactly the root slots `instances::build` enumerates first.
-    closed_roots: Arc<[usize]>,
     /// Per-module item ownership, in first-declaration order. Each entry is
     /// the input of one keyed ITEM_INVENTORY node.
     module_items: Arc<[ModuleItems]>,
@@ -18911,14 +18908,12 @@ impl PlanCtx {
             contexts: Arc::new(contexts),
             source_schemas,
             shared_env: None,
-            closed_roots: Arc::from([]),
             module_items: Arc::from([]),
             budget: budget.clone(),
         };
         plan.validate_inherent_overlaps(budget)?;
         plan.publish_trait_world(program)?;
         plan.validate_c_abi()?;
-        plan.closed_roots = plan.compute_closed_roots()?;
         plan.module_items = plan.compute_module_items()?;
         Ok(plan)
     }
@@ -18982,25 +18977,28 @@ impl PlanCtx {
             .get(ordinal)
             .ok_or_else(|| "invalid module inventory ordinal".into())
     }
-    fn compute_closed_roots(&self) -> Result<Arc<[usize]>, String> {
+    /// Nongeneric Source callable indices in callable order. Test and
+    /// diagnostic helper only; graph nodes use per-item `is_closed_root`.
+    pub fn closed_roots(&self) -> Result<Vec<usize>, String> {
         let mut roots = Vec::new();
         for index in 0..self.callable_count() {
             self.budget.charge_work(1)?;
-            let declaration = self.callable_decl(index)?;
-            if matches!(
-                self.callable_provider(declaration)?,
-                CallableProvider::Source { .. }
-            ) && !self.callable_env(declaration)?.is_generic()
-                && !self.is_prelude_decl(declaration)?
-            {
+            if self.is_closed_root(index)? {
                 roots.push(index);
             }
         }
-        Ok(roots.into())
+        Ok(roots)
     }
-    /// Nongeneric Source callable indices in callable order (plan roots).
-    pub fn closed_roots(&self) -> &[usize] {
-        &self.closed_roots
+    /// Whether callable `index` is a closed source root: a nongeneric,
+    /// non-prelude Source callable. Closed-root instance nodes are keyed by
+    /// this callable index, a per-item fact, not by a whole-program slot.
+    pub fn is_closed_root(&self, index: usize) -> Result<bool, String> {
+        let declaration = self.callable_decl(index)?;
+        Ok(matches!(
+            self.callable_provider(declaration)?,
+            CallableProvider::Source { .. }
+        ) && !self.callable_env(declaration)?.is_generic()
+            && !self.is_prelude_decl(declaration)?)
     }
     fn publish_trait_world(&mut self, program: &Program) -> Result<(), String> {
         let budget = &self.budget;
@@ -20365,7 +20363,6 @@ impl SchemaAdapter {
             world: None,
             validated: Arc::new(HashMap::new()),
             shared_env: None,
-            closed_roots: Arc::from([]),
             module_items: Arc::from([]),
         })
     }

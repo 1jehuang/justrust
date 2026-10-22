@@ -541,7 +541,7 @@ impl Facts<'_> {
         Ok(templates)
     }
     /// The target and source declaration of an instance-keyed node. Closed
-    /// roots are keyed by their SIGNATURES slot; every other instance by its
+    /// roots are keyed by their callable index; every other instance by its
     /// canonical graph-key words (`instance_params`). Decoding replays closure
     /// actuals and rejects a words key that names a closed root.
     async fn instance_of(
@@ -579,12 +579,12 @@ fn root_slot_of(
         .callable_index(target.declaration)
         .map_err(Error::new)?;
     Ok(types
-        .closed_roots()
-        .iter()
-        .position(|root| *root == callable))
+        .is_closed_root(callable)
+        .map_err(Error::new)?
+        .then_some(callable))
 }
 /// Canonical key parameters of an executable instance: the closed-root slot
-/// (derived from SIGNATURES alone) or the canonical graph-key words. Exactly
+/// (its callable index) or the canonical graph-key words. Exactly
 /// one form exists per target, so equivalent instances share one node.
 fn instance_params(
     types: &frontend::PlanCtx,
@@ -622,18 +622,17 @@ fn root_instance(
     types: &frontend::PlanCtx,
     index: usize,
 ) -> Result<Option<(ir::CallTarget, usize)>, Error> {
-    let roots = types.closed_roots();
-    Ok(roots.get(index).map(|&source_index| {
-        (
-            ir::CallTarget {
-                declaration: types
-                    .callable_decl(source_index)
-                    .expect("closed root index is a callable"),
-                type_args: Arc::from([]),
-            },
-            source_index,
-        )
-    }))
+    if index >= types.callable_count() || !types.is_closed_root(index).map_err(Error::new)? {
+        return Ok(None);
+    }
+    let declaration = types.callable_decl(index).map_err(Error::new)?;
+    Ok(Some((
+        ir::CallTarget {
+            declaration,
+            type_args: Arc::from([]),
+        },
+        index,
+    )))
 }
 
 impl CompilerProvider {
@@ -2083,7 +2082,7 @@ impl Provider for CompilerProvider {
                     )
                 }
                 CHECK | BUILD => {
-                    // Closed source roots have stable slots from SIGNATURES;
+                    // Closed source roots are keyed by callable index;
                     // BUILD discovers the generic frontier per instance.
                     let types = facts.types().await?;
                     // Item checks fan out through per-module inventory facts,
@@ -2163,7 +2162,6 @@ impl Provider for CompilerProvider {
                         }
                         return cx.publish(0, 1);
                     }
-                    let root_count = types.closed_roots().len();
                     let nominal_handles = cx.request_all(&nominal_keys, 0);
                     // Link inventory is the closed direct-demand frontier from
                     // the closed roots: each round requests every new
@@ -2175,10 +2173,15 @@ impl Provider for CompilerProvider {
                     let mut symbols: std::collections::HashMap<String, ir::CallTarget> =
                         std::collections::HashMap::new();
                     let mut frontier = Vec::new();
-                    for index in 0..root_count {
-                        let (target, _) = root_instance(&types, index)?
-                            .ok_or_else(|| Error::new("closed root slot out of range"))?;
-                        frontier.push((vec![index as u64], target));
+                    // Closed roots come from the per-module inventories, keyed
+                    // by callable index (a per-item identity).
+                    for index in inventories
+                        .iter()
+                        .flat_map(|inventory| inventory.callables.iter().copied())
+                    {
+                        if let Some((target, _)) = root_instance(&types, index)? {
+                            frontier.push((vec![index as u64], target));
+                        }
                     }
                     let mut pending = Vec::new();
                     let mut pending_symbols: Vec<String> = Vec::new();

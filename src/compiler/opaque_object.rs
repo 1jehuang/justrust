@@ -131,13 +131,12 @@ pub(super) async fn produce(
         let callable = types
             .callable_index(authorization.target().declaration)
             .map_err(Error::new)?;
-        let slot = types
-            .closed_roots()
-            .iter()
-            .position(|candidate| *candidate == callable)
-            .ok_or_else(|| {
-                Error::new("unsupported: physical callee has no declaration-owned object root")
-            })?;
+        if !types.is_closed_root(callable).map_err(Error::new)? {
+            return Err(Error::new(
+                "unsupported: physical callee has no declaration-owned object root",
+            ));
+        }
+        let slot = callable;
         // Exact target replay precedes this demand. Object producers do not wait
         // for one another, so recursive calls cannot create object/body joins.
         // BUILD waits on every declared root object before linking any symbol.

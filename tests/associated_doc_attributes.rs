@@ -87,12 +87,12 @@ fn docs_cannot_hide_unused_associated_type_name_or_move_errors() {
                     info.name.rsplit("::").next() == Some("f")
                 })
                 .expect("fixture has an exact named invalid source callable");
-            // OBJECT keys index closed roots, not declaration ids or arbitrary
-            // source function positions. Generic trait defaults have no root.
+            // OBJECT keys of closed roots are callable indices, not
+            // declaration ids. Generic trait defaults have no root.
             let bad_root = plan
-                .closed_roots()
-                .iter()
-                .position(|&index| index == bad_callable);
+                .is_closed_root(bad_callable)
+                .unwrap()
+                .then_some(bad_callable);
             for check_only in [true, false] {
                 let failure = match compiler::compile_observed(text.into(), workers, check_only) {
                     Ok(_) => panic!("accepted unused invalid associated body {text}"),

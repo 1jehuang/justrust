@@ -200,12 +200,8 @@ fn invalid_and_out_of_scope_rows_never_publish_build() {
                             == Some("bad")
                     })
                     .unwrap();
-                Some(
-                    plan.closed_roots()
-                        .iter()
-                        .position(|&index| index == bad)
-                        .unwrap() as u64,
-                )
+                assert!(plan.is_closed_root(bad).unwrap());
+                Some(bad as u64)
             } else {
                 None
             };
