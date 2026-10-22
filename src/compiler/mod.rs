@@ -2167,8 +2167,8 @@ impl Provider for CompilerProvider {
                     let nominal_handles = cx.request_all(&nominal_keys, 0);
                     // Link inventory is the closed direct-demand frontier from
                     // the closed roots: each round requests every new
-                    // instance's INSTANCE and OBJECT before awaiting any, so
-                    // object code overlaps discovery. Equivalent targets share
+                    // instance's INSTANCE before awaiting any; OBJECTs are
+                    // requested together once the frontier closes. Equivalent targets share
                     // one canonical key, and one symbol names one object.
                     let mut seen: std::collections::HashSet<Vec<u64>> =
                         std::collections::HashSet::new();
@@ -2213,9 +2213,8 @@ impl Provider for CompilerProvider {
                             }
                             symbols.insert(symbol.clone(), target.clone());
                             let demands = cx.request(keys::words(INSTANCE, params.clone())?).get(0);
-                            let object = cx.request(keys::words(OBJECT, params)?).get(0);
                             round.push((demands, target, symbol));
-                            pending.push(object);
+                            pending.push(params);
                         }
                         for (handle, target, _) in &round {
                             let demands: Arc<instances::DirectDemands> =
@@ -2245,8 +2244,16 @@ impl Provider for CompilerProvider {
                             cx.read_fact(handle).await?;
                         checked.validate(&types, declaration, &this.0.budget)?;
                     }
-                    let (mut objects, _objects_reservation) = this.scratch_vec(pending.len())?;
-                    for (handle, symbol) in pending.into_iter().zip(pending_symbols) {
+                    // Objects are requested only once the frontier is closed:
+                    // a non-terminating instance chain then fails at its
+                    // INSTANCE recursion limit before any codegen runs.
+                    let mut object_handles = Vec::with_capacity(pending.len());
+                    for params in pending {
+                        object_handles.push(cx.request(keys::words(OBJECT, params)?).get(0));
+                    }
+                    let (mut objects, _objects_reservation) =
+                        this.scratch_vec(object_handles.len())?;
+                    for (handle, symbol) in object_handles.into_iter().zip(pending_symbols) {
                         let object: Arc<backend::Object> = cx.read_fact(handle).await?;
                         let mut bytes = object.code.len();
                         for (_, name) in &object.calls {

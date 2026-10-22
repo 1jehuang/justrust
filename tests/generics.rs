@@ -175,11 +175,17 @@ fn runs(source: &str, expected: &str) {
 }
 
 fn rejects_resource(source: &str) {
+    rejects_resource_modes(source, &[true, false]);
+}
+fn rejects_resource_build(source: &str) {
+    rejects_resource_modes(source, &[false]);
+}
+fn rejects_resource_modes(source: &str, modes: &[bool]) {
     for workers in [1, 8] {
         let scratch = Scratch::new();
         let input = scratch.source(source);
         let output = scratch.path("must-not-exist");
-        for check in [true, false] {
+        for &check in modes {
             let result = capture(&mut compiler(&input, &output, workers, check), &scratch, 20);
             assert_eq!(
                 result.status.code(),
@@ -443,17 +449,45 @@ fn main(){if run()==7{println!("generic oracle ok");}}"#,
 }
 
 #[test]
-fn rejects_legal_unsupported_hidden_reference_substitution() {
+fn rejects_escaping_hidden_reference_substitution() {
+    // Stock rustc: E0515, the reference to local `x` escapes through `id`.
     rejects(
-        "legalunsupported: hidden_reference_substitution",
+        "escaping hidden reference",
+        r#"struct Wrap<T>{value:T}fn id<T>(x:T)->T{x}fn run()->&'static i32{let x=7;let w=id::<Wrap<&i32>>(Wrap::<&i32>{value:&x});w.value}
+fn main(){if *run()==7{println!("generic oracle ok");}}"#,
+    );
+}
+
+#[test]
+fn accepts_hidden_reference_substitution() {
+    // Valid Rust: stock rustc builds and prints the oracle. Per-instance
+    // INSTANCE planning now admits it; the escaping variant stays rejected.
+    runs(
         r#"struct Wrap<T>{value:T}fn id<T>(x:T)->T{x}fn run()->i32{let x=7;let w=id::<Wrap<&i32>>(Wrap::<&i32>{value:&x});*w.value}
 fn main(){if run()==7{println!("generic oracle ok");}}"#,
+        "generic oracle ok\n",
     );
 }
 
 #[test]
 fn rejects_resource_expanding_recursive_instances() {
-    rejects_resource(
+    // Stock rustc accepts this under `--emit=metadata` (check) and rejects it
+    // only while instantiating for codegen ("reached the recursion limit while
+    // instantiating"). CHECK must therefore accept, BUILD must reject.
+    let source = r#"fn grow<T>(x:T){grow::<(T,)>((x,));}fn run()->i32{grow::<i32>(1);7}
+fn main(){if run()==7{println!("generic oracle ok");}}"#;
+    for workers in [1, 8] {
+        let scratch = Scratch::new();
+        let input = scratch.source(source);
+        let output = scratch.path("must-not-exist");
+        let result = capture(&mut compiler(&input, &output, workers, true), &scratch, 20);
+        assert_eq!(
+            result.status.code(),
+            Some(0),
+            "stock check accepts: {result:?}"
+        );
+    }
+    rejects_resource_build(
         r#"fn grow<T>(x:T){grow::<(T,)>((x,));}fn run()->i32{grow::<i32>(1);7}
 fn main(){if run()==7{println!("generic oracle ok");}}"#,
     );

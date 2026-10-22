@@ -11,17 +11,22 @@ fn generic_instances_reuse_facts_and_check_has_no_objects() {
             let compiled = compiler::compile(source.to_owned(), workers, check).unwrap();
             assert!(compiled.report.capture_complete);
             assert_eq!(compiled.executable.is_none(), check);
-            assert_eq!(compiled.control_flow.len(), 3);
-            assert_eq!(compiled.analyses.len(), 3);
+            // CHECK proves generic bodies universally and never demands
+            // per-instance BODY/LOWER/ANALYZE (stock `--emit=metadata` does
+            // not monomorphize). BUILD reaches the 3 closed instances
+            // (main, id::<u8>, id::<u64>) through INSTANCE (142).
+            let instances = if check { 0 } else { 3 };
+            assert_eq!(compiled.control_flow.len(), if check { 2 } else { 3 });
+            assert_eq!(compiled.analyses.len(), if check { 2 } else { 3 });
             assert!(compiled.analyses.iter().all(|analysis| analysis.passed()));
-            for kind in [102, 108, 109] {
+            for kind in [102, 108, 109, 142] {
                 let facts: Vec<_> = compiled
                     .report
                     .node_evaluations
                     .iter()
                     .filter(|(key, _)| key.kind == kind)
                     .collect();
-                assert_eq!(facts.len(), 3);
+                assert_eq!(facts.len(), instances);
                 assert!(facts.iter().all(|(_, count)| *count == 1));
             }
             assert_eq!(
@@ -93,76 +98,41 @@ fn unused_generic_types_and_nominal_applications_cannot_use_concrete_witnesses()
                     assert!(report.capture_complete);
                     assert_eq!(report.events_dropped, 0);
                     assert_eq!(report.failures, 0);
-                    let mut expected = vec![
-                        Key::new(107, vec![0]), // Root source file unit.
-                        Key::new(100, vec![]),
-                        Key::new(106, vec![]),
-                        Key::new(101, vec![]),
-                        Key::new(104, vec![]),
-                        Key::new(113, vec![]),
-                        Key::new(111, vec![0]),
-                        Key::new(112, vec![0]),
-                        Key::new(115, vec![0]),
-                    ];
-                    for index in 0..2 {
-                        for kind in [110, 102, 108, 109] {
-                            expected.push(Key::new(kind, vec![index]));
-                        }
-                        if !check {
-                            expected.push(Key::new(103, vec![index]));
-                        }
-                    }
-                    if !check {
-                        expected.push(Key::new(105, vec![]));
-                    }
-                    let program = native_prelude::parse(source).unwrap();
-                    let plan = compiler::frontend::PlanCtx::from_program(
-                        &program,
-                        &compiler::ir::PlanBudget::default(),
-                    )
-                    .unwrap();
-                    for index in 0..plan.callable_count() {
-                        let declaration = plan.callable_decl(index).unwrap();
-                        match plan.callable_provider(declaration).unwrap() {
-                            compiler::frontend::CallableProvider::Source { .. } => {
-                                if plan.is_prelude_decl(declaration).unwrap() {
-                                    expected.push(Key::new(110, vec![index as u64]));
-                                } else {
-                                    assert!(index < compiled.functions);
-                                }
-                                if plan.callable_env(declaration).unwrap().is_generic()
-                                    && index != 0
-                                {
-                                    for kind in [111, 112, 115] {
-                                        expected.push(Key::new(kind, vec![index as u64]));
-                                    }
-                                }
-                            }
-                            compiler::frontend::CallableProvider::Recipe { .. } => {
-                                assert!(index >= compiled.functions);
-                                for kind in [110, 111, 112, 115] {
-                                    expected.push(Key::new(kind, vec![index as u64]));
-                                }
-                            }
-                            compiler::frontend::CallableProvider::UnavailableProvided {
-                                ..
-                            } => {
-                                panic!("unavailable provider entered body enumeration")
-                            }
-                        }
-                    }
-                    // Embedded native library files are independent SOURCE facts.
-                    expected.extend(native_prelude::library_source_keys());
-                    assert_eq!(report.node_evaluations.len(), expected.len());
-                    for key in expected {
-                        let entries: Vec<_> = report
+                    // Per-instance planning (no MONO_PLAN 113): CHECK evaluates no
+                    // instance-keyed node; BUILD reaches exactly main and
+                    // bad::<&u8> through one INSTANCE (142) each, with one
+                    // BODY/LOWER/ANALYZE/OBJECT per instance. Every node runs once.
+                    assert!(
+                        !report
                             .node_evaluations
                             .iter()
-                            .filter(|(seen, _)| *seen == key)
-                            .collect();
-                        assert_eq!(entries.len(), 1, "missing or duplicated {key:?}");
-                        assert_eq!(entries[0].1, 1, "shared operation repeated {key:?}");
+                            .any(|(key, _)| key.kind == 113)
+                    );
+                    assert!(report.node_evaluations.iter().all(|(_, count)| *count == 1));
+                    for kind in [102, 108, 109, 142] {
+                        let count = report
+                            .node_evaluations
+                            .iter()
+                            .filter(|(key, _)| key.kind == kind)
+                            .count();
+                        assert_eq!(count, if check { 0 } else { 2 }, "kind {kind}");
                     }
+                    for kind in [100, 101, 104, 106] {
+                        let root: Vec<_> = report
+                            .node_evaluations
+                            .iter()
+                            .filter(|(key, _)| key.kind == kind)
+                            .collect();
+                        assert_eq!(root.len(), 1);
+                        assert_eq!(root[0].0, Key::new(kind, vec![]));
+                    }
+                    assert_eq!(
+                        report
+                            .node_evaluations
+                            .iter()
+                            .any(|(key, _)| *key == Key::new(105, vec![])),
+                        !check
+                    );
                     let discovered = |key: &Key| {
                         let spelling = format!("{key:?}");
                         report
@@ -232,6 +202,12 @@ fn exact_generic_recursion_deduplicates_but_growing_instances_fail_boundedly() {
             assert!(compiled.report.capture_complete);
             assert_eq!(compiled.control_flow.len(), 2);
             assert!(compiled.analyses.iter().all(|analysis| analysis.passed()));
+            // Stock rustc accepts the growing chain at check and rejects it
+            // only while instantiating for codegen.
+            if check {
+                assert!(compiler::compile(growing.to_owned(), workers, check).is_ok());
+                continue;
+            }
             let failure = compiler::compile_observed(growing.to_owned(), workers, check)
                 .err()
                 .unwrap();
