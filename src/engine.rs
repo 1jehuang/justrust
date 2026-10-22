@@ -80,23 +80,19 @@ impl Meter {
     /// Add `amount` to `counter` if the result stays within `limit`. Returns
     /// the previous value on rejection.
     pub fn admit(counter: &AtomicU64, amount: u64, limit: u64) -> Result<(), u64> {
-        let mut used = counter.load(Ordering::Relaxed);
-        loop {
-            match used.checked_add(amount) {
-                Some(next) if next <= limit => {
-                    match counter.compare_exchange_weak(
-                        used,
-                        next,
-                        Ordering::Relaxed,
-                        Ordering::Relaxed,
-                    ) {
-                        Ok(_) => return Ok(()),
-                        Err(actual) => used = actual,
-                    }
-                }
-                _ => return Err(used),
-            }
+        // One fetch_add on the hot path (a CAS loop is several nested calls
+        // per charge in unoptimized builds). A rejected charge is rolled back,
+        // so the counter never stays above `limit`. Counters are bounded by
+        // `limit`, so the add cannot wrap once `amount <= limit`.
+        if amount > limit {
+            return Err(counter.load(Ordering::Relaxed));
         }
+        let used = counter.fetch_add(amount, Ordering::Relaxed);
+        if used <= limit - amount {
+            return Ok(());
+        }
+        counter.fetch_sub(amount, Ordering::Relaxed);
+        Err(used)
     }
 }
 
