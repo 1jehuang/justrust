@@ -213,13 +213,17 @@ fn sessions_do_not_share_symbol_span_or_context_authority() {
     assert!(matches!(b.symbol(symbol), Err(TokenError::ForeignHandle)));
     let anchor = span(&mut a, 0, 1);
     assert!(matches!(b.span(anchor), Err(TokenError::ForeignHandle)));
-    assert!(matches!(
-        b.context(a.root_context()),
-        Err(TokenError::ForeignHandle)
-    ));
+    // ROOT is a sessionless constant (a377dcaf0): no authority to forge.
+    assert!(matches!(b.context(a.root_context()), Ok(ContextData::Root)));
+    // Mark contexts stay owned by their issuing session.
+    let exp = expansion(&mut a, anchor, None);
+    let root = a.root_context();
+    let marked = a.apply_mark(root, exp, Transparency::Opaque).unwrap();
+    assert!(a.context(marked).is_ok());
+    assert!(matches!(b.context(marked), Err(TokenError::ForeignHandle)));
     let own = span(&mut b, 0, 1);
     assert!(matches!(
-        b.with_context(own, a.root_context(), None),
+        b.with_context(own, marked, None),
         Err(TokenError::ForeignHandle)
     ));
     let alien = snapshot("x");
