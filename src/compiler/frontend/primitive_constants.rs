@@ -20,14 +20,13 @@ pub(super) fn original_impl_range(
     start: Option<OriginalSpan>,
 ) -> Option<OriginalSpan> {
     let snapshot = parser.names.session().sources();
+    let handle = start?.file();
     let start = snapshot.render_span(start?).ok()?;
     let end = snapshot.render_span(original_token(parser)?).ok()?;
     if start.file != end.file || start.lo > end.hi {
         return None;
     }
-    snapshot
-        .span(snapshot.file(start.file.0 as usize).ok()?, start.lo, end.hi)
-        .ok()
+    snapshot.span(handle, start.lo, end.hi).ok()
 }
 
 /// Finite original initializer syntax, not a computed constant or magic value.

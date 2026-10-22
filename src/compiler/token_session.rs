@@ -171,6 +171,12 @@ pub struct OriginalSpan {
     lo: u32,
     hi: u32,
 }
+impl OriginalSpan {
+    /// The sealed file handle this span belongs to.
+    pub fn file(self) -> SourceFileHandle {
+        self.file
+    }
+}
 
 struct SealedSources {
     id: SourceSnapshotId,

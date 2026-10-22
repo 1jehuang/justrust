@@ -51,6 +51,7 @@ pub(super) fn original_query_token(
         }
         let snapshot = names.session().sources();
         let mut spans = [None; 5];
+        let mut handle = None;
         for (index, token) in window.iter().enumerate() {
             if token.whole.provenance() != TokenProvenance::Prepared {
                 return Ok(None);
@@ -62,6 +63,7 @@ pub(super) fn original_query_token(
             let crate::compiler::expansion_span::SpanOrigin::Original(span) = origin.origin else {
                 return Ok(None);
             };
+            handle.get_or_insert(span.file());
             spans[index] = Some(snapshot.render_span(span).map_err(|e| e.to_string())?);
         }
         let first = spans[0].as_ref().ok_or("packed query first token absent")?;
@@ -78,9 +80,7 @@ pub(super) fn original_query_token(
         found = Some(
             snapshot
                 .span(
-                    snapshot
-                        .file(first.file.0 as usize)
-                        .map_err(|e| e.to_string())?,
+                    handle.ok_or("packed query first token absent")?,
                     first.lo,
                     last.hi,
                 )

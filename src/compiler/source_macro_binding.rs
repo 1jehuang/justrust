@@ -10,9 +10,8 @@ pub(super) fn definition_root(
     span: SpanId,
 ) -> Result<SourceFileHandle, TokenError> {
     let original = session.original(span, 512)?;
-    let source = session.sources().render_span(original)?;
-    let file = session.sources().file(source.file.0 as usize)?;
-    session.sources().source_crate_root(file)
+    session.sources().render_span(original)?;
+    session.sources().source_crate_root(original.file())
 }
 
 /// Macro-name lookup uses the invocation environment. For generated calls this

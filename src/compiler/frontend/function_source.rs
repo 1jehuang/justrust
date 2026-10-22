@@ -592,6 +592,7 @@ fn original_token_range<'a>(
     let (Some(first), Some(last)) = (first, last) else {
         return Ok(None);
     };
+    let handle = first.file();
     let first = snapshot
         .render_span(first)
         .map_err(|error| error.to_string())?;
@@ -599,13 +600,7 @@ fn original_token_range<'a>(
         .render_span(last)
         .map_err(|error| error.to_string())?;
     let source = snapshot
-        .span(
-            snapshot
-                .file(first.file.0 as usize)
-                .map_err(|error| error.to_string())?,
-            first.lo,
-            last.hi,
-        )
+        .span(handle, first.lo, last.hi)
         .map_err(|error| error.to_string())?;
     Ok(Some(source))
 }
