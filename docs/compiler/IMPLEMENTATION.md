@@ -864,8 +864,18 @@ cleanup failures.
       replay controls. A cyclic assignment control rejects at the earlier closed
       projection boundary, not a cycle-specific proof. Unchanged matrix corpus
       E0282 remains open at its iterator-map closure (`CLOSURES.md`).
-      Corpus 11 no longer stops at E0282. The current first stop is the
-      implicit associated constant `i32::MIN` in a generic fold. Source
+      Corpus 11 no longer stops at E0282. Its first stop is
+      `fold(i32::MIN, i32::max)`: `i32::MIN` itself works in generic calls; the
+      blocker is function items (`i32::max`, `S::f`, bare `f`) used as values,
+      which resolution misreads as associated constants (no FnDef type yet).
+      Source `copied`/`cloned` adapters and `any`/`all`/`position` land, and
+      primitive operators forward one shared reference layer (`x*x` for
+      `x:&i32`), stock-differential in `tests/iterator_associated.rs` and
+      `tests/operator_inference.rs`. `map`/`filter` remain blocked: closure
+      types have no nominal realization coordinate (`coordinates.rs`,
+      `nominal_inputs.rs` closure fence), and `FnMut(&I::Item)` bounds hit
+      "projection in nominal metadata". `(1..=10).collect()`, `sum`, `zip`,
+      `rev`, `chunks` are also missing. Source
       `Iterator::count` and bound-owner generic trait method actuals
       (`B::mk(..)` under `B: Mk<A>`) pass worker-1/8 stock differential tests
       (`tests/iterator_associated.rs`). Still missing: source `map`/`filter`/
