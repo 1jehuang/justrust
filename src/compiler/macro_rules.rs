@@ -113,7 +113,7 @@ impl std::fmt::Debug for ExpandedTokens {
 impl ExpandedTokens {
     pub fn tokens(&self, session: &TokenSession) -> Result<TokenSlice, MacroError> {
         session.budget().check()?;
-        if self.owner != session.id() {
+        if !session.serves(self.owner) {
             return Err(TokenError::ForeignHandle.into());
         }
         self.tokens.len(session)?;
@@ -553,7 +553,7 @@ pub fn expand_rules(
     session: &mut TokenSession,
 ) -> Result<ExpandedTokens, MacroError> {
     session.budget().check()?;
-    if definition.owner != session.id() {
+    if !session.serves(definition.owner) {
         return Err(TokenError::ForeignHandle.into());
     }
     args.len(session)?;

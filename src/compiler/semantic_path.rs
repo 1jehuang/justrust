@@ -246,7 +246,7 @@ impl AstPath {
     pub fn check(&self, names: &impl NameAccess) -> Result<(), NameError> {
         names.budget().check()?;
         names.budget().charge(Counter::Work, 1)?;
-        if self.data.owner != names.session().id() {
+        if !names.session().serves(self.data.owner) {
             return Err(TokenError::ForeignHandle.into());
         }
         if let Some(origin) = &self.resolved_use

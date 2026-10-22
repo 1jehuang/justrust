@@ -94,7 +94,7 @@ impl TokenStream {
     }
     fn check_session(&self, session: &TokenSession) -> Result<(), TokenError> {
         session.budget().check()?;
-        if self.inner.session != session.id() {
+        if !session.serves(self.inner.session) {
             return Err(TokenError::ForeignHandle);
         }
         Ok(())
