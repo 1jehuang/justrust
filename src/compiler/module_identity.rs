@@ -152,6 +152,8 @@ pub struct ModuleArena {
     /// Frozen sibling file arenas of the same crate (PARSE-SPLIT.md step 1),
     /// sorted by owner. Their modules are served by them; others are foreign.
     linked: Arc<[(NonZeroU64, Arc<ModuleArena>)]>,
+    /// Whether this file arena adopted a linked crate root (`join_crate`).
+    joined: bool,
     source_names: Option<SessionId>,
     source_root: Option<ModuleId>,
     catalog: [ModuleId; 4],
@@ -254,6 +256,7 @@ impl ModuleArenaBuilder {
                 owner,
                 owners: CrateOwners::single(owner),
                 linked: Arc::from([]),
+                joined: false,
                 source_names,
                 source_root,
                 catalog: [
@@ -385,6 +388,28 @@ impl ModuleArenaBuilder {
             return Err(TokenError::InvalidInput("duplicate linked arena owner").into());
         }
         self.arena.linked = linked.into();
+        Ok(())
+    }
+    /// Place this file arena into the crate whose root file arena `root` is
+    /// already linked: the crate source root and catalog modules become the
+    /// root's, so every file of one crate shares one module tree.
+    pub fn join_crate(&mut self, root: &ModuleArena) -> Result<(), ModuleError> {
+        self.arena.budget.charge(Counter::Work, 1)?;
+        if self.arena.joined {
+            return Err(TokenError::InvalidInput("arena already joined a crate").into());
+        }
+        if root.joined
+            || self
+                .arena
+                .linked
+                .binary_search_by_key(&root.owner, |(owner, _)| *owner)
+                .is_err()
+        {
+            return Err(ModuleError::ForeignOwner);
+        }
+        self.arena.source_root = Some(root.source_root()?);
+        self.arena.catalog = root.catalog;
+        self.arena.joined = true;
         Ok(())
     }
     pub fn freeze(self) -> Result<Arc<ModuleArena>, ModuleError> {

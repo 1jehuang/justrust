@@ -570,7 +570,13 @@ impl ScopeArena {
     fn module_point(&self, p: ModuleFrontierId) -> Result<&ModulePoint, ScopeError> {
         self.budget.charge(Counter::Work, 1)?;
         if p.owner != self.owner {
-            return Err(ScopeError::ForeignOwner);
+            return match self
+                .linked
+                .binary_search_by_key(&p.owner, |(owner, _)| *owner)
+            {
+                Ok(index) => self.linked[index].1.module_point(p),
+                Err(_) => Err(ScopeError::ForeignOwner),
+            };
         }
         self.items
             .points

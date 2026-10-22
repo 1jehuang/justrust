@@ -274,6 +274,11 @@ impl Index {
 
 pub struct ScopeArena {
     owner: NonZeroU64,
+    /// Frozen scope arenas of linked crate sibling files (PARSE-SPLIT.md
+    /// step 1f), sorted by owner. Only their module frontier points are
+    /// served (the textual macro scope a parent file had at `mod child;`);
+    /// function scopes stay file-local.
+    linked: Arc<[(NonZeroU64, Arc<ScopeArena>)]>,
     names: SessionId,
     scopes: BudgetVec<ScopeRecord>,
     frontiers: BudgetVec<FrontierRecord>,
@@ -333,6 +338,7 @@ impl ScopeArenaBuilder {
             metadata_builder: item_scope::MetadataBuilder::new(&budget)?,
             arena: ScopeArena {
                 owner: owner.tag().bits(),
+                linked: Arc::from([]),
                 names: names.session().id(),
                 scopes: BudgetVec::new(&budget, Storage::Retained)?,
                 frontiers: BudgetVec::new(&budget, Storage::Retained)?,
@@ -553,6 +559,31 @@ impl ScopeArenaBuilder {
             index,
         )?;
         Ok(admission)
+    }
+    /// Link the crate's frozen sibling file scope arenas (explicit, fixed).
+    pub fn link_crate_files(&mut self, arenas: Vec<Arc<ScopeArena>>) -> Result<(), ScopeError> {
+        if !self.arena.linked.is_empty() {
+            return Err(TokenError::InvalidInput("crate sibling scopes already linked").into());
+        }
+        self.arena
+            .budget
+            .charge(Counter::Work, arenas.len() as u64)?;
+        let mut linked: Vec<(NonZeroU64, Arc<ScopeArena>)> = Vec::new();
+        linked
+            .try_reserve_exact(arenas.len())
+            .map_err(|_| self.arena.budget.poison_allocation())?;
+        for arena in arenas {
+            if arena.owner == self.arena.owner {
+                return Err(TokenError::InvalidInput("a scope arena cannot link itself").into());
+            }
+            linked.push((arena.owner, arena));
+        }
+        linked.sort_unstable_by_key(|(owner, _)| *owner);
+        if linked.windows(2).any(|pair| pair[0].0 == pair[1].0) {
+            return Err(TokenError::InvalidInput("duplicate linked scope owner").into());
+        }
+        self.arena.linked = linked.into();
+        Ok(())
     }
     pub fn freeze(mut self) -> Result<Arc<ScopeArena>, ScopeError> {
         self.arena.budget.check()?;
