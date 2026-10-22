@@ -242,6 +242,12 @@ const IPO_OPT: u32 = 133;
 const NOMINAL_DECL_WELL_FORMED: u32 = 138;
 /// Per-callable immutable generic signature (keyed by callable index).
 const SIGNATURE: u32 = 143;
+/// Per-trait implementation completeness (keyed by trait declaration).
+const TRAIT_IMPLS: u32 = 144;
+/// Per-impl coherence against its trait's impls (keyed by impl declaration).
+const IMPL_COHERENCE: u32 = 145;
+/// Per-callable inherent overlap and C ABI contract (keyed by callable index).
+const ITEM_COHERENCE: u32 = 146;
 /// Per-module item inventory (keyed by inventory ordinal): the callables,
 /// constants, nominals and associated constants that module owns.
 const ITEM_INVENTORY: u32 = 141;
@@ -271,6 +277,7 @@ struct ItemInventoryFact {
     constants: Vec<ir::DeclId>,
     nominals: Vec<ir::DeclId>,
     associated_constants: Vec<ir::DeclId>,
+    impls: Vec<ir::DeclId>,
 }
 impl crate::engine::Fact for ItemInventoryFact {}
 struct ClosureBodiesFact {
@@ -873,9 +880,10 @@ impl Provider for CompilerProvider {
                     // Debt: whole-program node. Its input is the whole program,
                     // so its per-task work limit scales with that input.
                     scale_task_work_by_items(&program);
-                    let context = frontend::PlanCtx::from_shared_program(
+                    let context = frontend::PlanCtx::from_shared_program_with(
                         program.as_ref().clone(),
                         &this.0.budget,
+                        false,
                     )
                     .map_err(Error::new)?;
                     cx.publish_fact(0, context)
@@ -892,6 +900,29 @@ impl Provider for CompilerProvider {
                             signature,
                         },
                     )
+                }
+                TRAIT_IMPLS => {
+                    let declaration = decl_param(&key, "trait impls key")?;
+                    let types = facts.types().await?;
+                    let world = types.trait_world().map_err(Error::new)?;
+                    let impls = world.trait_impls(declaration);
+                    cx.publish_fact(0, TraitImplsFact { impls })
+                }
+                IMPL_COHERENCE => {
+                    let declaration = decl_param(&key, "impl coherence key")?;
+                    let types = facts.types().await?;
+                    types
+                        .validate_impl_coherence(declaration)
+                        .map_err(Error::new)?;
+                    cx.publish(0, 1)
+                }
+                ITEM_COHERENCE => {
+                    let index = item_index(&key, "missing item coherence callable")?;
+                    let types = facts.types().await?;
+                    types
+                        .validate_item_coherence(index, &this.0.budget)
+                        .map_err(Error::new)?;
+                    cx.publish(0, 1)
                 }
                 BODY_LEXICAL => {
                     let index = item_index(&key, "missing lexical owner declaration")?;
@@ -2097,6 +2128,7 @@ impl Provider for CompilerProvider {
                             constants: items.constants.clone(),
                             nominals: items.nominals.clone(),
                             associated_constants: items.associated_constants.clone(),
+                            impls: items.impls.clone(),
                         },
                     )
                 }
@@ -2165,8 +2197,24 @@ impl Provider for CompilerProvider {
                             .map(keys::Item)
                             .collect();
                         let universal_handles = cx.request_all(&universal_keys, 0);
-                        for handle in constant_handles
+                        let item_keys: Vec<keys::Item<ITEM_COHERENCE>> = inventories
+                            .iter()
+                            .flat_map(|inventory| inventory.callables.iter().copied())
+                            .map(keys::Item)
+                            .collect();
+                        let item_handles = cx.request_all(&item_keys, 0);
+                        let impl_keys: Vec<keys::Params<IMPL_COHERENCE>> = inventories
+                            .iter()
+                            .flat_map(|inventory| inventory.impls.iter())
+                            .map(|d| {
+                                keys::Params(d.snapshot.graph_word(), vec![u64::from(d.index)])
+                            })
+                            .collect();
+                        let impl_handles = cx.request_all(&impl_keys, 0);
+                        for handle in item_handles
                             .into_iter()
+                            .chain(impl_handles)
+                            .chain(constant_handles)
                             .chain(admission_handles)
                             .chain(universal_handles)
                         {
@@ -2390,11 +2438,31 @@ fn closure_body_key(
 }
 /// One callable's immutable generic signature.
 #[derive(Debug)]
+#[allow(dead_code)] // consumers move over in step 3
 pub(crate) struct SignatureFact {
     pub declaration: ir::DeclId,
     pub signature: ir::GenericSignature,
 }
 impl crate::engine::Fact for SignatureFact {}
+/// Every implementation of one trait: the explicit completeness fact for
+/// lookups that genuinely need all impls.
+#[derive(Debug)]
+#[allow(dead_code)] // consumers move over in step 3
+pub(crate) struct TraitImplsFact {
+    pub impls: Vec<ir::DeclId>,
+}
+impl crate::engine::Fact for TraitImplsFact {}
+fn decl_param(key: &Key, what: &str) -> Result<ir::DeclId, Error> {
+    let [snapshot, index] = key.params.as_slice() else {
+        return Err(Error::new(format!(
+            "{what} requires snapshot and declaration"
+        )));
+    };
+    Ok(ir::DeclId {
+        snapshot: ir::SnapshotId::from_graph_word(*snapshot),
+        index: u32::try_from(*index).map_err(|_| Error::new("declaration index overflow"))?,
+    })
+}
 fn item_index(key: &Key, missing: &str) -> Result<usize, Error> {
     let [index] = key.params.as_slice() else {
         return Err(Error::new(missing));

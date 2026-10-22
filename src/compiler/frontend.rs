@@ -16470,6 +16470,8 @@ pub struct DeclRegistry {
     function_ids: Vec<ir::DeclId>,
     callable_sources: Vec<CallableSource>,
     impl_ids: Vec<ir::DeclId>,
+    /// Inherent associated callables per nominal (item-local overlap peers).
+    inherent_peers: HashMap<ir::DeclId, Vec<ir::DeclId>>,
     associated_ids: Vec<Vec<ir::DeclId>>,
     traits: HashMap<TraitLookupKey, ir::DeclId>,
     trait_ids: Vec<ir::DeclId>,
@@ -17118,6 +17120,8 @@ pub struct ModuleItems {
     pub constants: Vec<ir::DeclId>,
     pub nominals: Vec<ir::DeclId>,
     pub associated_constants: Vec<ir::DeclId>,
+    /// Source implementation blocks (per-impl coherence inputs).
+    pub impls: Vec<ir::DeclId>,
 }
 /// Shared read-only part of a [`TypeEnv`].
 #[derive(Debug)]
@@ -17450,6 +17454,16 @@ impl PlanCtx {
         shared: Arc<Program>,
         budget: &ir::PlanBudget,
     ) -> Result<Self, String> {
+        Self::from_shared_program_with(shared, budget, true)
+    }
+    /// `eager = false` is the graph constructor: impl coherence, inherent
+    /// overlap and C ABI checks are left to per-item graph nodes
+    /// (`impl_coherence`, `item_coherence`) that CHECK demands.
+    pub fn from_shared_program_with(
+        shared: Arc<Program>,
+        budget: &ir::PlanBudget,
+        eager: bool,
+    ) -> Result<Self, String> {
         let program = shared.as_ref();
         program.validate_name_handles()?;
         program.validate_c_source()?;
@@ -17515,6 +17529,7 @@ impl PlanCtx {
             function_ids: Vec::new(),
             callable_sources: Vec::new(),
             impl_ids: Vec::new(),
+            inherent_peers: HashMap::new(),
             associated_ids: Vec::new(),
             traits: HashMap::new(),
             trait_ids: Vec::new(),
@@ -18889,6 +18904,16 @@ impl PlanCtx {
             positions.entry(*id).or_insert(index);
         }
         registry_mut.function_positions = positions;
+        let mut peers: HashMap<ir::DeclId, Vec<ir::DeclId>> = HashMap::new();
+        for id in &registry_mut.function_ids {
+            budget.charge_work(1)?;
+            if let Some(owner) = &registry_mut.declaration(*id)?.path.associated
+                && owner.trait_decl.is_none()
+            {
+                peers.entry(owner.nominal).or_default().push(*id);
+            }
+        }
+        registry_mut.inherent_peers = peers;
         registry_mut.function_positions_sealed = true;
         // Qualify every declaration before graph-facing publication. The sealed
         // callable index resolves each call without scanning other bodies.
@@ -18911,9 +18936,13 @@ impl PlanCtx {
             module_items: Arc::from([]),
             budget: budget.clone(),
         };
-        plan.validate_inherent_overlaps(budget)?;
-        plan.publish_trait_world(program)?;
-        plan.validate_c_abi()?;
+        if eager {
+            plan.validate_inherent_overlaps(budget)?;
+        }
+        plan.publish_trait_world(program, eager)?;
+        if eager {
+            plan.validate_c_abi()?;
+        }
         plan.module_items = plan.compute_module_items()?;
         Ok(plan)
     }
@@ -18953,6 +18982,14 @@ impl PlanCtx {
         for decl in self.associated_constant_declarations().collect::<Vec<_>>() {
             associated.push((slot(decl)?, decl));
         }
+        let mut impls = Vec::new();
+        for &decl in &self.registry.impl_ids {
+            // Prelude impls are trusted; user impls check against them.
+            if self.is_prelude_decl(decl)? {
+                continue;
+            }
+            impls.push((slot(decl)?, decl));
+        }
         for (at, index) in callables {
             modules[at].callables.push(index);
         }
@@ -18961,6 +18998,9 @@ impl PlanCtx {
         }
         for (at, decl) in nominals {
             modules[at].nominals.push(decl);
+        }
+        for (at, decl) in impls {
+            modules[at].impls.push(decl);
         }
         for (at, decl) in associated {
             modules[at].associated_constants.push(decl);
@@ -19000,7 +19040,7 @@ impl PlanCtx {
         ) && !self.callable_env(declaration)?.is_generic()
             && !self.is_prelude_decl(declaration)?)
     }
-    fn publish_trait_world(&mut self, program: &Program) -> Result<(), String> {
+    fn publish_trait_world(&mut self, program: &Program, eager: bool) -> Result<(), String> {
         let budget = &self.budget;
         budget.retain_bytes(
             self.registry
@@ -19268,7 +19308,7 @@ impl PlanCtx {
             source_schemas: self.source_schemas.clone(),
             budget: budget.clone(),
         });
-        let world = tr::ValidatedTraitWorld::build(headers, adapter, budget)
+        let world = tr::ValidatedTraitWorld::build_with(headers, adapter, budget, eager)
             .map_err(|e| e.into_legacy_diagnostic(budget))?;
         let mut validated = HashMap::new();
         for id in &self.registry.function_ids {
@@ -21234,6 +21274,65 @@ fn overlap_types(
     }
 }
 impl PlanCtx {
+    /// Item-local coherence: this callable's inherent overlap against same-named
+    /// inherent items of its nominal, and its C ABI contract.
+    pub fn validate_item_coherence(
+        &self,
+        index: usize,
+        budget: &ir::PlanBudget,
+    ) -> Result<(), String> {
+        self.check_budget(budget)?;
+        let id = self.callable_decl(index)?;
+        let a = self.declaration(id)?;
+        if let Some(ao) = &a.path.associated
+            && ao.trait_decl.is_none()
+        {
+            for b in self
+                .registry
+                .inherent_peers
+                .get(&ao.nominal)
+                .map(|v| v.as_slice())
+                .unwrap_or_default()
+            {
+                budget.charge_work(1)?;
+                if *b == id {
+                    continue;
+                }
+                let b = self.declaration(*b)?;
+                let Some(bo) = &b.path.associated else {
+                    continue;
+                };
+                if !self.registry.source_items_equal(a.path.item, b.path.item)? {
+                    continue;
+                }
+                let _scratch = budget.reserve_bytes(32 * 512 + 128)?;
+                if overlap_types(
+                    &ao.self_pattern,
+                    &bo.self_pattern,
+                    &mut HashMap::new(),
+                    budget,
+                    0,
+                )? {
+                    return Err(format!("duplicate overlapping associated item {}", a.name));
+                }
+            }
+        }
+        if !self.program.c_abi.functions.is_empty() {
+            self.c_abi_for(id)?;
+        }
+        Ok(())
+    }
+    /// Coherence of one implementation against its trait's other impls.
+    pub fn validate_impl_coherence(&self, implementation: ir::DeclId) -> Result<(), String> {
+        let world = self.trait_world()?;
+        let Some(trait_decl) = world.impl_trait(implementation) else {
+            return Ok(());
+        };
+        let peers = world.trait_impls(trait_decl);
+        world
+            .check_impl_coherence(implementation, &peers)
+            .map_err(|e| e.into_legacy_diagnostic(&self.budget))
+    }
     fn validate_inherent_overlaps(&self, budget: &ir::PlanBudget) -> Result<(), String> {
         self.check_budget(budget)?;
         for (index, a) in self.registry.function_ids.iter().enumerate() {

@@ -1964,6 +1964,11 @@ pub struct ValidatedTraitWorld {
     constant_header_index: DeclIndex,
     constant_impl_index: std::collections::HashMap<(DeclId, DeclId), DeclId>,
     declared_callable_index: DeclIndex,
+    /// Trait declaration to impl header positions (TRAIT_IMPLS source).
+    trait_impl_index: std::collections::HashMap<DeclId, Vec<usize>>,
+    /// Whole-world impl overlap at build time; the graph defers it to
+    /// per-impl coherence nodes.
+    eager_coherence: bool,
 }
 
 impl ValidatedTraitWorld {
@@ -1979,9 +1984,18 @@ impl ValidatedTraitWorld {
     }
 
     pub fn build(
+        headers: HeaderSet,
+        schema: Arc<dyn SchemaCx + Send + Sync>,
+        budget: &PlanBudget,
+    ) -> Result<Arc<Self>> {
+        Self::build_with(headers, schema, budget, true)
+    }
+    /// `eager_coherence = false` leaves impl overlap to per-impl checks.
+    pub fn build_with(
         mut headers: HeaderSet,
         schema: Arc<dyn SchemaCx + Send + Sync>,
         budget: &PlanBudget,
+        eager_coherence: bool,
     ) -> Result<Arc<Self>> {
         if !schema.budget().same_authority(budget) {
             return Err(FactsError::invalid(
@@ -2120,7 +2134,17 @@ impl ValidatedTraitWorld {
             constant_header_index: DeclIndex::default(),
             constant_impl_index: std::collections::HashMap::new(),
             declared_callable_index: DeclIndex::default(),
+            trait_impl_index: std::collections::HashMap::new(),
+            eager_coherence,
         };
+        for (position, h) in world.headers.impls.iter().enumerate() {
+            charged(budget, budget.charge_work(1))?;
+            world
+                .trait_impl_index
+                .entry(h.trait_ref.declaration)
+                .or_default()
+                .push(position);
+        }
         world.build_constant_index()?;
         world.validate_header_type_metadata()?;
         world.validate_headers()?;
@@ -3492,48 +3516,97 @@ impl ValidatedTraitWorld {
                 ));
             }
         }
-        for (index, a) in self.headers.impls.iter().enumerate() {
-            for b in self.headers.impls[..index].iter() {
-                charged(&self.budget, self.budget.charge_work(1))?;
-                if a.trait_ref.declaration == b.trait_ref.declaration {
-                    let mut bindings = Vec::new();
-                    let mut overlaps = self.unify(
-                        Term {
-                            side: 0,
-                            ty: &a.trait_ref.self_ty,
-                        },
-                        Term {
-                            side: 1,
-                            ty: &b.trait_ref.self_ty,
-                        },
-                        &mut bindings,
-                        0,
-                    )?;
-                    if a.trait_ref.args.len() != b.trait_ref.args.len() {
-                        return Err(FactsError::invalid(
-                            &self.budget,
-                            "trait impl head arity mismatch",
-                        ));
-                    }
-                    for (left, right) in a.trait_ref.args.iter().zip(b.trait_ref.args.iter()) {
-                        if !overlaps {
-                            break;
-                        }
-                        overlaps = self.unify(
-                            Term { side: 0, ty: left },
-                            Term { side: 1, ty: right },
-                            &mut bindings,
-                            0,
-                        )?;
-                    }
-                    if overlaps {
-                        return Err(FactsError::ambiguous(
-                            &self.budget,
-                            "overlapping trait impl heads (predicate absence cannot establish disjointness)",
-                        ));
+        if self.eager_coherence {
+            for (index, a) in self.headers.impls.iter().enumerate() {
+                for b in self.headers.impls[..index].iter() {
+                    charged(&self.budget, self.budget.charge_work(1))?;
+                    if a.trait_ref.declaration == b.trait_ref.declaration {
+                        self.check_impl_pair(a, b)?;
                     }
                 }
             }
+        }
+        Ok(())
+    }
+    /// Every implementation header of `trait_decl`, in header order. This is
+    /// the explicit completeness fact behind lookups that need all impls.
+    pub fn trait_impls(&self, trait_decl: DeclId) -> Vec<DeclId> {
+        self.trait_impl_index
+            .get(&trait_decl)
+            .map(|positions| {
+                positions
+                    .iter()
+                    .map(|&p| self.headers.impls[p].declaration)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+    /// Trait of one implementation header, if it is a source impl.
+    pub fn impl_trait(&self, implementation: DeclId) -> Option<DeclId> {
+        self.headers
+            .impls
+            .iter()
+            .find(|h| h.declaration == implementation)
+            .map(|h| h.trait_ref.declaration)
+    }
+    /// Coherence of one impl against every other impl of the same trait.
+    pub fn check_impl_coherence(&self, implementation: DeclId, peers: &[DeclId]) -> Result<()> {
+        let find = |id: DeclId| {
+            self.headers
+                .impls
+                .iter()
+                .find(|h| h.declaration == id)
+                .ok_or_else(|| FactsError::invalid(&self.budget, "unknown impl header"))
+        };
+        let a = find(implementation)?;
+        for &peer in peers {
+            charged(&self.budget, self.budget.charge_work(1))?;
+            if peer == implementation {
+                continue;
+            }
+            let b = find(peer)?;
+            if a.trait_ref.declaration == b.trait_ref.declaration {
+                self.check_impl_pair(a, b)?;
+            }
+        }
+        Ok(())
+    }
+    fn check_impl_pair(&self, a: &ImplHeader, b: &ImplHeader) -> Result<()> {
+        let mut bindings = Vec::new();
+        let mut overlaps = self.unify(
+            Term {
+                side: 0,
+                ty: &a.trait_ref.self_ty,
+            },
+            Term {
+                side: 1,
+                ty: &b.trait_ref.self_ty,
+            },
+            &mut bindings,
+            0,
+        )?;
+        if a.trait_ref.args.len() != b.trait_ref.args.len() {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "trait impl head arity mismatch",
+            ));
+        }
+        for (left, right) in a.trait_ref.args.iter().zip(b.trait_ref.args.iter()) {
+            if !overlaps {
+                break;
+            }
+            overlaps = self.unify(
+                Term { side: 0, ty: left },
+                Term { side: 1, ty: right },
+                &mut bindings,
+                0,
+            )?;
+        }
+        if overlaps {
+            return Err(FactsError::ambiguous(
+                &self.budget,
+                "overlapping trait impl heads (predicate absence cannot establish disjointness)",
+            ));
         }
         Ok(())
     }
