@@ -105,7 +105,15 @@ graph-integrity evidence are recorded in the feature contracts. G0-G12 remain op
       (`SOURCE_BIT | module-path key | kind | per-module ordinal`, 519041cad),
       so any node can derive a declaration's owning module from its identity;
       registry and schema storage are identity-keyed, not positional
-      (2285fbe2f, bec557ef2, 0c0a82c85, 4f44c29f1). Next: per-module
+      (2285fbe2f, bec557ef2, 0c0a82c85, 4f44c29f1). Step a (392d04626):
+      `frontend::module_declarations` derives one module's canonical ids
+      from RESOLVE's Program alone (test proves equality with the
+      registry); not yet a graph node (hog: MODULE_INDEX kind 122 reserved,
+      PARSE_FILE kind 121 keyed by file ordinal). Blocker for deleting
+      SIGNATURES: PlanCtx (registry path maps, ValidatedTraitWorld,
+      SharedTypeEnv, contexts) is whole-program state behind ~227 call
+      sites; each `facts.types()` arm needs per-item replacements for
+      those maps first. Next: per-module
       declaration fact keyed by module-path key, TRAIT_IMPLS from it, move
       `facts.types()` consumers kind by kind, then delete SIGNATURES.
 - [x] Scalar checked-function IR shared directly by checking and native emission.
