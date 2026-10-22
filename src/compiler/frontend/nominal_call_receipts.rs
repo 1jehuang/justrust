@@ -215,10 +215,11 @@ impl CanonicalSourceCapability {
         {
             same_original &= replay_type_equal(retained, fresh, budget)?;
         }
-        if !same_original
-            || !ir::identical_call_types(&row.target, &row.mapped, target, current, budget)
-                .map_err(|e| source_error(budget, &e))?
-        {
+        // A rebuild (e.g. a second call of the same closure) allocates equal
+        // types afresh, so the retained realization is compared structurally.
+        let same_realization =
+            structurally_same_call(&row.target, &row.mapped, target, current, budget)?;
+        if !same_original || !same_realization {
             return Err(FactsError::invalid(
                 budget,
                 "nominal call realization changed target or signature",
@@ -226,6 +227,36 @@ impl CanonicalSourceCapability {
         }
         Ok(Some(row.mapped.clone()))
     }
+}
+
+/// Structural (not pointer) equality of a callee and its realized signature.
+/// Canonical rebuilds allocate equal type DAGs afresh; identity of allocation
+/// is not part of the realization's meaning.
+fn structurally_same_call(
+    a: &ir::Callee,
+    sa: &ir::Signature,
+    b: &ir::Callee,
+    sb: &ir::Signature,
+    budget: &ir::PlanBudget,
+) -> Result<bool, FactsError> {
+    if std::mem::discriminant(a) != std::mem::discriminant(b)
+        || a.metadata_types().count() != b.metadata_types().count()
+        || sa.params.len() != sb.params.len()
+        || sa.ref_contract != sb.ref_contract
+    {
+        return Ok(false);
+    }
+    for (left, right) in a
+        .metadata_types()
+        .zip(b.metadata_types())
+        .chain(sa.params.iter().zip(&sb.params))
+        .chain(std::iter::once((&sa.result, &sb.result)))
+    {
+        if !replay_type_equal(left, right, budget)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 pub(super) fn replay(
@@ -295,9 +326,7 @@ pub(super) fn replay(
         };
         validate_original_callee(target, &row.target, budget)?;
         validate(row, facts, budget, &mut scratch)?;
-        if !ir::identical_call_types(&row.target, &row.mapped, actual_target, signature, budget)
-            .map_err(|e| source_error(budget, &e))?
-        {
+        if !structurally_same_call(&row.target, &row.mapped, actual_target, signature, budget)? {
             return Err(FactsError::invalid(
                 budget,
                 "nominal call realization payload changed",

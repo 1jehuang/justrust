@@ -131,6 +131,16 @@ fn pair(
             return Ok(());
         }
         if source_id != mapped_id {
+            // A closed application realized through the graph (e.g. a closure
+            // result `Item`) and its canonical source slot are the same
+            // nominal: declaration, arity and every ordered actual were
+            // paired above, and a source slot carries no graph capability.
+            if matches!(source_id.index, ir::NominalIndex::GraphRealization(_))
+                && matches!(mapped_id.index, ir::NominalIndex::SourceSlot(_))
+                && source_id.snapshot == mapped_id.snapshot
+            {
+                return Ok(());
+            }
             return Err("closed call realization changed source nominal identity".into());
         }
         return Ok(());
