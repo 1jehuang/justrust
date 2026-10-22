@@ -4403,7 +4403,7 @@ mod tests {
     ) -> Result<cfg::ClosedCfg, String> {
         use super::super::ir::{BinderId, CallTarget, ParamEnv, Signature};
         let declaration =
-            source_decl(SnapshotId::allocate()?, 0, budget).map_err(|error| error.to_string())?;
+            source_decl(SnapshotId::standalone()?, 0, budget).map_err(|error| error.to_string())?;
         let scope = Arc::new(ParamEnv::new(BinderId { declaration }, 0)?);
         let env = Arc::new(GenericEnv::new(&[scope], budget)?);
         let signature = Signature {
@@ -5110,7 +5110,7 @@ mod tests {
         use super::super::ir::{BinderId, ParamEnv, ParamId, PlanBudget};
         let budget = PlanBudget::default();
         let binder = BinderId {
-            declaration: source_decl(SnapshotId::allocate().unwrap(), 0, &budget).unwrap(),
+            declaration: source_decl(SnapshotId::standalone().unwrap(), 0, &budget).unwrap(),
         };
         let scope = Arc::new(ParamEnv::new(binder, 1).unwrap());
         let env = Arc::new(GenericEnv::new(&[scope], &budget).unwrap());
@@ -5126,7 +5126,7 @@ mod tests {
     fn symbolic_pair() -> (Arc<GenericEnv>, [Ty; 2]) {
         use super::super::ir::{BinderId, ParamEnv, ParamId, PlanBudget};
         let budget = PlanBudget::default();
-        let snapshot = SnapshotId::allocate().unwrap();
+        let snapshot = SnapshotId::standalone().unwrap();
         let binders = [0, 1].map(|index| BinderId {
             declaration: source_decl(snapshot, index, &budget).unwrap(),
         });
@@ -7297,7 +7297,7 @@ mod tests {
     fn synthetic_call_target() -> super::super::ir::Callee {
         super::super::ir::Callee::Direct(super::super::ir::CallTarget {
             declaration: source_decl(
-                SnapshotId::allocate().unwrap(),
+                SnapshotId::standalone().unwrap(),
                 0,
                 &super::super::ir::PlanBudget::default(),
             )
@@ -7309,7 +7309,7 @@ mod tests {
         modules: &std::sync::Arc<super::super::module_identity::ModuleArena>,
         fields: Vec<Ty>,
     ) -> Ty {
-        let snapshot = SnapshotId::allocate().unwrap();
+        let snapshot = SnapshotId::standalone().unwrap();
         Ty::Struct(StructTy::new(StructDef {
             id: NominalAppId {
                 snapshot,
@@ -7364,7 +7364,7 @@ mod tests {
     }
 
     fn unit_enum(modules: &std::sync::Arc<super::super::module_identity::ModuleArena>) -> EnumTy {
-        let snapshot = SnapshotId::allocate().unwrap();
+        let snapshot = SnapshotId::standalone().unwrap();
         EnumTy::new(EnumDef {
             id: NominalAppId {
                 snapshot,
@@ -7414,7 +7414,7 @@ mod tests {
         modules: &std::sync::Arc<super::super::module_identity::ModuleArena>,
         variants: Vec<Vec<Ty>>,
     ) -> EnumTy {
-        let snapshot = SnapshotId::allocate().unwrap();
+        let snapshot = SnapshotId::standalone().unwrap();
         EnumTy::new(EnumDef {
             id: NominalAppId {
                 snapshot,

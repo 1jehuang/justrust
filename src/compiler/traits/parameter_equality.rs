@@ -1271,7 +1271,7 @@ mod tests {
         reject_mutation(&facts, |authority| authority.certificates = Arc::from([]));
         reject_mutation(&facts, |authority| authority.environment = usize::MAX);
         reject_mutation(&facts, |authority| {
-            authority.world = WorldId(SnapshotId::allocate().unwrap())
+            authority.world = WorldId(SnapshotId::standalone().unwrap())
         });
         reject_mutation(&facts, |authority| authority.phase = FactsPhase::Closed);
         reject_mutation(&facts, |authority| authority.finalized = false);

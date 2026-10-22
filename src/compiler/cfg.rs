@@ -6653,7 +6653,7 @@ mod tests {
             lower_template(std::sync::Arc::new(duplicate), duplicate_facts, &budget).unwrap();
         assert!(super::super::ownership::verify_template(invalid).is_err());
         let app = ir::NominalAppId {
-            snapshot: ir::SnapshotId::allocate().unwrap(),
+            snapshot: ir::SnapshotId::standalone().unwrap(),
             index: crate::compiler::ir::NominalIndex::SourceSlot(0),
         };
         let declaration = test_decl();
@@ -6856,7 +6856,7 @@ mod tests {
         static SNAPSHOT: std::sync::OnceLock<ir::SnapshotId> = std::sync::OnceLock::new();
         static INDEX: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
         super::super::traits::test_support::source_decl(
-            *SNAPSHOT.get_or_init(|| ir::SnapshotId::allocate().unwrap()),
+            *SNAPSHOT.get_or_init(|| ir::SnapshotId::standalone().unwrap()),
             INDEX.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             &ir::PlanBudget::default(),
         )
@@ -7451,7 +7451,7 @@ mod tests {
             source_decl: test_decl(),
             type_args: std::sync::Arc::from([]),
             id: ir::NominalAppId {
-                snapshot: ir::SnapshotId::allocate().unwrap(),
+                snapshot: ir::SnapshotId::standalone().unwrap(),
                 index: crate::compiler::ir::NominalIndex::SourceSlot(0),
             },
             name: "S".into(),
@@ -11318,7 +11318,7 @@ mod tests {
             source_decl: test_decl(),
             type_args: std::sync::Arc::from([]),
             id: ir::NominalAppId {
-                snapshot: ir::SnapshotId::allocate().unwrap(),
+                snapshot: ir::SnapshotId::standalone().unwrap(),
                 index: crate::compiler::ir::NominalIndex::SourceSlot(0),
             },
             name: "E".into(),

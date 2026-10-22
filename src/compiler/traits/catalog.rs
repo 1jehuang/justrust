@@ -839,7 +839,7 @@ mod wide_tests {
         .unwrap()
         .freeze()
         .unwrap();
-        let snapshot = SnapshotId::allocate().unwrap();
+        let snapshot = SnapshotId::standalone().unwrap();
         let builder = CoreCatalogBuilder::new(snapshot, modules.clone(), &budget).unwrap();
         assert!(Arc::ptr_eq(builder.modules(), &modules));
         for declaration in builder.base_declarations() {
@@ -891,14 +891,14 @@ mod wide_tests {
         );
         let budget = PlanBudget::default();
         assert!(
-            matches!(CoreCatalogBuilder::new(SnapshotId::allocate().unwrap(), modules, &budget), Err(error) if error.is_resource())
+            matches!(CoreCatalogBuilder::new(SnapshotId::standalone().unwrap(), modules, &budget), Err(error) if error.is_resource())
         );
     }
 
     #[test]
     fn char_clone_schema_and_identity_are_distinct() {
         let budget = PlanBudget::default();
-        let snapshot = SnapshotId::allocate().unwrap();
+        let snapshot = SnapshotId::standalone().unwrap();
         let schema = recipe_schema(
             DeclId {
                 snapshot,
@@ -925,7 +925,7 @@ mod wide_tests {
     #[test]
     fn wide_clone_catalog_schema_preserves_signedness_and_scalar_result() {
         let budget = PlanBudget::new(ir::PlanLimits::default());
-        let snapshot = SnapshotId::allocate().unwrap();
+        let snapshot = SnapshotId::standalone().unwrap();
         for kind in [IntTy::I128, IntTy::U128] {
             let declaration = DeclId {
                 snapshot,

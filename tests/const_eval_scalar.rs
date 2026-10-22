@@ -26,7 +26,7 @@ fn id(index: u32) -> DeclId {
 }
 fn snapshot() -> SnapshotId {
     // IDs compared by a test are built from its explicitly supplied owner below.
-    SnapshotId::allocate().unwrap()
+    SnapshotId::standalone().unwrap()
 }
 fn int(ty: IntTy, bits: u128) -> ScalarValue {
     ScalarValue::Int(IntValue {

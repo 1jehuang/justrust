@@ -28,7 +28,7 @@ fn universal_call_types_require_exact_projection_environment() {
     for mutation in 0..3 {
         let mut altered = projection.as_ref().clone();
         match mutation {
-            0 => altered.item.snapshot = ir::SnapshotId::allocate().unwrap(),
+            0 => altered.item.snapshot = ir::SnapshotId::standalone().unwrap(),
             1 => altered.trait_ref.args = Arc::from([ir::Ty::Bool, ir::Ty::Int(ir::IntTy::I32)]),
             _ => altered.trait_ref.declaration.index = u32::MAX,
         }

@@ -1904,7 +1904,7 @@ mod tests {
         });
         let target = ir::CallTarget {
             declaration: ir::DeclId {
-                snapshot: ir::SnapshotId::allocate().unwrap(),
+                snapshot: ir::SnapshotId::standalone().unwrap(),
                 index: 0,
             },
             type_args: Arc::from([]),

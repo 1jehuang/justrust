@@ -21,7 +21,7 @@ fn row(snapshot: SnapshotId, index: u32) -> DeclaredEqualityReduction {
 #[test]
 fn declared_reduction_rows_move_then_append_preserves_order_duplicates_and_peak() {
     let budget = PlanBudget::default();
-    let snapshot = SnapshotId::allocate().unwrap();
+    let snapshot = SnapshotId::standalone().unwrap();
     let mut first = ReductionRows::default();
     first.push(row(snapshot, 2), &budget).unwrap();
     let pointer = first.values.as_ptr();
@@ -52,7 +52,7 @@ fn declared_reduction_rows_move_then_append_preserves_order_duplicates_and_peak(
 #[test]
 fn declared_reduction_rows_underpaid_replacement_is_transactional_and_recoverable() {
     let budget = PlanBudget::default();
-    let snapshot = SnapshotId::allocate().unwrap();
+    let snapshot = SnapshotId::standalone().unwrap();
     let mut rows = ReductionRows::default();
     rows.push(row(snapshot, 2), &budget).unwrap();
     let pointer = rows.values.as_ptr();
@@ -80,7 +80,7 @@ fn declared_reduction_rows_failed_growth_and_poison_do_not_commit() {
         bytes: 2 * size_of::<DeclaredEqualityReduction>(),
         ..Default::default()
     });
-    let snapshot = SnapshotId::allocate().unwrap();
+    let snapshot = SnapshotId::standalone().unwrap();
     let mut rows = ReductionRows::default();
     rows.push(row(snapshot, 2), &budget).unwrap();
     let pointer = rows.values.as_ptr();
@@ -98,7 +98,7 @@ fn declared_reduction_rows_failed_growth_and_poison_do_not_commit() {
 fn declared_reduction_rows_reject_missing_receipt_foreign_payer_and_sticky_work() {
     let budget = PlanBudget::default();
     let other = PlanBudget::new(budget.limits());
-    let snapshot = SnapshotId::allocate().unwrap();
+    let snapshot = SnapshotId::standalone().unwrap();
     let mut rows = ReductionRows::default();
     rows.push(row(snapshot, 2), &budget).unwrap();
     assert!(rows.check(&other).is_err());

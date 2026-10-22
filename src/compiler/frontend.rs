@@ -17504,7 +17504,16 @@ impl PlanCtx {
         shared: Arc<Program>,
         budget: &ir::PlanBudget,
     ) -> Result<Self, String> {
-        Self::from_shared_program_with(shared, budget, true)
+        let owner = |domain| {
+            super::owner_path::standalone_issued(
+                &super::expansion_budget::ExpansionBudget::default(),
+                domain,
+            )
+            .map_err(|error| error.to_string())
+        };
+        let catalog = owner(super::owner_path::OwnerDomain::DeclarationSnapshot)?;
+        let world = owner(super::owner_path::OwnerDomain::TraitWorld)?;
+        Self::from_shared_program_with(shared, budget, true, catalog, world)
     }
     /// `eager = false` is the graph constructor: impl coherence, inherent
     /// overlap and C ABI checks are left to per-item graph nodes
@@ -17513,6 +17522,8 @@ impl PlanCtx {
         shared: Arc<Program>,
         budget: &ir::PlanBudget,
         eager: bool,
+        catalog_owner: super::owner_path::Issued,
+        world_owner: super::owner_path::Issued,
     ) -> Result<Self, String> {
         let program = shared.as_ref();
         program.validate_name_handles()?;
@@ -17552,7 +17563,7 @@ impl PlanCtx {
                 }
             }
         }
-        let snapshot = ir::SnapshotId::allocate()?;
+        let snapshot = ir::SnapshotId::issued(catalog_owner);
         let catalog_builder =
             tr::CoreCatalogBuilder::new(snapshot, program.modules.clone(), budget)
                 .map_err(|e| e.into_legacy_diagnostic(budget))?;
@@ -18989,7 +19000,7 @@ impl PlanCtx {
         if eager {
             plan.validate_inherent_overlaps(budget)?;
         }
-        plan.publish_trait_world(program, eager)?;
+        plan.publish_trait_world(program, eager, world_owner)?;
         if eager {
             plan.validate_c_abi()?;
         }
@@ -19090,7 +19101,12 @@ impl PlanCtx {
         ) && !self.callable_env(declaration)?.is_generic()
             && !self.is_prelude_decl(declaration)?)
     }
-    fn publish_trait_world(&mut self, program: &Program, eager: bool) -> Result<(), String> {
+    fn publish_trait_world(
+        &mut self,
+        program: &Program,
+        eager: bool,
+        world_owner: super::owner_path::Issued,
+    ) -> Result<(), String> {
         let budget = &self.budget;
         budget.retain_bytes(
             self.registry
@@ -19358,8 +19374,9 @@ impl PlanCtx {
             source_schemas: self.source_schemas.clone(),
             budget: budget.clone(),
         });
-        let world = tr::ValidatedTraitWorld::build_with(headers, adapter, budget, eager)
-            .map_err(|e| e.into_legacy_diagnostic(budget))?;
+        let world =
+            tr::ValidatedTraitWorld::build_with(headers, adapter, budget, eager, world_owner)
+                .map_err(|e| e.into_legacy_diagnostic(budget))?;
         let mut validated = HashMap::new();
         for id in &self.registry.function_ids {
             budget.charge_work(1)?;

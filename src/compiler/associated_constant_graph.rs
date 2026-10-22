@@ -577,7 +577,7 @@ mod caller_tests {
         };
         assert!(!same_caller_computation(&original, &different, &budget).unwrap());
         let mut foreign = original.clone();
-        foreign.declaration.snapshot = ir::SnapshotId::allocate().unwrap();
+        foreign.declaration.snapshot = ir::SnapshotId::standalone().unwrap();
         assert!(!same_caller_computation(&original, &foreign, &budget).unwrap());
     }
 }

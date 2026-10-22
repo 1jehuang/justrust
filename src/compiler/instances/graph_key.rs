@@ -545,7 +545,7 @@ mod tests {
     fn target(args: Vec<ir::Ty>) -> ir::CallTarget {
         ir::CallTarget {
             declaration: ir::DeclId {
-                snapshot: ir::SnapshotId::allocate().unwrap(),
+                snapshot: ir::SnapshotId::standalone().unwrap(),
                 index: 1,
             },
             type_args: args.into(),
@@ -590,7 +590,7 @@ mod tests {
             trailing.push(0);
             assert!(decode(&trailing, &context, &budget).is_err());
             let mut foreign = words.clone();
-            foreign[1] = ir::SnapshotId::allocate().unwrap().graph_word();
+            foreign[1] = ir::SnapshotId::standalone().unwrap().graph_word();
             assert!(decode(&foreign, &context, &budget).is_err());
             let mut overflowing = words.clone();
             overflowing[5] = u64::MAX;
@@ -631,7 +631,7 @@ mod tests {
         wrong_kind[4] = 14;
         assert!(decode(&wrong_kind, &context, &budget).is_err());
         let mut foreign_nominal = words.clone();
-        foreign_nominal[6] = ir::SnapshotId::allocate().unwrap().graph_word();
+        foreign_nominal[6] = ir::SnapshotId::standalone().unwrap().graph_word();
         assert!(decode(&foreign_nominal, &context, &budget).is_err());
         let mut opaque = encode(&target(ir::Ty::Bool), &budget).unwrap();
         opaque[4] = 16;
@@ -650,7 +650,7 @@ mod tests {
         ]))]);
         assert_ne!(first, encode(&original, &budget).unwrap());
         let mut other = original.clone();
-        other.declaration.snapshot = ir::SnapshotId::allocate().unwrap();
+        other.declaration.snapshot = ir::SnapshotId::standalone().unwrap();
         assert_ne!(
             encode(&original, &budget).unwrap(),
             encode(&other, &budget).unwrap()

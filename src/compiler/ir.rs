@@ -26,7 +26,6 @@ mod grouped_or;
 #[path = "ir/runtime_sites.rs"]
 mod runtime_sites;
 pub use runtime_sites::{RuntimeLocation, RuntimeSites};
-use std::sync::atomic::{AtomicU64, Ordering};
 #[path = "ir/call_value_types.rs"]
 mod call_value_types;
 #[path = "ir/closure.rs"]
@@ -61,22 +60,22 @@ impl SnapshotId {
     pub(in crate::compiler) fn from_graph_word(value: u64) -> Self {
         Self(value)
     }
-    pub fn allocate() -> Result<Self, String> {
-        static NEXT: AtomicU64 = AtomicU64::new(0);
-        Self::allocate_from(&NEXT)
+    /// The namespace of one issued owner. Production producers issue it from
+    /// their node's `OwnerIssuer`; engine-minted tags never collide, so two
+    /// environments never share a namespace and cross-snapshot ids stay
+    /// distinguishable. Never a compiler-global counter.
+    pub fn issued(owner: super::owner_path::Issued) -> Self {
+        Self(owner.tag().bits().get())
     }
-
-    fn allocate_from(next: &AtomicU64) -> Result<Self, String> {
-        let mut id = next.load(Ordering::Relaxed);
-        loop {
-            let successor = id
-                .checked_add(1)
-                .ok_or("nominal type snapshot IDs exhausted")?;
-            match next.compare_exchange_weak(id, successor, Ordering::Relaxed, Ordering::Relaxed) {
-                Ok(_) => return Ok(Self(id)),
-                Err(observed) => id = observed,
-            }
-        }
+    /// A fresh namespace under a standalone root, for direct tooling and
+    /// tests only. Graph code receives an `Issued` from its producer.
+    pub fn standalone() -> Result<Self, String> {
+        super::owner_path::standalone_issued(
+            &super::expansion_budget::ExpansionBudget::default(),
+            super::owner_path::OwnerDomain::DeclarationSnapshot,
+        )
+        .map(Self::issued)
+        .map_err(|error| error.to_string())
     }
 }
 
@@ -12957,7 +12956,7 @@ mod tests {
     }
     fn test_decl() -> super::DeclId {
         super::super::traits::test_support::source_decl(
-            super::SnapshotId::allocate().unwrap(),
+            super::SnapshotId::standalone().unwrap(),
             0,
             &PlanBudget::default(),
         )
@@ -14155,7 +14154,7 @@ mod tests {
     #[test]
     fn projected_input_paths_preserve_occurrences_privacy_and_exact_metadata() {
         let modules = fixture_modules();
-        let snapshot = SnapshotId::allocate().unwrap();
+        let snapshot = SnapshotId::standalone().unwrap();
         let pair = Ty::Tuple(Arc::from([Ty::Int(IntTy::I32), Ty::Int(IntTy::I32)]));
         let enumeration = EnumTy::new(EnumDef {
             source_decl: test_decl(),
@@ -14775,7 +14774,7 @@ mod tests {
         let noncopy = Ty::Struct(nominal(
             &modules,
             NominalAppId {
-                snapshot: SnapshotId::allocate().unwrap(),
+                snapshot: SnapshotId::standalone().unwrap(),
                 index: crate::compiler::ir::NominalIndex::SourceSlot(0),
             },
             "S",
@@ -14846,7 +14845,7 @@ mod tests {
     fn payload_projection_requires_owner_bound_downcast_field_pair() {
         let modules = fixture_modules();
         let id = NominalAppId {
-            snapshot: SnapshotId::allocate().unwrap(),
+            snapshot: SnapshotId::standalone().unwrap(),
             index: crate::compiler::ir::NominalIndex::SourceSlot(0),
         };
         let ty = EnumTy::new(EnumDef {
@@ -14958,7 +14957,7 @@ mod tests {
     fn enum_identity_copy_debug_and_variant_bounds() {
         let modules = fixture_modules();
         let id = NominalAppId {
-            snapshot: SnapshotId::allocate().unwrap(),
+            snapshot: SnapshotId::standalone().unwrap(),
             index: crate::compiler::ir::NominalIndex::SourceSlot(0),
         };
         let handle = EnumTy::new(EnumDef {
@@ -15266,7 +15265,7 @@ mod tests {
     #[test]
     fn by_value_cycle_walk_memoizes_shared_dags_and_preserves_depth() {
         let modules = fixture_modules();
-        let snapshot = SnapshotId::allocate().unwrap();
+        let snapshot = SnapshotId::standalone().unwrap();
         let id = |index| NominalAppId {
             snapshot,
             index: NominalIndex::SourceSlot(index),
@@ -15309,7 +15308,7 @@ mod tests {
     fn by_value_cycle_walk_keeps_back_edges_and_pointer_boundaries() {
         let modules = fixture_modules();
         let id = NominalAppId {
-            snapshot: SnapshotId::allocate().unwrap(),
+            snapshot: SnapshotId::standalone().unwrap(),
             index: NominalIndex::SourceSlot(0),
         };
         let definition = Arc::new_cyclic(|weak| {
@@ -15365,7 +15364,7 @@ mod tests {
     #[test]
     fn nominal_identity_is_not_name_shape_or_declaration_index_alone() {
         let modules = fixture_modules();
-        let snapshot = SnapshotId::allocate().unwrap();
+        let snapshot = SnapshotId::standalone().unwrap();
         let first = nominal(
             &modules,
             NominalAppId {
@@ -15387,7 +15386,7 @@ mod tests {
         let next_snapshot = nominal(
             &modules,
             NominalAppId {
-                snapshot: SnapshotId::allocate().unwrap(),
+                snapshot: SnapshotId::standalone().unwrap(),
                 index: crate::compiler::ir::NominalIndex::SourceSlot(0),
             },
             "S",
@@ -15409,7 +15408,7 @@ mod tests {
         let handle = nominal(
             &modules,
             NominalAppId {
-                snapshot: SnapshotId::allocate().unwrap(),
+                snapshot: SnapshotId::standalone().unwrap(),
                 index: crate::compiler::ir::NominalIndex::SourceSlot(0),
             },
             "S",
@@ -15433,21 +15432,12 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_allocation_fails_at_exhaustion_without_wrapping() {
-        let next = AtomicU64::new(u64::MAX - 1);
-        assert_eq!(SnapshotId::allocate_from(&next).unwrap().0, u64::MAX - 1);
-        assert!(SnapshotId::allocate_from(&next).is_err());
-        assert!(SnapshotId::allocate_from(&next).is_err());
-        assert_eq!(next.load(Ordering::Relaxed), u64::MAX);
-    }
-
-    #[test]
     fn snapshot_allocation_is_unique_across_threads() {
         let workers: Vec<_> = (0..8)
             .map(|_| {
                 std::thread::spawn(|| {
                     (0..32)
-                        .map(|_| SnapshotId::allocate().unwrap())
+                        .map(|_| SnapshotId::standalone().unwrap())
                         .collect::<Vec<_>>()
                 })
             })
@@ -15462,7 +15452,7 @@ mod tests {
     #[test]
     fn nominal_debug_bounds_unicode_names_and_does_not_expand_shared_fields() {
         let modules = fixture_modules();
-        let snapshot = SnapshotId::allocate().unwrap();
+        let snapshot = SnapshotId::standalone().unwrap();
         let mut ty = Ty::Int(IntTy::I32);
         for index in 0..16 {
             ty = Ty::Struct(nominal(
@@ -15568,7 +15558,7 @@ mod tests {
     #[test]
     fn aggregate_match_retains_exact_nominal_domain_and_plain_field_authority() {
         let modules = fixture_modules();
-        let snapshot = SnapshotId::allocate().unwrap();
+        let snapshot = SnapshotId::standalone().unwrap();
         let domain = Ty::Struct(nominal(
             &modules,
             NominalAppId {
@@ -15841,7 +15831,7 @@ mod tests {
             source_decl: test_decl(),
             type_args: Arc::from([]),
             id: NominalAppId {
-                snapshot: SnapshotId::allocate().unwrap(),
+                snapshot: SnapshotId::standalone().unwrap(),
                 index: crate::compiler::ir::NominalIndex::SourceSlot(0),
             },
             name: "Tag".into(),
@@ -15956,7 +15946,7 @@ mod tests {
                 // bound so this test isolates traversal of nested tag metadata.
                 type_args: vec![Ty::Bool; 33].into(),
                 id: NominalAppId {
-                    snapshot: SnapshotId::allocate().unwrap(),
+                    snapshot: SnapshotId::standalone().unwrap(),
                     index: crate::compiler::ir::NominalIndex::SourceSlot(0),
                 },
                 name: "InvalidArguments".into(),
@@ -16015,7 +16005,7 @@ mod tests {
             source_decl: test_decl(),
             type_args: Arc::from([]),
             id: NominalAppId {
-                snapshot: SnapshotId::allocate().unwrap(),
+                snapshot: SnapshotId::standalone().unwrap(),
                 index: crate::compiler::ir::NominalIndex::SourceSlot(0),
             },
             name: "Tag".into(),

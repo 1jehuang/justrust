@@ -971,7 +971,7 @@ mod wide_tests {
             let budget = ir::PlanBudget::default();
             let shapes = inventory(&program, &budget).unwrap();
             let builder = tr::CoreCatalogBuilder::new(
-                ir::SnapshotId::allocate().unwrap(),
+                ir::SnapshotId::standalone().unwrap(),
                 program.modules.clone(),
                 &budget,
             )
@@ -1020,7 +1020,7 @@ mod wide_tests {
         let budget = ir::PlanBudget::default();
         let shapes = inventory(&parsed.program, &budget).unwrap();
         let builder = tr::CoreCatalogBuilder::new(
-            ir::SnapshotId::allocate().unwrap(),
+            ir::SnapshotId::standalone().unwrap(),
             parsed.program.modules.clone(),
             &budget,
         )
@@ -1077,7 +1077,7 @@ mod wide_tests {
         let budget = ir::PlanBudget::default();
         let shapes = inventory(&parsed.program, &budget).unwrap();
         let builder = tr::CoreCatalogBuilder::new(
-            ir::SnapshotId::allocate().unwrap(),
+            ir::SnapshotId::standalone().unwrap(),
             parsed.program.modules.clone(),
             &budget,
         )

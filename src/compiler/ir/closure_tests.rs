@@ -1,7 +1,7 @@
 use super::*;
 
 fn closure(captures: Vec<Ty>) -> ClosureTy {
-    let snapshot = SnapshotId::allocate().unwrap();
+    let snapshot = SnapshotId::standalone().unwrap();
     ClosureTy::new(
         DeclId { snapshot, index: 0 },
         Arc::from([Ty::Int(IntTy::I32)]),

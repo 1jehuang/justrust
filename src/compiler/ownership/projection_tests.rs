@@ -36,7 +36,7 @@ fn opaque_projection_move_shape_requires_exact_universal_world() {
     for mutation in 0..3 {
         let mut forged = projection.as_ref().clone();
         match mutation {
-            0 => forged.item.snapshot = super::super::ir::SnapshotId::allocate().unwrap(),
+            0 => forged.item.snapshot = super::super::ir::SnapshotId::standalone().unwrap(),
             1 => {
                 forged.trait_ref.args = Arc::from([Ty::Bool, Ty::Int(super::super::ir::IntTy::I32)])
             }

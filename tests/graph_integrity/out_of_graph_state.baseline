@@ -4,5 +4,3 @@
 # explicit user approval. See GRAPH-INTEGRITY.md. Shrink after removing debt:
 # GRAPH_INTEGRITY_SHRINK=1 justrust test --test graph_integrity
 4 Mutex src/compiler/frontend.rs
-4 Atomic src/compiler/ir.rs
-1 static src/compiler/ir.rs

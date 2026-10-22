@@ -5,7 +5,7 @@ mod projection_family_transport_tests {
     use super::*;
 
     fn projection() -> Arc<ir::AssociatedTypeProjection> {
-        let snapshot = ir::SnapshotId::allocate().unwrap();
+        let snapshot = ir::SnapshotId::standalone().unwrap();
         Arc::new(ir::AssociatedTypeProjection {
             trait_ref: ir::TraitRef {
                 declaration: ir::DeclId { snapshot, index: 1 },
@@ -45,7 +45,7 @@ mod projection_family_transport_tests {
                     changed.trait_ref.args =
                         Arc::from([Ty::Int(ir::IntTy::U16), Ty::Int(ir::IntTy::U8)])
                 }
-                _ => changed.item.snapshot = ir::SnapshotId::allocate().unwrap(),
+                _ => changed.item.snapshot = ir::SnapshotId::standalone().unwrap(),
             }
             let changed = Arc::new(changed);
             let other = ir::CarrierFamily::Projection(changed.clone());

@@ -1605,6 +1605,10 @@ const STANDALONE_OWNER_ENTRIES: &[(&str, &str)] = &[
     ("src/compiler/frontend.rs", "new"),
     ("src/compiler/frontend.rs", "validate_inactive_syntax"),
     ("src/compiler/frontend.rs", "parse_prepared"),
+    // Direct tooling: SIGNATURES issues both owners from its node root.
+    ("src/compiler/frontend.rs", "from_shared_program"),
+    ("src/compiler/ir.rs", "standalone"),
+    ("src/compiler/traits.rs", "build"),
 ];
 const STANDALONE_MARKERS: &[&str] = &[
     "standalone_issued(",

@@ -38,7 +38,7 @@ fn declared_reductions_final_replay_rejects_foreign_stale_owner_rhs_and_rows() {
             .get(&world.budget, declaration)
             .unwrap()
             .unwrap();
-        let foreign = WorldId(SnapshotId::allocate().unwrap());
+        let foreign = WorldId(SnapshotId::standalone().unwrap());
         let context = &mut world.declared_callables[position];
         assert!(!context.reductions.values.is_empty());
         match variant {
@@ -91,7 +91,7 @@ fn declared_reductions_result_admission_is_atomic_for_foreign_stage_owner_and_pa
             declaration,
             reductions,
         };
-        let foreign = WorldId(SnapshotId::allocate().unwrap());
+        let foreign = WorldId(SnapshotId::standalone().unwrap());
         match variant {
             0 => result.world = foreign,
             1 => result.stage = DeclaredStageId(foreign),

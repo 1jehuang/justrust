@@ -1988,7 +1988,15 @@ impl ValidatedTraitWorld {
         schema: Arc<dyn SchemaCx + Send + Sync>,
         budget: &PlanBudget,
     ) -> Result<Arc<Self>> {
-        Self::build_with(headers, schema, budget, true)
+        let world = charged(
+            budget,
+            crate::compiler::owner_path::standalone_issued(
+                &crate::compiler::expansion_budget::ExpansionBudget::default(),
+                crate::compiler::owner_path::OwnerDomain::TraitWorld,
+            )
+            .map_err(|error| error.to_string()),
+        )?;
+        Self::build_with(headers, schema, budget, true, world)
     }
     /// `eager_coherence = false` leaves impl overlap to per-impl checks.
     pub fn build_with(
@@ -1996,6 +2004,7 @@ impl ValidatedTraitWorld {
         schema: Arc<dyn SchemaCx + Send + Sync>,
         budget: &PlanBudget,
         eager_coherence: bool,
+        world: crate::compiler::owner_path::Issued,
     ) -> Result<Arc<Self>> {
         if !schema.budget().same_authority(budget) {
             return Err(FactsError::invalid(
@@ -2098,7 +2107,9 @@ impl ValidatedTraitWorld {
             }
         }
         retain::<Self>(budget, 1)?;
-        let id = WorldId(charged(budget, SnapshotId::allocate())?);
+        // Issued by the producing node (or a standalone root for direct
+        // tooling): never a compiler-global counter.
+        let id = WorldId(SnapshotId::issued(world));
         let empty_env = Arc::new(charged(budget, GenericEnv::new(&[], budget))?);
         retain::<PredicateEnv>(budget, 1)?;
         let empty = Arc::new(PredicateEnv {
@@ -8450,7 +8461,7 @@ pub(crate) mod test_support {
             .or_else(|| headers.impls.first().map(|c| c.declaration.snapshot));
         let registry = match registry {
             Some(s) => s,
-            None => charged(budget, SnapshotId::allocate())?,
+            None => charged(budget, SnapshotId::standalone())?,
         };
         let mut schema = FixtureSchema {
             registry,
@@ -8847,7 +8858,7 @@ pub(crate) mod test_support {
         }
         let registry = match registry {
             Some(s) => s,
-            None => charged(budget, SnapshotId::allocate())?,
+            None => charged(budget, SnapshotId::standalone())?,
         };
         // Discover nominal declaration indices before choosing the fixture's
         // callable identity. A nominal at index zero is not a function at zero.
@@ -9034,7 +9045,7 @@ mod tests {
     fn case() -> Case {
         let modules = fixture_modules();
         let budget = PlanBudget::default();
-        let registry = SnapshotId::allocate().unwrap();
+        let registry = SnapshotId::standalone().unwrap();
         let id = |index| test_support::source_decl(registry, index, &budget).unwrap();
         let i32_ty = Ty::Int(IntTy::I32);
         let marker_self = scope(id(0), 1, &budget);
@@ -9635,7 +9646,7 @@ mod tests {
 
     fn nested_header(budget: &PlanBudget) -> CallableHeader {
         let declaration =
-            test_support::source_decl(SnapshotId::allocate().unwrap(), 0, budget).unwrap();
+            test_support::source_decl(SnapshotId::standalone().unwrap(), 0, budget).unwrap();
         let binder = scope(declaration, 1, budget);
         let environment = env(std::slice::from_ref(&binder), budget);
         let parameter = Ty::Param(ParamId {
@@ -9767,7 +9778,7 @@ mod tests {
             matches!(ValidatedTraitWorld::build(forged, world.schema.clone(), &budget), Err(e) if e.kind() == FactsErrorKind::InvalidMetadata)
         );
         let declaration =
-            test_support::source_decl(SnapshotId::allocate().unwrap(), 0, &budget).unwrap();
+            test_support::source_decl(SnapshotId::standalone().unwrap(), 0, &budget).unwrap();
         let empty = env(&[], &budget);
         let raw = CallableHeader {
             declaration,
@@ -9930,7 +9941,7 @@ mod tests {
         }
         let budget = PlanBudget::default();
         let declaration =
-            test_support::source_decl(SnapshotId::allocate().unwrap(), 0, &budget).unwrap();
+            test_support::source_decl(SnapshotId::standalone().unwrap(), 0, &budget).unwrap();
         let scope = scope(declaration, 2, &budget);
         let environment = env(std::slice::from_ref(&scope), &budget);
         let parameter = |index| {
@@ -10727,7 +10738,7 @@ mod tests {
         parameters: usize,
         make: impl FnOnce(&[Ty]) -> Signature,
     ) -> CallableHeader {
-        let snapshot = SnapshotId::allocate().unwrap();
+        let snapshot = SnapshotId::standalone().unwrap();
         let declaration = test_support::source_decl(snapshot, 0, budget).unwrap();
         let own = scope(declaration, parameters, budget);
         let env = env(std::slice::from_ref(&own), budget);
@@ -10812,7 +10823,7 @@ mod tests {
                 .is_err()
         );
         let mut foreign = c.caller;
-        foreign.snapshot = SnapshotId::allocate().unwrap();
+        foreign.snapshot = SnapshotId::standalone().unwrap();
         assert!(
             matches!(facts.original_callable_schema(OriginalCallableSubject::Direct(foreign)), Err(e) if e.kind() == FactsErrorKind::InvalidMetadata)
         );

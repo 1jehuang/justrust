@@ -1155,7 +1155,7 @@ mod tests {
 
     #[test]
     fn coordinates_preserve_order_and_never_accept_empty_terms() {
-        let snapshot = ir::SnapshotId::allocate().unwrap();
+        let snapshot = ir::SnapshotId::standalone().unwrap();
         let declaration = ir::DeclId { snapshot, index: 3 };
         let first = RealizationKey::encode(7, declaration, &[vec![1], vec![2, 3]], 32).unwrap();
         let swapped = RealizationKey::encode(7, declaration, &[vec![2, 3], vec![1]], 32).unwrap();

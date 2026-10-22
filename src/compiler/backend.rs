@@ -5206,7 +5206,7 @@ mod tests {
         let parameter = ir::Ty::Param(ir::ParamId {
             owner: ir::BinderId {
                 declaration: ir::DeclId {
-                    snapshot: ir::SnapshotId::allocate().unwrap(),
+                    snapshot: ir::SnapshotId::standalone().unwrap(),
                     index: 0,
                 },
             },
@@ -5905,7 +5905,7 @@ mod tests {
     fn unresolved_associated_types_never_acquire_native_layout() {
         // Structural layout helpers do not mint semantic projection authority.
         // Even dead zero-length storage must not hide an unresolved term.
-        let snapshot = ir::SnapshotId::allocate().unwrap();
+        let snapshot = ir::SnapshotId::standalone().unwrap();
         let projection =
             ir::Ty::AssociatedType(std::sync::Arc::new(ir::AssociatedTypeProjection {
                 trait_ref: ir::TraitRef {
@@ -5930,7 +5930,7 @@ mod tests {
 
     #[test]
     fn generic_native_closedness_standalone_gate_and_deterministic_symbols() {
-        let snapshot = ir::SnapshotId::allocate().unwrap();
+        let snapshot = ir::SnapshotId::standalone().unwrap();
         let parameter = ir::Ty::Param(ir::ParamId {
             owner: ir::BinderId {
                 declaration: ir::DeclId { snapshot, index: 0 },
@@ -7715,7 +7715,7 @@ mod tests {
                 projection: vec![],
             }
         }
-        let snapshot = ir::SnapshotId::allocate().unwrap();
+        let snapshot = ir::SnapshotId::standalone().unwrap();
         let ty = ir::EnumTy::new(ir::EnumDef {
             id: ir::NominalAppId {
                 snapshot,
@@ -7890,7 +7890,7 @@ mod tests {
             visibility: crate::compiler::ir::Visibility::Public,
             lifetime_bound: false,
         };
-        let snapshot = ir::SnapshotId::allocate().unwrap();
+        let snapshot = ir::SnapshotId::standalone().unwrap();
         let ty = ir::EnumTy::new(ir::EnumDef {
             id: ir::NominalAppId {
                 snapshot,

@@ -398,7 +398,7 @@ fn call_arguments_move_before_destination_is_initialized() {
                 Terminator::Call {
                     target: ir::Callee::Direct(ir::CallTarget {
                         declaration: ir::DeclId {
-                            snapshot: ir::SnapshotId::allocate().unwrap(),
+                            snapshot: ir::SnapshotId::standalone().unwrap(),
                             index: 0,
                         },
                         type_args: std::sync::Arc::from([]),
@@ -441,7 +441,7 @@ fn call_cannot_move_the_same_argument_twice() {
                 Terminator::Call {
                     target: ir::Callee::Direct(ir::CallTarget {
                         declaration: ir::DeclId {
-                            snapshot: ir::SnapshotId::allocate().unwrap(),
+                            snapshot: ir::SnapshotId::standalone().unwrap(),
                             index: 0,
                         },
                         type_args: std::sync::Arc::from([]),

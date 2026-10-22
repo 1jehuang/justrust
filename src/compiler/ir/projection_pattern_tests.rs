@@ -30,7 +30,7 @@ fn opaque_pattern_equality_requires_exact_universal_authority() {
     for mutation in 0..3 {
         let mut forged = projection.as_ref().clone();
         match mutation {
-            0 => forged.item.snapshot = SnapshotId::allocate().unwrap(),
+            0 => forged.item.snapshot = SnapshotId::standalone().unwrap(),
             1 => forged.trait_ref.args = Arc::from([Ty::Bool, Ty::Int(IntTy::I32)]),
             _ => forged.trait_ref.declaration.index = u32::MAX,
         }

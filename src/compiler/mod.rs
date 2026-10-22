@@ -886,10 +886,23 @@ impl Provider for CompilerProvider {
                     // Debt: whole-program node. Its input is the whole program,
                     // so its per-task work limit scales with that input.
                     scale_task_work_by_items(&program);
+                    // The catalog's declaration namespace and the trait world
+                    // are owners issued by this node, never a global counter.
+                    let owner_budget = expansion_budget::ExpansionBudget::default();
+                    let mut issuer = owner_path::OwnerIssuer::new(cx.owner_root()?, &owner_budget)
+                        .map_err(|error| Error::new(format!("owner issuance failed: {error:?}")))?;
+                    let catalog = issuer
+                        .issue(owner_path::OwnerDomain::DeclarationSnapshot)
+                        .map_err(|error| Error::new(format!("owner issuance failed: {error:?}")))?;
+                    let world = issuer
+                        .issue(owner_path::OwnerDomain::TraitWorld)
+                        .map_err(|error| Error::new(format!("owner issuance failed: {error:?}")))?;
                     let context = frontend::PlanCtx::from_shared_program_with(
                         program.as_ref().clone(),
                         &this.0.budget,
                         false,
+                        catalog,
+                        world,
                     )
                     .map_err(Error::new)?;
                     cx.publish_fact(0, context)

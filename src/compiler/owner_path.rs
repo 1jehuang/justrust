@@ -53,9 +53,14 @@ pub enum OwnerDomain {
     LocalMacroDriver,
     TokenSlice,
     PreparedView,
+    /// One validated declaration environment (`ir::SnapshotId`): the core
+    /// trait catalog's declaration namespace.
+    DeclarationSnapshot,
+    /// One validated trait world (`traits::WorldId`).
+    TraitWorld,
 }
 
-const DOMAINS: usize = 9;
+const DOMAINS: usize = 11;
 
 fn domain_index(domain: OwnerDomain) -> usize {
     match domain {
@@ -68,6 +73,8 @@ fn domain_index(domain: OwnerDomain) -> usize {
         OwnerDomain::LocalMacroDriver => 6,
         OwnerDomain::TokenSlice => 7,
         OwnerDomain::PreparedView => 8,
+        OwnerDomain::DeclarationSnapshot => 9,
+        OwnerDomain::TraitWorld => 10,
     }
 }
 

@@ -23,7 +23,7 @@ fn schema(b: &ir::PlanBudget) -> StoredSchema {
     StoredSchema::copy(&value, b).unwrap()
 }
 fn fixture(b: &ir::PlanBudget) -> (Arc<SourceSchemas>, ir::DeclId) {
-    let snapshot = ir::SnapshotId::allocate().unwrap();
+    let snapshot = ir::SnapshotId::standalone().unwrap();
     let declaration = id(snapshot, 0);
     let mut builder = SourceSchemasBuilder::default();
     builder
@@ -38,7 +38,7 @@ fn fixture(b: &ir::PlanBudget) -> (Arc<SourceSchemas>, ir::DeclId) {
 #[test]
 fn source_schemas_seal_moves_allocations_and_keeps_only_immutable_receipts() {
     let b = ir::PlanBudget::default();
-    let snapshot = ir::SnapshotId::allocate().unwrap();
+    let snapshot = ir::SnapshotId::standalone().unwrap();
     let declaration = id(snapshot, 0);
     let mut builder = SourceSchemasBuilder::default();
     builder
@@ -82,7 +82,7 @@ fn source_schemas_seal_moves_allocations_and_keeps_only_immutable_receipts() {
 fn source_schemas_foreign_snapshot_and_equal_policy_foreign_payer_fail() {
     let b = ir::PlanBudget::default();
     let (frozen, declaration) = fixture(&b);
-    let foreign = id(ir::SnapshotId::allocate().unwrap(), declaration.index);
+    let foreign = id(ir::SnapshotId::standalone().unwrap(), declaration.index);
     let other = ir::PlanBudget::new(b.limits());
     for (decl, payer) in [(foreign, &b), (declaration, &other)] {
         assert!(frozen.schema(decl, payer).is_err());
@@ -160,7 +160,7 @@ fn source_schemas_growth_is_prepaid_and_foreign_builder_payer_cannot_mutate() {
         bytes: 0,
         ..Default::default()
     });
-    let snapshot = ir::SnapshotId::allocate().unwrap();
+    let snapshot = ir::SnapshotId::standalone().unwrap();
     let declaration = id(snapshot, 0);
     let mut table = PaidDeclTable::<u32>::default();
     assert!(table.insert(slot(declaration), 0, &empty).is_err());
@@ -186,7 +186,7 @@ fn source_schemas_growth_is_prepaid_and_foreign_builder_payer_cannot_mutate() {
 #[test]
 fn source_schemas_assignment_duplicates_remain_visible_and_first_rhs_authoritative() {
     let b = ir::PlanBudget::default();
-    let snapshot = ir::SnapshotId::allocate().unwrap();
+    let snapshot = ir::SnapshotId::standalone().unwrap();
     let implementation = id(snapshot, 0);
     let associated = id(snapshot, 1);
     let mut builder = SourceSchemasBuilder::default();
@@ -304,7 +304,7 @@ fn source_schemas_failed_growth_is_sticky_and_never_commits_new_capacity() {
 #[test]
 fn source_schemas_forged_receipt_and_sparse_slot_cannot_publish_or_allocate() {
     let b = ir::PlanBudget::default();
-    let snapshot = ir::SnapshotId::allocate().unwrap();
+    let snapshot = ir::SnapshotId::standalone().unwrap();
     let mut builder = SourceSchemasBuilder::default();
     let sparse = DeclSlot {
         id: id(snapshot, u32::MAX),
@@ -328,8 +328,8 @@ fn source_schemas_forged_receipt_and_sparse_slot_cannot_publish_or_allocate() {
 #[test]
 fn source_schemas_mixed_snapshot_rows_regions_and_region_keys_are_rejected() {
     let b = ir::PlanBudget::default();
-    let snapshot = ir::SnapshotId::allocate().unwrap();
-    let foreign = ir::SnapshotId::allocate().unwrap();
+    let snapshot = ir::SnapshotId::standalone().unwrap();
+    let foreign = ir::SnapshotId::standalone().unwrap();
     let mut builder = SourceSchemasBuilder::default();
     builder
         .assignment(id(snapshot, 0), id(snapshot, 1), ir::Ty::Bool, &b)
@@ -491,7 +491,7 @@ fn source_schemas_projection_rejects_same_id_wrong_payload_before_seal() {
     let program = parse("fn f(x:bool)->bool{x}fn main(){}").unwrap();
     let plan = PlanCtx::from_program(&program, &b).unwrap();
     let declaration = plan.function_decl(0).unwrap();
-    let foreign = ir::SnapshotId::allocate().unwrap();
+    let foreign = ir::SnapshotId::standalone().unwrap();
     let other_program = parse("fn other(){}fn main(){}").unwrap();
     let other_plan = PlanCtx::from_program(&other_program, &b).unwrap();
     let foreign_module = other_plan

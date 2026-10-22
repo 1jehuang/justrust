@@ -309,7 +309,7 @@ fn implementation_equality_replay_rejects_forged_and_foreign_membership() {
         ProofEvidence(Arc::new(record))
     };
     let forged = [
-        forge(&|r| r.world = WorldId(SnapshotId::allocate().unwrap())),
+        forge(&|r| r.world = WorldId(SnapshotId::standalone().unwrap())),
         forge(&|r| r.environment = usize::MAX),
         forge(&|r| r.phase = FactsPhase::Closed),
         forge(&|r| r.origin = ProofOrigin::Assumption),

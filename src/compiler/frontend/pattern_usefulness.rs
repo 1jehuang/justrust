@@ -865,7 +865,7 @@ mod tests {
         .unwrap()
         .freeze()
         .unwrap();
-        let snapshot = ir::SnapshotId::allocate().unwrap();
+        let snapshot = ir::SnapshotId::standalone().unwrap();
         let source_decl = super::super::super::traits::test_support::source_decl(
             snapshot,
             0,

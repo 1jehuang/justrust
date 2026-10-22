@@ -52,7 +52,7 @@ fn projection_family_actual_replays_open_and_closed_authority() {
             match mutation {
                 0 => forged.item.index = u32::MAX,
                 1 => forged.trait_ref.declaration.index = u32::MAX,
-                _ => forged.item.snapshot = ir::SnapshotId::allocate().unwrap(),
+                _ => forged.item.snapshot = ir::SnapshotId::standalone().unwrap(),
             }
             assert!(
                 view.family_actual(&ir::CarrierFamily::Projection(Arc::new(forged)), facts)

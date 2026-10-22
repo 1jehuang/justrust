@@ -178,7 +178,7 @@ mod diagnostic_tests {
     #[test]
     fn opaque_bound_diagnostic_distinguishes_membership_and_output() {
         let declaration = ir::DeclId {
-            snapshot: ir::SnapshotId::allocate().unwrap(),
+            snapshot: ir::SnapshotId::standalone().unwrap(),
             index: 7,
         };
         let application = ir::TraitRef {

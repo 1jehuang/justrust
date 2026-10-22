@@ -2608,7 +2608,7 @@ mod tests {
             let header = &world.headers.associated_types[0];
             let later = if foreign {
                 DeclId {
-                    snapshot: SnapshotId::allocate().unwrap(),
+                    snapshot: SnapshotId::standalone().unwrap(),
                     index: header.declaration.index,
                 }
             } else {
@@ -2678,7 +2678,7 @@ mod tests {
         for foreign in [false, true] {
             let invalid = if foreign {
                 DeclId {
-                    snapshot: SnapshotId::allocate().unwrap(),
+                    snapshot: SnapshotId::standalone().unwrap(),
                     index: associated.declaration.index,
                 }
             } else {

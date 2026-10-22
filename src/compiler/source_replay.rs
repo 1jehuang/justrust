@@ -1271,7 +1271,7 @@ mod reference_identity_trace_tests {
         let budget = ir::PlanBudget::default();
         let binder = ir::BinderId {
             declaration: ir::DeclId {
-                snapshot: ir::SnapshotId::allocate().unwrap(),
+                snapshot: ir::SnapshotId::standalone().unwrap(),
                 index: 0,
             },
         };

@@ -1099,7 +1099,7 @@ fn b_cond(b: &mut Builder, ty: SsaTy, x: SsaValue, y: SsaValue) -> SsaValue {
 fn dummy_target() -> crate::compiler::ir::CallTarget {
     crate::compiler::ir::CallTarget {
         declaration: crate::compiler::ir::DeclId {
-            snapshot: crate::compiler::ir::SnapshotId::allocate().unwrap(),
+            snapshot: crate::compiler::ir::SnapshotId::standalone().unwrap(),
             index: 0,
         },
         type_args: std::sync::Arc::from([]),
