@@ -1471,6 +1471,13 @@ pub(super) fn identical_type(a: &Ty, b: &Ty, budget: &PlanBudget) -> Result<bool
         ) => an == bn && Arc::ptr_eq(a, b),
         (Ty::Opaque(a), Ty::Opaque(b)) => Arc::ptr_eq(a, b),
         (Ty::Closure(a), Ty::Closure(b)) => Arc::ptr_eq(a, b),
+        (Ty::FnItem(a), Ty::FnItem(b)) => {
+            Arc::ptr_eq(a, b)
+                || (a.declaration == b.declaration && Arc::ptr_eq(&a.type_args, &b.type_args))
+                || (a.declaration == b.declaration
+                    && a.type_args.is_empty()
+                    && b.type_args.is_empty())
+        }
         (Ty::AssociatedType(a), Ty::AssociatedType(b)) => Arc::ptr_eq(a, b),
         (Ty::Tuple(a), Ty::Tuple(b)) => Arc::ptr_eq(a, b),
         (Ty::Struct(a), Ty::Struct(b)) => std::ptr::eq(a.def(), b.def()),
@@ -3274,7 +3281,8 @@ pub(in crate::compiler) fn instantiate_checked_with_constants(
             | ExprKind::Loop { body: block, .. }
             | ExprKind::LabeledBlock { body: block, .. } => visitor.block(block, 0)?,
             ExprKind::TypeAlignment(query) => query.substitute(visitor.ty(query.queried_type())?),
-            ExprKind::CharToInt { .. }
+            ExprKind::FnItem
+            | ExprKind::CharToInt { .. }
             | ExprKind::U8ToChar { .. }
             | ExprKind::PtrCast { .. }
             | ExprKind::Intrinsic { .. }
@@ -5562,6 +5570,7 @@ impl Ty {
     pub fn field_count(&self) -> Option<usize> {
         match self {
             Self::Closure(closure) => Some(closure.captures().len()),
+            Self::FnItem(_) => Some(0),
             Self::Tuple(fields) => Some(fields.len()),
             Self::Struct(ty) => Some(ty.def().fields.len()),
             _ => None,
@@ -7931,6 +7940,9 @@ pub enum ExprKind {
     Local(LocalId),
     /// Elements are evaluated left to right into a new value snapshot.
     Tuple(Vec<ExprId>),
+    /// Zero-sized function item value. Its exact identity is the expression's
+    /// `Ty::FnItem` type, so substitution maps it through the type only.
+    FnItem,
     /// Initializers retain source evaluation order. Each index names a field in
     /// declaration order; lowering permutes snapshots, never source evaluation.
     Struct {
@@ -8658,6 +8670,7 @@ impl CheckedFunction {
                 | ExprKind::U8ToChar { .. }
                 | ExprKind::PtrCast { .. }
                 | ExprKind::LeadingZeros { .. }
+                | ExprKind::FnItem
                 | ExprKind::IntCast { .. }
                 | ExprKind::FloatCast { .. }
                 | ExprKind::Char(_)
@@ -9823,6 +9836,12 @@ impl CheckedFunction {
                     if (value.completion == Completion::Returns) != completes {
                         return Err("native syscall completion mismatch".into());
                     }
+                }
+                ExprKind::FnItem => {
+                    let Ty::FnItem(item) = &value.ty else {
+                        return Err("function item value lost its item type".into());
+                    };
+                    facts.validate_ty(&Ty::FnItem(item.clone()))?;
                 }
                 ExprKind::Tuple(elements) => {
                     for &id in elements {
