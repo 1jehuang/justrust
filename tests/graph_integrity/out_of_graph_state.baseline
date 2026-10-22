@@ -12,5 +12,3 @@
 1 static src/compiler/semantic_scope.rs
 4 Atomic src/compiler/token_session.rs
 1 static src/compiler/token_session.rs
-3 Atomic src/compiler/token_tree.rs
-1 static src/compiler/token_tree.rs

@@ -674,6 +674,9 @@ pub struct TokenSession {
     contexts: BudgetVec<ContextData>,
     expansions: BudgetVec<ExpansionEntry>,
     crates: BudgetVec<SourceFileHandle>,
+    /// Next session-local token stream ordinal. Streams are distinguished
+    /// within one session; cross-session handles already fail session checks.
+    next_stream: u64,
     _lease: ByteLease,
 }
 
@@ -781,8 +784,19 @@ impl TokenSession {
             contexts,
             expansions: BudgetVec::new(&budget, Storage::Retained)?,
             crates: BudgetVec::new(&budget, Storage::Retained)?,
+            next_stream: 1,
             budget,
         })
+    }
+    /// Issue the next session-local stream ordinal. Fails closed at
+    /// exhaustion and never reuses an ordinal.
+    pub(super) fn issue_stream_id(&mut self) -> Result<NonZeroU64, TokenError> {
+        let id = NonZeroU64::new(self.next_stream).ok_or(TokenError::IdExhausted)?;
+        self.next_stream = self
+            .next_stream
+            .checked_add(1)
+            .ok_or(TokenError::IdExhausted)?;
+        Ok(id)
     }
     pub(super) fn id(&self) -> SessionId {
         self.id

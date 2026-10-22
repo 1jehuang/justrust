@@ -5555,6 +5555,10 @@ impl ProgramBuilder {
     pub fn names(&self) -> &NameStoreBuilder {
         &self.names
     }
+    #[cfg(test)]
+    pub(crate) fn names_mut(&mut self) -> &mut NameStoreBuilder {
+        &mut self.names
+    }
     pub fn modules(&self) -> &ModuleArenaBuilder {
         &self.modules
     }

@@ -5,12 +5,11 @@
 use std::num::NonZeroU64;
 use std::ops::Range;
 use std::sync::Arc;
-use std::sync::atomic::AtomicU64;
 
 use super::expansion_budget::{ByteLease, Counter, Depth, Storage};
 use super::expansion_span::SpanId;
 use super::token::{Delimiter, InputToken, Token};
-use super::token_session::{BudgetVec, SessionId, TokenError, TokenSession, allocate_identity};
+use super::token_session::{BudgetVec, SessionId, TokenError, TokenSession};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GroupPolicy {
@@ -164,7 +163,7 @@ fn append_children(
 /// Structural grouping only; no lexical classification, source loading or macros.
 /// OriginalSource is selected by the source owner, not inferred from token text.
 pub fn group(
-    session: &TokenSession,
+    session: &mut TokenSession,
     input: &[InputToken],
     policy: GroupPolicy,
 ) -> Result<TokenStream, TokenError> {
@@ -174,8 +173,8 @@ pub fn group(
         Storage::Retained,
         (std::mem::size_of::<StreamData>() + 2 * std::mem::size_of::<usize>()) as u64,
     )?;
-    static NEXT: AtomicU64 = AtomicU64::new(1);
-    let stream = StreamId(allocate_identity(&NEXT)?);
+    let stream = StreamId(session.issue_stream_id()?);
+    let session = &*session;
     let mut nodes = BudgetVec::new(session.budget(), Storage::Retained)?;
     let mut edges = BudgetVec::new(session.budget(), Storage::Retained)?;
     let mut frames: BudgetVec<Frame> = BudgetVec::new(session.budget(), Storage::Temporary)?;
@@ -311,7 +310,7 @@ mod tests {
             },
             leaf(close),
         ];
-        let tree = group(&session, &input, GroupPolicy::OriginalSource).unwrap();
+        let tree = group(&mut session, &input, GroupPolicy::OriginalSource).unwrap();
         let roots = tree
             .children(&session, &tree.roots(&session).unwrap())
             .unwrap();
@@ -351,14 +350,14 @@ mod tests {
     }
     #[test]
     fn foreign_session_stream_and_nested_handles_reject() {
-        let (session, span) = session();
+        let (mut session, span) = session();
         let (other, other_span) = self::session();
         assert!(matches!(
-            group(&session, &[leaf(other_span)], GroupPolicy::Generated),
+            group(&mut session, &[leaf(other_span)], GroupPolicy::Generated),
             Err(TokenError::ForeignHandle)
         ));
-        let a = group(&session, &[leaf(span)], GroupPolicy::Generated).unwrap();
-        let b = group(&session, &[leaf(span)], GroupPolicy::Generated).unwrap();
+        let a = group(&mut session, &[leaf(span)], GroupPolicy::Generated).unwrap();
+        let b = group(&mut session, &[leaf(span)], GroupPolicy::Generated).unwrap();
         let roots = a.roots(&session).unwrap();
         let id = a.children(&session, &roots).unwrap()[0];
         assert!(matches!(a.node(&other, id), Err(TokenError::ForeignHandle)));
@@ -374,7 +373,7 @@ mod tests {
     }
     #[test]
     fn mismatch_unclosed_and_empty_root_are_explicit() {
-        let (session, span) = session();
+        let (mut session, span) = session();
         let open = InputToken::Open {
             kind: Delimiter::Brace,
             span,
@@ -384,10 +383,10 @@ mod tests {
             span,
         };
         for input in [&[open][..], &[close][..], &[open, close][..]] {
-            assert!(matches!(group(&session, input, GroupPolicy::Generated),
+            assert!(matches!(group(&mut session, input, GroupPolicy::Generated),
                 Err(TokenError::UnbalancedDelimiter { span: Some(s) }) if s == span));
         }
-        let empty = group(&session, &[], GroupPolicy::Generated).unwrap();
+        let empty = group(&mut session, &[], GroupPolicy::Generated).unwrap();
         assert!(
             empty
                 .children(&session, &empty.roots(&session).unwrap())
@@ -403,7 +402,7 @@ mod tests {
             (GroupPolicy::Generated, 256, true),
             (GroupPolicy::Generated, 257, false),
         ] {
-            let (session, span) = session();
+            let (mut session, span) = session();
             let input: Vec<_> = std::iter::repeat_n(
                 InputToken::Open {
                     kind: Delimiter::Brace,
@@ -419,7 +418,7 @@ mod tests {
                 depth,
             ))
             .collect();
-            assert_eq!(group(&session, &input, policy).is_ok(), pass);
+            assert_eq!(group(&mut session, &input, policy).is_ok(), pass);
         }
     }
     #[test]
@@ -427,7 +426,7 @@ mod tests {
         std::thread::Builder::new()
             .stack_size(128 * 1024)
             .spawn(|| {
-                let (session, span) = session();
+                let (mut session, span) = session();
                 let baseline = session.budget().snapshot().retained_bytes;
                 let input: Vec<_> = std::iter::repeat_n(
                     InputToken::Open {
@@ -444,7 +443,7 @@ mod tests {
                     512,
                 ))
                 .collect();
-                let tree = group(&session, &input, GroupPolicy::OriginalSource).unwrap();
+                let tree = group(&mut session, &input, GroupPolicy::OriginalSource).unwrap();
                 assert_eq!(session.budget().snapshot().temporary_bytes, 0);
                 drop(tree);
                 assert_eq!(session.budget().snapshot().retained_bytes, baseline);
@@ -477,13 +476,13 @@ mod tests {
         let mut limits = ExpansionLimits::default();
         limits.counters[Counter::Work as usize] = setup_work;
         let budget = ExpansionBudget::new(limits);
-        let (session, span) = setup(budget.clone());
+        let (mut session, span) = setup(budget.clone());
         assert!(budget.snapshot().failure.is_none());
         assert_eq!(
             budget.snapshot().counters[Counter::Work as usize],
             setup_work
         );
-        let failure = match group(&session, &[leaf(span)], GroupPolicy::OriginalSource) {
+        let failure = match group(&mut session, &[leaf(span)], GroupPolicy::OriginalSource) {
             Err(TokenError::Budget(failure)) => failure,
             Err(other) => panic!("lowered Work limit failed with {other:?}"),
             Ok(_) => panic!("lowered Work limit did not fail group"),

@@ -153,7 +153,7 @@ mod tests {
         let span = session.original_span(source).unwrap();
         (session, span)
     }
-    fn slice(session: &TokenSession, tokens: &[Token]) -> TokenSlice {
+    fn slice(session: &mut TokenSession, tokens: &[Token]) -> TokenSlice {
         let mut input = super::super::token_session::BudgetVec::new(
             session.budget(),
             super::super::expansion_budget::Storage::Temporary,
@@ -162,18 +162,15 @@ mod tests {
         for token in tokens {
             input.push(InputToken::Leaf(*token)).unwrap();
         }
-        TokenSlice::roots(
-            session,
-            group(session, input.as_slice(), GroupPolicy::Generated).unwrap(),
-        )
-        .unwrap()
+        let stream = group(session, input.as_slice(), GroupPolicy::Generated).unwrap();
+        TokenSlice::roots(session, stream).unwrap()
     }
     #[test]
     fn literal_opacity_weight_and_foreign_restore() {
         let (mut session, span) = session();
         let spelling = session.intern_symbol("1").unwrap();
         let input = slice(
-            &session,
+            &mut session,
             &[Token {
                 kind: TokenKind::Literal {
                     kind: LiteralKind::Integer,
@@ -186,7 +183,7 @@ mod tests {
             panic!("literal expected")
         };
         let opaque = slice(
-            &session,
+            &mut session,
             &[Token {
                 kind: TokenKind::Opaque(id),
                 span,
@@ -220,7 +217,7 @@ mod tests {
             },
             span,
         };
-        let invalid = slice(&session, &[minus]);
+        let invalid = slice(&mut session, &[minus]);
         assert!(matches!(
             session.capture_literal(invalid),
             Ok(LiteralCapture::CommittedSyntax { .. })
@@ -234,7 +231,7 @@ mod tests {
             }),
             span,
         };
-        let input = slice(&session, &[minus, boolean]);
+        let input = slice(&mut session, &[minus, boolean]);
         let LiteralCapture::Matched(id) = session.capture_literal(input).unwrap() else {
             panic!("literal expected")
         };
@@ -255,7 +252,7 @@ mod tests {
             )
             .unwrap();
         let input = slice(
-            &session,
+            &mut session,
             &[
                 Token {
                     kind: TokenKind::Punct {
@@ -303,7 +300,7 @@ mod tests {
         let (mut session, span) = session();
         let spelling = session.intern_symbol("1").unwrap();
         let positive = slice(
-            &session,
+            &mut session,
             &[Token {
                 kind: TokenKind::Literal {
                     kind: LiteralKind::Integer,
@@ -323,7 +320,7 @@ mod tests {
             span,
         };
         let negative = slice(
-            &session,
+            &mut session,
             &[
                 minus,
                 Token {
@@ -338,7 +335,7 @@ mod tests {
         assert_eq!(session.fragment(negative).unwrap().physical_weight(), 2);
         // A no-minus forwarding hop must retain the negative grammar fact.
         let forwarded = slice(
-            &session,
+            &mut session,
             &[Token {
                 kind: TokenKind::Opaque(negative),
                 span,
@@ -348,7 +345,7 @@ mod tests {
             panic!("forwarded literal")
         };
         let invalid = slice(
-            &session,
+            &mut session,
             &[
                 minus,
                 Token {

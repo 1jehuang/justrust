@@ -314,7 +314,7 @@ mod tests {
         let lexed =
             super::super::lexer::lex_prepared(&projection, Edition::E2024, &mut session).unwrap();
         let events: Vec<_> = lexed.events().iter().map(|event| event.token).collect();
-        let stream = group(&session, &events, GroupPolicy::OriginalSource).unwrap();
+        let stream = group(&mut session, &events, GroupPolicy::OriginalSource).unwrap();
         let source = TokenSlice::roots(&session, stream.clone()).unwrap();
         let half = source.len(&session).unwrap() / 2;
         let first = source.subslice(&session, 0..half).unwrap();
@@ -413,7 +413,7 @@ mod tests {
         let lexed =
             super::super::lexer::lex_prepared(&projection, Edition::E2024, &mut session).unwrap();
         let events: Vec<_> = lexed.events().iter().map(|event| event.token).collect();
-        let stream = group(&session, &events, GroupPolicy::OriginalSource).unwrap();
+        let stream = group(&mut session, &events, GroupPolicy::OriginalSource).unwrap();
         let span = events[0].span();
         let file = session.sources().file(0).unwrap();
         let defining_crate = session.register_crate_root(file).unwrap();

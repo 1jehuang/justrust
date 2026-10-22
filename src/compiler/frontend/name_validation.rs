@@ -1857,13 +1857,13 @@ mod tests {
         let mut builder = builder();
         let path = builder.path("crate::unknown").unwrap();
         let span = builder.names().data(path.segments()[0]).unwrap().span;
-        let names = builder.names();
         let stream = crate::compiler::token_tree::group(
-            names.session(),
+            builder.names_mut().session_mut(),
             &[],
             crate::compiler::token_tree::GroupPolicy::OriginalSource,
         )
         .unwrap();
+        let names = builder.names();
         let args =
             crate::compiler::macro_cursor::TokenSlice::roots(names.session(), stream).unwrap();
         let lease = names

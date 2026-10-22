@@ -585,7 +585,7 @@ impl NativeParserInput {
             }
             Some(
                 crate::compiler::token_tree::group(
-                    &session,
+                    &mut session,
                     events.as_slice(),
                     crate::compiler::token_tree::GroupPolicy::OriginalSource,
                 )

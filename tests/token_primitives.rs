@@ -357,7 +357,7 @@ fn groups_keep_genuine_delimiters_order_and_stream_ownership() {
             span: close,
         },
     ];
-    let tree = group(&s, &input, GroupPolicy::OriginalSource).unwrap();
+    let tree = group(&mut s, &input, GroupPolicy::OriginalSource).unwrap();
     let roots = tree.roots(&s).unwrap();
     let ids = tree.children(&s, &roots).unwrap();
     assert_eq!(ids.len(), 1);
@@ -385,7 +385,7 @@ fn groups_keep_genuine_delimiters_order_and_stream_ownership() {
         })
     ));
     assert!(tree.clone().node(&s, root).is_ok());
-    let independent = group(&s, &input, GroupPolicy::OriginalSource).unwrap();
+    let independent = group(&mut s, &input, GroupPolicy::OriginalSource).unwrap();
     assert!(matches!(
         independent.node(&s, root),
         Err(TokenError::ForeignHandle)
@@ -430,7 +430,7 @@ fn malformed_groups_refund_storage_without_poisoning() {
     ];
     for input in malformed {
         assert!(matches!(
-            group(&s, &input, GroupPolicy::OriginalSource),
+            group(&mut s, &input, GroupPolicy::OriginalSource),
             Err(TokenError::UnbalancedDelimiter { .. })
         ));
         let after = s.budget().snapshot();
@@ -438,7 +438,7 @@ fn malformed_groups_refund_storage_without_poisoning() {
         assert_eq!(after.temporary_bytes, 0);
         assert!(after.failure.is_none());
     }
-    assert!(group(&s, &[], GroupPolicy::OriginalSource).is_ok());
+    assert!(group(&mut s, &[], GroupPolicy::OriginalSource).is_ok());
 }
 
 #[test]
@@ -446,7 +446,7 @@ fn stream_clones_hold_storage_until_last_drop() {
     let mut s = session();
     let anchor = span(&mut s, 0, 1);
     let before = s.budget().snapshot();
-    let tree = group(&s, &[punct(anchor, '+')], GroupPolicy::OriginalSource).unwrap();
+    let tree = group(&mut s, &[punct(anchor, '+')], GroupPolicy::OriginalSource).unwrap();
     let during = s.budget().snapshot();
     assert!(during.retained_bytes > before.retained_bytes);
     assert_eq!(during.temporary_bytes, 0);
@@ -481,9 +481,9 @@ fn original_and_generated_group_depth_limits_are_distinct() {
             span: anchor,
         },
     ];
-    assert!(group(&s, &pair, GroupPolicy::OriginalSource).is_ok());
+    assert!(group(&mut s, &pair, GroupPolicy::OriginalSource).is_ok());
     assert!(matches!(
-        group(&s, &pair, GroupPolicy::Generated),
+        group(&mut s, &pair, GroupPolicy::Generated),
         Err(TokenError::Budget(BudgetFailure {
             resource: BudgetResource::Depth(Depth::GeneratedGroups),
             kind: BudgetFailureKind::Limit,

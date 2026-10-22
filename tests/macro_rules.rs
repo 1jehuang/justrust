@@ -672,7 +672,7 @@ impl Fixture {
             .iter()
             .map(|event| event.token)
             .collect::<Vec<_>>();
-        let stream = group(&session, &tokens, GroupPolicy::OriginalSource).unwrap();
+        let stream = group(&mut session, &tokens, GroupPolicy::OriginalSource).unwrap();
         let root = TokenSlice::roots(&session, stream).unwrap();
         let slices = (0..parts.len())
             .map(|n| root.children(&session, n).unwrap().unwrap())

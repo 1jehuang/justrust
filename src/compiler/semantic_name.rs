@@ -625,6 +625,12 @@ impl NameStoreBuilder {
     pub fn data(&self, ident: AstIdent) -> Result<NameData, NameError> {
         self.store.data(ident)
     }
+    /// Exclusive session access while building, for session-local issuance
+    /// such as token stream ordinals.
+    #[cfg(test)]
+    pub(crate) fn session_mut(&mut self) -> &mut TokenSession {
+        &mut self.store.session
+    }
     pub fn session(&self) -> &TokenSession {
         self.store.session()
     }

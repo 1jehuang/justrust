@@ -524,7 +524,7 @@ mod tests {
         for event in lexed.events() {
             events.push(event.token).unwrap();
         }
-        let stream = group(&session, events.as_slice(), GroupPolicy::OriginalSource).unwrap();
+        let stream = group(&mut session, events.as_slice(), GroupPolicy::OriginalSource).unwrap();
         let root = TokenSlice::roots(&session, stream).unwrap();
         let last = root.len(&session).unwrap() - 1;
         let Node::Delimited { open: call, .. } = root.node(&session, last).unwrap() else {
@@ -725,7 +725,7 @@ mod tests {
         for event in lexed.events() {
             events.push(event.token).unwrap();
         }
-        let stream = group(&session, events.as_slice(), GroupPolicy::OriginalSource).unwrap();
+        let stream = group(&mut session, events.as_slice(), GroupPolicy::OriginalSource).unwrap();
         let root = TokenSlice::roots(&session, stream).unwrap();
         let last = root.len(&session).unwrap() - 1;
         let Node::Delimited { open: call, .. } = root.node(&session, last).unwrap() else {

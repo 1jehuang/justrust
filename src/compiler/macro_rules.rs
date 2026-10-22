@@ -628,11 +628,13 @@ mod tests {
             for event in tokens.events() {
                 physical.push(event.token).unwrap();
             }
-            let roots = TokenSlice::roots(
-                &session,
-                group(&session, physical.as_slice(), GroupPolicy::OriginalSource).unwrap(),
+            let stream = group(
+                &mut session,
+                physical.as_slice(),
+                GroupPolicy::OriginalSource,
             )
             .unwrap();
+            let roots = TokenSlice::roots(&session, stream).unwrap();
             let defining_crate = session
                 .register_crate_root(input.snapshot().file(0).unwrap())
                 .unwrap();
