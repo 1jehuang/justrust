@@ -2,19 +2,17 @@
 use super::expansion_budget::{Counter, Storage};
 use super::expansion_span::SpanId;
 use super::token::{Delimiter, Ident, Spacing, Token, TokenKind};
-use super::token_session::{BudgetVec, SessionId, TokenError, TokenSession, allocate_identity};
+use super::token_session::{BudgetVec, SessionId, TokenError, TokenSession};
 use super::token_tree::{Node, TokenStream, TreeRange};
-use std::num::NonZeroU64;
 use std::ops::Range;
-use std::sync::atomic::AtomicU64;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct SliceId(NonZeroU64);
+/// A slice's identity is structural: its checked range, which already names
+/// its session and stream. Two slices over the same range view the same
+/// tokens, so a cursor mark is valid on either.
 #[derive(Clone)]
 pub struct TokenSlice {
     stream: TokenStream,
     range: TreeRange,
-    id: SliceId,
 }
 impl TokenSlice {
     pub fn new(
@@ -23,12 +21,7 @@ impl TokenSlice {
         range: TreeRange,
     ) -> Result<Self, TokenError> {
         stream.children(session, &range)?;
-        static NEXT: AtomicU64 = AtomicU64::new(1);
-        Ok(Self {
-            stream,
-            range,
-            id: SliceId(allocate_identity(&NEXT)?),
-        })
+        Ok(Self { stream, range })
     }
     pub fn roots(session: &TokenSession, stream: TokenStream) -> Result<Self, TokenError> {
         let range = stream.roots(session)?;
@@ -99,10 +92,10 @@ impl TokenSlice {
         Ok(total)
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CursorMark {
     session: SessionId,
-    slice: SliceId,
+    slice: TreeRange,
     position: usize,
 }
 #[derive(Clone)]
@@ -138,13 +131,13 @@ impl MacroCursor {
         self.input.len(session)?;
         Ok(CursorMark {
             session: session.id(),
-            slice: self.input.id,
+            slice: self.input.range.clone(),
             position: self.position,
         })
     }
-    fn check_mark(&self, session: &TokenSession, mark: CursorMark) -> Result<(), TokenError> {
+    fn check_mark(&self, session: &TokenSession, mark: &CursorMark) -> Result<(), TokenError> {
         let len = self.input.len(session)?;
-        if mark.session != session.id() || mark.slice != self.input.id {
+        if mark.session != session.id() || mark.slice != self.input.range {
             return Err(TokenError::ForeignHandle);
         }
         if mark.position > len {
@@ -153,7 +146,7 @@ impl MacroCursor {
         Ok(())
     }
     pub fn restore(&mut self, session: &TokenSession, mark: CursorMark) -> Result<(), TokenError> {
-        self.check_mark(session, mark)?;
+        self.check_mark(session, &mark)?;
         self.position = mark.position;
         Ok(())
     }
@@ -162,7 +155,7 @@ impl MacroCursor {
         session: &TokenSession,
         mark: CursorMark,
     ) -> Result<TokenSlice, TokenError> {
-        self.check_mark(session, mark)?;
+        self.check_mark(session, &mark)?;
         self.input.subslice(session, mark.position..self.position)
     }
     pub fn peek(&self, session: &TokenSession) -> Result<Option<LogicalToken>, TokenError> {

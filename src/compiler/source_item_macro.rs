@@ -6,10 +6,9 @@ use super::macro_rules::{CallSite, DefinitionSite, ExpandedTokens, RulesDef};
 use super::semantic_name::{AstIdent, LookupClass, NameKey, NameStoreBuilder, Namespace};
 use super::semantic_scope::{ModuleFrontierId, ScopeArenaBuilder};
 use super::source_macro::DriverError;
-use super::token_session::{BudgetVec, SessionId, SourceFileHandle, TokenError, allocate_identity};
+use super::token_session::{BudgetVec, SessionId, SourceFileHandle, TokenError};
 use super::token_tree::{Node, TokenStream};
 use std::num::NonZeroU64;
-use std::sync::atomic::AtomicU64;
 
 pub(super) fn group_body(
     source: &TokenSlice,
@@ -73,14 +72,16 @@ pub(super) struct SourceItemMacroDriver {
     _lease: ByteLease,
 }
 impl SourceItemMacroDriver {
-    pub(super) fn new(source: TokenStream, names: &NameStoreBuilder) -> Result<Self, DriverError> {
+    pub(super) fn new(
+        source: TokenStream,
+        names: &mut NameStoreBuilder,
+    ) -> Result<Self, DriverError> {
         source.roots(names.session())?;
         let lease = names
             .budget()
             .reserve(Storage::Retained, std::mem::size_of::<Self>() as u64)?;
-        static NEXT: AtomicU64 = AtomicU64::new(1);
         Ok(Self {
-            id: allocate_identity(&NEXT)?,
+            id: names.issue_driver_id()?,
             session: names.session().id(),
             source,
             definitions: BudgetVec::new(names.budget(), Storage::Retained)?,
@@ -336,7 +337,7 @@ mod tests {
         let point = scopes
             .module_root(&names, &modules, modules.source_root().unwrap(), None)
             .unwrap();
-        let mut driver = SourceItemMacroDriver::new(stream, &names).unwrap();
+        let mut driver = SourceItemMacroDriver::new(stream, &mut names).unwrap();
         let site0 = DefinitionSite {
             span: span0,
             edition: Edition::E2024,
@@ -428,7 +429,7 @@ mod tests {
         let module = modules.source_root().unwrap();
         let mut scopes = ScopeArenaBuilder::for_names(&names).unwrap();
         let point = scopes.module_root(&names, &modules, module, None).unwrap();
-        let mut driver = SourceItemMacroDriver::new(stream.clone(), &names).unwrap();
+        let mut driver = SourceItemMacroDriver::new(stream.clone(), &mut names).unwrap();
         let site = DefinitionSite {
             span,
             edition: Edition::E2024,
@@ -460,7 +461,7 @@ mod tests {
             };
             assert_eq!(names.session().symbol(*spelling).unwrap(), expected);
         }
-        let other = SourceItemMacroDriver::new(stream, &names).unwrap();
+        let other = SourceItemMacroDriver::new(stream, &mut names).unwrap();
         let nonmatching = first.subslice(names.session(), 0..1).unwrap();
         let error = driver
             .expand(latest, nonmatching, call, &mut names)

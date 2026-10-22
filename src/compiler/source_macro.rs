@@ -8,10 +8,9 @@ use super::semantic_name::{
     AstIdent, LookupClass, NameError, NameKey, NameStoreBuilder, Namespace,
 };
 use super::semantic_scope::{FrontierId, ScopeArenaBuilder, ScopeId};
-use super::token_session::{BudgetVec, SessionId, TokenError, allocate_identity};
+use super::token_session::{BudgetVec, SessionId, TokenError};
 use super::token_tree::{Node, TokenStream};
 use std::num::NonZeroU64;
-use std::sync::atomic::AtomicU64;
 
 #[derive(Debug)]
 pub(super) enum DriverError {
@@ -77,15 +76,14 @@ impl LocalMacroDriver {
     pub(super) fn new(
         source: TokenStream,
         owner: ScopeId,
-        names: &NameStoreBuilder,
+        names: &mut NameStoreBuilder,
     ) -> Result<Self, DriverError> {
         source.roots(names.session())?;
         let lease = names
             .budget()
             .reserve(Storage::Retained, std::mem::size_of::<Self>() as u64)?;
-        static NEXT_DRIVER: AtomicU64 = AtomicU64::new(1);
         Ok(Self {
-            id: allocate_identity(&NEXT_DRIVER)?,
+            id: names.issue_driver_id()?,
             source,
             owner,
             session: names.session().id(),
@@ -297,7 +295,7 @@ mod tests {
         let mut scopes = ScopeArenaBuilder::for_names(&names).unwrap();
         let at = scopes.function_root(&names).unwrap();
         let owner = scopes.function(at).unwrap();
-        let driver = LocalMacroDriver::new(stream, owner, &names).unwrap();
+        let driver = LocalMacroDriver::new(stream, owner, &mut names).unwrap();
         Fixture {
             names,
             scopes,
@@ -351,7 +349,7 @@ mod tests {
             assert_eq!(f.names.session().symbol(*spelling).unwrap(), expected);
         }
         let other =
-            LocalMacroDriver::new(f.driver.source.clone(), f.driver.owner, &f.names).unwrap();
+            LocalMacroDriver::new(f.driver.source.clone(), f.driver.owner, &mut f.names).unwrap();
         assert!(matches!(
             other.expand(selected, args.clone(), site, &mut f.names),
             Err(DriverError::Token(TokenError::ForeignHandle))

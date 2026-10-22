@@ -1179,7 +1179,7 @@ fn utility_cursor_marks_ranges_and_logical_capture_keep_physical_occurrences() {
         Some(LogicalToken::Operator { len: 3, .. })
     ));
     assert!(cursor.bump(&f.session).unwrap().is_none());
-    let capture = cursor.capture_since(&f.session, mark).unwrap();
+    let capture = cursor.capture_since(&f.session, mark.clone()).unwrap();
     assert_eq!(capture.len(&f.session).unwrap(), 3);
     assert_eq!(capture.physical_weight(&f.session).unwrap(), 3);
     let other = MacroCursor::new(&f.session, f.parts[1].clone()).unwrap();

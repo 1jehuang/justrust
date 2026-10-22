@@ -176,6 +176,9 @@ pub struct NameStoreBuilder {
     /// The session owner while building: a refundable lease. Lives only in
     /// the builder, never in the published `NameStore`. Consumed by `freeze`.
     owner: super::owner_path::BuilderOwnedPath,
+    /// Next builder-local macro driver ordinal. Drivers are distinguished
+    /// within one builder; cross-builder handles already fail session checks.
+    next_driver: u64,
 }
 
 /// Shared lifetime owner for every name used by the AST, resolver and replay.
@@ -415,7 +418,19 @@ impl NameStoreBuilder {
                 _lease: lease,
             },
             owner,
+            next_driver: 1,
         })
+    }
+
+    /// Issue the next builder-local macro driver identity. Fails closed at
+    /// exhaustion and never reuses an ordinal.
+    pub(super) fn issue_driver_id(&mut self) -> Result<std::num::NonZeroU64, NameError> {
+        let id = std::num::NonZeroU64::new(self.next_driver).ok_or(TokenError::IdExhausted)?;
+        self.next_driver = self
+            .next_driver
+            .checked_add(1)
+            .ok_or(TokenError::IdExhausted)?;
+        Ok(id)
     }
 
     /// Accepts an identifier leaf, never a joined textual lifetime or path.
@@ -583,7 +598,9 @@ impl NameStoreBuilder {
     /// refundable owner reservation into an immutable receipt exactly once.
     pub fn freeze(self) -> Result<Arc<NameStore>, NameError> {
         self.budget().check()?;
-        let Self { mut store, owner } = self;
+        let Self {
+            mut store, owner, ..
+        } = self;
         // The budget can be poisoned by a sibling after the precheck above:
         // keep its exact typed, latched failure rather than a generic error.
         store.owner = Some(owner.freeze()?);
@@ -1267,7 +1284,7 @@ mod tests {
         let latched = budget.poison_allocation();
         // NameStoreBuilder::freeze prechecks first; drive the owner freeze
         // itself to prove the conversion after the precheck is typed.
-        let NameStoreBuilder { store, owner } = builder;
+        let NameStoreBuilder { store, owner, .. } = builder;
         let error: NameError = owner.freeze().map_err(NameError::from).unwrap_err();
         assert!(
             matches!(&error, NameError::Token(TokenError::Budget(f)) if *f == latched),
