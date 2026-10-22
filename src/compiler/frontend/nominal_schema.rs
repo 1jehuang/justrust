@@ -48,6 +48,45 @@ impl PlanState {
         Ok(result)
     }
 
+    /// The declaration's display path, charged to this computation's plan
+    /// budget. Re-interning an application in a fresh per-call scratch must
+    /// not spend the shared name store's diagnostic budget each time.
+    fn schema_path_text(
+        &mut self,
+        registry: &DeclRegistry,
+        path: &AstPath,
+        budget: &ir::PlanBudget,
+    ) -> Result<String, String> {
+        let names = registry.names.as_ref();
+        let mut text = String::new();
+        match path.anchor() {
+            PathAnchor::Relative | PathAnchor::Super(0) => {}
+            PathAnchor::Crate => text.push_str("crate"),
+            PathAnchor::SelfModule => text.push_str("self"),
+            PathAnchor::SelfType => text.push_str("Self"),
+            PathAnchor::Super(count) => {
+                for index in 0..count {
+                    if index > 0 {
+                        text.push_str("::");
+                    }
+                    text.push_str("super");
+                }
+            }
+        }
+        for ident in path.segments() {
+            budget.charge_work(1)?;
+            if !text.is_empty() {
+                text.push_str("::");
+            }
+            text.push_str(
+                names
+                    .spelling(*ident)
+                    .map_err(native_adapter::name_diagnostic)?,
+            );
+        }
+        self.schema_text(&text, budget)
+    }
+
     fn schema_field_text(
         &mut self,
         names: &NameStore,
@@ -611,7 +650,15 @@ impl PlanState {
                 info.name
             ));
         }
-        budget.charge_application()?;
+        // Distinct applications are bounded per interner: discarded per-call
+        // scratch interners re-derive the same canonical applications, so a
+        // node-wide count would grow with occurrences, not distinct types.
+        // Node-wide cost stays bounded by the work and byte ledgers.
+        if self.nominals.applications.len() + self.nominals.building.len()
+            >= budget.limits().applications
+        {
+            budget.charge_application()?;
+        }
         self.retain(
             budget,
             512usize
@@ -779,11 +826,7 @@ impl PlanState {
                                 }
                             }
                             let fields = make_fields(self, &d.fields, d.module)?;
-                            let display = d
-                                .name
-                                .display(registry.names.as_ref())
-                                .map_err(native_adapter::name_diagnostic)?;
-                            let name = self.schema_text(display.as_str(), budget)?;
+                            let name = self.schema_path_text(registry, &d.name, budget)?;
                             ir::Ty::Struct(ir::StructTy::new(ir::StructDef {
                                 id,
                                 source_decl: decl,
@@ -846,11 +889,7 @@ impl PlanState {
                                     fields: make_fields(self, &v.fields, d.module)?,
                                 });
                             }
-                            let display = d
-                                .name
-                                .display(registry.names.as_ref())
-                                .map_err(native_adapter::name_diagnostic)?;
-                            let name = self.schema_text(display.as_str(), budget)?;
+                            let name = self.schema_path_text(registry, &d.name, budget)?;
                             ir::Ty::Enum(ir::EnumTy::new(ir::EnumDef {
                                 id,
                                 source_decl: decl,
