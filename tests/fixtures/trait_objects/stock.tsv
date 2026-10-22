@@ -31,6 +31,6 @@ positive/dyn_drop_owner.rs	accept	-
 boundary/dyn_mut_to_shared.rs	accept	-
 boundary/dyn_plus_bound.rs	accept	-
 positive/dyn_where_self_sized.rs	accept	-
-boundary/impl_arg_methods.rs	accept	-
-boundary/impl_partial_turbofish.rs	accept	-
-boundary/impl_trait_method_param.rs	accept	-
+positive/impl_arg_methods.rs	accept	-
+positive/impl_partial_turbofish.rs	accept	-
+positive/impl_trait_method_param.rs	accept	-
