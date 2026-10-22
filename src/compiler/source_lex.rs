@@ -4,14 +4,13 @@
 //! finish lexical validation before requesting projections. Configured input is
 //! already filtered by source preparation, so this bridge never reinjects attrs
 //! or documentation. Raw identity input performs no preparation or filesystem I/O.
+use std::cell::OnceCell;
 use std::num::NonZeroU64;
 use std::ops::Range;
 use std::path::Path;
-use std::sync::OnceLock;
-use std::sync::atomic::AtomicU64;
 
 use super::super::expansion_budget::{BudgetFailure, Counter, ExpansionBudget};
-use super::super::token_session::{OriginalSpan, SourceSnapshot, TokenSession, allocate_identity};
+use super::super::token_session::{OriginalSpan, SourceSnapshot, TokenSession};
 use super::{
     MAX_BYTES, MAX_ORIGINS, OriginSegment, PreparedSource, SourceError, SourceErrorKind,
     SourceLocation, SourceSpan,
@@ -43,7 +42,7 @@ pub struct PreparedLexInput<'a> {
     snapshot: SourceSnapshot,
     view: PreparedViewId,
     budget: ExpansionBudget,
-    structure: OnceLock<Result<(), StructureFailure>>,
+    structure: OnceCell<Result<(), StructureFailure>>,
 }
 impl<'a> PreparedLexInput<'a> {
     pub fn prepared(
@@ -85,15 +84,16 @@ impl<'a> PreparedLexInput<'a> {
                 "lexical source transport limit exceeded",
             ));
         }
-        static NEXT: AtomicU64 = AtomicU64::new(1);
-        let view = PreparedViewId(allocate_identity(&NEXT).map_err(SourceError::from_token)?);
+        // Structural identity: every prepared view seals its own snapshot,
+        // so the snapshot's sealed identity names exactly this view.
+        let view = PreparedViewId(snapshot.identity_bits());
         Ok(Self {
             text,
             origins,
             snapshot,
             view,
             budget: budget.clone(),
-            structure: OnceLock::new(),
+            structure: OnceCell::new(),
         })
     }
     pub fn text(&self) -> &'a str {
@@ -534,12 +534,9 @@ mod tests {
     #[test]
     fn empty_client_plus_verified_provider_retains_checked_provenance() {
         use crate::compiler::source::{SourceProbeRequest, prepare_probe_file};
-        use std::sync::atomic::Ordering;
-        static NEXT: AtomicU64 = AtomicU64::new(1);
         let directory = std::env::temp_dir().join(format!(
-            "justrust-empty-client-projection-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
+            "justrust-empty-client-projection-{}",
+            std::process::id()
         ));
         std::fs::create_dir(&directory).unwrap();
         let client = directory.join("client.rs");

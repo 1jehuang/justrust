@@ -337,6 +337,12 @@ impl SourceSnapshot {
         Arc::ptr_eq(&self.inner, &other.inner)
     }
 
+    /// The sealed snapshot's identity bits, for owners whose identity is
+    /// structurally this snapshot (one prepared lexical view per seal).
+    pub(super) fn identity_bits(&self) -> NonZeroU64 {
+        self.inner.id.0
+    }
+
     fn metadata_lease(budget: &ExpansionBudget) -> Result<ByteLease, TokenError> {
         Ok(budget.reserve(
             Storage::Retained,
