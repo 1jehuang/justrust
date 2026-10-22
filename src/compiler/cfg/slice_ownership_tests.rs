@@ -178,7 +178,11 @@ fn validator_rejects_malformed_slice_operands() {
             } = &statement.value
             {
                 assert_eq!(
-                    f.slice_operand_ty(slice, ir::FactsCtx::Concrete),
+                    f.slice_operand_ty(
+                        slice,
+                        ir::FactsCtx::Concrete,
+                        &mut crate::compiler::traits::TraitScratch::default(),
+                    ),
                     Err("CFG slice operand must copy a whole local".into())
                 );
             }

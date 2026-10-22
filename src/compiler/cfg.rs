@@ -2253,7 +2253,7 @@ impl Function {
 
     #[cfg(test)]
     fn rvalue_ty(&self, value: &Rvalue) -> Result<Ty, String> {
-        self.rvalue_ty_with_facts(value, ir::FactsCtx::Concrete)
+        self.rvalue_ty_with_facts(value, ir::FactsCtx::Concrete, &mut TraitScratch::default())
     }
     fn rvalue_ty_with_facts(
         &self,
