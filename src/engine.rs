@@ -80,18 +80,26 @@ impl Meter {
     /// Add `amount` to `counter` if the result stays within `limit`. Returns
     /// the previous value on rejection.
     pub fn admit(counter: &AtomicU64, amount: u64, limit: u64) -> Result<(), u64> {
-        // One fetch_add on the hot path (a CAS loop is several nested calls
-        // per charge in unoptimized builds). A rejected charge is rolled back,
-        // so the counter never stays above `limit`. Counters are bounded by
-        // `limit`, so the add cannot wrap once `amount <= limit`.
+        // Exact CAS: the counter never transiently exceeds `limit`, so a
+        // concurrent branch of the same node is never spuriously rejected
+        // (resource failures stay deterministic). Plain integer compares
+        // instead of checked_add/match keep the unoptimized path short.
         if amount > limit {
             return Err(counter.load(Ordering::Relaxed));
         }
-        let used = counter.fetch_add(amount, Ordering::Relaxed);
-        if used <= limit - amount {
-            return Ok(());
+        let ceiling = limit - amount;
+        let mut used = counter.load(Ordering::Relaxed);
+        while used <= ceiling {
+            match counter.compare_exchange_weak(
+                used,
+                used + amount,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return Ok(()),
+                Err(actual) => used = actual,
+            }
         }
-        counter.fetch_sub(amount, Ordering::Relaxed);
         Err(used)
     }
 }
@@ -2110,6 +2118,47 @@ impl Shared {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Branches of one node share a Meter. An over-limit charge by one
+    /// branch must never make a charge that fits alone fail on another.
+    #[test]
+    fn meter_admit_never_spuriously_rejects_under_contention() {
+        const LIMIT: u64 = 40_000;
+        const WORKERS: u64 = 8;
+        let counter = AtomicU64::new(0);
+        let done = std::sync::atomic::AtomicBool::new(false);
+        let rejected = AtomicU64::new(0);
+        std::thread::scope(|scope| {
+            // Probers: always-oversized charges racing near the limit.
+            for _ in 0..4 {
+                scope.spawn(|| {
+                    while !done.load(Ordering::Relaxed) {
+                        let used = counter.load(Ordering::Relaxed);
+                        let _ = Meter::admit(&counter, LIMIT - used + 1, LIMIT);
+                    }
+                });
+            }
+            let chargers: Vec<_> = (0..WORKERS)
+                .map(|_| {
+                    scope.spawn(|| {
+                        for _ in 0..LIMIT / WORKERS {
+                            if Meter::admit(&counter, 1, LIMIT).is_err() {
+                                rejected.fetch_add(1, Ordering::Relaxed);
+                            }
+                        }
+                    })
+                })
+                .collect();
+            for charger in chargers {
+                charger.join().unwrap();
+            }
+            done.store(true, Ordering::Relaxed);
+        });
+        assert_eq!(rejected.load(Ordering::Relaxed), 0);
+        assert_eq!(counter.load(Ordering::Relaxed), LIMIT);
+        assert_eq!(Meter::admit(&counter, 1, LIMIT), Err(LIMIT));
+        assert_eq!(Meter::admit(&counter, 0, LIMIT), Ok(()));
+    }
 
     struct PublicationOrderProvider {
         observer_ready: Arc<std::sync::Barrier>,
