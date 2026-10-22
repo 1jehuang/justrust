@@ -504,7 +504,7 @@ impl ModuleArena {
     pub fn check_names(&self, names: &impl NameAccess) -> Result<(), ModuleError> {
         self.budget.charge(Counter::Work, 1)?;
         let expected = self.source_names.ok_or(ModuleError::SourceUnavailable)?;
-        if expected != names.session().id() {
+        if !names.session().serves(expected) {
             return Err(ModuleError::ForeignNames);
         }
         names.budget().check()?;

@@ -50,7 +50,7 @@ impl ProgramSymbols {
         self.budget.check().map_err(|error| {
             super::super::source::SourceError::from_token(TokenError::Budget(error)).to_string()
         })?;
-        if self.owner != names.session().id() || !self.budget.same_authority(names.budget()) {
+        if !names.session().serves(self.owner) || !self.budget.same_authority(names.budget()) {
             return Err(
                 super::super::source::SourceError::from_token(TokenError::ForeignHandle)
                     .to_string(),

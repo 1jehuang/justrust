@@ -948,7 +948,7 @@ impl TokenSession {
         Ok(())
     }
     /// Whether `owner` is this session or one of its linked crate siblings.
-    pub(super) fn serves(&self, owner: SessionId) -> bool {
+    pub(crate) fn serves(&self, owner: SessionId) -> bool {
         self.admits(owner) || self.linked.get(owner).is_ok()
     }
     /// The session serving `owner`'s handles: this one or a linked sibling.

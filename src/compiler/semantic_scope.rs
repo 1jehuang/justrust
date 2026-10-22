@@ -685,7 +685,7 @@ impl ScopeArena {
     pub fn check_names(&self, names: &impl NameAccess) -> Result<(), ScopeError> {
         self.budget.check()?;
         names.budget().check()?;
-        if names.session().id() != self.names || !self.budget.same_authority(names.budget()) {
+        if !names.session().serves(self.names) || !self.budget.same_authority(names.budget()) {
             return Err(ScopeError::ForeignNames);
         }
         Ok(())
@@ -698,7 +698,21 @@ impl ScopeArena {
             Ok(())
         }
     }
+    /// The linked crate sibling arena owning `owner`, `None` for this one.
+    fn linked_arena(&self, owner: NonZeroU64) -> Result<Option<&ScopeArena>, ScopeError> {
+        if owner == self.owner {
+            return Ok(None);
+        }
+        self.budget.charge(Counter::Work, 1)?;
+        self.linked
+            .binary_search_by_key(&owner, |(id, _)| *id)
+            .map(|index| Some(&*self.linked[index].1))
+            .map_err(|_| ScopeError::ForeignOwner)
+    }
     fn scope(&self, id: ScopeId) -> Result<ScopeRecord, ScopeError> {
+        if let Some(arena) = self.linked_arena(id.owner)? {
+            return arena.scope(id);
+        }
         self.owner(id.owner)?;
         self.scopes
             .as_slice()
@@ -707,6 +721,9 @@ impl ScopeArena {
             .ok_or(ScopeError::InvalidHandle)
     }
     fn frontier(&self, id: FrontierId) -> Result<FrontierRecord, ScopeError> {
+        if let Some(arena) = self.linked_arena(id.owner)? {
+            return arena.frontier(id);
+        }
         self.owner(id.owner)?;
         self.frontiers
             .as_slice()
@@ -715,6 +732,9 @@ impl ScopeArena {
             .ok_or(ScopeError::InvalidHandle)
     }
     fn binding_record(&self, id: BindingId) -> Result<BindingRecord, ScopeError> {
+        if let Some(arena) = self.linked_arena(id.owner)? {
+            return arena.binding_record(id);
+        }
         self.owner(id.owner)?;
         self.bindings
             .as_slice()
