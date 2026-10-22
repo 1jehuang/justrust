@@ -6,5 +6,3 @@
 4 Mutex src/compiler/frontend.rs
 4 Atomic src/compiler/ir.rs
 1 static src/compiler/ir.rs
-4 Atomic src/compiler/token_session.rs
-1 static src/compiler/token_session.rs

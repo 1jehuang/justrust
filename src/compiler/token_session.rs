@@ -4,7 +4,6 @@ use std::mem::size_of;
 use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::expansion_budget::{BudgetFailure, ByteLease, Counter, Depth, ExpansionBudget, Storage};
 use super::expansion_span::{ExpansionRecord, SpanData, SpanOrigin, SyntheticReason, TraceFrame};
@@ -73,23 +72,6 @@ impl std::fmt::Display for TokenError {
     }
 }
 impl std::error::Error for TokenError {}
-
-pub(super) fn allocate_identity(counter: &AtomicU64) -> Result<NonZeroU64, TokenError> {
-    let mut current = counter.load(Ordering::Relaxed);
-    loop {
-        let successor = current.checked_add(1).ok_or(TokenError::IdExhausted)?;
-        let issued = NonZeroU64::new(current).ok_or(TokenError::IdExhausted)?;
-        match counter.compare_exchange_weak(
-            current,
-            successor,
-            Ordering::Relaxed,
-            Ordering::Relaxed,
-        ) {
-            Ok(_) => return Ok(issued),
-            Err(observed) => current = observed,
-        }
-    }
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct SourceSnapshotId(NonZeroU64);
@@ -233,21 +215,26 @@ pub struct SourceSnapshot {
 }
 
 impl SourceSnapshot {
-    pub fn new(map: SourceMap) -> Result<Self, TokenError> {
+    pub fn new(map: SourceMap, owner: super::owner_path::Issued) -> Result<Self, TokenError> {
         Self::validate_map(&map, None)?;
-        Self::seal(SourceStorage::Map(map), None)
+        Self::seal(SourceStorage::Map(map), None, owner)
     }
 
     /// Copies only map metadata. Original contents remain shared with their
     /// source owner, whose source-byte accounting is not replaced by this lease.
-    pub fn copy_borrowed(map: &SourceMap, budget: &ExpansionBudget) -> Result<Self, TokenError> {
-        Self::copy_with_crates(map, &[], budget)
+    pub fn copy_borrowed(
+        map: &SourceMap,
+        budget: &ExpansionBudget,
+        owner: super::owner_path::Issued,
+    ) -> Result<Self, TokenError> {
+        Self::copy_with_crates(map, &[], budget, owner)
     }
 
     pub(super) fn copy_with_crates(
         map: &SourceMap,
         roots: &[super::source::FileId],
         budget: &ExpansionBudget,
+        owner: super::owner_path::Issued,
     ) -> Result<Self, TokenError> {
         budget.check()?;
         Self::validate_map(map, Some(budget))?;
@@ -282,6 +269,7 @@ impl SourceSnapshot {
             SourceStorage::Map(SourceMap { files }),
             crate_roots,
             Some(lease),
+            owner,
         )
     }
 
@@ -291,6 +279,7 @@ impl SourceSnapshot {
         name: &Path,
         text: &str,
         budget: &ExpansionBudget,
+        owner: super::owner_path::Issued,
     ) -> Result<Self, TokenError> {
         budget.check()?;
         if text.len() > MAX_BYTES {
@@ -329,6 +318,7 @@ impl SourceSnapshot {
                 line_starts,
             },
             Some(lease),
+            owner,
         )
     }
 
@@ -446,24 +436,24 @@ impl SourceSnapshot {
         Ok(())
     }
 
-    fn seal(storage: SourceStorage, lease: Option<ByteLease>) -> Result<Self, TokenError> {
-        Self::seal_with_crates(storage, Vec::new(), lease)
+    fn seal(
+        storage: SourceStorage,
+        lease: Option<ByteLease>,
+        owner: super::owner_path::Issued,
+    ) -> Result<Self, TokenError> {
+        Self::seal_with_crates(storage, Vec::new(), lease, owner)
     }
 
     fn seal_with_crates(
         storage: SourceStorage,
         crate_roots: Vec<super::source::FileId>,
         lease: Option<ByteLease>,
+        owner: super::owner_path::Issued,
     ) -> Result<Self, TokenError> {
-        static NEXT: AtomicU64 = AtomicU64::new(1);
-        let id = match allocate_identity(&NEXT) {
-            Ok(id) => SourceSnapshotId(id),
-            Err(error) => {
-                drop(storage);
-                drop(lease);
-                return Err(error);
-            }
-        };
+        // Issued by the sealing producer (PARSE issues a SourceSnapshot
+        // owner; direct tooling passes a standalone issuance): never a
+        // compiler-global counter. The engine tag space keeps ids distinct.
+        let id = SourceSnapshotId(owner.tag().bits());
         Ok(Self {
             // Stable std has no fallible Arc control-block constructor. The
             // small fixed metadata allocation is accounted by budgeted callers;
@@ -1260,7 +1250,15 @@ mod owner_defect_tests {
     fn snapshot() -> SourceSnapshot {
         let mut map = SourceMap::default();
         map.add("owner.rs".into(), Arc::from("x"));
-        SourceSnapshot::new(map).unwrap()
+        SourceSnapshot::new(
+            map,
+            crate::compiler::owner_path::standalone_issued(
+                &crate::compiler::expansion_budget::ExpansionBudget::default(),
+                crate::compiler::owner_path::OwnerDomain::SourceSnapshot,
+            )
+            .unwrap(),
+        )
+        .unwrap()
     }
 
     /// An owner paid under one budget cannot back a session charged to
@@ -1272,9 +1270,10 @@ mod owner_defect_tests {
         assert_eq!(payer.limits(), other.limits(), "fixture needs equal policy");
         let mut issuer = OwnerIssuer::new(crate::OwnerRoot::standalone().unwrap(), &payer).unwrap();
         let owner = issuer.issue(OwnerDomain::TokenSession).unwrap();
+        let sources = snapshot();
         let minted_before = crate::engine::THREAD_MINTS.with(std::cell::Cell::get);
         assert!(matches!(
-            TokenSession::with_owner(snapshot(), other, owner),
+            TokenSession::with_owner(sources, other, owner),
             Err(TokenError::ForeignHandle)
         ));
         assert_eq!(
@@ -1369,8 +1368,9 @@ mod owner_defect_tests {
             bytes: 0,
             ..ExpansionLimits::default()
         });
+        let sources = snapshot();
         let before = minted();
-        assert!(TokenSession::standalone(snapshot(), zero).is_err());
+        assert!(TokenSession::standalone(sources.clone(), zero).is_err());
         assert_eq!(
             minted(),
             before,
@@ -1381,7 +1381,7 @@ mod owner_defect_tests {
             ..ExpansionLimits::default()
         });
         let before = minted();
-        assert!(TokenSession::standalone(snapshot(), short).is_err());
+        assert!(TokenSession::standalone(sources.clone(), short).is_err());
         assert_eq!(
             minted(),
             before,
@@ -1390,7 +1390,7 @@ mod owner_defect_tests {
         let poisoned = ExpansionBudget::default();
         poisoned.poison_allocation();
         let before = minted();
-        assert!(TokenSession::standalone(snapshot(), poisoned).is_err());
+        assert!(TokenSession::standalone(sources.clone(), poisoned).is_err());
         assert_eq!(minted(), before);
     }
 
@@ -1418,7 +1418,15 @@ mod tests {
     fn sources() -> SourceSnapshot {
         let mut map = SourceMap::default();
         map.add("unicode.rs".into(), Arc::from("α\r\nx"));
-        SourceSnapshot::new(map).unwrap()
+        SourceSnapshot::new(
+            map,
+            crate::compiler::owner_path::standalone_issued(
+                &crate::compiler::expansion_budget::ExpansionBudget::default(),
+                crate::compiler::owner_path::OwnerDomain::SourceSnapshot,
+            )
+            .unwrap(),
+        )
+        .unwrap()
     }
     fn fixture() -> (TokenSession, SpanId, CrateId) {
         let sources = sources();
@@ -1489,7 +1497,16 @@ mod tests {
         let mut map = SourceMap::default();
         map.add("original.rs".into(), Arc::from("α\r\nx\n"));
         let budget = ExpansionBudget::default();
-        let snapshot = SourceSnapshot::copy_borrowed(&map, &budget).unwrap();
+        let snapshot = SourceSnapshot::copy_borrowed(
+            &map,
+            &budget,
+            crate::compiler::owner_path::standalone_issued(
+                &budget,
+                crate::compiler::owner_path::OwnerDomain::SourceSnapshot,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         let file = snapshot.file(0).unwrap();
         let SourceStorage::Map(copied) = &snapshot.inner.storage else {
             panic!("map backing")
@@ -1506,7 +1523,16 @@ mod tests {
         assert!(retained > 0);
         let clone = snapshot.clone();
         assert!(snapshot.same_snapshot(&clone));
-        let independent = SourceSnapshot::copy_borrowed(&map, &ExpansionBudget::default()).unwrap();
+        let independent = SourceSnapshot::copy_borrowed(
+            &map,
+            &ExpansionBudget::default(),
+            crate::compiler::owner_path::standalone_issued(
+                &ExpansionBudget::default(),
+                crate::compiler::owner_path::OwnerDomain::SourceSnapshot,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         assert!(!snapshot.same_snapshot(&independent));
         assert!(matches!(
             independent.text(file),
@@ -1532,8 +1558,17 @@ mod tests {
     #[test]
     fn raw_identity_source_preserves_utf8_eof_and_charges_owned_payload() {
         let budget = ExpansionBudget::default();
-        let snapshot =
-            SourceSnapshot::from_text(Path::new("not-read.rs"), "α\r\nx\n", &budget).unwrap();
+        let snapshot = SourceSnapshot::from_text(
+            Path::new("not-read.rs"),
+            "α\r\nx\n",
+            &budget,
+            crate::compiler::owner_path::standalone_issued(
+                &budget,
+                crate::compiler::owner_path::OwnerDomain::SourceSnapshot,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         let file = snapshot.file(0).unwrap();
         assert_eq!(snapshot.text(file).unwrap(), "α\r\nx\n");
         assert!(snapshot.file(1).is_err());
@@ -1557,9 +1592,17 @@ mod tests {
         assert_eq!(budget.snapshot().retained_bytes, retained);
         drop(clone);
         assert_eq!(budget.snapshot().retained_bytes, 0);
-        let empty =
-            SourceSnapshot::from_text(Path::new("empty.rs"), "", &ExpansionBudget::default())
-                .unwrap();
+        let empty = SourceSnapshot::from_text(
+            Path::new("empty.rs"),
+            "",
+            &ExpansionBudget::default(),
+            crate::compiler::owner_path::standalone_issued(
+                &ExpansionBudget::default(),
+                crate::compiler::owner_path::OwnerDomain::SourceSnapshot,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         assert_eq!(
             empty
                 .location(empty.span(empty.file(0).unwrap(), 0, 0).unwrap())
@@ -1574,7 +1617,16 @@ mod tests {
         let mut map = SourceMap::default();
         map.add("a-long-path-for-copy.rs".into(), Arc::from("a\nb\nc\n"));
         let healthy = ExpansionBudget::default();
-        let snapshot = SourceSnapshot::copy_borrowed(&map, &healthy).unwrap();
+        let snapshot = SourceSnapshot::copy_borrowed(
+            &map,
+            &healthy,
+            crate::compiler::owner_path::standalone_issued(
+                &healthy,
+                crate::compiler::owner_path::OwnerDomain::SourceSnapshot,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         let bytes = healthy.snapshot().retained_bytes;
         drop(snapshot);
         for cap in [0, 1, bytes / 2, bytes - 1] {
@@ -1583,15 +1635,32 @@ mod tests {
                 ..ExpansionLimits::default()
             });
             assert!(matches!(
-                SourceSnapshot::copy_borrowed(&map, &budget),
+                SourceSnapshot::copy_borrowed(
+                    &map,
+                    &budget,
+                    crate::compiler::owner_path::standalone_issued(
+                        &ExpansionBudget::default(),
+                        crate::compiler::owner_path::OwnerDomain::SourceSnapshot
+                    )
+                    .unwrap()
+                ),
                 Err(TokenError::Budget(_))
             ));
             assert_eq!(budget.snapshot().retained_bytes, 0);
             assert!(budget.snapshot().counters[Counter::Work as usize] > 0);
         }
         let healthy = ExpansionBudget::default();
-        let snapshot =
-            SourceSnapshot::from_text(Path::new("raw.rs"), "a\nb\nc\n", &healthy).unwrap();
+        let snapshot = SourceSnapshot::from_text(
+            Path::new("raw.rs"),
+            "a\nb\nc\n",
+            &healthy,
+            crate::compiler::owner_path::standalone_issued(
+                &healthy,
+                crate::compiler::owner_path::OwnerDomain::SourceSnapshot,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         let bytes = healthy.snapshot().retained_bytes;
         drop(snapshot);
         for cap in [0, bytes / 2, bytes - 1] {
@@ -1600,7 +1669,16 @@ mod tests {
                 ..ExpansionLimits::default()
             });
             assert!(matches!(
-                SourceSnapshot::from_text(Path::new("raw.rs"), "a\nb\nc\n", &budget),
+                SourceSnapshot::from_text(
+                    Path::new("raw.rs"),
+                    "a\nb\nc\n",
+                    &budget,
+                    crate::compiler::owner_path::standalone_issued(
+                        &ExpansionBudget::default(),
+                        crate::compiler::owner_path::OwnerDomain::SourceSnapshot
+                    )
+                    .unwrap()
+                ),
                 Err(TokenError::Budget(_))
             ));
             assert_eq!(budget.snapshot().retained_bytes, 0);
@@ -1619,7 +1697,15 @@ mod tests {
             ..ExpansionLimits::default()
         });
         assert!(matches!(
-            SourceSnapshot::copy_borrowed(&map, &budget),
+            SourceSnapshot::copy_borrowed(
+                &map,
+                &budget,
+                crate::compiler::owner_path::standalone_issued(
+                    &budget,
+                    crate::compiler::owner_path::OwnerDomain::SourceSnapshot
+                )
+                .unwrap()
+            ),
             Err(TokenError::Budget(_))
         ));
         assert_eq!(budget.snapshot().retained_bytes, 0);
@@ -1630,7 +1716,15 @@ mod tests {
             ..ExpansionLimits::default()
         });
         assert!(matches!(
-            SourceSnapshot::copy_borrowed(&map, &budget),
+            SourceSnapshot::copy_borrowed(
+                &map,
+                &budget,
+                crate::compiler::owner_path::standalone_issued(
+                    &budget,
+                    crate::compiler::owner_path::OwnerDomain::SourceSnapshot
+                )
+                .unwrap()
+            ),
             Err(TokenError::Budget(_))
         ));
         assert_eq!(budget.snapshot().retained_bytes, 0);
@@ -1667,7 +1761,14 @@ mod tests {
         malformed.add("bad.rs".into(), Arc::from("x\ny"));
         malformed.files[0].line_starts.clear();
         assert!(matches!(
-            SourceSnapshot::new(malformed),
+            SourceSnapshot::new(
+                malformed,
+                crate::compiler::owner_path::standalone_issued(
+                    &crate::compiler::expansion_budget::ExpansionBudget::default(),
+                    crate::compiler::owner_path::OwnerDomain::SourceSnapshot
+                )
+                .unwrap()
+            ),
             Err(TokenError::InvalidInput(_))
         ));
     }
@@ -1921,34 +2022,29 @@ mod tests {
     }
 
     #[test]
-    fn checked_identity_counter_never_wraps_or_reuses() {
-        let counter = AtomicU64::new(u64::MAX - 1);
-        assert_eq!(allocate_identity(&counter).unwrap().get(), u64::MAX - 1);
-        assert!(matches!(
-            allocate_identity(&counter),
-            Err(TokenError::IdExhausted)
-        ));
-        assert!(matches!(
-            allocate_identity(&counter),
-            Err(TokenError::IdExhausted)
-        ));
-        assert_eq!(counter.load(Ordering::Relaxed), u64::MAX);
-    }
-
-    #[test]
     fn source_import_file_boundary_and_preflight_precede_line_scan() {
         let mut exact = SourceMap::default();
         for _ in 0..MAX_FILES {
             exact.add("small.rs".into(), Arc::from(""));
         }
-        assert!(SourceSnapshot::new(exact).is_ok());
+        assert!(
+            SourceSnapshot::new(
+                exact,
+                crate::compiler::owner_path::standalone_issued(
+                    &crate::compiler::expansion_budget::ExpansionBudget::default(),
+                    crate::compiler::owner_path::OwnerDomain::SourceSnapshot
+                )
+                .unwrap()
+            )
+            .is_ok()
+        );
         let mut above = SourceMap::default();
         for _ in 0..=MAX_FILES {
             above.add("small.rs".into(), Arc::from(""));
         }
         above.files[0].line_starts.clear();
         assert!(
-            matches!(SourceSnapshot::new(above), Err(TokenError::SourceLimit {
+            matches!(SourceSnapshot::new(above, crate::compiler::owner_path::standalone_issued(&crate::compiler::expansion_budget::ExpansionBudget::default(), crate::compiler::owner_path::OwnerDomain::SourceSnapshot).unwrap()), Err(TokenError::SourceLimit {
             resource: SourceLimitResource::Files, used: 0, requested, limit
         }) if requested == MAX_FILES + 1 && limit == MAX_FILES)
         );
@@ -1959,20 +2055,30 @@ mod tests {
         let contents: Arc<str> = Arc::from("x".repeat(MAX_BYTES));
         let mut exact = SourceMap::default();
         exact.add("exact.rs".into(), contents.clone());
-        assert!(SourceSnapshot::new(exact).is_ok());
+        assert!(
+            SourceSnapshot::new(
+                exact,
+                crate::compiler::owner_path::standalone_issued(
+                    &crate::compiler::expansion_budget::ExpansionBudget::default(),
+                    crate::compiler::owner_path::OwnerDomain::SourceSnapshot
+                )
+                .unwrap()
+            )
+            .is_ok()
+        );
         let mut above = SourceMap::default();
         above.add("exact.rs".into(), contents);
         above.add("extra.rs".into(), Arc::from("x"));
         above.files[0].line_starts.clear();
         assert!(
-            matches!(SourceSnapshot::new(above), Err(TokenError::SourceLimit {
+            matches!(SourceSnapshot::new(above, crate::compiler::owner_path::standalone_issued(&crate::compiler::expansion_budget::ExpansionBudget::default(), crate::compiler::owner_path::OwnerDomain::SourceSnapshot).unwrap()), Err(TokenError::SourceLimit {
             resource: SourceLimitResource::Bytes, used, requested: 1, limit
         }) if used == MAX_BYTES && limit == MAX_BYTES)
         );
         let mut single = SourceMap::default();
         single.add("large.rs".into(), Arc::from("x".repeat(MAX_BYTES + 1)));
         assert!(
-            matches!(SourceSnapshot::new(single), Err(TokenError::SourceLimit {
+            matches!(SourceSnapshot::new(single, crate::compiler::owner_path::standalone_issued(&crate::compiler::expansion_budget::ExpansionBudget::default(), crate::compiler::owner_path::OwnerDomain::SourceSnapshot).unwrap()), Err(TokenError::SourceLimit {
             resource: SourceLimitResource::Bytes, used: 0, requested, limit
         }) if requested == MAX_BYTES + 1 && limit == MAX_BYTES)
         );

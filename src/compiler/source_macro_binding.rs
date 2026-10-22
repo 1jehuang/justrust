@@ -71,6 +71,11 @@ mod tests {
             &sources(),
             &[FileId(0), FileId(0), FileId(2)],
             &budget,
+            crate::compiler::owner_path::standalone_issued(
+                &budget,
+                crate::compiler::owner_path::OwnerDomain::SourceSnapshot,
+            )
+            .unwrap(),
         )
         .unwrap();
         let sibling = snapshot.file(1).unwrap();
@@ -78,7 +83,16 @@ mod tests {
             snapshot.source_crate_root(sibling).unwrap(),
             snapshot.file(0).unwrap()
         );
-        let other = SourceSnapshot::copy_borrowed(&sources(), &budget).unwrap();
+        let other = SourceSnapshot::copy_borrowed(
+            &sources(),
+            &budget,
+            crate::compiler::owner_path::standalone_issued(
+                &budget,
+                crate::compiler::owner_path::OwnerDomain::SourceSnapshot,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         assert!(matches!(
             other.source_crate_root(sibling),
             Err(TokenError::ForeignHandle)
@@ -129,6 +143,11 @@ mod tests {
             &sources(),
             &[FileId(0), FileId(0), FileId(2)],
             &budget,
+            crate::compiler::owner_path::standalone_issued(
+                &budget,
+                crate::compiler::owner_path::OwnerDomain::SourceSnapshot,
+            )
+            .unwrap(),
         )
         .unwrap();
         let (mut session, _) = TokenSession::standalone(snapshot.clone(), budget).unwrap();
@@ -171,7 +190,19 @@ mod tests {
             vec![FileId(0), FileId(2), FileId(2)],
             vec![FileId(1), FileId(1), FileId(2)],
         ] {
-            assert!(SourceSnapshot::copy_with_crates(&sources(), &roots, &budget).is_err());
+            assert!(
+                SourceSnapshot::copy_with_crates(
+                    &sources(),
+                    &roots,
+                    &budget,
+                    crate::compiler::owner_path::standalone_issued(
+                        &budget,
+                        crate::compiler::owner_path::OwnerDomain::SourceSnapshot
+                    )
+                    .unwrap()
+                )
+                .is_err()
+            );
         }
     }
 }

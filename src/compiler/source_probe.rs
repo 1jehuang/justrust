@@ -767,7 +767,16 @@ mod tests {
             .unwrap()
             .validate(&extended)
             .unwrap();
-        let projection = PreparedLexInput::prepared(&extended, &budget).unwrap();
+        let projection = PreparedLexInput::prepared(
+            &extended,
+            &budget,
+            crate::compiler::owner_path::standalone_issued(
+                &budget,
+                crate::compiler::owner_path::OwnerDomain::SourceSnapshot,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         let provider = extended.probes.last().unwrap().span.file;
         let file = projection.snapshot().file(provider.0 as usize).unwrap();
         assert_eq!(projection.snapshot().source_crate_root(file).unwrap(), file);

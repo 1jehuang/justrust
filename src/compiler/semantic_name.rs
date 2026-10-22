@@ -823,7 +823,17 @@ mod tests {
         Token,
         SpanId,
     ) {
-        let source = SourceSnapshot::from_text(Path::new("fixture.rs"), "x\n", &budget).unwrap();
+        let source = SourceSnapshot::from_text(
+            Path::new("fixture.rs"),
+            "x\n",
+            &budget,
+            crate::compiler::owner_path::standalone_issued(
+                &budget,
+                crate::compiler::owner_path::OwnerDomain::SourceSnapshot,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         let file = source.file(0).unwrap();
         let first = source.span(file, 0, 1).unwrap();
         let eof = source.span(file, 2, 2).unwrap();
@@ -1142,7 +1152,17 @@ mod tests {
         // c's fixture already interned the real "x": in-session collision.
         assert!(matches!(forged_y, Err(TokenError::AtomCollision)));
         let budget = ExpansionBudget::default();
-        let source = SourceSnapshot::from_text(Path::new("c.rs"), "y\n", &budget).unwrap();
+        let source = SourceSnapshot::from_text(
+            Path::new("c.rs"),
+            "y\n",
+            &budget,
+            crate::compiler::owner_path::standalone_issued(
+                &budget,
+                crate::compiler::owner_path::OwnerDomain::SourceSnapshot,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         let (mut session_c, session_c_cap) = TokenSession::standalone(source, budget).unwrap();
         let forged_y = session_c
             .intern_forged("y", AtomFingerprint::of("x"))

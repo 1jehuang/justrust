@@ -12,7 +12,17 @@ use std::path::Path;
 use std::sync::Arc;
 
 fn names(text: &str, budget: &ExpansionBudget) -> (NameStoreBuilder, Vec<AstIdent>) {
-    let input = PreparedLexInput::identity(Path::new("module-control.rs"), text, budget).unwrap();
+    let input = PreparedLexInput::identity(
+        Path::new("module-control.rs"),
+        text,
+        budget,
+        justrust_engine::compiler::owner_path::standalone_issued(
+            &budget,
+            justrust_engine::compiler::owner_path::OwnerDomain::SourceSnapshot,
+        )
+        .unwrap(),
+    )
+    .unwrap();
     let (mut session, cap) =
         TokenSession::standalone(input.snapshot().clone(), budget.clone()).unwrap();
     let lexed = lex_prepared(&input, Edition::E2024, &mut session).unwrap();

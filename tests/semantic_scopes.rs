@@ -17,7 +17,17 @@ use justrust_engine::compiler::token_primitives::{
 };
 
 fn scanned(text: &str, budget: &ExpansionBudget) -> (NameStoreBuilder, Vec<Token>) {
-    let input = PreparedLexInput::identity(Path::new("scope-control.rs"), text, budget).unwrap();
+    let input = PreparedLexInput::identity(
+        Path::new("scope-control.rs"),
+        text,
+        budget,
+        justrust_engine::compiler::owner_path::standalone_issued(
+            &budget,
+            justrust_engine::compiler::owner_path::OwnerDomain::SourceSnapshot,
+        )
+        .unwrap(),
+    )
+    .unwrap();
     let (mut session, cap) =
         TokenSession::standalone(input.snapshot().clone(), budget.clone()).unwrap();
     let lexed = lex_prepared(&input, Edition::E2024, &mut session).unwrap();
@@ -915,8 +925,17 @@ fn frozen_clone_keeps_flat_scope_storage_alive_until_last_owner_drops() {
 #[test]
 fn public_name_gate_cannot_mint_unproved_marked_or_expanded_scope_occurrences() {
     let budget = ExpansionBudget::default();
-    let input =
-        PreparedLexInput::identity(Path::new("scope-mark-control.rs"), "x", &budget).unwrap();
+    let input = PreparedLexInput::identity(
+        Path::new("scope-mark-control.rs"),
+        "x",
+        &budget,
+        justrust_engine::compiler::owner_path::standalone_issued(
+            &budget,
+            justrust_engine::compiler::owner_path::OwnerDomain::SourceSnapshot,
+        )
+        .unwrap(),
+    )
+    .unwrap();
     let (mut session, cap) =
         TokenSession::standalone(input.snapshot().clone(), budget.clone()).unwrap();
     let lexed = lex_prepared(&input, Edition::E2024, &mut session).unwrap();

@@ -1621,8 +1621,17 @@ mod tests {
 
     fn inactive_input(text: &str) -> Result<NativeParserInput, ParseError> {
         let budget = ExpansionBudget::default();
-        let projection = PreparedLexInput::identity(Path::new("inactive.rs"), text, &budget)
-            .map_err(source_error)?;
+        let projection = PreparedLexInput::identity(
+            Path::new("inactive.rs"),
+            text,
+            &budget,
+            crate::compiler::owner_path::standalone_issued(
+                &budget,
+                crate::compiler::owner_path::OwnerDomain::SourceSnapshot,
+            )
+            .unwrap(),
+        )
+        .map_err(source_error)?;
         let (mut session, session_cap) =
             TokenSession::standalone(projection.snapshot().clone(), budget)
                 .map_err(transport_error)?;
@@ -1890,7 +1899,16 @@ mod tests {
         for (text, boundary) in [(">>=", 1), ("&&", 1), ("'region", 1)] {
             let source = split_source(text, boundary);
             let budget = ExpansionBudget::default();
-            let projection = PreparedLexInput::prepared(&source, &budget).unwrap();
+            let projection = PreparedLexInput::prepared(
+                &source,
+                &budget,
+                crate::compiler::owner_path::standalone_issued(
+                    &budget,
+                    crate::compiler::owner_path::OwnerDomain::SourceSnapshot,
+                )
+                .unwrap(),
+            )
+            .unwrap();
             let (mut session, session_cap) =
                 TokenSession::standalone(projection.snapshot().clone(), budget).unwrap();
             let lexed = crate::compiler::lexer::lex_prepared(
@@ -1916,7 +1934,16 @@ mod tests {
     fn canonical_float_requires_whole_mapping_before_tuple_projection() {
         let source = split_source("t.0.1", 3);
         let budget = ExpansionBudget::default();
-        let projection = PreparedLexInput::prepared(&source, &budget).unwrap();
+        let projection = PreparedLexInput::prepared(
+            &source,
+            &budget,
+            crate::compiler::owner_path::standalone_issued(
+                &budget,
+                crate::compiler::owner_path::OwnerDomain::SourceSnapshot,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         let error = super::super::native_input(
             &projection,
             budget.clone(),
@@ -1943,7 +1970,17 @@ mod tests {
     #[test]
     fn native_input_rejects_foreign_session_and_view_without_adoption() {
         let budget = ExpansionBudget::default();
-        let projection = PreparedLexInput::identity(Path::new("a.rs"), "name", &budget).unwrap();
+        let projection = PreparedLexInput::identity(
+            Path::new("a.rs"),
+            "name",
+            &budget,
+            crate::compiler::owner_path::standalone_issued(
+                &budget,
+                crate::compiler::owner_path::OwnerDomain::SourceSnapshot,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         let (mut session, session_cap) =
             TokenSession::standalone(projection.snapshot().clone(), budget.clone()).unwrap();
         let lexed = crate::compiler::lexer::lex_prepared(
@@ -1966,7 +2003,17 @@ mod tests {
             &mut session,
         )
         .unwrap();
-        let other = PreparedLexInput::identity(Path::new("a.rs"), "name", &budget).unwrap();
+        let other = PreparedLexInput::identity(
+            Path::new("a.rs"),
+            "name",
+            &budget,
+            crate::compiler::owner_path::standalone_issued(
+                &budget,
+                crate::compiler::owner_path::OwnerDomain::SourceSnapshot,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         assert_eq!(
             NativeParserInput::new(lexed, session, session_cap, &other)
                 .unwrap_err()
@@ -2013,8 +2060,17 @@ mod tests {
     #[test]
     fn native_leaf_identity_is_retained_and_compact_ranges_remain_checked() {
         let budget = ExpansionBudget::default();
-        let projection =
-            PreparedLexInput::identity(Path::new("single.rs"), "name", &budget).unwrap();
+        let projection = PreparedLexInput::identity(
+            Path::new("single.rs"),
+            "name",
+            &budget,
+            crate::compiler::owner_path::standalone_issued(
+                &budget,
+                crate::compiler::owner_path::OwnerDomain::SourceSnapshot,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         let (mut session, session_cap) =
             TokenSession::standalone(projection.snapshot().clone(), budget).unwrap();
         let lexed = crate::compiler::lexer::lex_prepared(

@@ -19,7 +19,17 @@ fn scanned(
     edition: Edition,
     budget: &ExpansionBudget,
 ) -> (NameStoreBuilder, Vec<Token>) {
-    let input = PreparedLexInput::identity(Path::new("name-control.rs"), text, budget).unwrap();
+    let input = PreparedLexInput::identity(
+        Path::new("name-control.rs"),
+        text,
+        budget,
+        justrust_engine::compiler::owner_path::standalone_issued(
+            &budget,
+            justrust_engine::compiler::owner_path::OwnerDomain::SourceSnapshot,
+        )
+        .unwrap(),
+    )
+    .unwrap();
     let (mut session, cap) =
         TokenSession::standalone(input.snapshot().clone(), budget.clone()).unwrap();
     let lexed = lex_prepared(&input, edition, &mut session).unwrap();

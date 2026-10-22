@@ -551,8 +551,17 @@ mod tests {
     use std::path::Path;
 
     fn fixture(budget: ExpansionBudget) -> (NameStoreBuilder, [AstIdent; 3]) {
-        let source =
-            SourceSnapshot::from_text(Path::new("path-fixture.rs"), "abc", &budget).unwrap();
+        let source = SourceSnapshot::from_text(
+            Path::new("path-fixture.rs"),
+            "abc",
+            &budget,
+            crate::compiler::owner_path::standalone_issued(
+                &budget,
+                crate::compiler::owner_path::OwnerDomain::SourceSnapshot,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         let file = source.file(0).unwrap();
         let first = source.span(file, 0, 1).unwrap();
         let eof = source.span(file, 3, 3).unwrap();

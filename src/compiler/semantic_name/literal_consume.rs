@@ -172,7 +172,17 @@ mod tests {
     ) -> (NameStoreBuilder, ExpansionAdmission, Token, SpanId, SpanId) {
         let budget = ExpansionBudget::default();
         let text = if boolean { "-true" } else { "-1" };
-        let sources = SourceSnapshot::from_text(Path::new("literal.rs"), text, &budget).unwrap();
+        let sources = SourceSnapshot::from_text(
+            Path::new("literal.rs"),
+            text,
+            &budget,
+            crate::compiler::owner_path::standalone_issued(
+                &budget,
+                crate::compiler::owner_path::OwnerDomain::SourceSnapshot,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         let file = sources.file(0).unwrap();
         let minus_origin = sources.span(file, 0, 1).unwrap();
         let value_origin = sources

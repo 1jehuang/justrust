@@ -265,7 +265,15 @@ mod tests {
     fn session() -> (TokenSession, SpanId) {
         let mut map = SourceMap::default();
         map.add("tree.rs".into(), Arc::from("()[]{}+"));
-        let sources = SourceSnapshot::new(map).unwrap();
+        let sources = SourceSnapshot::new(
+            map,
+            crate::compiler::owner_path::standalone_issued(
+                &crate::compiler::expansion_budget::ExpansionBudget::default(),
+                crate::compiler::owner_path::OwnerDomain::SourceSnapshot,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         let source = sources.span(sources.file(0).unwrap(), 0, 1).unwrap();
         let mut session = TokenSession::new(sources, ExpansionBudget::default()).unwrap();
         let span = session.original_span(source).unwrap();
@@ -459,7 +467,15 @@ mod tests {
         let setup = |budget: ExpansionBudget| {
             let mut map = SourceMap::default();
             map.add("empty.rs".into(), Arc::from("+"));
-            let sources = SourceSnapshot::new(map).unwrap();
+            let sources = SourceSnapshot::new(
+                map,
+                crate::compiler::owner_path::standalone_issued(
+                    &crate::compiler::expansion_budget::ExpansionBudget::default(),
+                    crate::compiler::owner_path::OwnerDomain::SourceSnapshot,
+                )
+                .unwrap(),
+            )
+            .unwrap();
             let source = sources.span(sources.file(0).unwrap(), 0, 1).unwrap();
             let mut session = TokenSession::new(sources, budget).unwrap();
             let span = session.original_span(source).unwrap();

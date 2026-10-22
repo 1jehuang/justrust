@@ -621,7 +621,17 @@ mod tests {
         }
         fn limited(text: &str, limits: ExpansionLimits) -> Self {
             let budget = ExpansionBudget::new(limits);
-            let input = PreparedLexInput::identity(Path::new("rules.rs"), text, &budget).unwrap();
+            let input = PreparedLexInput::identity(
+                Path::new("rules.rs"),
+                text,
+                &budget,
+                crate::compiler::owner_path::standalone_issued(
+                    &budget,
+                    crate::compiler::owner_path::OwnerDomain::SourceSnapshot,
+                )
+                .unwrap(),
+            )
+            .unwrap();
             let mut session = TokenSession::new(input.snapshot().clone(), budget).unwrap();
             let tokens = lex_prepared(&input, Edition::E2024, &mut session).unwrap();
             let mut physical = BudgetVec::new(session.budget(), Storage::Temporary).unwrap();

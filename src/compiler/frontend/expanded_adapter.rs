@@ -512,6 +512,11 @@ mod tests {
             Path::new("item.rs"),
             "($name:ident,$x:literal)=>{fn $name()->i32{$x}}; (generated,7)",
             &budget,
+            crate::compiler::owner_path::standalone_issued(
+                &budget,
+                crate::compiler::owner_path::OwnerDomain::SourceSnapshot,
+            )
+            .unwrap(),
         )
         .unwrap();
         let (mut session, session_cap) =
@@ -735,7 +740,17 @@ mod tests {
     fn fixture_rules(rules: &str, args: &str) -> Fixture {
         let budget = ExpansionBudget::default();
         let text = format!("{rules} {args}");
-        let input = PreparedLexInput::identity(Path::new("expanded.rs"), &text, &budget).unwrap();
+        let input = PreparedLexInput::identity(
+            Path::new("expanded.rs"),
+            &text,
+            &budget,
+            crate::compiler::owner_path::standalone_issued(
+                &budget,
+                crate::compiler::owner_path::OwnerDomain::SourceSnapshot,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         let (mut session, session_cap) =
             TokenSession::standalone(input.snapshot().clone(), budget.clone()).unwrap();
         let lexed =

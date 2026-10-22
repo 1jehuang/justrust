@@ -3890,9 +3890,17 @@ mod tests {
         use super::super::token::Edition;
         use super::super::token_session::{SourceSnapshot, TokenSession};
         let budget = ExpansionBudget::default();
-        let sources =
-            SourceSnapshot::from_text(std::path::Path::new("module-fixture.rs"), "", &budget)
-                .unwrap();
+        let sources = SourceSnapshot::from_text(
+            std::path::Path::new("module-fixture.rs"),
+            "",
+            &budget,
+            crate::compiler::owner_path::standalone_issued(
+                &budget,
+                crate::compiler::owner_path::OwnerDomain::SourceSnapshot,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         let (session, session_cap) = TokenSession::standalone(sources, budget).unwrap();
         let names = NameStoreBuilder::new(session, session_cap, Edition::E2024).unwrap();
         let modules = ModuleArenaBuilder::for_source(

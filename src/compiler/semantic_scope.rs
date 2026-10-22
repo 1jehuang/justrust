@@ -1123,7 +1123,17 @@ mod tests {
 
     fn fixture() -> (NameStoreBuilder, SpanId, ExpansionId, Token, Token) {
         let budget = ExpansionBudget::default();
-        let sources = SourceSnapshot::from_text(Path::new("scope.rs"), "x", &budget).unwrap();
+        let sources = SourceSnapshot::from_text(
+            Path::new("scope.rs"),
+            "x",
+            &budget,
+            crate::compiler::owner_path::standalone_issued(
+                &budget,
+                crate::compiler::owner_path::OwnerDomain::SourceSnapshot,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         let file = sources.file(0).unwrap();
         let original = sources.span(file, 0, 1).unwrap();
         let (mut session, session_cap) = TokenSession::standalone(sources, budget).unwrap();
@@ -1183,7 +1193,17 @@ mod tests {
     }
     fn nested_fixture() -> NestedFixture {
         let budget = ExpansionBudget::default();
-        let sources = SourceSnapshot::from_text(Path::new("nested.rs"), "x", &budget).unwrap();
+        let sources = SourceSnapshot::from_text(
+            Path::new("nested.rs"),
+            "x",
+            &budget,
+            crate::compiler::owner_path::standalone_issued(
+                &budget,
+                crate::compiler::owner_path::OwnerDomain::SourceSnapshot,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         let (mut session, session_cap) = TokenSession::standalone(sources, budget).unwrap();
         let file = session.sources().file(0).unwrap();
         let original = session
@@ -1514,7 +1534,17 @@ mod tests {
             depths: [512, 256, 2],
             ..ExpansionLimits::default()
         });
-        let source = SourceSnapshot::from_text(Path::new("depth.rs"), "x", &budget).unwrap();
+        let source = SourceSnapshot::from_text(
+            Path::new("depth.rs"),
+            "x",
+            &budget,
+            crate::compiler::owner_path::standalone_issued(
+                &budget,
+                crate::compiler::owner_path::OwnerDomain::SourceSnapshot,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         let file = source.file(0).unwrap();
         let original = source.span(file, 0, 1).unwrap();
         let mut session = TokenSession::new(source, budget.clone()).unwrap();

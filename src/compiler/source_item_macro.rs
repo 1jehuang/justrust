@@ -305,7 +305,16 @@ mod tests {
                 synthetic: false,
             });
         }
-        let projection = PreparedLexInput::prepared(&prepared, &budget).unwrap();
+        let projection = PreparedLexInput::prepared(
+            &prepared,
+            &budget,
+            crate::compiler::owner_path::standalone_issued(
+                &budget,
+                crate::compiler::owner_path::OwnerDomain::SourceSnapshot,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         let (mut session, cap) = super::super::token_session::TokenSession::standalone(
             projection.snapshot().clone(),
             budget,
@@ -419,8 +428,17 @@ mod tests {
     #[test]
     fn selected_rule_remains_committed_and_other_driver_rejects_handle() {
         let budget = ExpansionBudget::default();
-        let projection =
-            PreparedLexInput::identity(Path::new("items.rs"), "()=>{1};()=>{2};", &budget).unwrap();
+        let projection = PreparedLexInput::identity(
+            Path::new("items.rs"),
+            "()=>{1};()=>{2};",
+            &budget,
+            crate::compiler::owner_path::standalone_issued(
+                &budget,
+                crate::compiler::owner_path::OwnerDomain::SourceSnapshot,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         let (mut session, session_cap) = super::super::token_session::TokenSession::standalone(
             projection.snapshot().clone(),
             budget,

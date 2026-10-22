@@ -270,8 +270,17 @@ mod tests {
     }
     fn fixture() -> Fixture {
         let budget = ExpansionBudget::default();
-        let projection =
-            PreparedLexInput::identity(Path::new("rules.rs"), "()=>{1};()=>{2};", &budget).unwrap();
+        let projection = PreparedLexInput::identity(
+            Path::new("rules.rs"),
+            "()=>{1};()=>{2};",
+            &budget,
+            crate::compiler::owner_path::standalone_issued(
+                &budget,
+                crate::compiler::owner_path::OwnerDomain::SourceSnapshot,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         let (mut session, session_cap) = super::super::token_session::TokenSession::standalone(
             projection.snapshot().clone(),
             budget,

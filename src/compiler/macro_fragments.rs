@@ -147,7 +147,17 @@ mod tests {
 
     fn session() -> (TokenSession, super::super::expansion_span::SpanId) {
         let budget = ExpansionBudget::default();
-        let sources = SourceSnapshot::from_text(Path::new("fragment.rs"), "-1", &budget).unwrap();
+        let sources = SourceSnapshot::from_text(
+            Path::new("fragment.rs"),
+            "-1",
+            &budget,
+            crate::compiler::owner_path::standalone_issued(
+                &budget,
+                crate::compiler::owner_path::OwnerDomain::SourceSnapshot,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         let source = sources.span(sources.file(0).unwrap(), 0, 1).unwrap();
         let mut session = TokenSession::new(sources, budget).unwrap();
         let span = session.original_span(source).unwrap();

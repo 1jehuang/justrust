@@ -847,11 +847,17 @@ impl Provider for CompilerProvider {
                     let parse_budget = expansion_budget::ExpansionBudget::default();
                     let mut issuer = owner_path::OwnerIssuer::new(cx.owner_root()?, &parse_budget)
                         .map_err(|error| Error::new(format!("owner issuance failed: {error:?}")))?;
+                    // The lexical source snapshot is a sibling owner issued
+                    // by this same PARSE node, never a global counter.
+                    let snapshot = issuer
+                        .issue(owner_path::OwnerDomain::SourceSnapshot)
+                        .map_err(|error| Error::new(format!("owner issuance failed: {error:?}")))?;
                     let owner = issuer
                         .issue(owner_path::OwnerDomain::TokenSession)
                         .map_err(|error| Error::new(format!("owner issuance failed: {error:?}")))?;
-                    let parsed = frontend::parse_prepared_owned(&prepared, parse_budget, owner)
-                        .map_err(|error| Error::new(error.to_string()));
+                    let parsed =
+                        frontend::parse_prepared_owned(&prepared, parse_budget, snapshot, owner)
+                            .map_err(|error| Error::new(error.to_string()));
                     cx.publish_fact(1, prepared)?;
                     cx.publish_fact(0, parsed?)
                 }

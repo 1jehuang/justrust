@@ -661,8 +661,17 @@ impl Fixture {
             .collect::<Vec<_>>()
             .join(" ");
         let budget = ExpansionBudget::new(limits);
-        let input =
-            PreparedLexInput::identity(Path::new("utility-only.rs"), &text, &budget).unwrap();
+        let input = PreparedLexInput::identity(
+            Path::new("utility-only.rs"),
+            &text,
+            &budget,
+            justrust_engine::compiler::owner_path::standalone_issued(
+                &budget,
+                justrust_engine::compiler::owner_path::OwnerDomain::SourceSnapshot,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         let mut session = TokenSession::standalone(input.snapshot().clone(), budget)
             .unwrap()
             .0;

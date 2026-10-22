@@ -914,7 +914,17 @@ mod tests {
     }
     fn fixture() -> Fixture {
         let budget = ExpansionBudget::default();
-        let source = SourceSnapshot::from_text(Path::new("item.rs"), "x", &budget).unwrap();
+        let source = SourceSnapshot::from_text(
+            Path::new("item.rs"),
+            "x",
+            &budget,
+            crate::compiler::owner_path::standalone_issued(
+                &budget,
+                crate::compiler::owner_path::OwnerDomain::SourceSnapshot,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         let file = source.file(0).unwrap();
         let physical = source.span(file, 0, 1).unwrap();
         let (mut session, session_cap) = TokenSession::standalone(source, budget).unwrap();

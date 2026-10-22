@@ -18,7 +18,15 @@ fn map(text: &str) -> SourceMap {
     }
 }
 fn snapshot(text: &str) -> SourceSnapshot {
-    SourceSnapshot::new(map(text)).unwrap()
+    SourceSnapshot::new(
+        map(text),
+        justrust_engine::compiler::owner_path::standalone_issued(
+            &justrust_engine::compiler::token_primitives::ExpansionBudget::default(),
+            justrust_engine::compiler::owner_path::OwnerDomain::SourceSnapshot,
+        )
+        .unwrap(),
+    )
+    .unwrap()
 }
 fn session() -> TokenSession {
     TokenSession::standalone(
@@ -101,7 +109,15 @@ fn snapshots_are_owned_utf8_checked_and_eof_aware() {
 #[test]
 fn snapshot_seals_caller_owned_map_clones() {
     let mut caller = map("α\r\nz");
-    let sealed = SourceSnapshot::new(caller.clone()).unwrap();
+    let sealed = SourceSnapshot::new(
+        caller.clone(),
+        justrust_engine::compiler::owner_path::standalone_issued(
+            &justrust_engine::compiler::token_primitives::ExpansionBudget::default(),
+            justrust_engine::compiler::owner_path::OwnerDomain::SourceSnapshot,
+        )
+        .unwrap(),
+    )
+    .unwrap();
     let file = sealed.file(0).unwrap();
     let original = sealed.span(file, 4, 5).unwrap();
     caller.files[0].contents = Arc::from("replacement");
@@ -120,16 +136,23 @@ fn snapshot_seals_caller_owned_map_clones() {
 fn snapshot_file_limit_is_exact_and_precedes_line_validation() {
     const LIMIT: usize = 1024;
     let empty = map("").files.remove(0);
-    let exact = SourceSnapshot::new(SourceMap {
-        files: vec![empty.clone(); LIMIT],
-    })
+    let exact = SourceSnapshot::new(
+        SourceMap {
+            files: vec![empty.clone(); LIMIT],
+        },
+        justrust_engine::compiler::owner_path::standalone_issued(
+            &justrust_engine::compiler::token_primitives::ExpansionBudget::default(),
+            justrust_engine::compiler::owner_path::OwnerDomain::SourceSnapshot,
+        )
+        .unwrap(),
+    )
     .unwrap();
     assert!(exact.file(LIMIT - 1).is_ok());
     assert!(matches!(exact.file(LIMIT), Err(TokenError::InvalidHandle)));
     let mut files = vec![empty; LIMIT + 1];
     files[0].line_starts.clear();
     assert!(
-        matches!(SourceSnapshot::new(SourceMap { files }), Err(TokenError::SourceLimit {
+        matches!(SourceSnapshot::new(SourceMap { files }, justrust_engine::compiler::owner_path::standalone_issued(&justrust_engine::compiler::token_primitives::ExpansionBudget::default(), justrust_engine::compiler::owner_path::OwnerDomain::SourceSnapshot).unwrap()), Err(TokenError::SourceLimit {
         resource: SourceLimitResource::Files, used: 0, requested, limit: LIMIT,
     }) if requested == LIMIT + 1)
     );
@@ -143,9 +166,16 @@ fn snapshot_byte_limit_is_exact_for_single_and_aggregate_contents() {
         contents: Arc::from("x".repeat(LIMIT)),
         line_starts: vec![0],
     };
-    let exact = SourceSnapshot::new(SourceMap {
-        files: vec![exact_file],
-    })
+    let exact = SourceSnapshot::new(
+        SourceMap {
+            files: vec![exact_file],
+        },
+        justrust_engine::compiler::owner_path::standalone_issued(
+            &justrust_engine::compiler::token_primitives::ExpansionBudget::default(),
+            justrust_engine::compiler::owner_path::OwnerDomain::SourceSnapshot,
+        )
+        .unwrap(),
+    )
     .unwrap();
     let file = exact.file(0).unwrap();
     assert!(exact.span(file, LIMIT as u32, LIMIT as u32).is_ok());
@@ -155,7 +185,7 @@ fn snapshot_byte_limit_is_exact_for_single_and_aggregate_contents() {
         line_starts: vec![],
     };
     assert!(
-        matches!(SourceSnapshot::new(SourceMap { files: vec![oversized] }), Err(TokenError::SourceLimit {
+        matches!(SourceSnapshot::new(SourceMap { files: vec![oversized] }, justrust_engine::compiler::owner_path::standalone_issued(&justrust_engine::compiler::token_primitives::ExpansionBudget::default(), justrust_engine::compiler::owner_path::OwnerDomain::SourceSnapshot).unwrap()), Err(TokenError::SourceLimit {
         resource: SourceLimitResource::Bytes, used: 0, requested, limit: LIMIT,
     }) if requested == LIMIT + 1)
     );
@@ -165,15 +195,29 @@ fn snapshot_byte_limit_is_exact_for_single_and_aggregate_contents() {
         line_starts: vec![0],
     };
     assert!(
-        SourceSnapshot::new(SourceMap {
-            files: vec![half.clone(), half.clone()]
-        })
+        SourceSnapshot::new(
+            SourceMap {
+                files: vec![half.clone(), half.clone()]
+            },
+            justrust_engine::compiler::owner_path::standalone_issued(
+                &justrust_engine::compiler::token_primitives::ExpansionBudget::default(),
+                justrust_engine::compiler::owner_path::OwnerDomain::SourceSnapshot
+            )
+            .unwrap()
+        )
         .is_ok()
     );
     let mut files = vec![half.clone(), half, map("x").files.remove(0)];
     files[0].line_starts.clear();
     assert!(matches!(
-        SourceSnapshot::new(SourceMap { files }),
+        SourceSnapshot::new(
+            SourceMap { files },
+            justrust_engine::compiler::owner_path::standalone_issued(
+                &justrust_engine::compiler::token_primitives::ExpansionBudget::default(),
+                justrust_engine::compiler::owner_path::OwnerDomain::SourceSnapshot
+            )
+            .unwrap()
+        ),
         Err(TokenError::SourceLimit {
             resource: SourceLimitResource::Bytes,
             used: LIMIT,
@@ -189,7 +233,14 @@ fn snapshot_rejects_forged_line_tables() {
         let mut source = map("x\ny");
         source.files[0].line_starts = starts;
         assert!(matches!(
-            SourceSnapshot::new(source),
+            SourceSnapshot::new(
+                source,
+                justrust_engine::compiler::owner_path::standalone_issued(
+                    &justrust_engine::compiler::token_primitives::ExpansionBudget::default(),
+                    justrust_engine::compiler::owner_path::OwnerDomain::SourceSnapshot
+                )
+                .unwrap()
+            ),
             Err(TokenError::InvalidInput(_))
         ));
     }

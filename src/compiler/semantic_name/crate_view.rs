@@ -106,7 +106,17 @@ mod tests {
     ) {
         let budget = ExpansionBudget::default();
         let text = format!("{}\n", names.join(" "));
-        let source = SourceSnapshot::from_text(Path::new(path), &text, &budget).unwrap();
+        let source = SourceSnapshot::from_text(
+            Path::new(path),
+            &text,
+            &budget,
+            crate::compiler::owner_path::standalone_issued(
+                &budget,
+                crate::compiler::owner_path::OwnerDomain::SourceSnapshot,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         let handle = source.file(0).unwrap();
         let origin = source.span(handle, 0, 0).unwrap();
         let (mut session, cap) = TokenSession::standalone(source, budget).unwrap();

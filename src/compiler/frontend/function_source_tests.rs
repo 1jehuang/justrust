@@ -46,12 +46,17 @@ fn reject_original_token_range_mutations() {
                         .map_err(|error| {
                             crate::Error::new(format!("test owner issuance: {error:?}"))
                         })?;
+                let snapshot = issuer
+                    .issue(crate::compiler::owner_path::OwnerDomain::SourceSnapshot)
+                    .map_err(|error| {
+                        crate::Error::new(format!("test owner issuance: {error:?}"))
+                    })?;
                 let owner = issuer
                     .issue(crate::compiler::owner_path::OwnerDomain::TokenSession)
                     .map_err(|error| {
                         crate::Error::new(format!("test owner issuance: {error:?}"))
                     })?;
-                reject_token_ranges_with_owner(owner, budget);
+                reject_token_ranges_with_owner(snapshot, owner, budget);
                 cx.publish(0, 1)
             })
         }
@@ -63,11 +68,12 @@ fn reject_original_token_range_mutations() {
 }
 
 fn reject_token_ranges_with_owner(
+    snapshot: crate::compiler::owner_path::Issued,
     owner: crate::compiler::owner_path::Issued,
     budget: crate::compiler::expansion_budget::ExpansionBudget,
 ) {
     let prepared = genuine_source();
-    let projection = source::PreparedLexInput::prepared(&prepared, &budget).unwrap();
+    let projection = source::PreparedLexInput::prepared(&prepared, &budget, snapshot).unwrap();
     let issuers = prepared
         .embedded_issuers(projection.snapshot(), &budget)
         .unwrap();

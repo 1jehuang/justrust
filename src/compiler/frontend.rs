@@ -5520,8 +5520,17 @@ impl ProgramBuilder {
         source: &str,
         budget: &super::expansion_budget::ExpansionBudget,
     ) -> Result<Self, String> {
-        let input = super::source::PreparedLexInput::identity(name, source, budget)
-            .map_err(|error| error.to_string())?;
+        let input = super::source::PreparedLexInput::identity(
+            name,
+            source,
+            budget,
+            super::owner_path::standalone_issued(
+                budget,
+                super::owner_path::OwnerDomain::SourceSnapshot,
+            )
+            .map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| error.to_string())?;
         // Direct fixture builder, never reached from a graph node.
         let owner = super::owner_path::standalone_issued(
             budget,
@@ -7190,6 +7199,11 @@ fn lex(source: &str) -> Result<NativeParserInput, ParseError> {
         std::path::Path::new("<syntax>"),
         source,
         &budget,
+        crate::compiler::owner_path::standalone_issued(
+            &budget,
+            crate::compiler::owner_path::OwnerDomain::SourceSnapshot,
+        )
+        .unwrap(),
     )
     .map_err(native_adapter::source_error)?;
     let owner =
@@ -7259,6 +7273,11 @@ mod local_macro_parser_tests {
                 std::path::Path::new("or.rs"),
                 &source,
                 &budget,
+                crate::compiler::owner_path::standalone_issued(
+                    &budget,
+                    crate::compiler::owner_path::OwnerDomain::SourceSnapshot,
+                )
+                .unwrap(),
             )
             .unwrap();
             let (tokens, session, owner) = native_input(
@@ -7293,6 +7312,11 @@ mod local_macro_parser_tests {
             std::path::Path::new("nested.rs"),
             source,
             budget,
+            crate::compiler::owner_path::standalone_issued(
+                &budget,
+                crate::compiler::owner_path::OwnerDomain::SourceSnapshot,
+            )
+            .unwrap(),
         )
         .map_err(native_adapter::source_error)?;
         parse_syntax_tokens(native_input(
@@ -14375,6 +14399,11 @@ pub(super) fn validate_inactive_syntax(
         std::path::Path::new("<inactive>"),
         source,
         &budget,
+        super::owner_path::standalone_issued(
+            &budget,
+            super::owner_path::OwnerDomain::SourceSnapshot,
+        )
+        .map_err(native_adapter::transport_error)?,
     )
     .map_err(native_adapter::source_error)?;
     let owner =
@@ -15342,10 +15371,15 @@ pub fn parse_prepared(
     source: &super::source::PreparedSource,
 ) -> Result<ParsedProgram, super::source::SourceError> {
     let budget = super::expansion_budget::ExpansionBudget::default();
+    let snapshot = super::owner_path::standalone_issued(
+        &budget,
+        super::owner_path::OwnerDomain::SourceSnapshot,
+    )
+    .map_err(super::source::SourceError::from_token)?;
     let owner =
         super::owner_path::standalone_issued(&budget, super::owner_path::OwnerDomain::TokenSession)
             .map_err(super::source::SourceError::from_token)?;
-    parse_prepared_owned(source, budget, owner)
+    parse_prepared_owned(source, budget, snapshot, owner)
 }
 
 /// Graph entry: the session owner is a tag issued by the calling producer.
@@ -15353,6 +15387,7 @@ pub fn parse_prepared(
 pub fn parse_prepared_owned(
     source: &super::source::PreparedSource,
     budget: super::expansion_budget::ExpansionBudget,
+    snapshot: super::owner_path::Issued,
     owner: super::owner_path::Issued,
 ) -> Result<ParsedProgram, super::source::SourceError> {
     let mapped = |error: ParseError| {
@@ -15370,7 +15405,7 @@ pub fn parse_prepared_owned(
         diagnostic._diagnostic_lease = error._diagnostic_lease;
         diagnostic.with_sources(&source.sources)
     };
-    let projection = super::source::PreparedLexInput::prepared(source, &budget)?;
+    let projection = super::source::PreparedLexInput::prepared(source, &budget, snapshot)?;
     let mut no_std_roots = Vec::new();
     for policy in &source.crate_policies {
         if let Some(root) = policy.no_std_root(source)? {

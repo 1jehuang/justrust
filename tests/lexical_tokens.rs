@@ -64,8 +64,17 @@ fn prepared_identity(text: &str) -> PreparedSource {
 #[test]
 fn identity_projection_keeps_unicode_crlf_and_eof_original_locations() {
     let budget = ExpansionBudget::new(ExpansionLimits::default());
-    let input =
-        PreparedLexInput::identity(Path::new("original/utf8.rs"), "// α🙂\r\nx", &budget).unwrap();
+    let input = PreparedLexInput::identity(
+        Path::new("original/utf8.rs"),
+        "// α🙂\r\nx",
+        &budget,
+        justrust_engine::compiler::owner_path::standalone_issued(
+            &justrust_engine::compiler::token_primitives::ExpansionBudget::default(),
+            justrust_engine::compiler::owner_path::OwnerDomain::SourceSnapshot,
+        )
+        .unwrap(),
+    )
+    .unwrap();
     assert_eq!(input.mode(), PreparedMode::SyntaxOnly);
     let span = input.project(11..12).unwrap();
     let location = input.location(span).unwrap();
@@ -83,8 +92,17 @@ fn identity_projection_keeps_unicode_crlf_and_eof_original_locations() {
         input.project(12..13).unwrap_err().kind,
         SourceErrorKind::Contract
     );
-    let other =
-        PreparedLexInput::identity(Path::new("original/utf8.rs"), "// α🙂\r\nx", &budget).unwrap();
+    let other = PreparedLexInput::identity(
+        Path::new("original/utf8.rs"),
+        "// α🙂\r\nx",
+        &budget,
+        justrust_engine::compiler::owner_path::standalone_issued(
+            &justrust_engine::compiler::token_primitives::ExpansionBudget::default(),
+            justrust_engine::compiler::owner_path::OwnerDomain::SourceSnapshot,
+        )
+        .unwrap(),
+    )
+    .unwrap();
     assert_ne!(input.view_id(), other.view_id());
     assert_eq!(
         other.render(span).unwrap_err().kind,
@@ -96,8 +114,17 @@ fn identity_projection_keeps_unicode_crlf_and_eof_original_locations() {
 fn raw_identity_does_not_apply_configuration_or_touch_paths() {
     let budget = ExpansionBudget::new(ExpansionLimits::default());
     let text = "#[cfg(any())] mod absent;\n/// exact docs\n";
-    let input =
-        PreparedLexInput::identity(Path::new("/does/not/exist/raw.rs"), text, &budget).unwrap();
+    let input = PreparedLexInput::identity(
+        Path::new("/does/not/exist/raw.rs"),
+        text,
+        &budget,
+        justrust_engine::compiler::owner_path::standalone_issued(
+            &justrust_engine::compiler::token_primitives::ExpansionBudget::default(),
+            justrust_engine::compiler::owner_path::OwnerDomain::SourceSnapshot,
+        )
+        .unwrap(),
+    )
+    .unwrap();
     assert_eq!(input.text(), text);
     assert_eq!(input.mode(), PreparedMode::SyntaxOnly);
     assert!(!input.is_synthetic(0..1).unwrap());
@@ -129,7 +156,16 @@ fn prepared_projection_rejects_cross_file_logical_tokens() {
             synthetic: false,
         },
     ];
-    let input = PreparedLexInput::prepared(&prepared, &budget).unwrap();
+    let input = PreparedLexInput::prepared(
+        &prepared,
+        &budget,
+        justrust_engine::compiler::owner_path::standalone_issued(
+            &justrust_engine::compiler::token_primitives::ExpansionBudget::default(),
+            justrust_engine::compiler::owner_path::OwnerDomain::SourceSnapshot,
+        )
+        .unwrap(),
+    )
+    .unwrap();
     assert_eq!(input.mode(), PreparedMode::Configured);
     assert_eq!(
         input.location(input.project(0..2).unwrap()).unwrap().path,
@@ -158,7 +194,16 @@ fn malformed_prepared_provenance_is_contract_not_lexical_syntax() {
             2 => prepared.origins[0].prepared = 1..4,
             _ => prepared.origins[0].origin.hi = 3,
         }
-        let input = PreparedLexInput::prepared(&prepared, &budget).unwrap();
+        let input = PreparedLexInput::prepared(
+            &prepared,
+            &budget,
+            justrust_engine::compiler::owner_path::standalone_issued(
+                &budget,
+                justrust_engine::compiler::owner_path::OwnerDomain::SourceSnapshot,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         assert_eq!(
             input.project(0..4).unwrap_err().kind,
             SourceErrorKind::Contract,
@@ -174,7 +219,16 @@ fn synthetic_transport_is_an_explicit_anchor_not_original_spelling() {
     let mut prepared = prepared_identity(";");
     prepared.text = "{".into();
     prepared.origins[0].synthetic = true;
-    let input = PreparedLexInput::prepared(&prepared, &budget).unwrap();
+    let input = PreparedLexInput::prepared(
+        &prepared,
+        &budget,
+        justrust_engine::compiler::owner_path::standalone_issued(
+            &justrust_engine::compiler::token_primitives::ExpansionBudget::default(),
+            justrust_engine::compiler::owner_path::OwnerDomain::SourceSnapshot,
+        )
+        .unwrap(),
+    )
+    .unwrap();
     let projected = input.projected(0..1).unwrap();
     assert!(projected.synthetic);
     let raw = input.render(projected.original).unwrap();
@@ -194,9 +248,18 @@ fn ingress_storage_failure_is_a_typed_limit_not_syntax() {
         bytes: 0,
         ..ExpansionLimits::default()
     });
-    let error = PreparedLexInput::identity(Path::new("bounded.rs"), "x", &budget)
-        .err()
-        .unwrap();
+    let error = PreparedLexInput::identity(
+        Path::new("bounded.rs"),
+        "x",
+        &budget,
+        justrust_engine::compiler::owner_path::standalone_issued(
+            &justrust_engine::compiler::token_primitives::ExpansionBudget::default(),
+            justrust_engine::compiler::owner_path::OwnerDomain::SourceSnapshot,
+        )
+        .unwrap(),
+    )
+    .err()
+    .unwrap();
     assert_eq!(error.kind, SourceErrorKind::Limit);
     assert!(budget.check().is_err());
 }
@@ -207,8 +270,17 @@ fn native_lexical_categories_do_not_confuse_expression_suffix_semantics() {
     let mut rejected = 0;
     for case in CASES {
         let budget = ExpansionBudget::new(ExpansionLimits::default());
-        let input =
-            PreparedLexInput::identity(Path::new("corpus.rs"), case.source, &budget).unwrap();
+        let input = PreparedLexInput::identity(
+            Path::new("corpus.rs"),
+            case.source,
+            &budget,
+            justrust_engine::compiler::owner_path::standalone_issued(
+                &budget,
+                justrust_engine::compiler::owner_path::OwnerDomain::SourceSnapshot,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         let mut session = TokenSession::standalone(input.snapshot().clone(), budget)
             .unwrap()
             .0;
@@ -284,7 +356,17 @@ fn valid_lexical_classes_remain_explicit_unsupported_parser_ingress() {
 fn literal_spellings_suffix_ranges_and_raw_hashes_are_preserved() {
     let text = r###"r#type β á _ 1.5e+2f64 0xffu8 r##"x"## b'a' c"x" "a\n""###;
     let budget = ExpansionBudget::new(ExpansionLimits::default());
-    let input = PreparedLexInput::identity(Path::new("literals.rs"), text, &budget).unwrap();
+    let input = PreparedLexInput::identity(
+        Path::new("literals.rs"),
+        text,
+        &budget,
+        justrust_engine::compiler::owner_path::standalone_issued(
+            &justrust_engine::compiler::token_primitives::ExpansionBudget::default(),
+            justrust_engine::compiler::owner_path::OwnerDomain::SourceSnapshot,
+        )
+        .unwrap(),
+    )
+    .unwrap();
     let mut session = TokenSession::standalone(input.snapshot().clone(), budget.clone())
         .unwrap()
         .0;
@@ -343,7 +425,17 @@ fn literal_spellings_suffix_ranges_and_raw_hashes_are_preserved() {
 fn spacing_lifetime_and_tuple_dot_transport_are_exact() {
     let text = "'a :: >>= + /* gap */ = .0.1";
     let budget = ExpansionBudget::new(ExpansionLimits::default());
-    let input = PreparedLexInput::identity(Path::new("spacing.rs"), text, &budget).unwrap();
+    let input = PreparedLexInput::identity(
+        Path::new("spacing.rs"),
+        text,
+        &budget,
+        justrust_engine::compiler::owner_path::standalone_issued(
+            &justrust_engine::compiler::token_primitives::ExpansionBudget::default(),
+            justrust_engine::compiler::owner_path::OwnerDomain::SourceSnapshot,
+        )
+        .unwrap(),
+    )
+    .unwrap();
     let mut session = TokenSession::standalone(input.snapshot().clone(), budget)
         .unwrap()
         .0;
@@ -395,7 +487,17 @@ fn spacing_lifetime_and_tuple_dot_transport_are_exact() {
 fn documentation_is_audited_once_without_reintroducing_attributes() {
     let text = "/// α\r\n//! inner\n/** outer */\n/*! inner */\n//// ordinary\n/*** ordinary */\n/**/\nfn main(){}";
     let budget = ExpansionBudget::new(ExpansionLimits::default());
-    let input = PreparedLexInput::identity(Path::new("docs.rs"), text, &budget).unwrap();
+    let input = PreparedLexInput::identity(
+        Path::new("docs.rs"),
+        text,
+        &budget,
+        justrust_engine::compiler::owner_path::standalone_issued(
+            &justrust_engine::compiler::token_primitives::ExpansionBudget::default(),
+            justrust_engine::compiler::owner_path::OwnerDomain::SourceSnapshot,
+        )
+        .unwrap(),
+    )
+    .unwrap();
     let mut session = TokenSession::standalone(input.snapshot().clone(), budget.clone())
         .unwrap()
         .0;
@@ -429,7 +531,17 @@ fn documentation_is_audited_once_without_reintroducing_attributes() {
 #[test]
 fn lexed_output_rejects_other_session_or_prepared_view() {
     let budget = ExpansionBudget::new(ExpansionLimits::default());
-    let input = PreparedLexInput::identity(Path::new("same.rs"), "fn main(){}", &budget).unwrap();
+    let input = PreparedLexInput::identity(
+        Path::new("same.rs"),
+        "fn main(){}",
+        &budget,
+        justrust_engine::compiler::owner_path::standalone_issued(
+            &justrust_engine::compiler::token_primitives::ExpansionBudget::default(),
+            justrust_engine::compiler::owner_path::OwnerDomain::SourceSnapshot,
+        )
+        .unwrap(),
+    )
+    .unwrap();
     let mut session = TokenSession::standalone(input.snapshot().clone(), budget.clone())
         .unwrap()
         .0;
@@ -441,8 +553,17 @@ fn lexed_output_rejects_other_session_or_prepared_view() {
         tokens.validate_input(&other_session, &input),
         Err(LexError::Transport(TokenError::ForeignHandle))
     ));
-    let other_view =
-        PreparedLexInput::identity(Path::new("same.rs"), "fn main(){}", &budget).unwrap();
+    let other_view = PreparedLexInput::identity(
+        Path::new("same.rs"),
+        "fn main(){}",
+        &budget,
+        justrust_engine::compiler::owner_path::standalone_issued(
+            &justrust_engine::compiler::token_primitives::ExpansionBudget::default(),
+            justrust_engine::compiler::owner_path::OwnerDomain::SourceSnapshot,
+        )
+        .unwrap(),
+    )
+    .unwrap();
     assert!(matches!(
         tokens.validate_input(&session, &other_view),
         Err(LexError::Projection(error)) if error.kind == SourceErrorKind::Contract
@@ -469,7 +590,16 @@ fn late_invalid_literal_beats_earlier_bad_projection() {
     let mut prepared = prepared_identity(r#"fn main(){ let _ = "ok"; let _ = "\q"; }"#);
     prepared.origins[0].origin.file = FileId(99);
     let budget = ExpansionBudget::new(ExpansionLimits::default());
-    let input = PreparedLexInput::prepared(&prepared, &budget).unwrap();
+    let input = PreparedLexInput::prepared(
+        &prepared,
+        &budget,
+        justrust_engine::compiler::owner_path::standalone_issued(
+            &justrust_engine::compiler::token_primitives::ExpansionBudget::default(),
+            justrust_engine::compiler::owner_path::OwnerDomain::SourceSnapshot,
+        )
+        .unwrap(),
+    )
+    .unwrap();
     let mut session = TokenSession::standalone(input.snapshot().clone(), budget)
         .unwrap()
         .0;
@@ -505,7 +635,17 @@ fn guarded_strings_have_explicit_edition_specific_lexical_outcomes() {
     for text in ["#\"abc\"#", "##"] {
         for edition in [Edition::E2024, Edition::E2021] {
             let budget = ExpansionBudget::new(ExpansionLimits::default());
-            let input = PreparedLexInput::identity(Path::new("edition.rs"), text, &budget).unwrap();
+            let input = PreparedLexInput::identity(
+                Path::new("edition.rs"),
+                text,
+                &budget,
+                justrust_engine::compiler::owner_path::standalone_issued(
+                    &budget,
+                    justrust_engine::compiler::owner_path::OwnerDomain::SourceSnapshot,
+                )
+                .unwrap(),
+            )
+            .unwrap();
             let mut session = TokenSession::standalone(input.snapshot().clone(), budget)
                 .unwrap()
                 .0;

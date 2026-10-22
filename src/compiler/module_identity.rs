@@ -531,7 +531,17 @@ mod tests {
     use std::path::Path;
 
     fn names(budget: ExpansionBudget) -> (NameStoreBuilder, SpanId) {
-        let source = SourceSnapshot::from_text(Path::new("modules.rs"), "", &budget).unwrap();
+        let source = SourceSnapshot::from_text(
+            Path::new("modules.rs"),
+            "",
+            &budget,
+            crate::compiler::owner_path::standalone_issued(
+                &budget,
+                crate::compiler::owner_path::OwnerDomain::SourceSnapshot,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         let original = source.span(source.file(0).unwrap(), 0, 0).unwrap();
         let (mut session, session_cap) = TokenSession::standalone(source, budget).unwrap();
         let origin = session.original_span(original).unwrap();
@@ -669,7 +679,7 @@ mod tests {
             ModuleArenaBuilder::for_catalog(
                 zero.clone(),
                 crate::compiler::owner_path::standalone_issued(
-                    &zero.clone(),
+                    &ExpansionBudget::default(),
                     crate::compiler::owner_path::OwnerDomain::ModuleArena
                 )
                 .unwrap()

@@ -428,8 +428,17 @@ mod tests {
     use std::path::Path;
 
     fn names(text: &str, budget: &ExpansionBudget) -> (Arc<NameStore>, Vec<AstIdent>) {
-        let input =
-            PreparedLexInput::identity(Path::new("comparison-control.rs"), text, budget).unwrap();
+        let input = PreparedLexInput::identity(
+            Path::new("comparison-control.rs"),
+            text,
+            budget,
+            crate::compiler::owner_path::standalone_issued(
+                &budget,
+                crate::compiler::owner_path::OwnerDomain::SourceSnapshot,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         let (mut session, session_cap) =
             TokenSession::standalone(input.snapshot().clone(), budget.clone()).unwrap();
         let tokens =

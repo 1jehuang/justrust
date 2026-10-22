@@ -11194,8 +11194,17 @@ mod tests {
         use crate::compiler::token::Edition;
         use crate::compiler::token_session::{SourceSnapshot, TokenSession};
         let budget = ExpansionBudget::default();
-        let source =
-            SourceSnapshot::from_text(std::path::Path::new("visibility.rs"), "", &budget).unwrap();
+        let source = SourceSnapshot::from_text(
+            std::path::Path::new("visibility.rs"),
+            "",
+            &budget,
+            crate::compiler::owner_path::standalone_issued(
+                &budget,
+                crate::compiler::owner_path::OwnerDomain::SourceSnapshot,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         let origin = source.span(source.file(0).unwrap(), 0, 0).unwrap();
         let (mut session, session_cap) = TokenSession::standalone(source, budget).unwrap();
         let origin = session.original_span(origin).unwrap();

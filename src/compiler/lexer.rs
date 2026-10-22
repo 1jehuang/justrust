@@ -588,7 +588,17 @@ mod tests {
     use std::sync::Arc;
 
     fn input<'a>(text: &'a str, budget: &ExpansionBudget) -> PreparedLexInput<'a> {
-        PreparedLexInput::identity(Path::new("lex.rs"), text, budget).unwrap()
+        PreparedLexInput::identity(
+            Path::new("lex.rs"),
+            text,
+            budget,
+            crate::compiler::owner_path::standalone_issued(
+                &budget,
+                crate::compiler::owner_path::OwnerDomain::SourceSnapshot,
+            )
+            .unwrap(),
+        )
+        .unwrap()
     }
 
     #[test]
@@ -774,7 +784,16 @@ mod tests {
         prepared.text = text.into();
         prepared.sources = sources;
         let budget = ExpansionBudget::default();
-        let input = PreparedLexInput::prepared(&prepared, &budget).unwrap();
+        let input = PreparedLexInput::prepared(
+            &prepared,
+            &budget,
+            crate::compiler::owner_path::standalone_issued(
+                &budget,
+                crate::compiler::owner_path::OwnerDomain::SourceSnapshot,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         let mut session = TokenSession::new(input.snapshot().clone(), budget.clone()).unwrap();
         assert!(matches!(
             lex_prepared(&input, Edition::E2024, &mut session),
@@ -805,7 +824,16 @@ mod tests {
             synthetic: true,
         }];
         let budget = ExpansionBudget::default();
-        let input = PreparedLexInput::prepared(&prepared, &budget).unwrap();
+        let input = PreparedLexInput::prepared(
+            &prepared,
+            &budget,
+            crate::compiler::owner_path::standalone_issued(
+                &budget,
+                crate::compiler::owner_path::OwnerDomain::SourceSnapshot,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         let mut session = TokenSession::new(input.snapshot().clone(), budget).unwrap();
         let lexed = lex_prepared(&input, Edition::E2024, &mut session).unwrap();
         for span in lexed
@@ -844,8 +872,17 @@ mod tests {
             lexed.validate_input(&foreign, &input),
             Err(LexError::Transport(TokenError::ForeignHandle))
         ));
-        let different_view =
-            PreparedLexInput::identity(Path::new("other.rs"), "", &budget).unwrap();
+        let different_view = PreparedLexInput::identity(
+            Path::new("other.rs"),
+            "",
+            &budget,
+            crate::compiler::owner_path::standalone_issued(
+                &budget,
+                crate::compiler::owner_path::OwnerDomain::SourceSnapshot,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         assert!(matches!(
             lexed.validate_input(&session, &different_view),
             Err(LexError::Projection(SourceError {

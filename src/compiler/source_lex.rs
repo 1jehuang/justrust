@@ -48,12 +48,18 @@ impl<'a> PreparedLexInput<'a> {
     pub fn prepared(
         prepared: &'a PreparedSource,
         budget: &ExpansionBudget,
+        owner: super::super::owner_path::Issued,
     ) -> Result<Self, SourceError> {
         Self::new(
             &prepared.text,
             Some(&prepared.origins),
-            SourceSnapshot::copy_with_crates(&prepared.sources, &prepared.crate_roots, budget)
-                .map_err(SourceError::from_token)?,
+            SourceSnapshot::copy_with_crates(
+                &prepared.sources,
+                &prepared.crate_roots,
+                budget,
+                owner,
+            )
+            .map_err(SourceError::from_token)?,
             budget,
         )
     }
@@ -61,11 +67,13 @@ impl<'a> PreparedLexInput<'a> {
         name: &Path,
         text: &'a str,
         budget: &ExpansionBudget,
+        owner: super::super::owner_path::Issued,
     ) -> Result<Self, SourceError> {
         Self::new(
             text,
             None,
-            SourceSnapshot::from_text(name, text, budget).map_err(SourceError::from_token)?,
+            SourceSnapshot::from_text(name, text, budget, owner)
+                .map_err(SourceError::from_token)?,
             budget,
         )
     }
@@ -311,7 +319,16 @@ mod tests {
         )
         .unwrap();
         let budget = ExpansionBudget::default();
-        let input = PreparedLexInput::prepared(&source, &budget).unwrap();
+        let input = PreparedLexInput::prepared(
+            &source,
+            &budget,
+            crate::compiler::owner_path::standalone_issued(
+                &budget,
+                crate::compiler::owner_path::OwnerDomain::SourceSnapshot,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         assert!(std::ptr::eq(input.text().as_ptr(), source.text.as_ptr()));
         let start = input.text().find("main").unwrap();
         let span = input.project(start..start + 4).unwrap();
@@ -327,8 +344,28 @@ mod tests {
     fn identity_does_not_apply_attrs_cfg_or_io_and_has_distinct_views() {
         let text = "#[cfg(any())] mod absent; /// docs\n";
         let budget = ExpansionBudget::default();
-        let a = PreparedLexInput::identity(Path::new("raw.rs"), text, &budget).unwrap();
-        let b = PreparedLexInput::identity(Path::new("raw.rs"), text, &budget).unwrap();
+        let a = PreparedLexInput::identity(
+            Path::new("raw.rs"),
+            text,
+            &budget,
+            crate::compiler::owner_path::standalone_issued(
+                &budget,
+                crate::compiler::owner_path::OwnerDomain::SourceSnapshot,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let b = PreparedLexInput::identity(
+            Path::new("raw.rs"),
+            text,
+            &budget,
+            crate::compiler::owner_path::standalone_issued(
+                &budget,
+                crate::compiler::owner_path::OwnerDomain::SourceSnapshot,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         assert_eq!(a.text(), text);
         assert_eq!(a.mode(), PreparedMode::SyntaxOnly);
         assert_ne!(a.view_id(), b.view_id());
@@ -340,8 +377,17 @@ mod tests {
     #[test]
     fn lexical_pairing_requires_both_source_and_shared_budget_identity() {
         let budget = ExpansionBudget::default();
-        let input =
-            PreparedLexInput::identity(Path::new("pair.rs"), "fn main(){}", &budget).unwrap();
+        let input = PreparedLexInput::identity(
+            Path::new("pair.rs"),
+            "fn main(){}",
+            &budget,
+            crate::compiler::owner_path::standalone_issued(
+                &budget,
+                crate::compiler::owner_path::OwnerDomain::SourceSnapshot,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         let matching = TokenSession::new(input.snapshot().clone(), budget.clone()).unwrap();
         input.validate_session(&matching).unwrap();
         let independent = ExpansionBudget::new(budget.limits());
@@ -350,8 +396,17 @@ mod tests {
             input.validate_session(&split).unwrap_err().kind,
             SourceErrorKind::Contract
         );
-        let other =
-            PreparedLexInput::identity(Path::new("pair.rs"), input.text(), &budget).unwrap();
+        let other = PreparedLexInput::identity(
+            Path::new("pair.rs"),
+            input.text(),
+            &budget,
+            crate::compiler::owner_path::standalone_issued(
+                &budget,
+                crate::compiler::owner_path::OwnerDomain::SourceSnapshot,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         let foreign = TokenSession::new(other.snapshot().clone(), budget).unwrap();
         assert_eq!(
             input.validate_session(&foreign).unwrap_err().kind,
@@ -362,18 +417,47 @@ mod tests {
     fn eof_and_empty_identity_are_explicit_checked_original_anchors() {
         let budget = ExpansionBudget::default();
         for text in ["", "α\r\n"] {
-            let input = PreparedLexInput::identity(Path::new("empty.rs"), text, &budget).unwrap();
+            let input = PreparedLexInput::identity(
+                Path::new("empty.rs"),
+                text,
+                &budget,
+                crate::compiler::owner_path::standalone_issued(
+                    &budget,
+                    crate::compiler::owner_path::OwnerDomain::SourceSnapshot,
+                )
+                .unwrap(),
+            )
+            .unwrap();
             let raw = input.render(input.eof().unwrap()).unwrap();
             assert_eq!((raw.lo, raw.hi), (text.len() as u32, text.len() as u32));
         }
         let source = prepare_text("empty.rs", "", &SourceOptions::default()).unwrap();
-        let input = PreparedLexInput::prepared(&source, &budget).unwrap();
+        let input = PreparedLexInput::prepared(
+            &source,
+            &budget,
+            crate::compiler::owner_path::standalone_issued(
+                &budget,
+                crate::compiler::owner_path::OwnerDomain::SourceSnapshot,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         assert_eq!(input.render(input.eof().unwrap()).unwrap().lo, 0);
     }
     #[test]
     fn malformed_ranges_mappings_and_spelling_are_contract_not_syntax() {
         let budget = ExpansionBudget::default();
-        let input = PreparedLexInput::identity(Path::new("utf8.rs"), "α", &budget).unwrap();
+        let input = PreparedLexInput::identity(
+            Path::new("utf8.rs"),
+            "α",
+            &budget,
+            crate::compiler::owner_path::standalone_issued(
+                &budget,
+                crate::compiler::owner_path::OwnerDomain::SourceSnapshot,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         assert_eq!(
             input.project(1..2).unwrap_err().kind,
             SourceErrorKind::Contract
@@ -381,14 +465,32 @@ mod tests {
         let mut source =
             prepare_text("forged.rs", "fn main() {}", &SourceOptions::default()).unwrap();
         source.text.replace_range(0..2, "xx");
-        let input = PreparedLexInput::prepared(&source, &budget).unwrap();
+        let input = PreparedLexInput::prepared(
+            &source,
+            &budget,
+            crate::compiler::owner_path::standalone_issued(
+                &budget,
+                crate::compiler::owner_path::OwnerDomain::SourceSnapshot,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         assert_eq!(
             input.project(0..2).unwrap_err().kind,
             SourceErrorKind::Contract
         );
         drop(input);
         source.origins[0].origin.file = FileId(u32::MAX);
-        let input = PreparedLexInput::prepared(&source, &budget).unwrap();
+        let input = PreparedLexInput::prepared(
+            &source,
+            &budget,
+            crate::compiler::owner_path::standalone_issued(
+                &budget,
+                crate::compiler::owner_path::OwnerDomain::SourceSnapshot,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         assert_eq!(
             input.project(0..2).unwrap_err().kind,
             SourceErrorKind::Contract
@@ -400,7 +502,16 @@ mod tests {
             prepare_text("cache.rs", "fn main(){}", &SourceOptions::default()).unwrap();
         source.origins[0].prepared.start = 1;
         let budget = ExpansionBudget::default();
-        let input = PreparedLexInput::prepared(&source, &budget).unwrap();
+        let input = PreparedLexInput::prepared(
+            &source,
+            &budget,
+            crate::compiler::owner_path::standalone_issued(
+                &budget,
+                crate::compiler::owner_path::OwnerDomain::SourceSnapshot,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         let first = input.validate_structure().unwrap_err();
         let work = budget.snapshot().counters[Counter::Work as usize];
         let second = input.validate_structure().unwrap_err();
@@ -416,7 +527,16 @@ mod tests {
     fn cached_structure_budget_failure_keeps_the_exact_latched_cause() {
         let source = prepare_text("cache.rs", "fn main(){}", &SourceOptions::default()).unwrap();
         let budget = ExpansionBudget::default();
-        let input = PreparedLexInput::prepared(&source, &budget).unwrap();
+        let input = PreparedLexInput::prepared(
+            &source,
+            &budget,
+            crate::compiler::owner_path::standalone_issued(
+                &budget,
+                crate::compiler::owner_path::OwnerDomain::SourceSnapshot,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         let failure = budget
             .charge(
                 Counter::Work,
@@ -457,7 +577,16 @@ mod tests {
                 synthetic: false,
             },
         ];
-        let input = PreparedLexInput::prepared(&source, &budget).unwrap();
+        let input = PreparedLexInput::prepared(
+            &source,
+            &budget,
+            crate::compiler::owner_path::standalone_issued(
+                &budget,
+                crate::compiler::owner_path::OwnerDomain::SourceSnapshot,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         assert_eq!(
             input.project(1..3).unwrap_err().kind,
             SourceErrorKind::Contract
@@ -475,7 +604,16 @@ mod tests {
         let mut prepared = prepare_text("anchor.rs", ";", &SourceOptions::default()).unwrap();
         prepared.text = "{".into();
         prepared.origins[0].synthetic = true;
-        let input = PreparedLexInput::prepared(&prepared, &budget).unwrap();
+        let input = PreparedLexInput::prepared(
+            &prepared,
+            &budget,
+            crate::compiler::owner_path::standalone_issued(
+                &budget,
+                crate::compiler::owner_path::OwnerDomain::SourceSnapshot,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         let projected = input.projected(0..1).unwrap();
         assert!(projected.synthetic);
         let raw = input.render(projected.original).unwrap();
@@ -513,18 +651,36 @@ mod tests {
             ..ExpansionLimits::default()
         });
         assert_eq!(
-            PreparedLexInput::identity(Path::new("limit.rs"), "x", &budget)
-                .err()
+            PreparedLexInput::identity(
+                Path::new("limit.rs"),
+                "x",
+                &budget,
+                crate::compiler::owner_path::standalone_issued(
+                    &ExpansionBudget::default(),
+                    crate::compiler::owner_path::OwnerDomain::SourceSnapshot
+                )
                 .unwrap()
-                .kind,
+            )
+            .err()
+            .unwrap()
+            .kind,
             SourceErrorKind::Limit
         );
     }
     #[test]
     fn original_errors_retain_path_line_column_and_primary_span() {
         let budget = ExpansionBudget::default();
-        let input =
-            PreparedLexInput::identity(Path::new("scalar.rs"), "α🙂\r\nx", &budget).unwrap();
+        let input = PreparedLexInput::identity(
+            Path::new("scalar.rs"),
+            "α🙂\r\nx",
+            &budget,
+            crate::compiler::owner_path::standalone_issued(
+                &budget,
+                crate::compiler::owner_path::OwnerDomain::SourceSnapshot,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         let span = input.project(8..9).unwrap();
         let error = input.source_error(SourceErrorKind::Syntax, Some(span), "expected expression");
         assert_eq!(error.kind, SourceErrorKind::Syntax);
@@ -550,7 +706,16 @@ mod tests {
         assert_eq!(prepared.origins[0].prepared, 0..0);
         assert_eq!(prepared.crate_roots, [FileId(0), FileId(1)]);
         let budget = ExpansionBudget::default();
-        let input = PreparedLexInput::prepared(&prepared, &budget).unwrap();
+        let input = PreparedLexInput::prepared(
+            &prepared,
+            &budget,
+            crate::compiler::owner_path::standalone_issued(
+                &budget,
+                crate::compiler::owner_path::OwnerDomain::SourceSnapshot,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         let client_root = input.snapshot().file(0).unwrap();
         let provider_root = input.snapshot().file(1).unwrap();
         assert_eq!(
@@ -581,24 +746,49 @@ mod tests {
         drop(input);
         prepared.crate_roots.pop();
         assert_eq!(
-            PreparedLexInput::prepared(&prepared, &budget)
-                .err()
+            PreparedLexInput::prepared(
+                &prepared,
+                &budget,
+                crate::compiler::owner_path::standalone_issued(
+                    &ExpansionBudget::default(),
+                    crate::compiler::owner_path::OwnerDomain::SourceSnapshot
+                )
                 .unwrap()
-                .kind,
+            )
+            .err()
+            .unwrap()
+            .kind,
             SourceErrorKind::Contract
         );
         prepared.crate_roots.push(FileId(1));
         prepared.crate_roots[0] = FileId(1);
         assert_eq!(
-            PreparedLexInput::prepared(&prepared, &budget)
-                .err()
+            PreparedLexInput::prepared(
+                &prepared,
+                &budget,
+                crate::compiler::owner_path::standalone_issued(
+                    &ExpansionBudget::default(),
+                    crate::compiler::owner_path::OwnerDomain::SourceSnapshot
+                )
                 .unwrap()
-                .kind,
+            )
+            .err()
+            .unwrap()
+            .kind,
             SourceErrorKind::Contract
         );
         prepared.crate_roots[0] = FileId(0);
         prepared.origins[1].prepared.start += 1;
-        let input = PreparedLexInput::prepared(&prepared, &budget).unwrap();
+        let input = PreparedLexInput::prepared(
+            &prepared,
+            &budget,
+            crate::compiler::owner_path::standalone_issued(
+                &budget,
+                crate::compiler::owner_path::OwnerDomain::SourceSnapshot,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         assert_eq!(
             input.project(start..start + 8).unwrap_err().kind,
             SourceErrorKind::Contract
@@ -635,7 +825,16 @@ mod tests {
         ];
         prepared.text.push('`');
         let budget = ExpansionBudget::default();
-        let input = PreparedLexInput::prepared(&prepared, &budget).unwrap();
+        let input = PreparedLexInput::prepared(
+            &prepared,
+            &budget,
+            crate::compiler::owner_path::standalone_issued(
+                &budget,
+                crate::compiler::owner_path::OwnerDomain::SourceSnapshot,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         let mut session = TokenSession::new(input.snapshot().clone(), budget).unwrap();
         let error = lex_prepared(&input, Edition::E2024, &mut session)
             .err()
