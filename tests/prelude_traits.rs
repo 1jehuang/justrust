@@ -3,6 +3,8 @@
 
 #[path = "support/native_prelude.rs"]
 mod native_prelude;
+#[path = "support/stock_rustc.rs"]
+mod stock_rustc;
 
 use justrust_engine::Key;
 use justrust_engine::compiler;
@@ -33,7 +35,7 @@ fn fixture_case(source: &str, unsupported: Option<&str>, stock_invalid: Option<&
     let stock = dir.join("stock");
     let native = dir.join("native");
     fs::write(&input, source).unwrap();
-    let output = Command::new("rustc")
+    let output = Command::new(stock_rustc::stock_rustc())
         .args([
             "--edition=2024",
             "-Cpanic=abort",
@@ -159,9 +161,10 @@ fn assert_graph_authority(source: &str, compiled: &compiler::Compilation, check:
 }
 
 #[test]
-fn exact_source_iterator_requires_nominal_projection_support() {
-    fixture(
-        r#"
+fn exact_source_iterator_matches_stock() {
+    // Raw `Option<Self::Item>` headers validate since the raw nominal-actual
+    // walk; the projection normalizes to `Option<i32>` (stock-differential).
+    const SOURCE: &str = r#"
 mod contracts {
     pub trait Iterator {
         type Item;
@@ -187,26 +190,35 @@ fn main() {
             None => break,
         }
     }
-    if <Count as Iterator>::next(&mut iterator).is_none() { println!("done"); }
+    QUALIFIED
 }
-"#,
-        Some("residual associated type projection"),
+"#;
+    fixture(&SOURCE.replace("QUALIFIED", ""), None);
+    // A method on a qualified trait call's projected result stays explicit.
+    fixture(
+        &SOURCE.replace(
+            "QUALIFIED",
+            "if <Count as Iterator>::next(&mut iterator).is_none() { println!(\"done\"); }",
+        ),
+        Some("nominal source constraints cannot progress"),
     );
 }
 
 #[test]
-fn exact_deref_relaxed_target_is_an_explicit_boundary() {
+fn exact_deref_relaxed_target_matches_stock() {
+    // Associated `?Sized` bounds are supported since 48d7e6fdf.
     fixture(
         "mod contracts { pub trait Deref { type Target: ?Sized; fn deref(&self) -> &Self::Target; } } fn main() {}",
-        Some("unsupported token \"?\""),
+        None,
     );
 }
 
 #[test]
-fn exact_into_iterator_bound_is_an_explicit_boundary() {
+fn exact_into_iterator_bound_matches_stock() {
+    // Applied associated declaration bounds are supported since 9d9461ee5.
     fixture(
         "mod contracts { pub trait Iterator { type Item; fn next(&mut self) -> Option<Self::Item>; } pub trait IntoIterator { type Item; type IntoIter: Iterator<Item = Self::Item>; fn into_iter(self) -> Self::IntoIter; } } fn main() {}",
-        Some("associated"),
+        None,
     );
 }
 
@@ -245,10 +257,11 @@ fn main() {
 }
 
 #[test]
-fn projected_reference_results_are_not_admitted_by_receiver_support() {
+fn projected_reference_results_match_stock() {
+    // `&Self::Item` projected returns are supported since 4db1cf6fc.
     fixture(
         "trait Read { type Item; fn read(&self) -> &Self::Item; } struct S { value: i32 } impl Read for S { type Item = i32; fn read(&self) -> &Self::Item { &self.value } } fn main() {}",
-        Some("reference-bearing projected method signature"),
+        None,
     );
 }
 

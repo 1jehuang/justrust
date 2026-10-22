@@ -67,6 +67,10 @@ struct Captured {
     stdout: Vec<u8>,
     stderr: Vec<u8>,
 }
+/// Debug-binary compile cap. Prelude growth raised empty-program CHECK from
+/// 0.26s (6835f01fe) to ~13s (d180c7bee) unloaded; 20s failed under the
+/// parallel suite. A cap is a hang guard, not a correctness check.
+const COMPILE_SECONDS: u64 = 60;
 fn capture(command: &mut Command, scratch: &Scratch, seconds: u64) -> Captured {
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
     let stdout = scratch.path(&format!("stdout-{id}"));
@@ -121,7 +125,11 @@ fn runs_with_exit(source: &str, expected: &str, expected_exit: i32) {
         let input = scratch.source(source);
         let output = scratch.path("program");
         for check in [true, false] {
-            let result = capture(&mut compiler(&input, &output, workers, check), &scratch, 20);
+            let result = capture(
+                &mut compiler(&input, &output, workers, check),
+                &scratch,
+                COMPILE_SECONDS,
+            );
             assert!(
                 result.status.success(),
                 "workers={workers}, check={check}: {result:?}\n{}\n{source}",
@@ -159,7 +167,11 @@ fn rejects(label: &str, source: &str, semantic: bool) {
         let input = scratch.source(source);
         let output = scratch.path("must-not-exist");
         for check in [true, false] {
-            let result = capture(&mut compiler(&input, &output, workers, check), &scratch, 20);
+            let result = capture(
+                &mut compiler(&input, &output, workers, check),
+                &scratch,
+                COMPILE_SECONDS,
+            );
             assert!(
                 result.status.code() == Some(1),
                 "{label}: accepted workers={workers}, check={check}\n{source}"
