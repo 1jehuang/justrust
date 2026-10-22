@@ -5,6 +5,7 @@ use crate::compiler::{frontend, source};
 struct Fixture {
     plan: frontend::PlanCtx,
     template: Arc<ir::ClosureTy>,
+    budget: PlanBudget,
     facts: Arc<ValidatedFacts>,
 }
 
@@ -14,7 +15,7 @@ fn fixture() -> Fixture {
     let mut assembler = source::SourceAssembler::new(&options);
     let mut step = assembler.provide(Arc::new(source::prepare_text_unit(
         "closed-owner-reconstruction.rs",
-        "trait Marker{}impl Marker for u64{}fn apply<T:Marker>(x:T)->u64{let f=move||{let _y=x;7u64};f()}fn main(){}",
+        "trait Marker{}impl Marker for u64{}fn apply<T:Marker>(x:T)->u64{let f=move||{let _y=x;7u64};f()}fn take<U>(u:U)->U{u}fn main(){}",
         &options,
     ))).unwrap();
     let prepared = loop {
@@ -67,6 +68,7 @@ fn fixture() -> Fixture {
     Fixture {
         plan,
         template,
+        budget,
         facts,
     }
 }
@@ -179,4 +181,47 @@ fn checked_owner_reconstruction_rejects_foreign_recipe_and_changed_sealed_shape(
             .instantiate_closure_owner(&changed, &[Ty::Int(ir::IntTy::U64)])
             .is_err()
     );
+}
+
+#[test]
+fn closure_actual_graph_key_roundtrips_through_template_replay() {
+    use crate::compiler::instances::graph_key;
+    let f = fixture();
+    let budget = &f.budget;
+    let concrete = f
+        .facts
+        .instantiate_closure_owner(&f.template, &[Ty::Int(ir::IntTy::U64)])
+        .unwrap();
+    let take = (0..f.plan.callable_count())
+        .map(|i| f.plan.callable_decl(i).unwrap())
+        .find(|id| {
+            matches!(
+                f.plan.persistent_decl_path(*id).unwrap().item(),
+                frontend::PersistentDeclItem::Name("take")
+            )
+        })
+        .unwrap();
+    let target = CallTarget {
+        declaration: take,
+        type_args: Arc::from([Ty::Closure(concrete.clone())]),
+    };
+    let words = graph_key::encode(&target, budget).unwrap();
+    let missing = std::cell::RefCell::new(Vec::new());
+    let replay = |templates: &graph_key::ClosureTemplates| {
+        graph_key::decode_with_closures(&words, &f.plan, budget, &|p, a| {
+            graph_key::replay_closure(&f.plan, templates, &missing, budget, p, a)
+        })
+    };
+    // Without the provider template the decoder names exactly what to request.
+    assert!(replay(&graph_key::ClosureTemplates::new()).is_err());
+    assert_eq!(missing.borrow().as_slice(), &[f.template.provider()]);
+    let mut templates = graph_key::ClosureTemplates::new();
+    templates.insert(f.template.provider(), f.template.clone());
+    assert_eq!(replay(&templates).unwrap(), target);
+    // A forged (already substituted) template under the provider is rejected.
+    let mut forged = graph_key::ClosureTemplates::new();
+    forged.insert(f.template.provider(), concrete);
+    assert!(replay(&forged).is_err());
+    // The plain decoder still refuses closure actuals without graph replay.
+    assert!(graph_key::decode(&words, &f.plan, budget).is_err());
 }

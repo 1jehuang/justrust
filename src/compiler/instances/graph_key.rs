@@ -197,6 +197,39 @@ pub(in crate::compiler) fn decode(
     })
 }
 
+/// Parent-minted closure templates keyed by provider declaration, read from
+/// each provider's `TEMPLATE_BODY` graph output.
+pub(in crate::compiler) type ClosureTemplates =
+    std::collections::HashMap<ir::DeclId, Arc<ir::ClosureTy>>;
+
+/// Replays a tag-17 closure actual from its provider template and ordered owner
+/// actuals through the closed-owner substitution kernel. A provider absent from
+/// `templates` is recorded in `missing` so the graph caller can request it.
+pub(in crate::compiler) fn replay_closure(
+    context: &frontend::PlanCtx,
+    templates: &ClosureTemplates,
+    missing: &std::cell::RefCell<Vec<ir::DeclId>>,
+    budget: &ir::PlanBudget,
+    provider: ir::DeclId,
+    owner_args: &[ir::Ty],
+) -> Result<ir::Ty, String> {
+    let Some(template) = templates.get(&provider) else {
+        missing.borrow_mut().push(provider);
+        return Err("closure graph key template not yet read".into());
+    };
+    if template.provider() != provider {
+        return Err("closure graph key template changed its provider".into());
+    }
+    let owner = context.instance_facts(&ir::CallTarget {
+        declaration: template.owner(),
+        type_args: Arc::from(owner_args),
+    })?;
+    owner
+        .instantiate_closure_owner(template, owner_args)
+        .map(ir::Ty::Closure)
+        .map_err(|e| e.into_legacy_diagnostic(budget))
+}
+
 /// Closure actual replay: `(provider, ordered owner actuals)` to the exact
 /// substituted parent-minted closure type.
 pub(in crate::compiler) type ClosureReplay<'a> =

@@ -234,8 +234,9 @@ impl CompilerProvider {
             .params
             .get(1..caller_end)
             .ok_or_else(|| Error::new("truncated associated constant caller frame"))?;
-        let target = instances::graph_key::decode(caller_words, &plan, &self.0.budget)
-            .map_err(Error::new)?;
+        let target = facts
+            .decode_instance(caller_words, &plan, &self.0.budget)
+            .await?;
         let path_len = usize::try_from(
             *key.params
                 .get(caller_end)

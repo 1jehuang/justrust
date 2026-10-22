@@ -438,6 +438,57 @@ impl Facts<'_> {
     async fn types(&self) -> Result<Arc<frontend::PlanCtx>, Error> {
         self.get(keys::SignaturesDebtRoot.key()).await
     }
+    /// Decodes a canonical instance key, replaying closure actuals from their
+    /// provider `TEMPLATE_BODY` outputs. Each round requests every missing
+    /// provider before awaiting any. Nested closure actuals take more rounds.
+    async fn decode_instance(
+        &self,
+        words: &[u64],
+        types: &frontend::PlanCtx,
+        budget: &ir::PlanBudget,
+    ) -> Result<ir::CallTarget, Error> {
+        let mut templates = instances::graph_key::ClosureTemplates::new();
+        loop {
+            let missing = std::cell::RefCell::new(Vec::new());
+            let result = instances::graph_key::decode_with_closures(
+                words,
+                types,
+                budget,
+                &|provider, args| {
+                    instances::graph_key::replay_closure(
+                        types, &templates, &missing, budget, provider, args,
+                    )
+                },
+            );
+            let mut missing = missing.into_inner();
+            if result.is_ok() || missing.is_empty() {
+                return result.map_err(Error::new);
+            }
+            missing.sort();
+            missing.dedup();
+            let mut pending = Vec::new();
+            for provider in missing {
+                if templates.contains_key(&provider) {
+                    return result.map_err(Error::new);
+                }
+                types
+                    .stored_closure_owner(provider)
+                    .map_err(Error::new)?
+                    .ok_or_else(|| Error::new("closure graph key provider is not a closure"))?;
+                let index = types.callable_index(provider).map_err(Error::new)?;
+                let handle = self.cx.request(keys::item(TEMPLATE_BODY, index)).get(0);
+                pending.push((provider, handle));
+            }
+            for (provider, handle) in pending {
+                let body: Arc<TemplateBodyFact> = self.cx.read_fact(handle).await?;
+                let closure = body
+                    .closure
+                    .as_ref()
+                    .ok_or_else(|| Error::new("closure template omitted canonical metadata"))?;
+                templates.insert(provider, closure.ty.clone());
+            }
+        }
+    }
     async fn template(&self, index: usize) -> Result<Arc<TemplateBodyFact>, Error> {
         self.get(keys::Item::<TEMPLATE_BODY>(index).key()).await
     }

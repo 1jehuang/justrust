@@ -226,8 +226,9 @@ pub(super) async fn produce(
     let caller_words = words
         .get(2..end)
         .ok_or_else(|| Error::new("truncated opaque caller frame"))?;
-    let caller = instances::graph_key::decode(caller_words, &types, &provider.0.budget)
-        .map_err(Error::new)?;
+    let caller = facts
+        .decode_instance(caller_words, &types, &provider.0.budget)
+        .await?;
     let occurrence = ir::ExprId(
         usize::try_from(
             *words
