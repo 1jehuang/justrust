@@ -1452,6 +1452,7 @@ impl<'s> Checker<'s> {
             }
         }
         let mut projected_constraints = Vec::new();
+        let mut reference_arguments = Vec::new();
         if let Some(expected) = expected {
             let evidence = self.infer_type_term(expected, None, 0)?;
             projected_constraints.push((&schema.signature.result, evidence));
@@ -1477,6 +1478,17 @@ impl<'s> Checker<'s> {
                     continue;
                 }
             }
+            // A reference argument for a bare parameter may unsize to a trait
+            // object fixed by the expected result (`seed(&q)` into
+            // `Vec<&dyn P>`). Constrain it only after the expectation settles;
+            // the argument coercion itself is proven when checking the call.
+            if expected.is_some()
+                && matches!(formal, ir::Ty::Param(_))
+                && matches!(evidence.as_ref(), InferKind::Ref(..))
+            {
+                reference_arguments.push((formal, evidence));
+                continue;
+            }
             projected_constraints.push((formal, evidence));
         }
         // A declared `Proj = Rhs` bound is evidence for slots in `Rhs` once
@@ -1497,6 +1509,33 @@ impl<'s> Checker<'s> {
             })
             .collect();
         self.infer_storage(equalities.len())?;
+        if !reference_arguments.is_empty() {
+            // First settle the expectation and ordinary arguments without
+            // numeric defaults; whatever stays open is retried below.
+            // Constraints are idempotent, so the originals are replayed below.
+            let _ = solver.constrain_projected_formals(projected_constraints.clone(), false)?;
+            for (formal, evidence) in reference_arguments {
+                let ir::Ty::Param(parameter) = formal else {
+                    return Err("reference argument formal is not a parameter".into());
+                };
+                let bound = solver
+                    .core
+                    .slots()
+                    .get(parameter.index as usize)
+                    .cloned()
+                    .flatten();
+                let target = match bound {
+                    Some(term) => solver.resolve(&term, false, 0)?,
+                    None => None,
+                };
+                if let Some(ir::Ty::Ref { referent, .. }) = target
+                    && matches!(referent.as_ref(), ir::Ty::Dyn(_))
+                {
+                    continue;
+                }
+                projected_constraints.push((formal, evidence));
+            }
+        }
         if !solver.constrain_projected_formals(projected_constraints, fallback)? {
             return Ok(None);
         }

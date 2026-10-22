@@ -80,6 +80,10 @@ struct Solver<'a: 's, 'b: 's, 's> {
     projections: Vec<Projection>,
     delayed_results: Vec<Term>,
     coercions: Vec<(Term, Term)>,
+    /// Reference coercions into a still-unknown target. Stock lets a later
+    /// expectation (e.g. `let v: Vec<&dyn P> = vec![&a]`) fix the target first;
+    /// at quiescence the remaining ones fall back to equality.
+    lazy_coercions: Vec<(Term, Term)>,
     iterator_items: Vec<iteration::Pending>,
     /// `(carrier, payload)` for `e?` whose carrier was not yet nominal.
     tries: Vec<(Term, Term)>,
@@ -185,6 +189,7 @@ fn solve_body_with_seed<'a: 's, 'b: 's, 's>(
         projections: Vec::new(),
         delayed_results: Vec::new(),
         coercions: Vec::new(),
+        lazy_coercions: Vec::new(),
         iterator_items: Vec::new(),
         tries: Vec::new(),
         patterns: Vec::new(),
@@ -826,6 +831,13 @@ impl<'s> Solver<'_, '_, 's> {
             self.coercions.push((actual, expected));
             return Ok(());
         }
+        if matches!(self.domain(actual), Domain::Ref(_, inner)
+                if !matches!(self.domain(inner), Domain::Unknown))
+            && matches!(self.domain(expected), Domain::Unknown)
+        {
+            self.lazy_coercions.push((actual, expected));
+            return Ok(());
+        }
         match (self.domain(actual), self.domain(expected)) {
             (Domain::Ref(_, a), Domain::Ref(_, b)) => {
                 // A reference coercion may run an authoritative Deref chain.
@@ -1254,6 +1266,20 @@ impl<'s> Solver<'_, '_, 's> {
                 self.pattern_bindings = None;
                 result?;
                 progress = true;
+            }
+            for (actual, expected) in std::mem::take(&mut self.lazy_coercions) {
+                if matches!(self.domain(expected), Domain::Unknown) {
+                    self.lazy_coercions.push((actual, expected));
+                } else {
+                    self.coerce(actual, expected)?;
+                    progress = true;
+                }
+            }
+            if !progress && !self.lazy_coercions.is_empty() {
+                for (actual, expected) in std::mem::take(&mut self.lazy_coercions) {
+                    self.unify(actual, expected)?;
+                }
+                continue;
             }
             if !progress {
                 if self.preparation.is_some()
