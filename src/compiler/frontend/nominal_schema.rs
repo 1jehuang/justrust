@@ -693,14 +693,20 @@ impl PlanState {
                     .checked_mul(2)
                     .ok_or("nominal name allocation overflow")?,
             )?;
-            // Reserve this application's index before building fields, which
-            // may intern other applications (e.g. `Box<Self>`).
-            let index = self.nominals.ordered.len();
-            self.nominals
-                .ordered
-                .try_reserve(1)
-                .map_err(|_| "nominal ordering allocation failed")?;
-            self.nominals.ordered.push(ir::Ty::Unit);
+            // The slot is a canonical digest of the resolved declaration and
+            // its ordered actuals, never an interning-order ordinal, so every
+            // node computes the same identity for the same application.
+            let index = canonical_slot(&application_key);
+            if let Some(existing) = self.nominals.by_slot.get(&index) {
+                let same = match existing {
+                    ir::Ty::Struct(t) => t.def().source_decl == decl && *t.def().type_args == *args,
+                    ir::Ty::Enum(t) => t.def().source_decl == decl && *t.def().type_args == *args,
+                    _ => false,
+                };
+                if !same {
+                    return Err("unsupported: nominal application identity collision".into());
+                }
+            }
             let id = ir::NominalAppId {
                 snapshot: decl.snapshot,
                 index: ir::NominalIndex::SourceSlot(index),
@@ -910,7 +916,7 @@ impl PlanState {
                 validate_argument(&ty, caller, budget, 0)?;
             }
             self.nominals
-                .ordered
+                .by_slot
                 .try_reserve(1)
                 .map_err(|_| "nominal ordering allocation failed")?;
             self.nominals
@@ -918,7 +924,7 @@ impl PlanState {
                 .try_reserve(1)
                 .map_err(|_| "nominal application allocation failed")?;
             self.nominals.active.pop();
-            self.nominals.ordered[index] = ty.clone();
+            self.nominals.by_slot.insert(index, ty.clone());
             self.nominals
                 .applications
                 .insert(application_key, ty.clone());
@@ -927,6 +933,19 @@ impl PlanState {
         self.nominals.active.truncate(active_len);
         result
     }
+}
+
+/// Canonical slot of one nominal application: a deterministic digest of the
+/// resolved declaration and ordered type actuals. Nested nominals hash by
+/// their own canonical identity, so the digest is independent of interning
+/// order and of which node interned the application first.
+pub(super) fn canonical_slot(application: &(ir::DeclId, Vec<ir::Ty>)) -> usize {
+    use std::hash::{Hash, Hasher};
+    // DefaultHasher::new uses fixed keys: deterministic across nodes.
+    let mut hasher = std::hash::DefaultHasher::new();
+    0x4a52_4e4f_4d49_4e41u64.hash(&mut hasher);
+    application.hash(&mut hasher);
+    hasher.finish() as usize
 }
 
 /// Whether a source field type mentions a declared (non-`'static`) lifetime.

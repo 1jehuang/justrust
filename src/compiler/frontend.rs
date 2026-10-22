@@ -17086,7 +17086,8 @@ enum NominalSchema {
 #[derive(Debug, Default)]
 pub struct NominalInterner {
     applications: HashMap<(ir::DeclId, Vec<ir::Ty>), ir::Ty>,
-    ordered: Vec<ir::Ty>,
+    /// Canonical slot (see `canonical_slot`) to its application.
+    by_slot: HashMap<usize, ir::Ty>,
     active: Vec<ir::DeclId>,
     /// Applications under construction, keyed by exact application, with the
     /// cycle-closing back edge handed to recursive references to them.
@@ -19953,8 +19954,8 @@ impl ir::SubstitutionCx for PlanCtx {
             .map_err(|_| "generic plan context poisoned")?;
         let ty = state
             .nominals
-            .ordered
-            .get(id.index.source_slot().map_err(|error| {
+            .by_slot
+            .get(&id.index.source_slot().map_err(|error| {
                 format!(
                     "{error}; nominal_application id={id:?}, requested_at={}",
                     std::panic::Location::caller()
@@ -20002,8 +20003,8 @@ impl ir::SubstitutionCx for PlanCtx {
             .map_err(|_| "generic plan context poisoned")?;
         let original = state
             .nominals
-            .ordered
-            .get(request.original().index.source_slot()?)
+            .by_slot
+            .get(&request.original().index.source_slot()?)
             .ok_or("substitution request names unknown nominal")?;
         let declaration = match original {
             ir::Ty::Struct(ty) if ty.def().id == request.original() => ty.def().source_decl,
@@ -20814,7 +20815,7 @@ impl tr::SchemaCx for SchemaAdapter {
                     }
                 } else {
                     let state = cx.state.lock().map_err(|_| "schema interner poisoned")?;
-                    let canonical = match state.nominals.ordered.get(id.index.source_slot()?) {
+                    let canonical = match state.nominals.by_slot.get(&id.index.source_slot()?) {
                         Some(ir::Ty::Struct(t)) if matches!(ty, ir::Ty::Struct(_)) => {
                             t.def() as *const _ as usize
                         }
