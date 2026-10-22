@@ -59,6 +59,8 @@ pub struct Meter {
     /// (0 = only the fixed per-task default). Grows monotonically and is
     /// never shared with another node.
     pub work_allowance: AtomicU64,
+    /// Typed per-node budget ledgers (see [`with_ledger`]).
+    pub ledgers: Ledgers,
 }
 impl Meter {
     /// Effective per-task work limit: the fixed default or the allowance this
@@ -96,6 +98,171 @@ impl Meter {
             }
         }
     }
+}
+
+/// Typed resource ledgers owned by one node, keyed by budget identity. A
+/// budget value is an immutable `{id, limits}` token; all of its counters for
+/// work done inside this node live here, so no fact carries a ledger and no
+/// two nodes ever share one.
+pub struct Ledgers(Mutex<Vec<(u64, Box<dyn Any + Send>)>>, u64);
+impl Default for Ledgers {
+    fn default() -> Self {
+        Self(Mutex::default(), next_ledger_id())
+    }
+}
+impl fmt::Debug for Ledgers {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Ledgers")
+    }
+}
+impl Ledgers {
+    // A node charges very few budget identities, so a short vector scanned
+    // linearly (no hashing) beats a map on this per-charge hot path.
+    fn with<T: Default + Send + 'static, R>(&self, id: u64, f: impl FnOnce(&mut T) -> R) -> R {
+        let mut slots = lock(&self.0);
+        f(Self::slot(&mut slots, id))
+    }
+    fn slot<T: Default + Send + 'static>(
+        slots: &mut Vec<(u64, Box<dyn Any + Send>)>,
+        id: u64,
+    ) -> &mut T {
+        let index = match slots.iter().position(|(slot, _)| *slot == id) {
+            Some(index) => {
+                if !slots[index].1.is::<T>() {
+                    slots[index].1 = Box::new(T::default());
+                }
+                index
+            }
+            None => {
+                slots.push((id, Box::new(T::default())));
+                slots.len() - 1
+            }
+        };
+        slots[index]
+            .1
+            .downcast_mut::<T>()
+            .expect("ledger type checked")
+    }
+    /// Two distinct ledgers of one scope under one lock.
+    fn with2<A, B, R>(&self, a: u64, b: u64, f: impl FnOnce(&mut A, &mut B) -> R) -> R
+    where
+        A: Default + Send + 'static,
+        B: Default + Send + 'static,
+    {
+        assert_ne!(a, b, "ledger pair must be distinct");
+        let mut slots = lock(&self.0);
+        Self::slot::<A>(&mut slots, a);
+        Self::slot::<B>(&mut slots, b);
+        let (mut first, mut second) = (None, None);
+        for (id, entry) in slots.iter_mut() {
+            if *id == a {
+                first = entry.downcast_mut::<A>();
+            } else if *id == b {
+                second = entry.downcast_mut::<B>();
+            }
+        }
+        f(
+            first.expect("ledger type checked"),
+            second.expect("ledger type checked"),
+        )
+    }
+    fn forget(&self, id: u64) {
+        lock(&self.0).retain(|(slot, _)| *slot != id);
+    }
+    fn read<T: 'static, R>(&self, id: u64, f: impl FnOnce(&T) -> R) -> Option<R> {
+        lock(&self.0)
+            .iter()
+            .find(|(slot, _)| *slot == id)
+            .and_then(|(_, entry)| entry.downcast_ref::<T>())
+            .map(f)
+    }
+}
+
+/// The accounting scope of a charge: a process-unique id of the polled
+/// node's ledgers, or of this thread's detached ledgers outside polling.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct LedgerScope(u64);
+
+thread_local! {
+    /// Ledgers for charges made outside graph polling (direct API use before
+    /// or after a run, unit tests). Thread-local: never shared, never touched
+    /// while a provider is polled.
+    static DETACHED: Ledgers = Ledgers::default();
+    static DETACHED_ID: u64 = next_ledger_id();
+}
+
+static NEXT_LEDGER: AtomicU64 = AtomicU64::new(1);
+
+/// A fresh budget identity. Ids are never reused within a process.
+pub fn next_ledger_id() -> u64 {
+    NEXT_LEDGER.fetch_add(1, Ordering::Relaxed)
+}
+
+/// The scope a charge made now would land in.
+pub fn current_ledger_scope() -> LedgerScope {
+    CURRENT_NODE.with(|node| match node.borrow().as_ref() {
+        Some(node) => LedgerScope(node.meter.ledgers.1),
+        None => LedgerScope(DETACHED_ID.with(|id| *id)),
+    })
+}
+
+/// Run `f` on ledger `id` of the current scope (the polled node, else the
+/// detached scope), creating a default ledger on first use. Also passes the
+/// node meter for input-scaled limits.
+pub fn with_ledger<T: Default + Send + 'static, R>(
+    id: u64,
+    f: impl FnOnce(&mut T, Option<&Meter>) -> R,
+) -> R {
+    CURRENT_NODE.with(|node| match node.borrow().as_ref() {
+        Some(node) => node
+            .meter
+            .ledgers
+            .with(id, |ledger| f(ledger, Some(&node.meter))),
+        None => DETACHED.with(|ledgers| ledgers.with(id, |ledger| f(ledger, None))),
+    })
+}
+
+/// Run `f` on ledger `id` only if the current scope is `scope`. Used by
+/// leases to refund exactly the scope that charged them.
+pub fn with_ledger_in<T: Default + Send + 'static, R>(
+    scope: LedgerScope,
+    id: u64,
+    f: impl FnOnce(&mut T) -> R,
+) -> Option<R> {
+    (current_ledger_scope() == scope).then(|| with_ledger(id, |ledger, _| f(ledger)))
+}
+
+/// Run `f` on two distinct ledgers of the current scope under one lock.
+pub fn with_ledgers<A, B, R>(
+    a: u64,
+    b: u64,
+    f: impl FnOnce(&mut A, &mut B, Option<&Meter>) -> R,
+) -> R
+where
+    A: Default + Send + 'static,
+    B: Default + Send + 'static,
+{
+    CURRENT_NODE.with(|node| match node.borrow().as_ref() {
+        Some(node) => node
+            .meter
+            .ledgers
+            .with2(a, b, |x, y| f(x, y, Some(&node.meter))),
+        None => DETACHED.with(|ledgers| ledgers.with2(a, b, |x, y| f(x, y, None))),
+    })
+}
+
+/// Drop ledger `id` from this thread's detached scope (a budget token's
+/// identity ended). Node ledgers stay for post-run reporting.
+pub fn forget_detached_ledger(id: u64) {
+    let _ = DETACHED.try_with(|ledgers| ledgers.forget(id));
+}
+
+/// Run `f` on the polled node's meter only if it is the node of `scope`.
+pub fn with_meter_in<R>(scope: LedgerScope, f: impl FnOnce(&Meter) -> R) -> Option<R> {
+    if current_ledger_scope() != scope {
+        return None;
+    }
+    with_current_meter(|meter| meter.map(f))
 }
 
 /// Live bytes a task may hold per unit of its input-scaled work allowance.
@@ -800,6 +967,19 @@ impl Engine {
             },
             id,
             cancelled: AtomicBool::new(false),
+        }
+    }
+
+    /// Post-run: visit ledger `id` of every node that charged it, in node
+    /// discovery order. Reporting only; never available to providers.
+    pub fn visit_ledgers<T: 'static>(&self, id: u64, mut f: impl FnMut(&T)) {
+        assert!(
+            CURRENT_TASK.with(Cell::get).is_none(),
+            "Engine::visit_ledgers is post-run only"
+        );
+        let nodes = lock(&self.shared.nodes).clone();
+        for node in nodes {
+            node.meter.ledgers.read(id, &mut f);
         }
     }
 

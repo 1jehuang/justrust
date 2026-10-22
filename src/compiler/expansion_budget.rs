@@ -1,11 +1,15 @@
-//! Shared, poisoned expansion accounting. This is infrastructure, not macro support.
+//! Per-node, poisoned expansion accounting. This is infrastructure, not macro support.
 //!
+//! A budget is an immutable `{id, limits}` token. Its ledger lives in the graph
+//! node being polled (engine `with_ledger`), or in this thread's detached scope
+//! outside polling, so limits are per node and facts never carry a ledger.
 //! Logical charges never roll back. Only live storage and matcher-state leases
-//! release on drop. Every operation involving an invocation locks the session
-//! before the invocation. Depth arguments are absolute branch depths.
+//! release on drop, and only in the scope that paid them. Depth arguments are
+//! absolute branch depths.
 use super::resource_accounting::ReservationAccounting;
+use crate::engine::LedgerScope;
 use std::fmt;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(usize)]
@@ -119,14 +123,23 @@ pub struct BudgetSnapshot {
     pub reservations: ReservationAccounting,
     pub failure: Option<BudgetFailure>,
 }
-#[derive(Debug)]
+/// One scope's ledger for one budget identity. Lives inside the charging
+/// graph node (or this thread's detached scope), never in a fact.
+#[derive(Debug, Default)]
 struct State {
-    authority: ExpansionAuthority,
-    limits: ExpansionLimits,
     snapshot: BudgetSnapshot,
-    /// Per-invocation counters, indexed by invocation id. Held inside the one
-    /// session ledger so an invocation carries no lock of its own.
-    invocations: Vec<InvocationState>,
+}
+impl Default for BudgetSnapshot {
+    fn default() -> Self {
+        Self {
+            counters: [0; 10],
+            retained_bytes: 0,
+            temporary_bytes: 0,
+            peak_bytes: 0,
+            reservations: ReservationAccounting::default(),
+            failure: None,
+        }
+    }
 }
 impl State {
     fn latch(&mut self, failure: BudgetFailure) -> BudgetFailure {
@@ -162,13 +175,13 @@ impl State {
         }
         Ok(next)
     }
-    fn bytes(&mut self, add: u64) -> Result<u64, BudgetFailure> {
+    fn bytes(&mut self, add: u64, limit: u64) -> Result<u64, BudgetFailure> {
         let total = self
             .snapshot
             .retained_bytes
             .checked_add(self.snapshot.temporary_bytes)
             .ok_or_else(|| self.latch(infrastructure()))?;
-        self.checked(BudgetResource::Bytes, total, add, self.limits.bytes)
+        self.checked(BudgetResource::Bytes, total, add, limit)
     }
     fn add_bytes(&mut self, storage: Storage, bytes: u64, total: u64) {
         match storage {
@@ -212,9 +225,8 @@ impl ExpansionAuthority {
     }
 }
 /// Evidence of previously admitted retained bytes, with no ledger back-reference.
-/// Cloning or dropping this value never charges or refunds storage. Direct API
-/// admission remains retained until the originating budget ledger ends, even if
-/// the receipt is dropped earlier. The receipt may outlive that ledger.
+/// Cloning or dropping this value never charges or refunds storage. Admission
+/// stays charged to the scope (graph node) that paid it.
 #[derive(Clone, Debug)]
 pub struct RetainedBytes {
     authority: ExpansionAuthority,
@@ -228,9 +240,25 @@ impl RetainedBytes {
         self.bytes
     }
 }
+#[derive(Debug)]
+struct Identity {
+    id: u64,
+    authority: ExpansionAuthority,
+    /// Construction failure (raised caps), latched into every scope's ledger.
+    invalid: Option<BudgetFailure>,
+}
+impl Drop for Identity {
+    fn drop(&mut self) {
+        crate::engine::forget_detached_ledger(self.id);
+    }
+}
+/// An immutable expansion budget token: identity and limits only. Every
+/// charge lands in the ledger of the graph node being polled (or this
+/// thread's detached scope outside polling), so limits are per node and a
+/// token stored in a fact carries no shared mutable state.
 #[derive(Clone, Debug)]
 pub struct ExpansionBudget {
-    state: Arc<Mutex<State>>,
+    identity: Arc<Identity>,
 }
 impl Default for ExpansionBudget {
     fn default() -> Self {
@@ -239,11 +267,11 @@ impl Default for ExpansionBudget {
 }
 impl ExpansionBudget {
     pub fn authority(&self) -> ExpansionAuthority {
-        self.lock().authority.clone()
+        self.identity.authority.clone()
     }
-    /// Identity of the shared admission ledger, not equality of configured limits.
+    /// Identity of the budget token, not equality of configured limits.
     pub fn same_authority(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.state, &other.state)
+        Arc::ptr_eq(&self.identity, &other.identity)
     }
     /// Raised caps are rejected by pre-poisoning, never silently clamped.
     /// Call `check` to observe construction failure before allocating payloads.
@@ -259,108 +287,157 @@ impl ExpansionBudget {
             || limits.matcher_states > max.matcher_states
             || limits.invocation_output > max.invocation_output
             || limits.backtrace_frames > max.backtrace_frames;
-        let failure = invalid.then_some(BudgetFailure {
-            kind: BudgetFailureKind::Limit,
-            resource: BudgetResource::Limits,
-            used: 0,
-            requested: 1,
-            limit: 0,
-        });
         Self {
-            state: Arc::new(Mutex::new(State {
+            identity: Arc::new(Identity {
+                id: crate::engine::next_ledger_id(),
                 authority: ExpansionAuthority {
                     identity: Arc::new(limits),
                 },
-                limits,
-                snapshot: BudgetSnapshot {
-                    counters: [0; 10],
-                    retained_bytes: 0,
-                    temporary_bytes: 0,
-                    peak_bytes: 0,
-                    reservations: ReservationAccounting::default(),
-                    failure,
-                },
-                invocations: Vec::new(),
-            })),
+                invalid: invalid.then_some(BudgetFailure {
+                    kind: BudgetFailureKind::Limit,
+                    resource: BudgetResource::Limits,
+                    used: 0,
+                    requested: 1,
+                    limit: 0,
+                }),
+            }),
         }
     }
-    fn lock(&self) -> MutexGuard<'_, State> {
-        match self.state.lock() {
-            Ok(state) => state,
-            Err(error) => {
-                let mut state = error.into_inner();
-                state.latch(infrastructure());
-                state
+    fn limits_ref(&self) -> &ExpansionLimits {
+        &self.identity.authority.identity
+    }
+    fn prepare(&self, state: &mut State) {
+        if let Some(failure) = &self.identity.invalid {
+            state.latch(failure.clone());
+        }
+    }
+    /// Run `f` on this budget's ledger in the current scope.
+    fn with<R>(&self, f: impl FnOnce(&mut State, Option<&crate::engine::Meter>) -> R) -> R {
+        crate::engine::with_ledger(self.identity.id, |state: &mut State, meter| {
+            self.prepare(state);
+            f(state, meter)
+        })
+    }
+    /// Run `f` on this budget's ledger only in `scope` (lease refunds).
+    fn with_in<R>(&self, scope: LedgerScope, f: impl FnOnce(&mut State) -> R) -> Option<R> {
+        crate::engine::with_ledger_in(scope, self.identity.id, |state: &mut State| {
+            self.prepare(state);
+            f(state)
+        })
+    }
+    /// Live-byte ceiling in this scope: the configured cap, raised only by the
+    /// polled node's own input-scaled allowance.
+    fn byte_limit(&self, meter: Option<&crate::engine::Meter>) -> u64 {
+        let limit = self.limits_ref().bytes;
+        meter.map_or(limit, |meter| {
+            if limit == ExpansionLimits::default().bytes {
+                meter.bytes_limit(limit)
+            } else {
+                limit
             }
+        })
+    }
+    fn counter_limit(&self, counter: Counter, meter: Option<&crate::engine::Meter>) -> u64 {
+        let limit = self.limits_ref().counters[counter as usize];
+        match (counter, meter) {
+            (Counter::Work, Some(meter))
+                if limit == ExpansionLimits::default().counters[Counter::Work as usize] =>
+            {
+                meter.work_limit(limit)
+            }
+            _ => limit,
         }
     }
     pub fn limits(&self) -> ExpansionLimits {
-        self.lock().limits
+        *self.limits_ref()
     }
+    /// This scope's ledger: the polled node's, or this thread's detached one.
     pub fn snapshot(&self) -> BudgetSnapshot {
-        self.lock().snapshot.clone()
+        self.with(|s, _| s.snapshot.clone())
     }
     pub fn check(&self) -> Result<(), BudgetFailure> {
-        self.lock().healthy()
+        self.with(|s, _| s.healthy())
     }
+    #[inline(never)]
     pub fn charge(&self, counter: Counter, n: u64) -> Result<(), BudgetFailure> {
-        let mut s = self.lock();
-        s.healthy()?;
-        let index = counter as usize;
-        let limit = s.limits.counters[index];
-        // Inside a graph task, work is charged to the polled task's own meter
-        // with its input-scaled limit, so a ledger shared by later tasks (the
-        // session name store) never caps total program or library size.
+        // Hot path: default-limit work inside a graph node is bounded by the
+        // node's own meter alone; the ledger is touched only on failure or
+        // when the token was constructed invalid.
         if counter == Counter::Work
+            && self.identity.invalid.is_none()
+            && self.limits_ref().counters[Counter::Work as usize]
+                == ExpansionLimits::default().counters[Counter::Work as usize]
             && let Some(result) = crate::engine::with_current_meter(|meter| {
                 let meter = meter?;
-                let limit = meter.work_limit(limit);
+                let limit = meter.work_limit(self.limits_ref().counters[Counter::Work as usize]);
                 Some(
                     crate::engine::Meter::admit(&meter.work, n, limit)
                         .map_err(|used| (used, limit)),
                 )
             })
         {
-            return result.map_err(|(used, limit)| {
-                s.latch(BudgetFailure {
-                    kind: BudgetFailureKind::Limit,
-                    resource: BudgetResource::Counter(counter),
-                    used,
-                    requested: n,
-                    limit,
-                })
-            });
+            return match result {
+                Ok(()) => Ok(()),
+                Err((used, limit)) => Err(self.with(|s, _| {
+                    if let Err(failure) = s.healthy() {
+                        return failure;
+                    }
+                    s.latch(BudgetFailure {
+                        kind: BudgetFailureKind::Limit,
+                        resource: BudgetResource::Counter(counter),
+                        used,
+                        requested: n,
+                        limit,
+                    })
+                })),
+            };
         }
-        let used = s.snapshot.counters[index];
-        let next = s.checked(BudgetResource::Counter(counter), used, n, limit)?;
-        s.snapshot.counters[index] = next;
-        Ok(())
-    }
-    pub fn check_depth(&self, kind: Depth, absolute_depth: u32) -> Result<(), BudgetFailure> {
-        let mut s = self.lock();
-        s.healthy()?;
-        let limit = u64::from(s.limits.depths[kind as usize]);
-        s.checked(
-            BudgetResource::Depth(kind),
-            0,
-            u64::from(absolute_depth),
-            limit,
-        )?;
-        Ok(())
-    }
-    pub fn reserve(&self, storage: Storage, bytes: u64) -> Result<ByteLease, BudgetFailure> {
-        {
-            let mut s = self.lock();
+        self.with(|s, meter| {
             s.healthy()?;
-            let total = s.bytes(bytes)?;
+            let index = counter as usize;
+            let limit = self.counter_limit(counter, meter);
+            let used = s.snapshot.counters[index];
+            let next = s.checked(BudgetResource::Counter(counter), used, n, limit)?;
+            s.snapshot.counters[index] = next;
+            if counter == Counter::Work
+                && let Some(meter) = meter
+            {
+                meter
+                    .work
+                    .fetch_add(n, std::sync::atomic::Ordering::Relaxed);
+            }
+            Ok(())
+        })
+    }
+    #[inline(never)]
+    pub fn check_depth(&self, kind: Depth, absolute_depth: u32) -> Result<(), BudgetFailure> {
+        self.with(|s, _| {
+            s.healthy()?;
+            let limit = u64::from(self.limits_ref().depths[kind as usize]);
+            s.checked(
+                BudgetResource::Depth(kind),
+                0,
+                u64::from(absolute_depth),
+                limit,
+            )?;
+            Ok(())
+        })
+    }
+    #[inline(never)]
+    pub fn reserve(&self, storage: Storage, bytes: u64) -> Result<ByteLease, BudgetFailure> {
+        self.with(|s, meter| {
+            s.healthy()?;
+            let total = s.bytes(bytes, self.byte_limit(meter))?;
             s.add_bytes(storage, bytes, total);
             s.snapshot.reservations.record(bytes as usize, false);
             if storage == Storage::Retained {
                 s.snapshot.reservations.record_retention();
             }
-        }
+            Ok(())
+        })?;
         Ok(ByteLease {
             budget: Some(self.clone()),
+            scope: crate::engine::current_ledger_scope(),
             storage,
             bytes,
         })
@@ -371,10 +448,9 @@ impl ExpansionBudget {
         count: u64,
         size: u64,
     ) -> Result<ByteLease, BudgetFailure> {
-        let bytes = {
-            let mut s = self.lock();
+        let bytes = self.with(|s, _| {
             s.healthy()?;
-            let limit = s.limits.bytes;
+            let limit = self.limits_ref().bytes;
             count.checked_mul(size).ok_or_else(|| {
                 s.latch(BudgetFailure {
                     kind: BudgetFailureKind::Overflow,
@@ -383,50 +459,55 @@ impl ExpansionBudget {
                     requested: size,
                     limit,
                 })
-            })?
-        };
+            })
+        })?;
         self.reserve(storage, bytes)
     }
     pub fn checked_u32(&self, index: u64) -> Result<u32, BudgetFailure> {
-        let mut s = self.lock();
-        s.healthy()?;
-        u32::try_from(index).map_err(|_| {
-            s.latch(BudgetFailure {
-                kind: BudgetFailureKind::Overflow,
-                resource: BudgetResource::Index,
-                used: 0,
-                requested: index,
-                limit: u64::from(u32::MAX),
+        self.with(|s, _| {
+            s.healthy()?;
+            u32::try_from(index).map_err(|_| {
+                s.latch(BudgetFailure {
+                    kind: BudgetFailureKind::Overflow,
+                    resource: BudgetResource::Index,
+                    used: 0,
+                    requested: index,
+                    limit: u64::from(u32::MAX),
+                })
             })
         })
     }
     pub fn poison_allocation(&self) -> BudgetFailure {
-        self.lock().latch(BudgetFailure {
-            kind: BudgetFailureKind::Allocation,
-            resource: BudgetResource::Allocation,
-            used: 0,
-            requested: 0,
-            limit: 0,
+        self.with(|s, _| {
+            s.latch(BudgetFailure {
+                kind: BudgetFailureKind::Allocation,
+                resource: BudgetResource::Allocation,
+                used: 0,
+                requested: 0,
+                limit: 0,
+            })
         })
     }
+    #[cfg(test)]
+    fn poison_infrastructure_for_tests(&self) {
+        self.with(|s, _| {
+            s.latch(infrastructure());
+        });
+    }
+    /// A fresh invocation with its own ledger (per scope, keyed by its own id).
     pub fn begin_invocation(&self) -> Result<InvocationBudget, BudgetFailure> {
         self.charge(Counter::Invocations, 1)?;
-        let mut state = self.lock();
-        let id = state.invocations.len();
-        state.invocations.push(InvocationState {
-            output: 0,
-            states: 0,
-        });
-        drop(state);
         Ok(InvocationBudget {
             budget: self.clone(),
-            id,
+            id: Arc::new(InvocationId(crate::engine::next_ledger_id())),
         })
     }
 }
 #[derive(Debug)]
 pub struct ByteLease {
     budget: Option<ExpansionBudget>,
+    /// The scope that paid; only that scope refunds.
+    scope: LedgerScope,
     storage: Storage,
     bytes: u64,
 }
@@ -450,23 +531,20 @@ impl ByteLease {
     /// bytes as free while they are still allocated. Do not discard the
     /// returned lease through `map_err` or `?`.
     pub fn retain_or_return(mut self) -> Result<RetainedBytes, (BudgetFailure, ByteLease)> {
-        let sealed = {
-            let budget = self.budget.as_ref().expect("live byte lease");
-            let mut state = budget.lock();
-            match state.healthy() {
-                Err(failure) => Err(failure),
-                Ok(()) if self.storage != Storage::Retained => Err(state.latch(infrastructure())),
-                Ok(()) => {
-                    state.snapshot.reservations.current_reservations = state
-                        .snapshot
-                        .reservations
-                        .current_reservations
-                        .saturating_sub(1);
-                    Ok(state.authority.clone())
-                }
+        let budget = self.budget.clone().expect("live byte lease");
+        let storage = self.storage;
+        let sealed = budget.with(|state, _| match state.healthy() {
+            Err(failure) => Err(failure),
+            Ok(()) if storage != Storage::Retained => Err(state.latch(infrastructure())),
+            Ok(()) => {
+                state.snapshot.reservations.current_reservations = state
+                    .snapshot
+                    .reservations
+                    .current_reservations
+                    .saturating_sub(1);
+                Ok(budget.authority())
             }
-        };
-        // The guard is dropped: only now is `self` moved or disconnected.
+        });
         match sealed {
             Err(failure) => Err((failure, self)),
             Ok(authority) => {
@@ -481,11 +559,32 @@ impl ByteLease {
     pub fn bytes(&self) -> u64 {
         self.bytes
     }
+    /// Move this lease's accounting into the current scope when it is used
+    /// from another one: the old scope keeps its (final) charge, the current
+    /// scope is charged anew. A lease never refunds a scope that did not pay.
+    fn rescope(
+        &mut self,
+        s: &mut State,
+        budget: &ExpansionBudget,
+        meter: Option<&crate::engine::Meter>,
+    ) -> Result<(), BudgetFailure> {
+        let here = crate::engine::current_ledger_scope();
+        if here == self.scope {
+            return Ok(());
+        }
+        let total = s.bytes(self.bytes, budget.byte_limit(meter))?;
+        s.add_bytes(self.storage, self.bytes, total);
+        s.snapshot.reservations.record(self.bytes as usize, false);
+        self.scope = here;
+        Ok(())
+    }
     pub fn resize(&mut self, new_bytes: u64) -> Result<(), BudgetFailure> {
         let budget = self.budget.clone().expect("live byte lease");
-        let mut s = budget.lock();
-        s.healthy()?;
-        self.resize_locked(&mut s, new_bytes)
+        budget.with(|s, meter| {
+            s.healthy()?;
+            self.rescope(s, &budget, meter)?;
+            self.resize_locked(s, &budget, meter, new_bytes)
+        })
     }
     /// Resize to exactly `count * elem + header` bytes. The budget is checked
     /// first, so a poisoned ledger fails even for a zero or no-op size.
@@ -498,34 +597,42 @@ impl ByteLease {
         header: u64,
     ) -> Result<(), BudgetFailure> {
         let budget = self.budget.clone().expect("live byte lease");
-        let mut s = budget.lock();
-        s.healthy()?;
-        let limit = s.limits.bytes;
-        let Some(payload) = count.checked_mul(elem) else {
-            return Err(s.latch(BudgetFailure {
-                kind: BudgetFailureKind::Overflow,
-                resource: BudgetResource::Bytes,
-                used: count,
-                requested: elem,
-                limit,
-            }));
-        };
-        let Some(new_bytes) = payload.checked_add(header) else {
-            return Err(s.latch(BudgetFailure {
-                kind: BudgetFailureKind::Overflow,
-                resource: BudgetResource::Bytes,
-                used: payload,
-                requested: header,
-                limit,
-            }));
-        };
-        self.resize_locked(&mut s, new_bytes)
+        budget.with(|s, meter| {
+            s.healthy()?;
+            let limit = budget.limits_ref().bytes;
+            let Some(payload) = count.checked_mul(elem) else {
+                return Err(s.latch(BudgetFailure {
+                    kind: BudgetFailureKind::Overflow,
+                    resource: BudgetResource::Bytes,
+                    used: count,
+                    requested: elem,
+                    limit,
+                }));
+            };
+            let Some(new_bytes) = payload.checked_add(header) else {
+                return Err(s.latch(BudgetFailure {
+                    kind: BudgetFailureKind::Overflow,
+                    resource: BudgetResource::Bytes,
+                    used: payload,
+                    requested: header,
+                    limit,
+                }));
+            };
+            self.rescope(s, &budget, meter)?;
+            self.resize_locked(s, &budget, meter, new_bytes)
+        })
     }
-    /// The one resize implementation, under an already checked guard.
-    fn resize_locked(&mut self, s: &mut State, new_bytes: u64) -> Result<(), BudgetFailure> {
+    /// The one resize implementation, inside the current scope's ledger.
+    fn resize_locked(
+        &mut self,
+        s: &mut State,
+        budget: &ExpansionBudget,
+        meter: Option<&crate::engine::Meter>,
+        new_bytes: u64,
+    ) -> Result<(), BudgetFailure> {
         if new_bytes >= self.bytes {
             let add = new_bytes - self.bytes;
-            let total = s.bytes(add)?;
+            let total = s.bytes(add, budget.byte_limit(meter))?;
             s.add_bytes(self.storage, add, total);
         } else {
             s.release_bytes(self.storage, self.bytes - new_bytes);
@@ -537,15 +644,18 @@ impl ByteLease {
         Ok(())
     }
     pub fn promote_retained(&mut self) -> Result<(), BudgetFailure> {
-        let mut s = self.budget.as_ref().expect("live byte lease").lock();
-        s.healthy()?;
-        if self.storage == Storage::Temporary {
-            s.release_bytes(Storage::Temporary, self.bytes);
-            s.snapshot.retained_bytes += self.bytes;
-            s.snapshot.reservations.record_retention();
-            self.storage = Storage::Retained;
-        }
-        Ok(())
+        let budget = self.budget.clone().expect("live byte lease");
+        budget.with(|s, meter| {
+            s.healthy()?;
+            self.rescope(s, &budget, meter)?;
+            if self.storage == Storage::Temporary {
+                s.release_bytes(Storage::Temporary, self.bytes);
+                s.snapshot.retained_bytes += self.bytes;
+                s.snapshot.reservations.record_retention();
+                self.storage = Storage::Retained;
+            }
+            Ok(())
+        })
     }
 }
 impl Drop for ByteLease {
@@ -553,86 +663,114 @@ impl Drop for ByteLease {
         let Some(budget) = &self.budget else {
             return;
         };
-        let mut state = budget.lock();
-        state.release_bytes(self.storage, self.bytes);
-        state.snapshot.reservations.release(self.bytes as usize);
+        let (storage, bytes) = (self.storage, self.bytes);
+        budget.with_in(self.scope, |state| {
+            state.release_bytes(storage, bytes);
+            state.snapshot.reservations.release(bytes as usize);
+        });
     }
 }
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 struct InvocationState {
     output: u64,
     states: u64,
 }
+/// Invocation ledger identity; its counters live in the scope's own
+/// invocation ledger, never in the session budget's ledger.
+#[derive(Debug)]
+struct InvocationId(u64);
+impl Drop for InvocationId {
+    fn drop(&mut self) {
+        crate::engine::forget_detached_ledger(self.0);
+    }
+}
 #[derive(Clone, Debug)]
 pub struct InvocationBudget {
     budget: ExpansionBudget,
-    id: usize,
+    id: Arc<InvocationId>,
 }
 impl InvocationBudget {
-    fn local(&self, session: &State) -> InvocationState {
-        session.invocations[self.id]
+    fn with<R>(
+        &self,
+        f: impl FnOnce(&mut State, &mut InvocationState, Option<&crate::engine::Meter>) -> R,
+    ) -> R {
+        crate::engine::with_ledgers(
+            self.budget.identity.id,
+            self.id.0,
+            |session: &mut State, local: &mut InvocationState, meter| {
+                self.budget.prepare(session);
+                f(session, local, meter)
+            },
+        )
     }
     #[cfg(test)]
     fn live_states(&self) -> u64 {
-        self.local(&self.budget.lock()).states
+        self.with(|_, local, _| local.states)
     }
     #[cfg(test)]
     fn output(&self) -> u64 {
-        self.local(&self.budget.lock()).output
+        self.with(|_, local, _| local.output)
     }
     pub fn emit(&self, n: u64) -> Result<(), BudgetFailure> {
-        let mut s = self.budget.lock();
-        let local = self.local(&s);
-        s.healthy()?;
-        let limit = s.limits.invocation_output;
-        let output = s.checked(BudgetResource::InvocationOutput, local.output, n, limit)?;
-        let i = Counter::OutputTokens as usize;
-        let used = s.snapshot.counters[i];
-        let limit = s.limits.counters[i];
-        let total = s.checked(
-            BudgetResource::Counter(Counter::OutputTokens),
-            used,
-            n,
-            limit,
-        )?;
-        s.invocations[self.id].output = output;
-        s.snapshot.counters[i] = total;
-        Ok(())
+        let limits = self.budget.limits();
+        self.with(|s, local, _| {
+            s.healthy()?;
+            let output = s.checked(
+                BudgetResource::InvocationOutput,
+                local.output,
+                n,
+                limits.invocation_output,
+            )?;
+            let i = Counter::OutputTokens as usize;
+            let used = s.snapshot.counters[i];
+            let total = s.checked(
+                BudgetResource::Counter(Counter::OutputTokens),
+                used,
+                n,
+                limits.counters[i],
+            )?;
+            local.output = output;
+            s.snapshot.counters[i] = total;
+            Ok(())
+        })
     }
     pub fn reserve_states(
         &self,
         n: u64,
         bytes_per_state: u64,
     ) -> Result<StateLease, BudgetFailure> {
-        let bytes;
-        {
-            let mut s = self.budget.lock();
-            let local = self.local(&s);
+        let budget = &self.budget;
+        let bytes = self.with(|s, local, meter| {
             s.healthy()?;
-            let limit = s.limits.bytes;
-            bytes = n.checked_mul(bytes_per_state).ok_or_else(|| {
+            let bytes = n.checked_mul(bytes_per_state).ok_or_else(|| {
                 s.latch(BudgetFailure {
                     kind: BudgetFailureKind::Overflow,
                     resource: BudgetResource::Bytes,
                     used: n,
                     requested: bytes_per_state,
-                    limit,
+                    limit: budget.limits_ref().bytes,
                 })
             })?;
-            let limit = s.limits.matcher_states;
-            let states = s.checked(BudgetResource::MatcherStates, local.states, n, limit)?;
-            let total = s.bytes(bytes)?;
+            let states = s.checked(
+                BudgetResource::MatcherStates,
+                local.states,
+                n,
+                budget.limits_ref().matcher_states,
+            )?;
+            let total = s.bytes(bytes, budget.byte_limit(meter))?;
             let i = Counter::Work as usize;
             let used = s.snapshot.counters[i];
-            let limit = s.limits.counters[i];
+            let limit = budget.counter_limit(Counter::Work, meter);
             let work = s.checked(BudgetResource::Counter(Counter::Work), used, n, limit)?;
-            s.invocations[self.id].states = states;
+            local.states = states;
             s.snapshot.counters[i] = work;
             s.add_bytes(Storage::Temporary, bytes, total);
             s.snapshot.reservations.record(bytes as usize, false);
-        }
+            Ok(bytes)
+        })?;
         Ok(StateLease {
             invocation: self.clone(),
+            scope: crate::engine::current_ledger_scope(),
             states: n,
             bytes,
         })
@@ -641,20 +779,25 @@ impl InvocationBudget {
 #[derive(Debug)]
 pub struct StateLease {
     invocation: InvocationBudget,
+    scope: LedgerScope,
     states: u64,
     bytes: u64,
 }
 impl Drop for StateLease {
     fn drop(&mut self) {
-        let mut s = self.invocation.budget.lock();
-        let id = self.invocation.id;
-        if let Some(next) = s.invocations[id].states.checked_sub(self.states) {
-            s.invocations[id].states = next;
-        } else {
-            s.latch(infrastructure());
+        if crate::engine::current_ledger_scope() != self.scope {
+            return;
         }
-        s.release_bytes(Storage::Temporary, self.bytes);
-        s.snapshot.reservations.release(self.bytes as usize);
+        let (states, bytes) = (self.states, self.bytes);
+        self.invocation.with(|s, local, _| {
+            if let Some(next) = local.states.checked_sub(states) {
+                local.states = next;
+            } else {
+                s.latch(infrastructure());
+            }
+            s.release_bytes(Storage::Temporary, bytes);
+            s.snapshot.reservations.release(bytes as usize);
+        });
     }
 }
 
@@ -668,7 +811,7 @@ mod tests {
         send_sync::<RetainedBytes>();
         send_sync::<ExpansionAuthority>();
         #[cfg(target_arch = "x86_64")]
-        assert_eq!(std::mem::size_of::<ByteLease>(), 24);
+        assert_eq!(std::mem::size_of::<ByteLease>(), 32);
         let budget = ExpansionBudget::new(ExpansionLimits {
             bytes: 11,
             ..ExpansionLimits::default()
@@ -720,7 +863,6 @@ mod tests {
             bytes: 0,
             ..ExpansionLimits::default()
         });
-        let weak = Arc::downgrade(&budget.state);
         let receipt = budget
             .reserve(Storage::Retained, 0)
             .unwrap()
@@ -732,10 +874,8 @@ mod tests {
         assert_eq!(budget.snapshot().reservations.cumulative_bytes, 0);
         let authority = budget.authority();
         drop(budget);
-        assert!(weak.upgrade().is_none());
         assert!(receipt.authority().same_authority(&authority));
         drop(receipt.clone());
-        assert!(weak.upgrade().is_none());
     }
 
     #[test]
@@ -760,14 +900,7 @@ mod tests {
 
         let budget = ExpansionBudget::default();
         let lease = budget.reserve(Storage::Retained, 7).unwrap();
-        let state = budget.state.clone();
-        assert!(
-            std::panic::catch_unwind(move || {
-                let _guard = state.lock().unwrap();
-                panic!("poison receipt ledger");
-            })
-            .is_err()
-        );
+        budget.poison_infrastructure_for_tests();
         let failure = lease.retain().unwrap_err();
         assert_eq!(failure.kind, BudgetFailureKind::Infrastructure);
         assert_eq!(budget.snapshot().retained_bytes, 0);
@@ -813,7 +946,6 @@ mod tests {
                         bytes: 7,
                         ..ExpansionLimits::default()
                     });
-                    let weak = Arc::downgrade(&budget.state);
                     let receipt = budget
                         .reserve(Storage::Retained, 7)
                         .unwrap()
@@ -825,9 +957,7 @@ mod tests {
                         BudgetResource::Bytes
                     );
                     drop(budget);
-                    assert!(weak.upgrade().is_none());
                     cx.publish_fact(0, receipt)?;
-                    assert!(weak.upgrade().is_none());
                     Ok(())
                 })
             }
@@ -1175,34 +1305,6 @@ mod tests {
         );
     }
     #[test]
-    fn simultaneous_matcher_leases_share_invocation_state_and_bytes() {
-        let budget = ExpansionBudget::new(small());
-        let invocation = budget.begin_invocation().unwrap();
-        let gate = Arc::new(Barrier::new(2));
-        let threads: Vec<_> = (0..2)
-            .map(|_| {
-                let invocation = invocation.clone();
-                let gate = gate.clone();
-                thread::spawn(move || {
-                    let lease = invocation.reserve_states(4, 4);
-                    gate.wait();
-                    lease.is_ok()
-                })
-            })
-            .collect();
-        assert_eq!(
-            threads
-                .into_iter()
-                .map(|thread| thread.join().unwrap())
-                .filter(|success| *success)
-                .count(),
-            1
-        );
-        assert_eq!(budget.snapshot().temporary_bytes, 0);
-        assert_eq!(budget.snapshot().counters[Counter::Work as usize], 4);
-        assert_eq!(invocation.live_states(), 0);
-    }
-    #[test]
     fn flat_lease_drop_runs_on_an_ordinary_small_stack() {
         thread::Builder::new()
             .stack_size(64 * 1024)
@@ -1396,90 +1498,10 @@ mod tests {
         );
     }
     #[test]
-    fn concurrent_clones_cannot_reset_logical_counters() {
-        let b = ExpansionBudget::new(small());
-        let gate = Arc::new(Barrier::new(16));
-        let threads: Vec<_> = (0..16)
-            .map(|_| {
-                let b = b.clone();
-                let gate = gate.clone();
-                thread::spawn(move || {
-                    gate.wait();
-                    b.charge(Counter::InputTokens, 1)
-                })
-            })
-            .collect();
-        let results: Vec<_> = threads.into_iter().map(|t| t.join().unwrap()).collect();
-        assert_eq!(results.iter().filter(|r| r.is_ok()).count(), 8);
-        let first = b.check().unwrap_err();
-        assert!(
-            results
-                .into_iter()
-                .filter_map(Result::err)
-                .all(|e| e == first)
-        );
-        assert_eq!(b.snapshot().counters[Counter::InputTokens as usize], 8);
-    }
-    #[test]
-    fn concurrent_live_leases_cannot_each_claim_the_whole_ceiling() {
-        let b = ExpansionBudget::new(small());
-        let gate = Arc::new(Barrier::new(2));
-        let threads: Vec<_> = (0..2)
-            .map(|_| {
-                let b = b.clone();
-                let gate = gate.clone();
-                thread::spawn(move || {
-                    let result = b.reserve(Storage::Temporary, 16);
-                    gate.wait();
-                    result.is_ok()
-                })
-            })
-            .collect();
-        assert_eq!(
-            threads
-                .into_iter()
-                .map(|t| t.join().unwrap())
-                .filter(|success| *success)
-                .count(),
-            1
-        );
-        assert_eq!(b.snapshot().temporary_bytes, 0);
-        assert_eq!(b.snapshot().peak_bytes, 16);
-    }
-    #[test]
-    fn concurrent_invocation_emission_shares_local_cap() {
-        let b = ExpansionBudget::new(small());
-        let i = b.begin_invocation().unwrap();
-        let gate = Arc::new(Barrier::new(8));
-        let threads: Vec<_> = (0..8)
-            .map(|_| {
-                let i = i.clone();
-                let gate = gate.clone();
-                thread::spawn(move || {
-                    gate.wait();
-                    i.emit(1)
-                })
-            })
-            .collect();
-        assert_eq!(
-            threads
-                .into_iter()
-                .map(|t| t.join().unwrap())
-                .filter(Result::is_ok)
-                .count(),
-            4
-        );
-        assert_eq!(b.snapshot().counters[Counter::OutputTokens as usize], 4);
-    }
-    #[test]
     fn poisoned_mutex_is_infrastructure_and_cleanup_is_safe() {
         let b = ExpansionBudget::new(small());
         let lease = b.reserve(Storage::Retained, 4).unwrap();
-        let shared = b.clone();
-        let _ = std::panic::catch_unwind(move || {
-            let _guard = shared.state.lock().unwrap();
-            panic!("test lock poisoning");
-        });
+        b.poison_infrastructure_for_tests();
         assert_eq!(
             b.check().unwrap_err().kind,
             BudgetFailureKind::Infrastructure
@@ -1488,15 +1510,48 @@ mod tests {
         assert_eq!(b.snapshot().retained_bytes, 0);
         let b = ExpansionBudget::new(small());
         let first = b.poison_allocation();
-        let shared = b.clone();
-        let _ = std::panic::catch_unwind(move || {
-            let _guard = shared.state.lock().unwrap();
-            panic!("test existing poison");
-        });
+        b.poison_infrastructure_for_tests();
         assert_eq!(b.check(), Err(first));
     }
     #[test]
-    fn leases_release_on_unwind_and_cross_thread_drop() {
+    fn scopes_hold_independent_ledgers_and_limits_are_per_scope() {
+        // Each scope (graph node, or one thread outside polling) owns its own
+        // ledger: there is no shared whole-compilation ceiling to race on.
+        let b = ExpansionBudget::new(small());
+        let gate = Arc::new(Barrier::new(4));
+        let threads: Vec<_> = (0..4)
+            .map(|_| {
+                let b = b.clone();
+                let gate = gate.clone();
+                thread::spawn(move || {
+                    gate.wait();
+                    let lease = b.reserve(Storage::Temporary, 16).is_ok();
+                    let charged = (0..8).all(|_| b.charge(Counter::InputTokens, 1).is_ok());
+                    let over = b.charge(Counter::InputTokens, 1).is_err();
+                    lease && charged && over
+                })
+            })
+            .collect();
+        assert!(threads.into_iter().all(|t| t.join().unwrap()));
+        assert_eq!(b.snapshot().counters[Counter::InputTokens as usize], 0);
+        b.check().unwrap();
+    }
+    #[test]
+    fn same_scope_charges_share_one_ledger_and_invocation_cap() {
+        let b = ExpansionBudget::new(small());
+        let i = b.begin_invocation().unwrap();
+        let j = i.clone();
+        assert_eq!((0..8).filter(|_| j.emit(1).is_ok()).count(), 4);
+        assert_eq!(i.output(), 4);
+        assert_eq!(b.snapshot().counters[Counter::OutputTokens as usize], 4);
+        let k = ExpansionBudget::new(small()).begin_invocation().unwrap();
+        let first = k.reserve_states(4, 2).unwrap();
+        assert_eq!(k.clone().live_states(), 4);
+        drop(first);
+        assert_eq!(k.live_states(), 0);
+    }
+    #[test]
+    fn leases_release_on_unwind_and_only_in_the_paying_scope() {
         let b = ExpansionBudget::new(small());
         let copy = b.clone();
         let _ = std::panic::catch_unwind(move || {
@@ -1505,8 +1560,12 @@ mod tests {
         });
         assert_eq!(b.snapshot().temporary_bytes, 0);
         let lease = b.reserve(Storage::Retained, 8).unwrap();
+        // Dropping in another scope never refunds a ledger it did not pay.
         thread::spawn(move || drop(lease)).join().unwrap();
-        assert_eq!(b.snapshot().retained_bytes, 0);
+        assert_eq!(b.snapshot().retained_bytes, 8);
+        let lease = b.reserve(Storage::Temporary, 4).unwrap();
+        drop(lease);
+        assert_eq!(b.snapshot().temporary_bytes, 0);
         b.check().unwrap();
     }
     #[test]

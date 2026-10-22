@@ -3,10 +3,8 @@
 # These numbers may only go down. Raising one, or adding a line, requires
 # explicit user approval. See GRAPH-INTEGRITY.md. Shrink after removing debt:
 # GRAPH_INTEGRITY_SHRINK=1 justrust test --test graph_integrity
-5 Mutex src/compiler/expansion_budget.rs
 4 Mutex src/compiler/frontend.rs
 4 Atomic src/compiler/ir.rs
-3 Mutex src/compiler/ir.rs
 1 static src/compiler/ir.rs
 3 Atomic src/compiler/module_identity.rs
 1 static src/compiler/module_identity.rs

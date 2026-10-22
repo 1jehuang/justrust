@@ -146,15 +146,19 @@ parser fix below):
 |---|---|---|
 | `PlanCtx` | `state: Arc<Mutex<PlanState>>` | llama (cr-graphunify) |
 | `ValidatedTraitWorld` | `memo`, `projection_memo` | llama |
-| `PlanBudget` | `usage: Arc<Mutex<PlanUsage>>` | budget lane |
-| `PlanReservation` | `usage` (shared ledger) | budget lane |
-| `ExpansionBudget` | `state: Arc<Mutex<State>>` | budget lane |
-| `InvocationBudget` | `state: Arc<Mutex<InvocationState>>` | budget lane |
 
-The budget carriers are reached because facts retain the shared `PlanBudget`
-or expansion budget handle (for example `Plan`, `ClosedCfg`, `ModuleArena`).
-Removing them means facts stop holding the ledger: charge budgets to the
-producing node and drop the handle before publication.
+Budget carriers removed 2026-10-22 (31 entries). `PlanBudget`,
+`PlanReservation`, `ExpansionBudget`, `InvocationBudget`, `ByteLease` and
+`StateLease` are now immutable `{id, limits}` tokens or scope-tagged leases.
+Every charge lands in a typed ledger owned by the polled engine node
+(`engine::with_ledger`, keyed by budget id inside `Meter::ledgers`), or in a
+thread-local detached ledger outside polling. Leases refund only the scope
+that paid them. Work, node and byte ceilings are per node and scale with the
+node's declared input (`scale_task_work`); the 32,000,000 shared work cap is
+gone. Compilation-wide usage is a post-run fold over node ledgers
+(`PlanBudget::fold_node_ledgers`), for reporting only. Hot-path work/node
+charges for default-limit budgets admit lock-free on the node meter and touch
+the ledger only on failure.
 
 Only type positions are references: field types, tuple and variant payload
 types and alias right-hand sides. Field names, enum variant names,

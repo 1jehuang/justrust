@@ -2202,8 +2202,52 @@ struct PlanUsage {
     obligations: usize,
     diagnostic_bytes: usize,
     resource_failed: bool,
+    poisoned: bool,
     reservations: ReservationAccounting,
     first_failure: Option<ResourceBudgetFailure>,
+}
+impl PlanUsage {
+    fn snapshot(&self) -> PlanUsageSnapshot {
+        PlanUsageSnapshot {
+            applications: self.applications,
+            nodes: self.nodes,
+            work: self.work,
+            bytes: self.bytes,
+            obligations: self.obligations,
+            diagnostic_bytes: self.diagnostic_bytes,
+            reservations: self.reservations,
+            first_failure: self.first_failure,
+            poisoned: self.poisoned,
+        }
+    }
+}
+impl PlanUsageSnapshot {
+    /// Fold one node's ledger into a compilation-wide report. Reporting only:
+    /// admission never reads this sum.
+    pub fn absorb(&mut self, other: &PlanUsageSnapshot) {
+        self.applications = self.applications.saturating_add(other.applications);
+        self.nodes = self.nodes.saturating_add(other.nodes);
+        self.work = self.work.saturating_add(other.work);
+        self.bytes = self.bytes.saturating_add(other.bytes);
+        self.obligations = self.obligations.saturating_add(other.obligations);
+        self.diagnostic_bytes = self.diagnostic_bytes.saturating_add(other.diagnostic_bytes);
+        let r = &mut self.reservations;
+        let o = &other.reservations;
+        r.reservations = r.reservations.saturating_add(o.reservations);
+        r.current_reservations = r
+            .current_reservations
+            .saturating_add(o.current_reservations);
+        r.peak_reservations = r.peak_reservations.max(o.peak_reservations);
+        r.retentions = r.retentions.saturating_add(o.retentions);
+        r.current_bytes = r.current_bytes.saturating_add(o.current_bytes);
+        r.peak_bytes = r.peak_bytes.max(o.peak_bytes);
+        r.cumulative_bytes = r.cumulative_bytes.saturating_add(o.cumulative_bytes);
+        r.counters_saturated |= o.counters_saturated;
+        if self.first_failure.is_none() {
+            self.first_failure = other.first_failure;
+        }
+        self.poisoned |= other.poisoned;
+    }
 }
 /// Immutable identity and policy, with no resource ledger or spending API.
 #[derive(Clone, Debug)]
@@ -2212,7 +2256,13 @@ pub struct PlanAuthority {
 }
 #[derive(Debug)]
 struct PlanAuthorityIdentity {
+    id: u64,
     limits: PlanLimits,
+}
+impl Drop for PlanAuthorityIdentity {
+    fn drop(&mut self) {
+        crate::engine::forget_detached_ledger(self.id);
+    }
 }
 impl PlanAuthority {
     pub fn limits(&self) -> PlanLimits {
@@ -2223,8 +2273,8 @@ impl PlanAuthority {
     }
 }
 /// Evidence of paid storage, without a ledger or meter back-reference.
-/// Receipt drop/clone never refunds/charges bytes. The originating ledger or
-/// task conservatively retains admission charges until its own lifetime ends.
+/// Receipt drop/clone never refunds/charges bytes. The paying node keeps the
+/// admission charge for its own lifetime.
 #[derive(Clone, Debug)]
 pub struct RetainedStorage {
     authority: PlanAuthority,
@@ -2238,22 +2288,51 @@ impl RetainedStorage {
         self.bytes
     }
 }
+/// An immutable planning budget token: identity and limits only. Every charge
+/// lands in the ledger of the graph node being polled (engine `with_ledger`),
+/// or this thread's detached scope outside polling. Limits are per node and
+/// scale with that node's declared input; there is no whole-compilation
+/// ledger and a token reachable from a fact carries no mutable state.
 #[derive(Clone, Debug)]
 pub struct PlanBudget {
-    limits: PlanLimits,
     authority: PlanAuthority,
-    usage: Arc<std::sync::Mutex<PlanUsage>>,
 }
+/// Paid live bytes, refunded on drop to the exact scope that paid them.
 #[derive(Debug)]
 pub struct PlanReservation {
     authority: PlanAuthority,
+    scope: crate::engine::LedgerScope,
     retained: bool,
-    usage: Arc<std::sync::Mutex<PlanUsage>>,
     bytes: usize,
-    /// Set when the bytes were charged to a task meter instead of the ledger.
-    meter: Option<crate::engine::MeterHandle>,
 }
 impl PlanReservation {
+    fn refund(&self, bytes: usize, release: bool) {
+        let id = self.authority.identity.id;
+        // A poisoned ledger keeps its charges (conservative evidence).
+        let poisoned = crate::engine::with_ledger_in(self.scope, id, |usage: &mut PlanUsage| {
+            if usage.poisoned {
+                return true;
+            }
+            usage.bytes = usage.bytes.saturating_sub(bytes);
+            if release {
+                usage.reservations.release(bytes);
+            } else {
+                usage
+                    .reservations
+                    .resize_bytes(self.bytes, self.bytes - bytes);
+            }
+            false
+        });
+        if poisoned == Some(true) {
+            return;
+        }
+        crate::engine::with_meter_in(self.scope, |meter| {
+            meter.bytes.fetch_sub(
+                u64::try_from(bytes).unwrap_or(u64::MAX),
+                std::sync::atomic::Ordering::Relaxed,
+            );
+        });
+    }
     /// Release part of this reservation in place: decrease-only, never
     /// admits, never raises any charge or limit. `bytes` must not exceed the
     /// current reservation.
@@ -2264,34 +2343,24 @@ impl PlanReservation {
         if bytes == 0 {
             return Ok(());
         }
-        if let Some(meter) = &self.meter {
-            meter.meter().bytes.fetch_sub(
-                u64::try_from(bytes).unwrap_or(u64::MAX),
-                std::sync::atomic::Ordering::Relaxed,
-            );
-        } else {
-            let mut usage = self
-                .usage
-                .lock()
-                .map_err(|_| "generic planning budget poisoned".to_string())?;
-            usage.bytes -= bytes;
-            usage
-                .reservations
-                .resize_bytes(self.bytes, self.bytes - bytes);
-        }
+        self.refund(bytes, false);
         self.bytes -= bytes;
         Ok(())
     }
     /// Consume a paid lease without releasing or admitting its bytes again.
     pub fn retain(mut self) -> Result<RetainedStorage, String> {
-        if self.meter.is_none() {
-            let mut usage = self
-                .usage
-                .lock()
-                .map_err(|_| "generic planning budget poisoned".to_string())?;
+        let id = self.authority.identity.id;
+        let poisoned = crate::engine::with_ledger_in(self.scope, id, |usage: &mut PlanUsage| {
+            if usage.poisoned {
+                return true;
+            }
             usage.reservations.record_retention();
             usage.reservations.current_reservations =
                 usage.reservations.current_reservations.saturating_sub(1);
+            false
+        });
+        if poisoned == Some(true) {
+            return Err(POISONED.into());
         }
         self.retained = true;
         Ok(RetainedStorage {
@@ -2302,38 +2371,47 @@ impl PlanReservation {
 }
 impl Drop for PlanReservation {
     fn drop(&mut self) {
-        if self.retained {
-            return;
-        }
-        if let Some(meter) = &self.meter {
-            meter.meter().bytes.fetch_sub(
-                u64::try_from(self.bytes).unwrap_or(u64::MAX),
-                std::sync::atomic::Ordering::Relaxed,
-            );
-            return;
-        }
-        if let Ok(mut usage) = self.usage.lock() {
-            usage.bytes -= self.bytes;
-            usage.reservations.release(self.bytes);
+        if !self.retained {
+            self.refund(self.bytes, true);
         }
     }
 }
 #[cfg(test)]
 impl PlanBudget {
     pub(crate) fn poison_ledger_for_tests(&self) {
-        let usage = self.usage.clone();
-        let _ = std::thread::spawn(move || {
-            let _guard = usage.lock().unwrap();
-            panic!("intentional ledger poison (test)");
+        self.with(|usage, _| usage.poisoned = true);
+    }
+    /// Test access to this scope's raw counters.
+    pub(crate) fn usage_for_tests<R>(&self, f: impl FnOnce(&mut PlanUsageForTests) -> R) -> R {
+        self.with(|usage, _| {
+            let mut view = PlanUsageForTests {
+                nodes: usage.nodes,
+                bytes: usage.bytes,
+                work: usage.work,
+            };
+            let result = f(&mut view);
+            usage.nodes = view.nodes;
+            usage.bytes = view.bytes;
+            usage.work = view.work;
+            result
         })
-        .join();
     }
 }
+#[cfg(test)]
+pub(crate) struct PlanUsageForTests {
+    pub nodes: usize,
+    pub bytes: usize,
+    pub work: usize,
+}
+#[cfg(test)]
+impl PlanBudget {}
 impl Default for PlanBudget {
     fn default() -> Self {
         Self::new(PlanLimits::default())
     }
 }
+const POISONED: &str = "generic planning budget poisoned";
+const EXCEEDED: &str = "generic planning resource limit exceeded";
 impl PlanBudget {
     pub fn new(limits: PlanLimits) -> Self {
         let defaults = PlanLimits::default();
@@ -2346,15 +2424,25 @@ impl PlanBudget {
             bytes: limits.bytes.min(defaults.bytes),
         };
         Self {
-            limits,
             authority: PlanAuthority {
-                identity: Arc::new(PlanAuthorityIdentity { limits }),
+                identity: Arc::new(PlanAuthorityIdentity {
+                    id: crate::engine::next_ledger_id(),
+                    limits,
+                }),
             },
-            usage: Arc::new(std::sync::Mutex::new(PlanUsage::default())),
         }
     }
+    fn ledger_id(&self) -> u64 {
+        self.authority.identity.id
+    }
+    /// Post-run reporting: add every graph node's ledger for this budget.
+    pub fn fold_node_ledgers(&self, engine: &crate::engine::Engine, into: &mut PlanUsageSnapshot) {
+        engine.visit_ledgers(self.ledger_id(), |usage: &PlanUsage| {
+            into.absorb(&usage.snapshot())
+        });
+    }
     pub fn limits(&self) -> PlanLimits {
-        self.limits
+        self.authority.identity.limits
     }
     pub fn authority(&self) -> &PlanAuthority {
         &self.authority
@@ -2362,42 +2450,44 @@ impl PlanBudget {
     pub fn same_authority(&self, other: &Self) -> bool {
         self.authority.same_authority(&other.authority)
     }
-    /// A fixed-size snapshot. A poisoned ledger is readable for reporting only,
-    /// while all existing budget operations retain their poison error behavior.
+    fn with<R>(&self, f: impl FnOnce(&mut PlanUsage, Option<&crate::engine::Meter>) -> R) -> R {
+        crate::engine::with_ledger(self.ledger_id(), f)
+    }
+    /// This scope's ledger: the polled node's, or this thread's detached one.
     pub fn usage_snapshot(&self) -> PlanUsageSnapshot {
-        let (usage, poisoned) = match self.usage.lock() {
-            Ok(usage) => (usage, false),
-            Err(error) => (error.into_inner(), true),
-        };
-        PlanUsageSnapshot {
-            applications: usage.applications,
-            nodes: usage.nodes,
-            work: usage.work,
-            bytes: usage.bytes,
-            obligations: usage.obligations,
-            diagnostic_bytes: usage.diagnostic_bytes,
-            reservations: usage.reservations,
-            first_failure: usage.first_failure,
-            poisoned,
-        }
+        self.with(|usage, _| usage.snapshot())
     }
     pub fn first_resource_failure(&self) -> Option<ResourceBudgetFailure> {
         self.usage_snapshot().first_failure
     }
-    /// Attach an exact rejection from a subordinate budget to the same ledger.
-    /// It cannot replace a failure already observed by another worker.
+    /// Attach an exact rejection from a subordinate budget to this scope's
+    /// ledger. It cannot replace a failure already observed there.
     pub(super) fn record_resource_failure(&self, failure: ResourceBudgetFailure) {
-        if let Ok(mut usage) = self.usage.lock() {
+        self.with(|usage, _| {
             usage.resource_failed = true;
             usage.first_failure.get_or_insert(failure);
-        }
+        });
     }
-    /// Resource classification evidence from this exact shared planning ledger.
+    /// Resource classification evidence from this scope's ledger.
     /// Reservations may release storage, but never clear a failed operation.
     pub(super) fn has_resource_failure(&self) -> bool {
-        self.usage
-            .lock()
-            .map_or(true, |usage| usage.resource_failed)
+        self.with(|usage, _| usage.resource_failed || usage.poisoned)
+    }
+    fn fail(
+        usage: &mut PlanUsage,
+        caller: &'static std::panic::Location<'static>,
+        kind: ResourceBudgetKind,
+        amount: usize,
+        used: usize,
+        limit: usize,
+    ) -> String {
+        usage.resource_failed = true;
+        let mut failure = ResourceBudgetFailure::new(kind, amount, used, limit);
+        failure.file = caller.file();
+        failure.line = caller.line();
+        failure.column = caller.column();
+        usage.first_failure.get_or_insert(failure);
+        EXCEEDED.into()
     }
     #[track_caller]
     fn charge(
@@ -2408,142 +2498,136 @@ impl PlanBudget {
         kind: ResourceBudgetKind,
         reservation: Option<bool>,
     ) -> Result<(), String> {
-        let mut usage = self
-            .usage
-            .lock()
-            .map_err(|_| "generic planning budget poisoned")?;
-        let used = *select(&mut usage);
-        let next = match used.checked_add(amount) {
-            Some(next) if next <= limit => next,
-            _ => {
-                usage.resource_failed = true;
-                let failure = ResourceBudgetFailure::new(kind, amount, used, limit);
-                usage.first_failure.get_or_insert(failure);
-                return Err("generic planning resource limit exceeded".into());
+        let caller = std::panic::Location::caller();
+        self.with(|usage, _| {
+            if usage.poisoned {
+                return Err(POISONED.into());
             }
-        };
-        *select(&mut usage) = next;
-        if let Some(retained) = reservation {
-            usage.reservations.record(amount, retained);
-        }
-        Ok(())
+            let used = *select(usage);
+            let next = match used.checked_add(amount) {
+                Some(next) if next <= limit => next,
+                _ => return Err(Self::fail(usage, caller, kind, amount, used, limit)),
+            };
+            *select(usage) = next;
+            if let Some(retained) = reservation {
+                usage.reservations.record(amount, retained);
+            }
+            Ok(())
+        })
     }
+    /// Work and node charges. In a graph node the node-wide total is bounded
+    /// by that node's own meter (default floor, raised by its declared input
+    /// size); a budget built with a tighter limit also bounds its own charges
+    /// within the node. Outside polling only the budget's own limit applies.
     #[track_caller]
-    pub fn charge_work(&self, amount: usize) -> Result<(), String> {
-        if let Some(result) = self.charge_task(amount, ResourceBudgetKind::Work) {
-            return result;
-        }
-        self.charge(
-            amount,
-            |u| &mut u.work,
-            self.limits.work,
-            ResourceBudgetKind::Work,
-            None,
-        )
-    }
-    /// Per-task metering: inside a graph task, work and node charges go to
-    /// the polled node's own meter with per-task limits, so total program size
-    /// has no shared ceiling and workers never contend on one counter.
-    /// Returns `None` outside graph polling (direct API and unit-test use),
-    /// where the shared ledger still applies. Poison and recorded failures
-    /// remain sticky through the ledger.
-    #[track_caller]
-    fn charge_task(&self, amount: usize, kind: ResourceBudgetKind) -> Option<Result<(), String>> {
+    #[inline(never)]
+    fn charge_counted(&self, amount: usize, kind: ResourceBudgetKind) -> Result<(), String> {
         let caller = std::panic::Location::caller();
         let defaults = PlanLimits::default();
-        let (own_limit, default_limit) = match kind {
-            ResourceBudgetKind::Work => (self.limits.work, defaults.work),
-            _ => (self.limits.nodes, defaults.nodes),
+        let limits = self.limits();
+        let (own, default, select): (usize, usize, fn(&mut PlanUsage) -> &mut usize) = match kind {
+            ResourceBudgetKind::Work => (limits.work, defaults.work, |u| &mut u.work),
+            _ => (limits.nodes, defaults.nodes, |u| &mut u.nodes),
         };
-        // A budget built with a tighter limit than the default bounds one
-        // local sub-computation (for example one contract validation). Its
-        // bound applies to that computation alone, never to the enclosing
-        // task's cumulative work, so it is enforced on this budget's own
-        // ledger. The charge is still added to the task meter under the
-        // ordinary per-task limit, so repeated bounded locals cannot exceed
-        // what the task may spend in total.
-        let local = own_limit < default_limit;
-        let limit = if local { default_limit } else { own_limit };
-        let task = self.charge_task_meter(amount, kind, limit, caller)?;
-        if task.is_err() || !local {
-            return Some(task);
-        }
-        Some(self.charge(
-            amount,
-            match kind {
-                ResourceBudgetKind::Work => |u: &mut PlanUsage| &mut u.work,
-                _ => |u: &mut PlanUsage| &mut u.nodes,
-            },
-            own_limit,
-            kind,
-            None,
-        ))
-    }
-    /// Charge the polled node's meter. `None` outside graph polling.
-    fn charge_task_meter(
-        &self,
-        amount: usize,
-        kind: ResourceBudgetKind,
-        limit: usize,
-        caller: &'static std::panic::Location<'static>,
-    ) -> Option<Result<(), String>> {
-        crate::engine::with_current_meter(|meter| {
-            let meter = meter?;
-            let counter = match kind {
-                ResourceBudgetKind::Work => &meter.work,
-                _ => &meter.nodes,
-            };
-            let amount64 = u64::try_from(amount).unwrap_or(u64::MAX);
-            let limit64 = u64::try_from(limit).unwrap_or(u64::MAX);
-            let limit64 = match kind {
-                ResourceBudgetKind::Work | ResourceBudgetKind::OwnershipWork => {
-                    meter.work_limit(limit64)
-                }
-                _ => limit64,
-            };
-            let limit = usize::try_from(limit64).unwrap_or(usize::MAX);
-            Some(
-                match crate::engine::Meter::admit(counter, amount64, limit64) {
-                    Ok(()) => Ok(()),
-                    Err(used) => {
-                        let used = usize::try_from(used).unwrap_or(usize::MAX);
-                        match self.usage.lock() {
-                            Ok(mut usage) => {
-                                usage.resource_failed = true;
-                                let mut failure =
-                                    ResourceBudgetFailure::new(kind, amount, used, limit);
-                                failure.file = caller.file();
-                                failure.line = caller.line();
-                                failure.column = caller.column();
-                                usage.first_failure.get_or_insert(failure);
-                                Err("generic planning resource limit exceeded".into())
-                            }
-                            Err(_) => Err("generic planning budget poisoned".into()),
+        // Hot path: a default-limit budget inside a graph node is bounded only
+        // by that node's own meter, so admit there lock-free and touch the
+        // node's ledger only to record a failure.
+        if own >= default {
+            let admitted = crate::engine::with_current_meter(|meter| {
+                let meter = meter?;
+                let counter = match kind {
+                    ResourceBudgetKind::Work => &meter.work,
+                    _ => &meter.nodes,
+                };
+                let node_limit = meter.work_limit(default as u64);
+                Some(
+                    crate::engine::Meter::admit(
+                        counter,
+                        u64::try_from(amount).unwrap_or(u64::MAX),
+                        node_limit,
+                    )
+                    .map_err(|used| (used, node_limit)),
+                )
+            });
+            match admitted {
+                Some(Ok(())) => return Ok(()),
+                Some(Err((used, limit))) => {
+                    return Err(self.with(|usage, _| {
+                        if usage.poisoned {
+                            return POISONED.into();
                         }
+                        Self::fail(
+                            usage,
+                            caller,
+                            kind,
+                            amount,
+                            usize::try_from(used).unwrap_or(usize::MAX),
+                            usize::try_from(limit).unwrap_or(usize::MAX),
+                        )
+                    }));
+                }
+                None => {}
+            }
+        }
+        self.with(|usage, meter| {
+            if usage.poisoned {
+                return Err(POISONED.into());
+            }
+            let used = *select(usage);
+            let Some(next) = used.checked_add(amount) else {
+                return Err(Self::fail(usage, caller, kind, amount, used, own));
+            };
+            match meter {
+                Some(meter) => {
+                    let counter = match kind {
+                        ResourceBudgetKind::Work => &meter.work,
+                        _ => &meter.nodes,
+                    };
+                    // Both scale with this node's own declared input size.
+                    let node_limit = meter.work_limit(default as u64);
+                    if own < default && next > own {
+                        return Err(Self::fail(usage, caller, kind, amount, used, own));
                     }
-                },
-            )
+                    if let Err(node_used) = crate::engine::Meter::admit(
+                        counter,
+                        u64::try_from(amount).unwrap_or(u64::MAX),
+                        node_limit,
+                    ) {
+                        return Err(Self::fail(
+                            usage,
+                            caller,
+                            kind,
+                            amount,
+                            usize::try_from(node_used).unwrap_or(usize::MAX),
+                            usize::try_from(node_limit).unwrap_or(usize::MAX),
+                        ));
+                    }
+                }
+                None if next > own => {
+                    return Err(Self::fail(usage, caller, kind, amount, used, own));
+                }
+                None => {}
+            }
+            *select(usage) = next;
+            Ok(())
         })
     }
     #[track_caller]
+    #[inline(never)]
+    pub fn charge_work(&self, amount: usize) -> Result<(), String> {
+        self.charge_counted(amount, ResourceBudgetKind::Work)
+    }
+    #[track_caller]
+    #[inline(never)]
     pub fn charge_nodes(&self, amount: usize) -> Result<(), String> {
-        if let Some(result) = self.charge_task(amount, ResourceBudgetKind::Nodes) {
-            return result;
-        }
-        self.charge(
-            amount,
-            |u| &mut u.nodes,
-            self.limits.nodes,
-            ResourceBudgetKind::Nodes,
-            None,
-        )
+        self.charge_counted(amount, ResourceBudgetKind::Nodes)
     }
     #[track_caller]
     pub fn charge_application(&self) -> Result<(), String> {
         self.charge(
             1,
             |u| &mut u.applications,
-            self.limits.applications,
+            self.limits().applications,
             ResourceBudgetKind::Applications,
             None,
         )
@@ -2568,94 +2652,101 @@ impl PlanBudget {
             None,
         )
     }
+    /// Live-byte admission in this scope. In a graph node the node's meter
+    /// bounds all live bytes under its input-scaled limit; a tighter budget
+    /// also bounds its own bytes.
     #[track_caller]
-    pub fn reserve_bytes(&self, bytes: usize) -> Result<PlanReservation, String> {
-        if let Some(meter) = crate::engine::MeterHandle::current() {
-            self.charge_meter_bytes(meter.meter(), bytes)?;
-            return Ok(PlanReservation {
-                authority: self.authority.clone(),
-                retained: false,
-                usage: self.usage.clone(),
-                bytes,
-                meter: Some(meter),
-            });
-        }
-        self.charge(
-            bytes,
-            |u| &mut u.bytes,
-            self.limits.bytes,
-            ResourceBudgetKind::Bytes,
-            Some(false),
-        )?;
-        Ok(PlanReservation {
-            authority: self.authority.clone(),
-            retained: false,
-            usage: self.usage.clone(),
-            bytes,
-            meter: None,
-        })
-    }
-    /// Charge live bytes to one task's meter under the per-task byte limit.
-    #[track_caller]
-    fn charge_meter_bytes(&self, meter: &crate::engine::Meter, bytes: usize) -> Result<(), String> {
-        let limit64 = meter.bytes_limit(u64::try_from(self.limits.bytes).unwrap_or(u64::MAX));
-        let limit = usize::try_from(limit64).unwrap_or(usize::MAX);
-        match crate::engine::Meter::admit(
-            &meter.bytes,
-            u64::try_from(bytes).unwrap_or(u64::MAX),
-            limit64,
-        ) {
-            Ok(()) => {
-                if self.usage.is_poisoned() {
-                    return Err("generic planning budget poisoned".into());
-                }
-                Ok(())
+    #[inline(never)]
+    fn admit_bytes(&self, bytes: usize, retained: bool) -> Result<(), String> {
+        let caller = std::panic::Location::caller();
+        let own = self.limits().bytes;
+        let default = PlanLimits::default().bytes;
+        self.with(|usage, meter| {
+            if usage.poisoned {
+                return Err(POISONED.into());
             }
-            Err(used) => match self.usage.lock() {
-                Ok(mut usage) => {
-                    usage.resource_failed = true;
-                    let failure = ResourceBudgetFailure::new(
+            let used = usage.bytes;
+            let Some(next) = used.checked_add(bytes) else {
+                return Err(Self::fail(
+                    usage,
+                    caller,
+                    ResourceBudgetKind::Bytes,
+                    bytes,
+                    used,
+                    own,
+                ));
+            };
+            match meter {
+                Some(meter) => {
+                    if own < default && next > own {
+                        return Err(Self::fail(
+                            usage,
+                            caller,
+                            ResourceBudgetKind::Bytes,
+                            bytes,
+                            used,
+                            own,
+                        ));
+                    }
+                    let limit = meter.bytes_limit(default as u64);
+                    if let Err(node_used) = crate::engine::Meter::admit(
+                        &meter.bytes,
+                        u64::try_from(bytes).unwrap_or(u64::MAX),
+                        limit,
+                    ) {
+                        return Err(Self::fail(
+                            usage,
+                            caller,
+                            ResourceBudgetKind::Bytes,
+                            bytes,
+                            usize::try_from(node_used).unwrap_or(usize::MAX),
+                            usize::try_from(limit).unwrap_or(usize::MAX),
+                        ));
+                    }
+                }
+                None if next > own => {
+                    return Err(Self::fail(
+                        usage,
+                        caller,
                         ResourceBudgetKind::Bytes,
                         bytes,
-                        usize::try_from(used).unwrap_or(usize::MAX),
-                        limit,
-                    );
-                    usage.first_failure.get_or_insert(failure);
-                    Err("generic planning resource limit exceeded".into())
+                        used,
+                        own,
+                    ));
                 }
-                Err(_) => Err("generic planning budget poisoned".into()),
-            },
-        }
-    }
-    /// Conservatively retain generated semantic storage until this plan ends.
-    #[track_caller]
-    pub fn retain_bytes(&self, bytes: usize) -> Result<(), String> {
-        if let Some(result) = crate::engine::with_current_meter(|meter| {
-            meter.map(|meter| self.charge_meter_bytes(meter, bytes))
-        }) {
-            return result;
-        }
-        self.charge(
-            bytes,
-            |u| &mut u.bytes,
-            self.limits.bytes,
-            ResourceBudgetKind::Bytes,
-            Some(true),
-        )
-    }
-    #[track_caller]
-    pub fn check_depth(&self, depth: usize) -> Result<(), String> {
-        if depth > self.limits.depth {
-            if let Ok(mut usage) = self.usage.lock() {
-                usage.resource_failed = true;
-                let failure = ResourceBudgetFailure::new(
-                    ResourceBudgetKind::Depth,
-                    depth,
-                    0,
-                    self.limits.depth,
-                );
-                usage.first_failure.get_or_insert(failure);
+                None => {}
             }
+            usage.bytes = next;
+            usage.reservations.record(bytes, retained);
+            Ok(())
+        })
+    }
+    #[track_caller]
+    #[inline(never)]
+    pub fn reserve_bytes(&self, bytes: usize) -> Result<PlanReservation, String> {
+        self.admit_bytes(bytes, false)?;
+        Ok(PlanReservation {
+            authority: self.authority.clone(),
+            scope: crate::engine::current_ledger_scope(),
+            retained: false,
+            bytes,
+        })
+    }
+    /// Conservatively retain generated semantic storage for this scope's life.
+    #[track_caller]
+    #[inline(never)]
+    pub fn retain_bytes(&self, bytes: usize) -> Result<(), String> {
+        self.admit_bytes(bytes, true)
+    }
+    #[track_caller]
+    #[inline(never)]
+    pub fn check_depth(&self, depth: usize) -> Result<(), String> {
+        let limit = self.limits().depth;
+        if depth > limit {
+            let caller = std::panic::Location::caller();
+            self.with(|usage, _| {
+                Self::fail(usage, caller, ResourceBudgetKind::Depth, depth, 0, limit)
+            });
             Err("generic planning depth limit exceeded".into())
         } else {
             Ok(())
@@ -7333,12 +7424,11 @@ impl RefContract {
                     .into(),
             );
         }
-        let work = budget
-            .usage
-            .lock()
-            .map_err(|_| "generic planning budget poisoned")?
-            .work;
-        Ok(work)
+        let usage = budget.usage_snapshot();
+        if usage.poisoned {
+            return Err("generic planning budget poisoned".into());
+        }
+        Ok(usage.work)
     }
 }
 
@@ -10932,7 +11022,7 @@ mod original_replay_transport_tests {
         assert!(shared.retain_bytes(5).is_err());
         assert!(latch.has_resource_failure());
         drop(reservation);
-        assert_eq!(latch.usage.lock().unwrap().bytes, 0);
+        assert_eq!(latch.usage_for_tests(|u| u.bytes), 0);
         shared.retain_bytes(1).unwrap();
         assert!(latch.has_resource_failure());
         assert!(shared.has_resource_failure());
@@ -10943,16 +11033,12 @@ mod original_replay_transport_tests {
         assert!(depth.clone().check_depth(depth.limits().depth + 1).is_err());
         assert!(depth.has_resource_failure());
         let overflow = PlanBudget::default();
-        overflow.usage.lock().unwrap().work = usize::MAX;
+        overflow.usage_for_tests(|u| u.work = usize::MAX);
         assert!(overflow.clone().charge_work(1).is_err());
         assert!(overflow.has_resource_failure());
         let poisoned = PlanBudget::default();
         let poison_clone = poisoned.clone();
-        let panic = std::panic::catch_unwind(|| {
-            let _guard = poisoned.usage.lock().unwrap();
-            panic!("intentional ledger poison for conservative resource evidence");
-        });
-        assert!(panic.is_err());
+        poisoned.poison_ledger_for_tests();
         assert!(poisoned.has_resource_failure());
         assert!(poison_clone.has_resource_failure());
         assert!(poison_clone.charge_work(1).is_err());
@@ -10988,10 +11074,8 @@ mod original_replay_transport_tests {
                     .unwrap()
                     .is_empty()
             );
-            let (used_nodes, used_bytes, used_work) = {
-                let used = limited.usage.lock().unwrap();
-                (used.nodes, used.bytes, used.work)
-            };
+            let (used_nodes, used_bytes, used_work) =
+                limited.usage_for_tests(|used| (used.nodes, used.bytes, used.work));
             match exhausted {
                 0 => limited
                     .charge_nodes(limited.limits().nodes - used_nodes)
@@ -11078,7 +11162,7 @@ mod original_replay_transport_tests {
         );
         publication.validate_source(source, facts, &budget).unwrap();
         // Exhaust this exact ledger, not a fresh low-budget foreign authority.
-        let used = budget.usage.lock().unwrap().work;
+        let used = budget.usage_for_tests(|u| u.work);
         budget.charge_work(budget.limits().work - used).unwrap();
         let error = publication
             .validate_source(source, facts, &budget)
@@ -11287,7 +11371,11 @@ mod tests {
             let demand = engine.request(crate::compiler::keys::params(42, 7, vec![]));
             let report = engine.run(workers).unwrap();
             assert_eq!(report.failures, 0);
-            let failure = budget.first_resource_failure().unwrap();
+            // The charge landed in the node's own ledger, not a shared one.
+            assert!(budget.first_resource_failure().is_none());
+            let mut usage = PlanUsageSnapshot::default();
+            budget.fold_node_ledgers(&engine, &mut usage);
+            let failure = usage.first_failure.unwrap();
             assert_eq!(
                 (failure.file, u64::from(failure.line)),
                 (file!(), demand.result(0).unwrap())
@@ -11298,7 +11386,7 @@ mod tests {
     }
 
     #[test]
-    fn budget_telemetry_shared_workers_preserve_one_first_failure() {
+    fn budget_telemetry_scoped_workers_each_keep_their_own_first_failure() {
         let budget = PlanBudget::new(PlanLimits {
             work: 0,
             ..PlanLimits::default()
@@ -11307,13 +11395,16 @@ mod tests {
             for requested in 1..=4 {
                 let budget = &budget;
                 scope.spawn(move || {
+                    // Each thread outside polling is its own scope.
                     assert!(budget.charge_work(requested).is_err());
                     let first = budget.first_resource_failure().unwrap();
-                    assert!((1..=4).contains(&first.requested));
+                    assert_eq!(first.requested, requested);
                     assert_eq!(first.kind, ResourceBudgetKind::Work);
                 });
             }
         });
+        assert!(budget.first_resource_failure().is_none());
+        assert!(budget.charge_work(5).is_err());
         let first = budget.first_resource_failure().unwrap();
         assert_eq!((first.used, first.limit), (0, 0));
         assert_eq!(budget.usage_snapshot().work, 0);
@@ -11383,7 +11474,6 @@ mod tests {
             bytes: 11,
             ..PlanLimits::default()
         });
-        let ledger = Arc::downgrade(&budget.usage);
         let authority = budget.authority().clone();
         assert!(authority.same_authority(budget.clone().authority()));
         assert!(!authority.same_authority(PlanBudget::default().authority()));
@@ -11411,8 +11501,6 @@ mod tests {
         assert_eq!(budget.usage_snapshot().bytes, 8);
         let survivor = budget.reserve_bytes(0).unwrap().retain().unwrap();
         drop(budget);
-        // Neither authority nor receipt keeps the accounting ledger alive.
-        assert!(ledger.upgrade().is_none());
         assert_eq!(survivor.bytes(), 0);
         assert!(survivor.authority().same_authority(&authority));
     }
@@ -11472,15 +11560,7 @@ mod tests {
     fn retained_receipt_promotion_rejects_poison_without_fabricating_evidence() {
         let budget = PlanBudget::default();
         let reservation = budget.reserve_bytes(7).unwrap();
-        let usage = budget.usage.clone();
-        assert!(
-            std::thread::spawn(move || {
-                let _guard = usage.lock().unwrap();
-                panic!("poison test ledger");
-            })
-            .join()
-            .is_err()
-        );
+        budget.poison_ledger_for_tests();
         assert!(reservation.retain().is_err());
         let snapshot = budget.usage_snapshot();
         assert!(snapshot.poisoned);
@@ -11598,15 +11678,7 @@ mod tests {
         });
         assert!(budget.charge_work(1).is_err());
         let first = budget.first_resource_failure();
-        let ledger = budget.clone();
-        assert!(
-            std::thread::spawn(move || {
-                let _guard = ledger.usage.lock().unwrap();
-                panic!("deliberately poison the test ledger");
-            })
-            .join()
-            .is_err()
-        );
+        budget.poison_ledger_for_tests();
         assert!(budget.usage_snapshot().poisoned);
         assert_eq!(budget.first_resource_failure(), first);
         assert_eq!(
@@ -11674,7 +11746,9 @@ mod tests {
         }
         // G3 admits nested carriers structurally; ownership still authorizes use.
         validate_root_reference_actual(&components, &budget).unwrap();
-        assert!(validate_root_reference_actual(&Ty::Str, &budget).is_err());
+        // A bare `str` is admitted by shape only (025791b22). Its implicit
+        // `Sized` obligation rejects it unless the binder is `?Sized` (E0277).
+        assert!(validate_root_reference_actual(&Ty::Str, &budget).is_ok());
         assert!(
             validate_root_reference_actual(&reference(BorrowKind::Mut, Ty::Bool), &budget).is_ok()
         );
@@ -12836,7 +12910,8 @@ mod tests {
                 .is_empty()
         );
         validate_root_reference_actual(&hidden, &PlanBudget::default()).unwrap();
-        assert!(validate_root_reference_actual(&Ty::Str, &PlanBudget::default()).is_err());
+        // Shape-only admission; the Sized proof owns the E0277 rejection.
+        assert!(validate_root_reference_actual(&Ty::Str, &PlanBudget::default()).is_ok());
         let budget = PlanBudget::new(PlanLimits {
             applications: 4,
             bytes: 16,
@@ -12845,17 +12920,10 @@ mod tests {
         let clone = budget.clone();
         assert!(budget.same_authority(&clone));
         assert!(!budget.same_authority(&PlanBudget::default()));
-        let workers = (0..8)
-            .map(|_| {
-                let budget = budget.clone();
-                std::thread::spawn(move || budget.charge_application().is_ok())
-            })
-            .collect::<Vec<_>>();
+        // Limits are per scope: clones share one ledger within a scope.
         assert_eq!(
-            workers
-                .into_iter()
-                .map(|worker| worker.join().unwrap())
-                .filter(|success| *success)
+            (0..8)
+                .filter(|_| clone.charge_application().is_ok())
                 .count(),
             4
         );

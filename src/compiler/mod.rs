@@ -1945,6 +1945,8 @@ impl Provider for CompilerProvider {
                         let publication = template.publication.as_ref().ok_or_else(|| {
                             Error::new("closed source admission omitted its canonical publication")
                         })?;
+                        // Declare this node's own input before lowering charges it.
+                        scale_task_work_by_callable(&types, declaration);
                         let lowered = cfg::lower_source_closed(publication, &this.0.budget)
                             .map_err(|error| source_fact_error(error, &this.0.budget))?;
                         scale_task_work_by_cfg(&lowered);
@@ -2520,7 +2522,7 @@ fn compile_input_configured(
         .unwrap_or(error),
         report: Some(Box::new(report.clone())),
         analyses: retained_analyses(&engine),
-        resource_usage: Box::new(metered_usage(&snapshot.budget, report)),
+        resource_usage: Box::new(metered_usage(&engine, &snapshot.budget, report)),
     };
     let outcome = (|| -> Result<Option<Arc<Vec<u8>>>, Error> {
         check.completion()?;
@@ -2669,7 +2671,7 @@ fn compile_input_configured(
             .map(|analysis| analysis.as_ref().clone())
             .collect()
     };
-    let resource_usage = metered_usage(&snapshot.budget, &report);
+    let resource_usage = metered_usage(&engine, &snapshot.budget, &report);
     let mut optimizer = OptimizerReport {
         mode: snapshot.source_options.opt,
         ..OptimizerReport::default()
@@ -2705,12 +2707,22 @@ fn compile_input_configured(
 }
 
 /// The shared ledger snapshot plus all per-task metered work and nodes.
-fn metered_usage(budget: &ir::PlanBudget, report: &Report) -> ir::PlanUsageSnapshot {
-    let mut usage = budget.usage_snapshot();
-    usage.work = usage
+/// Compilation-wide usage report: the direct (non-graph) ledger plus every
+/// node's own ledger for this budget, folded after the run. Work and node
+/// counts come from the node meters, which also cover expansion work.
+/// Reporting only; admission never reads this sum.
+fn metered_usage(
+    engine: &Engine,
+    budget: &ir::PlanBudget,
+    report: &Report,
+) -> ir::PlanUsageSnapshot {
+    let direct = budget.usage_snapshot();
+    let mut usage = direct;
+    budget.fold_node_ledgers(engine, &mut usage);
+    usage.work = direct
         .work
         .saturating_add(usize::try_from(report.metered_work).unwrap_or(usize::MAX));
-    usage.nodes = usage
+    usage.nodes = direct
         .nodes
         .saturating_add(usize::try_from(report.metered_nodes).unwrap_or(usize::MAX));
     usage
