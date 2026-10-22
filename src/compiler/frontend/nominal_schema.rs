@@ -445,6 +445,19 @@ impl PlanState {
                     pointee: Arc::new(ir::Ty::shared_str_ty()),
                 }
             }
+            Type::RawPtr { kind, pointee } if matches!(pointee.as_ref(), Type::Dyn(_)) => {
+                // `*const dyn P` / `*mut dyn P`: a two-word (data, vtable)
+                // pointer with the same canonical object identity as `&dyn P`.
+                let Type::Dyn(trait_path) = pointee.as_ref() else {
+                    return Err("invalid trait object source shape".into());
+                };
+                ir::Ty::RawPtr {
+                    kind: *kind,
+                    pointee: Arc::new(
+                        self.source_dynamic_type(registry, trait_path, bindings, caller, budget)?,
+                    ),
+                }
+            }
             Type::RawPtr { kind, pointee } => ir::Ty::RawPtr {
                 kind: *kind,
                 pointee: Arc::new(self.source_ty_with_transport(

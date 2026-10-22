@@ -409,6 +409,8 @@ fn shape(ty: &ir::Ty, budget: &ir::PlanBudget, depth: usize) -> Result<Shape, Er
             receiver: Arc::new(shape(&p.trait_ref.self_ty, budget, depth + 1)?),
             arguments: children(&p.trait_ref.args)?,
         },
+        // Closed object identities were lowered by the canonical dynamic path.
+        ir::Ty::Dyn(object) if object.is_closed_leaf() => Shape::Leaf(ty.clone()),
         ir::Ty::Closure(_) | ir::Ty::Dyn(_) => {
             return Err(Error::new(
                 "unsupported: nominal source recipe needs independently authenticated closure or dynamic metadata",

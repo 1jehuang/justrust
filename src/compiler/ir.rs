@@ -5097,6 +5097,29 @@ pub enum Ty {
 /// `&T`/`&mut T` to `*const T`, `&mut T` to `*mut T`, any raw pointer to any
 /// raw pointer, raw pointer to `usize`, and `usize` to raw pointer.
 pub fn ptr_cast_valid(from: &Ty, to: &Ty) -> bool {
+    // Fat trait object pointers keep their exact object identity; the
+    // two-word (data, vtable) carrier is copied unchanged.
+    let object = |ty: &Ty| match ty {
+        Ty::Ref { referent, .. } | Ty::RawPtr { pointee: referent, .. } => match referent.as_ref() {
+            Ty::Dyn(object) => Some(object.clone()),
+            _ => None,
+        },
+        _ => None,
+    };
+    match (object(from), object(to)) {
+        (None, None) => {}
+        (Some(a), Some(b)) => {
+            return a == b
+                && match (from, to) {
+                    (Ty::Ref { kind, .. }, Ty::RawPtr { kind: target, .. }) => {
+                        *target == BorrowKind::Shared || *kind == BorrowKind::Mut
+                    }
+                    (Ty::RawPtr { .. }, Ty::RawPtr { .. }) => true,
+                    _ => false,
+                };
+        }
+        _ => return false,
+    }
     match (from, to) {
         (
             Ty::Ref { kind, referent },

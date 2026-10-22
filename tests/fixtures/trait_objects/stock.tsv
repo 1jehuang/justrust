@@ -34,3 +34,5 @@ positive/dyn_where_self_sized.rs	accept	-
 positive/impl_arg_methods.rs	accept	-
 positive/impl_partial_turbofish.rs	accept	-
 positive/impl_trait_method_param.rs	accept	-
+positive/dyn_raw_ptr.rs	accept	-
+negative/dyn_raw_ptr_cast.rs	reject	E0606

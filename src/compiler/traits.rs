@@ -2733,9 +2733,14 @@ impl ValidatedTraitWorld {
                 }
             }
             Ty::Dyn(object) => {
-                // Unsized: only meaningful directly behind a reference, or as
-                // the root Self of a trait goal (`dyn T: T` dispatch schema).
-                if !matches!(usage, TypeUse::Referent { .. } | TypeUse::Root) {
+                // Unsized: only meaningful directly behind a reference, as the
+                // root Self of a trait goal (`dyn T: T` dispatch schema), or as a
+                // nominal actual. An actual for a parameter without `?Sized`
+                // is still rejected by that parameter's implicit Sized row.
+                if !matches!(
+                    usage,
+                    TypeUse::Referent { .. } | TypeUse::Root | TypeUse::Actual
+                ) {
                     return Err(FactsError::unsupported(
                         &self.budget,
                         "unsupported: trait object type outside a reference",

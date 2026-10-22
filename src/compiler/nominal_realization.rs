@@ -432,6 +432,8 @@ impl ReadNominal {
                 | ir::Ty::RawPtr { pointee: ty, .. }
                 | ir::Ty::Array { element: ty, .. }
                 | ir::Ty::Slice { element: ty } => child(ty)?,
+                // A closed object carries no nominal children to authenticate.
+                ir::Ty::Dyn(object) if object.is_closed_leaf() => {}
                 ir::Ty::Closure(_)
                 | ir::Ty::Dyn(_)
                 | ir::Ty::AssociatedType(_)

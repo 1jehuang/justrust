@@ -76,7 +76,10 @@ pub const SHARED_BYTE_SLICE_LAYOUT: SliceLayout = SliceLayout {
 /// slice. Returns the principal trait.
 fn trait_object_ref(ty: &ir::Ty) -> Option<ir::DeclId> {
     match ty {
-        ir::Ty::Ref { referent, .. } => match referent.as_ref() {
+        ir::Ty::Ref { referent, .. }
+        | ir::Ty::RawPtr {
+            pointee: referent, ..
+        } => match referent.as_ref() {
             ir::Ty::Dyn(object) => Some(object.principal),
             _ => None,
         },
