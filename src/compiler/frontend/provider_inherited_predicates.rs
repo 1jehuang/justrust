@@ -25,11 +25,9 @@ impl SourceSchemasBuilder {
             }
         }
         for (id, predicates) in replacements {
-            let row = self
-                .functions
-                .values
-                .get_mut(id.index as usize)
-                .and_then(Option::as_mut)
+            let position = table_position(&self.functions.values, id).ok();
+            let row = position
+                .and_then(|position| self.functions.values[position].as_mut())
                 .filter(|(stored, _)| *stored == id)
                 .ok_or("closure predicate replacement lost its canonical declaration")?;
             row.1.value.predicates = predicates;

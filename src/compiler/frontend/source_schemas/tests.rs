@@ -5,10 +5,7 @@ fn id(snapshot: ir::SnapshotId, index: u32) -> ir::DeclId {
 }
 // Unit fixtures deliberately bypass registry minting to exercise rejection.
 fn slot(id: ir::DeclId) -> DeclSlot {
-    DeclSlot {
-        id,
-        declaration_count: id.index as usize + 1,
-    }
+    DeclSlot { id }
 }
 fn schema(b: &ir::PlanBudget) -> StoredSchema {
     let value = tr::GenericSchema {
@@ -298,17 +295,10 @@ fn source_schemas_failed_growth_is_sticky_and_never_commits_new_capacity() {
     assert_eq!(values, [1]);
 }
 #[test]
-fn source_schemas_forged_receipt_and_sparse_slot_cannot_publish_or_allocate() {
+fn source_schemas_forged_receipt_cannot_publish() {
     let b = ir::PlanBudget::default();
     let snapshot = ir::SnapshotId::standalone().unwrap();
     let mut builder = SourceSchemasBuilder::default();
-    let sparse = DeclSlot {
-        id: id(snapshot, u32::MAX),
-        declaration_count: 4,
-    };
-    let mut table = PaidDeclTable::<u32>::default();
-    assert!(table.insert(sparse, 1, &b).is_err());
-    assert_eq!(table.values.capacity(), 0);
     builder
         .functions
         .insert(slot(id(snapshot, 0)), schema(&b), &b)
@@ -505,7 +495,8 @@ fn source_schemas_projection_rejects_same_id_wrong_payload_before_seal() {
                 &b,
             )
             .unwrap();
-        let info = &mut builder.region_modes.values[declaration.index as usize]
+        let position = table_position(&builder.region_modes.values, declaration).unwrap();
+        let info = &mut builder.region_modes.values[position]
             .as_mut()
             .unwrap()
             .1

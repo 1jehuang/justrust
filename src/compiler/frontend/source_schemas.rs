@@ -11,7 +11,16 @@ use super::{ir, tr};
 use std::mem::size_of;
 use std::sync::Arc;
 
+/// Rows sorted by declaration identity, every slot occupied. Storage never
+/// assumes a dense `DeclId.index`, so identities may be canonical
+/// per-module keys rather than whole-program insertion positions.
 type DeclTable<V> = Vec<Option<(ir::DeclId, V)>>;
+fn table_position<V>(values: &DeclTable<V>, id: ir::DeclId) -> Result<usize, usize> {
+    values.binary_search_by(|slot| match slot {
+        Some((key, _)) => key.cmp(&id),
+        None => std::cmp::Ordering::Less,
+    })
+}
 type AssignmentTable = Vec<((ir::DeclId, ir::DeclId), ir::Ty)>;
 
 /// Params is the sole owned vector. Other schema/signature children and
@@ -179,9 +188,9 @@ fn lookup<'a, V>(
     budget: &ir::PlanBudget,
 ) -> Result<Option<&'a V>, String> {
     budget.charge_work(1)?;
-    Ok(values
-        .get(id.index as usize)
-        .and_then(Option::as_ref)
+    Ok(table_position(values, id)
+        .ok()
+        .and_then(|position| values[position].as_ref())
         .filter(|(key, _)| *key == id)
         .map(|(_, value)| value))
 }
@@ -189,7 +198,6 @@ fn lookup<'a, V>(
 /// Checked against the existing registry, never a standalone admission ID.
 pub(super) struct DeclSlot {
     id: ir::DeclId,
-    declaration_count: usize,
 }
 pub(super) fn decl_slot(
     id: ir::DeclId,
@@ -199,10 +207,7 @@ pub(super) fn decl_slot(
     check_budget(budget)?;
     budget.charge_work(1)?;
     registry.declaration(id)?;
-    Ok(DeclSlot {
-        id,
-        declaration_count: registry.declarations.len(),
-    })
+    Ok(DeclSlot { id })
 }
 #[derive(Debug)]
 pub(super) struct PaidDeclTable<V> {
@@ -228,9 +233,6 @@ impl<V> PaidDeclTable<V> {
     ) -> Result<(), String> {
         check_budget(budget)?;
         let id = slot.id;
-        if id.index as usize >= slot.declaration_count {
-            return Err("source schema index exceeds declaration inventory".into());
-        }
         check_receipt(self.receipt.as_ref(), budget)?;
         if self
             .snapshot
@@ -238,20 +240,26 @@ impl<V> PaidDeclTable<V> {
         {
             return Err("foreign source schema snapshot".into());
         }
-        let needed = (id.index as usize)
-            .checked_add(1)
-            .ok_or("schema index overflow")?;
-        budget.charge_work(
-            needed
-                .saturating_sub(self.values.len())
-                .checked_add(1)
-                .ok_or("schema work overflow")?,
-        )?;
-        grow(&mut self.values, &mut self.receipt, needed, budget)?;
-        if needed > self.values.len() {
-            self.values.resize_with(needed, || None);
+        match table_position(&self.values, id) {
+            Ok(position) => {
+                budget.charge_work(1)?;
+                self.values[position] = Some((id, value));
+            }
+            Err(position) => {
+                let needed = self
+                    .values
+                    .len()
+                    .checked_add(1)
+                    .ok_or("schema index overflow")?;
+                budget.charge_work(
+                    (self.values.len() - position)
+                        .checked_add(1)
+                        .ok_or("schema work overflow")?,
+                )?;
+                grow(&mut self.values, &mut self.receipt, needed, budget)?;
+                self.values.insert(position, Some((id, value)));
+            }
         }
-        self.values[id.index as usize] = Some((id, value));
         self.snapshot = Some(id.snapshot);
         Ok(())
     }
@@ -307,14 +315,8 @@ impl SourceSchemasBuilder {
             receiver: super::receiver_mode(declaration.receiver),
             region_contract_mode: mode,
         };
-        self.region_modes.insert(
-            DeclSlot {
-                id,
-                declaration_count: registry.declarations.len(),
-            },
-            SourceDeclaration { info },
-            budget,
-        )
+        self.region_modes
+            .insert(DeclSlot { id }, SourceDeclaration { info }, budget)
     }
     pub(super) fn seal_from_registry(
         self,
@@ -444,14 +446,16 @@ impl SourceSchemasBuilder {
             budget: &ir::PlanBudget,
         ) -> Result<(), String> {
             verify_storage(&table.values, table.receipt.as_ref(), budget)?;
-            for (index, slot) in table.values.iter().enumerate() {
+            let mut previous = None;
+            for slot in &table.values {
                 budget.charge_work(1)?;
-                if slot
-                    .as_ref()
-                    .is_some_and(|(key, _)| key.snapshot != snapshot || key.index as usize != index)
-                {
+                let Some((key, _)) = slot else {
+                    return Err("foreign source schema snapshot or slot".into());
+                };
+                if key.snapshot != snapshot || previous.is_some_and(|p| p >= *key) {
                     return Err("foreign source schema snapshot or slot".into());
                 }
+                previous = Some(*key);
             }
             Ok(())
         }
