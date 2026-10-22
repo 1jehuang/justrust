@@ -114,3 +114,22 @@ fn source_iterator_count_and_bound_from_iterator() {
         "fn main(){let v=vec![1i32];let n:i32=v.iter().count();println!(\"{}\",n);}",
     );
 }
+
+#[test]
+fn source_copied_cloned_and_short_circuit_adapters() {
+    // `copied`/`cloned` are ordinary source adapters over `&T` items;
+    // `any`/`all`/`position` are provided methods taking source closures.
+    oracle::stock_native(
+        "fn main(){let v=vec![4i32,9,2];let m=v.iter().copied().fold(i32::MIN,|a,b|if a>b{a}else{b});let c=v.iter().cloned().count();let p=v.iter().position(|&x|x==2);let q=v.iter().position(|&x|x==7);let a=v.iter().any(|&x|x>8);let b=v.iter().all(|&x|x>2);println!(\"{} {} {:?} {:?} {} {}\",m,c,p,q,a,b);}",
+    );
+    for source in [
+        // `copied` needs `Copy` items: String is not Copy.
+        "fn main(){let v=vec![String::new()];let n=v.iter().copied().count();println!(\"{}\",n);}",
+        // `copied` over owned (non-reference) items has no `Item = &T`.
+        "fn main(){let v=vec![1i32];let n=v.iter().copied().copied().count();println!(\"{}\",n);}",
+        // The predicate's result must be bool.
+        "fn main(){let v=vec![1i32];let p=v.iter().any(|&x|x);println!(\"{}\",p);}",
+    ] {
+        oracle::stock_and_native_reject(source);
+    }
+}

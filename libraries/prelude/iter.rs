@@ -9,6 +9,55 @@ pub trait Iterator: Sized {
         Enumerate { iterator: self, count: 0usize }
     }
 
+    fn copied(self) -> Copied<Self> {
+        Copied { iterator: self }
+    }
+
+    fn cloned(self) -> Cloned<Self> {
+        Cloned { iterator: self }
+    }
+
+    fn any<F: FnMut(Self::Item) -> bool>(&mut self, mut f: F) -> bool {
+        loop {
+            match self.next() {
+                Option::Some(item) => {
+                    if f(item) {
+                        return true;
+                    }
+                }
+                Option::None => return false,
+            }
+        }
+    }
+
+    fn all<F: FnMut(Self::Item) -> bool>(&mut self, mut f: F) -> bool {
+        loop {
+            match self.next() {
+                Option::Some(item) => {
+                    if !f(item) {
+                        return false;
+                    }
+                }
+                Option::None => return true,
+            }
+        }
+    }
+
+    fn position<P: FnMut(Self::Item) -> bool>(&mut self, mut predicate: P) -> Option<usize> {
+        let mut index = 0usize;
+        loop {
+            match self.next() {
+                Option::Some(item) => {
+                    if predicate(item) {
+                        return Option::Some(index);
+                    }
+                    index += 1usize;
+                }
+                Option::None => return Option::None,
+            }
+        }
+    }
+
     fn count(self) -> usize {
         let mut iterator = self;
         let mut count = 0usize;
@@ -58,6 +107,36 @@ impl<I: Iterator> Iterator for Enumerate<I> {
                 self.count += 1usize;
                 Option::Some((index, item))
             }
+            Option::None => Option::None,
+        }
+    }
+}
+
+pub struct Copied<I> {
+    iterator: I,
+}
+
+impl<'a, T: Copy, I: Iterator<Item = &'a T>> Iterator for Copied<I> {
+    type Item = T;
+
+    fn next(&mut self) -> Option<T> {
+        match self.iterator.next() {
+            Option::Some(item) => Option::Some(*item),
+            Option::None => Option::None,
+        }
+    }
+}
+
+pub struct Cloned<I> {
+    iterator: I,
+}
+
+impl<'a, T: Clone, I: Iterator<Item = &'a T>> Iterator for Cloned<I> {
+    type Item = T;
+
+    fn next(&mut self) -> Option<T> {
+        match self.iterator.next() {
+            Option::Some(item) => Option::Some(item.clone()),
             Option::None => Option::None,
         }
     }
