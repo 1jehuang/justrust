@@ -160,6 +160,13 @@ impl Solver<'_, '_, '_> {
                 self.unify(result, element)?;
                 return Ok(true);
             }
+            let (left, right) = match (kind, right) {
+                (Kind::Binary(op), Some(right)) => {
+                    let (left, right) = self.scalar_reference_operands(op, left, right);
+                    (left, Some(right))
+                }
+                _ => (left, right),
+            };
             if let Some(right) = right {
                 let shift = matches!(
                     kind,
@@ -269,5 +276,42 @@ impl Solver<'_, '_, '_> {
         };
         self.unify(result, output)?;
         Ok(true)
+    }
+}
+
+impl Solver<'_, '_, '_> {
+    /// Mirrors the checker's primitive forwarding impls: arithmetic accepts
+    /// one shared reference layer per operand over a numeric referent, and
+    /// comparisons peel equal reference depths. Only hints; the checker
+    /// re-derives every accepted read.
+    fn scalar_reference_operands(&self, op: BinaryOp, left: Term, right: Term) -> (Term, Term) {
+        let numeric = |solver: &Self, term: Term| {
+            matches!(
+                solver.domain(term),
+                Domain::Integer
+                    | Domain::Float
+                    | Domain::Fixed(ir::Ty::Int(_) | ir::Ty::Float(_) | ir::Ty::Bool)
+            )
+        };
+        if comparison(op) {
+            let (mut l, mut r) = (left, right);
+            for _ in 0..8 {
+                let (Domain::Ref(_, a), Domain::Ref(_, b)) = (self.domain(l), self.domain(r))
+                else {
+                    break;
+                };
+                l = a;
+                r = b;
+            }
+            if (l, r) != (left, right) && numeric(self, l) && numeric(self, r) {
+                return (l, r);
+            }
+            return (left, right);
+        }
+        let peel = |term: Term| match self.domain(term) {
+            Domain::Ref(ir::BorrowKind::Shared, inner) if numeric(self, inner) => inner,
+            _ => term,
+        };
+        (peel(left), peel(right))
     }
 }

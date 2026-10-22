@@ -80,3 +80,22 @@ fn invalid_operators_remain_rejected_even_in_unused_bodies() {
         oracle::stock_and_native_reject(source);
     }
 }
+
+#[test]
+fn primitive_reference_operands_use_forwarding_impls() {
+    // Stock forwards `&i32 op i32`, `i32 op &i32` and `&i32 op &i32` to the
+    // scalar impl; comparisons need equal reference depth on both sides.
+    oracle::stock_native(
+        "fn sq(x:&i32)->i32{x*x} fn f(a:&f64,b:f64)->f64{a+b} fn main(){let a=3;let r=&a;let b=7u8;let rb=&b;let c=2.5;println!(\"{} {} {} {} {} {} {} {}\",sq(&a),r+1,1-r,rb<<1u8,rb&3,f(&c,1.0),r==&3,r<&4);}",
+    );
+    for source in [
+        // Mutable references have no forwarding operator impls.
+        "fn main(){let mut a=3i32;let r=&mut a;let x=r*2;println!(\"{}\",x);}",
+        // Comparison operands must have equal reference depth.
+        "fn main(){let a=3i32;let b=(&a)==3;println!(\"{}\",b);}",
+        // Mismatched scalar referents still reject.
+        "fn main(){let a=3i32;let b=1u8;let x=&a+&b;println!(\"{}\",x);}",
+    ] {
+        oracle::stock_and_native_reject(source);
+    }
+}

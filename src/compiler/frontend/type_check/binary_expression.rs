@@ -24,10 +24,10 @@ impl Checker<'_> {
                     .filter(|t| matches!(t, ir::Ty::Int(_) | ir::Ty::Float(_)))
                     .cloned();
                 if hint.is_none() {
-                    hint = self.scalar_hint(left)?;
+                    hint = self.scalar_hint(left)?.map(scalar_referent);
                 }
                 if hint.is_none() && !shifting {
-                    hint = self.scalar_hint(right)?;
+                    hint = self.scalar_hint(right)?.map(scalar_referent);
                 }
                 hint
             };
@@ -52,6 +52,7 @@ impl Checker<'_> {
                 self.reachable && left_flow.completes,
                 right_hint.as_ref(),
             )?;
+            let (left, right) = self.scalar_reference_operands(*op, left, right)?;
             let l = self.flow(left);
             let r = self.flow(right);
             let str_comparison = l.ty.is_shared_str()
@@ -157,5 +158,102 @@ impl Checker<'_> {
             }
         };
         self.finish_checked_expression(source, kind, flow)
+    }
+}
+
+fn scalar(ty: &ir::Ty) -> bool {
+    matches!(
+        ty,
+        ir::Ty::Int(_) | ir::Ty::Float(_) | ir::Ty::Bool | ir::Ty::Char
+    )
+}
+
+impl Checker<'_> {
+    /// Stock forwarding impls for primitive operators: arithmetic, bitwise and
+    /// shift operators accept one shared reference layer on either operand
+    /// (`impl Add<&i32> for &i32`, ...). Comparisons accept equal reference
+    /// depths on both sides (`impl PartialEq<&B> for &A`). Each accepted layer
+    /// is an explicit read through the reference; nothing else is admitted.
+    fn scalar_reference_operands(
+        &mut self,
+        op: BinaryOp,
+        left: ir::ExprId,
+        right: ir::ExprId,
+    ) -> Result<(ir::ExprId, ir::ExprId), String> {
+        if matches!(op, BinaryOp::And | BinaryOp::Or) {
+            return Ok((left, right));
+        }
+        let comparison = matches!(
+            op,
+            BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge
+        );
+        if comparison {
+            let (mut l, mut r) = (left, right);
+            for _ in 0..MAX_INTRINSIC_AUTODEREF {
+                let (ir::Ty::Ref { referent: a, .. }, ir::Ty::Ref { referent: b, .. }) =
+                    (&self.exprs[l.0].ty, &self.exprs[r.0].ty)
+                else {
+                    break;
+                };
+                let (a, b) = (a.as_ref().clone(), b.as_ref().clone());
+                l = self.read_through_reference(l, a)?;
+                r = self.read_through_reference(r, b)?;
+            }
+            // Only rewrite when the peeled operands are scalars; any other
+            // shape keeps its original operands and existing diagnostics.
+            if (l, r) != (left, right) && scalar(&self.exprs[l.0].ty) && scalar(&self.exprs[r.0].ty)
+            {
+                return Ok((l, r));
+            }
+            return Ok((left, right));
+        }
+        let mut peel = |checker: &mut Self, id: ir::ExprId| -> Result<ir::ExprId, String> {
+            if let ir::Ty::Ref {
+                kind: ir::BorrowKind::Shared,
+                referent,
+            } = &checker.exprs[id.0].ty
+                && matches!(
+                    referent.as_ref(),
+                    ir::Ty::Int(_) | ir::Ty::Float(_) | ir::Ty::Bool
+                )
+            {
+                let referent = referent.as_ref().clone();
+                return checker.read_through_reference(id, referent);
+            }
+            Ok(id)
+        };
+        let l = peel(self, left)?;
+        let r = peel(self, right)?;
+        Ok((l, r))
+    }
+
+    fn read_through_reference(
+        &mut self,
+        value: ir::ExprId,
+        ty: ir::Ty,
+    ) -> Result<ir::ExprId, String> {
+        let completion = self.exprs[value.0].completion;
+        self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
+        let id = ir::ExprId(self.exprs.len());
+        self.exprs.push(ir::TypedExpr {
+            ty,
+            kind: ir::ExprKind::Deref { value },
+            completion,
+        });
+        Ok(id)
+    }
+}
+
+/// A literal operand beside `&scalar` takes the referent's type, as the
+/// forwarding impl `impl Op<T> for &T` dictates. Other hints are unchanged.
+fn scalar_referent(ty: ir::Ty) -> ir::Ty {
+    match &ty {
+        ir::Ty::Ref {
+            kind: ir::BorrowKind::Shared,
+            referent,
+        } if matches!(referent.as_ref(), ir::Ty::Int(_) | ir::Ty::Float(_)) => {
+            referent.as_ref().clone()
+        }
+        _ => ty,
     }
 }
