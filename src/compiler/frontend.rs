@@ -18931,7 +18931,14 @@ impl PlanCtx {
         };
         let mut callables = Vec::new();
         for index in 0..self.callable_count() {
-            callables.push((slot(self.callable_decl(index)?)?, index));
+            let decl = self.callable_decl(index)?;
+            let at = slot(decl)?;
+            // Embedded prelude bodies are trusted library code checked and
+            // instantiated on demand, like stock's precompiled std. Eagerly
+            // admitting every one made a trivial CHECK cost ~1300 bodies.
+            if !self.is_prelude_decl(decl)? {
+                callables.push((at, index));
+            }
         }
         let mut constants = Vec::new();
         for index in 0..self.constant_count() {
