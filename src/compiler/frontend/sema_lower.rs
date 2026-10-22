@@ -762,11 +762,14 @@ impl<'a> Lower<'a> {
 
     fn source_fields(&self, adt: st::DefId, variant: u32) -> R<&'a [FieldDecl]> {
         let plan = self.plan;
+        let snapshot = plan.registry_snapshot_id().map_err(Unsupported)?;
         let info = plan
             .registry
-            .declarations
-            .get(adt as usize)
-            .ok_or_else(|| Unsupported("unknown nominal".into()))?;
+            .declaration(ir::DeclId {
+                snapshot,
+                index: adt,
+            })
+            .map_err(|_| Unsupported("unknown nominal".into()))?;
         Ok(match info.kind {
             ir::DeclKind::Struct => &plan.program.structs[info.source_index].fields,
             ir::DeclKind::Enum => {

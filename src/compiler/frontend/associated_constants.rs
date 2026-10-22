@@ -49,7 +49,7 @@ pub(super) fn seal_registry_owners(
             budget.charge_work(1)?;
             let source = &program.traits[owner_index].associated_constants[index];
             clone_visibility(&source.visibility, budget)?;
-            let info = decl_mut(&mut registry.declarations, declaration)?;
+            let info = decl_mut(&registry.slots, &mut registry.declarations, declaration)?;
             info.owner = Some(owner);
             info.env = env.clone();
             info.visibility = source.visibility.clone();
@@ -91,7 +91,7 @@ pub(super) fn seal_registry_owners(
             budget.charge_work(1)?;
             let source = &program.impls[owner_index].associated_constants[index];
             clone_visibility(&source.visibility, budget)?;
-            let info = decl_mut(&mut registry.declarations, declaration)?;
+            let info = decl_mut(&registry.slots, &mut registry.declarations, declaration)?;
             info.owner = Some(owner);
             info.env = env.clone();
             info.visibility = source.visibility.clone();

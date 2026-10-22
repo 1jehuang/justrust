@@ -32,9 +32,16 @@ impl PlanCtx {
         &self,
         index: usize,
     ) -> Result<ir::DeclId, String> {
+        let snapshot = self.registry_snapshot_id()?;
+        let id = ir::DeclId {
+            snapshot,
+            index: u32::try_from(index).map_err(
+                |_| "contract: constant graph key is not a current constant declaration",
+            )?,
+        };
         self.registry
-            .declarations
-            .get(index)
+            .declaration(id)
+            .ok()
             .filter(|info| info.kind == ir::DeclKind::Const)
             .map(|info| info.id)
             .ok_or_else(|| {

@@ -5040,6 +5040,14 @@ impl PlanCtx {
     pub fn sema_declarations(&self) -> &[DeclInfo] {
         &self.registry.declarations
     }
+    /// The declaration namespace this context issued.
+    pub(in crate::compiler) fn registry_snapshot_id(&self) -> Result<ir::SnapshotId, String> {
+        self.registry
+            .declarations
+            .first()
+            .map(|info| info.id.snapshot)
+            .ok_or_else(|| "missing declaration inventory".into())
+    }
     /// Read-only resolved program for the semantic core adapter.
     pub fn sema_program(&self) -> &Arc<Program> {
         &self.program
@@ -16512,6 +16520,9 @@ pub struct DeclRegistry {
     modules: Arc<ModuleArena>,
     symbols: Arc<ProgramSymbols>,
     declarations: Vec<DeclInfo>,
+    /// Storage slot of each declaration identity. Identities are not storage
+    /// positions, so they may be canonical per-module keys.
+    slots: HashMap<ir::DeclId, usize>,
     functions: HashMap<PathKey, ir::DeclId>,
     constants: HashMap<PathKey, ir::DeclId>,
     const_ids: Vec<ir::DeclId>,
@@ -17107,27 +17118,40 @@ impl DeclRegistry {
         ))
     }
     pub fn declaration(&self, id: ir::DeclId) -> Result<&DeclInfo, String> {
-        self.declarations
-            .get(id.index as usize)
+        self.slots
+            .get(&id)
+            .and_then(|slot| self.declarations.get(*slot))
             .filter(|d| d.id == id)
             .ok_or_else(|| "foreign generic declaration identity".into())
+    }
+    /// Appends a declaration under its identity. Duplicate identities are
+    /// rejected; storage order carries no meaning.
+    fn push_declaration(&mut self, info: DeclInfo) -> Result<(), String> {
+        let slot = self.declarations.len();
+        if self.slots.insert(info.id, slot).is_some() {
+            return Err("duplicate declaration identity".into());
+        }
+        self.declarations.push(info);
+        Ok(())
     }
     /// Identity-checked mutable access during registration. Callers never
     /// index storage by `DeclId.index` directly, so the identity scheme can
     /// change without touching them.
     fn declaration_mut(&mut self, id: ir::DeclId) -> Result<&mut DeclInfo, String> {
-        decl_mut(&mut self.declarations, id)
+        decl_mut(&self.slots, &mut self.declarations, id)
     }
 }
 /// Identity-checked mutable registry access that borrows only the
 /// declaration storage, so callers may hold other registry fields.
-fn decl_mut(
-    declarations: &mut [DeclInfo],
+fn decl_mut<'a>(
+    slots: &HashMap<ir::DeclId, usize>,
+    declarations: &'a mut [DeclInfo],
     id: impl std::borrow::Borrow<ir::DeclId>,
-) -> Result<&mut DeclInfo, String> {
+) -> Result<&'a mut DeclInfo, String> {
     let id = *id.borrow();
-    declarations
-        .get_mut(id.index as usize)
+    slots
+        .get(&id)
+        .and_then(|slot| declarations.get_mut(*slot))
         .filter(|d| d.id == id)
         .ok_or_else(|| "foreign generic declaration identity".into())
 }
@@ -17634,6 +17658,7 @@ impl PlanCtx {
             modules: program.modules.clone(),
             symbols: program.symbols.clone(),
             declarations: Vec::new(),
+            slots: HashMap::new(),
             functions: HashMap::new(),
             constants: HashMap::new(),
             const_ids: Vec::new(),
@@ -17699,9 +17724,7 @@ impl PlanCtx {
             if entry.declaration.index as usize != registry.declarations.len() {
                 return Err("catalog prefix identity mismatch".into());
             }
-            registry
-                .declarations
-                .push(catalog_decl_info(entry, budget)?);
+            registry.push_declaration(catalog_decl_info(entry, budget)?)?;
             if let Some(schema) = &entry.schema {
                 source_schemas.functions.insert(
                     source_schemas::decl_slot(entry.declaration, &registry, budget)?,
@@ -17929,6 +17952,13 @@ impl PlanCtx {
                 std::slice::from_ref(&param_env),
                 budget,
             )?);
+            if registry
+                .slots
+                .insert(id, registry.declarations.len())
+                .is_some()
+            {
+                return Err("duplicate declaration identity".into());
+            }
             registry.declarations.push(DeclInfo {
                 embedded_function: None,
                 receiver: ReceiverKind::None,
@@ -18245,7 +18275,8 @@ impl PlanCtx {
             let key =
                 name_scope::path_key(program.names.as_ref(), &declaration.name, Namespace::Value)?;
             let id = registry.constants[&key];
-            decl_mut(&mut registry.declarations, id)?.visibility = declaration.visibility.clone();
+            decl_mut(&registry.slots, &mut registry.declarations, id)?.visibility =
+                declaration.visibility.clone();
         }
         for declaration in &program.structs {
             clone_visibility(&declaration.visibility, budget)?;
@@ -18254,7 +18285,8 @@ impl PlanCtx {
                 &declaration.name,
                 Namespace::Type,
             )?];
-            decl_mut(&mut registry.declarations, id)?.visibility = declaration.visibility.clone();
+            decl_mut(&registry.slots, &mut registry.declarations, id)?.visibility =
+                declaration.visibility.clone();
         }
         for declaration in &program.enums {
             clone_visibility(&declaration.visibility, budget)?;
@@ -18263,7 +18295,8 @@ impl PlanCtx {
                 &declaration.name,
                 Namespace::Type,
             )?];
-            decl_mut(&mut registry.declarations, id)?.visibility = declaration.visibility.clone();
+            decl_mut(&registry.slots, &mut registry.declarations, id)?.visibility =
+                declaration.visibility.clone();
         }
         for (position, source) in registry.callable_sources.iter().enumerate() {
             let CallableSource::Free(index) = *source else {
@@ -18272,7 +18305,8 @@ impl PlanCtx {
             let function = &program.functions[index];
             clone_visibility(&function.visibility, budget)?;
             let id = registry.function_ids[position];
-            decl_mut(&mut registry.declarations, id)?.visibility = function.visibility.clone();
+            decl_mut(&registry.slots, &mut registry.declarations, id)?.visibility =
+                function.visibility.clone();
             if let Some(receipt) = &function.embedded_source {
                 let bound = function_source::bind_registration(
                     receipt,
@@ -18282,26 +18316,28 @@ impl PlanCtx {
                     id,
                     budget,
                 )?;
-                decl_mut(&mut registry.declarations, id)?.embedded_function = Some(bound);
+                decl_mut(&registry.slots, &mut registry.declarations, id)?.embedded_function =
+                    Some(bound);
             }
         }
         associated_constants::seal_registry_owners(&mut registry, program, budget)?;
         for (index, declaration) in program.traits.iter().enumerate() {
             let id = registry.trait_ids[index];
             clone_visibility(&declaration.visibility, budget)?;
-            decl_mut(&mut registry.declarations, id)?.visibility = declaration.visibility.clone();
+            decl_mut(&registry.slots, &mut registry.declarations, id)?.visibility =
+                declaration.visibility.clone();
             let trait_env = registry.declaration(id)?.param_env.clone();
             let inherited_env = registry.declaration(id)?.env.clone();
             for item in &registry.trait_associated_types[index] {
                 clone_visibility(&declaration.visibility, budget)?;
-                let info = decl_mut(&mut registry.declarations, item)?;
+                let info = decl_mut(&registry.slots, &mut registry.declarations, item)?;
                 info.owner = Some(id);
                 info.visibility = declaration.visibility.clone();
                 info.env = inherited_env.clone();
             }
             for (ii, item) in registry.trait_items[index].iter().enumerate() {
                 clone_visibility(&declaration.visibility, budget)?;
-                let info = decl_mut(&mut registry.declarations, item)?;
+                let info = decl_mut(&registry.slots, &mut registry.declarations, item)?;
                 info.receiver = declaration.items[ii].receiver;
                 info.owner = Some(id);
                 info.visibility = declaration.visibility.clone();
@@ -18313,7 +18349,9 @@ impl PlanCtx {
         }
         for (implementation, block) in program.impls.iter().enumerate() {
             let id = registry.impl_ids[implementation];
-            decl_mut(&mut registry.declarations, id)?.path.module = block.module;
+            decl_mut(&registry.slots, &mut registry.declarations, id)?
+                .path
+                .module = block.module;
         }
         for (index, source) in registry.callable_sources.iter().enumerate() {
             let CallableSource::TraitDefault { trait_index, item } = *source else {
@@ -18323,7 +18361,7 @@ impl PlanCtx {
             let trait_env = registry.declaration(owner)?.param_env.clone();
             let module = registry.declaration(owner)?.path.module;
             let id = registry.function_ids[index];
-            let info = decl_mut(&mut registry.declarations, id)?;
+            let info = decl_mut(&registry.slots, &mut registry.declarations, id)?;
             info.owner = Some(owner);
             info.receiver = program.traits[trait_index].items[item].receiver;
             clone_visibility(&program.traits[trait_index].visibility, budget)?;
@@ -18351,7 +18389,7 @@ impl PlanCtx {
                 .param_env
                 .clone();
             for id in ids {
-                let info = decl_mut(&mut registry.declarations, id)?;
+                let info = decl_mut(&registry.slots, &mut registry.declarations, id)?;
                 info.env = Arc::new(ir::GenericEnv::new(
                     &[impl_env.clone(), info.param_env.clone()],
                     budget,
@@ -18973,9 +19011,7 @@ impl PlanCtx {
             if entry.declaration.index as usize != registry_mut.declarations.len() {
                 return Err("recipe suffix identity mismatch".into());
             }
-            registry_mut
-                .declarations
-                .push(catalog_decl_info(entry, budget)?);
+            registry_mut.push_declaration(catalog_decl_info(entry, budget)?)?;
             if let Some(schema) = &entry.schema {
                 source_schemas.functions.insert(
                     source_schemas::decl_slot(entry.declaration, registry_mut, budget)?,
