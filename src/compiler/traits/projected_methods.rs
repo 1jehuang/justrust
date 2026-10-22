@@ -1138,16 +1138,11 @@ impl ValidatedTraitWorld {
             },
             &mut ProofScratch::default(),
         )?;
-        if matches!(&selection.0.origin, ProofOrigin::FnItem { .. }) {
-            return Err(FactsError::unsupported(
-                &self.budget,
-                "unsupported: invoking a function item through a callable bound requires the untupling call form",
-            ));
-        }
         if !matches!(
             &selection.0.origin,
             ProofOrigin::Implementation { .. }
                 | ProofOrigin::Closure { .. }
+                | ProofOrigin::FnItem { .. }
                 | ProofOrigin::TraitObject
         ) {
             return Err(FactsError::invalid(
@@ -1300,7 +1295,7 @@ impl ValidatedTraitWorld {
         }
         if matches!(
             &evidence.selection.0.origin,
-            ProofOrigin::Closure { .. } | ProofOrigin::TraitObject
+            ProofOrigin::Closure { .. } | ProofOrigin::FnItem { .. } | ProofOrigin::TraitObject
         ) {
             let env = if matches!(&evidence.selection.0.origin, ProofOrigin::TraitObject) {
                 facts.env().clone()
@@ -1445,6 +1440,7 @@ impl ValidatedTraitWorld {
             &application.evidence.selection.0.origin,
         ) {
             (ProofOrigin::Closure { kind: left }, ProofOrigin::Closure { kind: right })
+            | (ProofOrigin::FnItem { kind: left }, ProofOrigin::FnItem { kind: right })
                 if left == right => {}
             (ProofOrigin::TraitObject, ProofOrigin::TraitObject) => {}
             (

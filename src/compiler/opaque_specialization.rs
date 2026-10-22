@@ -151,6 +151,11 @@ impl<'a> Specialization<'a> {
                     "unsupported: virtual opaque specialization call",
                 ));
             }
+            ir::Callee::Untupled(_) => {
+                return Err(Error::new(
+                    "unsupported: function item dispatch in opaque specialization",
+                ));
+            }
         };
         let mut parameters = self.type_buffer(signature.params.len())?;
         for parameter in &signature.params {

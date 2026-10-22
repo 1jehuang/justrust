@@ -332,7 +332,7 @@ impl ValidatedFacts {
         }
         Ok(match callee {
             Callee::TraitItem(call) => call.item == self.world.catalog.id(CatalogItem::DropItem),
-            Callee::Virtual(_) => false,
+            Callee::Virtual(_) | Callee::Untupled(_) => false,
             Callee::Direct(target) => self.world.headers.impls.iter().any(|h| {
                 h.trait_ref.declaration == self.world.catalog.id(CatalogItem::Drop)
                     && h.items.iter().any(|(item, body)| {

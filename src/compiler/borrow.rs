@@ -1328,9 +1328,8 @@ impl CarrierBuilder<'_, '_> {
                     let offset = match target {
                         ir::Callee::Direct(_) => 0,
                         ir::Callee::TraitItem(call)
-                        | ir::Callee::Virtual(ir::VirtualCall { call }) => {
-                            1 + call.trait_ref.args.len()
-                        }
+                        | ir::Callee::Virtual(ir::VirtualCall { call })
+                        | ir::Callee::Untupled(call) => 1 + call.trait_ref.args.len(),
                     };
                     if let Some(source_index) = index.checked_sub(offset) {
                         for row in evidence.trace().type_actual_regions.iter().filter(|row| {
@@ -3903,9 +3902,8 @@ impl CarrierBuilder<'_, '_> {
             let actuals = match target {
                 ir::Callee::Direct(target) => target.type_args.as_ref(),
                 ir::Callee::TraitItem(target)
-                | ir::Callee::Virtual(ir::VirtualCall { call: target }) => {
-                    target.method_args.as_ref()
-                }
+                | ir::Callee::Virtual(ir::VirtualCall { call: target })
+                | ir::Callee::Untupled(target) => target.method_args.as_ref(),
             };
             self.budget.spend(actuals.len())?;
             if !actuals.iter().any(|ty| matches!(ty, Ty::Ref { .. })) {
@@ -3966,9 +3964,8 @@ impl CarrierBuilder<'_, '_> {
                     let actuals = match target {
                         ir::Callee::Direct(target) => target.type_args.as_ref(),
                         ir::Callee::TraitItem(target)
-                        | ir::Callee::Virtual(ir::VirtualCall { call: target }) => {
-                            target.method_args.as_ref()
-                        }
+                        | ir::Callee::Virtual(ir::VirtualCall { call: target })
+                        | ir::Callee::Untupled(target) => target.method_args.as_ref(),
                     };
                     self.budget.spend(actuals.len())?;
                     if !actuals.iter().any(|ty| matches!(ty, Ty::Ref { .. })) {

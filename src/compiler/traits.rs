@@ -3981,7 +3981,9 @@ impl ValidatedTraitWorld {
             return Ok(view);
         }
         if let SignatureSubject::Call(
-            Callee::TraitItem(call) | Callee::Virtual(ir::VirtualCall { call }),
+            Callee::TraitItem(call)
+            | Callee::Virtual(ir::VirtualCall { call })
+            | Callee::Untupled(call),
         ) = subject
             && self.schema_contains_projection(&self.item_header(call.item)?.schema)?
         {
@@ -4034,7 +4036,9 @@ impl ValidatedTraitWorld {
                 self.discharge_direct(target, facts)?.signature,
             ),
             SignatureSubject::Call(
-                Callee::TraitItem(call) | Callee::Virtual(ir::VirtualCall { call }),
+                Callee::TraitItem(call)
+                | Callee::Virtual(ir::VirtualCall { call })
+                | Callee::Untupled(call),
             ) => {
                 let mut args = Vec::new();
                 push(&self.budget, &mut args, call.trait_ref.self_ty.clone())?;
@@ -7528,7 +7532,9 @@ impl TraitCx for ValidatedTraitWorld {
                 self.discharge_direct(target, facts)?.signature
             }
             SignatureSubject::Call(
-                Callee::TraitItem(call) | Callee::Virtual(ir::VirtualCall { call }),
+                Callee::TraitItem(call)
+                | Callee::Virtual(ir::VirtualCall { call })
+                | Callee::Untupled(call),
             ) => self.instantiate_trait_signature(call, facts)?,
         };
         if !self.eq_signature(&expected, signature)? {
@@ -7549,7 +7555,9 @@ impl TraitCx for ValidatedTraitWorld {
                 }
                 Ok(self.info(target.declaration)?.receiver)
             }
-            Callee::TraitItem(call) | Callee::Virtual(ir::VirtualCall { call }) => {
+            Callee::TraitItem(call)
+            | Callee::Virtual(ir::VirtualCall { call })
+            | Callee::Untupled(call) => {
                 self.instantiate_trait_signature(call, facts)?;
                 Ok(self.item_header(call.item)?.receiver)
             }
@@ -7558,6 +7566,19 @@ impl TraitCx for ValidatedTraitWorld {
     fn validate_trait_ref(&self, goal: &TraitRef, facts: &ValidatedFacts) -> Result<()> {
         self.check_facts(facts, true)?;
         self.validate_ref_in(goal, facts.env(), None)
+    }
+    fn validate_untupled(&self, call: &TraitCall, facts: &ValidatedFacts) -> Result<Signature> {
+        self.check_facts(facts, true)?;
+        self.validated_untupled(call, facts)
+            .map(|(signature, _)| signature)
+    }
+    fn untupled_target(
+        &self,
+        call: &TraitCall,
+        facts: &ValidatedFacts,
+    ) -> Result<ir::DirectCallProofView> {
+        self.check_facts(facts, true)?;
+        self.validated_untupled(call, facts).map(|(_, view)| view)
     }
     fn instantiate_trait_signature(
         &self,
@@ -7624,6 +7645,28 @@ impl TraitCx for ValidatedTraitWorld {
         let scratch = scratch.for_world(self.id);
         self.check_facts(facts, true)?;
         let caller = ProofContext::from_facts(facts);
+        if matches!(&call.trait_ref.self_ty, Ty::FnItem(_))
+            && self
+                .schema
+                .closure_trait_kind(call.trait_ref.declaration)?
+                .is_some()
+        {
+            // Builtin function item dispatch: no implementation selection.
+            let (signature, _) = self.validated_untupled(call, facts)?;
+            let evidence = self.require_in(
+                &Predicate::Implements(call.trait_ref.clone()),
+                caller,
+                scratch,
+            )?;
+            return Ok(ResolvedTraitCall {
+                callee: Callee::Untupled(call.clone()),
+                signature,
+                _evidence: evidence,
+                _refinement: None,
+                _topology: None,
+                _required: None,
+            });
+        }
         if self.schema_contains_projection(&self.item_header(call.item)?.schema)?
             && !self.goal_is_closed(&call.trait_ref, facts.env())?
             && !matches!(&call.trait_ref.self_ty, Ty::Dyn(_))
@@ -7714,12 +7757,6 @@ impl TraitCx for ValidatedTraitWorld {
             });
         }
         let mut target = None;
-        if matches!(&evidence.0.origin, ProofOrigin::FnItem { .. }) {
-            return Err(FactsError::unsupported(
-                &self.budget,
-                "unsupported: invoking a function item through a callable trait requires the untupling call form",
-            ));
-        }
         if let ProofOrigin::Closure { kind } = &evidence.0.origin {
             let Ty::Closure(closure) = &call.trait_ref.self_ty else {
                 return Err(FactsError::invalid(

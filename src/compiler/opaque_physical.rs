@@ -512,7 +512,7 @@ pub(super) fn normalize(
                     *signature = direct.physical_signature.clone();
                     direct_calls.push(direct);
                 }
-                ir::Callee::TraitItem(_) | ir::Callee::Virtual(_) => {
+                ir::Callee::TraitItem(_) | ir::Callee::Virtual(_) | ir::Callee::Untupled(_) => {
                     return Err(Error::new("unsupported: residual abstract physical callee"));
                 }
             }

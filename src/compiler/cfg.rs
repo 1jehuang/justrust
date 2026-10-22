@@ -1395,9 +1395,9 @@ impl Function {
             });
             let ordinary_actuals: &[Ty] = match target {
                 ir::Callee::Direct(target) => &target.type_args,
-                ir::Callee::TraitItem(call) | ir::Callee::Virtual(ir::VirtualCall { call }) => {
-                    &call.method_args
-                }
+                ir::Callee::TraitItem(call)
+                | ir::Callee::Virtual(ir::VirtualCall { call })
+                | ir::Callee::Untupled(call) => &call.method_args,
             };
             budget.charge_work(ordinary_actuals.len())?;
             let requires = ordinary_actuals

@@ -367,6 +367,11 @@ pub enum Callee {
     /// `&dyn`/`&mut dyn` receiver carrier; `slot` indexes the principal
     /// trait's method entries (declaration order, supertraits first).
     Virtual(VirtualCall),
+    /// Builtin Fn/FnMut/FnOnce dispatch on a zero-sized function item
+    /// (`call.trait_ref.self_ty` is `Ty::FnItem`). Checking and validation use
+    /// the trait item's signature `(receiver, (A..)) -> R`; native code ignores
+    /// the zero-sized receiver and calls the item with the tuple's fields.
+    Untupled(TraitCall),
 }
 /// `call.trait_ref.self_ty` is the exact `Ty::Dyn` receiver object type and
 /// `call.trait_ref.declaration` the trait owning `call.item` (the principal or
@@ -393,13 +398,15 @@ impl Callee {
     pub fn type_arguments(&self) -> &[Ty] {
         match self {
             Self::Direct(target) => &target.type_args,
-            Self::TraitItem(call) | Self::Virtual(VirtualCall { call }) => &call.method_args,
+            Self::TraitItem(call) | Self::Virtual(VirtualCall { call }) | Self::Untupled(call) => {
+                &call.method_args
+            }
         }
     }
     pub fn metadata_types(&self) -> impl Iterator<Item = &Ty> {
         let (self_ty, trait_args): (Option<&Ty>, &[Ty]) = match self {
             Self::Direct(_) => (None, &[]),
-            Self::TraitItem(call) | Self::Virtual(VirtualCall { call }) => {
+            Self::TraitItem(call) | Self::Virtual(VirtualCall { call }) | Self::Untupled(call) => {
                 (Some(&call.trait_ref.self_ty), &call.trait_ref.args)
             }
         };
@@ -474,6 +481,18 @@ pub trait TraitCx: Send + Sync {
         call: &TraitCall,
         facts: &super::traits::ValidatedFacts,
     ) -> Result<Signature, super::traits::FactsError>;
+    /// Validate builtin function item dispatch; returns the trait signature.
+    fn validate_untupled(
+        &self,
+        call: &TraitCall,
+        facts: &super::traits::ValidatedFacts,
+    ) -> Result<Signature, super::traits::FactsError>;
+    /// The exact item a validated untupled call executes.
+    fn untupled_target(
+        &self,
+        call: &TraitCall,
+        facts: &super::traits::ValidatedFacts,
+    ) -> Result<DirectCallProofView, super::traits::FactsError>;
     fn prove_goal(
         &self,
         goal: &Predicate,
@@ -507,6 +526,12 @@ pub trait TraitCx: Send + Sync {
         facts: &super::traits::ValidatedFacts,
         scratch: &mut super::traits::TraitScratch,
     ) -> Result<super::traits::ResolvedTraitCall, super::traits::FactsError>;
+}
+/// Exact executed item and signature of a validated untupled call.
+#[derive(Clone, Debug)]
+pub struct DirectCallProofView {
+    pub target: CallTarget,
+    pub signature: Signature,
 }
 #[derive(Clone, Debug)]
 pub struct GenericSignature {
@@ -1472,11 +1497,15 @@ pub(super) fn identical_type(a: &Ty, b: &Ty, budget: &PlanBudget) -> Result<bool
         (Ty::Opaque(a), Ty::Opaque(b)) => Arc::ptr_eq(a, b),
         (Ty::Closure(a), Ty::Closure(b)) => Arc::ptr_eq(a, b),
         (Ty::FnItem(a), Ty::FnItem(b)) => {
-            Arc::ptr_eq(a, b)
-                || (a.declaration == b.declaration && Arc::ptr_eq(&a.type_args, &b.type_args))
-                || (a.declaration == b.declaration
-                    && a.type_args.is_empty()
-                    && b.type_args.is_empty())
+            if a.declaration != b.declaration || a.type_args.len() != b.type_args.len() {
+                return Ok(false);
+            }
+            for (a, b) in a.type_args.iter().zip(b.type_args.iter()) {
+                if !identical_type(a, b, budget)? {
+                    return Ok(false);
+                }
+            }
+            true
         }
         (Ty::AssociatedType(a), Ty::AssociatedType(b)) => Arc::ptr_eq(a, b),
         (Ty::Tuple(a), Ty::Tuple(b)) => Arc::ptr_eq(a, b),
@@ -1504,9 +1533,9 @@ pub(super) fn identical_call_types(
     let count = |target: &Callee| {
         target.type_arguments().len().saturating_add(match target {
             Callee::Direct(_) => 0,
-            Callee::TraitItem(call) | Callee::Virtual(VirtualCall { call }) => {
-                call.trait_ref.args.len().saturating_add(1)
-            }
+            Callee::TraitItem(call)
+            | Callee::Virtual(VirtualCall { call })
+            | Callee::Untupled(call) => call.trait_ref.args.len().saturating_add(1),
         })
     };
     budget.charge_work(
@@ -3599,11 +3628,16 @@ fn substitute_callee_metadata(
             declaration: target.declaration,
             type_args: types(&target.type_args)?,
         }),
-        Callee::TraitItem(call) => {
+        Callee::TraitItem(call) | Callee::Untupled(call) => {
             let method_args = types(&call.method_args)?;
             let trait_args = types(&call.trait_ref.args)?;
             let self_ty = substitute_ty(&call.trait_ref.self_ty, env, args, facts, cx, budget)?;
-            Callee::TraitItem(TraitCall {
+            let rebuild = if matches!(callee, Callee::Untupled(_)) {
+                Callee::Untupled
+            } else {
+                Callee::TraitItem
+            };
+            rebuild(TraitCall {
                 trait_ref: TraitRef {
                     declaration: call.trait_ref.declaration,
                     self_ty,
@@ -3672,6 +3706,13 @@ pub fn substitute_callee(
                 .instantiate_trait_signature(&virtual_call.call, closed_facts)
                 .map_err(|e| e.into_legacy_diagnostic(budget))?;
             Ok(Callee::Virtual(virtual_call))
+        }
+        Callee::Untupled(call) => {
+            closed_facts
+                .service()
+                .validate_untupled(&call, closed_facts)
+                .map_err(|e| e.into_legacy_diagnostic(budget))?;
+            Ok(Callee::Untupled(call))
         }
     }
 }
@@ -3784,9 +3825,16 @@ fn canonicalize_call_metadata(
                         .instantiate_trait_signature(&virtual_call.call, facts)?;
                     (Callee::Virtual(virtual_call.clone()), signature)
                 }
+                Callee::Untupled(call) => {
+                    let signature = facts.service().validate_untupled(call, facts)?;
+                    (Callee::Untupled(call.clone()), signature)
+                }
             };
             if facts.phase() == super::traits::FactsPhase::Closed
-                && !matches!(callee, Callee::Direct(_) | Callee::Virtual(_))
+                && !matches!(
+                    callee,
+                    Callee::Direct(_) | Callee::Virtual(_) | Callee::Untupled(_)
+                )
             {
                 return Err(FactsError::invalid(
                     budget,
@@ -7340,6 +7388,14 @@ fn pattern_types_equal_with_facts(
                     Ok::<bool, String>(true)
                 })? {
                     return Ok(false);
+                }
+            }
+            (Ty::FnItem(a), Ty::FnItem(b)) => {
+                if a.declaration != b.declaration || a.type_args.len() != b.type_args.len() {
+                    return Ok(false);
+                }
+                for (a, b) in a.type_args.iter().zip(b.type_args.iter()) {
+                    pending.push((a, b, depth + 1));
                 }
             }
             (Ty::AssociatedType(_), _) | (_, Ty::AssociatedType(_)) => {

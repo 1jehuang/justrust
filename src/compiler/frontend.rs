@@ -1143,6 +1143,10 @@ fn validate_original_callee(
     let role = match (original, actual) {
         (ir::Callee::Direct(a), ir::Callee::Direct(b)) => a.declaration == b.declaration,
         (ir::Callee::TraitItem(a), ir::Callee::TraitItem(b))
+        | (ir::Callee::Untupled(a), ir::Callee::Untupled(b))
+        // A checked callable trait call on a function item canonicalizes to
+        // builtin untupled dispatch of the same trait item.
+        | (ir::Callee::TraitItem(a), ir::Callee::Untupled(b))
         | (
             ir::Callee::Virtual(ir::VirtualCall { call: a }),
             ir::Callee::Virtual(ir::VirtualCall { call: b }),
@@ -17345,7 +17349,7 @@ fn validate_const_typed_calls(
                         return Err("E0015: non-const call in typed constant body".into());
                     }
                 }
-                ir::Callee::TraitItem(_) | ir::Callee::Virtual(_) => {
+                ir::Callee::TraitItem(_) | ir::Callee::Virtual(_) | ir::Callee::Untupled(_) => {
                     return Err("E0015: non-const trait call in typed constant body".into());
                 }
             }

@@ -8163,7 +8163,7 @@ impl<'a> Checker<'a> {
         };
         let region_offset = match &selected.target {
             ir::Callee::Direct(target) => target.type_args.len().saturating_sub(type_args.len()),
-            ir::Callee::TraitItem(_) | ir::Callee::Virtual(_) => 0,
+            ir::Callee::TraitItem(_) | ir::Callee::Virtual(_) | ir::Callee::Untupled(_) => 0,
         };
         if selected.depth == 1
             && matches!(selected.adjustment, ReceiverAdjustment::SharedAutoref)
@@ -8413,7 +8413,7 @@ impl<'a> Checker<'a> {
             .ok_or(MISSING)?;
         let region_offset = match &selected.target {
             ir::Callee::Direct(target) => target.type_args.len().saturating_sub(type_args.len()),
-            ir::Callee::TraitItem(_) | ir::Callee::Virtual(_) => 0,
+            ir::Callee::TraitItem(_) | ir::Callee::Virtual(_) | ir::Callee::Untupled(_) => 0,
         };
         self.finish_checked_call(
             selected.target,
@@ -8576,7 +8576,7 @@ impl<'a> Checker<'a> {
         };
         let region_offset = match &target {
             ir::Callee::Direct(target) => target.type_args.len().saturating_sub(type_args.len()),
-            ir::Callee::TraitItem(_) | ir::Callee::Virtual(_) => 0,
+            ir::Callee::TraitItem(_) | ir::Callee::Virtual(_) | ir::Callee::Untupled(_) => 0,
         };
         let call = self.finish_checked_call(
             target,

@@ -15,6 +15,9 @@ impl ValidatedTraitWorld {
         if index != 1 {
             return Ok(false);
         }
+        if let ProofOrigin::FnItem { .. } = &selection.0.origin {
+            return self.closed_fn_item_tuple_input(goal, signature, index, context);
+        }
         let ProofOrigin::Closure { kind } = &selection.0.origin else {
             return Ok(false);
         };

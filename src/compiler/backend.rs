@@ -188,12 +188,12 @@ pub(super) fn indirect(ty: &ir::Ty) -> Result<bool, String> {
         return Ok(true);
     }
     match ty {
-        ir::Ty::Closure(_) | ir::Ty::Tuple(_) | ir::Ty::Struct(_) | ir::Ty::Array { .. } => {
-            Ok(true)
-        }
+        ir::Ty::Closure(_)
+        | ir::Ty::FnItem(_)
+        | ir::Ty::Tuple(_)
+        | ir::Ty::Struct(_)
+        | ir::Ty::Array { .. } => Ok(true),
         ir::Ty::Enum(ty) => Ok(ty.has_payload()),
-        // Zero-sized; no native ABI is admitted until the call form exists.
-        ir::Ty::FnItem(_) => Err("unsupported: function item values have no native ABI yet".into()),
         ir::Ty::Int(_)
         | ir::Ty::Float(_)
         | ir::Ty::Char
@@ -231,7 +231,9 @@ pub(super) fn value_size(ty: &ir::Ty) -> Result<i32, String> {
     if ty.contains_slice() {
         return Err(SLICE_UNSUPPORTED.into());
     }
-    if matches!(ty, ir::Ty::Closure(closure) if closure.captures().is_empty()) {
+    if matches!(ty, ir::Ty::Closure(closure) if closure.captures().is_empty())
+        || matches!(ty, ir::Ty::FnItem(_))
+    {
         // Closure environments use product storage, including an owned dummy
         // word for an empty environment in the private ABI.
         return Ok(8);
@@ -3083,6 +3085,48 @@ impl Emitter<'_> {
                 next,
                 ..
             } => {
+                // Builtin function item dispatch (ir::Callee::Untupled): the
+                // checked trait signature is `(receiver, (A..)) -> R`. The
+                // receiver is a zero-sized item (or a reference to one) with
+                // no observable effect, so the exact validated item is called
+                // directly with the argument tuple's fields.
+                let untupled;
+                let (target, signature, args) = if let ir::Callee::Untupled(call) = target {
+                    let facts = self.concrete.facts();
+                    let view = facts
+                        .service()
+                        .untupled_target(call, facts)
+                        .map_err(|e| e.into_legacy_diagnostic(facts.budget()))?;
+                    let [_, tuple] = args.as_slice() else {
+                        return Err("untupled call requires receiver and argument tuple".into());
+                    };
+                    let fields = match tuple {
+                        cfg::Operand::Constant(cfg::Constant::Unit) => Vec::new(),
+                        cfg::Operand::Copy(place) | cfg::Operand::Move(place) => {
+                            (0..view.signature.params.len())
+                                .map(|index| {
+                                    let mut field = place.clone();
+                                    field.projection.push(ir::Projection::Field(index));
+                                    if facts
+                                        .must_copy(&view.signature.params[index])
+                                        .map_err(|e| e.into_legacy_diagnostic(facts.budget()))?
+                                    {
+                                        Ok(cfg::Operand::Copy(field))
+                                    } else {
+                                        Ok(cfg::Operand::Move(field))
+                                    }
+                                })
+                                .collect::<Result<Vec<_>, String>>()?
+                        }
+                        cfg::Operand::Constant(_) => {
+                            return Err("untupled argument tuple is not a place".into());
+                        }
+                    };
+                    untupled = (ir::Callee::Direct(view.target), view.signature, fields);
+                    (&untupled.0, &untupled.1, &untupled.2)
+                } else {
+                    (target, signature, args)
+                };
                 // Virtual calls: argument 0 is the `&dyn` receiver carrier. The
                 // implementation receives only the thin data word as `&Self`;
                 // the vtable word selects the slot after argument evaluation.
@@ -3114,6 +3158,9 @@ impl Emitter<'_> {
                     }
                     ir::Callee::TraitItem(_) => {
                         return Err("unresolved trait dispatch has no native ABI".into());
+                    }
+                    ir::Callee::Untupled(_) => {
+                        return Err("untupled dispatch was not lowered to its item".into());
                     }
                 };
                 if args.len() > MAX_ARGS {

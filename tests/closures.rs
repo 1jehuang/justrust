@@ -506,15 +506,33 @@ fn closure_nesting_has_a_live_per_task_depth_gate() {
     compiler::compile(source, 8, true).expect("sibling closures restore live depth");
 }
 
-/// Function items as values (FNITEM slices 1-2): CHECK admits a plain
-/// function passed to a callable bound and rejects mismatches like stock.
-/// BUILD and direct invocation stay explicitly unsupported until the
-/// untupling call form lands.
+/// Function items as values: `Ty::FnItem` with builtin Fn/FnMut/FnOnce
+/// evidence and untupled dispatch (`Callee::Untupled`) to the exact item.
 #[test]
-fn function_item_values_check_and_reject_like_stock() {
+fn function_item_values_match_stock() {
     oracle::check(
         "fn-item-values",
         &[
+            Case {
+                name: "plain_fn_through_fn_bound",
+                source: "fn dbl(x: i32) -> i32 { x * 2 } fn ap<F: Fn(i32) -> i32>(f: F, v: i32) -> i32 { f(v) } fn main() { println!(\"{}\", ap(dbl, 4)); }",
+                expect: Expect::Run("8\n"),
+            },
+            Case {
+                name: "fnmut_fnonce_nullary_nested_and_let_bound",
+                source: "fn dbl(x: i32) -> i32 { x * 2 } fn add(a: i32, b: i32) -> i32 { a + b } fn seven() -> u64 { 7 } fn ap<F: FnMut(i32) -> i32>(mut f: F, v: i32) -> i32 { f(v) } fn ap2<F: FnOnce(i32, i32) -> i32>(f: F) -> i32 { f(3, 4) } fn ap0<F: Fn() -> u64>(f: F) -> u64 { f() + f() } fn twice<F: Fn(i32) -> i32>(f: F, x: i32) -> i32 { f(f(x)) } fn main() { let g = dbl; println!(\"{} {} {} {}\", ap(g, 4), ap2(add), ap0(seven), twice(dbl, 3)); }",
+                expect: Expect::Run("8 7 14 12\n"),
+            },
+            Case {
+                name: "direct_invocation_of_bound_item",
+                source: "fn dbl(x: i32) -> i32 { x * 2 } fn main() { let f = dbl; let y: i32 = f(4); println!(\"{}\", y + dbl(1)); }",
+                expect: Expect::Run("10\n"),
+            },
+            Case {
+                name: "local_closure_shadows_item",
+                source: "fn dbl(x: i32) -> i32 { x * 2 } fn ap<F: Fn(i32) -> i32>(f: F, v: i32) -> i32 { f(v) } fn main() { let dbl = |x: i32| -> i32 { x + 100 }; println!(\"{}\", ap(dbl, 4)); }",
+                expect: Expect::Run("104\n"),
+            },
             Case {
                 name: "fn_item_wrong_argument",
                 source: "fn dbl(x: i32) -> i32 { x * 2 } fn ap<F: Fn(i64) -> i64>(f: F, v: i64) -> i64 { f(v) } fn main() { println!(\"{}\", ap(dbl, 4)); }",
@@ -527,25 +545,20 @@ fn function_item_values_check_and_reject_like_stock() {
             },
         ],
     );
-    let accepted = [
-        "fn dbl(x: i32) -> i32 { x * 2 } fn ap<F: Fn(i32) -> i32>(f: F, v: i32) -> i32 { f(v) } fn main() { println!(\"{}\", ap(dbl, 4)); }",
-        "fn dbl(x: i32) -> i32 { x * 2 } fn add(a: i32, b: i32) -> i32 { a + b } fn ap<F: FnMut(i32) -> i32>(mut f: F, v: i32) -> i32 { f(v) } fn ap2<F: FnOnce(i32, i32) -> i32>(f: F) -> i32 { f(3, 4) } fn main() { let g = dbl; println!(\"{} {}\", ap(g, 4), ap2(add)); }",
-        "fn dbl(x: i32) -> i32 { x * 2 } fn ap<F: Fn(i32) -> i32>(f: F, v: i32) -> i32 { f(v) } fn main() { let dbl = |x: i32| -> i32 { x + 100 }; println!(\"{}\", ap(dbl, 4)); }",
-    ];
+    // Explicit worker counts: native build and run at workers 1 and 8.
+    let source = "fn dbl(x: i32) -> i32 { x * 2 } fn add(a: i32, b: i32) -> i32 { a + b } fn ap<F: Fn(i32) -> i32>(f: F, v: i32) -> i32 { f(v) } fn ap2<F: FnOnce(i32, i32) -> i32>(f: F) -> i32 { f(3, 4) } fn main() { let f = dbl; println!(\"{} {} {}\", ap(dbl, 4), ap2(add), f(5)); }";
+    let dir = std::env::temp_dir().join(format!("jr-fn-item-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
     for workers in [1, 8] {
-        for source in accepted {
-            compiler::compile_observed(source.into(), workers, true)
-                .unwrap_or_else(|failure| panic!("{}\n{source}", failure.error));
-        }
-        let built = compiler::compile_observed(accepted[0].into(), workers, false)
-            .err()
-            .expect("function item dispatch build must stay unsupported");
-        assert!(built.to_string().contains("unsupported"), "{built}");
-        let direct =
-            "fn dbl(x: i32) -> i32 { x * 2 } fn main() { let f = dbl; let y: i32 = f(4); }";
-        let failure = compiler::compile_observed(direct.into(), workers, true)
-            .err()
-            .expect("direct function item invocation must stay unsupported");
-        assert!(failure.to_string().contains("unsupported"), "{failure}");
+        let compiled = compiler::compile(source.into(), workers, false)
+            .unwrap_or_else(|error| panic!("workers {workers}: {error}"));
+        let image = dir.join(format!("native-{workers}"));
+        std::fs::write(&image, compiled.executable.expect("executable")).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&image, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let output = std::process::Command::new(&image).output().unwrap();
+        assert!(output.status.success(), "workers {workers}");
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "8 7 10\n");
     }
+    std::fs::remove_dir_all(&dir).ok();
 }

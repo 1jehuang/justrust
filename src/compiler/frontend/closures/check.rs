@@ -180,13 +180,17 @@ impl PlanCtx {
     ) -> Result<Option<MethodSelection>, String> {
         let (kind, params) = match receiver {
             ir::Ty::Closure(closure) => (closure.kind(), closure.params().to_vec()),
-            // Direct invocation of a function item value needs the untupling
-            // call form (FNITEM slice 3); never approximate it.
+            // `f(x)` on a function item value selects builtin `Fn` dispatch
+            // through a shared autoref; it resolves to `Callee::Untupled`.
+            ir::Ty::FnItem(item) if item.type_args.is_empty() => (
+                ir::ClosureKind::Fn,
+                self.function_schema(item.declaration)?
+                    .signature
+                    .params
+                    .clone(),
+            ),
             ir::Ty::FnItem(_) => {
-                return Err(
-                    "unsupported: calling a function item value directly requires the untupling call form"
-                        .into(),
-                );
+                return Err("unsupported: calling a generic function item value".into());
             }
             _ => return self.bounded_closure_method_selection(receiver, name, caller),
         };

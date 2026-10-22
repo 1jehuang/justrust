@@ -900,8 +900,17 @@ pub(super) fn direct_demands(
                 budget,
                 engine,
             )?;
-            let ir::Callee::Direct(next) = resolved else {
-                return Err("unresolved trait callee in concrete instance frontier".into());
+            let next = match resolved {
+                ir::Callee::Direct(next) => next,
+                // Builtin function item dispatch executes the item itself.
+                ir::Callee::Untupled(call) => {
+                    closed_facts
+                        .service()
+                        .untupled_target(&call, &closed_facts)
+                        .map_err(|e| e.into_legacy_diagnostic(budget))?
+                        .target
+                }
+                _ => return Err("unresolved trait callee in concrete instance frontier".into()),
             };
             let _ = expression_index;
             demands.call(next, budget)?;

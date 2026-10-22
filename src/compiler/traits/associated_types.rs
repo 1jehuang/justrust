@@ -23,7 +23,9 @@ impl ValidatedFacts {
                     ));
                 }
             }
-            Callee::TraitItem(call) | Callee::Virtual(ir::VirtualCall { call }) => {
+            Callee::TraitItem(call)
+            | Callee::Virtual(ir::VirtualCall { call })
+            | Callee::Untupled(call) => {
                 self.world
                     .validate_ty_metadata_in(&call.trait_ref.self_ty, self.env(), 0)?;
                 for argument in call.trait_ref.args.iter().chain(call.method_args.iter()) {

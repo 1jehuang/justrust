@@ -150,6 +150,13 @@ impl ClosedReceipt {
                 .callee()
                 .clone(),
             ir::Callee::Virtual(call) => ir::Callee::Virtual(call.clone()),
+            ir::Callee::Untupled(call) => {
+                facts
+                    .service()
+                    .validate_untupled(call, facts)
+                    .map_err(|e| e.into_legacy_diagnostic(budget))?;
+                ir::Callee::Untupled(call.clone())
+            }
         };
         validate_original_callee(&selected, &self.receipt.target, budget)
             .map_err(|e| e.into_legacy_diagnostic(budget))?;

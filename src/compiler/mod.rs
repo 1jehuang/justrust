@@ -1242,9 +1242,8 @@ impl Provider for CompilerProvider {
                         let actuals = match target {
                             ir::Callee::Direct(target) => target.type_args.as_ref(),
                             ir::Callee::TraitItem(call)
-                            | ir::Callee::Virtual(ir::VirtualCall { call }) => {
-                                call.method_args.as_ref()
-                            }
+                            | ir::Callee::Virtual(ir::VirtualCall { call })
+                            | ir::Callee::Untupled(call) => call.method_args.as_ref(),
                         };
                         this.0
                             .budget

@@ -191,9 +191,8 @@ impl CarrierEffectTable {
             let actuals = match target {
                 super::ir::Callee::Direct(target) => target.type_args.as_ref(),
                 super::ir::Callee::TraitItem(call)
-                | super::ir::Callee::Virtual(super::ir::VirtualCall { call }) => {
-                    call.method_args.as_ref()
-                }
+                | super::ir::Callee::Virtual(super::ir::VirtualCall { call })
+                | super::ir::Callee::Untupled(call) => call.method_args.as_ref(),
             };
             budget.charge_work(actuals.len())?;
             if !actuals.iter().any(|ty| matches!(ty, Ty::Ref { .. })) {
@@ -447,9 +446,8 @@ fn source_requires_carrier_proof(
             let actuals = match target {
                 super::ir::Callee::Direct(target) => target.type_args.as_ref(),
                 super::ir::Callee::TraitItem(call)
-                | super::ir::Callee::Virtual(super::ir::VirtualCall { call }) => {
-                    call.method_args.as_ref()
-                }
+                | super::ir::Callee::Virtual(super::ir::VirtualCall { call })
+                | super::ir::Callee::Untupled(call) => call.method_args.as_ref(),
             };
             budget.charge_work(actuals.len()).map_err(classify)?;
             required |= actuals.iter().any(|ty| matches!(ty, Ty::Ref { .. }));
@@ -1703,7 +1701,8 @@ fn preflight_with_plan(
                         }
                     }
                     super::ir::Callee::TraitItem(call)
-                    | super::ir::Callee::Virtual(super::ir::VirtualCall { call }) => {
+                    | super::ir::Callee::Virtual(super::ir::VirtualCall { call })
+                    | super::ir::Callee::Untupled(call) => {
                         budget.spend(call.trait_ref.args.len() + call.method_args.len() + 1)?;
                         preflight_ty(&call.trait_ref.self_ty, 0, &mut budget)?;
                         for argument in call.trait_ref.args.iter().chain(call.method_args.iter()) {
