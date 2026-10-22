@@ -408,6 +408,14 @@ fn external_source_graph_is_shared_and_accounts_for_all_files() {
             ("src/foo.rs", "pub fn value() -> i32 { 7 }"),
         ];
         let scratch = fixture(&files);
+        // One plan for the shape oracle, not one per worker/mode run.
+        let loaded = compiler::source::load(&scratch.path("src/input.rs")).unwrap();
+        let program = native_prelude::parse(&loaded.text).unwrap();
+        let plan = compiler::frontend::PlanCtx::from_program(
+            &program,
+            &compiler::ir::PlanBudget::default(),
+        )
+        .unwrap();
         for workers in [1, 8] {
             for check in [false, true] {
                 let result =
@@ -442,17 +450,17 @@ fn external_source_graph_is_shared_and_accounts_for_all_files() {
                     Key::new(106, vec![]),
                     Key::new(101, vec![]),
                     Key::new(104, vec![]),
-                    Key::new(113, vec![]),
                     source.clone(),
                     child.clone(),
                 ];
                 for index in 0..2 {
                     expected.push(Key::new(110, vec![index]));
-                    expected.push(Key::new(102, vec![index]));
-                    expected.push(Key::new(108, vec![index]));
-                    expected.push(Key::new(109, vec![index]));
+                    expected.push(Key::new(128, vec![index]));
+                    // CHECK never demands BODY/LOWER/ANALYZE/OBJECT.
                     if !check {
-                        expected.push(Key::new(103, vec![index]));
+                        for kind in [102, 103, 108, 109] {
+                            expected.push(Key::new(kind, vec![index]));
+                        }
                     }
                 }
                 if !check {
@@ -460,22 +468,15 @@ fn external_source_graph_is_shared_and_accounts_for_all_files() {
                 }
                 // Include every available recipe's real universal proof, without
                 // changing source-file accounting or eager concrete roots.
-                let loaded = compiler::source::load(&scratch.path("src/input.rs")).unwrap();
-                let program = native_prelude::parse(&loaded.text).unwrap();
-                let plan = compiler::frontend::PlanCtx::from_program(
-                    &program,
-                    &compiler::ir::PlanBudget::default(),
-                )
-                .unwrap();
                 for index in 0..plan.callable_count() {
                     let declaration = plan.callable_decl(index).unwrap();
                     match plan.callable_provider(declaration).unwrap() {
                         compiler::frontend::CallableProvider::Source { .. } => {
+                            // Prelude bodies are admitted on demand, not by CHECK.
                             if plan.is_prelude_decl(declaration).unwrap() {
-                                expected.push(Key::new(110, vec![index as u64]));
-                            } else {
-                                assert!(index < result.functions);
+                                continue;
                             }
+                            assert!(index < result.functions);
                             if plan.callable_env(declaration).unwrap().is_generic() {
                                 for kind in [111, 112, 115] {
                                     expected.push(Key::new(kind, vec![index as u64]));
@@ -484,7 +485,7 @@ fn external_source_graph_is_shared_and_accounts_for_all_files() {
                         }
                         compiler::frontend::CallableProvider::Recipe { .. } => {
                             assert!(index >= result.functions);
-                            for kind in [110, 111, 112, 115] {
+                            for kind in [110, 111, 112, 115, 128] {
                                 expected.push(Key::new(kind, vec![index as u64]));
                             }
                         }
@@ -495,7 +496,28 @@ fn external_source_graph_is_shared_and_accounts_for_all_files() {
                 }
                 // Embedded native library files are independent SOURCE facts.
                 expected.extend(native_prelude::library_source_keys());
-                assert_eq!(result.report.node_evaluations.len(), expected.len());
+                // Per-module inventories, associated-constant headers,
+                // nominal well-formedness, per-instance, per-signature and
+                // per-trait/impl/item coherence nodes are keyed
+                // infrastructure: each evaluates exactly once.
+                let infrastructure = [126, 134, 138, 141, 142, 143, 144, 145, 146];
+                assert!(
+                    result
+                        .report
+                        .node_evaluations
+                        .iter()
+                        .filter(|(key, _)| infrastructure.contains(&key.kind))
+                        .all(|(_, count)| *count == 1)
+                );
+                assert_eq!(
+                    result
+                        .report
+                        .node_evaluations
+                        .iter()
+                        .filter(|(key, _)| !infrastructure.contains(&key.kind))
+                        .count(),
+                    expected.len()
+                );
                 for key in expected {
                     let entries: Vec<_> = result
                         .report

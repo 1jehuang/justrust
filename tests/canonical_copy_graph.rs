@@ -193,6 +193,10 @@ fn invalid_unused_clone_and_unavailable_dispatch_never_reach_objects() {
                     let context = PlanCtx::from_program(&program, &PlanBudget::default()).unwrap();
                     for index in 0..context.callable_count() {
                         let declaration = context.callable_decl(index).unwrap();
+                        // Prelude bodies are admitted on demand, not by CHECK.
+                        if context.is_prelude_decl(declaration).unwrap() {
+                            continue;
+                        }
                         expected.push(Key::new(110, vec![index as u64]));
                         match context.callable_provider(declaration).unwrap() {
                             CallableProvider::Source { .. } => {

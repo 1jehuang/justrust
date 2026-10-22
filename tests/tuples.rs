@@ -535,11 +535,11 @@ fn tuple_checked_bodies_are_shared_once_and_check_does_not_demand_codegen() {
                     let declaration = plan.callable_decl(index).unwrap();
                     match plan.callable_provider(declaration).unwrap() {
                         compiler::frontend::CallableProvider::Source { .. } => {
+                            // Prelude bodies are admitted on demand, not by CHECK.
                             if plan.is_prelude_decl(declaration).unwrap() {
-                                expected.push(Key::new(110, vec![index as u64]));
-                            } else {
-                                assert!(index < result.functions);
+                                continue;
                             }
+                            assert!(index < result.functions);
                             if plan.callable_env(declaration).unwrap().is_generic() {
                                 for kind in [111, 112, 115] {
                                     expected.push(Key::new(kind, vec![index as u64]));

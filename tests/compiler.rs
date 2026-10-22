@@ -232,17 +232,28 @@ fn lightweight_profiles_preserve_native_output_and_report_failures() {
         "resource-profile.rs",
         "fn grow<T>(x:T,n:i32)->i32{if n==0{7}else{grow::<(T,)>((x,),n-1)}}fn main(){let x=grow::<u8>(1u8,1);}",
     );
+    // Stock `--emit=metadata` accepts this; only instantiation hits the
+    // recursion limit, so CHECK succeeds and BUILD fails.
     for workers in [1, 4] {
         let profile = scratch.path(&format!("resource-profile-{workers}.json"));
-        let failure = capture(
+        let checked = capture(
             Command::new(env!("CARGO_BIN_EXE_jr-rust"))
                 .arg(&growing)
-                .args(["--check", "--workers", &workers.to_string(), "--profile"])
+                .args(["--check", "--workers", &workers.to_string()]),
+            &scratch,
+            COMPILE_TIMEOUT,
+        );
+        assert!(checked.status.success(), "{checked:?}");
+        let output = scratch.path(&format!("resource-program-{workers}"));
+        let failure = capture(
+            compiler(&growing, &output)
+                .args(["--workers", &workers.to_string(), "--profile"])
                 .arg(&profile),
             &scratch,
             COMPILE_TIMEOUT,
         );
         assert!(!failure.status.success());
+        assert!(!output.exists());
         let contents = fs::read_to_string(profile).unwrap();
         assert!(contents.contains("\"success\":false"), "{contents}");
         assert!(contents.contains("\"kind\":\"depth\""), "{contents}");
@@ -252,7 +263,7 @@ fn lightweight_profiles_preserve_native_output_and_report_failures() {
             contents.contains("\"first_failure_task\":{\"node\":"),
             "{contents}"
         );
-        assert!(contents.contains("\"phase\":\"mono_plan\""), "{contents}");
+        assert!(contents.contains("\"phase\":\"build\""), "{contents}");
     }
 }
 
@@ -730,6 +741,13 @@ fn compiler_graph_shares_check_and_build_and_check_only_never_demands_codegen() 
         use justrust_engine::{Key, compiler};
 
         let source = "fn double(n: i32) -> i32 { n * 2 } fn unused() {} fn main() { double(3); }";
+        // One plan for the shape oracle, not one per worker/mode run.
+        let program = native_prelude::parse(source).unwrap();
+        let plan = compiler::frontend::PlanCtx::from_program(
+            &program,
+            &compiler::ir::PlanBudget::default(),
+        )
+        .unwrap();
         for workers in [1, 8] {
             for check_only in [true, false] {
                 let result = compiler::compile(source.to_owned(), workers, check_only).unwrap();
@@ -748,15 +766,18 @@ fn compiler_graph_shares_check_and_build_and_check_only_never_demands_codegen() 
                         .iter()
                         .position(|event| event.kind == "discovered" && event.detail == detail)
                 };
-                let plan_discovery = discovered(Key::new(113, vec![])).unwrap();
+                // MONO_PLAN (113) was split into per-instance INSTANCE (142).
+                // CHECK admits every user body through SOURCE_ADMISSION and
+                // never demands BODY/LOWER/ANALYZE/OBJECT.
                 for index in 0..3 {
-                    // CHECK and BUILD may race, but whichever requests the
-                    // plan first must already have demanded every closed root.
-                    let early = [109, 103].into_iter().any(|kind| {
-                        discovered(Key::new(kind, vec![index]))
-                            .is_some_and(|position| position < plan_discovery)
-                    });
-                    assert!(early, "root {index} was held behind MONO_PLAN");
+                    assert!(discovered(Key::new(128, vec![index])).is_some());
+                    for kind in [102, 103, 108, 109] {
+                        assert_eq!(
+                            discovered(Key::new(kind, vec![index])).is_some(),
+                            !check_only,
+                            "kind {kind} root {index} check_only={check_only}"
+                        );
+                    }
                 }
                 // These operation IDs are the compiler graph schema, not fixtures.
                 let mut expected = vec![
@@ -765,15 +786,14 @@ fn compiler_graph_shares_check_and_build_and_check_only_never_demands_codegen() 
                     Key::new(106, vec![]),
                     Key::new(101, vec![]),
                     Key::new(104, vec![]),
-                    Key::new(113, vec![]),
                 ];
                 for index in 0..3 {
                     expected.push(Key::new(110, vec![index]));
-                    expected.push(Key::new(102, vec![index]));
-                    expected.push(Key::new(108, vec![index]));
-                    expected.push(Key::new(109, vec![index]));
+                    expected.push(Key::new(128, vec![index]));
                     if !check_only {
-                        expected.push(Key::new(103, vec![index]));
+                        for kind in [102, 103, 108, 109] {
+                            expected.push(Key::new(kind, vec![index]));
+                        }
                     }
                 }
                 if !check_only {
@@ -782,21 +802,15 @@ fn compiler_graph_shares_check_and_build_and_check_only_never_demands_codegen() 
                 }
                 // Available catalog recipes add real universal proof nodes, but
                 // never eager concrete roots. Keep every historical source key.
-                let program = native_prelude::parse(source).unwrap();
-                let plan = compiler::frontend::PlanCtx::from_program(
-                    &program,
-                    &compiler::ir::PlanBudget::default(),
-                )
-                .unwrap();
                 for index in 0..plan.callable_count() {
                     let declaration = plan.callable_decl(index).unwrap();
                     match plan.callable_provider(declaration).unwrap() {
                         compiler::frontend::CallableProvider::Source { .. } => {
+                            // Prelude bodies are admitted on demand, not by CHECK.
                             if plan.is_prelude_decl(declaration).unwrap() {
-                                expected.push(Key::new(110, vec![index as u64]));
-                            } else {
-                                assert!(index < result.functions);
+                                continue;
                             }
+                            assert!(index < result.functions);
                             if plan.callable_env(declaration).unwrap().is_generic() {
                                 for kind in [111, 112, 115] {
                                     expected.push(Key::new(kind, vec![index as u64]));
@@ -805,7 +819,7 @@ fn compiler_graph_shares_check_and_build_and_check_only_never_demands_codegen() 
                         }
                         compiler::frontend::CallableProvider::Recipe { .. } => {
                             assert!(index >= result.functions);
-                            for kind in [110, 111, 112, 115] {
+                            for kind in [110, 111, 112, 115, 128] {
                                 expected.push(Key::new(kind, vec![index as u64]));
                             }
                         }
@@ -816,7 +830,34 @@ fn compiler_graph_shares_check_and_build_and_check_only_never_demands_codegen() 
                 }
                 // Embedded native library files are independent SOURCE facts.
                 expected.extend(native_prelude::library_source_keys());
-                assert_eq!(report.node_evaluations.len(), expected.len());
+                // Per-module inventories, associated-constant headers,
+                // nominal well-formedness, per-instance, per-signature and
+                // per-trait/impl/item coherence nodes are keyed
+                // infrastructure: each evaluates exactly once.
+                let infrastructure = [126, 134, 138, 141, 142, 143, 144, 145, 146];
+                assert!(
+                    report
+                        .node_evaluations
+                        .iter()
+                        .filter(|(key, _)| infrastructure.contains(&key.kind))
+                        .all(|(_, count)| *count == 1)
+                );
+                assert_eq!(
+                    report
+                        .node_evaluations
+                        .iter()
+                        .filter(|(key, _)| !infrastructure.contains(&key.kind))
+                        .count(),
+                    expected.len(),
+                    "unexpected nodes: {:?}",
+                    report
+                        .node_evaluations
+                        .iter()
+                        .filter(|(key, _)| !infrastructure.contains(&key.kind)
+                            && !expected.contains(key))
+                        .map(|(key, _)| key)
+                        .collect::<Vec<_>>()
+                );
                 for key in expected {
                     let entries: Vec<_> = report
                         .node_evaluations

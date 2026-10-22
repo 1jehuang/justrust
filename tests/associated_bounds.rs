@@ -913,10 +913,16 @@ fn successful_all_body_graph(case: &Case, compiled: &compiler::Compilation, chec
     assert_eq!(compiled.report.failures, 0);
     assert_eq!(compiled.report.events_dropped, 0);
     assert!(compiled.report.capture_complete);
+    let mut eager_bodies = 0usize;
     let mut source_bodies = 0;
     let mut generic_bodies = 0;
     for index in 0..plan.callable_count() {
         let declaration = plan.callable_decl(index).unwrap();
+        // Embedded prelude bodies are admitted on demand, never eagerly.
+        if plan.is_prelude_decl(declaration).unwrap() {
+            continue;
+        }
+        eager_bodies += 1;
         evaluated_once(&compiled.report, 110, index, case);
         let universal = match plan.callable_provider(declaration).unwrap() {
             frontend::CallableProvider::Source { .. } => {
@@ -953,7 +959,7 @@ fn successful_all_body_graph(case: &Case, compiled: &compiler::Compilation, chec
             .iter()
             .filter(|(key, _)| key.kind == 110)
             .count(),
-        plan.callable_count()
+        eager_bodies
     );
     assert_eq!(compiled.control_flow.len(), compiled.analyses.len());
     assert!(compiled.analyses.iter().all(|analysis| analysis.passed()));

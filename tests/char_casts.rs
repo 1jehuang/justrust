@@ -969,9 +969,15 @@ fn successful_graph(case: &Case, compiled: &compiler::Compilation, check: bool) 
         "once_evaluation" => 4,
         _ => 2,
     };
+    let mut eager_bodies = 0usize;
     let mut source_bodies = 0;
     for index in 0..plan.callable_count() {
         let declaration = plan.callable_decl(index).unwrap();
+        // Embedded prelude bodies are admitted on demand, never eagerly.
+        if plan.is_prelude_decl(declaration).unwrap() {
+            continue;
+        }
+        eager_bodies += 1;
         let universal = match plan.callable_provider(declaration).unwrap() {
             frontend::CallableProvider::Source { .. } => {
                 source_bodies += usize::from(!plan.is_prelude_decl(declaration).unwrap());
@@ -1013,7 +1019,7 @@ fn successful_graph(case: &Case, compiled: &compiler::Compilation, check: bool) 
             .iter()
             .filter(|(key, _)| key.kind == 110)
             .count(),
-        plan.callable_count()
+        eager_bodies
     );
     for kind in [102, 108, 109, 103] {
         let nodes: Vec<_> = compiled
