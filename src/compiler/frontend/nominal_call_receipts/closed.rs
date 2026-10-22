@@ -292,41 +292,69 @@ mod tests {
         let build = engine.request(crate::compiler::keys::BuildRoot.key());
         let report = engine.run(1).unwrap();
         build.completion().unwrap();
-        let (body, rows, first, index) = report
+        let (body, rows, first, nominal) = report
             .node_evaluations
             .iter()
             .filter(|(key, _)| matches!(key.kind, BODY | CANONICAL_BODY))
             .filter_map(|(key, _)| engine.fact_of::<InstanceBodyFact>(key, 0))
             .find_map(|body| {
                 body.checked.body_substitution.as_ref()?;
-                if !body
-                    .checked
-                    .exprs
-                    .iter()
-                    .any(|expression| matches!(expression.kind, ir::ExprKind::Call { .. }))
-                {
-                    return None;
-                }
                 let rows = issued_rows(&body);
-                let (first, index) = rows.iter().enumerate().find_map(|(first, row)| {
-                    row.conversions
+                // Nominal identities are canonical digests of (declaration,
+                // ordered actuals), so a callee instantiation and the caller
+                // body name the same application identically and the issued
+                // inventory is empty. Pick an occurrence whose signature
+                // carries a nominal so a forged conversion can name it.
+                let (first, nominal) = rows.iter().enumerate().find_map(|(first, row)| {
+                    row.receipt
+                        .mapped
+                        .params
                         .iter()
-                        .position(|conversion| conversion.original != conversion.instantiated)
-                        .map(|index| (first, index))
+                        .chain(std::iter::once(&row.receipt.mapped.result))
+                        .find_map(first_nominal)
+                        .map(|nominal| (first, nominal))
                 })?;
-                Some((body, rows, first, index))
+                Some((body, rows, first, nominal))
             })
-            .expect("real format BUILD must issue a nonidentity nominal call conversion");
+            .expect("real format BUILD must issue a closed call over a nominal signature");
         let authority = engine.authority();
         assert!(!reject_changed_rows(&body, authority, Some(rows.clone())));
+        assert!(
+            rows.iter().all(
+                |row| row.conversions.iter().all(|c| c.original != c.instantiated
+                    || matches!(c.original.index, ir::NominalIndex::GraphRealization(_)))
+            ),
+            "issued conversions are only real changes or graph realizations"
+        );
 
-        let mut changed = rows.to_vec();
-        let conversion = &mut Arc::make_mut(&mut changed[first].conversions)[index];
-        conversion.instantiated = conversion.original;
-        assert!(reject_changed_rows(&body, authority, Some(changed.into())));
-        let mut omitted = rows.to_vec();
-        omitted[first].conversions = Arc::from([]);
-        assert!(reject_changed_rows(&body, authority, Some(omitted.into())));
+        // A forged identity conversion is not derived from the occurrence's
+        // original/mapped signatures and must be rejected.
+        let mut forged = rows.to_vec();
+        let mut conversions = forged[first].conversions.to_vec();
+        conversions.push(ir::NominalCarrierMapping {
+            original: nominal,
+            instantiated: nominal,
+        });
+        forged[first].conversions = conversions.into();
+        assert!(reject_changed_rows(&body, authority, Some(forged.into())));
+        // Moving the occurrence's receipt to another expression is rejected.
+        if rows.len() > 1 {
+            let mut moved = rows.to_vec();
+            moved.swap(0, 1);
+            assert!(reject_changed_rows(&body, authority, Some(moved.into())));
+        }
+    }
+
+    fn first_nominal(ty: &ir::Ty) -> Option<ir::NominalAppId> {
+        match ty {
+            ir::Ty::Struct(value) => Some(value.id()),
+            ir::Ty::Enum(value) => Some(value.id()),
+            ir::Ty::Ref { referent, .. } => first_nominal(referent),
+            ir::Ty::RawPtr { pointee, .. } => first_nominal(pointee),
+            ir::Ty::Array { element, .. } | ir::Ty::Slice { element } => first_nominal(element),
+            ir::Ty::Tuple(items) => items.iter().find_map(first_nominal),
+            _ => None,
+        }
     }
 
     #[test]
