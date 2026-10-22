@@ -514,6 +514,7 @@ impl ValidatedTraitWorld {
                     active.pop();
                     let normal = result?;
                     self.validate_associated_normal_form(
+                        Some(projection.item),
                         &normal,
                         &owner.implementation.schema_env,
                         ProofContext {
@@ -954,6 +955,7 @@ impl ValidatedTraitWorld {
                     closed,
                 )?;
                 self.validate_associated_normal_form(
+                    Some(value.associated),
                     &normal,
                     context.env(),
                     context,

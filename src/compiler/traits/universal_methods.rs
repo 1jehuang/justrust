@@ -685,6 +685,7 @@ mod tests {
         let context = ProofContext::from_facts(&facts);
         world
             .validate_associated_normal_form(
+                None,
                 normal,
                 facts.env(),
                 context,
@@ -695,6 +696,7 @@ mod tests {
             assert!(
                 world
                     .validate_associated_normal_form(
+                None,
                         normal,
                         facts.env(),
                         ProofContext {
@@ -710,6 +712,7 @@ mod tests {
         assert!(
             world
                 .validate_associated_normal_form(
+                None,
                     normal,
                     foreign.env(),
                     ProofContext::from_facts(&foreign),
@@ -725,6 +728,7 @@ mod tests {
         assert!(
             world
                 .validate_associated_normal_form(
+                None,
                     &Ty::AssociatedType(Arc::new(forged)),
                     facts.env(),
                     context,

@@ -1547,6 +1547,7 @@ impl ValidatedTraitWorld {
                 0,
             )?;
             self.validate_associated_normal_form(
+                Some(projection.item),
                 &normal,
                 context.proof.env(),
                 selection_context,
@@ -1758,6 +1759,7 @@ impl ValidatedTraitWorld {
 
     pub(super) fn validate_associated_normal_form(
         &self,
+        item: Option<DeclId>,
         normal: &Ty,
         env: &GenericEnv,
         context: ProofContext<'_>,
@@ -1779,6 +1781,11 @@ impl ValidatedTraitWorld {
         }
         self.validate_actual(normal, env)?;
         charged(&self.budget, ir::reject_references(normal, &self.budget))?;
+        if let Some(item) = item
+            && self.associated_header(item)?.relaxed_sized
+        {
+            return Ok(());
+        }
         self.require_in(
             &Predicate::Implements(TraitRef {
                 declaration: self.catalog.id(CatalogItem::Sized),

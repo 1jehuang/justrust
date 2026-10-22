@@ -190,3 +190,18 @@ fn associated_bounds_nested_unused_payload_clone_is_metered() {
     assert!(source_clone::preflight_program_clone(&nested.program, &denied).is_err());
     assert!(denied.first_resource_failure().is_some());
 }
+
+#[test]
+fn associated_bounds_relaxed_sized_is_recorded_and_only_sized_relaxes() {
+    let program = parse("trait G{type A:?Sized+Copy;type B:Copy;}fn main(){}").unwrap();
+    let owner = program
+        .traits
+        .iter()
+        .find(|t| !t.associated_types.is_empty())
+        .unwrap();
+    assert!(owner.associated_types[0].relaxed_sized);
+    assert_eq!(owner.associated_types[0].bounds.len(), 1);
+    assert!(!owner.associated_types[1].relaxed_sized);
+    assert!(parse("trait G{type A:?Copy;}fn main(){}").is_err());
+    assert!(parse("trait G{type A:?Sized+?Sized;}fn main(){}").is_err());
+}

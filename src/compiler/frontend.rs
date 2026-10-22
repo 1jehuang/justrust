@@ -5922,6 +5922,8 @@ pub struct TraitDecl {
 pub struct AssociatedTypeDecl {
     pub name: AstIdent,
     pub bounds: Vec<TraitPath>,
+    /// Written `?Sized`: the associated type has no implicit `Sized` bound.
+    pub relaxed_sized: bool,
 }
 #[derive(Clone, Debug)]
 pub struct TraitItemDecl {
@@ -11106,12 +11108,21 @@ impl<'input, 'names> Parser<'input, 'names> {
                         return Err(self.unsupported("generic associated types are unsupported"));
                     }
                     let mut associated_bounds = Vec::new();
+                    let mut relaxed_sized = false;
                     if self.eat(":") {
                         loop {
                             if self.is("?") {
-                                return Err(self.unsupported(
-                                    "unsupported token \"?\": relaxed associated type bounds",
-                                ));
+                                // Only `?Sized`; any other relaxation is rejected
+                                // like stock. Repeating it is also an error.
+                                self.relaxed_sized()?;
+                                if relaxed_sized {
+                                    return Err(self.error("duplicate relaxed `Sized` bounds"));
+                                }
+                                relaxed_sized = true;
+                                if !self.eat("+") {
+                                    break;
+                                }
+                                continue;
                             }
                             if associated_bounds.len() >= 256 {
                                 return Err(self.limit("associated type bound limit exceeded"));
@@ -11137,6 +11148,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                     associated_types.push(AssociatedTypeDecl {
                         name,
                         bounds: associated_bounds,
+                        relaxed_sized,
                     });
                     continue;
                 }
@@ -16474,6 +16486,7 @@ enum TraitLookupKey {
 #[derive(Debug)]
 struct FrozenAssociatedBounds {
     ids: Arc<[ir::DeclId]>,
+    relaxed_sized: bool,
     predicates: Arc<[ir::Predicate]>,
     source_index: Option<usize>,
 }
@@ -18271,6 +18284,7 @@ impl PlanCtx {
                     declaration,
                     FrozenAssociatedBounds {
                         ids: ids.into(),
+                        relaxed_sized: member.relaxed_sized,
                         predicates: Arc::from([]),
                         source_index: (!program.associated_bound_sources.is_empty())
                             .then_some(source_index),
@@ -19095,6 +19109,11 @@ impl PlanCtx {
                         .get(declaration)
                         .map(|bounds| bounds.ids.clone())
                         .ok_or("missing authoritative associated declaration bounds")?,
+                    relaxed_sized: self
+                        .registry
+                        .associated_type_bounds
+                        .get(declaration)
+                        .is_some_and(|bounds| bounds.relaxed_sized),
                 });
             }
             for (ii, item) in t.items.iter().enumerate() {

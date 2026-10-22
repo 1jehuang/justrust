@@ -433,6 +433,8 @@ pub struct AssociatedTypeHeader {
     pub trait_decl: DeclId,
     pub env: Arc<GenericEnv>,
     pub bounds: Arc<[DeclId]>,
+    /// Declared `?Sized`: no implicit `Sized` on the family or its values.
+    pub relaxed_sized: bool,
 }
 #[derive(Clone, Debug)]
 pub struct AssociatedTypeValue {
@@ -7228,6 +7230,7 @@ impl ValidatedTraitWorld {
             Ty::AssociatedType(projection) => {
                 self.validate_universal_projection(projection, context.env())?;
                 item == CatalogItem::Sized
+                    && !self.associated_header(projection.item)?.relaxed_sized
             }
         };
         if !known {
