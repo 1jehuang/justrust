@@ -633,6 +633,18 @@ cleanup failures.
       signature without a parent-arena receipt. Stock CHECK/BUILD/run at workers
       1/8 and missing-impl rejection in `tests/iterator_fold.rs`. Unchanged
       `19_operator_overloading` now passes: full-program corpus 8/20.
+- [x] Stock index autoderef through references to nominal containers:
+      `r[i]` / `r[i] = x` / `r[i] += x` with `r: &Vec<T>` or `&mut Vec<T>` use
+      `Index`/`IndexMut` on `*r`; constant-index operands through `&[T]` in
+      generic trait comparisons (`v[0] < p`, `T: PartialOrd`) take the runtime
+      bounds-checked place; `Vec<String>`/`Vec<&str>` `join` (prelude
+      `SliceJoin`, pending `Vec: Deref<Target=[T]>`). Nominal-declaration schema
+      field walks charge work, not retained clone bytes. Stock-differential at
+      workers 1/8 plus shared-reference assignment rejection in
+      `tests/vec_index.rs`. Corpus stays 8/20: 16 now stops at `split_at_mut`
+      (returning two `&mut [T]` in a tuple is unsupported), 06 at
+      `row.iter().map(..).collect()` over arrays, 04 at a per-task proof-node
+      limit from repeated trait proofs in `iter().enumerate()` over `Vec`.
 - [x] Bounded source trait type parameters and complete checked applications in
       impls, bounds, supertraits, UFCS, unique dot dispatch and defaults under
       GENERIC-TRAITS.md. Same Self with distinct trait actuals retains separate

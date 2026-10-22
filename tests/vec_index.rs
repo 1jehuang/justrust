@@ -156,3 +156,46 @@ fn vec_immutable_index_assignment_is_rejected() {
         }
     }
 }
+
+/// G4 corpus 06/16: index autoderef through `&Vec`/`&mut Vec` (Index and
+/// IndexMut on `*r`), constant-index operands through `&[T]` in generic
+/// comparisons, and `Vec<String>::join`.
+#[test]
+fn reference_index_autoderef_and_join_match_stock() {
+    compare(
+        "fn insertion(v: &mut Vec<i32>) {
+    for i in 1..v.len() {
+        let key = v[i];
+        let mut j = i;
+        while j > 0 && v[j - 1] > key {
+            v[j] = v[j - 1];
+            j -= 1;
+        }
+        v[j] = key;
+    }
+    v[0] += 100;
+}
+fn read(v: &Vec<i32>, i: usize) -> i32 { v[i] }
+fn same<T: PartialEq + Copy>(v: &[T]) -> bool { v[0] == v[1] }
+fn below<T: PartialOrd + Copy>(v: &[T], p: T) -> bool { v[0] < p }
+fn main() {
+    let mut v = vec![5, 2, 9, 1];
+    insertion(&mut v);
+    println!(\"{} {} {} {}\", v[0], read(&v, 1), v[2], v[3]);
+    println!(\"{} {} {}\", same(&[1, 1, 2]), same(&[2.5, 3.0]), below(&[1u8, 2], 2));
+    let parts: Vec<String> = vec![String::from(\"a\"), String::from(\"bc\")];
+    println!(\"[{}]\", parts.join(\", \"));
+}
+",
+        "101 2 5 9\ntrue false true\n[a, bc]\n",
+        "ref-autoderef",
+    );
+}
+
+#[test]
+fn index_assignment_through_shared_vec_reference_is_rejected() {
+    let source = "fn f(v: &Vec<i32>) { v[0] = 1; } fn main() { let v = vec![1]; f(&v); }";
+    assert!(compiler::compile(source.into(), 1, true).is_err());
+    let source = "fn main() { let v = vec![String::from(\"a\")]; let s: String = v.join(1); }";
+    assert!(compiler::compile(source.into(), 1, true).is_err());
+}

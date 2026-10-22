@@ -528,3 +528,42 @@ impl<S: StrCarrier> super::iter::IntoIterator for SplitWhitespace<S> {
         self
     }
 }
+
+/// Element views accepted by `join` (stock `Borrow<str>` for `String`/`&str`).
+pub trait JoinElement {
+    fn push_onto(&self, out: &mut String);
+}
+
+impl JoinElement for String {
+    fn push_onto(&self, out: &mut String) {
+        out.push_str(self.as_str());
+    }
+}
+
+impl<'a> JoinElement for &'a str {
+    fn push_onto(&self, out: &mut String) {
+        out.push_str(*self);
+    }
+}
+
+/// `[S].join(sep)` for `String` and `&str` elements (stock `Join<&str>`).
+/// Implemented on `Vec<S>` until `Vec<T>: Deref<Target = [T]>` lands; stock
+/// reaches the same slice method by autoderef.
+pub trait SliceJoin {
+    fn join(&self, separator: &str) -> String;
+}
+
+impl<S: JoinElement> SliceJoin for super::vec::Vec<S> {
+    fn join(&self, separator: &str) -> String {
+        let mut out = String::new();
+        let mut i = 0usize;
+        while i < self.len() {
+            if i > 0usize {
+                out.push_str(separator);
+            }
+            self.get_ref(i).push_onto(&mut out);
+            i += 1usize;
+        }
+        out
+    }
+}

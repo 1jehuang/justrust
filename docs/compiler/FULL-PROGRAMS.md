@@ -48,10 +48,13 @@ The hosted replay completed without timeouts or wrong-output executables.
 
 | Programs | First reported boundary |
 |---|---|
-| 04, 06, 09, 10, 14, 15, 16, 18, 19 | unresolved nominal source constraints from the available graph inputs |
+| 04 | per-task proof-node limit: `Vec` `iter().enumerate()` re-proves the same trait goals per check |
+| 06, 14, 15 | unresolved nominal source constraints (`[T; N]` `iter().map(..).collect()`, generic containers) |
+| 10, 18 | `Chars` adapters (`filter`, `collect`) |
 | 11 | implicit associated constant lookup requires a retained caller trait bound |
 | 12 | recursive nominal field realization requires an explicit recursive layout protocol |
 | 13 | trait object types only admitted directly behind a reference (`Box<dyn>`) |
+| 16 | `split_at_mut` (tuple of two `&mut [T]`); `&Vec` index autoderef and generic slice comparisons now pass |
 | 17, 20 | unresolved import `HashMap` (no `std::collections`) |
 
 Most of these trace to the inactive source Iterator library (adapters,

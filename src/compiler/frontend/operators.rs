@@ -246,7 +246,18 @@ impl type_check::Checker<'_> {
             _ => return Ok(None),
         };
         let index = index.or(literal.as_ref()).unwrap();
-        let (_, owner, writable) = self.checked_place(&base)?;
+        let (_, mut owner, mut writable) = self.checked_place(&base)?;
+        // Stock index autoderef: `r[i] = x` with `r: &mut Vec<T>` assigns
+        // through `IndexMut` on `*r`.
+        let mut base = base;
+        if let ir::Ty::Ref { kind, referent } = &owner
+            && overloadable(referent)
+            && !matches!(referent.as_ref(), ir::Ty::Tuple(_))
+        {
+            writable = *kind == ir::BorrowKind::Mut;
+            owner = referent.as_ref().clone();
+            base.fields.push(FieldSelector::Deref);
+        }
         if !overloadable(&owner) {
             return Ok(None);
         }
@@ -452,6 +463,35 @@ impl type_check::Checker<'_> {
         ))
     }
 
+    /// `v[N]` through a reference (`v: &[T]`, `&Vec<T>`) is the same
+    /// bounds-checked runtime place as `v[Nusize]`. Static constant-index
+    /// places are array-only, so such operator operands take the runtime path.
+    fn index_through_reference(&self, value: &Expr) -> Result<Option<Expr>, String> {
+        let Expr::Index { base, index, site } = value else {
+            return Ok(None);
+        };
+        let Ok(place) = type_check::static_source_place(base) else {
+            return Ok(None);
+        };
+        if !place.fields.is_empty() {
+            return Ok(None);
+        }
+        let Ok(local) = self.lookup(place.local) else {
+            return Ok(None);
+        };
+        if !matches!(self.locals[local.0].ty, ir::Ty::Ref { .. }) {
+            return Ok(None);
+        }
+        Ok(Some(Expr::DynamicIndex {
+            base: base.clone(),
+            index: Box::new(Expr::Integer(IntegerLiteral {
+                magnitude: *index as u128,
+                suffix: Some(ir::IntTy::Usize),
+            })),
+            site: *site,
+        }))
+    }
+
     /// Overloaded binary/unary operator, or `None` for primitive operands.
     pub(super) fn overloaded_operator(&mut self, e: &Expr) -> Result<Option<ir::ExprId>, String> {
         match e {
@@ -476,12 +516,16 @@ impl type_check::Checker<'_> {
                 } else {
                     self.method_receiver_hint(right)?
                 };
+                let left_runtime = self.index_through_reference(left)?;
+                let right_runtime = self.index_through_reference(right)?;
+                let left = left_runtime.as_ref().unwrap_or(left.as_ref());
+                let right = right_runtime.as_ref().unwrap_or(right.as_ref());
                 let id = if spec.0 == "cmp" {
-                    let rest = std::slice::from_ref(right.as_ref());
+                    let rest = std::slice::from_ref(right);
                     let first = First::Borrow(ir::BorrowKind::Shared, left);
                     self.operator_call(spec, lhs, rhs, first, rest)?
                 } else {
-                    let rest = std::slice::from_ref(right.as_ref());
+                    let rest = std::slice::from_ref(right);
                     self.operator_call(spec, lhs, rhs, First::Value(left), rest)?
                 };
                 self.record_operator(e as *const Expr as usize, id)?;
@@ -515,9 +559,24 @@ impl type_check::Checker<'_> {
                 self.deref_overloaded_result(call).map(Some)
             }
             Expr::DynamicIndex { base, index, .. } => {
-                let Some(ty) = self.method_receiver_hint(base)? else {
+                let Some(mut ty) = self.method_receiver_hint(base)? else {
                     return Ok(None);
                 };
+                // Stock index autoderef: `r[i]` with `r: &Vec<T>` / `&mut Vec<T>`
+                // indexes `*r` through the nominal's `Index` impl.
+                let explicit;
+                let mut base: &Expr = base;
+                if let ir::Ty::Ref { referent, .. } = &ty
+                    && overloadable(referent)
+                    && !matches!(referent.as_ref(), ir::Ty::Tuple(_))
+                {
+                    let referent = referent.as_ref().clone();
+                    explicit = Expr::Deref {
+                        value: Box::new(base.clone()),
+                    };
+                    base = &explicit;
+                    ty = referent;
+                }
                 if !overloadable(&ty) {
                     return Ok(None);
                 }

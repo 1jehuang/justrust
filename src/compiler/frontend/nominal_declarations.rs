@@ -93,7 +93,11 @@ impl SchemaAdapter {
             )?;
             let mut projections = Vec::new();
             for field in fields {
+                // This walk only inspects field types and never clones them, so
+                // it charges per-node work rather than retained clone storage
+                // (repeated per-proof replays otherwise exhaust the task bytes).
                 let mut inspect = |node: &DepthNode<'_>, _| {
+                    self.budget.charge_work(1)?;
                     if let DepthNode::Type(ty @ Type::Projection(_)) = node {
                         let lowered = state.source_ty(
                             &self.registry,
@@ -116,12 +120,7 @@ impl SchemaAdapter {
                     }
                     Ok(())
                 };
-                walk_depth_inspecting(
-                    DepthNode::Type(field),
-                    Some(&self.budget),
-                    None,
-                    Some(&mut inspect),
-                )?;
+                walk_depth_inspecting(DepthNode::Type(field), None, None, Some(&mut inspect))?;
             }
             Ok(tr::NominalDeclarationSchema {
                 declaration,
