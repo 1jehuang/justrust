@@ -14441,6 +14441,50 @@ pub(super) fn validate_inactive_syntax(
 mod inactive_item_syntax_tests {
     use super::*;
 
+    /// A forced canonical-key collision (two declarations minted with the
+    /// same module key, kind and ordinal) is rejected, never merged.
+    #[test]
+    fn canonical_decl_id_collision_is_rejected_not_merged() {
+        let program = resolve(&parse_unresolved("struct S;fn main(){}").unwrap()).unwrap();
+        let budget = ir::PlanBudget::default();
+        let plan = PlanCtx::from_program(&program, &budget).unwrap();
+        let registry = &plan.registry;
+        let key = name_scope::path_key(
+            program.names.as_ref(),
+            &program.structs[0].name,
+            Namespace::Type,
+        )
+        .unwrap();
+        let existing = registry.nominals[&key];
+        assert!(existing.is_source());
+        let module_key =
+            canonical_module_key(&program.modules, &program.names, program.structs[0].module)
+                .unwrap();
+        let forged = ir::DeclId {
+            snapshot: existing.snapshot,
+            index: ir::DeclId::source_index(module_key, ir::DeclKind::Struct, 0).unwrap(),
+        };
+        assert_eq!(forged, existing, "canonical identity must be reproducible");
+        // A fresh registry holding the original row, then a second row minted
+        // under the same canonical key with different metadata.
+        let original = registry.declaration(existing).unwrap().clone();
+        let mut colliding = original.clone();
+        colliding.kind = ir::DeclKind::Enum;
+        let mut fresh = DeclRegistry {
+            declarations: Vec::new(),
+            slots: HashMap::new(),
+            ..registry.empty_like()
+        };
+        fresh.push_declaration(original).unwrap();
+        let error = fresh.push_declaration(colliding).unwrap_err();
+        assert!(error.contains("duplicate declaration identity"), "{error}");
+        assert_eq!(fresh.declarations.len(), 1);
+        assert_eq!(
+            fresh.declaration(existing).unwrap().kind,
+            ir::DeclKind::Struct
+        );
+    }
+
     fn client_main(program: &Program) -> &Function {
         let root = program.modules.source_root().unwrap();
         let mut matches = program.functions.iter().filter(|function| {
@@ -17126,11 +17170,45 @@ impl DeclRegistry {
     }
     /// Appends a declaration under its identity. Duplicate identities are
     /// rejected; storage order carries no meaning.
+    /// An empty registry over the same program, for identity tests.
+    #[cfg(test)]
+    fn empty_like(&self) -> Self {
+        Self {
+            program: self.program.clone(),
+            names: self.names.clone(),
+            modules: self.modules.clone(),
+            symbols: self.symbols.clone(),
+            declarations: Vec::new(),
+            slots: HashMap::new(),
+            functions: HashMap::new(),
+            constants: HashMap::new(),
+            const_ids: Vec::new(),
+            nominals: HashMap::new(),
+            function_ids: Vec::new(),
+            callable_sources: Vec::new(),
+            impl_ids: Vec::new(),
+            inherent_peers: HashMap::new(),
+            associated_ids: Vec::new(),
+            traits: HashMap::new(),
+            trait_ids: Vec::new(),
+            native_iterator_traits: [None; 2],
+            trait_items: Vec::new(),
+            trait_default_callables: HashMap::new(),
+            associated_constants: associated_constants::Registry::default(),
+            closure_recipes: HashMap::new(),
+            trait_associated_types: Vec::new(),
+            associated_type_bounds: HashMap::new(),
+            trait_imports: Vec::new(),
+            function_positions: HashMap::new(),
+            function_positions_sealed: false,
+        }
+    }
     fn push_declaration(&mut self, info: DeclInfo) -> Result<(), String> {
         let slot = self.declarations.len();
-        if self.slots.insert(info.id, slot).is_some() {
+        if self.slots.contains_key(&info.id) {
             return Err("duplicate declaration identity".into());
         }
+        self.slots.insert(info.id, slot);
         self.declarations.push(info);
         Ok(())
     }
@@ -17999,13 +18077,10 @@ impl PlanCtx {
                 std::slice::from_ref(&param_env),
                 budget,
             )?);
-            if registry
-                .slots
-                .insert(id, registry.declarations.len())
-                .is_some()
-            {
+            if registry.slots.contains_key(&id) {
                 return Err("duplicate declaration identity".into());
             }
+            registry.slots.insert(id, registry.declarations.len());
             registry.declarations.push(DeclInfo {
                 embedded_function: None,
                 receiver: ReceiverKind::None,
