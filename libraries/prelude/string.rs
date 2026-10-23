@@ -551,6 +551,7 @@ impl StrPattern for &str {
 }
 
 pub trait StrMethods {
+    fn is_empty(&self) -> bool;
     fn to_uppercase(&self) -> String;
     fn contains<P: StrPattern>(&self, pattern: P) -> bool;
     fn split_whitespace<'a>(&'a self) -> SplitWhitespace<&'a str>;
@@ -558,6 +559,10 @@ pub trait StrMethods {
 }
 
 impl StrMethods for str {
+    fn is_empty(&self) -> bool {
+        self.len() == 0usize
+    }
+
     fn to_uppercase(&self) -> String {
         String::from(self).to_uppercase()
     }

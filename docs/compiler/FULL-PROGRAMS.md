@@ -59,7 +59,7 @@ matched their stored stock output and nine rejected explicitly.
 | 11 | module authority resource boundary in the combined iterator program |
 | 12 | recursive nominal field realization requires an explicit recursive layout protocol |
 | 13 | trait object types only admitted directly behind a reference (`Box<dyn>`) |
-| 14, 15 | unresolved nominal source constraints in `main` and `parse_u32`, respectively |
+| 14, 15 | unresolved nominal source constraints in `main` (15 advances past `parse_u32` after `str::is_empty`, rechecked in `20261023-083331529-1328667`) |
 | 16 | no method `split_at_mut` for `&mut [T]` |
 | 17 | unresolved or cyclic import `BTreeMap` |
 | 18 | no method `parse` for `str` |

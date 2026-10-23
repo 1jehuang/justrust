@@ -6,6 +6,17 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 
 ## Completed foundations, not full compatibility
 
+- [x] `str::is_empty` is supplied by the source prelude using the existing byte
+      length operation. Empty, Unicode, embedded-NUL and borrowed-String inputs,
+      plus a nominal-error decimal parser using `ok_or` and `?`, match stock
+      CHECK/BUILD/run at workers 1/8; wrong arity, type arguments and return types
+      in unused functions reject (`20261023-083338029-1330664`). The six-target
+      string/primitive/Result/graph suite passes 30 tests
+      (`20261023-083206616-1324130`), and the root graph gate and scoped clippy
+      pass. The unchanged error-handling program now advances past `parse_u32`
+      to unresolved source constraints in `main`. The full corpus stays 11/20
+      (`20261023-083331529-1328667`), not complete Rust compatibility.
+
 - [x] Borrowed callable forwarding retains exact source provenance, receiver
       reference chains, and physical carrier/lifetime boundaries. The five
       standard `Fn`/`FnMut`/`FnOnce` reference implementations support shared
