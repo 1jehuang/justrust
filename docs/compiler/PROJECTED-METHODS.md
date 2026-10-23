@@ -1,6 +1,6 @@
 # Projected required methods
 
-Status: bounded required-method vertical implemented and validated on October 17, 2026. Full Rust and general associated-type support remain open.
+Status: bounded required-method vertical implemented on October 17, 2026; generic methods and local source-recipe integration extended October 23. Full Rust and general associated-type support remain open.
 
 ## Admitted vertical
 
@@ -10,7 +10,7 @@ The first measured core is stock sources 01 through 06 in the projected-method s
 
 The first native gate found that the original core programs also use `panic!`, which the existing source parser does not admit. Keep all 18 original sources unchanged and report that earlier boundary honestly. Separately measured appended programs use positive conditional checks and print the success literal only after every original payload condition holds. Their executable evidence tests this milestone without pretending to implement panic expansion or replacing the original witnesses.
 
-Arbitrary rigid caller projections, projected defaults, explicit associated bounds/equalities, GATs and reference-bearing projected method forms remain separate, explicit boundaries. They are not solved by a favorable closed callsite. The measured generic-forward, Copy/Sized-bound, default and reference witnesses remain unchanged for later admission. Existing nonprojected trait methods keep their current contracts.
+The October 17 boundary excluded rigid caller projections, projected defaults and explicit associated bounds. Those original witnesses remain unchanged and are now exercised as native acceptance cases. GATs and reference-bearing projected method forms remain separate boundaries. A favorable closed callsite does not authorize an invalid universal body.
 
 ## Generic method extension (2026-10-23)
 
@@ -29,6 +29,14 @@ unused implementation and an invalid unused result assignment at workers 1/8 in
 CHECK/BUILD/run. The existing iterator consumer matrix exercises `find`, including
 non-fused stopping and invalid predicate results. Unsupported residual projected
 ABIs, general associated-type support and full Rust compatibility remain open.
+
+Local projected annotations now enter the nominal demand system through exact
+retained-occurrence authentication. Receiver and argument demands must be read
+before normalization under the validated caller. Normalized nominal results
+still demand their graph realization instead of bypassing it. A same-owner
+member-transplant test rejects forged occurrences through this ingress too.
+When projection normalization introduces return-reference layers without source
+lifetime authority, it reports Unsupported rather than inventing an origin.
 
 ## Separate authority paths
 
@@ -52,9 +60,27 @@ Closed projected calls need a context-bound per-application required carrier vie
 
 ## Source, resources and acceptance
 
-Admit required method source projections without admitting projected default bodies or general short-name inference. Preserve exact source occurrence and owner certificates. PlanState lowering remains structural under its mutex; normalization and schema callbacks execute only after releasing that mutex.
+Preserve exact source occurrence and owner certificates when admitting required signatures, supported defaults and short-name projections. Structural lowering uses node-local scratch. Source shapes describe demands, not type or region permissions.
 
 All metadata, including dead and unused method bodies and every supplied type argument, is validated before capability rejection. Use existing work/depth/bytes limits, actual-capacity accounting and poisoned failure behavior. No cap increase, fake declaration, fake body, public proof constructor or new external compiler delegation.
+
+### October 23 acceptance
+
+The unchanged 24-source corpus now partitions into 17 native executable cases,
+five ordinary invalid cases, one stock-valid Unsupported case and one stock-invalid
+Unsupported case. Both remaining boundaries concern reference-bearing projected
+signatures. All 96 CLI CHECK/BUILD cells pass at workers 1/8, including 34 native
+executions with exact `ok\n` output. The 96-cell observed graph matrix passes and
+checks source admission for every body, universal checking for generic bodies,
+and absence of instance/codegen demand during CHECK. An overridden default is
+checked universally but is not emitted as a reachable executable instance.
+
+The full library suite passes 1,781 tests with one ignored. All-target lint passes
+with existing warnings. The broader full-program corpus remains 9/20, not a
+full-Rust completion. Selected redacted receipts are retained in
+`data/runs/xps14/2026-10-23-generic-projected-methods.jsonl`.
+
+### Historical October 17 measurements
 
 Preserve all 18 measured stock source bytes/order. Stock rustc 1.98.1, edition2024 and panic=abort accepts 12 and rejects 6; every accepted program prints exact ok followed by LF after semantic payload checks. The stock result is not native acceptance. Six separately measured positive-check equivalents are appended without replacing those originals. The combined 24-source native partition is 6 executable, 3 ordinary-invalid, 12 stock-valid boundaries and 3 stock-invalid boundaries. Original cases 01-07 stop at the local panic macro, 12/13 at earlier Self-where syntax, 10/11 at associated bounds, and 17/18 at lifetime syntax. These do not establish projected-default, rigid-caller or reference-result support.
 

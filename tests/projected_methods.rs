@@ -8,12 +8,8 @@
 //! Equivalent ordered source SHA256 0370b25e9ed3e381e2de7fdfee844deba9429b1a55b6fdbbcc832743ac7504a5.
 //! Native outcomes are acceptance expectations, not predeclared measured results.
 //! Originals 01-06 expect Runtime with exact ok+LF now that literal panic! is admitted.
-//! Gate 888141ae5r exposes original 07 at the rigid generic projection boundary.
-//! Cases 12/13 now pass Self-where syntax and reach projected-default semantics.
-//! Unsupported below is a corpus category, not necessarily the diagnostic error kind.
-//! Cases 08/09 retain rigid projection boundaries, 10/11 earlier short-projection syntax.
-//! Cases 17/18 stop at nominal lifetime syntax, before projected-reference semantics.
-//! Cases 08/09/18 are stock-invalid Unsupported boundaries, not ordinary-invalid parity.
+//! Cases 07-13 now exercise native forwarding, bounds and default methods.
+//! Cases 08/09 are ordinary invalid programs; 17/18 retain the projected-reference boundary.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
 
 #[path = "support/native_prelude.rs"]
@@ -29,13 +25,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const BASELINE_STOCK: &str = "rustc 1.98.1;48a229ceaefd4985c50990b14116b6d856af0985;2026-09-01;x86_64-unknown-linux-gnu;LLVM22.1.8";
-const RIGID_BOUNDARY: &str = "unsupported: rigid generic associated projection";
-const PARSE_PROJECTION_BOUNDARY: &str =
-    "unsupported: associated type projections are unsupported, found \"::\"";
-const DEFAULT_PROJECTION_BOUNDARY: &str =
-    "projection-bearing trait default signatures and bodies are unsupported";
-const LIFETIME_BOUNDARY: &str =
-    "lifetime parameters on nominal and impl declarations are unsupported";
+const REFERENCE_BOUNDARY: &str = "unsupported: reference-bearing projected method signature";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Outcome {
@@ -148,8 +138,8 @@ fn main() { let a = forward(Wrap(42i32)); let b = forward(Wrap(true)); if a != 4
 "#,
             source_bytes: 337,
             stock_diagnostic: None,
-            outcome: Outcome::Unsupported,
-            native_boundary: Some(RIGID_BOUNDARY),
+            outcome: Outcome::Runtime,
+            native_boundary: None,
         },
         // Source SHA256 f4cd7e597fcfc5509d48b741456e55103634bf1b17ed00ce629904409255df2f
         Case {
@@ -160,8 +150,8 @@ fn main() {}
 "#,
             source_bytes: 121,
             stock_diagnostic: Some("error[E0308]"),
-            outcome: Outcome::InvalidUnsupported,
-            native_boundary: Some(RIGID_BOUNDARY),
+            outcome: Outcome::Invalid,
+            native_boundary: None,
         },
         // Source SHA256 76d3f2c568337ff4737c34d08650e0080a551261f125b867b89900cd47ea0ab9
         Case {
@@ -172,8 +162,8 @@ fn main() {}
 "#,
             source_bytes: 163,
             stock_diagnostic: Some("error[E0382]"),
-            outcome: Outcome::InvalidUnsupported,
-            native_boundary: Some(RIGID_BOUNDARY),
+            outcome: Outcome::Invalid,
+            native_boundary: None,
         },
         // Source SHA256 9903fa8e2d500885bf5e7b5f7c33d9f705610ddab2266a16799e30cdda2bc309
         Case {
@@ -186,8 +176,8 @@ fn main() { let x = duplicate(S); if x.0 != 42 || x.1 != 42 { panic!(); } printl
 "#,
             source_bytes: 311,
             stock_diagnostic: None,
-            outcome: Outcome::Unsupported,
-            native_boundary: Some(PARSE_PROJECTION_BOUNDARY),
+            outcome: Outcome::Runtime,
+            native_boundary: None,
         },
         // Source SHA256 7028424f9528fb4af4aca48bd6d9f01eef061adf0c5f644d099a6df3b2d56731
         Case {
@@ -200,8 +190,8 @@ fn main() { if forward(S) != 42 { panic!(); } println!("ok"); }
 "#,
             source_bytes: 256,
             stock_diagnostic: None,
-            outcome: Outcome::Unsupported,
-            native_boundary: Some(PARSE_PROJECTION_BOUNDARY),
+            outcome: Outcome::Runtime,
+            native_boundary: None,
         },
         // Source SHA256 d64b7f5e8b9207e57a2bb6569de605f2628d6f18814caf74ac74861838f121d6
         Case {
@@ -213,8 +203,8 @@ fn main() { let x: <S as Source>::Out = S.get(); if x != 42 { panic!(); } printl
 "#,
             source_bytes: 289,
             stock_diagnostic: None,
-            outcome: Outcome::Unsupported,
-            native_boundary: Some(DEFAULT_PROJECTION_BOUNDARY),
+            outcome: Outcome::Runtime,
+            native_boundary: None,
         },
         // Source SHA256 69656a8d3296975e1deaab104e6dbc7b79f0c4fb9f0e138ff407de3dcbde47c0
         Case {
@@ -226,8 +216,8 @@ fn main() { let x: <S as Source>::Out = S.get(); if x != 42 { panic!(); } printl
 "#,
             source_bytes: 321,
             stock_diagnostic: None,
-            outcome: Outcome::Unsupported,
-            native_boundary: Some(DEFAULT_PROJECTION_BOUNDARY),
+            outcome: Outcome::Runtime,
+            native_boundary: None,
         },
         // Source SHA256 aa4f20274f2330dc143b2f96383a06a59b1c895a5623b7c1afa1e4fb8f9757c2
         Case {
@@ -280,7 +270,7 @@ fn main() { let n = 42; let x = forward(S(&n)); if *x != 42 { panic!(); } printl
             source_bytes: 306,
             stock_diagnostic: None,
             outcome: Outcome::Unsupported,
-            native_boundary: Some(LIFETIME_BOUNDARY),
+            native_boundary: Some(REFERENCE_BOUNDARY),
         },
         // Source SHA256 592111f492d34a9056accb716d1e27026d7fcd53bec0eb6688e2d85f011a33df
         Case {
@@ -294,7 +284,7 @@ fn main() {}
             source_bytes: 230,
             stock_diagnostic: Some("error[E0515]"),
             outcome: Outcome::InvalidUnsupported,
-            native_boundary: Some(LIFETIME_BOUNDARY),
+            native_boundary: Some(REFERENCE_BOUNDARY),
         },
         // Equivalent of original 01, separately stock-measured.
         // Source SHA256 a0cf8b67aa2212a3392fb8dbf636e4f1c69be313574a6698f71856752729b7f9
@@ -438,15 +428,11 @@ fn projected_methods_stock_partition_and_frozen_source_metadata() {
         1698
     );
     assert_eq!(stock, [18, 6]);
-    assert_eq!(partition, [12, 3, 6, 3]);
+    assert_eq!(partition, [17, 5, 1, 1]);
     for (index, case) in cases[..18].iter().enumerate() {
         let boundary = match index + 1 {
-            1..=6 => None,
-            12 | 13 => Some(DEFAULT_PROJECTION_BOUNDARY),
-            7..=9 => Some(RIGID_BOUNDARY),
-            10 | 11 => Some(PARSE_PROJECTION_BOUNDARY),
-            14..=16 => None,
-            17 | 18 => Some(LIFETIME_BOUNDARY),
+            1..=16 => None,
+            17 | 18 => Some(REFERENCE_BOUNDARY),
             _ => unreachable!(),
         };
         assert_eq!(case.native_boundary, boundary, "{}", case.name);
@@ -610,13 +596,6 @@ fn assert_native_diagnostic(case: &Case, diagnostic: &str) {
             "{}: expected exact boundary {boundary:?}, got {diagnostic}",
             case.name
         );
-        if case.name == "10_explicit_out_copy" {
-            assert!(
-                diagnostic.contains(&format!(":4:36: {PARSE_PROJECTION_BOUNDARY}")),
-                "{} expected recorded short-projection parser location:{diagnostic}",
-                case.name
-            );
-        }
     } else {
         assert_eq!(case.outcome, Outcome::Invalid);
         assert!(
@@ -754,10 +733,10 @@ fn native_projected_methods_workers1_8_check_build_no_compiler_fallback() {
         }
     }
     assert_eq!(cells, 96);
-    assert_eq!(modes, [[24, 24], [6, 6], [12, 12], [6, 6]]);
-    assert_eq!(runtimes, 24);
+    assert_eq!(modes, [[34, 34], [10, 10], [2, 2], [2, 2]]);
+    assert_eq!(runtimes, 34);
     eprintln!(
-        "NATIVE PROJECTED METHODS:96 CLI cells,modes{modes:?},24 exact-output native images from01-06/19-24;24 stock-valid Unsupported cells (4 rigid projection,8 projected-default,8 associated-bounds,4 nominal-lifetime) and12 stock-invalid Unsupported cells remain separate from12 ordinary-invalid cells;12/13 now reach projected-default semantics"
+        "NATIVE PROJECTED METHODS:96 CLI cells,modes{modes:?},34 exact-output native images; reference-bearing projection remains the sole unsupported boundary"
     );
 }
 
@@ -771,11 +750,14 @@ fn evaluated_once(report: &Report, kind: u32, index: usize, case: &Case) {
     assert_eq!(entries.len(), 1, "{}: missing/duplicate {key:?}", case.name);
     assert_eq!(entries[0].1, 1, "{}: repeated {key:?}", case.name);
 }
-fn assert_successful_all_body_graph(case: &Case, compiled: &compiler::Compilation, check: bool) {
-    let program = native_prelude::parse(case.source).expect("frozen Runtime source parses");
-    frontend::check(&program).expect("all original bodies check independently of reachability");
-    let plan = frontend::PlanCtx::from_program(&program, &ir::PlanBudget::default())
-        .expect("real source declarations and impl binders");
+fn assert_successful_all_body_graph(
+    case: &Case,
+    compiled: &compiler::Compilation,
+    check: bool,
+    plan: &frontend::PlanCtx,
+) {
+    // compile_observed checks every source body through graph-backed nominal
+    // inputs. This independent plan supplies only expected source identities.
     let expected_source_bodies = match case.name {
         "01_associated_only" | "19_associated_only_positive" => 1,
         "02_closed_required_get"
@@ -788,6 +770,11 @@ fn assert_successful_all_body_graph(case: &Case, compiled: &compiler::Compilatio
         | "04_noncopy_cell_move"
         | "21_same_self_trait_args_positive"
         | "22_noncopy_cell_move_positive" => 3,
+        "07_generic_forward"
+        | "10_explicit_out_copy"
+        | "11_explicit_out_sized"
+        | "12_projected_default_get" => 3,
+        "13_projected_default_override" => 4,
         _ => panic!("unexpected Runtime case {}", case.name),
     };
     assert_eq!(compiled.functions, expected_source_bodies, "{}", case.name);
@@ -810,6 +797,7 @@ fn assert_successful_all_body_graph(case: &Case, compiled: &compiler::Compilatio
         evaluated_once(&compiled.report, 110, index, case);
         let universal = match plan.callable_provider(declaration).unwrap() {
             frontend::CallableProvider::Source { .. } => {
+                evaluated_once(&compiled.report, 128, index, case);
                 source_bodies += usize::from(!plan.is_prelude_decl(declaration).unwrap());
                 if plan.callable_env(declaration).unwrap().is_generic() {
                     generic_source_bodies +=
@@ -836,7 +824,13 @@ fn assert_successful_all_body_graph(case: &Case, compiled: &compiler::Compilatio
     assert_eq!(
         generic_source_bodies,
         match case.name {
-            "06_generic_impl_wrap" | "24_generic_impl_wrap_positive" => 1,
+            "06_generic_impl_wrap"
+            | "24_generic_impl_wrap_positive"
+            | "10_explicit_out_copy"
+            | "11_explicit_out_sized"
+            | "12_projected_default_get"
+            | "13_projected_default_override" => 1,
+            "07_generic_forward" => 2,
             _ => 0,
         },
         "{}: original impl binder must remain universally checked",
@@ -857,10 +851,12 @@ fn assert_successful_all_body_graph(case: &Case, compiled: &compiler::Compilatio
         compiled.control_flow.len(),
         expected_source_bodies
             + match case.name {
-                "06_generic_impl_wrap" | "24_generic_impl_wrap_positive" => 1,
+                "06_generic_impl_wrap" | "24_generic_impl_wrap_positive" if !check => 1,
+                "07_generic_forward" if !check => 2,
                 _ => 0,
-            },
-        "{}: native inventory includes both distinct Wrap instantiations",
+            }
+            - usize::from(!check && case.name == "13_projected_default_override"),
+        "{}: executable inventory includes reachable specializations, not an overridden default",
         case.name
     );
     assert_eq!(compiled.control_flow.len(), compiled.analyses.len());
@@ -872,7 +868,16 @@ fn assert_successful_all_body_graph(case: &Case, compiled: &compiler::Compilatio
             .iter()
             .filter(|(key, _)| key.kind == kind)
             .collect();
-        assert_eq!(nodes.len(), compiled.control_flow.len(), "{}", case.name);
+        assert_eq!(
+            nodes.len(),
+            if check {
+                0
+            } else {
+                compiled.control_flow.len()
+            },
+            "{}: instance-only kind {kind} must not be demanded by CHECK",
+            case.name
+        );
         assert!(nodes.iter().all(|(_, count)| *count == 1));
     }
     assert_eq!(
@@ -891,68 +896,100 @@ fn assert_successful_all_body_graph(case: &Case, compiled: &compiler::Compilatio
         case.name
     );
 }
-fn all_body_graph() {
+fn all_body_graph_worker(workers: usize) -> (usize, [[usize; 2]; 4], usize) {
     let mut cells = 0;
     let mut modes = [[0; 2]; 4];
     let mut unused_body_failures = 0;
     for case in cases() {
-        for workers in [1, 8] {
-            for check in [true, false] {
-                match compiler::compile_observed(case.source.to_owned(), workers, check) {
-                    Ok(compiled) => {
-                        assert_eq!(case.outcome, Outcome::Runtime, "{}", case.name);
-                        assert_successful_all_body_graph(&case, &compiled, check);
-                    }
-                    Err(failure) => {
-                        assert_ne!(case.outcome, Outcome::Runtime, "{}:{failure}", case.name);
-                        assert_native_diagnostic(&case, &failure.to_string());
-                        let report = failure.report.expect("failure retains real graph report");
-                        assert!(report.capture_complete, "{}", case.name);
-                        assert_eq!(report.events_dropped, 0);
-                        assert!(report.failures > 0, "{}", case.name);
-                        assert!(
-                            !report.published_kind(105),
-                            "{}: failure must precede object generation",
-                            case.name
-                        );
-                        if case.name == "16_unused_bad_impl_body" {
-                            let program = frontend::parse(case.source).unwrap();
-                            let plan = frontend::PlanCtx::from_program(
-                                &program,
-                                &ir::PlanBudget::default(),
-                            )
-                            .unwrap();
-                            let mut source_bodies = 0;
-                            let mut saw_get = false;
-                            for index in 0..plan.callable_count() {
-                                let declaration = plan.callable_decl(index).unwrap();
-                                if let frontend::CallableProvider::Source { .. } =
-                                    plan.callable_provider(declaration).unwrap()
-                                {
-                                    source_bodies += 1;
-                                    evaluated_once(&report, 110, index, &case);
-                                    let body = plan.callable_body(&program, declaration).unwrap();
-                                    saw_get |= body.name.segments().last().is_some_and(|name| {
-                                        program.names.spelling(*name).unwrap() == "get"
-                                    });
-                                }
+        // Source identities are independent of worker count and build mode.
+        let expected_plan = if case.outcome == Outcome::Runtime {
+            let program = native_prelude::parse(case.source).expect("frozen Runtime source parses");
+            Some(
+                frontend::PlanCtx::from_program(&program, &ir::PlanBudget::default())
+                    .expect("real source declarations and impl binders"),
+            )
+        } else {
+            None
+        };
+        for check in [true, false] {
+            match compiler::compile_observed(case.source.to_owned(), workers, check) {
+                Ok(compiled) => {
+                    assert_eq!(case.outcome, Outcome::Runtime, "{}", case.name);
+                    assert_successful_all_body_graph(
+                        &case,
+                        &compiled,
+                        check,
+                        expected_plan.as_ref().unwrap(),
+                    );
+                }
+                Err(failure) => {
+                    assert_ne!(case.outcome, Outcome::Runtime, "{}:{failure}", case.name);
+                    assert_native_diagnostic(&case, &failure.to_string());
+                    let report = failure.report.expect("failure retains real graph report");
+                    assert!(report.capture_complete, "{}", case.name);
+                    assert_eq!(report.events_dropped, 0);
+                    assert!(report.failures > 0, "{}", case.name);
+                    assert!(
+                        !report.published_kind(105),
+                        "{}: failure must precede object generation",
+                        case.name
+                    );
+                    if case.name == "16_unused_bad_impl_body" {
+                        let program = frontend::parse(case.source).unwrap();
+                        let plan =
+                            frontend::PlanCtx::from_program(&program, &ir::PlanBudget::default())
+                                .unwrap();
+                        let mut source_bodies = 0;
+                        let mut saw_get = false;
+                        for index in 0..plan.callable_count() {
+                            let declaration = plan.callable_decl(index).unwrap();
+                            if let frontend::CallableProvider::Source { .. } =
+                                plan.callable_provider(declaration).unwrap()
+                            {
+                                source_bodies += 1;
+                                evaluated_once(&report, 110, index, &case);
+                                let body = plan.callable_body(&program, declaration).unwrap();
+                                saw_get |= body.name.segments().last().is_some_and(|name| {
+                                    program.names.spelling(*name).unwrap() == "get"
+                                });
                             }
-                            assert_eq!(source_bodies, 2, "unchanged main and unused impl body");
-                            assert!(saw_get, "unused required-method implementation was checked");
-                            unused_body_failures += 1;
                         }
+                        assert_eq!(source_bodies, 2, "unchanged main and unused impl body");
+                        assert!(saw_get, "unused required-method implementation was checked");
+                        unused_body_failures += 1;
                     }
                 }
-                modes[partition_index(case.outcome)][usize::from(!check)] += 1;
-                cells += 1;
+            }
+            modes[partition_index(case.outcome)][usize::from(!check)] += 1;
+            cells += 1;
+        }
+    }
+    (cells, modes, unused_body_failures)
+}
+
+fn all_body_graph() {
+    // Independent engines retain their own worker setting and report. Running
+    // the two matrix lanes concurrently keeps the expanded gate bounded without
+    // increasing its timeout or skipping any CHECK, BUILD or source-body checks.
+    let lanes = [1, 8].map(|workers| std::thread::spawn(move || all_body_graph_worker(workers)));
+    let mut cells = 0;
+    let mut modes = [[0; 2]; 4];
+    let mut unused_body_failures = 0;
+    for lane in lanes {
+        let (count, partitions, unused) = lane.join().expect("all-body worker lane panicked");
+        cells += count;
+        unused_body_failures += unused;
+        for (total, partition) in modes.iter_mut().zip(partitions) {
+            for (total, value) in total.iter_mut().zip(partition) {
+                *total += value;
             }
         }
     }
     assert_eq!(cells, 96);
-    assert_eq!(modes, [[24, 24], [6, 6], [12, 12], [6, 6]]);
+    assert_eq!(modes, [[34, 34], [10, 10], [2, 2], [2, 2]]);
     assert_eq!(unused_body_failures, 4);
     eprintln!(
-        "NATIVE PROJECTED METHODS ALL-BODY GRAPH:96 cells,modes{modes:?},4 unused-impl rejection cells;01-06/19-24 cover successful bodies and generic Wrap<T>::get retains its original universal binder;07 retains the rigid generic projection boundary"
+        "NATIVE PROJECTED METHODS ALL-BODY GRAPH:96 cells,modes{modes:?},4 unused-impl rejection cells; generic forwarders, bounds and defaults retain universal body checks"
     );
 }
 

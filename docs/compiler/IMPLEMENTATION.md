@@ -6,6 +6,19 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 
 ## Completed foundations, not full compatibility
 
+- [x] Generic trait-method inference substitutes exact owner projections before
+      constraining arguments and expected results. Closed projected signatures
+      validate raw owner/method substitution before normalization, and required
+      signatures use only the exact implementation's assignments for conformance
+      (`PROJECTED-METHODS.md`). This repairs the iterator `find` acceptance cases.
+      Local projection annotations retain source identity and normalize only after
+      graph-backed receiver/argument realization. The frozen projected-method
+      corpus now has 17 executable cases, five invalid cases and two explicit
+      reference-related boundaries, with workers 1/8 CHECK/BUILD/run coverage.
+      The full library rerun passes 1,781 tests with one ignored. The unchanged
+      full-program corpus remains 9/20, with collection, recursive layouts and
+      missing library APIs still blocking programs. No full-Rust gate is closed.
+
 **Audit follow-up in progress (2026-10-20):** `OVERFLOW-PROFILES.md` defines
 explicit runtime overflow policy across stack and SSA lowering, independent of
 assertions and optimization. `NOMINAL-RECIPE-SELECTORS.md` separates Index/IndexMut
