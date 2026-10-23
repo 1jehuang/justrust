@@ -2,6 +2,7 @@
 //! Outputs preserve original source slots and require explicit read capabilities.
 mod coordinates;
 mod preparation;
+pub(super) use preparation::shape as source_shape;
 mod producer;
 pub(super) mod substitution;
 

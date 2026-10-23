@@ -416,11 +416,46 @@ fn recipe_type(
                 element: Arc::new(element),
             }
         }
-        NominalShape::Projection { .. } => {
-            return Err(
-                "unsupported: executable local projection recipe requires sealed normalization"
-                    .into(),
-            );
+        NominalShape::Projection {
+            declaration,
+            item,
+            receiver,
+            arguments,
+        } => {
+            let receiver = recipe_type(checker, inputs, receiver, missing, depth + 1)?;
+            checker.infer_storage(arguments.len())?;
+            let mut actuals = Vec::new();
+            let mut complete = receiver.is_some();
+            for argument in arguments.iter() {
+                match recipe_type(checker, inputs, argument, missing, depth + 1)? {
+                    Some(actual) => actuals.push(actual),
+                    None => complete = false,
+                }
+            }
+            if !complete {
+                return Ok(None);
+            }
+            let raw = ir::Ty::AssociatedType(Arc::new(ir::AssociatedTypeProjection {
+                trait_ref: ir::TraitRef {
+                    declaration: *declaration,
+                    self_ty: receiver.ok_or("missing projection receiver")?,
+                    args: actuals.into(),
+                },
+                item: *item,
+            }));
+            let plan = checker.signatures.plan()?;
+            let caller = checker.facts();
+            let facts = caller
+                .validated()
+                .ok_or("unsupported: local projection recipe requires validated caller facts")?;
+            let normal = facts
+                .normalize_substituted_projection_type(&raw, &plan.budget)
+                .map_err(|error| error.into_legacy_diagnostic(&plan.budget))?;
+            if matches!(normal, ir::Ty::AssociatedType(_)) {
+                return Err("unsupported: executable local projection remains symbolic".into());
+            }
+            let shape = type_shape(checker, &normal, depth + 1)?;
+            return recipe_type(checker, inputs, &shape, missing, depth + 1);
         }
     }))
 }

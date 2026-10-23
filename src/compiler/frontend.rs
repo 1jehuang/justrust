@@ -22320,6 +22320,11 @@ mod associated_registry_tests {
                 .validate_source_projection(context, projection, &plan.budget)
                 .is_err()
         );
+        assert!(
+            plan.nominal_source_shape(function, &original.result)
+                .is_ok()
+        );
+        assert!(plan.nominal_source_shape(function, &transplanted).is_err());
         let facts = plan.callable_facts(function).unwrap();
         assert!(
             plan.source_ty(

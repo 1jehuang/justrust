@@ -376,7 +376,11 @@ impl Capabilities {
     }
 }
 
-fn shape(ty: &ir::Ty, budget: &ir::PlanBudget, depth: usize) -> Result<Shape, Error> {
+pub(in crate::compiler) fn shape(
+    ty: &ir::Ty,
+    budget: &ir::PlanBudget,
+    depth: usize,
+) -> Result<Shape, Error> {
     budget.check_depth(depth).map_err(Error::new)?;
     budget.charge_work(1).map_err(Error::new)?;
     let children = |types: &[ir::Ty]| -> Result<Arc<[Shape]>, Error> {
