@@ -1383,9 +1383,9 @@ fn same_callee(a: &Callee, b: &Callee) -> bool {
 }
 /// Equality that is faithful to validation inputs: nominal applications must
 /// share the exact retained definition and realization capability (identity
-/// alone is not authority); other structure compares recursively. Variants
-/// carrying opaque, closure, object or projection payloads only match the
-/// same allocation.
+/// alone is not authority); other structure compares recursively. Projections
+/// compare their item, trait and exact child authority. Opaque, closure, object
+/// and function-item payloads only match the same allocation.
 fn same_type_allocation(a: &Ty, b: &Ty) -> bool {
     fn nominal_same<T>(
         x: &T,
@@ -1450,7 +1450,13 @@ fn same_type_allocation(a: &Ty, b: &Ty) -> bool {
         (Ty::Opaque(x), Ty::Opaque(y)) => Arc::ptr_eq(x, y),
         (Ty::Closure(x), Ty::Closure(y)) => Arc::ptr_eq(x, y),
         (Ty::FnItem(x), Ty::FnItem(y)) => Arc::ptr_eq(x, y),
-        (Ty::AssociatedType(x), Ty::AssociatedType(y)) => Arc::ptr_eq(x, y),
+        (Ty::AssociatedType(x), Ty::AssociatedType(y)) => {
+            Arc::ptr_eq(x, y)
+                || (x.item == y.item
+                    && x.trait_ref.declaration == y.trait_ref.declaration
+                    && same_type_allocation(&x.trait_ref.self_ty, &y.trait_ref.self_ty)
+                    && same_types(&x.trait_ref.args, &y.trait_ref.args))
+        }
         (Ty::Dyn(x), Ty::Dyn(y)) => Arc::ptr_eq(x, y),
         _ => false,
     }
@@ -2461,17 +2467,31 @@ impl ValidatedTraitWorld {
         env: &GenericEnv,
         maybe_unsized: Option<ParamId>,
     ) -> Result<()> {
+        self.validate_predicates_with(
+            predicates,
+            env,
+            maybe_unsized,
+            &mut NominalReplays::default(),
+        )
+    }
+    fn validate_predicates_with(
+        &self,
+        predicates: &[Predicate],
+        env: &GenericEnv,
+        maybe_unsized: Option<ParamId>,
+        replays: &mut NominalReplays,
+    ) -> Result<()> {
         let mut canonical = Vec::new();
         for predicate in predicates {
-            self.validate_predicate_metadata(predicate, env)?;
+            self.validate_predicate_metadata_with(predicate, env, replays)?;
         }
         for predicate in predicates {
             match predicate {
                 Predicate::Implements(goal) => {
-                    self.validate_predicate_ref_in(goal, env, maybe_unsized)?
+                    self.validate_predicate_ref_with(goal, env, maybe_unsized, replays)?
                 }
                 Predicate::ProjectionEq { projection, ty } => {
-                    self.validate_equality_domain(projection, ty, env)?;
+                    self.validate_equality_domain_with(projection, ty, env, replays)?;
                 }
             }
             self.append_predicate(&mut canonical, predicate)?;
@@ -6246,7 +6266,7 @@ impl ValidatedTraitWorld {
         result.predicates =
             self.normalize_instantiated_projection_predicates(&result.predicates, facts, active)?;
         self.validate_signature_shape(&result.signature, facts.env(), None)?;
-        self.validate_predicates(&result.predicates, facts.env(), None)?;
+        self.validate_predicates_with(&result.predicates, facts.env(), None, &mut active.replays)?;
         // The complete predicate batch, including ordinary membership rows,
         // already passed metadata validation above. Only equality discharge is
         // new work here; replaying metadata repeats deep actual-type walks.
@@ -6581,6 +6601,25 @@ impl ValidatedTraitWorld {
             ));
         }
         self.validate_ty(actual, context.env(), None, true, 0)?;
+        // Non-Self arguments can also carry references (for example
+        // PartialEq<&str>). Derive their positions from every original
+        // parameter tail, just as for generic method instantiation.
+        let mut argument_has_references = false;
+        for argument in goal.args.iter() {
+            if charged(&self.budget, ir::root_reference_layers(argument))? != 0 {
+                argument_has_references = true;
+            }
+        }
+        if argument_has_references && !self.schema_contains_projection(&item.schema)? {
+            let instantiated = self.instantiate_scratch(
+                &item.schema,
+                &arguments,
+                context,
+                Some(item.declaration),
+                &mut ProofScratch::default(),
+            )?;
+            return Ok((instantiated, None));
+        }
         if self.schema_contains_projection(&item.schema)? {
             let application = self.instantiate_projected_item(item, goal, context)?;
             return Ok((application.instantiated, None));
@@ -7015,9 +7054,12 @@ impl ValidatedTraitWorld {
             Predicate::Implements(goal) => {
                 self.validate_predicate_ref_with(goal, facts.env(), None, &mut active.replays)?
             }
-            Predicate::ProjectionEq { projection, ty } => {
-                self.validate_equality_domain(projection, ty, facts.env())?
-            }
+            Predicate::ProjectionEq { projection, ty } => self.validate_equality_domain_with(
+                projection,
+                ty,
+                facts.env(),
+                &mut active.replays,
+            )?,
         }
         let key = GoalKey {
             environment: facts.predicates.index,
@@ -7535,7 +7577,12 @@ impl ValidatedTraitWorld {
             Some(target.declaration),
             scratch,
         )?;
-        self.validate_owner_callable_instantiation(target, &instantiated.signature, context)?;
+        self.validate_owner_callable_instantiation(
+            target,
+            &instantiated.signature,
+            context,
+            scratch,
+        )?;
         let mut evidence = Vec::new();
         for predicate in instantiated.predicates.iter() {
             push(
@@ -10520,6 +10567,72 @@ mod tests {
                 "generic planning resource limit exceeded: source-controlled suffix"
             )
             .is_none()
+        );
+    }
+
+    #[test]
+    fn local_metadata_memo_preserves_projection_and_nominal_authority() {
+        let c = case();
+        let projection = |self_ty: Ty, item: DeclId| {
+            Ty::AssociatedType(Arc::new(ir::AssociatedTypeProjection {
+                trait_ref: TraitRef {
+                    declaration: c.value_trait,
+                    self_ty,
+                    args: Arc::from([]),
+                },
+                item,
+            }))
+        };
+        let first = projection(c.leaf.clone(), c.item);
+        let equivalent = projection(c.leaf.clone(), c.item);
+        assert!(same_type_allocation(&first, &equivalent));
+        assert!(!same_type_allocation(
+            &first,
+            &projection(c.leaf.clone(), c.body)
+        ));
+        let Ty::Struct(original) = &c.leaf else {
+            panic!("expected nominal")
+        };
+        let mut forged = original.def().clone();
+        forged.fields = Arc::from([]);
+        let forged = projection(Ty::Struct(StructTy::new(forged)), c.item);
+        assert!(!same_type_allocation(&first, &forged));
+        let mut memo = ValidatedTypes::default();
+        memo.check(&first, |_| Ok::<_, ()>(())).unwrap();
+        memo.check(&equivalent, |_| Err::<(), _>(())).unwrap();
+        assert!(memo.check(&forged, |_| Err::<(), _>(())).is_err());
+
+        let world = c.build().unwrap();
+        let facts = world.callable_facts(c.caller).unwrap();
+        let mut replays = NominalReplays::default();
+        let nested = Ty::Tuple(Arc::from([c.leaf.clone(), c.leaf.clone()]));
+        world
+            .validate_ty_metadata_with(&nested, facts.env(), 0, &mut replays)
+            .unwrap();
+        assert!(
+            replays
+                .validated_type(&world, &nested, facts.env())
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            replays
+                .validated_type(&world, &c.leaf, facts.env())
+                .unwrap()
+                .is_some()
+        );
+        let Ty::AssociatedType(forged_projection) = &forged else {
+            unreachable!()
+        };
+        assert!(
+            world
+                .validate_ty_metadata_with(
+                    &forged_projection.trait_ref.self_ty,
+                    facts.env(),
+                    0,
+                    &mut replays
+                )
+                .is_err()
         );
     }
 

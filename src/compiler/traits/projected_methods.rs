@@ -873,6 +873,7 @@ impl ValidatedTraitWorld {
         target: &CallTarget,
         signature: &Signature,
         context: ProofContext<'_>,
+        active: &mut ProofScratch,
     ) -> Result<()> {
         let Some(owner_id) = self.info(target.declaration)?.owner else {
             return Ok(());
@@ -954,7 +955,7 @@ impl ValidatedTraitWorld {
                 self_ty: head.signature.result,
                 args: head.signature.params.into(),
             };
-            self.validate_ref_in(&goal, context.env(), None)?;
+            self.validate_ref_with(&goal, context.env(), None, &mut active.replays)?;
             let closed = self.goal_is_closed(&goal, context.env())?;
             if closed {
                 let selection = self.require_in(
@@ -963,7 +964,7 @@ impl ValidatedTraitWorld {
                         predicates: &self.empty,
                         phase: FactsPhase::Closed,
                     },
-                    &mut ProofScratch::default(),
+                    active,
                 )?;
                 if !matches!(&selection.0.origin,
                     ProofOrigin::Implementation { declaration, arguments }
@@ -989,13 +990,14 @@ impl ValidatedTraitWorld {
                     &owner_arguments,
                     context,
                     closed,
+                    active,
                 )?;
                 self.validate_associated_normal_form(
                     Some(value.associated),
                     &normal,
                     context.env(),
                     context,
-                    &mut ProofScratch::default(),
+                    active,
                 )?;
             }
             if raw.signature.params.len() != signature.params.len() {
@@ -1018,6 +1020,7 @@ impl ValidatedTraitWorld {
                     &target.type_args,
                     context,
                     closed,
+                    active,
                 )?;
                 if !self.eq_ty(&normal, actual, 0)? {
                     return Err(FactsError::invalid(
@@ -1039,6 +1042,7 @@ impl ValidatedTraitWorld {
         arguments: &[Ty],
         context: ProofContext<'_>,
         closed: bool,
+        active: &mut ProofScratch,
     ) -> Result<Ty> {
         // Rigid callers retain private owning-impl authority. Concrete callers
         // must instead use finalized closed selection and its RHS/domain checks.
@@ -1059,8 +1063,13 @@ impl ValidatedTraitWorld {
         };
         let value = self.substitute_projected_schema(&schema, arguments, context.env())?;
         if closed {
-            self.normalize_closed_projected_type(&value.signature.result, context, false)
-                .map(|(normal, _)| normal)
+            self.normalize_closed_projected_type_with(
+                &value.signature.result,
+                context,
+                false,
+                active,
+            )
+            .map(|(normal, _)| normal)
         } else {
             Ok(value.signature.result)
         }

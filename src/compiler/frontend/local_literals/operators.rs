@@ -164,7 +164,9 @@ impl Solver<'_, '_, '_> {
         let overloaded = matches!(
             self.domain(left),
             Domain::Nominal(..) | Domain::Tuple(..) | Domain::Fixed(ir::Ty::Param(_))
-        );
+        ) || (matches!(kind, Kind::Binary(op) if comparison(op))
+            && matches!(self.domain(left), Domain::Ref(..))
+            && right.is_some_and(|right| matches!(self.domain(right), Domain::Nominal(..))));
         if !overloaded {
             if matches!(kind, Kind::Index(_)) {
                 let element = match self.domain(left) {

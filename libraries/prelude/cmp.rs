@@ -58,9 +58,9 @@ impl Clone for Ordering {
 }
 impl Copy for Ordering {}
 
-pub trait PartialEq {
-    fn eq(&self, other: &Self) -> bool;
-    fn ne(&self, other: &Self) -> bool {
+pub trait PartialEq<Rhs = Self> {
+    fn eq(&self, other: &Rhs) -> bool;
+    fn ne(&self, other: &Rhs) -> bool {
         !self.eq(other)
     }
 }

@@ -6,6 +6,21 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 
 ## Completed foundations, not full compatibility
 
+- [x] The unchanged string-processing program passes native CHECK/BUILD/run
+      at workers 1 and 8, raising the full-program manifest to 11/20. Source
+      implementations cover character reversal, splitting, containment, Unicode
+      uppercase and heterogeneous `String`/`&str` equality. Uppercase data is
+      generated from the acceptance toolchain's Unicode 18 tables and checked
+      against every changed scalar. This is a scoped library milestone, not
+      complete Unicode or standard-library compatibility. Nested inferred
+      adapters retain node-local owner and projection proofs without increasing
+      resource limits. The staged snapshot passes 1,784 library tests, the
+      11/20 corpus ratchet, and graph, Unicode and heterogeneous-comparison
+      gates (`20261023-031503215-265249`, `20261023-031756111-273302`).
+      Slice/range iteration and nested collection pass differential checks at
+      workers 1 and 8 (`20261023-031340786-261093`), including empty and zero-sized
+      slices without constructing an uninitialized element reference.
+
 - [x] Source-level `Iterator::sum` dispatches through `Sum`, with owned and
       borrowed implementations for all integer widths and user-defined result
       implementations. Explicit trait arguments retain the validated caller's

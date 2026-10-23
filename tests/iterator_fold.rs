@@ -19,6 +19,69 @@ fn unchanged_matrix_matches_stock_at_both_worker_counts() {
 }
 
 #[test]
+fn iterator_filter_inferred_char_matches_stock() {
+    closure_oracle::check(
+        "iterator-filter-inferred-char",
+        &[
+            closure_oracle::Case {
+                name: "inferred_char_filter_map",
+                source: r#"fn main(){let cleaned:Vec<char>="Ab 1!".chars().filter(|c|c.is_alphanumeric()).map(|c|c.to_ascii_lowercase()).collect();println!("{} {} {}",cleaned[0],cleaned[1],cleaned[2]);}"#,
+                expect: closure_oracle::Expect::Run("a b 1\n"),
+            },
+            closure_oracle::Case {
+                name: "nested_inferred_filters",
+                source: r#"fn main(){let cleaned:Vec<char>="Ab 1!".chars().filter(|c|c.is_alphanumeric()).filter(|c|*c!='1').map(|c|c.to_ascii_lowercase()).collect();println!("{} {}",cleaned[0],cleaned[1]);}"#,
+                expect: closure_oracle::Expect::Run("a b\n"),
+            },
+            closure_oracle::Case {
+                name: "invalid_filter_result_unused",
+                source: r#"fn bad(){let cleaned:Vec<char>="Ab".chars().filter(|c|1).map(|c|c.to_ascii_lowercase()).collect();}fn main(){}"#,
+                expect: closure_oracle::Expect::Invalid("E0308"),
+            },
+        ],
+    );
+}
+
+#[test]
+fn unchanged_string_processing_matches_stock_at_both_worker_counts() {
+    closure_oracle::check(
+        "unchanged-string-processing",
+        &[closure_oracle::Case {
+            name: "full_string_program",
+            source: include_str!("fixtures/full_programs/10_string_processing.rs"),
+            expect: closure_oracle::Expect::Run(include_str!(
+                "fixtures/full_programs/10_string_processing.stdout"
+            )),
+        }],
+    );
+}
+
+#[test]
+fn reverse_characters_match_stock() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "reverse-characters",
+        &[
+            Case {
+                name: "unicode_and_empty_reverse",
+                source: r#"fn main(){let text:String="aé🦀".chars().rev().collect();let empty:String="".chars().rev().collect();println!("{} {}",text,empty.len());}"#,
+                expect: Expect::Run("🦀éa 0\n"),
+            },
+            Case {
+                name: "interleaved_character_ends",
+                source: r#"fn main(){let mut c="aé🦀z".chars();println!("{:?} {:?} {:?} {:?} {:?}",c.next(),c.next_back(),c.next_back(),c.next(),c.next_back());}"#,
+                expect: Expect::Run("Some('a') Some('z') Some('🦀') Some('é') None\n"),
+            },
+            Case {
+                name: "reverse_requires_double_ended",
+                source: "struct Forward;impl Iterator for Forward{type Item=i32;fn next(&mut self)->Option<i32>{None}}fn bad(){let x=Forward.rev();}fn main(){}",
+                expect: Expect::Invalid("E0277"),
+            },
+        ],
+    );
+}
+
+#[test]
 fn iterator_sum_matches_stock() {
     use closure_oracle::{Case, Expect};
     closure_oracle::check(

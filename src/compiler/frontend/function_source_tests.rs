@@ -82,11 +82,13 @@ fn reject_token_ranges_with_owner(
         .into_parts();
     let names =
         NameStoreBuilder::new(session, cap, crate::compiler::token::Edition::E2024).unwrap();
-    let name = tokens
-        .iter()
-        .position(|token| token.text == "utf8_width")
+    let start = tokens
+        .windows(3)
+        .position(|tokens| {
+            tokens[0].text == "pub" && tokens[1].text == "fn" && tokens[2].text == "utf8_width"
+        })
         .unwrap();
-    let start = name.checked_sub(2).unwrap();
+    let name = start + 2;
     assert_eq!(tokens[start].text, "pub");
     assert_eq!(tokens[start + 1].text, "fn");
     let mut depth = 0usize;

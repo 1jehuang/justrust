@@ -5,6 +5,25 @@ use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 
 #[test]
+fn uppercase_mappings_match_stock() {
+    let text: String = (0..=0x10ffff)
+        .filter_map(char::from_u32)
+        .filter(|c| c.to_uppercase().ne(std::iter::once(*c)))
+        .chain("Az09 日🦀".chars())
+        .collect();
+    let source = format!("fn main(){{let text={text:?};println!(\"{{}}\",text.to_uppercase());}}");
+    let expected = format!("{}\n", text.to_uppercase());
+    closure_oracle::check(
+        "uppercase-mappings",
+        &[closure_oracle::Case {
+            name: "all_changed_unicode_scalars",
+            source: Box::leak(source.into_boxed_str()),
+            expect: closure_oracle::Expect::Run(Box::leak(expected.into_boxed_str())),
+        }],
+    );
+}
+
+#[test]
 fn string_unicode_trim_and_utf8_prefix_suffix_match_stock() {
     let mut cases = Vec::new();
     let whitespace = [

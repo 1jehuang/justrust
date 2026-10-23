@@ -21,7 +21,15 @@ milestone, not full Rust support (see RUST-COMPATIBILITY.md).
 - `justrust test --test full_programs -- --nocapture` prints per-program
   `PASS` or the first native diagnostic.
 
-## Status (2026-10-20)
+## Status (2026-10-23)
+
+11/20 manifest entries pass, including the unchanged matrix and string-processing
+programs. The full hosted corpus ratchet passed in
+`20261023-031756111-273302` against the isolated staged source snapshot. The string program also passes stock-differential
+CHECK/BUILD/run at workers 1 and 8. Nine entries remain explicit rejection
+boundaries, so this does not complete the corpus or full Rust support.
+
+## Historical status (2026-10-20)
 
 The pass count below is current through the manifest ratchet. The original blocker matrix further below is a historical inventory,
 not a fresh measurement of today's diagnostics. Subsequent source-prelude,

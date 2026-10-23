@@ -1500,8 +1500,11 @@ impl<'s> Checker<'s> {
             .iter()
             .filter_map(|predicate| match predicate {
                 // Bare-parameter RHS is already covered by projected formals.
+                // A bare projection RHS (`IntoIter: Iterator<Item = Self::Item>`)
+                // names no slot; it is proven as an obligation, not evidence.
                 ir::Predicate::ProjectionEq { projection, ty }
-                    if !matches!(ty, ir::Ty::Param(_)) && inferred_owner::mentions_param(ty) =>
+                    if !matches!(ty, ir::Ty::Param(_) | ir::Ty::AssociatedType(_))
+                        && inferred_owner::mentions_param(ty) =>
                 {
                     Some((ir::Ty::AssociatedType(Arc::new(projection.clone())), ty))
                 }
@@ -4596,8 +4599,7 @@ impl<'a> Checker<'a> {
         }
         if matches!(base, Expr::Borrow { .. } | Expr::BorrowValue { .. }) {
             let evidence = self.inference_evidence(receiver, 0)?;
-            let ty = Inference::empty(self)?.resolve(&evidence, true, 0)?;
-            return Ok(ty.filter(array_len_receiver::receiver_is_array));
+            return Inference::empty(self)?.resolve(&evidence, true, 0);
         }
         Ok(None)
     }
@@ -4692,8 +4694,19 @@ impl<'a> Checker<'a> {
                 args: call_args,
             } => {
                 if let Some(owner) = self.method_receiver_hint(receiver)? {
-                    self.method_selection_with_inference(&owner, name, type_args, call_args, None)?
-                        .map(|selected| selected.signature.result)
+                    match self
+                        .method_selection_with_inference(&owner, name, type_args, call_args, None)?
+                    {
+                        Some(selected) => Some(selected.signature.result),
+                        None => match array_unsize_carrier(&owner) {
+                            Some(carrier) => self
+                                .method_selection_with_inference(
+                                    &carrier, name, type_args, call_args, None,
+                                )?
+                                .map(|selected| selected.signature.result),
+                            None => None,
+                        },
+                    }
                 } else {
                     None
                 }
@@ -8219,6 +8232,11 @@ impl<'a> Checker<'a> {
         let Some(selected) =
             self.method_selection_with_inference(&ty, name, type_args, args, expected)?
         else {
+            if let Some(call) =
+                self.method_through_array_unsize(receiver, &ty, name, type_args, args, expected)?
+            {
+                return Ok(call);
+            }
             return self.method_through_deref(receiver, &ty, name, type_args, args, expected);
         };
         let region_offset = match &selected.target {
@@ -8414,6 +8432,61 @@ impl<'a> Checker<'a> {
             Some(adjusted),
         )
     }
+    /// Stock probing appends one unsizing step `[T; N] -> [T]` after the
+    /// array's own autoref steps fail. Only shared receivers are admitted:
+    /// the method must take the exact `&[T]` carrier (by-value `self: &[T]`
+    /// or `&self` on `[T]`). Anything else stays an ordinary missing method.
+    fn method_through_array_unsize(
+        &mut self,
+        receiver: &Expr,
+        ty: &ir::Ty,
+        name: &AstIdent,
+        type_args: &[Type],
+        args: &[Expr],
+        expected: Option<&ir::Ty>,
+    ) -> Result<Option<ir::ExprId>, String> {
+        let Some(carrier) = array_unsize_carrier(ty) else {
+            return Ok(None);
+        };
+        let Some(selected) =
+            self.method_selection_with_inference(&carrier, name, type_args, args, expected)?
+        else {
+            return Ok(None);
+        };
+        let admitted = selected.depth == 0
+            && matches!(selected.adjustment, ReceiverAdjustment::Identity)
+            && matches!(
+                selected.mode,
+                ReceiverKind::Value { .. }
+                    | ReceiverKind::Borrowed {
+                        kind: ir::BorrowKind::Shared
+                    }
+            );
+        if !admitted {
+            return Err(
+                "unsupported: array receiver unsizing to a mutable or by-value slice".into(),
+            );
+        }
+        let borrowed = self
+            .array_len_receiver(receiver)?
+            .ok_or("array unsizing receiver changed checked type")?;
+        let slice = self.coerce_shared_array_to_slice(borrowed, &carrier)?;
+        let region_offset = match &selected.target {
+            ir::Callee::Direct(target) => target.type_args.len().saturating_sub(type_args.len()),
+            ir::Callee::TraitItem(_) | ir::Callee::Virtual(_) | ir::Callee::Untupled(_) => 0,
+        };
+        let regions = self.type_actual_regions(type_args, region_offset)?;
+        self.finish_checked_call(
+            selected.target,
+            name,
+            selected.original_signature.unwrap_or(selected.signature),
+            args,
+            regions,
+            Some((slice, None)),
+        )
+        .map(Some)
+    }
+
     /// Method autoderef through one overloaded `Deref` step: the call is
     /// selected on the exact `Target` and receives the checked deref result.
     fn method_through_deref(

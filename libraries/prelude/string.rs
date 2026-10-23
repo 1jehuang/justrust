@@ -193,9 +193,9 @@ impl String {
         let mut r = String::with_capacity(self.len);
         let mut i = 0usize;
         while i < self.len {
-            let b = read_u8(self.ptr + i);
-            r.push_byte(if b >= 97u8 && b <= 122u8 { b - 32u8 } else { b });
-            i += 1usize;
+            let c = decode_utf8_at(self.ptr, i);
+            super::unicode_uppercase::push_uppercase(&mut r, c);
+            i += utf8_width(read_u8(self.ptr + i));
         }
         r
     }
@@ -416,9 +416,28 @@ impl<T: super::fmt::Display> ToString for T {
     }
 }
 
+impl super::ops::Deref for String {
+    type Target = str;
+    fn deref(&self) -> &str {
+        self.as_str()
+    }
+}
+
 impl super::cmp::PartialEq for String {
     fn eq(&self, other: &String) -> bool {
         str_eq(self.as_str(), other.as_str())
+    }
+}
+
+impl super::cmp::PartialEq<&str> for String {
+    fn eq(&self, other: &&str) -> bool {
+        str_eq(self.as_str(), *other)
+    }
+}
+
+impl super::cmp::PartialEq<String> for &str {
+    fn eq(&self, other: &String) -> bool {
+        str_eq(*self, other.as_str())
     }
 }
 
@@ -483,6 +502,20 @@ impl<'a, U> super::iter::Iterator for Chars<'a, U> {
     }
 }
 
+impl<'a, U> super::iter::DoubleEndedIterator for Chars<'a, U> {
+    fn next_back(&mut self) -> Option<char> {
+        if self.front >= self.back {
+            return Option::None;
+        }
+        let mut at = self.back - 1usize;
+        while at > self.front && (read_u8(self.ptr + at) & 192u8) == 128u8 {
+            at -= 1usize;
+        }
+        self.back = at;
+        Option::Some(decode_utf8_at(self.ptr, at))
+    }
+}
+
 impl<'a, U> super::iter::IntoIterator for Chars<'a, U> {
     type Item = char;
     type IntoIter = Chars<'a, U>;
@@ -493,11 +526,51 @@ impl<'a, U> super::iter::IntoIterator for Chars<'a, U> {
 
 /// `str` methods that return borrowed iterators. A separate prelude trait,
 /// like `StrToString`, until inherent `impl str` blocks are supported.
+pub trait StrPattern {
+    fn is_contained_in(self, text: &str) -> bool;
+}
+
+impl StrPattern for char {
+    fn is_contained_in(self, text: &str) -> bool {
+        let (ptr, len) = str_parts(text);
+        let mut at = 0usize;
+        while at < len {
+            if decode_utf8_at(ptr, at) == self {
+                return true;
+            }
+            at += utf8_width(read_u8(ptr + at));
+        }
+        false
+    }
+}
+
+impl StrPattern for &str {
+    fn is_contained_in(self, text: &str) -> bool {
+        str_find(text, self).is_some()
+    }
+}
+
 pub trait StrMethods {
+    fn to_uppercase(&self) -> String;
+    fn contains<P: StrPattern>(&self, pattern: P) -> bool;
     fn split_whitespace<'a>(&'a self) -> SplitWhitespace<&'a str>;
+    fn split<'a>(&'a self, separator: char) -> Split<&'a str>;
 }
 
 impl StrMethods for str {
+    fn to_uppercase(&self) -> String {
+        String::from(self).to_uppercase()
+    }
+
+    fn contains<P: StrPattern>(&self, pattern: P) -> bool {
+        pattern.is_contained_in(self)
+    }
+
+    fn split<'a>(&'a self, separator: char) -> Split<&'a str> {
+        let (ptr, len) = str_parts(self);
+        Split { ptr, len, at: 0usize, separator, finished: false, marker: self }
+    }
+
     fn split_whitespace<'a>(&'a self) -> SplitWhitespace<&'a str> {
         let (ptr, len) = str_parts(self);
         SplitWhitespace { ptr, len, at: 0usize, marker: self }
@@ -513,6 +586,43 @@ pub struct SplitWhitespace<S> {
     len: usize,
     at: usize,
     marker: S,
+}
+
+pub struct Split<S> {
+    ptr: usize,
+    len: usize,
+    at: usize,
+    separator: char,
+    finished: bool,
+    marker: S,
+}
+
+impl<S: StrCarrier> super::iter::Iterator for Split<S> {
+    type Item = S;
+    fn next(&mut self) -> Option<S> {
+        if self.finished {
+            return Option::None;
+        }
+        let start = self.at;
+        while self.at < self.len {
+            let at = self.at;
+            let character = decode_utf8_at(self.ptr, at);
+            self.at += utf8_width(read_u8(self.ptr + at));
+            if character == self.separator {
+                return Option::Some(S::from_parts(self.ptr + start, at - start));
+            }
+        }
+        self.finished = true;
+        Option::Some(S::from_parts(self.ptr + start, self.len - start))
+    }
+}
+
+impl<S: StrCarrier> super::iter::IntoIterator for Split<S> {
+    type Item = S;
+    type IntoIter = Self;
+    fn into_iter(self) -> Self {
+        self
+    }
 }
 
 fn is_space(b: u8) -> bool {

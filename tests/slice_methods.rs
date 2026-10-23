@@ -151,3 +151,90 @@ fn swap_out_of_bounds_panics_like_stock() {
     assert!(String::from_utf8_lossy(&stock.stderr).contains(message));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// `[T]::iter` over slice-backed `slice::Iter`, array receivers reaching slice
+/// methods through stock's final unsizing probe step, and `Range<int>` as an
+/// `Iterator` (corpus 06/11/15 reductions).
+#[test]
+fn slice_iter_array_unsize_and_range_iterator_match_stock() {
+    #[path = "support/closure_oracle.rs"]
+    mod closure_oracle;
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "slice-iter-unsize",
+        &[
+            Case {
+                name: "slice_and_vec_iter",
+                source: r#"
+fn total(s: &[i64]) -> i64 { let mut t = 0; for x in s.iter() { t += *x; } t }
+fn main() {
+    let v = vec![1i64, 2, 3];
+    let s: &[i64] = &v[1..];
+    for x in s.iter() { println!("{}", x); }
+    println!("{}", total(v.as_slice()));
+    let e: &[i64] = &v[3..];
+    let mut it = e.iter();
+    println!("{}", it.next().is_none());
+}
+"#,
+                expect: Expect::Run("2\n3\n6\ntrue\n"),
+            },
+            Case {
+                name: "array_receivers_unsize",
+                source: r#"
+fn main() {
+    let a = [4i64, 5, 6];
+    let r = &a;
+    let n = a.iter().map(|x| *x * 2).count();
+    let f = r.iter().fold(0i64, |acc, x| acc + *x);
+    println!("{} {} {} {:?}", n, f, a.is_empty(), a.first());
+    let m = [[1i64, 2], [3, 4]];
+    for row in m.iter() { println!("{}", row.iter().fold(0i64, |s, x| s + *x)); }
+}
+"#,
+                expect: Expect::Run("3 15 false Some(4)\n3\n7\n"),
+            },
+            Case {
+                name: "range_iterator",
+                source: r#"
+fn main() {
+    let a = [10i64, 20, 30];
+    let t = (0..3usize).map(|i| a[i]).fold(0i64, |s: i64, x: i64| s + x);
+    let mut r = 5..7i64;
+    let x = r.next();
+    let y = r.next();
+    let z = r.next();
+    println!("{} {:?} {:?} {:?}", t, x, y, z);
+    println!("{}", (3u8..3).count());
+}
+"#,
+                expect: Expect::Run("60 Some(5) Some(6) None\n0\n"),
+            },
+            Case {
+                name: "empty_and_zero_sized_iteration",
+                source: "fn main(){let empty:[i32;0]=[];let units=[();3];println!(\"{} {}\",empty.iter().count(),units.iter().count());}",
+                expect: Expect::Run("0 3\n"),
+            },
+            Case {
+                name: "iterator_keeps_owner_borrowed",
+                source: "fn main(){let mut v=vec![1i32,2];let mut it=v.iter();v.push(3);println!(\"{:?}\",it.next());}",
+                expect: Expect::Invalid("E0502"),
+            },
+            Case {
+                name: "iterator_cannot_escape_owner",
+                source: "fn main(){let mut it={let v=vec![1i32,2];v.iter()};println!(\"{:?}\",it.next());}",
+                expect: Expect::Invalid("E0597"),
+            },
+            Case {
+                name: "array_iter_item_mismatch_unused",
+                source: "fn bad() { let a = [1i64, 2]; let _: i64 = a.iter().count(); }\nfn main() { println!(\"x\"); }\n",
+                expect: Expect::Invalid("E0308"),
+            },
+            Case {
+                name: "range_item_mismatch_unused",
+                source: "fn bad() { let mut r = 0..2u8; let _: Option<i64> = r.next(); }\nfn main() { println!(\"x\"); }\n",
+                expect: Expect::Invalid("E0308"),
+            },
+        ],
+    );
+}

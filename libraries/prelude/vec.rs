@@ -53,7 +53,7 @@ impl<T> Vec<T> {
     }
 
     pub fn iter<'a>(&'a self) -> super::slice::Iter<'a, T> {
-        super::slice::Iter::new(self)
+        super::slice::Iter::new(self.as_slice())
     }
 
     /// Borrow element `index` (panics when out of bounds).

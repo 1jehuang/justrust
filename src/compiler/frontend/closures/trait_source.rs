@@ -58,10 +58,13 @@ impl SchemaAdapter {
         let Some(stored) = &source.stored else {
             return Ok(None);
         };
-        let owner = self
-            .registry
-            .closure_source_owner(source)
-            .map_err(|e| self.error(e))?;
+        let owner = match self.registry.closure_owner_sites.get(&provider) {
+            Some(owner) => *owner,
+            None => self
+                .registry
+                .closure_source_owner(source)
+                .map_err(|e| self.error(e))?,
+        };
         Ok(Some((owner, stored.site)))
     }
 }

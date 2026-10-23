@@ -65,6 +65,10 @@ const PRELUDE_FILES: &[(&str, &str)] = &[
         include_str!("../../libraries/prelude/string.rs"),
     ),
     (
+        "__justrust_std/unicode_uppercase.rs",
+        include_str!("../../libraries/prelude/unicode_uppercase.rs"),
+    ),
+    (
         "__justrust_std/primitive.rs",
         include_str!("../../libraries/prelude/primitive.rs"),
     ),

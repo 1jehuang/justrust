@@ -97,7 +97,7 @@ impl ValidatedTraitWorld {
         header: &ImplHeader,
         slots: &mut [Option<Ty>],
         facts: ProofContext<'_>,
-        active: &[GoalKey],
+        active: &mut ProofScratch,
     ) -> Result<bool> {
         loop {
             let before = slots.iter().filter(|slot| slot.is_some()).count();
@@ -164,7 +164,7 @@ impl ValidatedTraitWorld {
                         "raw impl equality substitution changed projection shape",
                     ));
                 };
-                if !self.goal_is_closed(&projection.trait_ref, facts.env())?
+                if !self.raw_associated_ty_is_closed(&Ty::AssociatedType(projection.clone()), 0)?
                     && !self.checked_closure_projection(&projection, facts.env())?
                 {
                     // A symbolic input (`<I as Iterator>::Item` for a caller

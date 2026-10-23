@@ -96,6 +96,7 @@ struct Solver<'a: 's, 'b: 's, 's> {
     control_targets: Vec<control_flow::ControlTarget>,
     unit_defaults: Vec<Term>,
     associated_equalities: Vec<(Term, Term)>,
+    structural_impl_stack: Vec<(ir::DeclId, Term)>,
     operators: Vec<operators::Operation>,
     projection_defaults: bool,
     opaque_return: Option<Term>,
@@ -201,6 +202,7 @@ fn solve_body_with_seed<'a: 's, 'b: 's, 's>(
         control_targets: Vec::new(),
         unit_defaults: Vec::new(),
         associated_equalities: Vec::new(),
+        structural_impl_stack: Vec::new(),
         operators: Vec::new(),
         projection_defaults: false,
         opaque_return: None,
@@ -1090,6 +1092,18 @@ impl<'s> Solver<'_, '_, 's> {
                         None,
                         &method.actuals,
                     )?;
+                    self.bind_declared_method_result(result, method.result)?;
+                    progress = true;
+                    continue;
+                }
+                if self.contains_callable(receiver, 0)?
+                    && let Some(result) = self.structural_trait_method_constraints(
+                        receiver,
+                        method.name,
+                        &method.args,
+                        &method.actuals,
+                    )?
+                {
                     self.bind_declared_method_result(result, method.result)?;
                     progress = true;
                     continue;

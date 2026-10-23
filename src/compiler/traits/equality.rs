@@ -221,11 +221,19 @@ impl ValidatedTraitWorld {
         predicate: &Predicate,
         env: &GenericEnv,
     ) -> Result<()> {
+        self.validate_predicate_metadata_with(predicate, env, &mut NominalReplays::default())
+    }
+    pub(super) fn validate_predicate_metadata_with(
+        &self,
+        predicate: &Predicate,
+        env: &GenericEnv,
+        replays: &mut NominalReplays,
+    ) -> Result<()> {
         for ty in predicate.metadata_types() {
-            self.validate_ty_metadata_in(ty, env, 0)?;
+            self.validate_ty_metadata_with(ty, env, 0, replays)?;
         }
         if let Predicate::ProjectionEq { projection, .. } = predicate {
-            self.validate_ty_metadata_in(&self.projection_type(projection)?, env, 0)?;
+            self.validate_ty_metadata_with(&self.projection_type(projection)?, env, 0, replays)?;
         }
         Ok(())
     }
@@ -380,10 +388,10 @@ impl ValidatedTraitWorld {
             Ok(normal)
         };
         for ty in &mut instantiated.signature.params {
-            *ty = self.map_equality_type(ty, 0, &mut reduce)?;
+            *ty = self.map_equality_type(ty, facts.env(), 0, &mut reduce)?;
         }
         instantiated.signature.result =
-            self.map_equality_type(&instantiated.signature.result, 0, &mut reduce)?;
+            self.map_equality_type(&instantiated.signature.result, facts.env(), 0, &mut reduce)?;
         if !dependencies
             .iter()
             .any(|(_, proof)| matches!(proof, ProjectionReduction::Equality(_)))
@@ -546,9 +554,18 @@ impl ValidatedTraitWorld {
         rhs: &Ty,
         env: &GenericEnv,
     ) -> Result<()> {
+        self.validate_equality_domain_with(projection, rhs, env, &mut NominalReplays::default())
+    }
+    pub(super) fn validate_equality_domain_with(
+        &self,
+        projection: &ir::AssociatedTypeProjection,
+        rhs: &Ty,
+        env: &GenericEnv,
+        replays: &mut NominalReplays,
+    ) -> Result<()> {
         self.check_normalization_budget()?;
-        self.validate_ty_metadata_in(&self.projection_type(projection)?, env, 0)?;
-        self.validate_ty_metadata_in(rhs, env, 0)?;
+        self.validate_ty_metadata_with(&self.projection_type(projection)?, env, 0, replays)?;
+        self.validate_ty_metadata_with(rhs, env, 0, replays)?;
         // Raw admission is solver-free. Metadata, including rejected children,
         // has already been validated above.
         if matches!(rhs, Ty::Param(_)) {
@@ -969,22 +986,27 @@ impl ValidatedTraitWorld {
         // Residual projections stay symbolic only for rigid parameter subjects
         // whose membership the genuine caller context proves. Anything else
         // (closed or nominal nested projection) stays outside this path.
-        let normal = self.map_equality_type(&instantiated.signature.result, 0, &mut |nested| {
-            if !matches!(nested.trait_ref.self_ty, Ty::Param(_))
-                || self.goal_is_closed(&nested.trait_ref, context.env())?
-            {
-                return Err(FactsError::unsupported(
-                    &self.budget,
-                    "unsupported: projected RHS in rigid implementation equality",
-                ));
-            }
-            self.require_in(
-                &Predicate::Implements(nested.trait_ref.clone()),
-                context,
-                &mut ProofScratch::default(),
-            )?;
-            self.projection_type(nested)
-        })?;
+        let normal = self.map_equality_type(
+            &instantiated.signature.result,
+            context.env(),
+            0,
+            &mut |nested| {
+                if !matches!(nested.trait_ref.self_ty, Ty::Param(_))
+                    || self.goal_is_closed(&nested.trait_ref, context.env())?
+                {
+                    return Err(FactsError::unsupported(
+                        &self.budget,
+                        "unsupported: projected RHS in rigid implementation equality",
+                    ));
+                }
+                self.require_in(
+                    &Predicate::Implements(nested.trait_ref.clone()),
+                    context,
+                    &mut ProofScratch::default(),
+                )?;
+                self.projection_type(nested)
+            },
+        )?;
         self.validate_ty_metadata_in(&normal, context.env(), 0)?;
         Ok(normal)
     }
@@ -1108,7 +1130,7 @@ impl ValidatedTraitWorld {
         reductions: &mut ReductionRows,
         depth: usize,
     ) -> Result<Ty> {
-        self.map_equality_type(ty, depth, &mut |projection| {
+        self.map_equality_type(ty, &context.env, depth, &mut |projection| {
             if let Some(normal) =
                 self.normalize_exact_owner_projection(context.declaration, projection)?
             {
@@ -1163,6 +1185,7 @@ impl ValidatedTraitWorld {
     pub(super) fn map_equality_type(
         &self,
         ty: &Ty,
+        env: &GenericEnv,
         depth: usize,
         reduce: &mut impl FnMut(&ir::AssociatedTypeProjection) -> Result<Ty>,
     ) -> Result<Ty> {
@@ -1178,7 +1201,7 @@ impl ValidatedTraitWorld {
                     push(
                         &self.budget,
                         &mut values,
-                        self.map_equality_type(part, depth + 1, reduce)?,
+                        self.map_equality_type(part, env, depth + 1, reduce)?,
                     )?;
                 }
                 Ty::Tuple(values.into())
@@ -1186,7 +1209,7 @@ impl ValidatedTraitWorld {
             Ty::Array { element, len } => {
                 retain::<Ty>(&self.budget, 1)?;
                 Ty::Array {
-                    element: Arc::new(self.map_equality_type(element, depth + 1, reduce)?),
+                    element: Arc::new(self.map_equality_type(element, env, depth + 1, reduce)?),
                     len: *len,
                 }
             }
@@ -1194,20 +1217,19 @@ impl ValidatedTraitWorld {
                 retain::<Ty>(&self.budget, 1)?;
                 Ty::Ref {
                     kind: *kind,
-                    referent: Arc::new(self.map_equality_type(referent, depth + 1, reduce)?),
+                    referent: Arc::new(self.map_equality_type(referent, env, depth + 1, reduce)?),
                 }
             }
             Ty::Slice { element } => {
                 retain::<Ty>(&self.budget, 1)?;
                 Ty::Slice {
-                    element: Arc::new(self.map_equality_type(element, depth + 1, reduce)?),
+                    element: Arc::new(self.map_equality_type(element, env, depth + 1, reduce)?),
                 }
             }
-            Ty::Struct(_) | Ty::Enum(_) if self.type_contains_projection(ty, depth)? => {
-                return Err(FactsError::unsupported(
-                    &self.budget,
-                    "unsupported: projection in nominal metadata",
-                ));
+            Ty::Struct(_) | Ty::Enum(_) => {
+                self.normalize_nominal_actuals(ty, env, depth, |argument| {
+                    self.map_equality_type(argument, env, depth + 1, reduce)
+                })?
             }
             _ => ty.clone(),
         })
@@ -1220,6 +1242,7 @@ impl ValidatedTraitWorld {
         declaration: DeclId,
         predicates: &[Predicate],
     ) -> Result<Arc<[Predicate]>> {
+        let env = &self.info(declaration)?.env;
         let mut rows = Vec::new();
         for predicate in predicates {
             charged(&self.budget, self.budget.charge_work(1))?;
@@ -1230,13 +1253,13 @@ impl ValidatedTraitWorld {
                 None => self.projection_type(projection),
             };
             let application = predicate.trait_ref();
-            let self_ty = self.map_equality_type(&application.self_ty, 0, &mut reduce)?;
+            let self_ty = self.map_equality_type(&application.self_ty, env, 0, &mut reduce)?;
             let mut args = Vec::new();
             for argument in application.args.iter() {
                 push(
                     &self.budget,
                     &mut args,
-                    self.map_equality_type(argument, 0, &mut reduce)?,
+                    self.map_equality_type(argument, env, 0, &mut reduce)?,
                 )?;
             }
             let application = TraitRef {
@@ -1253,7 +1276,7 @@ impl ValidatedTraitWorld {
                         trait_ref: application,
                         item: projection.item,
                     },
-                    ty: self.map_equality_type(ty, 0, &mut reduce)?,
+                    ty: self.map_equality_type(ty, env, 0, &mut reduce)?,
                 },
             };
             push(&self.budget, &mut rows, row)?;

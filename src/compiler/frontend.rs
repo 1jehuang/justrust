@@ -16597,6 +16597,9 @@ pub struct DeclRegistry {
     /// registry is sealed. Replaces O(callables) scans per lookup.
     function_positions: HashMap<ir::DeclId, usize>,
     function_positions_sealed: bool,
+    /// Canonical owner of each stored closure provider, authenticated once at
+    /// seal time by `closure_source_owner` (immutable thereafter).
+    closure_owner_sites: HashMap<ir::DeclId, ir::DeclId>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 enum TraitLookupKey {
@@ -17206,6 +17209,7 @@ impl DeclRegistry {
             trait_imports: Vec::new(),
             function_positions: HashMap::new(),
             function_positions_sealed: false,
+            closure_owner_sites: HashMap::new(),
         }
     }
     fn push_declaration(&mut self, info: DeclInfo) -> Result<(), String> {
@@ -17807,6 +17811,7 @@ impl PlanCtx {
             trait_imports: program.trait_imports.clone(),
             function_positions: HashMap::new(),
             function_positions_sealed: false,
+            closure_owner_sites: HashMap::new(),
         };
         reserve_registry_map(&mut registry.functions, program.functions.len(), budget)?;
         reserve_registry_map(
@@ -19182,6 +19187,22 @@ impl PlanCtx {
         }
         registry_mut.inherent_peers = peers;
         registry_mut.function_positions_sealed = true;
+        let mut owner_sites = HashMap::new();
+        for provider in registry_mut.closure_recipes.keys() {
+            budget.charge_work(1)?;
+            let info = registry_mut.declaration(*provider)?;
+            let Some(function) = program.functions.get(info.source_index) else {
+                continue;
+            };
+            let key =
+                name_scope::path_key(program.names.as_ref(), &function.name, Namespace::Type)?;
+            if let Some(source) = registry_mut.program.closure_sources.get(&key)
+                && source.stored.is_some()
+            {
+                owner_sites.insert(*provider, registry_mut.closure_source_owner(source)?);
+            }
+        }
+        registry_mut.closure_owner_sites = owner_sites;
         // Qualify every declaration before graph-facing publication. The sealed
         // callable index resolves each call without scanning other bodies.
         for function in &program.functions {
@@ -21049,7 +21070,8 @@ impl tr::SchemaCx for SchemaAdapter {
             env: &ir::GenericEnv,
             b: &ir::PlanBudget,
             depth: usize,
-            memo: &mut HashMap<ir::NominalAppId, usize>,
+            memo: &mut HashMap<(ir::NominalAppId, usize), usize>,
+            state: &mut PlanState,
         ) -> Result<usize, String> {
             b.check_depth(depth)?;
             b.charge_work(1)?;
@@ -21063,6 +21085,12 @@ impl tr::SchemaCx for SchemaAdapter {
                 _ => None,
             };
             if let Some((id, pointer)) = nominal {
+                // Only an already authenticated immutable definition allocation
+                // can skip replay. Equal IDs on a different payload still replay.
+                if let Some(height) = memo.get(&(id, pointer)) {
+                    b.check_depth(depth + height)?;
+                    return Ok(*height);
+                }
                 if let ir::NominalIndex::ParentLocal { owner, .. } = id.index {
                     // Minted by the owning parent from its own closure actuals;
                     // children (actuals, fields) are walked below.
@@ -21121,8 +21149,7 @@ impl tr::SchemaCx for SchemaAdapter {
                                 }
                                 _ => unreachable!(),
                             };
-                            cx.scratch()
-                                .intern(&cx.registry, decl, &args, caller, b, 0)?
+                            state.intern(&cx.registry, decl, &args, caller, b, 0)?
                         }
                     };
                     let same = match (&canonical, ty) {
@@ -21140,14 +21167,10 @@ impl tr::SchemaCx for SchemaAdapter {
                         return Err("noncanonical nominal application".into());
                     }
                 }
-                if let Some(height) = memo.get(&id) {
-                    b.check_depth(depth + height)?;
-                    return Ok(*height);
-                }
             }
             let mut height = 0usize;
             let mut child = |t: &ir::Ty| -> Result<(), String> {
-                height = height.max(walk(cx, t, env, b, depth + 1, memo)? + 1);
+                height = height.max(walk(cx, t, env, b, depth + 1, memo, state)? + 1);
                 Ok(())
             };
             match ty {
@@ -21208,9 +21231,9 @@ impl tr::SchemaCx for SchemaAdapter {
                 ir::Ty::Ref { referent, .. } => child(referent)?,
                 _ => {}
             }
-            if let Some((id, _)) = nominal {
+            if let Some((id, pointer)) = nominal {
                 b.retain_bytes(128)?;
-                memo.insert(id, height);
+                memo.insert((id, pointer), height);
             }
             Ok(height)
         }
@@ -21225,9 +21248,17 @@ impl tr::SchemaCx for SchemaAdapter {
             }
             inner = referent;
         }
-        walk(self, inner, env, budget, layers, &mut HashMap::new())
-            .map(|_| ())
-            .map_err(|e| self.error(e))
+        walk(
+            self,
+            inner,
+            env,
+            budget,
+            layers,
+            &mut HashMap::new(),
+            &mut self.scratch(),
+        )
+        .map(|_| ())
+        .map_err(|e| self.error(e))
     }
 }
 fn raw_type_has_projection(

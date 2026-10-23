@@ -554,9 +554,6 @@ impl type_check::Checker<'_> {
                 let Some(lhs) = self.method_receiver_hint(left)? else {
                     return Ok(None);
                 };
-                if !overloadable(&lhs) {
-                    return Ok(None);
-                }
                 // A constructor operand (`x == W { a: 1 }`, `x == Some(1)`)
                 // takes its generic arguments from the selected impl, as in
                 // stock. Typing it standalone would apply literal fallback
@@ -566,6 +563,15 @@ impl type_check::Checker<'_> {
                 } else {
                     self.method_receiver_hint(right)?
                 };
+                // A reference can itself implement a heterogeneous comparison
+                // with a nominal RHS, such as `&str == String`.
+                if !overloadable(&lhs)
+                    && !(spec.0 == "cmp"
+                        && matches!(lhs, ir::Ty::Ref { .. })
+                        && rhs.as_ref().is_some_and(overloadable))
+                {
+                    return Ok(None);
+                }
                 let left_runtime = self.index_through_reference(left)?;
                 let right_runtime = self.index_through_reference(right)?;
                 let left = left_runtime.as_ref().unwrap_or(left.as_ref());

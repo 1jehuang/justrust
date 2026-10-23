@@ -5281,7 +5281,10 @@ pub fn ptr_cast_valid(from: &Ty, to: &Ty) -> bool {
     // Fat trait object pointers keep their exact object identity; the
     // two-word (data, vtable) carrier is copied unchanged.
     let object = |ty: &Ty| match ty {
-        Ty::Ref { referent, .. } | Ty::RawPtr { pointee: referent, .. } => match referent.as_ref() {
+        Ty::Ref { referent, .. }
+        | Ty::RawPtr {
+            pointee: referent, ..
+        } => match referent.as_ref() {
             Ty::Dyn(object) => Some(object.clone()),
             _ => None,
         },
@@ -6918,6 +6921,7 @@ fn ref_type_walk(
                 | Ty::AssociatedType(_)
                 | Ty::Dyn(_)
                 | Ty::Slice { .. }
+                | Ty::Str
                 | Ty::RawPtr { .. }
         );
         let mut height = 0;
@@ -11263,6 +11267,38 @@ mod original_replay_transport_tests {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn unsized_string_returns_preserve_lifetime_qualified_envelopes() {
+        use super::*;
+        let budget = PlanBudget::default();
+        let reference = |ty| Ty::Ref {
+            kind: BorrowKind::Shared,
+            referent: Arc::new(ty),
+        };
+        let contract = RefContract {
+            results: fixture_result_regions(Some(RegionParamId(0)), ReturnContract::NoReference),
+            input_regions: fixture_input_regions(Arc::from([
+                Some(RegionParamId(0)),
+                Some(RegionParamId(1)),
+            ])),
+            region_count: 2,
+            outlives: Arc::from([]),
+        };
+        let results = derive_return_contracts(
+            &[reference(Ty::Int(IntTy::U8)), reference(Ty::Str)],
+            &reference(Ty::Str),
+            &contract,
+            &budget,
+        )
+        .unwrap();
+        assert_eq!(
+            results[0].returns,
+            ReturnContract::SharedInputEnvelopes(Arc::from([InputEnvelope {
+                input: fixture_input(0)
+            }]))
+        );
+    }
+
     fn fixture_modules() -> std::sync::Arc<super::super::module_identity::ModuleArena> {
         super::super::module_identity::ModuleArenaBuilder::for_catalog(
             super::super::expansion_budget::ExpansionBudget::default(),

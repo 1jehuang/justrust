@@ -245,9 +245,8 @@ impl ValidatedTraitWorld {
                 self.budget.check_depth(depth.saturating_add(height)),
             );
         }
-        let height =
-            self.validate_ty_metadata_walk(ty, env, depth, &mut TypeWalk::default(), replays)?;
-        replays.record_type(ty, env, height, &self.budget)
+        self.validate_ty_metadata_walk(ty, env, depth, &mut TypeWalk::default(), replays)
+            .map(|_| ())
     }
 
     fn validate_ty_metadata_walk(
@@ -263,6 +262,15 @@ impl ValidatedTraitWorld {
         charged(&self.budget, self.budget.charge_nodes(1))?;
         if ty.is_nominal_back_edge() {
             return Ok(0);
+        }
+        // Reuse completed child validations across roots in this same proof.
+        // The key retains exact payload authority and the generic environment.
+        if let Some(height) = replays.validated_type(self, ty, env)? {
+            charged(
+                &self.budget,
+                self.budget.check_depth(depth.saturating_add(height)),
+            )?;
+            return Ok(height);
         }
         let key = TypeWalk::key(ty).map(|node| (node, TypeUse::Root));
         if let Some(key) = key
@@ -459,6 +467,7 @@ impl ValidatedTraitWorld {
         if let Some(key) = key {
             walk.insert(key, height, &self.budget)?;
         }
+        replays.record_type(ty, env, height, &self.budget)?;
         Ok(height)
     }
 
@@ -596,19 +605,23 @@ impl ValidatedTraitWorld {
         &self,
         projection: &ir::AssociatedTypeProjection,
         proof: ProofContext<'_>,
-        active: &[GoalKey],
+        active: &mut ProofScratch,
     ) -> Result<NormalizedAssociatedType> {
-        let mut stack = NormalizationStack::default();
-        for goal in active {
-            push(&self.budget, &mut stack.obligations, goal.clone())?;
-        }
+        let mut stack = NormalizationStack {
+            active: Vec::new(),
+            obligations: std::mem::take(active),
+        };
         let context = NormalizationContext {
             proof,
             staged: false,
         };
-        let evidence = self.normalize_projection_in(projection, context, &mut stack)?;
-        self.validate_normalization_evidence(&evidence, context)?;
-        Ok(NormalizedAssociatedType(evidence))
+        let result = (|| {
+            let evidence = self.normalize_projection_in(projection, context, &mut stack)?;
+            self.validate_normalization_evidence_with(&evidence, context, &mut stack.obligations)?;
+            Ok(NormalizedAssociatedType(evidence))
+        })();
+        *active = stack.obligations;
+        result
     }
 
     pub(super) fn validate_staged_projected_dependency(
@@ -1278,6 +1291,12 @@ impl ValidatedTraitWorld {
         stack.obligations.charge_obligation(&self.budget)?;
         let cycles_before = stack.obligations.cycles;
         let mut child_dependencies = Vec::new();
+        let mut normal_args = Vec::new();
+        for argument in projection.trait_ref.args.iter() {
+            let normal =
+                self.normalize_type_in(argument, context, stack, &mut child_dependencies, 0)?;
+            push(&self.budget, &mut normal_args, normal)?;
+        }
         let selected_goal = TraitRef {
             declaration: projection.trait_ref.declaration,
             self_ty: self.normalize_type_in(
@@ -1287,7 +1306,7 @@ impl ValidatedTraitWorld {
                 &mut child_dependencies,
                 0,
             )?,
-            args: projection.trait_ref.args.clone(),
+            args: normal_args.into(),
         };
         self.validate_ref_with(
             &selected_goal,
@@ -1800,10 +1819,17 @@ impl ValidatedTraitWorld {
             self.validate_universal_projection_type(normal, env, 0)?;
         }
         self.validate_actual(normal, env)?;
+        let relaxed_sized = match item {
+            Some(item) => self.associated_header(item)?.relaxed_sized,
+            None => false,
+        };
+        // A ?Sized associated output may itself be str or a slice, while
+        // ordinary generic actuals and aggregate fields still require sizing.
+        if relaxed_sized && matches!(normal, Ty::Str | Ty::Slice { .. }) {
+            return Ok(());
+        }
         charged(&self.budget, ir::reject_references(normal, &self.budget))?;
-        if let Some(item) = item
-            && self.associated_header(item)?.relaxed_sized
-        {
+        if relaxed_sized {
             return Ok(());
         }
         self.require_in(

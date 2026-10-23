@@ -23,7 +23,7 @@
 07_bank_account	pass
 08_enum_state_machine	pass
 09_vec_stack	pass
-10_string_processing	fail	fmt-display,fmt-debug,str,string,for,vec,iter,closure,prim-methods,byte-lit,array-iter
+10_string_processing	pass
 11_closures_iterators	fail	fmt-display,fmt-debug,vec,iter,closure,fn-traits,impl-trait,prim-methods,prim-consts,option-result,slice,ref-ops
 12_linked_list	fail	fmt-display,fmt-debug,derive,for,vec,closure,box,option-result,match-ergonomics,ref-ops
 13_trait_objects	fail	fmt-display,fmt-spec,fmt-float,str,string,for,vec,iter,closure,dyn,unsize,box,format-macro,prim-methods,option-result,slice,autoderef

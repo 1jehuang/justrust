@@ -125,21 +125,28 @@ impl ClosedReceipt {
         Ok(output)
     }
     fn validate(&self, facts: &tr::ValidatedFacts, budget: &ir::PlanBudget) -> Result<(), String> {
-        let mut scratch = tr::TraitScratch::default();
-        validate(&self.receipt, facts, budget, &mut scratch)
+        self.validate_with(facts, budget, &mut tr::TraitScratch::default())
+    }
+    fn validate_with(
+        &self,
+        facts: &tr::ValidatedFacts,
+        budget: &ir::PlanBudget,
+        scratch: &mut tr::TraitScratch,
+    ) -> Result<(), String> {
+        validate(&self.receipt, facts, budget, scratch)
             .map_err(|e| e.into_legacy_diagnostic(budget))?;
         let selected = match &self.selection {
             ir::Callee::Direct(target) => ir::Callee::Direct(
                 facts
                     .service()
-                    .discharge_direct_with(target, facts, &mut scratch)
+                    .discharge_direct_with(target, facts, scratch)
                     .map_err(|e| e.into_legacy_diagnostic(budget))?
                     .target()
                     .clone(),
             ),
             ir::Callee::TraitItem(call) => facts
                 .service()
-                .resolve_trait_call_with(call, facts, &mut scratch)
+                .resolve_trait_call_with(call, facts, scratch)
                 .map_err(|e| e.into_legacy_diagnostic(budget))?
                 .callee()
                 .clone(),
@@ -170,7 +177,7 @@ impl ClosedReceipt {
             &self.receipt.mapped,
             ir::FactsCtx::from_validated(facts),
             budget,
-            &mut scratch,
+            scratch,
         )?;
         Ok(())
     }
@@ -223,6 +230,7 @@ pub(in crate::compiler) fn replay(
         return Ok(());
     };
     let mut count = 0;
+    let mut scratch = tr::TraitScratch::default();
     for (expression, target, signature) in calls {
         budget.charge_work(1)?;
         let row = rows
@@ -247,7 +255,7 @@ pub(in crate::compiler) fn replay(
             )
             .map_err(|e| e.into_legacy_diagnostic(budget))?;
         row.validate_current_engine(engine.ok_or("closed call receipt omitted engine authority")?)?;
-        row.validate(facts, budget)?;
+        row.validate_with(facts, budget, &mut scratch)?;
         if !ir::identical_call_types(
             &row.receipt.target,
             &row.receipt.mapped,

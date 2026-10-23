@@ -25,6 +25,15 @@ impl<'s> Solver<'_, '_, 's> {
             .iter()
             .map(|argument| self.schema(argument, params, depth + 1))
             .collect::<Result<Vec<_>, _>>()?;
+        if let Some(term) = self.structural_projection(
+            receiver,
+            projection.trait_ref.declaration,
+            projection.item,
+            &arguments,
+            depth + 1,
+        )? {
+            return Ok(term);
+        }
         self.node(Domain::AssociatedProjection(ProjectionTerm {
             declaration: projection.trait_ref.declaration,
             item: projection.item,

@@ -4,6 +4,34 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 
+#[path = "support/closure_oracle.rs"]
+mod closure_oracle;
+
+#[test]
+fn heterogeneous_string_equality_preserves_reference_contracts() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "heterogeneous-equality",
+        &[
+            Case {
+                name: "string_and_str",
+                source: r#"fn main(){let s=String::from("héllo");let t="héllo";println!("{} {} {} {}",s==t,t==s,s!="bye","bye"!=s);println!("{}",s);}"#,
+                expect: Expect::Run("true true true true\nhéllo\n"),
+            },
+            Case {
+                name: "custom_borrowed_rhs",
+                source: r#"struct Item{value:i32}impl PartialEq<&i32> for Item{fn eq(&self,other:&&i32)->bool{self.value==**other}}fn main(){let item=Item{value:7};let n=7;println!("{} {}",item==&n,item!=&8);}"#,
+                expect: Expect::Run("true true\n"),
+            },
+            Case {
+                name: "invalid_rhs_unused",
+                source: r#"fn bad(){let s=String::from("x");let same=s==3i32;}fn main(){}"#,
+                expect: Expect::Invalid("E0277"),
+            },
+        ],
+    );
+}
+
 #[test]
 fn comparison_autoref_preserves_original_nested_calls() {
     let source = r#"

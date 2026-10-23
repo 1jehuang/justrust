@@ -4,13 +4,24 @@
 
 /// Shared iteration retains the owner's borrow, not an unchecked pointer loan.
 pub struct Iter<'a, T> {
-    values: &'a super::vec::Vec<T>,
+    pointer: *const T,
+    loan: &'a (),
+    len: usize,
     index: usize,
 }
 
 impl<'a, T> Iter<'a, T> {
-    pub(super) fn new(values: &'a super::vec::Vec<T>) -> Iter<'a, T> {
-        Iter { values, index: 0usize }
+    /// A zero-sized loan retains the owner lifetime without inventing an
+    /// initialized T for an empty iterator. The data pointer stays separate.
+    pub(super) fn new(values: &'a [T]) -> Iter<'a, T> {
+        let len = values.len();
+        let pointer = if len == 0usize {
+            super::mem::align_of::<T>() as *const T
+        } else {
+            &values[0usize] as *const T
+        };
+        let loan_pointer = pointer as *const ();
+        Iter { pointer, loan: unsafe { &*loan_pointer }, len, index: 0usize }
     }
 }
 
@@ -25,10 +36,12 @@ impl<'a, T> super::iter::IntoIterator for Iter<'a, T> {
 impl<'a, T> super::iter::Iterator for Iter<'a, T> {
     type Item = &'a T;
     fn next(&mut self) -> super::option::Option<&'a T> {
-        if self.index < self.values.len() {
+        if self.index < self.len {
             let index = self.index;
             self.index += 1usize;
-            super::option::Option::Some(self.values.get_ref(index))
+            let base = self.pointer;
+            let p = (base as usize + index * super::mem::size_of::<T>()) as *const T;
+            super::option::Option::Some(unsafe { &*p })
         } else {
             super::option::Option::None
         }
@@ -124,5 +137,16 @@ impl<'a, T: Clone> SliceToVec<'a, T> for &'a [T] {
             i += 1usize;
         }
         out
+    }
+}
+
+/// `[T]::iter`: a shared element iterator over the borrowed slice.
+pub trait SliceIter<'a, T> {
+    fn iter(self) -> Iter<'a, T>;
+}
+
+impl<'a, T> SliceIter<'a, T> for &'a [T] {
+    fn iter(self) -> Iter<'a, T> {
+        Iter::new(self)
     }
 }

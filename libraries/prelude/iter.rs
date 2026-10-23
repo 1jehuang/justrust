@@ -6,7 +6,10 @@ pub trait Iterator: Sized {
     fn next(&mut self) -> Option<Self::Item>;
 
     fn enumerate(self) -> Enumerate<Self> {
-        Enumerate { iterator: self, count: 0usize }
+        Enumerate {
+            iterator: self,
+            count: 0usize,
+        }
     }
 
     fn copied(self) -> Copied<Self> {
@@ -22,7 +25,10 @@ pub trait Iterator: Sized {
     }
 
     fn filter<P: FnMut(&Self::Item) -> bool>(self, predicate: P) -> Filter<Self, P> {
-        Filter { iterator: self, predicate }
+        Filter {
+            iterator: self,
+            predicate,
+        }
     }
 
     fn any<F: FnMut(Self::Item) -> bool>(&mut self, mut f: F) -> bool {
@@ -49,6 +55,13 @@ pub trait Iterator: Sized {
                 Option::None => return true,
             }
         }
+    }
+
+    fn rev(self) -> Rev<Self>
+    where
+        Self: DoubleEndedIterator,
+    {
+        Rev { iterator: self }
     }
 
     fn position<P: FnMut(Self::Item) -> bool>(&mut self, mut predicate: P) -> Option<usize> {
@@ -136,6 +149,35 @@ impl Sum for i16 {
                 Option::None => return total,
             }
         }
+    }
+}
+
+pub trait DoubleEndedIterator: Iterator {
+    fn next_back(&mut self) -> Option<Self::Item>;
+}
+
+pub struct Rev<I> {
+    iterator: I,
+}
+
+impl<I: DoubleEndedIterator> Iterator for Rev<I> {
+    type Item = I::Item;
+    fn next(&mut self) -> Option<Self::Item> {
+        self.iterator.next_back()
+    }
+}
+
+impl<I: DoubleEndedIterator> DoubleEndedIterator for Rev<I> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        self.iterator.next()
+    }
+}
+
+impl<I: DoubleEndedIterator> IntoIterator for Rev<I> {
+    type Item = I::Item;
+    type IntoIter = Self;
+    fn into_iter(self) -> Self {
+        self
     }
 }
 
@@ -408,13 +450,17 @@ pub struct CollectInput<I> {
 impl<I: Iterator> IntoIterator for CollectInput<I> {
     type Item = I::Item;
     type IntoIter = I;
-    fn into_iter(self) -> I { self.iterator }
+    fn into_iter(self) -> I {
+        self.iterator
+    }
 }
 
 impl<I: Iterator> IntoIterator for Enumerate<I> {
     type Item = (usize, I::Item);
     type IntoIter = Enumerate<I>;
-    fn into_iter(self) -> Enumerate<I> { self }
+    fn into_iter(self) -> Enumerate<I> {
+        self
+    }
 }
 
 pub struct Enumerate<I> {
@@ -501,6 +547,162 @@ impl<A, I: Iterator<Item = A>, P: FnMut(&A) -> bool> Iterator for Filter<I, P> {
                 }
                 Option::None => return Option::None,
             }
+        }
+    }
+}
+
+impl Iterator for super::ops::Range<i8> {
+    type Item = i8;
+    fn next(&mut self) -> Option<i8> {
+        if self.start < self.end {
+            let value = self.start;
+            self.start = value + 1i8;
+            Option::Some(value)
+        } else {
+            Option::None
+        }
+    }
+}
+
+impl Iterator for super::ops::Range<i16> {
+    type Item = i16;
+    fn next(&mut self) -> Option<i16> {
+        if self.start < self.end {
+            let value = self.start;
+            self.start = value + 1i16;
+            Option::Some(value)
+        } else {
+            Option::None
+        }
+    }
+}
+
+impl Iterator for super::ops::Range<i32> {
+    type Item = i32;
+    fn next(&mut self) -> Option<i32> {
+        if self.start < self.end {
+            let value = self.start;
+            self.start = value + 1i32;
+            Option::Some(value)
+        } else {
+            Option::None
+        }
+    }
+}
+
+impl Iterator for super::ops::Range<i64> {
+    type Item = i64;
+    fn next(&mut self) -> Option<i64> {
+        if self.start < self.end {
+            let value = self.start;
+            self.start = value + 1i64;
+            Option::Some(value)
+        } else {
+            Option::None
+        }
+    }
+}
+
+impl Iterator for super::ops::Range<i128> {
+    type Item = i128;
+    fn next(&mut self) -> Option<i128> {
+        if self.start < self.end {
+            let value = self.start;
+            self.start = value + 1i128;
+            Option::Some(value)
+        } else {
+            Option::None
+        }
+    }
+}
+
+impl Iterator for super::ops::Range<isize> {
+    type Item = isize;
+    fn next(&mut self) -> Option<isize> {
+        if self.start < self.end {
+            let value = self.start;
+            self.start = value + 1isize;
+            Option::Some(value)
+        } else {
+            Option::None
+        }
+    }
+}
+
+impl Iterator for super::ops::Range<u8> {
+    type Item = u8;
+    fn next(&mut self) -> Option<u8> {
+        if self.start < self.end {
+            let value = self.start;
+            self.start = value + 1u8;
+            Option::Some(value)
+        } else {
+            Option::None
+        }
+    }
+}
+
+impl Iterator for super::ops::Range<u16> {
+    type Item = u16;
+    fn next(&mut self) -> Option<u16> {
+        if self.start < self.end {
+            let value = self.start;
+            self.start = value + 1u16;
+            Option::Some(value)
+        } else {
+            Option::None
+        }
+    }
+}
+
+impl Iterator for super::ops::Range<u32> {
+    type Item = u32;
+    fn next(&mut self) -> Option<u32> {
+        if self.start < self.end {
+            let value = self.start;
+            self.start = value + 1u32;
+            Option::Some(value)
+        } else {
+            Option::None
+        }
+    }
+}
+
+impl Iterator for super::ops::Range<u64> {
+    type Item = u64;
+    fn next(&mut self) -> Option<u64> {
+        if self.start < self.end {
+            let value = self.start;
+            self.start = value + 1u64;
+            Option::Some(value)
+        } else {
+            Option::None
+        }
+    }
+}
+
+impl Iterator for super::ops::Range<u128> {
+    type Item = u128;
+    fn next(&mut self) -> Option<u128> {
+        if self.start < self.end {
+            let value = self.start;
+            self.start = value + 1u128;
+            Option::Some(value)
+        } else {
+            Option::None
+        }
+    }
+}
+
+impl Iterator for super::ops::Range<usize> {
+    type Item = usize;
+    fn next(&mut self) -> Option<usize> {
+        if self.start < self.end {
+            let value = self.start;
+            self.start = value + 1usize;
+            Option::Some(value)
+        } else {
+            Option::None
         }
     }
 }
