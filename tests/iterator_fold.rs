@@ -299,6 +299,31 @@ fn reverse_characters_match_stock() {
 }
 
 #[test]
+fn contextual_iterator_trait_arguments_match_stock() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "contextual-trait-arguments",
+        &[
+            Case {
+                name: "chunk_sum_and_product_from_collection_context",
+                source: "fn main(){let a=[1i32,2,3,4,5];let sums:Vec<i32>=a.chunks(2).map(|c|c.iter().sum()).collect();let products:Vec<i32>=a.chunks(2).map(|c|c.iter().product()).collect();println!(\"{:?} {:?}\",sums,products);}",
+                expect: Expect::Run("[3, 7, 5] [2, 12, 5]\n"),
+            },
+            Case {
+                name: "custom_generic_collection_context",
+                source: "use std::iter::FromIterator;struct Batch<T>{values:Vec<T>}impl<T> FromIterator<T> for Batch<T>{fn from_iter<I:IntoIterator<Item=T>>(source:I)->Self{let mut iter=source.into_iter();let mut values=Vec::new();loop{match iter.next(){Some(value)=>values.push(value),None=>return Batch{values},}}}}fn main(){let a=[1i32,2,3];let b:Batch<i32>=a.chunks(2).map(|c|c.iter().sum()).collect();println!(\"{:?}\",b.values);}",
+                expect: Expect::Run("[3, 3]\n"),
+            },
+            Case {
+                name: "wrong_context_does_not_authorize_sum",
+                source: "fn bad(){let a=[1i32,2];let result:Vec<u64>=a.chunks(1).map(|c|c.iter().sum()).collect();}fn main(){}",
+                expect: Expect::Invalid("E0277"),
+            },
+        ],
+    );
+}
+
+#[test]
 fn iterator_sum_matches_stock() {
     use closure_oracle::{Case, Expect};
     closure_oracle::check(

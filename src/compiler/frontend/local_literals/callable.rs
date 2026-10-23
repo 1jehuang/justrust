@@ -227,6 +227,17 @@ impl<'a: 's, 'b: 's, 's> Solver<'a, 'b, 's> {
                 .map_err(|e| e.into_legacy_diagnostic(&plan.budget))?
                 .is_none()
             {
+                if !trait_ref.args.is_empty() {
+                    let receiver = self.schema(&trait_ref.self_ty, params, 0)?;
+                    let mut arguments = Vec::new();
+                    for argument in trait_ref.args.iter() {
+                        self.checker.infer_storage(1)?;
+                        arguments.push(self.schema(argument, params, 0)?);
+                    }
+                    self.checker.infer_storage(1)?;
+                    self.trait_arguments
+                        .push((trait_ref.declaration, receiver, arguments));
+                }
                 continue;
             }
             let term = self.schema(&trait_ref.self_ty, params, 0)?;

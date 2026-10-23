@@ -96,6 +96,7 @@ struct Solver<'a: 's, 'b: 's, 's> {
     control_targets: Vec<control_flow::ControlTarget>,
     unit_defaults: Vec<Term>,
     associated_equalities: Vec<(Term, Term)>,
+    trait_arguments: Vec<(ir::DeclId, Term, Vec<Term>)>,
     structural_impl_stack: Vec<(ir::DeclId, Term)>,
     operators: Vec<operators::Operation>,
     projection_defaults: bool,
@@ -202,6 +203,7 @@ fn solve_body_with_seed<'a: 's, 'b: 's, 's>(
         control_targets: Vec::new(),
         unit_defaults: Vec::new(),
         associated_equalities: Vec::new(),
+        trait_arguments: Vec::new(),
         structural_impl_stack: Vec::new(),
         operators: Vec::new(),
         projection_defaults: false,
@@ -1332,6 +1334,7 @@ impl<'s> Solver<'_, '_, 's> {
                     progress = true;
                 }
             }
+            progress |= self.infer_trait_arguments()?;
             let patterns = std::mem::take(&mut self.patterns);
             let force = !progress;
             for (pattern, term, bindings) in patterns {

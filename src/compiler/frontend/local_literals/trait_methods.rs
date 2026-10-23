@@ -5,6 +5,37 @@ use super::super::method_argument_selection::MethodArguments;
 use super::*;
 
 impl Solver<'_, '_, '_> {
+    /// Infer arguments only from a unique unspecialized nominal implementation.
+    /// These are equations, not selection authority: checked lowering must still
+    /// prove the fully instantiated application and all implementation bounds.
+    pub(super) fn infer_trait_arguments(&mut self) -> Result<bool, String> {
+        let mut progress = false;
+        for (trait_id, receiver, arguments) in std::mem::take(&mut self.trait_arguments) {
+            self.checker.infer_work(0)?;
+            let mut unresolved = false;
+            for argument in &arguments {
+                unresolved |= self.resolve(*argument, 0)?.is_none();
+            }
+            if !unresolved {
+                continue;
+            }
+            let Some(header) = self.structural_impl(receiver, trait_id)? else {
+                self.trait_arguments.push((trait_id, receiver, arguments));
+                continue;
+            };
+            if header.trait_ref.args.len() != arguments.len() {
+                return Err("trait inference argument arity changed".into());
+            }
+            let params = self.structural_impl_parameters(receiver, &header, 0)?;
+            for (pattern, actual) in header.trait_ref.args.iter().zip(arguments) {
+                let pattern = self.schema(pattern, &params, 0)?;
+                self.unify(pattern, actual)?;
+            }
+            progress = true;
+        }
+        Ok(progress)
+    }
+
     /// A closure-bearing nominal cannot yet be interned. A unique source impl
     /// can still contribute equations, never a proof or executable selection.
     /// Restrict this path to unspecialized nominal heads so probing cannot bind

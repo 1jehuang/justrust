@@ -6,6 +6,17 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 
 ## Completed foundations, not full compatibility
 
+- [x] Contextual result types propagate through unique, unspecialized nominal
+      trait implementations as local inference equations, never executable
+      proof authority. Nested chunk `map`/`sum` and `map`/`product` collection
+      infer their result types without turbofish annotations; a custom generic
+      `FromIterator` implementation follows the same path. Stock CHECK/BUILD/run
+      at workers 1/8 and unused wrong-result rejection pass. The full library,
+      graph, body-inference, iterator, slice-method and corpus suites pass 1,843
+      tests with three ignored; graph ratchets and all-target lints pass.
+      Untyped integer-range method inference and a nested generic collection
+      equality-authority case remain open. The unchanged corpus is still 11/20.
+
 - [x] Shared chunk iteration and physical aggregate slice descriptors pass
       stock CHECK/BUILD/run acceptance at workers 1 and 8. General heap-stored
       borrowed elements are not complete: collecting chunks into `Vec<&[T]>`
@@ -14,9 +25,8 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
       unsupported, including an escaped collection that stock rejects with
       E0597, rather than incorrectly accepted. Positive heap support remains
       tracked by `slice_methods::collected_slice_references_require_heap_lifetime_authority`.
-      Nested `map`/`collect` contextual inference without an explicit `sum`
-      result type is also open. Neither gap may be hidden by weakening issued
-      provenance checks or reported as full Rust support. The final hosted
+      These gaps may not be hidden by weakening issued provenance checks or
+      reported as full Rust support. The final hosted
       replay passes 1,874 tests across the full library and seven integration
       suites (slice methods, typed slices, typed-slice authority, slice returns,
       graph integrity, full programs and iterator fold), with zero failures and
