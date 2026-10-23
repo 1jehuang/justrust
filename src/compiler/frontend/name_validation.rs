@@ -1109,7 +1109,8 @@ impl<'a> Validator<'a> {
                 }
                 Expr::TypeAlignment(target) => self.push(Visit::Type(target))?,
                 Expr::Borrow { place, .. } => self.push(Visit::Place(place))?,
-                Expr::Deref { value }
+                Expr::SliceDataPointer(value)
+                | Expr::Deref { value }
                 | Expr::BorrowValue { value, .. }
                 | Expr::Repeat { value, .. }
                 | Expr::Index { base: value, .. }

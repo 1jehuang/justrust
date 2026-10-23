@@ -929,6 +929,14 @@ acceptance.
       First slice landed (RAW-POINTERS.md): `*const/*mut T`, `unsafe {}`,
       E0133-checked deref read/write, pointer casts and equality; pointee
       storage is untracked by ownership/loan analysis.
+      Added ordinary-source mutable slice `as_mut_ptr`, including generic callers:
+      typed descriptor data extraction preserves element identity and never reads
+      an element. Exact implementation-selected associated results carry immutable
+      proof dependencies replayed against the caller's world and environment;
+      bound-only projections remain symbolic. Empty/ZST/non-Copy cases and forged
+      source/type/evidence controls are covered in `tests/slice_methods.rs` and
+      existing IR/trait tests. `split_at_mut` and general tuple-reference origin
+      transport remain open (RAW-POINTERS.md).
 
 **Next:** agree a shared drop-obligation/cleanup IR contract and freeze observable
 Drop-order plus rejected-escape fixtures. In parallel classify aggregate-region

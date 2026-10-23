@@ -1,8 +1,9 @@
 //! Required method authority for a rigid universal receiver.
 //!
 //! A caller bound proves membership, not an implementation assignment. Keep
-//! unresolved associated types attached to their exact declaration and ordered
-//! application until a closed instance can select and normalize an impl.
+//! bound-only associated types attached to their exact declaration and ordered
+//! application. An exact implementation witness may reduce its source RHS in
+//! the caller context, with immutable evidence replayed by executable consumers.
 use super::*;
 
 #[derive(Clone, Debug)]
@@ -13,6 +14,7 @@ pub(super) struct UniversalMethodEvidence {
     pub(super) signature: Signature,
     pub(super) source_regions: Arc<ir::SourceRegionEnv>,
     pub(super) dependencies: Arc<[(ir::AssociatedTypeProjection, equality::ProjectionReduction)]>,
+    implementation_dependencies: Arc<[(ir::AssociatedTypeProjection, ProofEvidence, Ty)]>,
 }
 
 impl ValidatedFacts {
@@ -387,6 +389,7 @@ impl ValidatedTraitWorld {
         let mut instantiated =
             self.substitute_projected_schema(&item.schema, &arguments, facts.env())?;
         let mut dependencies = Vec::new();
+        let mut implementation_dependencies = Vec::new();
         let mut reduce = |projection: &ir::AssociatedTypeProjection| -> Result<Ty> {
             if self.checked_closure_projection(projection, facts.env())?
                 || self
@@ -408,11 +411,28 @@ impl ValidatedTraitWorld {
                 push(&self.budget, &mut dependencies, (projection.clone(), proof))?;
                 return Ok(ty);
             }
-            self.require_in(
+            let membership = self.require_in(
                 &Predicate::Implements(projection.trait_ref.clone()),
                 context,
                 &mut ProofScratch::default(),
             )?;
+            if matches!(membership.0.origin, ProofOrigin::Implementation { .. }) {
+                let ty = self.implementation_equality_rhs(projection, &membership, context)?;
+                self.validate_equality_domain_in(
+                    projection,
+                    &ty,
+                    context,
+                    &mut ProofScratch::default(),
+                )?;
+                retain::<ir::AssociatedTypeProjection>(&self.budget, 1)?;
+                retain::<Ty>(&self.budget, 1)?;
+                push(
+                    &self.budget,
+                    &mut implementation_dependencies,
+                    (projection.clone(), membership, ty.clone()),
+                )?;
+                return Ok(ty);
+            }
             retain::<ir::AssociatedTypeProjection>(&self.budget, 1)?;
             Ok(Ty::AssociatedType(Arc::new(projection.clone())))
         };
@@ -445,6 +465,7 @@ impl ValidatedTraitWorld {
             signature: instantiated.signature.clone(),
             source_regions,
             dependencies: dependencies.into(),
+            implementation_dependencies: implementation_dependencies.into(),
         });
         Ok((instantiated, evidence))
     }
@@ -669,6 +690,44 @@ impl ValidatedTraitWorld {
                 }
             }
         }
+        if evidence.implementation_dependencies.len() != replay.implementation_dependencies.len() {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "universal implementation reductions changed",
+            ));
+        }
+        let context = ProofContext::from_facts(facts);
+        for ((projection, proof, rhs), (expected, expected_proof, expected_rhs)) in evidence
+            .implementation_dependencies
+            .iter()
+            .zip(replay.implementation_dependencies.iter())
+        {
+            if !self.same_projection(projection, expected)?
+                || proof.0.world != expected_proof.0.world
+                || proof.0.environment != expected_proof.0.environment
+                || proof.0.phase != expected_proof.0.phase
+                || !self.eq_predicate(&proof.0.goal, &expected_proof.0.goal)?
+                || !self.same_universal_required_selection(proof, expected_proof, 0)?
+            {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "universal implementation projection authority changed",
+                ));
+            }
+            let reminted = self.implementation_equality_rhs(projection, proof, context)?;
+            self.validate_equality_domain_in(
+                projection,
+                &reminted,
+                context,
+                &mut ProofScratch::default(),
+            )?;
+            if !self.eq_ty(rhs, &reminted, 0)? || !self.eq_ty(rhs, expected_rhs, 0)? {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "universal implementation projection RHS changed",
+                ));
+            }
+        }
         if !self.eq_types(&evidence.arguments, &replay.arguments, 0)?
             || !self.eq_signature(&evidence.signature, &replay.signature)?
             || evidence.source_regions != replay.source_regions
@@ -730,6 +789,193 @@ mod tests {
     }
 
     #[test]
+    fn rigid_slice_implementation_pointer_rejects_changed_selection() {
+        let program = frontend::parse(
+            "trait Data{type Element;type Other;fn data(&mut self,value:Self::Other)->*mut Self::Element;}impl<T> Data for [T]{type Element=T;type Other=bool;fn data(&mut self,value:bool)->*mut T{0usize as *mut T}}fn caller<T>(s:&mut[T])->*mut T{s.data(true)}fn main(){}",
+        ).unwrap();
+        let ctx = PlanCtx::from_program(&program, &PlanBudget::default()).unwrap();
+        let world = ctx.trait_world().unwrap();
+        let facts = world.callable_facts(ctx.function_decl(0).unwrap()).unwrap();
+        let parameter = facts.env().ordered_params().next().unwrap();
+        let implementation = world
+            .headers
+            .impls
+            .iter()
+            .find(|header| matches!(header.trait_ref.self_ty, Ty::Slice { .. }))
+            .unwrap();
+        let item = world
+            .headers
+            .items
+            .iter()
+            .find(|item| item.trait_decl == implementation.trait_ref.declaration)
+            .unwrap();
+        let call = TraitCall {
+            trait_ref: TraitRef {
+                declaration: implementation.trait_ref.declaration,
+                self_ty: Ty::Slice {
+                    element: Arc::new(Ty::Param(parameter)),
+                },
+                args: Arc::from([]),
+            },
+            item: item.declaration,
+            method_args: Arc::from([]),
+        };
+        let context = ProofContext::from_facts(&facts);
+        let membership = world
+            .require_in(
+                &Predicate::Implements(call.trait_ref.clone()),
+                context,
+                &mut ProofScratch::default(),
+            )
+            .unwrap();
+        let projection = ir::AssociatedTypeProjection {
+            trait_ref: call.trait_ref.clone(),
+            item: implementation.associated_types[0].associated,
+        };
+        let rhs = world
+            .implementation_equality_rhs(&projection, &membership, context)
+            .unwrap();
+        assert!(world.eq_ty(&rhs, &Ty::Param(parameter), 0).unwrap());
+        let (application, evidence) = world
+            .instantiate_universal_required_item(&call, &facts)
+            .unwrap();
+        assert!(
+            world
+                .eq_ty(
+                    &application.signature.result,
+                    &Ty::RawPtr {
+                        kind: ir::BorrowKind::Mut,
+                        pointee: Arc::new(Ty::Param(parameter)),
+                    },
+                    0
+                )
+                .unwrap()
+        );
+        world
+            .validate_universal_required_evidence(&evidence, &facts)
+            .unwrap();
+        for result in [
+            Ty::RawPtr {
+                kind: ir::BorrowKind::Shared,
+                pointee: Arc::new(Ty::Param(parameter)),
+            },
+            Ty::RawPtr {
+                kind: ir::BorrowKind::Mut,
+                pointee: Arc::new(Ty::Bool),
+            },
+        ] {
+            let mut forged = (*evidence).clone();
+            forged.signature.result = result;
+            assert!(
+                world
+                    .validate_universal_required_evidence(&forged, &facts)
+                    .is_err()
+            );
+        }
+        let ProofOrigin::Implementation {
+            declaration,
+            arguments,
+        } = &evidence.selection.0.origin
+        else {
+            panic!("expected exact source implementation")
+        };
+        for origin in [
+            ProofOrigin::Implementation {
+                declaration: call.item,
+                arguments: arguments.clone(),
+            },
+            ProofOrigin::Implementation {
+                declaration: *declaration,
+                arguments: Arc::from([Ty::Bool]),
+            },
+        ] {
+            let mut forged = (*evidence).clone();
+            forged.selection = ProofEvidence(Arc::new(ProofRecord {
+                world: evidence.selection.0.world,
+                environment: evidence.selection.0.environment,
+                phase: evidence.selection.0.phase,
+                goal: evidence.selection.0.goal.clone(),
+                origin,
+            }));
+            assert!(
+                world
+                    .validate_universal_required_evidence(&forged, &facts)
+                    .is_err()
+            );
+        }
+        assert_eq!(evidence.implementation_dependencies.len(), 2);
+        let dependency = evidence.implementation_dependencies[0].clone();
+        let reject_dependency = |changed: (ir::AssociatedTypeProjection, ProofEvidence, Ty)| {
+            let mut forged = (*evidence).clone();
+            let mut dependencies = evidence.implementation_dependencies.to_vec();
+            dependencies[0] = changed;
+            forged.implementation_dependencies = dependencies.into();
+            assert!(
+                world
+                    .validate_universal_required_evidence(&forged, &facts)
+                    .is_err()
+            );
+        };
+        let mut changed = dependency.clone();
+        changed.0.item = call.item;
+        reject_dependency(changed);
+        let mut changed = dependency.clone();
+        changed.0.trait_ref.self_ty = Ty::Bool;
+        reject_dependency(changed);
+        for rhs in [
+            Ty::Unit,
+            Ty::RawPtr {
+                kind: ir::BorrowKind::Shared,
+                pointee: Arc::new(Ty::Param(parameter)),
+            },
+        ] {
+            let mut changed = dependency.clone();
+            changed.2 = rhs;
+            reject_dependency(changed);
+        }
+        for which in 0..6 {
+            let mut changed = dependency.clone();
+            let mut proof = (*changed.1.0).clone();
+            match which {
+                0 => proof.environment += 1,
+                1 => proof.phase = FactsPhase::Closed,
+                2 => {
+                    proof.goal = Predicate::Implements(TraitRef {
+                        self_ty: Ty::Bool,
+                        ..call.trait_ref.clone()
+                    })
+                }
+                3 => {
+                    proof.origin = ProofOrigin::Implementation {
+                        declaration: call.item,
+                        arguments: Arc::from([Ty::Param(parameter)]),
+                    }
+                }
+                4 => {
+                    proof.origin = ProofOrigin::Implementation {
+                        declaration: *declaration,
+                        arguments: Arc::from([Ty::Bool]),
+                    }
+                }
+                _ => proof.world = fixture().0.id,
+            }
+            changed.1 = ProofEvidence(Arc::new(proof));
+            reject_dependency(changed);
+        }
+        let mut reversed = evidence.implementation_dependencies.to_vec();
+        reversed.reverse();
+        for dependencies in [Vec::new(), vec![dependency], reversed] {
+            let mut forged = (*evidence).clone();
+            forged.implementation_dependencies = dependencies.into();
+            assert!(
+                world
+                    .validate_universal_required_evidence(&forged, &facts)
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
     fn rigid_required_method_keeps_projection_without_inventing_equality() {
         let (world, facts, call) = fixture();
         let (application, evidence) = world
@@ -740,6 +986,7 @@ mod tests {
             Ty::AssociatedType(_)
         ));
         assert!(evidence.dependencies.is_empty());
+        assert!(evidence.implementation_dependencies.is_empty());
         assert!(matches!(
             evidence.selection.0.origin,
             ProofOrigin::Assumption

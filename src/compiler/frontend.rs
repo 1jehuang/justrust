@@ -2499,7 +2499,9 @@ impl SourceInventory {
                     depth + 1,
                 )?;
             }
-            Expr::Cast { value, .. } | Expr::Repeat { value, .. } => self.expr(
+            Expr::Cast { value, .. }
+            | Expr::Repeat { value, .. }
+            | Expr::SliceDataPointer(value) => self.expr(
                 value,
                 &node.child(11, 0, budget)?,
                 None,
@@ -7235,6 +7237,8 @@ pub enum Expr {
         kind: ir::BorrowKind,
         arguments: Vec<Expr>,
     },
+    /// Extract the data address from an exclusive slice descriptor.
+    SliceDataPointer(Box<Expr>),
     UnexpandedMacro(Arc<UnexpandedMacroSyntax>),
     TraitCall {
         owner: Type,
@@ -8833,6 +8837,9 @@ impl<'input, 'names> Parser<'input, 'names> {
         }
         if self.builtin_macro_ahead("__justrust_linux_syscall6")? {
             return self.native_syscall_expression();
+        }
+        if self.builtin_macro_ahead("__justrust_slice_as_mut_ptr")? {
+            return self.slice_data_pointer_expression();
         }
         for (name, kind) in [
             ("__justrust_slice_from_raw_parts", ir::BorrowKind::Shared),
@@ -16560,9 +16567,9 @@ fn walk_depth_inspecting(
                         push(DepthNode::Expr(e))?;
                     }
                 }
-                Expr::Deref { value } | Expr::BorrowValue { value, .. } => {
-                    push(DepthNode::Expr(value))?
-                }
+                Expr::Deref { value }
+                | Expr::BorrowValue { value, .. }
+                | Expr::SliceDataPointer(value) => push(DepthNode::Expr(value))?,
                 Expr::Repeat { value, .. } => push(DepthNode::Expr(value))?,
                 Expr::DynamicIndex { base, index, .. } => {
                     push(DepthNode::Expr(base))?;

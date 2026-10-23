@@ -788,7 +788,11 @@ impl ValidatedTraitWorld {
                 }
                 self.validate_raw_associated_ty(element, env, depth + 1)?;
             }
-            Ty::Ref { referent, .. } | Ty::Slice { element: referent } => {
+            Ty::Ref { referent, .. }
+            | Ty::RawPtr {
+                pointee: referent, ..
+            }
+            | Ty::Slice { element: referent } => {
                 self.validate_raw_associated_ty(referent, env, depth + 1)?;
             }
             // A raw header such as `Option<Self::Item>` (or its impl-side
@@ -846,6 +850,9 @@ impl ValidatedTraitWorld {
                 }
             }
             Ty::Ref { referent, .. }
+            | Ty::RawPtr {
+                pointee: referent, ..
+            }
             | Ty::Array {
                 element: referent, ..
             }
@@ -1181,6 +1188,19 @@ impl ValidatedTraitWorld {
                         depth + 1,
                     )?),
                     len: *len,
+                })
+            }
+            Ty::RawPtr { kind, pointee } => {
+                retain::<Ty>(&self.budget, 1)?;
+                Ok(Ty::RawPtr {
+                    kind: *kind,
+                    pointee: Arc::new(self.normalize_type_in(
+                        pointee,
+                        context,
+                        stack,
+                        dependencies,
+                        depth + 1,
+                    )?),
                 })
             }
             Ty::Ref { kind, referent } => {

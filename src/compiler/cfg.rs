@@ -350,6 +350,7 @@ fn same_rvalue_types(a: &Rvalue, b: &Rvalue, budget: &ir::PlanBudget) -> Result<
         (Rvalue::Use(a), Rvalue::Use(b))
         | (Rvalue::ArrayToSlice { reference: a }, Rvalue::ArrayToSlice { reference: b })
         | (Rvalue::RefToDyn { reference: a, .. }, Rvalue::RefToDyn { reference: b, .. })
+        | (Rvalue::SliceDataPointer { slice: a }, Rvalue::SliceDataPointer { slice: b })
         | (Rvalue::SliceLen { slice: a }, Rvalue::SliceLen { slice: b })
         | (Rvalue::CharToInt { value: a, .. }, Rvalue::CharToInt { value: b, .. })
         | (Rvalue::U8ToChar { value: a }, Rvalue::U8ToChar { value: b })
@@ -539,6 +540,10 @@ pub enum Rvalue {
         kind: ir::BorrowKind,
         args: Vec<Operand>,
     },
+    /// Extract the data word, not the descriptor address, from `&mut [T]`.
+    SliceDataPointer {
+        slice: Operand,
+    },
     /// Inherent primitive method over exact `intrinsic.signature()` operands.
     Intrinsic {
         intrinsic: ir::Intrinsic,
@@ -706,6 +711,7 @@ impl Rvalue {
             | Self::RefToDyn {
                 reference: value, ..
             }
+            | Self::SliceDataPointer { slice: value }
             | Self::SliceLen { slice: value } => visit(value)?,
             Self::SliceIndex { slice, index } => {
                 visit(slice)?;
@@ -896,10 +902,12 @@ pub fn lower_template(
     let mut lowered = lower_internal(&source, facts, Some(budget))?;
     lowered.call_evidence = ir::bind_call_evidence(source.clone(), authority.clone(), budget)?;
     budget.charge_work(source.exprs.len())?;
-    let has_raw_slice = source
-        .exprs
-        .iter()
-        .any(|expr| matches!(expr.kind, ir::ExprKind::RawSlice { .. }));
+    let has_raw_slice = source.exprs.iter().any(|expr| {
+        matches!(
+            expr.kind,
+            ir::ExprKind::RawSlice { .. } | ir::ExprKind::SliceDataPointer { .. }
+        )
+    });
     if !lowered.call_evidence.is_empty() || has_raw_slice {
         lowered.lowering_proof = Some(std::sync::Arc::new(GeneratedCfgShape::capture(
             &lowered, &authority, budget,
@@ -1829,6 +1837,7 @@ impl Function {
                             | Rvalue::RefToDyn {
                                 reference: value, ..
                             }
+                            | Rvalue::SliceDataPointer { slice: value }
                             | Rvalue::SliceLen { slice: value } => operand(value, budget, facts)?,
                             Rvalue::SliceIndex { slice, index } => {
                                 operand(slice, budget, facts)?;
@@ -2444,6 +2453,15 @@ impl Function {
                     referent: std::sync::Arc::new(Ty::Dyn(object.clone())),
                 })
             }
+            Rvalue::SliceDataPointer { slice } => {
+                let source = self.slice_operand_ty(slice, facts, scratch)?;
+                let result = ir::slice_data_pointer_ty(&source)?;
+                let element = source
+                    .mut_slice_element()
+                    .ok_or("slice pointer input invariant")?;
+                ir::validate_shared_slice_element_with_facts(element, facts)?;
+                Ok(result)
+            }
             Rvalue::SliceLen { slice } => {
                 let source = self.slice_operand_ty(slice, facts, scratch)?;
                 if !source.is_shared_str() {
@@ -2727,6 +2745,18 @@ impl Function {
                 if matches!(
                     statement.value,
                     Statement::Assign {
+                        value: Rvalue::SliceDataPointer { .. },
+                        ..
+                    }
+                ) && self.lowering_proof.is_none()
+                {
+                    return Err(
+                        "slice data pointer requires its canonical lowering snapshot".into(),
+                    );
+                }
+                if matches!(
+                    statement.value,
+                    Statement::Assign {
                         value: Rvalue::RawSlice { .. },
                         ..
                     }
@@ -2817,6 +2847,11 @@ impl Function {
                         self.place_ty(&place(*local))?;
                     }
                     Statement::Assign { destination, value } => {
+                        if matches!(value, Rvalue::SliceDataPointer { .. })
+                            && statement.origin.is_none()
+                        {
+                            return Err("slice data pointer has no source origin".into());
+                        }
                         if matches!(value, Rvalue::RawSlice { .. }) && statement.origin.is_none() {
                             return Err("raw slice constructor has no source origin".into());
                         }
@@ -4481,6 +4516,14 @@ impl Lowerer<'_> {
                     origin,
                 );
             }
+            ir::ExprKind::SliceDataPointer { slice } => {
+                let slice = self.expression(*slice)?;
+                self.assign(
+                    destination.clone(),
+                    Rvalue::SliceDataPointer { slice },
+                    origin,
+                );
+            }
             ir::ExprKind::SliceLen { slice } => {
                 let slice = self.expression(*slice)?;
                 self.assign(destination.clone(), Rvalue::SliceLen { slice }, origin);
@@ -5270,10 +5313,12 @@ pub fn lower_with_facts(
     }
     let has_raw_slice = if source.body_substitution.is_none() && source.call_evidence.is_empty() {
         budget.charge_work(source.exprs.len())?;
-        source
-            .exprs
-            .iter()
-            .any(|expr| matches!(expr.kind, ir::ExprKind::RawSlice { .. }))
+        source.exprs.iter().any(|expr| {
+            matches!(
+                expr.kind,
+                ir::ExprKind::RawSlice { .. } | ir::ExprKind::SliceDataPointer { .. }
+            )
+        })
     } else {
         false
     };
@@ -12069,6 +12114,7 @@ mod tests {
                             | Rvalue::RefToDyn {
                                 reference: value, ..
                             }
+                            | Rvalue::SliceDataPointer { slice: value }
                             | Rvalue::SliceLen { slice: value } => live_operand(value, &live),
                             Rvalue::Subslice {
                                 slice, start, end, ..

@@ -9,6 +9,197 @@ use oracle::{Case, Expect, check};
 use std::process::Command;
 
 #[test]
+fn slice_data_pointer_primitive_matches_stock() {
+    use std::os::unix::fs::PermissionsExt;
+    let source = r#"
+fn pointer<T>(s:&mut[T])->*mut T{s.as_mut_ptr()}
+fn main(){
+    let mut a=[1i32,2,3];let p=pointer(&mut a);
+    unsafe{*p.add(2)=9;}println!("{} {}",a[0],a[2]);
+    let mut empty:[u64;0]=[];let p=pointer(&mut empty);
+    println!("{} {}",p as usize!=0,(p as usize)%8==0);
+    let mut z=[();3];let p=pointer(&mut z);unsafe{*p.add(2)=();}
+    println!("{} {}",p as usize!=0,z.len());
+}"#;
+    let root = scratch("data-pointer-primitive");
+    let stock_source = root.join("stock.rs");
+    let stock_image = root.join("stock");
+    std::fs::write(&stock_source, source).unwrap();
+    let stock = Command::new(stock_rustc::stock_rustc())
+        .args(["--edition=2024", "-Cpanic=abort"])
+        .arg(&stock_source)
+        .arg("-o")
+        .arg(&stock_image)
+        .output()
+        .unwrap();
+    assert!(stock.status.success(), "{stock:?}");
+    let expected = Command::new(&stock_image).output().unwrap();
+    assert!(expected.status.success());
+    let native_source = source.replace("s.as_mut_ptr()", "__justrust_slice_as_mut_ptr!(s)");
+    for workers in [1, 8] {
+        for check in [true, false] {
+            let result =
+                justrust_engine::compiler::compile(native_source.clone().into(), workers, check)
+                    .unwrap();
+            if check {
+                assert!(result.executable.is_none());
+                assert!(
+                    result
+                        .report
+                        .node_evaluations
+                        .iter()
+                        .all(|(key, _)| { !matches!(key.kind, 103 | 105 | 130 | 131 | 133) })
+                );
+            } else {
+                let image = root.join(format!("native-{workers}"));
+                std::fs::write(&image, result.executable.unwrap()).unwrap();
+                std::fs::set_permissions(&image, std::fs::Permissions::from_mode(0o700)).unwrap();
+                let actual = Command::new(&image).output().unwrap();
+                assert!(actual.status.success(), "{actual:?}");
+                assert_eq!(actual.stdout, expected.stdout);
+            }
+        }
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn associated_raw_pointer_method_preserves_source_identity() {
+    #[path = "support/closure_oracle.rs"]
+    mod closure_oracle;
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "associated-raw-pointer-method",
+        &[
+            Case {
+                name: "owner_normalizes_exact_associated_pointee",
+                source: "trait Data{type Element;fn data(&mut self)->*mut Self::Element;}struct Value{n:i32}impl Data for Value{type Element=i32;fn data(&mut self)->*mut i32{&mut self.n as *mut i32}}fn main(){let mut v=Value{n:4};let p=v.data();unsafe{*p=9;}println!(\"{}\",v.n);}",
+                expect: Expect::Run("9\n"),
+            },
+            Case {
+                name: "wrong_associated_pointer_kind_rejected_unused",
+                source: "trait Data{type Element;fn data(&mut self)->*mut Self::Element;}struct Value;impl Data for Value{type Element=i32;fn data(&mut self)->*const i32{0usize as *const i32}}fn main(){}",
+                expect: Expect::Invalid("E0053"),
+            },
+            Case {
+                name: "wrong_associated_pointee_rejected_unused",
+                source: "trait Data{type Element;fn data(&mut self)->*mut Self::Element;}struct Value;impl Data for Value{type Element=i32;fn data(&mut self)->*mut u32{0usize as *mut u32}}fn main(){}",
+                expect: Expect::Invalid("E0053"),
+            },
+        ],
+    );
+}
+
+#[test]
+fn slice_mut_pointer_matches_stock() {
+    #[path = "support/closure_oracle.rs"]
+    mod closure_oracle;
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "slice-mut-pointer",
+        &[Case {
+            name: "generic_reborrow_and_whole_allocation",
+            source: r#"
+fn pointer<T>(s: &mut [T]) -> *mut T { s.as_mut_ptr() }
+fn main() {
+    let mut a = [1i32, 2, 3];
+    let s: &mut [i32] = &mut a;
+    let p = s.as_mut_ptr();
+    let q = s.as_mut_ptr();
+    unsafe { *p.add(2) = 30; *q = 10; }
+    println!("{} {} {}", s[0], s[1], s[2]);
+    let p = pointer(s);
+    println!("{}", s.len());
+    unsafe { *p.add(1) = 20; }
+    println!("{}", s[1]);
+    let mut b = [7u8, 8];
+    let p = pointer(&mut b);
+    unsafe { *p.add(1) = 9; }
+    println!("{}", b[1]);
+}
+"#,
+            expect: Expect::Run("10 2 30\n3\n20\n9\n"),
+        }],
+    );
+}
+
+#[test]
+fn slice_mut_pointer_empty_zst_and_noncopy() {
+    #[path = "support/closure_oracle.rs"]
+    mod closure_oracle;
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "slice-mut-pointer-concrete",
+        &[Case {
+            name: "empty_zst_and_noncopy",
+            source: r#"
+struct Value { n: i32 }
+fn main() {
+    let mut empty: [u64; 0] = [];
+    let e: &mut [u64] = &mut empty;
+    let p = e.as_mut_ptr();
+    println!("{} {}", p as usize != 0, (p as usize) % 8 == 0);
+    let mut units = [(); 3];
+    let s: &mut [()] = &mut units;
+    let p = s.as_mut_ptr();
+    unsafe { *p.add(2) = (); }
+    println!("{} {}", p as usize != 0, s.len());
+    let mut values = [Value { n: 4 }, Value { n: 5 }];
+    let s: &mut [Value] = &mut values;
+    let p = s.as_mut_ptr();
+    unsafe { (*p.add(1)).n = 6; }
+    let value = &s[1];
+    println!("{}", value.n);
+}
+"#,
+            expect: Expect::Run("true true\ntrue 3\n6\n"),
+        }],
+    );
+}
+
+#[test]
+fn slice_mut_pointer_empty_vec() {
+    #[path = "support/closure_oracle.rs"]
+    mod closure_oracle;
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "slice-mut-pointer-empty-vec",
+        &[Case {
+            name: "empty_heap_storage_is_nonnull_and_aligned",
+            source: "fn main(){let p=Vec::<u64>::new().as_mut_slice().as_mut_ptr();println!(\"{} {}\",p as usize!=0,(p as usize)%8==0);}",
+            expect: Expect::Run("true true\n"),
+        }],
+    );
+}
+
+#[test]
+fn slice_mut_pointer_invalid_boundaries() {
+    #[path = "support/closure_oracle.rs"]
+    mod closure_oracle;
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "slice-mut-pointer-invalid",
+        &[
+            Case {
+                name: "shared_receiver",
+                source: "fn bad(s:&[i32]){let _=s.as_mut_ptr();}fn main(){}",
+                expect: Expect::Invalid("E0596"),
+            },
+            Case {
+                name: "dereference_requires_unsafe",
+                source: "fn bad(s:&mut[i32]){let p=s.as_mut_ptr();*p=2;}fn main(){}",
+                expect: Expect::Invalid("E0133"),
+            },
+            Case {
+                name: "wrong_element_type",
+                source: "fn bad(s:&mut[i32]){let _: *mut u8=s.as_mut_ptr();}fn main(){}",
+                expect: Expect::Invalid("E0308"),
+            },
+        ],
+    );
+}
+
+#[test]
 fn heap_stored_slice_carriers_are_explicitly_unsupported() {
     let cases = [
         (

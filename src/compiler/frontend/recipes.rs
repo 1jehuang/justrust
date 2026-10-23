@@ -591,7 +591,8 @@ pub(super) fn inventory(
                 expr(value, ds, b, d + 1)?;
             }
             Expr::TypeAlignment(target) => ty(target, ds, b, d + 1)?,
-            Expr::Deref { value }
+            Expr::SliceDataPointer(value)
+            | Expr::Deref { value }
             | Expr::BorrowValue { value, .. }
             | Expr::Unary { value, .. }
             | Expr::Field { base: value, .. }

@@ -1623,6 +1623,7 @@ fn preflight_with_plan(
                     | Rvalue::Unary { value: op, .. }
                     | Rvalue::ArrayToSlice { reference: op }
                     | Rvalue::RefToDyn { reference: op, .. }
+                    | Rvalue::SliceDataPointer { slice: op }
                     | Rvalue::SliceLen { slice: op } => operand(op, &mut budget)?,
                     Rvalue::SliceIndex { slice, index } => {
                         operand(slice, &mut budget)?;
@@ -2938,7 +2939,9 @@ impl Transfer<'_> {
             // Unsizing moves/copies the reference once; the vtable is static.
             Rvalue::RefToDyn { reference, .. } => self.operand(state, reference)?,
             // Length reads only the slice handle, never the referent storage.
-            Rvalue::SliceLen { slice } => self.operand(state, slice)?,
+            Rvalue::SliceLen { slice } | Rvalue::SliceDataPointer { slice } => {
+                self.operand(state, slice)?
+            }
             // A subslice copies the shared handle once (its loan and origins
             // are the operand's) and reads only usize bounds plus the length
             // metadata; it performs no read of the referent storage.

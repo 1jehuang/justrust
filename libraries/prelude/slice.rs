@@ -72,11 +72,18 @@ pub unsafe fn from_raw_parts_mut<'a, T>(data: *mut T, len: usize) -> &'a mut [T]
 /// `[T]` methods that need no element bound. A prelude trait, like
 /// `StrMethods`, until inherent `impl<T> [T]` blocks are supported.
 pub trait SliceMethods {
+    type Element;
+    fn as_mut_ptr(&mut self) -> *mut Self::Element;
     fn is_empty(&self) -> bool;
     fn swap(&mut self, a: usize, b: usize);
 }
 
 impl<T> SliceMethods for [T] {
+    type Element = T;
+    fn as_mut_ptr(&mut self) -> *mut T {
+        __justrust_slice_as_mut_ptr!(self)
+    }
+
     fn is_empty(&self) -> bool {
         self.len() == 0usize
     }

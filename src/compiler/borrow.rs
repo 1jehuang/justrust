@@ -4994,6 +4994,7 @@ fn visit_rvalue(f: &cfg::Function, value: &Rvalue, mut visit: impl FnMut(&Place,
         | Rvalue::Repeat { value: op, .. }
         | Rvalue::ArrayToSlice { reference: op }
         | Rvalue::RefToDyn { reference: op, .. }
+        | Rvalue::SliceDataPointer { slice: op }
         | Rvalue::SliceLen { slice: op }
         | Rvalue::CharToInt { value: op, .. }
         | Rvalue::U8ToChar { value: op }

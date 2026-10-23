@@ -2,6 +2,19 @@
 use super::*;
 
 impl Parser<'_, '_> {
+    pub(super) fn slice_data_pointer_expression(&mut self) -> Result<Expr, ParseError> {
+        self.ident()?;
+        self.expect("!")?;
+        self.expect("(")?;
+        self.names
+            .retain_parser_text(std::mem::size_of::<Expr>())
+            .map_err(native_adapter::name_error)?;
+        let slice = self.expr(0)?;
+        self.eat(",");
+        self.expect(")")?;
+        Ok(Expr::SliceDataPointer(Box::new(slice)))
+    }
+
     pub(super) fn raw_slice_expression(
         &mut self,
         kind: ir::BorrowKind,
@@ -26,6 +39,33 @@ impl Parser<'_, '_> {
 }
 
 impl type_check::Checker<'_> {
+    pub(super) fn slice_data_pointer_hint(&self, slice: &Expr) -> Result<Option<ir::Ty>, String> {
+        self.scalar_hint(slice)?
+            .map(|ty| ir::slice_data_pointer_ty(&ty))
+            .transpose()
+    }
+
+    pub(super) fn slice_data_pointer(
+        &mut self,
+        slice: &Expr,
+    ) -> Result<(ir::ExprKind, Flow), String> {
+        let slice = self.expr(slice)?;
+        let source = self.flow(slice);
+        let ty = ir::slice_data_pointer_ty(&source.ty)?;
+        let element = source
+            .ty
+            .mut_slice_element()
+            .ok_or("slice data pointer requires mutable slice")?;
+        ir::validate_shared_slice_element(element, self.facts(), &self.signatures.plan()?.budget)?;
+        Ok((
+            ir::ExprKind::SliceDataPointer { slice },
+            Flow {
+                ty,
+                completes: source.completes,
+            },
+        ))
+    }
+
     pub(super) fn raw_slice_hint(
         &self,
         kind: ir::BorrowKind,

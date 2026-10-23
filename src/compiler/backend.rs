@@ -2851,6 +2851,16 @@ impl Emitter<'_> {
                 self.operand(reference)?;
                 self.array_to_slice(layout, self.aggregate_scratch, len)?;
             }
+            cfg::Rvalue::SliceDataPointer { slice } => {
+                let source = self.function().operand_ty(slice)?;
+                let _ = ir::slice_data_pointer_ty(&source)?;
+                let element = source
+                    .mut_slice_element()
+                    .ok_or("slice pointer input invariant")?;
+                let layout = shared_slice_layout(element)?;
+                self.slice_operand(slice)?;
+                self.load_word(0, 0, layout.data_offset);
+            }
             cfg::Rvalue::SliceLen { slice } => {
                 self.slice_operand(slice)?;
                 self.slice_len(SHARED_BYTE_SLICE_LAYOUT);

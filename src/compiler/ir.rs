@@ -3479,6 +3479,7 @@ pub(in crate::compiler) fn instantiate_checked_with_constants(
             | ExprKind::DynamicIndex { .. }
             | ExprKind::ArrayToSlice { .. }
             | ExprKind::RefToDyn { .. }
+            | ExprKind::SliceDataPointer { .. }
             | ExprKind::SliceLen { .. }
             | ExprKind::SliceIndex { .. }
             | ExprKind::Subslice { .. }
@@ -8240,6 +8241,10 @@ pub enum ExprKind {
         intrinsic: Intrinsic,
         args: Vec<ExprId>,
     },
+    /// Extract only the data word of an exclusive slice descriptor.
+    SliceDataPointer {
+        slice: ExprId,
+    },
     /// A string literal: `&'static str` over immutable program data.
     Str(String),
     /// Exact shared array reference over immutable static program bytes.
@@ -8412,6 +8417,25 @@ pub enum ExprKind {
         newline: bool,
     },
     Panic(Box<PanicMessage>),
+}
+
+/// The descriptor is an exclusive slice reference, not a thin address.
+/// This operation returns its data word and never creates a reference loan.
+pub fn slice_data_pointer_ty(slice: &Ty) -> Result<Ty, String> {
+    let Ty::Ref {
+        kind: BorrowKind::Mut,
+        referent,
+    } = slice
+    else {
+        return Err("slice data pointer requires &mut [T]".into());
+    };
+    let Ty::Slice { element } = referent.as_ref() else {
+        return Err("slice data pointer requires &mut [T]".into());
+    };
+    Ok(Ty::RawPtr {
+        kind: BorrowKind::Mut,
+        pointee: Arc::clone(element),
+    })
 }
 
 /// Exact raw pointer-to-slice carrier shape. Construction does not read an
@@ -9113,6 +9137,7 @@ impl CheckedFunction {
                 | ExprKind::DynamicIndex { .. }
                 | ExprKind::ArrayToSlice { .. }
                 | ExprKind::RefToDyn { .. }
+                | ExprKind::SliceDataPointer { .. }
                 | ExprKind::SliceLen { .. }
                 | ExprKind::SliceIndex { .. }
                 | ExprKind::Subslice { .. }
@@ -10094,6 +10119,22 @@ impl CheckedFunction {
                     }
                     if value.completion != source.completion {
                         return Err("trait object unsizing completion mismatch".into());
+                    }
+                }
+                ExprKind::SliceDataPointer { slice } => {
+                    expr(*slice)?;
+                    let source = &self.exprs[slice.0];
+                    let expected = slice_data_pointer_ty(&source.ty)?;
+                    let element = source
+                        .ty
+                        .mut_slice_element()
+                        .ok_or("slice pointer input invariant")?;
+                    validate_shared_slice_element_with_facts(element, facts)?;
+                    if value.ty != expected {
+                        return Err("slice data pointer result type mismatch".into());
+                    }
+                    if value.completion != source.completion {
+                        return Err("slice data pointer completion mismatch".into());
                     }
                 }
                 ExprKind::SliceLen { slice } => {

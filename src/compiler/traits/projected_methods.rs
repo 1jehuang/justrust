@@ -677,6 +677,18 @@ impl ValidatedTraitWorld {
                     len: *len,
                 })
             }
+            Ty::RawPtr { kind, pointee } => {
+                retain::<Ty>(&self.budget, 1)?;
+                Ok(Ty::RawPtr {
+                    kind: *kind,
+                    pointee: Arc::new(self.normalize_owner_type(
+                        pointee,
+                        owner,
+                        active,
+                        depth + 1,
+                    )?),
+                })
+            }
             Ty::Ref { kind, referent } => {
                 retain::<Ty>(&self.budget, 1)?;
                 Ok(Ty::Ref {
@@ -2013,6 +2025,58 @@ mod tests {
                 .eq_ty(&actual, &owners[0].associated_types[0].rhs, 0)
                 .unwrap()
         );
+    }
+
+    #[test]
+    fn projected_pointer_owner_preserves_kind_and_exact_assignment() {
+        let world = paired();
+        let owners = owners(&world);
+        let context = world.owner_context(owners[0]).unwrap();
+        let projection = ir::AssociatedTypeProjection {
+            trait_ref: owners[1].trait_ref.clone(),
+            item: owners[1].associated_types[0].associated,
+        };
+        for kind in [ir::BorrowKind::Shared, ir::BorrowKind::Mut] {
+            let pointer = Ty::RawPtr {
+                kind,
+                pointee: Arc::new(Ty::AssociatedType(Arc::new(projection.clone()))),
+            };
+            let actual = world
+                .normalize_owner_type(&pointer, &context, &mut Vec::new(), 0)
+                .unwrap();
+            let expected = Ty::RawPtr {
+                kind,
+                pointee: Arc::new(owners[1].associated_types[0].rhs.clone()),
+            };
+            assert!(world.eq_ty(&actual, &expected, 0).unwrap());
+            let wrong = Ty::RawPtr {
+                kind,
+                pointee: Arc::new(owners[0].associated_types[0].rhs.clone()),
+            };
+            assert!(!world.eq_ty(&actual, &wrong, 0).unwrap());
+            let mut forged = projection.clone();
+            forged.item.index = u64::MAX;
+            let forged = Ty::RawPtr {
+                kind,
+                pointee: Arc::new(Ty::AssociatedType(Arc::new(forged))),
+            };
+            assert!(
+                world
+                    .normalize_owner_type(&forged, &context, &mut Vec::new(), 0)
+                    .is_err()
+            );
+            let mut wrong_owner = projection.clone();
+            wrong_owner.trait_ref.declaration = owners[0].declaration;
+            let wrong_owner = Ty::RawPtr {
+                kind,
+                pointee: Arc::new(Ty::AssociatedType(Arc::new(wrong_owner))),
+            };
+            assert!(
+                world
+                    .normalize_owner_type(&wrong_owner, &context, &mut Vec::new(), 0)
+                    .is_err()
+            );
+        }
     }
 
     #[test]

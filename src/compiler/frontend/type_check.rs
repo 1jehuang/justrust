@@ -1059,6 +1059,10 @@ impl<'s> Checker<'s> {
             Expr::NativeSyscall(_) | Expr::TypeAlignment(_) => {
                 self.infer_node(InferKind::Rigid(ir::Ty::Int(ir::IntTy::Usize)))?
             }
+            Expr::SliceDataPointer(slice) => match self.slice_data_pointer_hint(slice)? {
+                Some(ty) => self.infer_type_term(&ty, None, depth + 1)?,
+                None => self.infer_node(InferKind::Unknown(false))?,
+            },
             Expr::RawSlice { kind, arguments } => match self.raw_slice_hint(*kind, arguments)? {
                 Some(ty) => self.infer_type_term(&ty, None, depth + 1)?,
                 None => self.infer_node(InferKind::Unknown(false))?,
@@ -4687,6 +4691,7 @@ impl<'a> Checker<'a> {
         Ok(match e {
             Expr::NativeSyscall(_) | Expr::TypeAlignment(_) => Some(ir::Ty::Int(ir::IntTy::Usize)),
             Expr::RawSlice { kind, arguments } => self.raw_slice_hint(*kind, arguments)?,
+            Expr::SliceDataPointer(slice) => self.slice_data_pointer_hint(slice)?,
             Expr::UnexpandedMacro(_) => return Err(UNEXPANDED_MACRO_CHECK_ERROR.into()),
             Expr::Output(output) => {
                 validate_output_site(output, self.names()?)?;
@@ -10917,6 +10922,7 @@ impl<'a> Checker<'a> {
                 )
             }
             Expr::RawSlice { kind, arguments } => self.raw_slice(*kind, arguments)?,
+            Expr::SliceDataPointer(slice) => self.slice_data_pointer(slice)?,
             Expr::TypeAlignment(queried) => self.type_alignment(queried)?,
             Expr::NativeSyscall(arguments) => {
                 if self.unsafe_depth == 0 {

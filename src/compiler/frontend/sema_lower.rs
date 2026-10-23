@@ -1196,7 +1196,10 @@ impl<'a> Lower<'a> {
             }
             Expr::Invoke { .. } => return un("callee expression invocation"),
             Expr::ByteStr(_) => return un("byte string"),
-            Expr::TypeAlignment(_) | Expr::NativeSyscall(_) | Expr::RawSlice { .. } => {
+            Expr::TypeAlignment(_)
+            | Expr::NativeSyscall(_)
+            | Expr::RawSlice { .. }
+            | Expr::SliceDataPointer(_) => {
                 return un("bootstrap intrinsic");
             }
             Expr::UnexpandedMacro(_) => return un("unexpanded macro"),

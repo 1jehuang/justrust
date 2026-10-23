@@ -221,6 +221,7 @@ pub(super) fn preflight_clone_node(
                 clone_ast_path(name, budget)?;
                 clone_vector(args, budget)?;
             }
+            Expr::SliceDataPointer(_) => budget.retain_bytes(std::mem::size_of::<Expr>())?,
             Expr::Invoke { args, .. } => clone_vector(args, budget)?,
             Expr::MethodCall {
                 type_args, args, ..

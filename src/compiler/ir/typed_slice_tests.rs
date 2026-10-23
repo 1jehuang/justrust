@@ -10,6 +10,110 @@ fn shared(referent: Ty) -> Ty {
 }
 
 #[test]
+fn slice_data_pointer_rejects_forged_type_operand_completion_and_origin() {
+    use crate::compiler::cfg;
+    let program = frontend::parse(
+        "fn data(s:&mut[i32])->*mut i32{__justrust_slice_as_mut_ptr!(s)}fn main(){}",
+    )
+    .unwrap();
+    let budget = PlanBudget::default();
+    let plan = frontend::PlanCtx::from_program(&program, &budget).unwrap();
+    let facts = plan.callable_facts(plan.function_decl(0).unwrap()).unwrap();
+    let function = frontend::type_function_with_plan(&program, 0, &plan, &budget).unwrap();
+    function
+        .validate_with_facts(FactsCtx::from_validated(&facts))
+        .unwrap();
+    let index = function
+        .exprs
+        .iter()
+        .position(|e| matches!(e.kind, ExprKind::SliceDataPointer { .. }))
+        .unwrap();
+    for mode in 0..4 {
+        let mut forged = function.clone();
+        match mode {
+            0 => {
+                forged.exprs[index].ty = Ty::RawPtr {
+                    kind: BorrowKind::Shared,
+                    pointee: Arc::new(Ty::Int(IntTy::I32)),
+                }
+            }
+            1 => {
+                forged.exprs[index].ty = Ty::RawPtr {
+                    kind: BorrowKind::Mut,
+                    pointee: Arc::new(Ty::Int(IntTy::U32)),
+                }
+            }
+            2 => forged.exprs[index].completion = Completion::Never,
+            _ => {
+                forged.exprs[index].kind = ExprKind::SliceDataPointer {
+                    slice: ExprId(usize::MAX),
+                }
+            }
+        }
+        assert!(
+            forged
+                .validate_with_facts(FactsCtx::from_validated(&facts))
+                .is_err(),
+            "typed mode {mode}"
+        );
+    }
+    assert!(slice_data_pointer_ty(&Ty::shared_byte_slice_ty()).is_err());
+    assert!(slice_data_pointer_ty(&Ty::Int(IntTy::Usize)).is_err());
+    let element = Arc::new(Ty::Int(IntTy::I32));
+    let slice = Ty::Ref {
+        kind: BorrowKind::Mut,
+        referent: Arc::new(Ty::Slice {
+            element: Arc::clone(&element),
+        }),
+    };
+    let Ty::RawPtr { pointee, .. } = slice_data_pointer_ty(&slice).unwrap() else {
+        unreachable!()
+    };
+    assert!(Arc::ptr_eq(&element, &pointee));
+
+    let template = cfg::lower_template(Arc::new(function), facts.clone(), &budget).unwrap();
+    for mode in 0..3 {
+        let mut forged = template.function().as_ref().clone();
+        if mode == 0 {
+            forged.lowering_proof = None;
+        }
+        let located = forged
+            .blocks
+            .iter_mut()
+            .flat_map(|block| &mut block.statements)
+            .find(|s| {
+                matches!(
+                    s.value,
+                    cfg::Statement::Assign {
+                        value: cfg::Rvalue::SliceDataPointer { .. },
+                        ..
+                    }
+                )
+            })
+            .unwrap();
+        if mode == 1 {
+            located.origin = None;
+        }
+        if mode == 2 {
+            let cfg::Statement::Assign {
+                value: cfg::Rvalue::SliceDataPointer { slice },
+                ..
+            } = &mut located.value
+            else {
+                unreachable!()
+            };
+            *slice = cfg::Operand::Constant(cfg::Constant::Int(IntValue::usize(0)));
+        }
+        assert!(
+            forged
+                .validate_with_facts(FactsCtx::from_validated(&facts))
+                .is_err(),
+            "lowered mode {mode}"
+        );
+    }
+}
+
+#[test]
 fn typed_shapes_preserve_exact_element_and_byte_only_helpers() {
     let element = Ty::Tuple(vec![Ty::Int(IntTy::I128), Ty::Bool].into());
     let slice = shared(Ty::Slice {

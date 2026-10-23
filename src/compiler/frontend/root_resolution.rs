@@ -3459,7 +3459,8 @@ impl Resolver<'_> {
             Expr::Cast { .. } => {
                 return Err("cast bypassed resolver expression dispatcher".into());
             }
-            Expr::Deref { value }
+            Expr::SliceDataPointer(value)
+            | Expr::Deref { value }
             | Expr::BorrowValue { value, .. }
             | Expr::Repeat { value, .. }
             | Expr::Index { base: value, .. }

@@ -19,6 +19,14 @@ unsafe semantics remain open (IMPLEMENTATION.md G3).
   (any pointees), raw pointer to `usize` and `usize` to raw pointer. Other
   pointer casts are rejected (E0606).
 * `==`/`!=` on identical raw pointer types (address comparison).
+* `[T]::as_mut_ptr()` through the ordinary prelude `SliceMethods` implementation,
+  including generic callers. Its typed `SliceDataPointer` operation accepts only
+  `&mut [T]`, preserves the exact element type and extracts the descriptor's data
+  word without reading an element. It is not a thin-reference cast. Existing
+  slice-element restrictions still apply. Empty and zero-sized-element slices
+  are covered without a dereference; empty `Vec<u64>` yields a nonnull aligned
+  data pointer. This does not implement `split_at_mut` or tuple-reference origin
+  transport.
 
 ## Analysis contract
 
@@ -46,3 +54,14 @@ arithmetic operators, and casts between pointers and non-usize integers.
 `tests/heap.rs` with stock-rustc-frozen fixtures in `tests/fixtures/heap`
 (1 positive with exact stdout, 4 stock-rejected sources). The former
 `integer_casts` reference-to-pointer legal-unsupported case is now positive.
+
+The mutable slice data-pointer addition passes the isolated 1,812-test library
+suite, 17 graph-integrity tests, and all slice-method/associated-authority cases
+in the neighboring integration run. Targeted universal-method, copied-origin,
+raw-slice authority and graph tests also pass; CHECK and clippy succeed with
+baseline warnings. Stock differential pointer cases run at workers 1 and 8.
+Receipts: `data/runs/xps14/slice-data-pointer-2026-10-23.jsonl`.
+The neighboring `raw_slices::shared_mutable_empty_noncopy_and_order_match_stock`
+fixture still fails E0606 at an array-reference cast, reproduced identically on
+the pre-pointer `3859c87d4` snapshot. Its expectation is unchanged; the broader
+raw-slice suite is not claimed passing.
