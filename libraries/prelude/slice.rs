@@ -48,6 +48,19 @@ impl<'a, T> super::iter::Iterator for Iter<'a, T> {
     }
 }
 
+impl<'a, T> super::iter::DoubleEndedIterator for Iter<'a, T> {
+    fn next_back(&mut self) -> super::option::Option<&'a T> {
+        if self.index < self.len {
+            self.len -= 1usize;
+            let base = self.pointer;
+            let p = (base as usize + self.len * super::mem::size_of::<T>()) as *const T;
+            super::option::Option::Some(unsafe { &*p })
+        } else {
+            super::option::Option::None
+        }
+    }
+}
+
 pub unsafe fn from_raw_parts<'a, T>(data: *const T, len: usize) -> &'a [T] {
     unsafe { __justrust_slice_from_raw_parts!(data, len) }
 }

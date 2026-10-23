@@ -6,6 +6,13 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 
 ## Completed foundations, not full compatibility
 
+- [x] Shared slice iterators implement `DoubleEndedIterator` through ordinary
+      source. `slice_methods::double_ended_slice_iteration_matches_stock`
+      checks mixed front/back consumption, reversed collection, empty and
+      zero-sized slices, singleton exhaustion, owner mutation and escape
+      rejection at workers 1/8. Existing iterator, corpus and graph gates pass.
+      Mutable slice iteration and remaining iterator adapters are still open.
+
 - [x] Source `Iterator::product` dispatches through `Product`, with owned and
       borrowed implementations for all twelve integer types and custom result
       types. `iterator_fold` exercises empty identity, zero factors, mapped

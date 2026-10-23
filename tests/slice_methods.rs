@@ -240,6 +240,38 @@ fn main() {
 }
 
 #[test]
+fn double_ended_slice_iteration_matches_stock() {
+    #[path = "support/closure_oracle.rs"]
+    mod closure_oracle;
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "slice-double-ended",
+        &[
+            Case {
+                name: "mixed_front_back_and_reverse",
+                source: r#"fn main(){let a=[1i32,2,3,4];let mut it=a.iter();println!("{} {} {} {} {}",it.next_back().unwrap(),it.next().unwrap(),it.next_back().unwrap(),it.next().unwrap(),it.next_back().is_none());let v:Vec<i32>=a.iter().rev().copied().collect();println!("{} {}",v[0],v[3]);}"#,
+                expect: Expect::Run("4 1 3 2 true\n4 1\n"),
+            },
+            Case {
+                name: "empty_singleton_and_zero_sized",
+                source: r#"fn main(){let empty:[i32;0]=[];let mut e=empty.iter();let one=[7i32];let mut o=one.iter();let units=[();3];let mut z=units.iter();println!("{} {} {} {} {} {} {}",e.next_back().is_none(),o.next_back().unwrap(),o.next().is_none(),z.next_back().is_some(),z.next().is_some(),z.next_back().is_some(),z.next().is_none());}"#,
+                expect: Expect::Run("true 7 true true true true true\n"),
+            },
+            Case {
+                name: "reverse_keeps_owner_borrowed",
+                source: r#"fn main(){let mut v=vec![1i32,2];let mut it=v.iter().rev();v.push(3);println!("{:?}",it.next());}"#,
+                expect: Expect::Invalid("E0502"),
+            },
+            Case {
+                name: "reverse_cannot_escape_owner",
+                source: r#"fn main(){let mut it={let v=vec![1i32,2];v.iter().rev()};println!("{:?}",it.next());}"#,
+                expect: Expect::Invalid("E0597"),
+            },
+        ],
+    );
+}
+
+#[test]
 fn inclusive_and_reverse_integer_ranges_match_stock() {
     #[path = "support/closure_oracle.rs"]
     mod closure_oracle;
