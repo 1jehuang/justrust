@@ -43,6 +43,32 @@ fn validated_nested_nominal_interning_replays_authority_after_unlock() {
         panic!("lost outer nominal")
     };
     assert_eq!(outer.def().type_args.as_ref(), &[inner]);
+    // A node-local schema check does not replace the world's recursive
+    // validation. Corrupt nested payloads must still reject through wrappers.
+    let ir::Ty::Struct(nested) = &outer.def().fields[0].ty else {
+        panic!("lost nested nominal")
+    };
+    let foreign_declaration = declaration(&self::plan(&budget), 0);
+    for foreign_owner in [false, true] {
+        let mut nested_definition = nested.def().clone();
+        if foreign_owner {
+            nested_definition.source_decl = foreign_declaration;
+        } else {
+            nested_definition.fields = Arc::from([]);
+        }
+        let mut outer_definition = outer.def().clone();
+        let fields = Arc::make_mut(&mut outer_definition.fields);
+        fields[0].ty = ir::Ty::Struct(ir::StructTy::new(nested_definition));
+        let forged = ir::Ty::Ref {
+            kind: ir::BorrowKind::Shared,
+            referent: Arc::new(ir::Ty::Struct(ir::StructTy::new(outer_definition))),
+        };
+        assert!(
+            caller
+                .validate_ty_metadata_with_budget(&forged, &budget)
+                .is_err()
+        );
+    }
 }
 
 #[test]

@@ -605,6 +605,12 @@ pub trait SchemaCx {
         ))
     }
     fn validate_nominal(&self, ty: &Ty, env: &GenericEnv, budget: &PlanBudget) -> Result<()>;
+    /// Authenticate one nominal definition. The caller must separately walk
+    /// every actual and field under its ordinary type-use rules. Adapters
+    /// without a node-local validator retain the full recursive check.
+    fn validate_nominal_node(&self, ty: &Ty, env: &GenericEnv, budget: &PlanBudget) -> Result<()> {
+        self.validate_nominal(ty, env, budget)
+    }
     /// Remint an application from its authoritative source schema after the
     /// caller normalizes actual arguments with checked projection evidence.
     /// Implementations must validate the original canonical application and
@@ -2796,7 +2802,7 @@ impl ValidatedTraitWorld {
                     ));
                 }
                 validate_nominal_modules(ty, self.catalog.modules(), &self.budget)?;
-                self.schema.validate_nominal(ty, env, &self.budget)?;
+                self.schema.validate_nominal_node(ty, env, &self.budget)?;
                 for t in t.def().type_args.iter() {
                     child(
                         t,
@@ -2821,7 +2827,7 @@ impl ValidatedTraitWorld {
                     ));
                 }
                 validate_nominal_modules(ty, self.catalog.modules(), &self.budget)?;
-                self.schema.validate_nominal(ty, env, &self.budget)?;
+                self.schema.validate_nominal_node(ty, env, &self.budget)?;
                 for t in t.def().type_args.iter() {
                     child(
                         t,

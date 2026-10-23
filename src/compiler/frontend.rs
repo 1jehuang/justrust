@@ -21577,12 +21577,32 @@ impl tr::SchemaCx for SchemaAdapter {
         env: &ir::GenericEnv,
         budget: &ir::PlanBudget,
     ) -> Result<(), tr::FactsError> {
+        self.validate_nominal_tree(ty, env, budget, true)
+    }
+    fn validate_nominal_node(
+        &self,
+        ty: &ir::Ty,
+        env: &ir::GenericEnv,
+        budget: &ir::PlanBudget,
+    ) -> Result<(), tr::FactsError> {
+        self.validate_nominal_tree(ty, env, budget, false)
+    }
+}
+impl SchemaAdapter {
+    fn validate_nominal_tree(
+        &self,
+        ty: &ir::Ty,
+        env: &ir::GenericEnv,
+        budget: &ir::PlanBudget,
+        descend: bool,
+    ) -> Result<(), tr::FactsError> {
         if !budget.same_authority(&self.budget) {
             return Err(tr::FactsError::invalid(
                 budget,
                 "schema budget authority mismatch",
             ));
         }
+        #[allow(clippy::too_many_arguments)]
         fn walk(
             cx: &SchemaAdapter,
             ty: &ir::Ty,
@@ -21591,6 +21611,7 @@ impl tr::SchemaCx for SchemaAdapter {
             depth: usize,
             memo: &mut HashMap<(ir::NominalAppId, usize), usize>,
             state: &mut PlanState,
+            descend: bool,
         ) -> Result<usize, String> {
             b.check_depth(depth)?;
             b.charge_work(1)?;
@@ -21687,9 +21708,12 @@ impl tr::SchemaCx for SchemaAdapter {
                     }
                 }
             }
+            if !descend {
+                return Ok(0);
+            }
             let mut height = 0usize;
             let mut child = |t: &ir::Ty| -> Result<(), String> {
-                height = height.max(walk(cx, t, env, b, depth + 1, memo, state)? + 1);
+                height = height.max(walk(cx, t, env, b, depth + 1, memo, state, true)? + 1);
                 Ok(())
             };
             match ty {
@@ -21775,6 +21799,7 @@ impl tr::SchemaCx for SchemaAdapter {
             layers,
             &mut HashMap::new(),
             &mut self.scratch(),
+            descend,
         )
         .map(|_| ())
         .map_err(|e| self.error(e))

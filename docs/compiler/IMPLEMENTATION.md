@@ -2048,7 +2048,11 @@ replaying ordinary source-signature checks against physical rows. Shared and
 mutable results, escaping-local rejection, and dormant outer opaque bindings
 are covered by `closure_generic_owners`. Unused outer-binding lookup slots no
 longer introduce opaque representation dependencies into independent closures.
-The full closure corpus still reaches a module-authority resource boundary
+Nominal schema authentication now checks one definition at a time within the
+existing recursive type-validation walk, retaining nested-payload rejection
+without revalidating every subtree at every ancestor. The full closure corpus
+advances beyond its module-authority work limit but still rejects the reference
+result of `Filter::next` because its declaration-owned source set is empty
 (`justrust run --bin jr-rust --
 tests/fixtures/full_programs/11_closures_iterators.rs -o .jcode/closure-probe
 --workers 8`), so this is not a native-corpus promotion.

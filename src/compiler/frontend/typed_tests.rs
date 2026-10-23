@@ -2597,17 +2597,10 @@ fn b3b_mutable_call_temp_copy_reads_preserve_computed_place_boundaries() {
         "fn id<'a>(r:&'a mut i32)->&'a mut i32{r}fn main(){let mut x=1;*id(&mut x)=2;}",
         "fn id<'a>(r:&'a mut i32)->&'a mut i32{r}fn main(){let mut x=1;let q=&mut *id(&mut x);}",
     ] {
-        if source.contains("*id(&mut x)=2") {
-            check(&parse(source).unwrap()).unwrap();
-        } else {
-            // `&mut *call()` reborrows through a call result: an explicit
-            // boundary of the checker, not a parse rejection.
-            assert!(
-                check(&parse(source).unwrap())
-                    .unwrap_err()
-                    .contains("unsupported")
-            );
-        }
+        // Call-result assignment and explicit reborrowing both preserve the
+        // original referent loan. Execution and rejection are covered by the
+        // reference-return differential acceptance suite.
+        check(&parse(source).unwrap()).unwrap();
     }
     for source in [
         "fn bad<'a>(x:&'a i32)->&'a mut i32{loop{}}fn main(){}",

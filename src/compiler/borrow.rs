@@ -835,7 +835,6 @@ fn result_flow_problem(
     }
 }
 
-/// A root generic result instantiated to one reference retains the element's
 fn physical_result_flow_problem(
     physical: Option<&super::opaque_physical::PhysicalCarrierFlow>,
     view: Option<&super::traits::CarrierContractView>,
@@ -866,6 +865,7 @@ fn physical_result_flow_problem(
     }
 }
 
+/// A root generic result instantiated to one reference retains the element's
 /// declared family lifetime, not the lifetime of the slice descriptor. This is
 /// shape selection for the existing authenticated result-flow and origin checks.
 fn borrowed_slice_family_result(
@@ -1095,15 +1095,15 @@ struct CarrierBuilder<'a, 'b> {
     parents: Vec<Set>,
     dependencies: Vec<Set>,
     calls: Vec<Option<Arc<super::traits::CarrierContractView>>>,
+    physical_calls: Vec<Option<super::opaque_physical::PhysicalCarrierFlow>>,
     // Each block has one immutable callee/view and this builder has one fixed
     // facts/table pair. Cache only successful lookups, including no summary,
-    physical_calls: Vec<Option<super::opaque_physical::PhysicalCarrierFlow>>,
     // so dataflow revisits do not replay identical authority proofs.
     call_effects: Vec<Option<Option<Arc<CarrierEffects>>>>,
     body: Option<Arc<super::traits::CarrierContractView>>,
+    physical_body: Option<super::opaque_physical::PhysicalCarrierFlow>,
     body_signature: Option<ir::Signature>,
     call_rows: Vec<Vec<(CarrierLocation, ReferenceOriginId)>>,
-    physical_body: Option<super::opaque_physical::PhysicalCarrierFlow>,
     raw_slice_rows: Vec<(BlockId, usize, ReferenceOriginId)>,
     function: Option<Arc<cfg::Function>>,
     authority: Option<Arc<super::traits::ValidatedFacts>>,
@@ -2352,6 +2352,10 @@ impl<'a, 'b> CarrierBuilder<'a, 'b> {
             &'a Arc<super::traits::ValidatedFacts>,
         )>,
     ) -> Result<Self, Exhausted> {
+        let (physical, physical_facts) = match physical {
+            Some((validation, facts)) => (Some(validation), Some(facts)),
+            None => (None, None),
+        };
         let allocation_start = budget.reserved_bytes();
         // Closed layouts do not grant new read-cover authority. Retain only
         // original types from the exact validated template, without owning a
@@ -2359,10 +2363,6 @@ impl<'a, 'b> CarrierBuilder<'a, 'b> {
         let original = f
             .body_substitution
             .as_ref()
-        let (physical, physical_facts) = match physical {
-            Some((validation, facts)) => (Some(validation), Some(facts)),
-            None => (None, None),
-        };
             .map_or(f, |proof| proof.template().function().as_ref());
         // Canonical lowering reserves source locals, one slot per expression,
         // then the return slot before any type-dependent extra temporaries.
@@ -2555,6 +2555,12 @@ impl<'a, 'b> CarrierBuilder<'a, 'b> {
             None
         };
         let n = kinds.len();
+        if physical.is_some() {
+            budget.reserve_bytes(mul(
+                f.blocks.len(),
+                size_of::<Option<super::opaque_physical::PhysicalCarrierFlow>>(),
+            )?)?;
+        }
         budget.reserve_bytes(mul(
             n,
             3 * size_of::<Set>() + 2 * n.div_ceil(64) * 8 + size_of::<BorrowKind>(),
@@ -2585,19 +2591,19 @@ impl<'a, 'b> CarrierBuilder<'a, 'b> {
             parents: vec![Set::new(n); n],
             dependencies: vec![Set::new(n); n],
             calls: vec![None; f.blocks.len()],
+            physical_calls: if physical.is_some() {
+                (0..f.blocks.len()).map(|_| None).collect()
+            } else {
+                Vec::new()
+            },
             call_effects: vec![None; f.blocks.len()],
             body: None,
+            physical_body: None,
             body_signature: None,
             call_rows,
             raw_slice_rows,
             function: None,
             authority: None,
-        if physical.is_some() {
-            budget.reserve_bytes(mul(
-                f.blocks.len(),
-                size_of::<Option<super::opaque_physical::PhysicalCarrierFlow>>(),
-            )?)?;
-        }
             validated_provenance: None,
             bindings: vec![],
             regions: RegionRelations::default(),
@@ -2629,14 +2635,8 @@ impl<'a, 'b> CarrierBuilder<'a, 'b> {
             }
         }
         let mut next_reference = 0usize;
-            physical_calls: if physical.is_some() {
-                (0..f.blocks.len()).map(|_| None).collect()
-            } else {
-                Vec::new()
-            },
         let mut next_family = 0usize;
         for (param, local) in f.params.iter().enumerate() {
-            physical_body: None,
             for location in layouts[local.0].iter() {
                 let component = Place {
                     local: *local,
@@ -4856,6 +4856,7 @@ impl CarrierBuilder<'_, '_> {
             original_locals: self.original_locals,
             family_inputs: self.family_inputs,
             body: self.body,
+            physical_body: self.physical_body,
             body_signature: self.body_signature,
             authority,
             effects,
@@ -4897,7 +4898,6 @@ fn visit_rvalue_for_statement(
             index,
             value,
         }
-            physical_body: self.physical_body,
         | Statement::IndexAssignOp {
             array,
             index,
@@ -5170,6 +5170,7 @@ pub(super) struct Plan {
     original_locals: Vec<Ty>,
     family_inputs: Vec<FamilyOrigin>,
     body: Option<Arc<super::traits::CarrierContractView>>,
+    physical_body: Option<super::opaque_physical::PhysicalCarrierFlow>,
     body_signature: Option<ir::Signature>,
     authority: Option<Arc<super::traits::ValidatedFacts>>,
     effects: Option<Arc<CarrierEffects>>,
@@ -5212,7 +5213,6 @@ fn identity_effect_rows(
         )?;
         if row.destination != expected.destination
             || row.sources.len() != 1
-    physical_body: Option<super::opaque_physical::PhysicalCarrierFlow>,
             || !matches!(row.destination.location.channel, CarrierChannel::Fixed(_))
             || row.destination.location.path.0.iter().any(|step| {
                 !matches!(
@@ -6046,10 +6046,10 @@ impl Plan {
                         if !row.sources.iter().any(|input| {
                             f.params.get(input.param) == Some(local) && input.location == *location
                         }) {
-                            return Ok(Some(Problem::Invalid(
-                                "returned carrier violates its declaration-owned input occurrence"
-                                    .into(),
-                            )));
+                            return Ok(Some(Problem::Invalid(format!(
+                                "returned carrier violates its declaration-owned input occurrence: expected {:?}, got {:?} at {:?}",
+                                row.sources, local, location
+                            ))));
                         }
                     }
                 }
@@ -6795,6 +6795,21 @@ mod parameter_equality_tests {
             )
         };
         assert!(original.iter().all(subject_ok));
+        let mut calls = vec![None; template.function().blocks.len()];
+        for binding in original.iter() {
+            calls[binding.block.0] = Some(binding.contract.clone());
+        }
+        assert!(
+            original
+                .iter()
+                .all(|binding| call_binding_view_matches(binding, &calls))
+        );
+        let mut foreign_view = original[0].clone();
+        foreign_view.contract = Arc::new(foreign_view.contract.as_ref().clone());
+        assert!(!call_binding_view_matches(&foreign_view, &calls));
+        let mut missing_view = calls.clone();
+        missing_view[original[0].block.0] = None;
+        assert!(!call_binding_view_matches(&original[0], &missing_view));
         let mut stale = original[0].clone();
         stale.block = original[1].block;
         assert!(!subject_ok(&stale));
@@ -6845,21 +6860,6 @@ mod parameter_equality_tests {
                     row.block = BlockId(index * 2 + 1);
                     row
                 })
-        let mut calls = vec![None; template.function().blocks.len()];
-        for binding in original.iter() {
-            calls[binding.block.0] = Some(binding.contract.clone());
-        }
-        assert!(
-            original
-                .iter()
-                .all(|binding| call_binding_view_matches(binding, &calls))
-        );
-        let mut foreign_view = original[0].clone();
-        foreign_view.contract = Arc::new(foreign_view.contract.as_ref().clone());
-        assert!(!call_binding_view_matches(&foreign_view, &calls));
-        let mut missing_view = calls.clone();
-        missing_view[original[0].block.0] = None;
-        assert!(!call_binding_view_matches(&original[0], &missing_view));
                 .collect();
             let bound = (usize::BITS - count.leading_zeros()) as usize;
             assert!(ordered_call_bindings(&rows, &mut Budget::new(count - 1)).unwrap());
