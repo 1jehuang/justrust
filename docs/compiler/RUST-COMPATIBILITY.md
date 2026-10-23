@@ -113,7 +113,9 @@ our evidence. Neither implementation resemblance nor timing alone proves parity.
 The ordering below is a starting dependency plan, not a claim that language
 features can be implemented in one linear pass. Revisit representations when
 new semantics demand it. Each slice must execute end to end and retain graph
-accounting, failure diagnostics and benchmark receipts.
+accounting and useful failure diagnostics. Use rerunnable automated acceptance
+checks to track correctness, not routine hand-maintained run receipts. Retain
+comparable historical benchmark results when making performance claims.
 
 1. **Names and source organization.** Module trees, item identity, path resolution,
    imports, visibility, source maps and file loading. First slice: inline modules,

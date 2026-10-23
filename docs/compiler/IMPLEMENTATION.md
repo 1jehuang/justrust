@@ -414,9 +414,15 @@ historical test counts as the current total.
 
 ### Gate rules and dependency map
 
-Each gate needs a scoped contract, named owner, dependency/API agreement, frozen
-positive/invalid/legal-unsupported cases, actual public CHECK/BUILD/run evidence,
-and retained regression receipts. Invalid unused declarations and dead metadata
+Each gate needs a scoped contract, named owner, dependency/API agreement, and
+executable positive/invalid/legal-unsupported regression cases. Run the public
+CHECK/BUILD/run checks against the changed revision, using current test-runner or
+CI results rather than manually retained success receipts. Keep test names and
+commands discoverable; update this tracker only when capabilities or blockers
+change. Historical performance comparisons and hard-to-reproduce failures may
+need selected retained records (see AGENTS.md and data/runs/README.md). Existing
+checkpoint logs below are historical, not a template for new per-run narratives.
+Invalid unused declarations and dead metadata
 must still reject. CHECK must not demand code generation. Failed correctness,
 unsupported input, resource limits and infrastructure faults remain distinct and
 must never publish a successful executable. Internal graph tests supplement,
@@ -1519,11 +1525,13 @@ not establish persistent, distributed or authorized cross-tenant reuse.
 - [ ] Exercise real CLI packaging, artifacts, diagnostics/spans, exit status,
       time/resource limits and all-unused checks at single/multiple workers.
 
-**Next:** build a machine-readable requirement-to-case index and prioritize
-soundness/wrong-code and library/project blockers over accumulating small corpus
-counts. **Acceptance:** every claimed contract row links to real observed results,
-known valid unsupported programs remain gaps, and discovered failures acquire
-minimized tests before the corresponding completion claim is restored.
+**Next:** keep a machine-readable requirement-to-case index in the test system and
+prioritize soundness/wrong-code and library/project blockers over accumulating
+small corpus counts. **Acceptance:** every claimed contract row maps to a
+rerunnable automated check whose current result passes, known valid unsupported
+programs remain gaps, and discovered failures acquire minimized regression tests
+before the corresponding completion claim is restored. Ordinary passing runs need
+no additional receipt archive or prose report.
 
 ### G12. Graph-native optimizer and code generation
 

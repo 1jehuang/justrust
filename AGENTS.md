@@ -120,10 +120,21 @@ needs stock-differential CHECK/BUILD/run acceptance at workers 1 and 8, relevant
 forged-fact and invalid-input rejection, and graph-shape coverage. Extend existing
 suites and feature contracts by default; do not create a new Markdown file or
 three new test files for each small fix. A new feature document is warranted only
-for a substantial contract not already covered by an existing one. Keep contract,
-IR/CFG shape and acceptance evidence concise and update docs/compiler/IMPLEMENTATION.md when
-actual gate status or a tracked blocker changes. Do not substitute planning,
-audits or test-expectation changes for production integration. Always run
+for a substantial contract not already covered by an existing one. Treat executable
+regression tests and machine-readable expectations as the source of truth for
+progress. Run the affected acceptance suites and graph gate on the actual change;
+rerun them whenever confidence is needed. Keep ordinary results in the test runner
+or CI output associated with the tested revision, not hand-copied receipts or
+per-run Markdown narratives. Update docs/compiler/IMPLEMENTATION.md only when an
+actual capability, gate status or tracked blocker changes, with a short description
+and the relevant test command/name. Routine correctness runs do not require
+`justrust export`, committed logs, run IDs, or a second documentation-only commit.
+Preserve existing historical records. Retain selected historical measurements for
+performance claims and hard-to-reproduce failures as described under Measuring.
+This policy concerns development logs only: compiler-internal proof receipts,
+source identities and immutable graph evidence remain mandatory.
+Do not substitute planning, audits or test-expectation changes for production
+integration. Always run
 `justrust test --test graph_integrity` before committing compiler changes.
 
 **Where things are.**
@@ -308,12 +319,19 @@ billing, private caches) and never weaken the security invariants in
   and correctness checks relevant to the change. Its coverage is not universal
   (see `bench/synth/README.md`, Known gaps). If the broad gate is blocked,
   report it as blocked rather than substituting `desktop-test-edit`.
-- Record notable observations in `docs/compiler/FINDINGS.md` with the run id.
-- Run `justrust export` from the repo root and commit `data/runs/` so every
-  cited run id exists in the repository (slim, path-redacted summaries, see
-  `data/runs/README.md`).
+- For a performance claim, retain the comparable before/after benchmark results
+  and the conditions needed to reproduce them. Record a concise finding when it
+  explains a regression or a decision. Selected run summaries may be exported
+  with `justrust export --out <scratch-directory>` and copied into `data/runs/`
+  when the claim needs them; do not commit the entire rolling run archive.
+- For a hard-to-reproduce correctness or infrastructure failure, retain only the
+  useful diagnostic, revision, inputs and reproduction command. Prefer a minimized
+  regression test once the failure can be reproduced.
+- Routine successful checks, tests and lints need no manual receipt export or
+  committed logs. Use current automated results to assess progress, and rerun
+  the checks rather than maintaining historical passing-test counts.
 - `justrust history` mines past Jcode sessions; `justrust runs` lists recorded
-  builds.
+  builds. Local automatic telemetry may remain enabled; exporting it is selective.
 
 ## Design rules
 
