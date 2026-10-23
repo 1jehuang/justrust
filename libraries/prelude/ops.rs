@@ -108,6 +108,40 @@ pub trait Fn<Args> {
     type Output;
     fn call(&self, args: Args) -> Self::Output;
 }
+// Shared references preserve shared-call capability. Mutable references forward
+// mutable calls, including their consuming call, without moving the referent.
+// Naming the result keeps implementation signatures projection-free while the
+// associated equality still requires exactly the underlying callable's output.
+impl<Args, R, F: Fn<Args, Output = R> + ?Sized> Fn<Args> for &F {
+    type Output = R;
+    fn call(&self, args: Args) -> R {
+        <F as Fn<Args>>::call(*self, args)
+    }
+}
+impl<Args, R, F: Fn<Args, Output = R> + ?Sized> FnMut<Args> for &F {
+    type Output = R;
+    fn call_mut(&mut self, args: Args) -> R {
+        <F as Fn<Args>>::call(*self, args)
+    }
+}
+impl<Args, R, F: Fn<Args, Output = R> + ?Sized> FnOnce<Args> for &F {
+    type Output = R;
+    fn call_once(self, args: Args) -> R {
+        <F as Fn<Args>>::call(self, args)
+    }
+}
+impl<Args, R, F: FnMut<Args, Output = R> + ?Sized> FnMut<Args> for &mut F {
+    type Output = R;
+    fn call_mut(&mut self, args: Args) -> R {
+        <F as FnMut<Args>>::call_mut(*self, args)
+    }
+}
+impl<Args, R, F: FnMut<Args, Output = R> + ?Sized> FnOnce<Args> for &mut F {
+    type Output = R;
+    fn call_once(self, args: Args) -> R {
+        <F as FnMut<Args>>::call_mut(self, args)
+    }
+}
 // Range expressions desugar to these struct literals (frontend/range_expr.rs).
 #[derive(Clone, PartialEq, Eq)]
 pub struct Range<Idx> {

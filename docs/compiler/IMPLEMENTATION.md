@@ -6,6 +6,32 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 
 ## Completed foundations, not full compatibility
 
+- [x] Borrowed callable forwarding retains exact source provenance, receiver
+      reference chains, and physical carrier/lifetime boundaries. The five
+      standard `Fn`/`FnMut`/`FnOnce` reference implementations support shared
+      opaque callables, nested shared references, and mutable stateful closure
+      forwarding without moving the referent. `&mut F: Fn` is not invented:
+      stock-invalid shared mutation/consumption and mutable-reference `Fn`
+      calls reject. All nine owner/forwarding cases pass stock CHECK/BUILD/run
+      at workers 1/8. Deferred generic write envelopes are filtered against
+      concrete writable destinations; an additional closed-body proof admits
+      only exact identity transport of distinct fixed cells, not arbitrary
+      multi-cell mutation. Forged source bindings, reborrow timing, receiver
+      keys, carrier rows and physical boundaries reject. The exact owned
+      snapshot passes 1,963 library and integration tests with zero failures
+      and three existing ignores (`20261023-081622283-1266672`), including
+      stored generic callable references after canonical bound selection through
+      autoderef. Library/test clippy passes with existing warnings
+      (`20261023-081617008-1266673`); hosted check also passes
+      (`20261023-080205036-1221650`). The final root graph-integrity gate passes
+      (`20261023-082018931-1279668`). Hidden reference-bearing opaque families
+      and nonidentity declared-lifetime transport remain unsupported. The
+      unchanged full-program corpus remains 11/20, not full Rust support.
+      The broader replay also exposed three pre-existing test expectation
+      failures in `borrowing_graph` and `associated_types`; all three reproduce
+      before this increment (`20261023-080948247-1246200`). Their graph-count
+      and formerly unsupported parse/CHECK expectations are not changed here.
+
 - [x] Mutable reference arguments reached through local-rooted dereference
       chains are reborrowed rather than moved. Typed carrier witnesses and CFG
       two-phase loans retain every dereference, and every crossed reference
@@ -759,9 +785,10 @@ missing-file changes invalidate only justified consumers without stale lookup.
       Output and caller world/env/phase replay controls reject. The later owned
       generic callable increment listed above adds executable scalar-capturing
       closure-backed opaque values passed by value to generic `Fn` consumers.
-      Nested opaque closure composition, borrowed callable forwarding,
-      reference-bearing hidden representations and realized destructor
-      dependencies remain incomplete, not approximated.
+      Later increments above complete nested opaque closure composition and
+      the covered borrowed callable forwarding paths. Reference-bearing hidden
+      representations and realized destructor dependencies remain incomplete,
+      not approximated.
       Partial method inference substitutes canonical enclosing impl bindings.
       Delivered body-local structural union-find constraints: later inherent
       receiver uses, assignments and call parameters solve nested generic local

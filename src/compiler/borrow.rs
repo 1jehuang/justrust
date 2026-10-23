@@ -1597,6 +1597,38 @@ impl CarrierBuilder<'_, '_> {
                 ));
             }
         }
+        if owned_destination {
+            // A symbolic family may carry a deferred write envelope, but its
+            // concrete expansion can include owned values that are not writable
+            // referent cells. The declaration's instantiated contract already
+            // performed that exact mutability check. Do not resurrect filtered
+            // destinations in either admission or effect application.
+            let mut retained = 0;
+            for index in 0..result.len() {
+                let mut authorized = false;
+                for envelope in view.contract().writes.iter() {
+                    self.budget.spend(
+                        envelope
+                            .destination
+                            .location
+                            .path
+                            .0
+                            .len()
+                            .saturating_add(result[index].0.location.path.0.len())
+                            .saturating_add(1),
+                    )?;
+                    if envelope.destination == result[index].0 {
+                        authorized = true;
+                        break;
+                    }
+                }
+                if authorized {
+                    result.swap(retained, index);
+                    retained += 1;
+                }
+            }
+            result.truncate(retained);
+        }
         Ok(result)
     }
     fn initialize_regions(&mut self) -> Result<(), Exhausted> {
@@ -4247,9 +4279,10 @@ impl CarrierBuilder<'_, '_> {
                 activations[activation.0].push(LoanId(index));
             }
         }
-        let effects = if let Some(body) = self.body.clone().filter(|_| family_admitted) {
+        let effects = if let Some(body) = self.body.clone() {
             let mut writes = Vec::new();
             let mut must_overwrite = Vec::new();
+            let mut exact_identity_cells = true;
             self.retain(
                 mul(
                     body.contract().writes.len(),
@@ -4267,6 +4300,7 @@ impl CarrierBuilder<'_, '_> {
                         matching.push(index);
                     }
                 }
+                exact_identity_cells &= matching.len() == 1;
                 let mut definite = !matching.is_empty() && final_overwrites.is_some();
                 for index in matching {
                     definite &= final_overwrites
@@ -4417,27 +4451,49 @@ impl CarrierBuilder<'_, '_> {
             if invalid_binding {
                 self.problem(f.entry, None, Problem::Invalid("retained carrier occurrence changed source, snapshot, region or authority identity".into()))?;
             }
-            checked_arc_transfer::<ir::CarrierWriteEnvelope>(writes.len(), self.budget)?;
-            checked_arc_transfer::<InputCarrier>(must_overwrite.len(), self.budget)?;
-            checked_arc_transfer::<CallCarrierBinding>(self.bindings.len(), self.budget)?;
-            self.retain(size_of::<CarrierEffects>() + size_of::<[usize; 8]>(), 1)?;
-            // All effect rows, occurrence snapshots, paths and component sets
-            // are subsets of this analysis's paid allocations. Retain that
-            // conservative whole-allocation bound in the SAME planning ledger
-            // before publishing an Arc that outlives the local Budget tokens.
-            let retained_payload = self
-                .budget
-                .reserved_bytes()
-                .checked_sub(self.allocation_start)
-                .ok_or(Exhausted)?;
-            self.ledger
-                .retain_bytes(retained_payload)
-                .map_err(|_| Exhausted)?;
-            Some(Arc::new(CarrierEffects {
-                writes: writes.into(),
-                must_overwrite: must_overwrite.into(),
-                bindings: std::mem::take(&mut self.bindings).into(),
-            }))
+            let identity_admitted = if !family_admitted
+                && !invalid_binding
+                && exact_identity_cells
+                && self.problems.is_empty()
+                && self
+                    .authority
+                    .as_ref()
+                    .is_some_and(|facts| facts.phase() == super::traits::FactsPhase::Closed)
+            {
+                let result = self.f.result.clone();
+                let result_empty = self
+                    .metadata_value(ir::carrier_locations(&result, &self.ledger))?
+                    .is_some_and(|locations| locations.is_empty());
+                result_empty
+                    && identity_effect_rows(body.contract(), &writes, &must_overwrite, self.budget)?
+            } else {
+                false
+            };
+            if (family_admitted || identity_admitted) && self.problems.is_empty() {
+                checked_arc_transfer::<ir::CarrierWriteEnvelope>(writes.len(), self.budget)?;
+                checked_arc_transfer::<InputCarrier>(must_overwrite.len(), self.budget)?;
+                checked_arc_transfer::<CallCarrierBinding>(self.bindings.len(), self.budget)?;
+                self.retain(size_of::<CarrierEffects>() + size_of::<[usize; 8]>(), 1)?;
+                // All effect rows, occurrence snapshots, paths and component sets
+                // are subsets of this analysis's paid allocations. Retain that
+                // conservative whole-allocation bound in the SAME planning ledger
+                // before publishing an Arc that outlives the local Budget tokens.
+                let retained_payload = self
+                    .budget
+                    .reserved_bytes()
+                    .checked_sub(self.allocation_start)
+                    .ok_or(Exhausted)?;
+                self.ledger
+                    .retain_bytes(retained_payload)
+                    .map_err(|_| Exhausted)?;
+                Some(Arc::new(CarrierEffects {
+                    writes: writes.into(),
+                    must_overwrite: must_overwrite.into(),
+                    bindings: std::mem::take(&mut self.bindings).into(),
+                }))
+            } else {
+                None
+            }
         } else {
             None
         };
@@ -4803,6 +4859,98 @@ pub(super) struct Plan {
     effects: Option<Arc<CarrierEffects>>,
     pub problems: Vec<(BlockId, Option<usize>, Problem)>,
     pub bytes: usize,
+}
+
+/// A separate, evidence-based case for closed bodies outside the fast affine
+/// envelope: every exact declared cell survives with only its own ENTRY origin.
+/// This cannot admit a swap, a missing cell, an abstract/summary destination, or
+/// a strong overwrite. The caller separately proves zero result carriers,
+/// unique cells, valid occurrence bindings, and an otherwise successful plan.
+fn identity_effect_rows(
+    declared: &ir::CarrierContract,
+    computed: &[ir::CarrierWriteEnvelope],
+    must_overwrite: &[InputCarrier],
+    budget: &mut Budget,
+) -> Result<bool, Exhausted> {
+    budget.spend(
+        computed
+            .len()
+            .saturating_add(declared.writes.len())
+            .saturating_add(1),
+    )?;
+    if !must_overwrite.is_empty()
+        || !declared.results.is_empty()
+        || computed.len() != declared.writes.len()
+    {
+        return Ok(false);
+    }
+    for (index, (row, expected)) in computed.iter().zip(declared.writes.iter()).enumerate() {
+        budget.spend(
+            row.destination
+                .location
+                .path
+                .0
+                .len()
+                .saturating_add(expected.destination.location.path.0.len())
+                .saturating_add(1),
+        )?;
+        if row.destination != expected.destination
+            || row.sources.len() != 1
+            || !matches!(row.destination.location.channel, CarrierChannel::Fixed(_))
+            || row.destination.location.path.0.iter().any(|step| {
+                !matches!(
+                    step,
+                    CarrierStep::Referent | CarrierStep::Field(_) | CarrierStep::ConstantIndex(_)
+                )
+            })
+        {
+            return Ok(false);
+        }
+        budget.spend(
+            row.destination
+                .location
+                .path
+                .0
+                .len()
+                .saturating_add(row.sources[0].location.path.0.len())
+                .saturating_add(1),
+        )?;
+        if row.sources[0] != row.destination {
+            return Ok(false);
+        }
+        let mut declared_self = false;
+        for source in expected.sources.iter() {
+            budget.spend(
+                source
+                    .location
+                    .path
+                    .0
+                    .len()
+                    .saturating_add(row.destination.location.path.0.len())
+                    .saturating_add(1),
+            )?;
+            declared_self |= source == &row.destination;
+        }
+        if !declared_self {
+            return Ok(false);
+        }
+        for previous in &computed[..index] {
+            budget.spend(
+                previous
+                    .destination
+                    .location
+                    .path
+                    .0
+                    .len()
+                    .saturating_add(row.destination.location.path.0.len())
+                    .saturating_add(1),
+            )?;
+            if previous.destination == row.destination {
+                return Ok(false);
+            }
+        }
+    }
+    Ok(true)
 }
 
 fn add(a: usize, b: usize) -> Result<usize, Exhausted> {
@@ -6069,6 +6217,93 @@ mod parameter_equality_tests {
             panic!("expected genuine source publication")
         };
         cfg::lower_source_template(&publication, &budget).unwrap()
+    }
+
+    #[test]
+    fn closed_identity_effect_rows_reject_forged_or_incomplete_transport() {
+        let input = |field| InputCarrier {
+            param: 0,
+            location: CarrierLocation {
+                path: ir::CarrierPath(Arc::from([
+                    CarrierStep::Referent,
+                    CarrierStep::Field(field),
+                ])),
+                channel: CarrierChannel::Fixed(ReferencePosition { depth: 0 }),
+            },
+        };
+        let rows = [input(0), input(1)].map(|destination| ir::CarrierWriteEnvelope {
+            sources: Arc::from([destination.clone()]),
+            destination,
+        });
+        let declared = ir::CarrierContract {
+            inputs: Arc::from([input(0), input(1)]),
+            results: Arc::from([]),
+            writes: Arc::from(rows.clone()),
+        };
+        let admitted = |contract: &ir::CarrierContract,
+                        rows: &[ir::CarrierWriteEnvelope],
+                        must: &[InputCarrier]| {
+            identity_effect_rows(contract, rows, must, &mut Budget::new(1_000_000)).unwrap()
+        };
+        assert!(admitted(&declared, &rows, &[]));
+        assert!(!admitted(&declared, &rows[..1], &[]));
+        assert!(!admitted(&declared, &rows, &[input(0)]));
+        let mut changed = rows.clone();
+        changed[1] = changed[0].clone();
+        assert!(!admitted(&declared, &changed, &[]));
+        let mut duplicate = declared.clone();
+        duplicate.writes = Arc::from(changed.clone());
+        assert!(!admitted(&duplicate, &changed, &[]));
+        changed = rows.clone();
+        changed[0].sources = Arc::from([]);
+        assert!(!admitted(&declared, &changed, &[]));
+        changed = rows.clone();
+        changed[0].sources = Arc::from([input(1)]);
+        assert!(!admitted(&declared, &changed, &[]));
+        changed = rows.clone();
+        changed[0].sources = Arc::from([input(0), input(1)]);
+        assert!(!admitted(&declared, &changed, &[]));
+        changed = rows.clone();
+        changed.swap(0, 1);
+        assert!(!admitted(&declared, &changed, &[]));
+        let mut unauthorized = declared.clone();
+        let mut envelopes = unauthorized.writes.to_vec();
+        envelopes[0].sources = Arc::from([]);
+        unauthorized.writes = envelopes.into();
+        assert!(!admitted(&unauthorized, &rows, &[]));
+        let mut with_result = declared.clone();
+        with_result.results = Arc::from([ir::CarrierReturn {
+            location: input(0).location,
+            sources: Arc::from([input(0)]),
+        }]);
+        assert!(!admitted(&with_result, &rows, &[]));
+        let mut summary = rows.clone();
+        summary[0].destination.location.path =
+            ir::CarrierPath(Arc::from([CarrierStep::SliceElement]));
+        summary[0].sources = Arc::from([summary[0].destination.clone()]);
+        let mut summary_contract = declared.clone();
+        summary_contract.writes = Arc::from(summary.clone());
+        assert!(!admitted(&summary_contract, &summary, &[]));
+        assert!(identity_effect_rows(&declared, &rows, &[], &mut Budget::new(0)).is_err());
+    }
+
+    #[test]
+    fn identity_fallback_does_not_admit_affine_results_or_replacement() {
+        for source in [
+            "fn pair<T,U>(x:T,y:U)->(T,U){(x,y)}fn main(){let mut a=1i32;let mut b=2i32;let (x,y)=pair::<&mut i32,&mut i32>(&mut a,&mut b);*x=10;*y=20;}",
+            "fn put_and_view<'a,T>(dst:&'a mut T,x:T)->&'a mut T{*dst=x;dst}fn main(){let mut a=1i32;let mut b=2i32;let mut slot=&mut a;let r=put_and_view::<&mut i32>(&mut slot,&mut b);**r=31;}",
+        ] {
+            for workers in [1, 8] {
+                let error = crate::compiler::compile(source.into(), workers, true)
+                    .err()
+                    .expect("multi-affine result unexpectedly admitted")
+                    .to_string();
+                assert!(
+                    error.contains("affine carrier") || error.contains("bounded transport/write"),
+                    "workers={workers}: {error}"
+                );
+            }
+        }
     }
 
     #[test]

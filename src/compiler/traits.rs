@@ -5235,7 +5235,16 @@ impl ValidatedTraitWorld {
             all_mutable &= *kind == ir::BorrowKind::Mut;
             ty = referent;
         }
-        Ok(saw_deref && all_mutable)
+        // A parameter family can hide mutable reference cells even when its
+        // declaration has no visible dereference. Retain that deferred envelope;
+        // instantiation expands it and rechecks every concrete destination with
+        // this same predicate. A shared prefix still forbids mutation.
+        let deferred_parameter = matches!(
+            (&location.channel, ty),
+            (ir::CarrierChannel::ParamTail { parameter, .. }, Ty::Param(actual))
+                if parameter == actual
+        );
+        Ok(all_mutable && (saw_deref || deferred_parameter))
     }
     fn derive_carriers(
         &self,
@@ -7883,8 +7892,7 @@ impl TraitCx for ValidatedTraitWorld {
         facts: &ValidatedFacts,
     ) -> Result<Signature> {
         self.check_facts(facts, true)?;
-        if (facts.phase() == FactsPhase::Universal
-            || !matches!(call.trait_ref.self_ty, Ty::Opaque(_)))
+        if facts.phase() == FactsPhase::Universal
             && self.schema_contains_projection(&self.item_header(call.item)?.schema)?
             && !self.goal_is_closed(&call.trait_ref, facts.env())?
             && !matches!(&call.trait_ref.self_ty, Ty::Dyn(_))
@@ -7995,8 +8003,7 @@ impl TraitCx for ValidatedTraitWorld {
                 _required: None,
             });
         }
-        if (facts.phase() == FactsPhase::Universal
-            || !matches!(call.trait_ref.self_ty, Ty::Opaque(_)))
+        if facts.phase() == FactsPhase::Universal
             && self.schema_contains_projection(&self.item_header(call.item)?.schema)?
             && !self.goal_is_closed(&call.trait_ref, facts.env())?
             && !matches!(&call.trait_ref.self_ty, Ty::Dyn(_))
@@ -11054,8 +11061,13 @@ mod tests {
             test_support::world(fixture_modules(), std::slice::from_ref(&header), &budget).unwrap();
         let universal = world.callable_facts(header.declaration).unwrap();
         let rigid = universal.carrier_contract(SignatureSubject::Body).unwrap();
-        assert_eq!(rigid.contract().writes.len(), 1);
+        assert_eq!(rigid.contract().writes.len(), 2);
         assert_eq!(rigid.contract().writes[0].destination.param, 0);
+        assert_eq!(rigid.contract().writes[1].destination.param, 1);
+        assert!(matches!(
+            rigid.contract().writes[1].destination.location.channel,
+            ir::CarrierChannel::ParamTail { prefix: 0, .. }
+        ));
         assert!(
             rigid.contract().writes[0]
                 .sources
@@ -11190,6 +11202,55 @@ mod tests {
                 )
                 .unwrap()
         );
+    }
+
+    #[test]
+    fn owned_generic_write_envelopes_filter_concrete_shared_paths() {
+        let budget = PlanBudget::default();
+        let header = carrier_header(&budget, 1, |p| {
+            reference_signature(vec![p[0].clone()], Ty::Unit, &budget)
+        });
+        let world =
+            test_support::world(fixture_modules(), std::slice::from_ref(&header), &budget).unwrap();
+        let universal = world.callable_facts(header.declaration).unwrap();
+        let retained = universal.carrier_contract(SignatureSubject::Body).unwrap();
+        assert_eq!(retained.contract().writes.len(), 1);
+        let reference = |kind, ty| Ty::Ref {
+            kind,
+            referent: Arc::new(ty),
+        };
+        for (actual, expected) in [
+            (Ty::Int(IntTy::I32), 0),
+            (reference(BorrowKind::Mut, Ty::Int(IntTy::I32)), 0),
+            (
+                reference(
+                    BorrowKind::Shared,
+                    reference(BorrowKind::Mut, Ty::Int(IntTy::I32)),
+                ),
+                0,
+            ),
+            (
+                reference(
+                    BorrowKind::Mut,
+                    reference(BorrowKind::Mut, Ty::Int(IntTy::I32)),
+                ),
+                1,
+            ),
+        ] {
+            let target = CallTarget {
+                declaration: header.declaration,
+                type_args: Arc::from([actual]),
+            };
+            let facts = world.instance_facts(&target).unwrap();
+            let view = facts.carrier_contract(SignatureSubject::Body).unwrap();
+            assert_eq!(view.contract().writes.len(), expected);
+            if expected == 1 {
+                assert_eq!(
+                    view.contract().writes[0].destination.location.channel,
+                    ir::CarrierChannel::Fixed(ir::ReferencePosition { depth: 1 })
+                );
+            }
+        }
     }
 
     #[test]

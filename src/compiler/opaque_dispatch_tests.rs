@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn opaque_dispatch_v3_argument_identity_and_malformed_keys() {
+fn opaque_dispatch_v4_argument_identity_and_malformed_keys() {
     struct Probe(CompilerProvider);
     impl Provider for Probe {
         fn outputs(&self, key: &Key) -> usize {
@@ -40,7 +40,7 @@ fn opaque_dispatch_v3_argument_identity_and_malformed_keys() {
                     .ok_or_else(|| Error::new("fixture has no opaque bound call"))?;
                 let budget = &provider.0.budget;
                 let canonical = opaque_dispatch::key(&caller, occurrence, &call, budget)?;
-                assert_eq!(canonical.params[0], 3);
+                assert_eq!(canonical.params[0], 4);
 
                 // Keep the caller, occurrence, receiver and declarations identical:
                 // only the ordered public trait/method actuals may distinguish these.
@@ -70,6 +70,41 @@ fn opaque_dispatch_v3_argument_identity_and_malformed_keys() {
                     argument_keys.push(key);
                 }
 
+                // A borrowed receiver must not alias the bare family or any
+                // other ordered shared/mutable wrapper sequence.
+                for wrappers in [
+                    vec![ir::BorrowKind::Shared],
+                    vec![ir::BorrowKind::Mut],
+                    vec![ir::BorrowKind::Shared, ir::BorrowKind::Shared],
+                    vec![ir::BorrowKind::Shared, ir::BorrowKind::Mut],
+                    vec![ir::BorrowKind::Mut, ir::BorrowKind::Shared],
+                ] {
+                    let mut changed = call.clone();
+                    for kind in wrappers.into_iter().rev() {
+                        changed.trait_ref.self_ty = ir::Ty::Ref {
+                            kind,
+                            referent: Arc::new(changed.trait_ref.self_ty),
+                        };
+                    }
+                    let key = opaque_dispatch::key(&caller, occurrence, &changed, budget)?;
+                    assert!(
+                        !argument_keys.contains(&key),
+                        "reference wrapper identity collided"
+                    );
+                    argument_keys.push(key);
+                }
+                for receiver in [
+                    ir::Ty::RawPtr {
+                        kind: ir::BorrowKind::Shared,
+                        pointee: Arc::new(call.trait_ref.self_ty.clone()),
+                    },
+                    ir::Ty::Tuple(Arc::from([call.trait_ref.self_ty.clone()])),
+                ] {
+                    let mut changed = call.clone();
+                    changed.trait_ref.self_ty = receiver;
+                    assert!(opaque_dispatch::key(&caller, occurrence, &changed, budget).is_err());
+                }
+
                 let caller_end = 2 + canonical.params[1] as usize;
                 let opaque_len_index = caller_end + 6;
                 let trait_frame =
@@ -78,7 +113,7 @@ fn opaque_dispatch_v3_argument_identity_and_malformed_keys() {
                 assert_eq!(
                     method_frame + 1 + canonical.params[method_frame] as usize,
                     canonical.params.len(),
-                    "v3 must end with exactly the trait and method argument frames"
+                    "v4 must end with exactly the trait and method argument frames"
                 );
                 let mut rejected = argument_keys.into_iter().skip(1).collect::<Vec<_>>();
                 // Every proper prefix, including cuts inside each application frame,
@@ -94,7 +129,7 @@ fn opaque_dispatch_v3_argument_identity_and_malformed_keys() {
                     rejected.push(key);
                 }
                 for (index, value) in [
-                    (0, 2), // The pre-argument version cannot authorize a v3 call.
+                    (0, 3), // A key without the full receiver frame cannot authorize dispatch.
                     (caller_end, u64::MAX),
                     (caller_end + 1, 1), // Unsupported invocation capability.
                     (trait_frame, 0),
@@ -152,6 +187,165 @@ fn opaque_dispatch_v3_argument_identity_and_malformed_keys() {
         });
         let engine = Engine::new(Probe(CompilerProvider(snapshot)));
         let probe = engine.request(crate::compiler::keys::test_key(9002, vec![]));
+        engine.run(workers).unwrap();
+        probe.completion().unwrap();
+    }
+}
+
+#[test]
+fn borrowed_opaque_dispatch_replays_exact_source_wrappers() {
+    struct Probe(CompilerProvider);
+    impl Provider for Probe {
+        fn outputs(&self, key: &Key) -> usize {
+            self.0.outputs(key)
+        }
+        fn start(&self, cx: Context, requested: Key) -> TaskFuture {
+            if requested.kind != 9003 {
+                return self.0.start(cx, requested);
+            }
+            let provider = self.0.clone();
+            Box::pin(async move {
+                let facts = Facts { cx: &cx };
+                let types = facts.types().await?;
+                let main: Arc<TemplateBodyFact> = facts.get(keys::item(TEMPLATE_BODY, 2)).await?;
+                let apply = types.callable_decl(1).map_err(Error::new)?;
+                let main_source = provider.validated_body(&types, 2, &main)?;
+                let caller = main_source
+                    .exprs
+                    .iter()
+                    .find_map(|expr| match &expr.kind {
+                        ir::ExprKind::Call {
+                            target: ir::Callee::Direct(target),
+                            ..
+                        } if target.declaration == apply => Some(target.clone()),
+                        _ => None,
+                    })
+                    .ok_or_else(|| Error::new("fixture lost apply instance"))?;
+                let template: Arc<TemplateBodyFact> =
+                    facts.get(keys::item(TEMPLATE_BODY, 1)).await?;
+                let publication = template.publication.as_ref().unwrap();
+                let occurrence = publication
+                    .source()
+                    .exprs
+                    .iter()
+                    .enumerate()
+                    .find_map(|(index, expr)| {
+                        matches!(
+                            expr.kind,
+                            ir::ExprKind::Call {
+                                target: ir::Callee::TraitItem(_),
+                                ..
+                            }
+                        )
+                        .then_some(ir::ExprId(index))
+                    })
+                    .ok_or_else(|| Error::new("fixture lost borrowed invocation"))?;
+                let budget = &provider.0.budget;
+                let mut specialization = opaque_specialization::Specialization::new(
+                    publication,
+                    &caller,
+                    &types,
+                    budget,
+                )?;
+                let (ir::Callee::TraitItem(call), _) = specialization.call(occurrence)? else {
+                    return Err(Error::new("fixture changed invocation kind"));
+                };
+                assert!(matches!(
+                    call.trait_ref.self_ty,
+                    ir::Ty::Ref {
+                        kind: ir::BorrowKind::Shared,
+                        ..
+                    }
+                ));
+                let canonical = opaque_dispatch::key(&caller, occurrence, &call, budget)?;
+                let request = cx.request(canonical.clone());
+                let representations = opaque_instances::read(
+                    &facts,
+                    std::slice::from_ref(&call.trait_ref.self_ty),
+                    budget,
+                )
+                .await?;
+                let authorization: Arc<opaque_dispatch::OpaqueCallAuthorization> =
+                    cx.read_fact(request.get(0)).await?;
+                let ready: Arc<opaque_dispatch::PhysicalCalleeReady> =
+                    cx.read_fact(request.get(1)).await?;
+                assert_eq!(authorization.target(), ready.target());
+                authorization.replay(
+                    publication,
+                    &caller,
+                    occurrence,
+                    &representations,
+                    &types,
+                    budget,
+                )?;
+                let ir::Ty::Ref { referent, .. } = &call.trait_ref.self_ty else {
+                    unreachable!()
+                };
+                for receiver in [
+                    referent.as_ref().clone(),
+                    ir::Ty::Ref {
+                        kind: ir::BorrowKind::Mut,
+                        referent: referent.clone(),
+                    },
+                    ir::Ty::Ref {
+                        kind: ir::BorrowKind::Shared,
+                        referent: Arc::new(call.trait_ref.self_ty.clone()),
+                    },
+                ] {
+                    let mut changed = call.clone();
+                    changed.trait_ref.self_ty = receiver.clone();
+                    let forged = opaque_dispatch::key(&caller, occurrence, &changed, budget)?;
+                    assert_ne!(forged, canonical);
+                    let request = cx.request(forged);
+                    assert!(
+                        cx.read_fact::<opaque_dispatch::OpaqueCallAuthorization>(request.get(0))
+                            .await
+                            .is_err()
+                    );
+                    assert!(
+                        cx.read_fact::<opaque_dispatch::PhysicalCalleeReady>(request.get(1))
+                            .await
+                            .is_err()
+                    );
+                    let mut changed_caller = caller.clone();
+                    changed_caller.type_args = Arc::from([receiver]);
+                    assert!(
+                        authorization
+                            .replay(
+                                publication,
+                                &changed_caller,
+                                occurrence,
+                                &representations,
+                                &types,
+                                budget
+                            )
+                            .is_err()
+                    );
+                }
+                assert!(
+                    authorization
+                        .replay(
+                            publication,
+                            &caller,
+                            ir::ExprId(usize::MAX),
+                            &representations,
+                            &types,
+                            budget
+                        )
+                        .is_err()
+                );
+                cx.publish_fact(0, ())
+            })
+        }
+    }
+    for workers in [1, 8] {
+        let snapshot = Arc::new(Snapshot {
+            input: Input::Text("fn make_adder(n:i32)->impl Fn(i32)->i32{move |x|x+n} fn apply<F:Fn(i32)->i32>(f:F,x:i32)->i32{f(x)} fn main(){let a=make_adder(5);assert!(apply(&a,10)==15);}".into()),
+            source_options: source::SourceOptions::default(),
+            budget: ir::PlanBudget::default(),
+        });
+        let engine = Engine::new(Probe(CompilerProvider(snapshot)));
+        let probe = engine.request(keys::test_key(9003, vec![]));
         engine.run(workers).unwrap();
         probe.completion().unwrap();
     }

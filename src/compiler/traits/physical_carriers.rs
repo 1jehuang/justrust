@@ -25,6 +25,10 @@ fn same_result_subject(
 }
 
 impl CarrierContractView {
+    /// Declaration-owned instantiated signature, before physical representation mapping.
+    pub(in crate::compiler) fn physical_source_signature(&self) -> &Signature {
+        &self.result_signature
+    }
     pub(in crate::compiler) fn from_physical_boundary(
         original: &Self,
         identity: super::super::opaque_physical::PhysicalCarrierIdentity,
@@ -40,8 +44,9 @@ impl CarrierContractView {
         // constructing this one. Its source-signature equality result cannot
         // authorize the different physical signature and is not retained.
         view.equality_results = None;
-        // The factory admits no declared lifetime constraints. Keep original
-        // source identities and input mapping, but do not invent region rows.
+        // Declared lifetime rows survive only proven identity transport.
+        // Synthesized fixed rows may also retain proven empty-family bounds.
+        // Keep original source identities and mappings, never invent rows.
         view
     }
 

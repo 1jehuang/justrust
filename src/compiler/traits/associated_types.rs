@@ -1411,7 +1411,8 @@ impl ValidatedTraitWorld {
             },
             context.proof.env(),
         )?;
-        if !closed_goal && !builtin_closure {
+        let opaque_reference = matches!(&selected_goal.self_ty, Ty::Ref { referent, .. } if matches!(referent.as_ref(), Ty::Opaque(_)));
+        if !closed_goal && !builtin_closure && !opaque_reference {
             return Err(FactsError::unsupported(
                 &self.budget,
                 "unsupported: nonclosed associated projection application",
@@ -1863,11 +1864,11 @@ impl ValidatedTraitWorld {
         let caller_membership = matches!(
             &evidence.implementation,
             NormalizationOrigin::Dynamic(_) | NormalizationOrigin::Opaque(_)
-        ) || (matches!(
-            &evidence.membership.0.origin,
-            ProofOrigin::Closure { .. } | ProofOrigin::FnItem { .. }
-        ) && !self
-            .goal_is_closed(&evidence.selected_goal, context.proof.env())?);
+        ) || matches!(&evidence.selected_goal.self_ty, Ty::Ref { referent, .. } if matches!(referent.as_ref(), Ty::Opaque(_)))
+            || (matches!(
+                &evidence.membership.0.origin,
+                ProofOrigin::Closure { .. } | ProofOrigin::FnItem { .. }
+            ) && !self.goal_is_closed(&evidence.selected_goal, context.proof.env())?);
         if evidence.world != self.id
             || evidence.key.environment != context.proof.predicates.index
             || evidence.key.phase != context.proof.phase

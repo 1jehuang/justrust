@@ -1170,8 +1170,10 @@ impl ValidatedTraitWorld {
                 "projected required application changed item owner",
             ));
         }
+        let opaque_reference = matches!(&goal.self_ty, Ty::Ref { referent, .. } if matches!(referent.as_ref(), Ty::Opaque(_)));
         if !self.goal_is_closed(goal, context.env())?
             && !matches!(&goal.self_ty, Ty::Dyn(_) | Ty::Opaque(_))
+            && !opaque_reference
         {
             return Err(FactsError::unsupported(
                 &self.budget,
@@ -1180,7 +1182,7 @@ impl ValidatedTraitWorld {
         }
         let selection = self.require_in(
             &Predicate::Implements(goal.clone()),
-            if matches!(&goal.self_ty, Ty::Dyn(_) | Ty::Opaque(_)) {
+            if matches!(&goal.self_ty, Ty::Dyn(_) | Ty::Opaque(_)) || opaque_reference {
                 context
             } else {
                 ProofContext {

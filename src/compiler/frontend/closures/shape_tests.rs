@@ -280,7 +280,9 @@ fn raw_fn_membership_rejects_forged_final_shape() {
     );
     // A real independent world allocates a new snapshot. Remap declaration
     // handles to its genuine registered IDs, but transplant the old seal.
-    let foreign = PlanCtx::from_program(&program, &budget).unwrap();
+    // Each independent world owns its own unchanged per-task budget.
+    let foreign_budget = ir::PlanBudget::default();
+    let foreign = PlanCtx::from_program(&program, &foreign_budget).unwrap();
     let foreign_world = foreign.trait_world().unwrap();
     let foreign_owner = foreign
         .callable_decl(plan.callable_index(owner).unwrap())

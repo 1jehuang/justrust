@@ -94,7 +94,9 @@ pub(super) async fn produce(
             let ir::Callee::TraitItem(specialized) = callee else {
                 continue;
             };
-            if !matches!(specialized.trait_ref.self_ty, ir::Ty::Opaque(_)) {
+            if opaque_dispatch::opaque_receiver(&specialized.trait_ref.self_ty, &provider.0.budget)?
+                .is_none()
+            {
                 continue;
             }
             let request = cx.request(opaque_dispatch::key(

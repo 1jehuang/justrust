@@ -675,6 +675,129 @@ mod canonical_source_replay_tests {
     }
 
     #[test]
+    fn borrowed_callable_replay_rejects_place_and_producer_mutations() {
+        for source in [
+            "trait Marker{}struct S{}impl Marker for S{}fn apply<F>(f:F,x:i32)->i32{x}fn add(n:i32)->impl Marker{S{}}fn main(){let a=add(5);let b=add(6);let result=apply(&a,10);}",
+            "trait Marker{}struct S{}impl Marker for S{}fn apply<F>(f:F,x:i32)->i32{x}fn add(n:i32)->impl Marker{S{}}fn main(){let a=add(5);let b=add(6);let first=&a;let second=&first;let result=apply(second,10);}",
+            "trait Marker{}struct S{}impl Marker for S{}fn apply<F>(f:F,x:i32)->i32{x}fn add(n:i32)->impl Marker{S{}}fn main(){let mut a=add(5);let b=add(6);let first=&mut a;let result=apply(first,10);}",
+        ] {
+            let (_, _, budget, publication) = published(source, 2);
+            let original = publication.original().source_for_test();
+            let source = publication.source();
+            replay_source_body(&original, source, publication.facts(), &budget).unwrap();
+            let borrow = source
+                .exprs
+                .iter()
+                .position(|e| matches!(e.kind, ir::ExprKind::Borrow { .. }))
+                .unwrap();
+            let sibling = source
+                .locals
+                .iter()
+                .position(|local| local.name == "b")
+                .unwrap();
+            for mutation in 0..4 {
+                let mut changed = source.as_ref().clone();
+                let ir::ExprKind::Borrow { kind, place, .. } = &mut changed.exprs[borrow].kind
+                else {
+                    unreachable!()
+                };
+                match mutation {
+                    0 => place.local = ir::LocalId(sibling),
+                    1 => {
+                        *kind = if *kind == ir::BorrowKind::Mut {
+                            ir::BorrowKind::Shared
+                        } else {
+                            ir::BorrowKind::Mut
+                        }
+                    }
+                    2 => place.projection.push(ir::Projection::Deref),
+                    _ => {
+                        let ir::TypedStmt::Let {
+                            value: sibling_value,
+                            ..
+                        } = source.body.statements[1]
+                        else {
+                            unreachable!()
+                        };
+                        let ir::TypedStmt::Let { value, .. } = &mut changed.body.statements[0]
+                        else {
+                            unreachable!()
+                        };
+                        *value = sibling_value;
+                    }
+                }
+                assert_eq!(
+                    kind_error(replay_source_body(
+                        &original,
+                        &Arc::new(changed),
+                        publication.facts(),
+                        &budget
+                    )),
+                    tr::FactsErrorKind::InvalidMetadata
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn borrowed_callable_replay_rejects_reborrow_timing_mutations() {
+        let (_, _, budget, publication) = published(
+            "trait Marker{}struct S{}impl Marker for S{}fn apply<F>(f:F,x:i32)->i32{x}fn add(n:i32)->impl Marker{S{}}fn main(){let mut a=add(5);let first=&mut a;let result=apply(first,10);}",
+            2,
+        );
+        let original = publication.original().source_for_test();
+        let source = publication.source();
+        replay_source_body(&original, source, publication.facts(), &budget).unwrap();
+        let index = source
+            .exprs
+            .iter()
+            .position(|expr| {
+                matches!(
+                    expr.kind,
+                    ir::ExprKind::Borrow {
+                        timing: ir::BorrowTiming::TwoPhase { .. },
+                        ..
+                    }
+                )
+            })
+            .unwrap();
+        for mutation in 0..3 {
+            let mut changed = source.as_ref().clone();
+            let ir::ExprKind::Borrow {
+                timing:
+                    ir::BorrowTiming::TwoPhase {
+                        activation,
+                        argument,
+                        reason,
+                    },
+                ..
+            } = &mut changed.exprs[index].kind
+            else {
+                unreachable!()
+            };
+            match mutation {
+                0 => *activation = ir::ExprId(index),
+                1 => *argument = 1,
+                _ => {
+                    let ir::ImplicitBorrowKind::MutableArgumentReborrow { carrier } = reason else {
+                        unreachable!()
+                    };
+                    *carrier = ir::ExprId(index);
+                }
+            }
+            assert_eq!(
+                kind_error(replay_source_body(
+                    &original,
+                    &Arc::new(changed),
+                    publication.facts(),
+                    &budget
+                )),
+                tr::FactsErrorKind::InvalidMetadata
+            );
+        }
+    }
+
+    #[test]
     fn retained_authority_mutations_and_same_ledger_resource() {
         let (_, _, budget, publication) =
             published("fn f(a:i32,b:i32){let x=1;let y=2;{let z=3;}}", 0);
@@ -2249,10 +2372,10 @@ impl SourceInventory {
                     // Only local-shaped paths name bindings. Generated item
                     // paths (an inline closure lowered to a crate item) are
                     // not local references.
-                    [Expr::Var(name)] if is_local_shaped_path(name) => {
+                    [Expr::Var(name), ..] if is_local_shaped_path(name) => {
                         (self.lookup(name, budget)?, None)
                     }
-                    [Expr::Borrow { kind, place }] if place.fields.is_empty() => {
+                    [Expr::Borrow { kind, place }, ..] if place.fields.is_empty() => {
                         (self.lookup(place.local, budget)?, Some(*kind))
                     }
                     _ => (None, None),
@@ -4399,6 +4522,286 @@ fn optional_application_equal(
     }
     Ok(true)
 }
+// Recover only source-authenticated callable roots and local reference chains.
+// Checked local types are comparisons, never the authority for inferred roots.
+fn borrowed_callable_source_binding(
+    original: &OriginalSource,
+    inventory: &SourceInventory,
+    index: usize,
+    checked: &ir::CheckedFunction,
+    signatures: &Signatures,
+    budget: &ir::PlanBudget,
+    depth: usize,
+) -> Result<(ir::LocalId, ir::Ty), FactsError> {
+    sr::depth(budget, depth)?;
+    sr::work(budget, 1)?;
+    let site = original.bindings.get(index).ok_or_else(|| {
+        FactsError::invalid(budget, "borrowed callable binding outside original source")
+    })?;
+    validate_original_occurrence(original, &site.node, budget)?;
+    if site.annotation.is_some() || site.parameter.is_some() {
+        return source_binding_type(original, index, checked, signatures, budget);
+    }
+    let statement = site.statement.ok_or_else(|| {
+        FactsError::unsupported(budget, "borrowed callable requires root source binding")
+    })?;
+    let ordinal = u32::try_from(statement)
+        .map_err(|_| FactsError::resource(budget, "borrowed callable statement overflow"))?;
+    if site.node.path.as_ref() != [1, 0, 2, ordinal] {
+        return Err(FactsError::invalid(
+            budget,
+            "borrowed callable root occurrence changed",
+        ));
+    }
+    let function = original
+        .plan
+        .callable_body(&original.plan.program, original.declaration)
+        .map_err(|e| source_error(budget, &e))?;
+    let Some(Stmt::Let {
+        value: source,
+        mutable,
+        ..
+    }) = function.body.statements.get(statement)
+    else {
+        return Err(FactsError::invalid(
+            budget,
+            "borrowed callable source initializer changed",
+        ));
+    };
+    let local = mapped_source_binding(original, index, budget)?;
+    let position = original.root_positions[index].ok_or_else(|| {
+        FactsError::invalid(budget, "borrowed callable initializer lost root mapping")
+    })?;
+    let Some(ir::TypedStmt::Let {
+        local: actual,
+        value,
+    }) = checked.body.statements.get(position)
+    else {
+        return Err(FactsError::invalid(
+            budget,
+            "borrowed callable initializer changed",
+        ));
+    };
+    if *actual != local {
+        return Err(FactsError::invalid(
+            budget,
+            "borrowed callable local identity changed",
+        ));
+    }
+    let expression = checked.exprs.get(value.0).ok_or_else(|| {
+        FactsError::invalid(budget, "borrowed callable initializer outside checked body")
+    })?;
+    let source_local = |name: LocalName| -> Result<usize, FactsError> {
+        let key = inventory
+            .lexical_key(&name, false, budget)?
+            .ok_or_else(|| {
+                FactsError::invalid(budget, "borrowed callable source lacks lexical binding")
+            })?;
+        let mut found = None;
+        for (candidate, binding) in original.bindings.iter().enumerate() {
+            sr::work(budget, 1)?;
+            let declaration_key = if let Some(parameter) = binding.parameter {
+                let (name, _) = function.params.get(parameter).ok_or_else(|| {
+                    FactsError::invalid(budget, "borrowed callable parameter outside source")
+                })?;
+                inventory.lexical_key(name, true, budget)?
+            } else if let Some(prior) = binding.statement {
+                // Only earlier root bindings can initialize this root binding.
+                if prior >= statement {
+                    continue;
+                }
+                let Some(Stmt::Let { name, .. }) = function.body.statements.get(prior) else {
+                    continue;
+                };
+                inventory.lexical_key(name, true, budget)?
+            } else {
+                continue;
+            };
+            if declaration_key == Some(key) && found.replace(candidate).is_some() {
+                return Err(FactsError::invalid(
+                    budget,
+                    "borrowed callable source binding ambiguous",
+                ));
+            }
+        }
+        found.ok_or_else(|| FactsError::invalid(budget, "borrowed callable source binding missing"))
+    };
+    let ty = match source {
+        Expr::Call { .. } => {
+            sr::work(budget, original.call_mapping.len())?;
+            let matched = original.call_mapping.iter().any(|(source, expression, _)| {
+                expression == value
+                    && original
+                        .calls
+                        .get(*source)
+                        .is_some_and(|call| call.direct_let.as_ref() == Some(&site.node))
+            });
+            let ir::ExprKind::Call {
+                target, signature, ..
+            } = &expression.kind
+            else {
+                return Err(FactsError::invalid(
+                    budget,
+                    "borrowed callable producer changed",
+                ));
+            };
+            if !matched {
+                return Err(FactsError::invalid(
+                    budget,
+                    "borrowed callable producer lacks original occurrence",
+                ));
+            }
+            ir::validate_callee(target, signature, ir::FactsCtx::Validated(&original.facts))
+                .map_err(|e| source_error(budget, &e))?;
+            signature.result.clone()
+        }
+        Expr::Var(path)
+            if original
+                .plan
+                .stored_closure_syntax(path)
+                .map_err(|e| source_error(budget, &e))?
+                .is_some() =>
+        {
+            let syntax = original
+                .plan
+                .stored_closure_syntax(path)
+                .map_err(|e| source_error(budget, &e))?
+                .unwrap();
+            let key =
+                name_scope::path_key(original.plan.program.names.as_ref(), path, Namespace::Value)
+                    .map_err(|e| source_error(budget, &e))?;
+            let provider = original.plan.registry.functions.get(&key).ok_or_else(|| {
+                FactsError::invalid(budget, "borrowed callable source provider missing")
+            })?;
+            let (ir::Ty::Closure(closure), ir::ExprKind::Tuple(_)) =
+                (&expression.ty, &expression.kind)
+            else {
+                return Err(FactsError::invalid(
+                    budget,
+                    "borrowed callable closure initializer changed",
+                ));
+            };
+            if closure.provider() != *provider
+                || closure.owner() != original.declaration
+                || closure.site() != syntax.site
+                || original
+                    .plan
+                    .stored_closure_owner(*provider)
+                    .map_err(|e| source_error(budget, &e))?
+                    != Some((original.declaration, syntax.site))
+            {
+                return Err(FactsError::invalid(
+                    budget,
+                    "borrowed callable closure source identity changed",
+                ));
+            }
+            let recipe = original
+                .plan
+                .registry
+                .closure_recipes
+                .get(provider)
+                .ok_or_else(|| {
+                    FactsError::invalid(budget, "borrowed callable closure recipe missing")
+                })?;
+            let template = closure
+                .shape_seal()
+                .and_then(|seal| seal.template_for(recipe))
+                .ok_or_else(|| {
+                    FactsError::invalid(budget, "borrowed callable closure source seal changed")
+                })?;
+            let unsealed = closure.as_ref().clone().with_shape_seal(None);
+            if !template.try_eq(&unsealed, |left, right| {
+                replay_type_equal(left, right, budget)
+            })? {
+                return Err(FactsError::invalid(
+                    budget,
+                    "borrowed callable closure shape changed",
+                ));
+            }
+            expression.ty.clone()
+        }
+        Expr::Var(path) if is_local_shaped_path(path) => {
+            let name = source_local_name(path, original.plan.program.names.as_ref())
+                .map_err(|e| source_error(budget, &e))?;
+            let source_index = source_local(name)?;
+            let (source_local, ty) = borrowed_callable_source_binding(
+                original,
+                inventory,
+                source_index,
+                checked,
+                signatures,
+                budget,
+                depth + 1,
+            )?;
+            if !matches!(expression.kind, ir::ExprKind::Local(actual) if actual == source_local) {
+                return Err(FactsError::invalid(
+                    budget,
+                    "borrowed callable alias changed source local",
+                ));
+            }
+            ty
+        }
+        Expr::Borrow { kind, place } if place.fields.is_empty() => {
+            let source_index = source_local(place.local)?;
+            let (source_local, referent) = borrowed_callable_source_binding(
+                original,
+                inventory,
+                source_index,
+                checked,
+                signatures,
+                budget,
+                depth + 1,
+            )?;
+            if !matches!(&expression.kind, ir::ExprKind::Borrow { kind: actual_kind, place: actual_place, timing: ir::BorrowTiming::Immediate }
+                if actual_kind == kind && actual_place.local == source_local && actual_place.projection.is_empty())
+            {
+                return Err(FactsError::invalid(
+                    budget,
+                    "borrowed callable reference initializer changed",
+                ));
+            }
+            sr::retain(budget, std::mem::size_of::<ir::Ty>() + 32)?;
+            ir::Ty::Ref {
+                kind: *kind,
+                referent: Arc::new(referent),
+            }
+        }
+        _ => {
+            return Err(FactsError::unsupported(
+                budget,
+                "borrowed callable requires source callable or reference initializer",
+            ));
+        }
+    };
+    let actual = checked.locals.get(local.0).ok_or_else(|| {
+        FactsError::invalid(budget, "borrowed callable local outside checked body")
+    })?;
+    if actual.mutable != *mutable
+        || !replay_type_equal(&actual.ty, &ty, budget)?
+        || !replay_type_equal(&expression.ty, &ty, budget)?
+    {
+        return Err(FactsError::invalid(
+            budget,
+            "borrowed callable initializer type or mutability changed",
+        ));
+    }
+    Ok((local, ty))
+}
+
+fn borrowed_callable_leaf(
+    ty: &ir::Ty,
+    budget: &ir::PlanBudget,
+    depth: usize,
+) -> Result<bool, FactsError> {
+    sr::depth(budget, depth)?;
+    sr::work(budget, 1)?;
+    match ty {
+        ir::Ty::Ref { referent, .. } => borrowed_callable_leaf(referent, budget, depth + 1),
+        ir::Ty::Opaque(_) | ir::Ty::Closure(_) => Ok(true),
+        _ => Ok(false),
+    }
+}
+
 /// Validate retained source correspondences, not arbitrary AST equivalence.
 /// The private publication factory checks its own canonical checked body and
 /// seals that immutable Arc. Consumers must also use the publication's
@@ -4824,6 +5227,98 @@ pub(super) fn replay_source_body(
             continue;
         }
         require_ordinary_free(&original.plan, expected_decl, budget)?;
+        // A borrowed value consumed by a call with a reference-free result has
+        // no returned loan to infer. Authenticate its source place and exact
+        // instantiated signature instead of applying the identity-return rule.
+        if target.type_args.len() == 1
+            && let ir::Ty::Ref { kind, referent } = &target.type_args[0]
+            && borrowed_callable_leaf(referent, budget, 0)?
+            && signature
+                .params
+                .first()
+                .is_some_and(|ty| ty == &target.type_args[0])
+            && ir::carrier_locations(&signature.result, budget)
+                .map_err(|e| source_error(budget, &e))?
+                .is_empty()
+        {
+            let binding = site.argument_binding.as_ref().ok_or_else(|| {
+                FactsError::unsupported(budget, "borrowed callable requires original local source")
+            })?;
+            let binding_index = source_binding_index(&original.bindings, binding, budget)?
+                .ok_or_else(|| FactsError::invalid(budget, "borrowed callable source missing"))?;
+            let (local, source_ty) = borrowed_callable_source_binding(
+                original,
+                &fresh,
+                binding_index,
+                checked,
+                &signatures,
+                budget,
+                0,
+            )?;
+            let first = args
+                .first()
+                .and_then(|arg| checked.exprs.get(arg.0))
+                .ok_or_else(|| FactsError::invalid(budget, "borrowed callable argument missing"))?;
+            let exact = if let Some(source_kind) = site.argument_borrow {
+                source_kind == *kind
+                    && replay_type_equal(&source_ty, referent, budget)?
+                    && matches!(&first.kind, ir::ExprKind::Borrow { kind: actual_kind, place, timing: ir::BorrowTiming::Immediate }
+                        if actual_kind == kind && place.local == local && place.projection.is_empty())
+            } else {
+                let source_value = match &first.kind {
+                    ir::ExprKind::Local(actual) => *actual == local,
+                    ir::ExprKind::Borrow {
+                        kind: ir::BorrowKind::Mut,
+                        place,
+                        timing:
+                            ir::BorrowTiming::TwoPhase {
+                                activation,
+                                argument: 0,
+                                reason: ir::ImplicitBorrowKind::MutableArgumentReborrow { carrier },
+                            },
+                    } if *kind == ir::BorrowKind::Mut
+                        && *activation == id
+                        && place.local == local
+                        && place.projection.as_slice() == [ir::Projection::Deref] =>
+                    {
+                        let carrier = checked.exprs.get(carrier.0).ok_or_else(|| {
+                            FactsError::invalid(
+                                budget,
+                                "borrowed callable reborrow carrier missing",
+                            )
+                        })?;
+                        matches!(carrier.kind, ir::ExprKind::Local(actual) if actual == local)
+                            && replay_type_equal(&carrier.ty, &source_ty, budget)?
+                    }
+                    _ => false,
+                };
+                replay_type_equal(&source_ty, &target.type_args[0], budget)? && source_value
+            };
+            if !exact || !replay_type_equal(&first.ty, &target.type_args[0], budget)? {
+                return Err(FactsError::invalid(
+                    budget,
+                    "borrowed callable changed source place or type",
+                ));
+            }
+            for parameter in signature.params.iter().skip(1) {
+                if !ir::carrier_locations(parameter, budget)
+                    .map_err(|e| source_error(budget, &e))?
+                    .is_empty()
+                {
+                    return Err(FactsError::unsupported(
+                        budget,
+                        "additional borrowed callable argument carriers",
+                    ));
+                }
+            }
+            ir::validate_callee(
+                &ir::Callee::Direct(target.clone()),
+                signature,
+                ir::FactsCtx::Validated(facts),
+            )
+            .map_err(|e| source_error(budget, &e))?;
+            continue;
+        }
         let parent = site.direct_let.as_ref().ok_or_else(|| {
             FactsError::unsupported(
                 budget,

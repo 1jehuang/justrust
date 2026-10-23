@@ -166,6 +166,9 @@ impl ValidatedTraitWorld {
                 };
                 if !self.raw_associated_ty_is_closed(&Ty::AssociatedType(projection.clone()), 0)?
                     && !self.checked_closure_projection(&projection, facts.env())?
+                    && self
+                        .opaque_associated_binding(&projection, facts.env())?
+                        .is_none()
                 {
                     // A symbolic input (`<I as Iterator>::Item` for a caller
                     // parameter `I`): the output is the caller's declared

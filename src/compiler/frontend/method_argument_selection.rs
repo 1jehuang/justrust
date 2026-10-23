@@ -25,6 +25,25 @@ impl PlanCtx {
         if let Some(selection) = self.closure_method_selection(receiver, name, caller)? {
             return Ok(Some(selection));
         }
+        // Call syntax can use a declared callable bound through a reference.
+        // Resolve that exact bound before inspecting reference blanket impls,
+        // whose Args and Output parameters are not inferable from the self head.
+        // Preserve the dereference count so normal receiver checking still
+        // enforces shared/mutable access and forbids moving a borrowed FnOnce.
+        let mut callable_root = receiver;
+        for depth in 1..=2 {
+            let ir::Ty::Ref { referent, .. } = callable_root else {
+                break;
+            };
+            callable_root = referent;
+            budget.charge_work(1)?;
+            if let Some(mut selection) =
+                self.closure_method_selection(callable_root, name, caller)?
+            {
+                selection.depth = depth;
+                return Ok(Some(selection));
+            }
+        }
         let mut root = receiver;
         for depth in 0..=2 {
             budget.charge_work(1)?;

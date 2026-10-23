@@ -5,6 +5,7 @@ use super::*;
 #[path = "opaque_physical/carriers.rs"]
 mod carriers;
 pub(super) use carriers::PhysicalCarrierIdentity;
+pub(super) use carriers::require_preserved_boundary;
 
 #[derive(Clone, Debug)]
 struct DirectPhysicalCall {
@@ -67,28 +68,19 @@ impl DirectPhysicalCall {
             .map(|ty| representations.normalize(ty, budget))
             .collect::<Result<Vec<_>, _>>()?;
         let result = representations.normalize(&specialized_signature.result, budget)?;
-        let physical_signature =
-            if params == specialized_signature.params && result == specialized_signature.result {
-                specialized_signature
-            } else {
-                for ty in params.iter().chain(std::iter::once(&result)) {
-                    if !ir::carrier_locations(ty, budget)
-                        .map_err(Error::new)?
-                        .is_empty()
-                    {
-                        return Err(Error::new(
-                            "unsupported: direct physical ABI has reference carriers",
-                        ));
-                    }
-                }
-                let contract = ir::RefContract::default();
-                contract.validate(&params, &result).map_err(Error::new)?;
-                ir::Signature {
-                    params,
-                    result,
-                    ref_contract: Arc::new(contract),
-                }
-            };
+        let physical_signature = ir::Signature {
+            params,
+            result,
+            ref_contract: specialized_signature.ref_contract.clone(),
+        };
+        carriers::require_preserved_boundary(
+            &specialized_signature,
+            &physical_signature,
+            context.trait_world().map_err(Error::new)?.as_ref(),
+            representations,
+            budget,
+        )
+        .map_err(Error::new)?;
         Ok(Self {
             publication: publication.identity().clone(),
             occurrence,
@@ -348,7 +340,7 @@ fn require_empty_physical_capture(actual: &ir::Ty, budget: &ir::PlanBudget) -> R
     Ok(())
 }
 
-/// Materialize the first carrier-empty boundary slice from the exact canonical
+/// Materialize an exactly carrier-preserving boundary from canonical
 /// lowering. CFG blocks, argument snapshots, loans and evaluation order are
 /// copied intact. Only types and independently authorized call/pack operations
 /// can change. Unsupported operations fail without producing a physical body.
@@ -393,23 +385,27 @@ pub(super) fn normalize(
         .iter()
         .map(|id| output.locals[id.0].ty.clone())
         .collect::<Vec<_>>();
-    for ty in parameters.iter().chain(std::iter::once(&output.result)) {
-        if !ir::carrier_locations(ty, budget)
-            .map_err(Error::new)?
-            .is_empty()
-        {
-            return Err(Error::new(
-                "unsupported: physical body boundary has reference carriers",
-            ));
-        }
-    }
-    // Empty follows from complete validated concrete carrier sets, not from a
-    // syntactic scalar guess or an approximation of the public opaque family.
-    let contract = ir::RefContract::default();
-    contract
-        .validate(&parameters, &output.result)
-        .map_err(Error::new)?;
-    output.ref_contract = Arc::new(contract);
+    let closed = context.instance_facts(target).map_err(Error::new)?;
+    let original_boundary = closed
+        .carrier_contract(ir::SignatureSubject::Body)
+        .map_err(|error| source_fact_error(error, budget))?;
+    original_boundary
+        .validate_for(&closed)
+        .map_err(|error| source_fact_error(error, budget))?;
+    let signature = ir::Signature {
+        params: parameters,
+        result: output.result.clone(),
+        ref_contract: original_boundary.ref_contract().clone(),
+    };
+    carriers::require_preserved_boundary(
+        original_boundary.physical_source_signature(),
+        &signature,
+        closed.world(),
+        representations,
+        budget,
+    )
+    .map_err(Error::new)?;
+    output.ref_contract = signature.ref_contract;
     let mut packs = Vec::new();
     let mut direct_calls = Vec::new();
     for block in &mut output.blocks {

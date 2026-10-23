@@ -5,6 +5,77 @@
 mod oracle;
 use oracle::{Case, Expect};
 
+fn callable_reference_forwarding(name: &str) {
+    let cases = [
+        Case {
+            name: "shared_opaque_callable",
+            source: "fn apply<F:Fn(i32)->i32>(f:F,x:i32)->i32{f(x)}fn add(n:i32)->impl Fn(i32)->i32{move|x|x+n}fn main(){let a=add(5);println!(\"{}\",apply(&a,10));}",
+            expect: Expect::Run("15\n"),
+        },
+        Case {
+            name: "nested_shared_callable",
+            source: "fn apply<F:Fn(i32)->i32>(f:F,x:i32)->i32{f(x)}fn main(){let a=|x:i32|x+5;let first=&a;let second=&first;println!(\"{}\",apply(second,10));}",
+            expect: Expect::Run("15\n"),
+        },
+        Case {
+            name: "shared_callable_mut_and_once",
+            source: "fn mutable<F:FnMut(i32)->i32>(mut f:F)->i32{f(10)}fn once<F:FnOnce(i32)->i32>(f:F)->i32{f(20)}fn main(){let a=|x:i32|x+5;let r=&a;println!(\"{} {}\",mutable(r),once(r));}",
+            expect: Expect::Run("15 25\n"),
+        },
+        Case {
+            name: "mutable_callable_reference",
+            source: "fn mutable<F:FnMut(i32)->i32>(mut f:F)->i32{f(10)}fn once<F:FnOnce(i32)->i32>(f:F)->i32{f(20)}fn main(){let mut n=5;let mut a=|x:i32|{n+=x;n};let first=&mut a;println!(\"{}\",mutable(first));let second=&mut a;println!(\"{}\",once(second));}",
+            expect: Expect::Run("15\n35\n"),
+        },
+        Case {
+            name: "mutable_reference_does_not_implement_fn",
+            source: "fn apply<F:Fn(i32)->i32>(f:F,x:i32)->i32{f(x)}fn main(){let mut a=|x:i32|x+5;println!(\"{}\",apply(&mut a,10));}",
+            expect: Expect::Invalid("E0277"),
+        },
+        Case {
+            name: "shared_reference_cannot_mutate_callable",
+            source: "fn apply<F:FnMut()>(mut f:F){f()}fn main(){let mut n=0;let a=||{n+=1;};apply(&a);}",
+            expect: Expect::Invalid("E0525"),
+        },
+        Case {
+            name: "shared_reference_cannot_consume_callable",
+            source: "fn apply<F:FnOnce()>(f:F){f()}fn main(){let s=String::from(\"owned\");let a=move||{let moved=s;};apply(&a);}",
+            expect: Expect::Invalid("E0525"),
+        },
+    ];
+    let case = cases.into_iter().find(|case| case.name == name).unwrap();
+    oracle::check("closure_reference_forwarding", &[case]);
+}
+
+#[test]
+fn shared_opaque_callable() {
+    callable_reference_forwarding("shared_opaque_callable");
+}
+#[test]
+fn nested_shared_callable() {
+    callable_reference_forwarding("nested_shared_callable");
+}
+#[test]
+fn shared_callable_mut_and_once() {
+    callable_reference_forwarding("shared_callable_mut_and_once");
+}
+#[test]
+fn mutable_callable_reference() {
+    callable_reference_forwarding("mutable_callable_reference");
+}
+#[test]
+fn mutable_reference_does_not_implement_fn() {
+    callable_reference_forwarding("mutable_reference_does_not_implement_fn");
+}
+#[test]
+fn shared_reference_cannot_mutate_callable() {
+    callable_reference_forwarding("shared_reference_cannot_mutate_callable");
+}
+#[test]
+fn shared_reference_cannot_consume_callable() {
+    callable_reference_forwarding("shared_reference_cannot_consume_callable");
+}
+
 #[test]
 fn current_parent_generic_owner_consumer() {
     oracle::check(

@@ -878,18 +878,21 @@ impl ValidatedTraitWorld {
         )?;
         self.evidence(&goal, context, ProofOrigin::DeclaredEquality)
     }
-    /// Equality-only selection for a rigid source nominal subject such as
-    /// `slice::Iter<T>`. The impl is chosen by canonical head matching in the
-    /// genuine caller context and its RHS is reminted from the immutable
-    /// declaration callback. This never grants a carrier, layout or origin.
+    /// Equality-only selection for a rigid source nominal or reference subject,
+    /// such as `slice::Iter<T>` or a borrowed opaque callable. The impl is chosen
+    /// by canonical head matching in the genuine caller context, and its RHS
+    /// is reminted from the immutable declaration callback. This never grants
+    /// a carrier, layout or origin.
     pub(super) fn rigid_nominal_implementation_rhs(
         &self,
         projection: &ir::AssociatedTypeProjection,
         context: ProofContext<'_>,
         active: &mut ProofScratch,
     ) -> Result<Option<(ProofEvidence, Ty)>> {
-        if !matches!(projection.trait_ref.self_ty, Ty::Struct(_) | Ty::Enum(_))
-            || self.goal_is_closed(&projection.trait_ref, context.env())?
+        if !matches!(
+            projection.trait_ref.self_ty,
+            Ty::Struct(_) | Ty::Enum(_) | Ty::Ref { .. }
+        ) || self.goal_is_closed(&projection.trait_ref, context.env())?
             || self.type_contains_projection(&projection.trait_ref.self_ty, 0)?
         {
             return Ok(None);
