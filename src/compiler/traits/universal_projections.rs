@@ -130,6 +130,22 @@ impl ValidatedTraitWorld {
                 return Ok(());
             }
         }
+        if matches!(projection.trait_ref.self_ty, Ty::Struct(_) | Ty::Enum(_)) {
+            let caller = self.predicate_env(declaration)?;
+            if matches!(
+                self.prove_in(
+                    &expected,
+                    ProofContext {
+                        predicates: &caller,
+                        phase: FactsPhase::Schema,
+                    },
+                    &mut ProofScratch::default(),
+                )?,
+                ProofOutcome::Proved(_)
+            ) {
+                return Ok(());
+            }
+        }
         Err(FactsError::unproved(
             &self.budget,
             "E0277: associated projection has no exact declared trait membership",

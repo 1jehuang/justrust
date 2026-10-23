@@ -1181,6 +1181,13 @@ impl ValidatedTraitWorld {
         charged(&self.budget, self.budget.charge_nodes(1))?;
         match ty {
             Ty::AssociatedType(projection) => {
+                if context.proof.phase == FactsPhase::Universal
+                    && matches!(projection.trait_ref.self_ty, Ty::Param(_))
+                    && !self.goal_is_closed(&projection.trait_ref, context.proof.env())?
+                {
+                    self.validate_universal_projection(projection, context.proof.env())?;
+                    return Ok(ty.clone());
+                }
                 let evidence = self.normalize_projection_in(projection, context, stack)?;
                 let normal = evidence.normal.clone();
                 push(&self.budget, dependencies, evidence)?;
@@ -1464,7 +1471,8 @@ impl ValidatedTraitWorld {
             context.proof.env(),
         )?;
         let opaque_reference = matches!(&selected_goal.self_ty, Ty::Ref { referent, .. } if matches!(referent.as_ref(), Ty::Opaque(_)));
-        if !closed_goal && !builtin_closure && !opaque_reference {
+        let nominal_application = matches!(selected_goal.self_ty, Ty::Struct(_) | Ty::Enum(_));
+        if !closed_goal && !builtin_closure && !opaque_reference && !nominal_application {
             return Err(FactsError::unsupported(
                 &self.budget,
                 "unsupported: nonclosed associated projection application",
@@ -1966,14 +1974,15 @@ impl ValidatedTraitWorld {
             &evidence.implementation,
             NormalizationOrigin::Dynamic(_) | NormalizationOrigin::Opaque(_)
         ) || matches!(&evidence.selected_goal.self_ty, Ty::Ref { referent, .. } if matches!(referent.as_ref(), Ty::Opaque(_)))
-            || (matches!(
+            || ((matches!(
                 &evidence.membership.0.origin,
                 ProofOrigin::Closure { .. } | ProofOrigin::FnItem { .. }
-            ) && !self.goal_is_closed_with(
-                &evidence.selected_goal,
-                context.proof.env(),
-                proofs,
-            )?);
+            ) || matches!(evidence.selected_goal.self_ty, Ty::Struct(_) | Ty::Enum(_)))
+                && !self.goal_is_closed_with(
+                    &evidence.selected_goal,
+                    context.proof.env(),
+                    proofs,
+                )?);
         if evidence.world != self.id
             || evidence.key.environment != context.proof.predicates.index
             || evidence.key.phase != context.proof.phase
@@ -2208,6 +2217,61 @@ impl ValidatedTraitWorld {
                 "associated normalization evidence lost assignment identity",
             ));
         }
+        if caller_membership {
+            let header = self
+                .headers
+                .impls
+                .iter()
+                .find(|header| header.declaration == implementation)
+                .ok_or_else(|| {
+                    FactsError::invalid(&self.budget, "normalization implementation disappeared")
+                })?;
+            retain::<ir::RefContract>(&self.budget, 1)?;
+            let schema = GenericSchema {
+                env: header.schema_env.clone(),
+                signature: Signature {
+                    params: Vec::new(),
+                    result: value.rhs.clone(),
+                    ref_contract: Arc::new(ir::RefContract::default()),
+                },
+                predicates: Arc::from([]),
+            };
+            let instantiated = self.schema.instantiate_schema(
+                &schema,
+                &evidence.arguments,
+                context.proof.env(),
+                &self.budget,
+            )?;
+            self.validate_rhs_substitution(
+                &value.rhs,
+                &instantiated.signature.result,
+                &header.schema_env,
+                &evidence.arguments,
+                0,
+            )?;
+            let mut replay = NormalizationStack::default();
+            push(
+                &self.budget,
+                &mut replay.active,
+                (evidence.key.clone(), implementation),
+            )?;
+            let mut dependencies = Vec::new();
+            let normal = self.normalize_type_in(
+                &instantiated.signature.result,
+                context,
+                &mut replay,
+                &mut dependencies,
+                0,
+            )?;
+            if !self.eq_ty(&normal, &evidence.normal, 0)?
+                || dependencies.len() != evidence.dependencies.len()
+            {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "open nominal normalization changed its substituted result",
+                ));
+            }
+        }
         // Dependency records are sealed by this module and bound to the same authority.
         for dependency in evidence.dependencies.iter() {
             charged(&self.budget, self.budget.charge_work(1))?;
@@ -2229,9 +2293,13 @@ impl ValidatedTraitWorld {
             evidence.key.projection.item,
             &evidence.key.projection.trait_ref,
             &evidence.normal,
-            ProofContext {
-                predicates: &self.empty,
-                phase: FactsPhase::Closed,
+            if caller_membership {
+                context.proof
+            } else {
+                ProofContext {
+                    predicates: &self.empty,
+                    phase: FactsPhase::Closed,
+                }
             },
             proofs,
         )?;
@@ -2243,6 +2311,50 @@ impl ValidatedTraitWorld {
 mod tests {
     use super::*;
     use crate::compiler::frontend::{self, PlanCtx};
+
+    #[test]
+    fn open_nominal_normalization_retains_caller_authority() {
+        let program = frontend::parse("trait Has{type Out;}struct Wrap<T>{value:T}impl<T> Has for Wrap<T>{type Out=T;}fn inspect<T>(value:Wrap<T>){}fn main(){}").unwrap();
+        let budget = PlanBudget::default();
+        let plan = PlanCtx::from_program(&program, &budget).unwrap();
+        let world = plan.trait_world().unwrap();
+        let owner = plan.function_decl(0).unwrap();
+        let schema = world.schema.declaration_schema(owner).unwrap();
+        let header = &world.headers.associated_types[0];
+        let projection = ir::AssociatedTypeProjection {
+            trait_ref: TraitRef {
+                declaration: header.trait_decl,
+                self_ty: schema.signature.params[0].clone(),
+                args: Arc::from([]),
+            },
+            item: header.declaration,
+        };
+        let facts = world.callable_facts(owner).unwrap();
+        let normalized = world
+            .normalize_associated_type(&projection, &facts)
+            .unwrap();
+        normalized.validate_for(&projection, &facts).unwrap();
+        assert!(matches!(normalized.0.normal, Ty::Param(_)));
+        assert_eq!(
+            normalized.0.membership.0.environment,
+            normalized.0.key.environment
+        );
+        assert_eq!(normalized.0.membership.0.phase, normalized.0.key.phase);
+        for mode in 0..3 {
+            let mut forged = (*normalized.0).clone();
+            match mode {
+                0 => forged.normal = Ty::Bool,
+                1 => forged.key.phase = FactsPhase::Closed,
+                _ => forged.key.environment = world.empty.index,
+            }
+            assert!(
+                NormalizedAssociatedType(Arc::new(forged))
+                    .validate_for(&projection, &facts)
+                    .is_err(),
+                "forgery {mode}"
+            );
+        }
+    }
 
     struct RhsAdapter {
         inner: Arc<dyn SchemaCx + Send + Sync>,

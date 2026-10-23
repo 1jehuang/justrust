@@ -270,6 +270,10 @@ impl<'s> Solver<'_, '_, 's> {
                         return Ok(Some(equality.ty().clone()));
                     }
                 }
+                return facts
+                    .normalize_substituted_projection_type(&projection, &plan.budget)
+                    .map(Some)
+                    .map_err(|error| error.into_legacy_diagnostic(&plan.budget));
             }
             return Ok(Some(projection));
         }

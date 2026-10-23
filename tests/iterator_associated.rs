@@ -6,6 +6,19 @@ use justrust_engine::compiler;
 mod oracle;
 
 #[test]
+fn generic_nominal_iterator_closure_inputs() {
+    oracle::stock_native(
+        "fn visit<T>(values:&[T]){let mut mapped=values.iter().map(|_x|7i32);match mapped.next(){Some(n)=>assert_eq!(n,7i32),None=>panic!()}}fn main(){visit(&[1i32,2]);visit(&[true,false]);}",
+    );
+    for source in [
+        "fn unused<T>(values:&[T]){let _=values.iter().map(|x:&u8|*x);}fn main(){}",
+        "fn unused<T>(values:&[T]){let _=values.iter().map(|x:&mut T|7i32);}fn main(){}",
+    ] {
+        oracle::stock_and_native_reject(source);
+    }
+}
+
+#[test]
 fn native_iterator_prelude_preserves_plain_program() {
     oracle::stock_native("fn main(){println!(\"ok\");}");
 }

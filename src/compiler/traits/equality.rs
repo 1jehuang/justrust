@@ -796,6 +796,7 @@ impl ValidatedTraitWorld {
                 .opaque_associated_binding(projection, facts.env())?
                 .is_some()
             || self.goal_is_closed(&projection.trait_ref, facts.env())?
+            || matches!(projection.trait_ref.self_ty, Ty::Struct(_) | Ty::Enum(_))
         {
             Ok(ProjectionReduction::Implementation(
                 self.normalize_associated_type(projection, facts)?,
@@ -838,6 +839,7 @@ impl ValidatedTraitWorld {
                 .opaque_associated_binding(projection, context.env())?
                 .is_some()
             || self.goal_is_closed(&projection.trait_ref, context.env())?
+            || matches!(projection.trait_ref.self_ty, Ty::Struct(_) | Ty::Enum(_))
         {
             let normalization =
                 self.normalize_closed_equality_projection(projection, context, active)?;

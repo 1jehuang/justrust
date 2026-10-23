@@ -42,6 +42,16 @@ impl ValidatedFacts {
                     return self.world.normalize_equality_type(&raw, self);
                 }
                 if !self.world.raw_associated_ty_is_closed(&raw, 0)? {
+                    if matches!(projection.trait_ref.self_ty, Ty::Struct(_) | Ty::Enum(_)) {
+                        let (normal, dependencies) = self
+                            .world
+                            .normalize_closed_projected_type(&raw, context, false)?;
+                        for dependency in dependencies.iter() {
+                            self.world
+                                .validate_projected_dependency(dependency, context)?;
+                        }
+                        return Ok(normal);
+                    }
                     self.world
                         .validate_universal_projection(projection, self.env())?;
                     for row in self.predicates.predicates.iter() {
@@ -221,6 +231,7 @@ impl ValidatedTraitWorld {
             }
             if !self.raw_associated_ty_is_closed(&raw, 0)?
                 && !self.checked_closure_projection(projection, context.env())?
+                && !matches!(projection.trait_ref.self_ty, Ty::Struct(_) | Ty::Enum(_))
             {
                 return Ok(raw);
             }
@@ -269,6 +280,7 @@ impl ValidatedTraitWorld {
             }
             if !self.raw_associated_ty_is_closed(&raw, 0)?
                 && !self.checked_closure_projection(projection, context.env())?
+                && !matches!(projection.trait_ref.self_ty, Ty::Struct(_) | Ty::Enum(_))
             {
                 return Ok(raw);
             }
@@ -394,6 +406,7 @@ impl ValidatedTraitWorld {
                     .opaque_associated_binding(projection, facts.env())?
                     .is_some()
                 || self.goal_is_closed(&projection.trait_ref, facts.env())?
+                || matches!(projection.trait_ref.self_ty, Ty::Struct(_) | Ty::Enum(_))
                 || self
                     .declared_equality_rhs(projection, &facts.predicates.predicates, facts.env())?
                     .is_some()

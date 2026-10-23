@@ -1858,12 +1858,15 @@ mod tests {
         };
         let ty = Ty::AssociatedType(Arc::new(projection.clone()));
         assert!(matches!(world.normalize_ty(&ty, &facts).unwrap(), Ty::Param(p) if p == parameter));
-        assert_eq!(
-            world
-                .normalize_associated_type(&projection, &facts)
-                .unwrap_err()
-                .kind(),
-            FactsErrorKind::Unsupported
+        let normalized = world
+            .normalize_associated_type(&projection, &facts)
+            .unwrap();
+        normalized.validate_for(&projection, &facts).unwrap();
+        assert!(matches!(normalized.ty(), Ty::Param(p) if *p == parameter));
+        assert!(
+            !world
+                .goal_is_closed(&projection.trait_ref, facts.env())
+                .unwrap()
         );
         let carrier = facts.carrier_contract(SignatureSubject::Body).unwrap();
         assert!(carrier.original_contract().results.iter().any(|result| {

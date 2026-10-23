@@ -6,6 +6,14 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 
 ## Completed foundations, not full compatibility
 
+- [x] Open nominal iterator input projections normalize through the selected
+      implementation under the caller's bounds, including closure argument
+      tuple checks. Rigid parameter projections remain symbolic. Coverage:
+      `iterator_associated::generic_nominal_iterator_closure_inputs` and
+      `open_nominal_normalization_retains_caller_authority`, including wrong
+      input types and forged result/environment/phase rejection. The generic
+      container formatting/collect probe still reaches the module authority
+      resource boundary, so full-program 14 remains incomplete.
 - [x] Numeric-only nominal arguments permit the quiescent defaulting round
       without masquerading as missing graph inputs. Integer and float generic
       comparisons, later narrowing constraints, and invalid comparisons are
