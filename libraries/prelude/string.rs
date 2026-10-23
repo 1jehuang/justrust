@@ -443,6 +443,28 @@ impl super::cmp::PartialEq<String> for &str {
 
 impl super::cmp::Eq for String {}
 
+impl super::cmp::PartialOrd for String {
+    fn partial_cmp(&self, other: &String) -> Option<super::cmp::Ordering> {
+        Option::Some(<String as super::cmp::Ord>::cmp(self, other))
+    }
+}
+
+impl super::cmp::Ord for String {
+    fn cmp(&self, other: &String) -> super::cmp::Ordering {
+        let mut index = 0usize;
+        while index < self.len && index < other.len {
+            let left = read_u8(self.ptr + index);
+            let right = read_u8(other.ptr + index);
+            if left < right { return super::cmp::Ordering::Less; }
+            if left > right { return super::cmp::Ordering::Greater; }
+            index += 1usize;
+        }
+        if self.len < other.len { super::cmp::Ordering::Less }
+        else if self.len > other.len { super::cmp::Ordering::Greater }
+        else { super::cmp::Ordering::Equal }
+    }
+}
+
 // std's str hashing: the bytes, then a 0xff terminator.
 impl super::hash::Hash for String {
     fn hash<H: super::hash::Hasher>(&self, state: &mut H) {

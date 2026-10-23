@@ -6,6 +6,11 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 
 ## Completed foundations, not full compatibility
 
+- [x] Source `String` implements `PartialOrd` and `Ord` with bytewise lexical
+      ordering. `operator_inference::owned_string_ordering_matches_stock`
+      covers empty/equal/prefix strings, embedded NULs, and multibyte UTF-8
+      through operators and ordering methods. Full-program 14 advances to the
+      inferred-reference source replay boundary and is not yet supported.
 - [x] Open nominal iterator input projections normalize through the selected
       implementation under the caller's bounds, including closure argument
       tuple checks. Rigid parameter projections remain symbolic. Coverage:
@@ -15,8 +20,7 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
       normalization now proves membership once through its selected assignment,
       while independently authenticating input metadata and nested projections.
       `generic_iterator_format_collect_reuses_membership_proofs` covers generic
-      formatting/collect execution without increasing resource limits. Full-program
-      14 still fails a separate trait obligation and remains incomplete.
+      formatting/collect execution without increasing resource limits.
 - [x] Numeric-only nominal arguments permit the quiescent defaulting round
       without masquerading as missing graph inputs. Integer and float generic
       comparisons, later narrowing constraints, and invalid comparisons are

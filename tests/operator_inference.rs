@@ -137,3 +137,14 @@ fn main(){
 }"#,
     );
 }
+
+#[test]
+fn owned_string_ordering_matches_stock() {
+    oracle::stock_native(
+        r#"fn compare(a:&str,b:&str){
+    let left=String::from(a);let right=String::from(b);
+    println!("{} {} {} {} {} {} {}",left==right,left<right,left<=right,left>right,left>=right,left.cmp(&right).is_lt(),left.partial_cmp(&right).unwrap().is_eq());
+}
+fn main(){compare("","");compare("","a");compare("a","");compare("abc","abc");compare("ab","abc");compare("abc","ab");compare("a\0b","a\0c");compare("é","z");compare("日","é");compare("🙂","🦀");compare("e\u{301}","é");}"#,
+    );
+}
