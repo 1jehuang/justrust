@@ -16,6 +16,21 @@ impl Checker<'_> {
                     None => Ok(term.clone()),
                 };
             }
+            InferKind::Rigid(ty @ ir::Ty::AssociatedType(_)) => {
+                let bound = super::trait_method_hint::bind_owner(ty, bindings);
+                if bound == *ty {
+                    return Ok(term.clone());
+                }
+                let plan = self.signatures.plan()?;
+                let caller = self.facts();
+                let facts = caller
+                    .validated()
+                    .ok_or("projected method inference requires validated caller facts")?;
+                let normal = facts
+                    .normalize_substituted_projection_type(&bound, &plan.budget)
+                    .map_err(|error| error.into_legacy_diagnostic(&plan.budget))?;
+                return self.infer_type_term(&normal, None, depth + 1);
+            }
             InferKind::Tuple(fields) => {
                 self.infer_storage(fields.len())?;
                 InferKind::Tuple(

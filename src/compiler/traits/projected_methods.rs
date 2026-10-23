@@ -770,6 +770,31 @@ impl ValidatedTraitWorld {
         Ok(None)
     }
 
+    /// Method alpha-renaming preserves raw projections for substitution
+    /// validation. Only after that check may the exact implementation owner
+    /// supply its associated assignments for signature conformance.
+    pub(super) fn normalize_required_owner_method_signature(
+        &self,
+        declaration: DeclId,
+        signature: &mut Signature,
+    ) -> Result<()> {
+        let env = &self.info(declaration)?.env;
+        let mut reduce = |projection: &ir::AssociatedTypeProjection| match self
+            .normalize_exact_owner_projection(declaration, projection)?
+        {
+            Some(normal) => Ok(normal),
+            None => {
+                retain::<ir::AssociatedTypeProjection>(&self.budget, 1)?;
+                Ok(Ty::AssociatedType(Arc::new(projection.clone())))
+            }
+        };
+        for parameter in &mut signature.params {
+            *parameter = self.map_equality_type(parameter, env, 0, &mut reduce)?;
+        }
+        signature.result = self.map_equality_type(&signature.result, env, 0, &mut reduce)?;
+        self.complete_projected_contract(signature)
+    }
+
     pub(super) fn normalize_exact_owner_projection(
         &self,
         declaration: DeclId,

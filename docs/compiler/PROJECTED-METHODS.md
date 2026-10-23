@@ -12,6 +12,24 @@ The first native gate found that the original core programs also use `panic!`, w
 
 Arbitrary rigid caller projections, projected defaults, explicit associated bounds/equalities, GATs and reference-bearing projected method forms remain separate, explicit boundaries. They are not solved by a favorable closed callsite. The measured generic-forward, Copy/Sized-bound, default and reference witnesses remain unchanged for later admission. Existing nonprojected trait methods keep their current contracts.
 
+## Generic method extension (2026-10-23)
+
+Generic trait methods now substitute the selected owner inside projected inference
+terms before comparing argument and expected-result constraints. Raw method
+signatures are independently checked against the simultaneous owner/method
+substitution before closed projection normalization, rather than comparing a
+normalized ABI to an unreduced source projection. Generic required-versus-provided
+conformance likewise reduces only the exact owning implementation's associated
+assignments after alpha-renaming. This does not treat membership in a foreign
+application as an assignment or relax the residual executable-projection guard.
+
+`generic_method_owner_projections_match_stock` in `tests/iterator_fold.rs` covers
+projected arguments/results, distinct generic owner and method binders, an invalid
+unused implementation and an invalid unused result assignment at workers 1/8 in
+CHECK/BUILD/run. The existing iterator consumer matrix exercises `find`, including
+non-fused stopping and invalid predicate results. Unsupported residual projected
+ABIs, general associated-type support and full Rust compatibility remain open.
+
 ## Separate authority paths
 
 A private owning-impl normalization context may be issued only after complete metadata, assignment-map and coherence checks. It binds the current world/stage, implementation DeclId, exact full impl TraitRef, real impl GenericEnv and original assignment pair/RHS. It is not public ValidatedFacts, an Implements proof or closed normalization evidence.

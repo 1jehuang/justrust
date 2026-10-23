@@ -3893,6 +3893,14 @@ impl ValidatedTraitWorld {
             } else {
                 self.instantiate_item(item, &h.trait_ref, context)?.0
             };
+            if !method_arguments.is_empty()
+                && self.signature_contains_projection(&expected.signature)?
+            {
+                self.normalize_required_owner_method_signature(
+                    *callable_id,
+                    &mut expected.signature,
+                )?;
+            }
             expected.predicates =
                 self.normalize_required_owner_predicates(*callable_id, &expected.predicates)?;
             self.validate_signature_shape(&expected.signature, &target.schema.env, None)?;

@@ -101,7 +101,7 @@ impl Checker<'_> {
 
 /// Replace enclosing trait-owner parameters (Self and trait arguments) with
 /// the selected application's actuals. Method-own parameters stay slots.
-fn bind_owner(ty: &ir::Ty, bindings: &HashMap<ir::ParamId, ir::Ty>) -> ir::Ty {
+pub(super) fn bind_owner(ty: &ir::Ty, bindings: &HashMap<ir::ParamId, ir::Ty>) -> ir::Ty {
     let child = |t: &ir::Ty| Arc::new(bind_owner(t, bindings));
     match ty {
         ir::Ty::Param(p) => bindings.get(p).cloned().unwrap_or_else(|| ty.clone()),

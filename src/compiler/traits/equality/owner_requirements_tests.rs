@@ -3,7 +3,7 @@ use super::*;
 use crate::compiler::frontend::{self, PlanCtx};
 
 #[test]
-fn predicate_projection_support_does_not_admit_projected_executable_abi() {
+fn generic_projected_signature_does_not_invent_an_implementation() {
     let world =
         source_world("trait Required{type Item;fn run<F>(self,value:Self::Item,f:F);}fn main(){}");
     let items: Vec<_> = world
@@ -43,12 +43,12 @@ fn predicate_projection_support_does_not_admit_projected_executable_abi() {
         .unwrap_err();
     assert_eq!(
         error.kind,
-        FactsErrorKind::Unsupported,
-        "actual ABI rejection: {error:?}"
+        FactsErrorKind::Unproved,
+        "unimplemented projected owner rejection: {error:?}"
     );
     assert!(
-        format!("{error:?}").contains("generic projected trait method signature"),
-        "actual ABI rejection: {error:?}"
+        format!("{error:?}").contains("associated projection has no applicable implementation"),
+        "unimplemented projected owner rejection: {error:?}"
     );
 }
 

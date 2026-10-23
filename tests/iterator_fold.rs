@@ -5,6 +5,82 @@
 mod closure_oracle;
 
 #[test]
+fn generic_method_owner_projections_match_stock() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "method-owner-projections",
+        &[
+            Case {
+                name: "projected_parameter_and_result",
+                source: r#"
+trait Source {
+    type Item;
+    fn choose<U>(&self, value: Self::Item, tag: U) -> Option<Self::Item>;
+}
+struct Numbers;
+impl Source for Numbers {
+    type Item = i32;
+    fn choose<U>(&self, value: i32, tag: U) -> Option<i32> { Some(value) }
+}
+fn main() {
+    let source = Numbers;
+    let chosen: Option<i32> = source.choose(7i32, true);
+    println!("{:?}", chosen);
+}
+"#,
+                expect: Expect::Run("Some(7)\n"),
+            },
+            Case {
+                name: "generic_owner_and_method_binders",
+                source: r#"
+trait Source { type Item; fn choose<U>(&self, value: Self::Item, tag: U) -> Self::Item; }
+struct Holder<T> { value: T }
+impl<T> Source for Holder<T> {
+    type Item = T;
+    fn choose<U>(&self, value: T, tag: U) -> T { value }
+}
+fn main() {
+    let source = Holder { value: 1i32 };
+    println!("{}", source.choose(9i32, false));
+}
+"#,
+                expect: Expect::Run("9\n"),
+            },
+            Case {
+                name: "wrong_projected_implementation_unused",
+                source: r#"
+trait Source { type Item; fn choose<U>(&self, value: Self::Item, tag: U) -> Self::Item; }
+struct Numbers;
+impl Source for Numbers {
+    type Item = i32;
+    fn choose<U>(&self, value: u8, tag: U) -> i32 { 7 }
+}
+fn main() {}
+"#,
+                expect: Expect::Invalid("E0053"),
+            },
+            Case {
+                name: "projected_result_mismatch_unused",
+                source: r#"
+trait Source {
+    type Item;
+    fn choose<U>(&self, tag: U) -> Option<Self::Item>;
+}
+struct Numbers;
+impl Source for Numbers {
+    type Item = i32;
+    fn choose<U>(&self, tag: U) -> Option<i32> { Some(7) }
+}
+fn bad() { let chosen: Option<bool> = Numbers.choose(true); }
+fn main() {}
+"#,
+                expect: Expect::Invalid("E0308"),
+            },
+        ],
+    );
+}
+
+#[test]
 fn iterator_fold_matches_stock() {
     use closure_oracle::{Case, Expect};
     closure_oracle::check(
