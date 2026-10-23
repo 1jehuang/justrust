@@ -6,6 +6,17 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 
 ## Completed foundations, not full compatibility
 
+- [x] Source `Iterator::product` dispatches through `Product`, with owned and
+      borrowed implementations for all twelve integer types and custom result
+      types. `iterator_fold` exercises empty identity, zero factors, mapped
+      inputs and a generic custom implementation using `fold` against stock
+      CHECK/BUILD/run at workers 1/8. Generic required-method carrier evidence
+      retains ordered method arguments; caller projection equalities and closure
+      body substitutions are replayed from their original authority. Forged
+      method arguments are rejected by the projected-carrier unit tests.
+      Floating-point and other standard Product implementations remain open;
+      the full-program corpus remains 11/20.
+
 - [x] Source `RangeInclusive` iteration and double-ended integer ranges cover
       all twelve integer types, including MIN/MAX endpoints, mixed front/back
       consumption, exhausted and reversed-empty ranges, and collection.

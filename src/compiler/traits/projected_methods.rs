@@ -17,6 +17,7 @@ pub(super) struct ProjectedMethodEvidence {
     phase: FactsPhase,
     item: DeclId,
     goal: TraitRef,
+    method_args: Arc<[Ty]>,
     signature: Signature,
     source_regions: Arc<ir::SourceRegionEnv>,
     dependencies: Arc<[NormalizedAssociatedType]>,
@@ -36,6 +37,7 @@ impl ProjectedMethodEvidence {
             phase: facts.phase(),
             item: authority.call.item,
             goal: authority.call.trait_ref.clone(),
+            method_args: authority.call.method_args.clone(),
             signature: authority.signature.clone(),
             source_regions: authority.source_regions.clone(),
             dependencies: Arc::from([]),
@@ -1155,6 +1157,7 @@ impl ValidatedTraitWorld {
         &self,
         item: &TraitItemHeader,
         goal: &TraitRef,
+        method_args: &[Ty],
         context: ProofContext<'_>,
     ) -> Result<ProjectedApplication> {
         self.check_normalization_budget()?;
@@ -1197,7 +1200,10 @@ impl ValidatedTraitWorld {
                 "projected method requires an exact implementation selection",
             ));
         }
-        let arguments = self.trait_arguments(goal)?;
+        let mut arguments = self.trait_arguments(goal)?;
+        for argument in method_args {
+            push(&self.budget, &mut arguments, argument.clone())?;
+        }
         let mut instantiated =
             self.substitute_projected_schema(&item.schema, &arguments, context.env())?;
         // As in `instantiate_owner_item`: a reference Self actual
@@ -1223,6 +1229,16 @@ impl ValidatedTraitWorld {
         instantiated.signature.result = normal;
         for proof in proofs {
             push(&self.budget, &mut dependencies, proof)?;
+        }
+        if !method_args.is_empty() {
+            instantiated.predicates = self.normalize_instantiated_projection_predicates(
+                &instantiated.predicates,
+                context,
+                &mut ProofScratch::default(),
+            )?;
+            for predicate in instantiated.predicates.iter() {
+                self.require_in(predicate, context, &mut ProofScratch::default())?;
+            }
         }
         self.complete_projected_contract(&mut instantiated.signature)?;
         self.validate_schema_signature(
@@ -1264,6 +1280,13 @@ impl ValidatedTraitWorld {
             phase: context.phase,
             item: item.declaration,
             goal: goal.clone(),
+            method_args: {
+                let mut retained = Vec::new();
+                for argument in method_args {
+                    push(&self.budget, &mut retained, argument.clone())?;
+                }
+                retained.into()
+            },
             signature: instantiated.signature.clone(),
             source_regions,
             dependencies: dependencies.into(),
@@ -1286,6 +1309,7 @@ impl ValidatedTraitWorld {
         let application = self.instantiate_projected_item(
             self.item_header(call.item)?,
             &call.trait_ref,
+            &call.method_args,
             ProofContext::from_facts(facts),
         )?;
         let signature = application.instantiated.signature;
@@ -1339,6 +1363,31 @@ impl ValidatedTraitWorld {
                 &self.budget,
                 "projected carrier selection changed exact goal authority",
             ));
+        }
+        if !evidence.method_args.is_empty() {
+            let schema = self.normalized_declaration_schema(evidence.item)?;
+            let retained = self.declaration_carriers(evidence.item)?;
+            let source_regions = retained.source_regions.clone();
+            let (contract, regions) = self.derive_carriers(&schema.signature, &source_regions)?;
+            let mut arguments = self.trait_arguments(&evidence.goal)?;
+            for argument in evidence.method_args.iter() {
+                push(&self.budget, &mut arguments, argument.clone())?;
+            }
+            let origin = charged(
+                &self.budget,
+                ir::derive_signature_origin_schema(&schema.signature, &schema.env, &self.budget),
+            )?;
+            return Ok(ProjectedCarrierBase {
+                schema: clone_schema(&schema, &self.budget)?,
+                arguments: arguments.into(),
+                origin,
+                retained: DeclarationCarriers {
+                    declaration: retained.declaration,
+                    contract,
+                    regions,
+                    source_regions,
+                },
+            });
         }
         if matches!(
             &evidence.selection.0.origin,
@@ -1459,6 +1508,23 @@ impl ValidatedTraitWorld {
                 "projected carrier changed exact application or caller",
             ));
         }
+        if let super::parameter_equality::EqualityResultSubject::Required(call) =
+            &view.result_subject
+        {
+            if call.item != evidence.item
+                || !self.eq_types(&call.method_args, &evidence.method_args, 0)?
+            {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "projected carrier changed exact method arguments",
+                ));
+            }
+        } else {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "projected carrier lost required call identity",
+            ));
+        }
         let Some(subject) = &view.projected_subject else {
             return Err(FactsError::invalid(
                 &self.budget,
@@ -1480,6 +1546,7 @@ impl ValidatedTraitWorld {
         let application = self.instantiate_projected_item(
             self.item_header(evidence.item)?,
             &evidence.goal,
+            &evidence.method_args,
             ProofContext::from_facts(facts),
         )?;
         match (
@@ -1969,8 +2036,49 @@ mod tests {
             first_view.validate_for(&foreign_facts).unwrap_err().kind(),
             FactsErrorKind::InvalidMetadata
         );
+        let mut wrong_method_arguments = first_view.as_ref().clone();
+        if let super::super::parameter_equality::EqualityResultSubject::Required(call) =
+            &mut wrong_method_arguments.result_subject
+        {
+            call.method_args = Arc::from([Ty::Int(ir::IntTy::I32)]);
+        } else {
+            panic!("expected required result subject");
+        }
+        assert_eq!(
+            wrong_method_arguments
+                .validate_for(&facts)
+                .unwrap_err()
+                .kind(),
+            FactsErrorKind::InvalidMetadata
+        );
         let mut forged = Arc::try_unwrap(first_view).unwrap();
         forged.projected = second_view.projected.clone();
+        assert_eq!(
+            forged.validate_for(&facts).unwrap_err().kind(),
+            FactsErrorKind::InvalidMetadata
+        );
+    }
+
+    #[test]
+    fn projected_generic_method_replays_full_substitution() {
+        let world = world(
+            "struct S;trait Has{type Out;fn get<T:Copy>(self,value:T)->Self::Out;}impl Has for S{type Out=i32;fn get<T:Copy>(self,value:T)->i32{7}}fn main(){}",
+        );
+        let owner = owners(&world)[0];
+        let facts = world.callable_facts(owner.items[0].1).unwrap();
+        let mut call = closed_call(owner);
+        call.method_args = Arc::from([Ty::Int(ir::IntTy::I32)]);
+        let callee = Callee::TraitItem(call);
+        let view = facts
+            .carrier_contract(SignatureSubject::Call(&callee))
+            .unwrap();
+        view.validate_for(&facts).unwrap();
+        let mut forged = view.as_ref().clone();
+        if let super::super::parameter_equality::EqualityResultSubject::Required(call) =
+            &mut forged.result_subject
+        {
+            call.method_args = Arc::from([Ty::Bool]);
+        }
         assert_eq!(
             forged.validate_for(&facts).unwrap_err().kind(),
             FactsErrorKind::InvalidMetadata

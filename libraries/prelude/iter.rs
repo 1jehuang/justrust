@@ -97,6 +97,10 @@ pub trait Iterator: Sized {
         B::from_iter(CollectInput { iterator: self })
     }
 
+    fn product<P: Product<Self::Item>>(self) -> P {
+        <P as Product<Self::Item>>::product(self)
+    }
+
     fn sum<S: Sum<Self::Item>>(self) -> S {
         <S as Sum<Self::Item>>::sum(self)
     }
@@ -427,6 +431,298 @@ impl<'a> Sum<&'a usize> for usize {
         loop {
             match iter.next() {
                 Option::Some(value) => total += *value,
+                Option::None => return total,
+            }
+        }
+    }
+}
+
+pub trait Product<A = Self>: Sized {
+    fn product<I: Iterator<Item = A>>(iter: I) -> Self;
+}
+
+impl Product for i8 {
+    fn product<I: Iterator<Item = i8>>(mut iter: I) -> i8 {
+        let mut total = 1i8;
+        loop {
+            match iter.next() {
+                Option::Some(value) => total *= value,
+                Option::None => return total,
+            }
+        }
+    }
+}
+
+impl<'a> Product<&'a i8> for i8 {
+    fn product<I: Iterator<Item = &'a i8>>(mut iter: I) -> i8 {
+        let mut total = 1i8;
+        loop {
+            match iter.next() {
+                Option::Some(value) => total *= *value,
+                Option::None => return total,
+            }
+        }
+    }
+}
+
+impl Product for i16 {
+    fn product<I: Iterator<Item = i16>>(mut iter: I) -> i16 {
+        let mut total = 1i16;
+        loop {
+            match iter.next() {
+                Option::Some(value) => total *= value,
+                Option::None => return total,
+            }
+        }
+    }
+}
+
+impl<'a> Product<&'a i16> for i16 {
+    fn product<I: Iterator<Item = &'a i16>>(mut iter: I) -> i16 {
+        let mut total = 1i16;
+        loop {
+            match iter.next() {
+                Option::Some(value) => total *= *value,
+                Option::None => return total,
+            }
+        }
+    }
+}
+
+impl Product for i32 {
+    fn product<I: Iterator<Item = i32>>(mut iter: I) -> i32 {
+        let mut total = 1i32;
+        loop {
+            match iter.next() {
+                Option::Some(value) => total *= value,
+                Option::None => return total,
+            }
+        }
+    }
+}
+
+impl<'a> Product<&'a i32> for i32 {
+    fn product<I: Iterator<Item = &'a i32>>(mut iter: I) -> i32 {
+        let mut total = 1i32;
+        loop {
+            match iter.next() {
+                Option::Some(value) => total *= *value,
+                Option::None => return total,
+            }
+        }
+    }
+}
+
+impl Product for i64 {
+    fn product<I: Iterator<Item = i64>>(mut iter: I) -> i64 {
+        let mut total = 1i64;
+        loop {
+            match iter.next() {
+                Option::Some(value) => total *= value,
+                Option::None => return total,
+            }
+        }
+    }
+}
+
+impl<'a> Product<&'a i64> for i64 {
+    fn product<I: Iterator<Item = &'a i64>>(mut iter: I) -> i64 {
+        let mut total = 1i64;
+        loop {
+            match iter.next() {
+                Option::Some(value) => total *= *value,
+                Option::None => return total,
+            }
+        }
+    }
+}
+
+impl Product for i128 {
+    fn product<I: Iterator<Item = i128>>(mut iter: I) -> i128 {
+        let mut total = 1i128;
+        loop {
+            match iter.next() {
+                Option::Some(value) => total *= value,
+                Option::None => return total,
+            }
+        }
+    }
+}
+
+impl<'a> Product<&'a i128> for i128 {
+    fn product<I: Iterator<Item = &'a i128>>(mut iter: I) -> i128 {
+        let mut total = 1i128;
+        loop {
+            match iter.next() {
+                Option::Some(value) => total *= *value,
+                Option::None => return total,
+            }
+        }
+    }
+}
+
+impl Product for isize {
+    fn product<I: Iterator<Item = isize>>(mut iter: I) -> isize {
+        let mut total = 1isize;
+        loop {
+            match iter.next() {
+                Option::Some(value) => total *= value,
+                Option::None => return total,
+            }
+        }
+    }
+}
+
+impl<'a> Product<&'a isize> for isize {
+    fn product<I: Iterator<Item = &'a isize>>(mut iter: I) -> isize {
+        let mut total = 1isize;
+        loop {
+            match iter.next() {
+                Option::Some(value) => total *= *value,
+                Option::None => return total,
+            }
+        }
+    }
+}
+
+impl Product for u8 {
+    fn product<I: Iterator<Item = u8>>(mut iter: I) -> u8 {
+        let mut total = 1u8;
+        loop {
+            match iter.next() {
+                Option::Some(value) => total *= value,
+                Option::None => return total,
+            }
+        }
+    }
+}
+
+impl<'a> Product<&'a u8> for u8 {
+    fn product<I: Iterator<Item = &'a u8>>(mut iter: I) -> u8 {
+        let mut total = 1u8;
+        loop {
+            match iter.next() {
+                Option::Some(value) => total *= *value,
+                Option::None => return total,
+            }
+        }
+    }
+}
+
+impl Product for u16 {
+    fn product<I: Iterator<Item = u16>>(mut iter: I) -> u16 {
+        let mut total = 1u16;
+        loop {
+            match iter.next() {
+                Option::Some(value) => total *= value,
+                Option::None => return total,
+            }
+        }
+    }
+}
+
+impl<'a> Product<&'a u16> for u16 {
+    fn product<I: Iterator<Item = &'a u16>>(mut iter: I) -> u16 {
+        let mut total = 1u16;
+        loop {
+            match iter.next() {
+                Option::Some(value) => total *= *value,
+                Option::None => return total,
+            }
+        }
+    }
+}
+
+impl Product for u32 {
+    fn product<I: Iterator<Item = u32>>(mut iter: I) -> u32 {
+        let mut total = 1u32;
+        loop {
+            match iter.next() {
+                Option::Some(value) => total *= value,
+                Option::None => return total,
+            }
+        }
+    }
+}
+
+impl<'a> Product<&'a u32> for u32 {
+    fn product<I: Iterator<Item = &'a u32>>(mut iter: I) -> u32 {
+        let mut total = 1u32;
+        loop {
+            match iter.next() {
+                Option::Some(value) => total *= *value,
+                Option::None => return total,
+            }
+        }
+    }
+}
+
+impl Product for u64 {
+    fn product<I: Iterator<Item = u64>>(mut iter: I) -> u64 {
+        let mut total = 1u64;
+        loop {
+            match iter.next() {
+                Option::Some(value) => total *= value,
+                Option::None => return total,
+            }
+        }
+    }
+}
+
+impl<'a> Product<&'a u64> for u64 {
+    fn product<I: Iterator<Item = &'a u64>>(mut iter: I) -> u64 {
+        let mut total = 1u64;
+        loop {
+            match iter.next() {
+                Option::Some(value) => total *= *value,
+                Option::None => return total,
+            }
+        }
+    }
+}
+
+impl Product for u128 {
+    fn product<I: Iterator<Item = u128>>(mut iter: I) -> u128 {
+        let mut total = 1u128;
+        loop {
+            match iter.next() {
+                Option::Some(value) => total *= value,
+                Option::None => return total,
+            }
+        }
+    }
+}
+
+impl<'a> Product<&'a u128> for u128 {
+    fn product<I: Iterator<Item = &'a u128>>(mut iter: I) -> u128 {
+        let mut total = 1u128;
+        loop {
+            match iter.next() {
+                Option::Some(value) => total *= *value,
+                Option::None => return total,
+            }
+        }
+    }
+}
+
+impl Product for usize {
+    fn product<I: Iterator<Item = usize>>(mut iter: I) -> usize {
+        let mut total = 1usize;
+        loop {
+            match iter.next() {
+                Option::Some(value) => total *= value,
+                Option::None => return total,
+            }
+        }
+    }
+}
+
+impl<'a> Product<&'a usize> for usize {
+    fn product<I: Iterator<Item = &'a usize>>(mut iter: I) -> usize {
+        let mut total = 1usize;
+        loop {
+            match iter.next() {
+                Option::Some(value) => total *= *value,
                 Option::None => return total,
             }
         }

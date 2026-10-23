@@ -520,7 +520,7 @@ impl ValidatedTraitWorld {
         }
         Ok(())
     }
-    pub(super) fn same_projection(
+    pub(in crate::compiler) fn same_projection(
         &self,
         a: &ir::AssociatedTypeProjection,
         b: &ir::AssociatedTypeProjection,

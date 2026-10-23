@@ -160,7 +160,7 @@ mod tests {
             )
             .unwrap();
         let application = world
-            .instantiate_projected_item(item, &goal, context)
+            .instantiate_projected_item(item, &goal, &[], context)
             .unwrap();
         let signature = application.instantiated.signature;
         assert!(

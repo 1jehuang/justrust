@@ -142,6 +142,28 @@ impl<'s> Solver<'_, '_, 's> {
         }));
         if symbolic {
             caller.validate_ty_metadata(&projection)?;
+            if let Some(facts) = caller.validated()
+                && let ir::Ty::AssociatedType(projected) = &projection
+            {
+                for predicate in facts.predicates().predicates() {
+                    plan.budget.charge_work(1)?;
+                    if let ir::Predicate::ProjectionEq {
+                        projection: declared,
+                        ..
+                    } = predicate
+                        && facts
+                            .world()
+                            .same_projection(declared, projected)
+                            .map_err(|error| error.into_legacy_diagnostic(&plan.budget))?
+                    {
+                        let equality = facts
+                            .world()
+                            .normalize_projection_equality(projected, facts)
+                            .map_err(|error| error.into_legacy_diagnostic(&plan.budget))?;
+                        return Ok(Some(equality.ty().clone()));
+                    }
+                }
+            }
             return Ok(Some(projection));
         }
         let Some(facts) = caller.validated() else {

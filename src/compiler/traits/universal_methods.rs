@@ -33,6 +33,12 @@ impl ValidatedFacts {
         self.world
             .map_universal_projection_type(ty, self.env(), 0, &mut |projection| {
                 let raw = Ty::AssociatedType(Arc::new(projection.clone()));
+                if self
+                    .world
+                    .checked_closure_projection(projection, self.env())?
+                {
+                    return self.world.normalize_equality_type(&raw, self);
+                }
                 if !self.world.raw_associated_ty_is_closed(&raw, 0)? {
                     self.world
                         .validate_universal_projection(projection, self.env())?;
@@ -76,7 +82,30 @@ impl ValidatedTraitWorld {
         charged(&self.budget, self.budget.check_depth(depth))?;
         charged(&self.budget, self.budget.charge_work(1))?;
         Ok(match ty {
-            Ty::AssociatedType(projection) => reduce(projection)?,
+            Ty::AssociatedType(projection) => {
+                let receiver = self.map_universal_projection_type(
+                    &projection.trait_ref.self_ty,
+                    env,
+                    depth + 1,
+                    reduce,
+                )?;
+                let mut arguments = Vec::new();
+                for argument in projection.trait_ref.args.iter() {
+                    push(
+                        &self.budget,
+                        &mut arguments,
+                        self.map_universal_projection_type(argument, env, depth + 1, reduce)?,
+                    )?;
+                }
+                reduce(&ir::AssociatedTypeProjection {
+                    trait_ref: TraitRef {
+                        declaration: projection.trait_ref.declaration,
+                        self_ty: receiver,
+                        args: arguments.into(),
+                    },
+                    item: projection.item,
+                })?
+            }
             Ty::Closure(closure) => Ty::Closure(Arc::new(closure.try_map(|child| {
                 self.map_universal_projection_type(child, env, depth + 1, reduce)
             })?)),
@@ -173,6 +202,21 @@ impl ValidatedTraitWorld {
         }
         let mut normalize = |projection: &ir::AssociatedTypeProjection| -> Result<Ty> {
             let raw = Ty::AssociatedType(Arc::new(projection.clone()));
+            if let Some(ty) = self.declared_equality_rhs(
+                projection,
+                &context.predicates.predicates,
+                context.env(),
+            )? {
+                self.require_in(
+                    &Predicate::ProjectionEq {
+                        projection: projection.clone(),
+                        ty: ty.clone(),
+                    },
+                    context,
+                    active,
+                )?;
+                return Ok(ty);
+            }
             if !self.raw_associated_ty_is_closed(&raw, 0)?
                 && !self.checked_closure_projection(projection, context.env())?
             {
@@ -206,6 +250,21 @@ impl ValidatedTraitWorld {
         self.check_context(context)?;
         let mut normalize = |projection: &ir::AssociatedTypeProjection| -> Result<Ty> {
             let raw = Ty::AssociatedType(Arc::new(projection.clone()));
+            if let Some(ty) = self.declared_equality_rhs(
+                projection,
+                &context.predicates.predicates,
+                context.env(),
+            )? {
+                self.require_in(
+                    &Predicate::ProjectionEq {
+                        projection: projection.clone(),
+                        ty: ty.clone(),
+                    },
+                    context,
+                    active,
+                )?;
+                return Ok(ty);
+            }
             if !self.raw_associated_ty_is_closed(&raw, 0)?
                 && !self.checked_closure_projection(projection, context.env())?
             {
@@ -366,6 +425,11 @@ impl ValidatedTraitWorld {
             facts.env(),
             0,
             &mut reduce,
+        )?;
+        instantiated.predicates = self.normalize_instantiated_projection_predicates(
+            &instantiated.predicates,
+            context,
+            &mut ProofScratch::default(),
         )?;
         for predicate in instantiated.predicates.iter() {
             self.require_in(predicate, context, &mut ProofScratch::default())?;
@@ -711,7 +775,7 @@ mod tests {
             assert!(
                 world
                     .validate_associated_normal_form(
-                None,
+                        None,
                         normal,
                         facts.env(),
                         ProofContext {
@@ -727,7 +791,7 @@ mod tests {
         assert!(
             world
                 .validate_associated_normal_form(
-                None,
+                    None,
                     normal,
                     foreign.env(),
                     ProofContext::from_facts(&foreign),
@@ -743,7 +807,7 @@ mod tests {
         assert!(
             world
                 .validate_associated_normal_form(
-                None,
+                    None,
                     &Ty::AssociatedType(Arc::new(forged)),
                     facts.env(),
                     context,

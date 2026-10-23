@@ -298,6 +298,16 @@ impl ValidatedTraitWorld {
         facts: &ValidatedFacts,
     ) -> Result<EqualityResultSubject> {
         Ok(match subject {
+            SignatureSubject::Body if facts.closure.is_some() => EqualityResultSubject::Body {
+                declaration: facts
+                    .closure
+                    .as_ref()
+                    .expect("guarded closure facts")
+                    .provider(),
+                arguments: self.closure_body_arguments(facts)?.ok_or_else(|| {
+                    FactsError::invalid(&self.budget, "closure body lost its exact substitution")
+                })?,
+            },
             SignatureSubject::Body => match &facts.subject {
                 FactsSubject::UniversalCallable(declaration) => {
                     let mut arguments = Vec::new();
@@ -712,6 +722,9 @@ impl ValidatedTraitWorld {
         // origin, region schema, or nominal/component mappings. In particular,
         // a concrete target signature cannot replace the original ParamTails.
         let signature = match &view.result_subject {
+            EqualityResultSubject::Body { .. } if facts.closure.is_some() => {
+                self.closure_body_signature(facts)?
+            }
             EqualityResultSubject::Body { .. }
                 if matches!(facts.subject, FactsSubject::UniversalCallable(_)) =>
             {

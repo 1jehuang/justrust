@@ -5,6 +5,98 @@
 mod closure_oracle;
 
 #[test]
+fn custom_iterator_product_matches_stock() {
+    closure_oracle::check(
+        "custom-product",
+        &[closure_oracle::Case {
+            name: "custom_result_and_zero",
+            source: r#"struct Total(i32);impl std::iter::Product<i32> for Total {fn product<I:Iterator<Item=i32>>(iter:I)->Self{Total(iter.fold(1,|a,b|a*b))}}fn main(){let p:Total=(2i32..5i32).product();let q:i32=(-2i32..1i32).product();println!("{} {}",p.0,q);}"#,
+            expect: closure_oracle::Expect::Run("24 0\n"),
+        }],
+    );
+}
+
+#[test]
+fn iterator_product_matches_stock() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "iterator-product",
+        &[
+            Case {
+                name: "product_i8",
+                source: r#"fn main(){let a=[2i8,3i8,4i8];let p:i8=a.iter().product();let q:i8=(1i8..=4i8).product();let e:i8=(1i8..1i8).product();println!("{} {} {}",p,q,e);}"#,
+                expect: Expect::Run("24 24 1\n"),
+            },
+            Case {
+                name: "product_i16",
+                source: r#"fn main(){let a=[2i16,3i16,4i16];let p:i16=a.iter().product();let q:i16=(1i16..=4i16).product();let e:i16=(1i16..1i16).product();println!("{} {} {}",p,q,e);}"#,
+                expect: Expect::Run("24 24 1\n"),
+            },
+            Case {
+                name: "product_i32",
+                source: r#"fn main(){let a=[2i32,3i32,4i32];let p:i32=a.iter().product();let q:i32=(1i32..=4i32).product();let e:i32=(1i32..1i32).product();println!("{} {} {}",p,q,e);}"#,
+                expect: Expect::Run("24 24 1\n"),
+            },
+            Case {
+                name: "product_i64",
+                source: r#"fn main(){let a=[2i64,3i64,4i64];let p:i64=a.iter().product();let q:i64=(1i64..=4i64).product();let e:i64=(1i64..1i64).product();println!("{} {} {}",p,q,e);}"#,
+                expect: Expect::Run("24 24 1\n"),
+            },
+            Case {
+                name: "product_i128",
+                source: r#"fn main(){let a=[2i128,3i128,4i128];let p:i128=a.iter().product();let q:i128=(1i128..=4i128).product();let e:i128=(1i128..1i128).product();println!("{} {} {}",p,q,e);}"#,
+                expect: Expect::Run("24 24 1\n"),
+            },
+            Case {
+                name: "product_isize",
+                source: r#"fn main(){let a=[2isize,3isize,4isize];let p:isize=a.iter().product();let q:isize=(1isize..=4isize).product();let e:isize=(1isize..1isize).product();println!("{} {} {}",p,q,e);}"#,
+                expect: Expect::Run("24 24 1\n"),
+            },
+            Case {
+                name: "product_u8",
+                source: r#"fn main(){let a=[2u8,3u8,4u8];let p:u8=a.iter().product();let q:u8=(1u8..=4u8).product();let e:u8=(1u8..1u8).product();println!("{} {} {}",p,q,e);}"#,
+                expect: Expect::Run("24 24 1\n"),
+            },
+            Case {
+                name: "product_u16",
+                source: r#"fn main(){let a=[2u16,3u16,4u16];let p:u16=a.iter().product();let q:u16=(1u16..=4u16).product();let e:u16=(1u16..1u16).product();println!("{} {} {}",p,q,e);}"#,
+                expect: Expect::Run("24 24 1\n"),
+            },
+            Case {
+                name: "product_u32",
+                source: r#"fn main(){let a=[2u32,3u32,4u32];let p:u32=a.iter().product();let q:u32=(1u32..=4u32).product();let e:u32=(1u32..1u32).product();println!("{} {} {}",p,q,e);}"#,
+                expect: Expect::Run("24 24 1\n"),
+            },
+            Case {
+                name: "product_u64",
+                source: r#"fn main(){let a=[2u64,3u64,4u64];let p:u64=a.iter().product();let q:u64=(1u64..=4u64).product();let e:u64=(1u64..1u64).product();println!("{} {} {}",p,q,e);}"#,
+                expect: Expect::Run("24 24 1\n"),
+            },
+            Case {
+                name: "product_u128",
+                source: r#"fn main(){let a=[2u128,3u128,4u128];let p:u128=a.iter().product();let q:u128=(1u128..=4u128).product();let e:u128=(1u128..1u128).product();println!("{} {} {}",p,q,e);}"#,
+                expect: Expect::Run("24 24 1\n"),
+            },
+            Case {
+                name: "product_usize",
+                source: r#"fn main(){let a=[2usize,3usize,4usize];let p:usize=a.iter().product();let q:usize=(1usize..=4usize).product();let e:usize=(1usize..1usize).product();println!("{} {} {}",p,q,e);}"#,
+                expect: Expect::Run("24 24 1\n"),
+            },
+            Case {
+                name: "mapped_product",
+                source: r#"fn main(){let p:i64=(1i32..=5i32).map(|x|x as i64).product();println!("{}",p);}"#,
+                expect: Expect::Run("120\n"),
+            },
+            Case {
+                name: "missing_product_impl",
+                source: r#"struct Nope;fn bad(){let _:Nope=(1i32..4i32).product();}fn main(){}"#,
+                expect: Expect::Invalid("E0277"),
+            },
+        ],
+    );
+}
+
+#[test]
 fn unchanged_matrix_matches_stock_at_both_worker_counts() {
     closure_oracle::check(
         "unchanged-matrix",

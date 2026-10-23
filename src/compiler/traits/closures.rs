@@ -191,10 +191,34 @@ impl ValidatedTraitWorld {
             return Ok(None);
         };
         self.validate_closure_metadata(closure, context.env())?;
-        if !closure.supports(kind)
-            || goal.args.len() != 1
-            || !self.eq_ty(&goal.args[0], &self.closure_arguments(closure)?, 0)?
-        {
+        if !closure.supports(kind) || goal.args.len() != 1 {
+            return Ok(Some(ProofOutcome::NotProven));
+        }
+        let arguments = self.map_universal_projection_type(
+            &goal.args[0],
+            context.env(),
+            0,
+            &mut |projection| {
+                if let Some(ty) = self.declared_equality_rhs(
+                    projection,
+                    &context.predicates.predicates,
+                    context.env(),
+                )? {
+                    self.require_in(
+                        &Predicate::ProjectionEq {
+                            projection: projection.clone(),
+                            ty: ty.clone(),
+                        },
+                        context,
+                        active,
+                    )?;
+                    Ok(ty)
+                } else {
+                    Ok(Ty::AssociatedType(Arc::new(projection.clone())))
+                }
+            },
+        )?;
+        if !self.eq_ty(&arguments, &self.closure_arguments(closure)?, 0)? {
             return Ok(Some(ProofOutcome::NotProven));
         }
         self.require_closure_owner_predicates(closure, context, active)?;

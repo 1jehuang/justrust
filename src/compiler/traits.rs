@@ -6621,7 +6621,7 @@ impl ValidatedTraitWorld {
             return Ok((instantiated, None));
         }
         if self.schema_contains_projection(&item.schema)? {
-            let application = self.instantiate_projected_item(item, goal, context)?;
+            let application = self.instantiate_projected_item(item, goal, &[], context)?;
             return Ok((application.instantiated, None));
         }
         let origin = self
