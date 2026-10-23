@@ -744,6 +744,19 @@ impl ValidatedTraitWorld {
         env: &GenericEnv,
         depth: usize,
     ) -> Result<()> {
+        self.validate_raw_associated_ty_with(ty, env, depth, &mut NominalReplays::default())
+    }
+
+    // Keep formation replays local to the current proof computation. This
+    // shares only successful metadata authentication: raw projection membership,
+    // closedness, depth and executable-type checks still run below.
+    fn validate_raw_associated_ty_with(
+        &self,
+        ty: &Ty,
+        env: &GenericEnv,
+        depth: usize,
+        replays: &mut NominalReplays,
+    ) -> Result<()> {
         charged(&self.budget, self.budget.check_depth(depth))?;
         charged(&self.budget, self.budget.charge_work(1))?;
         charged(&self.budget, self.budget.charge_nodes(1))?;
@@ -756,10 +769,15 @@ impl ValidatedTraitWorld {
                         "associated projection item belongs to another trait",
                     ));
                 }
-                self.validate_ty_metadata_in(ty, env, depth)?;
-                self.validate_raw_associated_ty(&projection.trait_ref.self_ty, env, depth + 1)?;
+                self.validate_ty_metadata_with(ty, env, depth, replays)?;
+                self.validate_raw_associated_ty_with(
+                    &projection.trait_ref.self_ty,
+                    env,
+                    depth + 1,
+                    replays,
+                )?;
                 for argument in projection.trait_ref.args.iter() {
-                    self.validate_raw_associated_ty(argument, env, depth + 1)?;
+                    self.validate_raw_associated_ty_with(argument, env, depth + 1, replays)?;
                 }
                 if !self.raw_associated_ty_is_closed(ty, depth + 1)?
                     && !matches!(&projection.trait_ref.self_ty, Ty::Dyn(_))
@@ -776,7 +794,7 @@ impl ValidatedTraitWorld {
                     ));
                 }
                 for part in parts.iter() {
-                    self.validate_raw_associated_ty(part, env, depth + 1)?;
+                    self.validate_raw_associated_ty_with(part, env, depth + 1, replays)?;
                 }
             }
             Ty::Array { element, len } => {
@@ -786,14 +804,14 @@ impl ValidatedTraitWorld {
                         "array length limit exceeded",
                     ));
                 }
-                self.validate_raw_associated_ty(element, env, depth + 1)?;
+                self.validate_raw_associated_ty_with(element, env, depth + 1, replays)?;
             }
             Ty::Ref { referent, .. }
             | Ty::RawPtr {
                 pointee: referent, ..
             }
             | Ty::Slice { element: referent } => {
-                self.validate_raw_associated_ty(referent, env, depth + 1)?;
+                self.validate_raw_associated_ty_with(referent, env, depth + 1, replays)?;
             }
             // A raw header such as `Option<Self::Item>` (or its impl-side
             // `Option<<C as It>::Item>`) carries a projection as a nominal
@@ -801,14 +819,14 @@ impl ValidatedTraitWorld {
             // as raw, exactly as tuples and references do above. Executable
             // types still meet the strict validator after normalization.
             Ty::Struct(_) | Ty::Enum(_) if self.type_contains_projection(ty, depth + 1)? => {
-                self.validate_ty_metadata_in(ty, env, depth)?;
+                self.validate_ty_metadata_with(ty, env, depth, replays)?;
                 let arguments = match ty {
                     Ty::Struct(value) => value.def().type_args.clone(),
                     Ty::Enum(value) => value.def().type_args.clone(),
                     _ => unreachable!(),
                 };
                 for argument in arguments.iter() {
-                    self.validate_raw_associated_ty(argument, env, depth + 1)?;
+                    self.validate_raw_associated_ty_with(argument, env, depth + 1, replays)?;
                 }
             }
             _ => self.validate_ty(ty, env, None, true, depth)?,
@@ -1284,10 +1302,11 @@ impl ValidatedTraitWorld {
         charged(&self.budget, self.budget.check_depth(stack.active.len()))?;
         charged(&self.budget, self.budget.charge_work(1))?;
         retain::<ir::AssociatedTypeProjection>(&self.budget, 1)?;
-        self.validate_raw_associated_ty(
+        self.validate_raw_associated_ty_with(
             &Ty::AssociatedType(Arc::new(projection.clone())),
             context.proof.env(),
             0,
+            &mut stack.obligations.replays,
         )?;
         let key = NormalizationKey {
             environment: context.proof.predicates.index,
@@ -3012,6 +3031,70 @@ mod tests {
             .validate_for(&projection, &facts)
             .unwrap_err();
         assert_eq!(error.kind(), FactsErrorKind::Unproved);
+    }
+
+    #[test]
+    fn raw_projection_validation_reuses_only_authenticated_metadata() {
+        let source = frontend::parse(
+            "struct S;trait Has{type Out;}impl Has for S{type Out=i32;}fn main(){}",
+        )
+        .unwrap();
+        let plan = PlanCtx::from_program(&source, &PlanBudget::default()).unwrap();
+        let world = plan.trait_world().unwrap();
+        let implementation = world
+            .headers
+            .impls
+            .iter()
+            .find(|header| !header.associated_types.is_empty())
+            .unwrap();
+        let projection = ir::AssociatedTypeProjection {
+            trait_ref: implementation.trait_ref.clone(),
+            item: implementation.associated_types[0].associated,
+        };
+        let declaration = world
+            .headers
+            .callables
+            .iter()
+            .find(|header| header.schema.env.total_arity() == 0)
+            .unwrap()
+            .declaration;
+        let facts = world.callable_facts(declaration).unwrap();
+        let ty = Ty::AssociatedType(Arc::new(projection.clone()));
+        let mut replays = NominalReplays::default();
+        world
+            .validate_raw_associated_ty_with(&ty, facts.env(), 0, &mut replays)
+            .unwrap();
+        let retained = replays.types.len();
+        assert!(retained > 0);
+        let before = world.budget.usage_snapshot().work;
+        world
+            .validate_raw_associated_ty_with(&ty, facts.env(), 0, &mut replays)
+            .unwrap();
+        let reused = world.budget.usage_snapshot().work - before;
+        assert_eq!(replays.types.len(), retained);
+        let before = world.budget.usage_snapshot().work;
+        world
+            .validate_raw_associated_ty(&ty, facts.env(), 0)
+            .unwrap();
+        assert!(world.budget.usage_snapshot().work - before > reused);
+
+        let mut forged = projection;
+        forged.item = declaration;
+        assert!(
+            world
+                .validate_raw_associated_ty_with(
+                    &Ty::AssociatedType(Arc::new(forged)),
+                    facts.env(),
+                    0,
+                    &mut replays,
+                )
+                .is_err()
+        );
+        assert!(
+            world
+                .validate_raw_associated_ty_with(&ty, facts.env(), usize::MAX, &mut replays,)
+                .is_err()
+        );
     }
 
     #[test]

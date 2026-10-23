@@ -28,6 +28,20 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
       tests pass, but broader integration attempts time out, including the
       associated-equality matrix's 240-second bound. Those gates are unresolved,
       and unchanged fixture 11 still rejects at workers 1 and 8.
+      Raw associated-type validation now also retains the current proof's
+      nominal metadata replay scratch throughout recursive validation. The
+      regression verifies reduced repeated validation work, stable retained
+      entries, and rejection of a forged associated owner and excessive depth.
+      The exact isolated library passes 1,813 tests
+      (`20261023-110447737-1852049`); both isolated and active checkout graph
+      gates pass all 17 checks (`20261023-110452213-1852644`). This preserves all raw projection
+      admission checks and does not solve fixture 11's work-limit rejection.
+      The related iterator/authority run passes 43 tests; two historical
+      associated-type exclusions fail because their sources are now accepted.
+      Both failures reproduce with this change removed
+      (`20261023-111105524-1871854`), so their expectations are left unchanged
+      here rather than counted as passing gates. Library/test clippy passes
+      with existing warnings (`20261023-111142490-1874078`).
 
 - [x] `str::is_empty` is supplied by the source prelude using the existing byte
       length operation. Empty, Unicode, embedded-NUL and borrowed-String inputs,
