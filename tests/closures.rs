@@ -2,8 +2,45 @@
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[path = "support/oracle.rs"]
 mod oracle;
+#[path = "support/closure_oracle.rs"]
+mod output_oracle;
 use justrust_engine::compiler;
 use oracle::{Case, Expect};
+
+#[test]
+fn inherent_callable_output_infers_without_result_context() {
+    use output_oracle::{Case, Expect};
+    output_oracle::check(
+        "inherent-callable-output",
+        &[
+            Case {
+                name: "result_map_and_map_err",
+                source: "fn main(){let ok:Result<u32,u8>=Ok(4);println!(\"{:?}\",ok.map(|n|n+1u32));let err:Result<u32,u8>=Err(3);println!(\"{:?}\",err.map_err(|e|e as i32+2));}",
+                expect: Expect::Run("Ok(5)\nErr(5)\n"),
+            },
+            Case {
+                name: "display_error_to_string",
+                source: "use std::fmt;#[derive(Debug)]enum E{Bad}impl fmt::Display for E{fn fmt(&self,f:&mut fmt::Formatter)->fmt::Result{write!(f,\"bad\")}}fn main(){let value:Result<u32,E>=Err(E::Bad);println!(\"{:?}\",value.map_err(|e|e.to_string()));}",
+                expect: Expect::Run("Err(\"bad\")\n"),
+            },
+            Case {
+                name: "own_inherent_callable_output",
+                source: "struct Wrap<T>(T);impl<T> Wrap<T>{fn apply<U,F:FnOnce(T)->U>(self,f:F)->U{f(self.0)}}fn main(){println!(\"{}\",Wrap(4i32).apply(|n|n+3));}",
+                expect: Expect::Run("7\n"),
+            },
+            Case {
+                name: "wrong_output_still_rejected",
+                source: "struct Wrap<T>(T);impl<T> Wrap<T>{fn apply<U,F:FnOnce(T)->U>(self,f:F)->U{f(self.0)}}fn bad(){let _:bool=Wrap(4i32).apply(|n|n+3);}fn main(){}",
+                expect: Expect::Invalid("E0308"),
+            },
+            Case {
+                name: "unconstrained_parameter_stays_unresolved",
+                source: "struct Wrap<T>(T);impl<T> Wrap<T>{fn apply<U,F:FnOnce(T)->i32>(self,f:F)->i32{f(self.0)}}fn main(){println!(\"{}\",Wrap(4i32).apply(|n|n+3));}",
+                expect: Expect::Invalid("E0282"),
+            },
+        ],
+    );
+}
 
 #[test]
 fn immediate_noncapturing_closures_match_stock() {

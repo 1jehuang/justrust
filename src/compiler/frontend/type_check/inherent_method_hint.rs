@@ -116,6 +116,25 @@ impl Checker<'_> {
                 return Ok(InherentMethodInference::Applicable(None));
             }
         }
+        // The closure argument can determine a method parameter that occurs
+        // only in its callable Output equality, e.g. Result::map_err's G.
+        // As for trait methods, normalize the original predicate after binding
+        // the receiver's impl parameters. Final method selection still proves
+        // the complete instantiated signature and its obligations.
+        for predicate in schema.predicates.predicates() {
+            plan.budget.charge_work(1)?;
+            if let ir::Predicate::ProjectionEq { projection, ty } = predicate
+                && !matches!(ty, ir::Ty::AssociatedType(_))
+                && inferred_owner::mentions_param(ty)
+            {
+                let projection = super::trait_method_hint::bind_owner(
+                    &ir::Ty::AssociatedType(Arc::new(projection.clone())),
+                    &owner_bindings,
+                );
+                let ty = super::trait_method_hint::bind_owner(ty, &owner_bindings);
+                solver.constrain_projection_equality(&projection, &ty, true)?;
+            }
+        }
         Ok(InherentMethodInference::Applicable(
             solver.finish(true).ok().flatten(),
         ))

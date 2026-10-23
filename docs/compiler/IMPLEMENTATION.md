@@ -6,6 +6,19 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 
 ## Completed foundations, not full compatibility
 
+- [x] Inherent method inference consumes callable `Output` equalities after
+      binding the receiver's implementation parameters. `Result::map`,
+      `Result::map_err` and custom callable methods infer their result parameters
+      without a result annotation; final method selection still checks the full
+      signature and obligations. Stock/native CHECK/BUILD/run at workers 1/8
+      and invalid unused-body controls pass. All 11 closure tests, 1,824 library
+      tests and 17 graph checks pass, with one ignored test in each latter suite;
+      clippy exits successfully. Receipts are retained in
+      `data/runs/xps14/inherent-output-inference-2026-10-23.jsonl`.
+      Unchanged full-program 15 now reaches a slice-family source-channel
+      rejection instead of the unresolved `map_err` inference error; it remains
+      unsupported and no full-program completion is claimed.
+
 - [x] Declared generic shared-slice element families retain source lifetime
       authority through substitution, trait headers and borrowed element returns.
       Exact input/path/family checks reject forged mappings, escapes and live-loan
