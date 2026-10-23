@@ -6,6 +6,20 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 
 ## Completed foundations, not full compatibility
 
+- [x] Mutable reference arguments reached through local-rooted dereference
+      chains are reborrowed rather than moved. Typed carrier witnesses and CFG
+      two-phase loans retain every dereference, and every crossed reference
+      must be mutable. Repeated calls through `&mut &mut i32` run as stock does;
+      mutation through `&&mut i32` is rejected even in an unused function.
+      Stock CHECK/BUILD/run at workers 1/8, forged cyclic carrier and shortened
+      place rejection, and all 35 reference call/graph tests pass on the isolated
+      committed baseline (`20261023-073946397-1146951`,
+      `20261023-074029277-1149326`). Graph integrity passes 17 tests with one
+      existing ignore (`20261023-074102975-1146943`). The isolated full library
+      passes 1,792 tests with one existing ignore (`20261023-074130548-1152705`).
+      This does not complete borrowed opaque callable forwarding or full Rust
+      compatibility.
+
 - [x] Nested owned opaque callable composition supports concrete and generic
       argument/result types and deeper composed owners. Closure-bearing opaque
       keys replay canonical graph templates. Physical closure descriptors are

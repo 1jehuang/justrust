@@ -481,3 +481,24 @@ fn main() { if run() == 7 { println!("borrow params oracle ok"); } }
         "borrow params oracle ok\n",
     );
 }
+
+#[test]
+fn projected_mutable_argument_reborrows_match_stock() {
+    #[path = "support/closure_oracle.rs"]
+    mod oracle;
+    oracle::check(
+        "projected_mutable_reborrow",
+        &[
+            oracle::Case {
+                name: "reborrow_does_not_move",
+                source: "fn put(r:&mut i32){*r+=1;} fn relay(r:&mut &mut i32){put(*r);put(*r);} fn main(){let mut x=5;let mut r=&mut x;relay(&mut r);println!(\"{}\",x);}",
+                expect: oracle::Expect::Run("7\n"),
+            },
+            oracle::Case {
+                name: "shared_reference_cannot_authorize_mutation",
+                source: "fn put(r:&mut i32){*r=1;} fn bad(r:&&mut i32){put(*r);} fn main(){}",
+                expect: oracle::Expect::Invalid("E0596"),
+            },
+        ],
+    );
+}

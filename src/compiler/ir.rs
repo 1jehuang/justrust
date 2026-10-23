@@ -9907,16 +9907,24 @@ impl CheckedFunction {
                                 }
                             }
                             ImplicitBorrowKind::MutableArgumentReborrow { carrier } => {
-                                let carrier = self
-                                    .exprs
-                                    .get(carrier.0)
-                                    .ok_or("invalid reborrow carrier")?;
-                                let ExprKind::Local(local) = carrier.kind else {
-                                    return Err(
-                                        "implicit mutable reborrow requires original local carrier"
-                                            .into(),
-                                    );
+                                let mut root = *carrier;
+                                let mut derefs = 0usize;
+                                let local = loop {
+                                    if let Some(authority) = facts.validated() {
+                                        authority.budget().charge_work(1)?;
+                                    }
+                                    let expression =
+                                        self.exprs.get(root.0).ok_or("invalid reborrow carrier")?;
+                                    match &expression.kind {
+                                        ExprKind::Local(local) => break *local,
+                                        ExprKind::Deref { value } if value.0 < root.0 && derefs < 127 => {
+                                            derefs += 1;
+                                            root = *value;
+                                        }
+                                        _ => return Err("implicit mutable reborrow requires a local-rooted dereference carrier".into()),
+                                    }
                                 };
+                                let carrier = &self.exprs[carrier.0];
                                 if !matches!(
                                     carrier.ty,
                                     Ty::Ref {
@@ -9924,7 +9932,15 @@ impl CheckedFunction {
                                         ..
                                     }
                                 ) || place.local != local
-                                    || place.projection.as_slice() != [Projection::Deref]
+                                    || place.projection.len() != derefs + 1
+                                    || place
+                                        .projection
+                                        .iter()
+                                        .any(|step| *step != Projection::Deref)
+                                    || projected_ty(
+                                        &self.locals[local.0].ty,
+                                        &place.projection[..derefs],
+                                    )? != &carrier.ty
                                 {
                                     return Err(
                                         "implicit mutable reborrow carrier provenance mismatch"

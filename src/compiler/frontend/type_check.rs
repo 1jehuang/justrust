@@ -7981,35 +7981,36 @@ impl<'a> Checker<'a> {
         expected: &ir::Ty,
         reachable: bool,
     ) -> Result<(ir::ExprId, Option<ir::ImplicitBorrowKind>), String> {
-        if let (
-            Expr::Var(name),
-            ir::Ty::Ref {
-                kind: ir::BorrowKind::Mut,
-                referent,
-            },
-        ) = (source, expected)
+        if let ir::Ty::Ref {
+            kind: ir::BorrowKind::Mut,
+            referent,
+        } = expected
         {
-            let local = self.lookup(name)?;
-            if let ir::Ty::Ref {
-                kind: ir::BorrowKind::Mut,
-                referent: actual,
-            } = &self.locals[local.0].ty
-            {
-                let budget = &self
-                    .signatures
-                    .plan
-                    .as_ref()
-                    .ok_or("call requires plan")?
-                    .budget;
-                if metered_type_equal(actual, referent, budget, 0)? {
+            let mut root = source;
+            let mut derefs = 0usize;
+            while let Expr::Deref { value } = root {
+                self.signatures.plan()?.budget.charge_work(1)?;
+                derefs += 1;
+                if derefs >= 128 {
+                    return Err("argument reborrow dereference limit128".into());
+                }
+                root = value;
+            }
+            if let Expr::Var(name) = root {
+                let local = self.lookup(name)?;
+                let mut projection = self.retained_pattern_vec::<ir::Projection>(derefs + 1)?;
+                projection.resize(derefs, ir::Projection::Deref);
+                let source_ty = ir::projected_ty(&self.locals[local.0].ty, &projection)?.clone();
+                if let ir::Ty::Ref {
+                    kind: ir::BorrowKind::Mut,
+                    referent: actual,
+                } = source_ty
+                    && metered_type_equal(&actual, referent, &self.signatures.plan()?.budget, 0)?
+                {
                     let carrier = self.expr(source)?;
-                    let id = self.borrow_expression(
-                        ir::BorrowKind::Mut,
-                        ir::Place {
-                            local,
-                            projection: vec![ir::Projection::Deref],
-                        },
-                    )?;
+                    projection.push(ir::Projection::Deref);
+                    let id = self
+                        .borrow_expression(ir::BorrowKind::Mut, ir::Place { local, projection })?;
                     return Ok((
                         id,
                         Some(ir::ImplicitBorrowKind::MutableArgumentReborrow { carrier }),

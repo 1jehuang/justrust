@@ -1542,14 +1542,24 @@ impl Function {
             } else {
                 false
             };
-            let reborrow = site.place.projection.as_slice() == [Projection::Deref]
-                && matches!(
-                    self.locals.get(site.place.local.0).map(|local| &local.ty),
-                    Some(Ty::Ref {
-                        kind: ir::BorrowKind::Mut,
-                        ..
-                    })
-                );
+            let mut reborrow = !site.place.projection.is_empty();
+            let mut projected = self.locals.get(site.place.local.0).map(|local| &local.ty);
+            for projection in &site.place.projection {
+                spend(1)?;
+                projected = match (projection, projected) {
+                    (
+                        Projection::Deref,
+                        Some(Ty::Ref {
+                            kind: ir::BorrowKind::Mut,
+                            referent,
+                        }),
+                    ) => Some(referent.as_ref()),
+                    _ => {
+                        reborrow = false;
+                        None
+                    }
+                };
+            }
             if !receiver && !reborrow {
                 return Err(
                     "two-phase loan is neither a mutable receiver nor local mutable reborrow"

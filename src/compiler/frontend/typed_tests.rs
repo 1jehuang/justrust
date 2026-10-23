@@ -495,6 +495,47 @@ fn receiver_regions_call_carriers_and_explicit_immediate_conflicts_remain_distin
 }
 
 #[test]
+fn projected_mutable_reborrow_rejects_forged_carrier_and_place() {
+    let p =
+        parse("fn put(r:&mut i32){*r=1;}fn relay(r:&mut &mut i32){put(*r);}fn main(){}").unwrap();
+    let budget = ir::PlanBudget::default();
+    let plan = PlanCtx::from_program(&p, &budget).unwrap();
+    let typed =
+        type_callable_with_plan(&p, plan.callable_decl(1).unwrap(), &plan, &budget).unwrap();
+    typed.validate().unwrap();
+    let (borrow, carrier) = typed
+        .exprs
+        .iter()
+        .enumerate()
+        .find_map(|(index, expr)| match &expr.kind {
+            ir::ExprKind::Borrow {
+                timing:
+                    ir::BorrowTiming::TwoPhase {
+                        reason: ir::ImplicitBorrowKind::MutableArgumentReborrow { carrier },
+                        ..
+                    },
+                ..
+            } => Some((index, *carrier)),
+            _ => None,
+        })
+        .unwrap();
+    assert!(matches!(
+        typed.exprs[carrier.0].kind,
+        ir::ExprKind::Deref { .. }
+    ));
+    let mut forged = typed.clone();
+    if let ir::ExprKind::Deref { value } = &mut forged.exprs[carrier.0].kind {
+        *value = carrier;
+    }
+    assert!(forged.validate().is_err(), "cyclic carrier accepted");
+    let mut forged = typed.clone();
+    if let ir::ExprKind::Borrow { place, .. } = &mut forged.exprs[borrow].kind {
+        place.projection.pop();
+    }
+    assert!(forged.validate().is_err(), "shortened projection accepted");
+}
+
+#[test]
 fn trait_default_sources_have_separate_identity_and_rigid_self_facts() {
     let p =
         parse("mod m{fn helper()->i32{7}pub trait V{fn value(&self)->i32{helper()}}}fn main(){}")
