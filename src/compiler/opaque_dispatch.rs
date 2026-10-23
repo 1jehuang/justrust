@@ -2,7 +2,7 @@
 //! No hidden representation is read while source CHECK is being admitted.
 use super::*;
 
-const VERSION: u64 = 2;
+const VERSION: u64 = 3;
 
 /// A physical target is usable only together with this original occurrence.
 /// This payload deliberately retains no publication, facts, world or CFG.
@@ -146,19 +146,13 @@ impl PhysicalCalleeReady {
     }
 }
 
-/// The first slice admits scalar Read-like methods only. Reject metadata we
-/// cannot encode rather than allowing two different authorizations to merge.
+/// Every public trait and method actual participates in the canonical key.
 pub(super) fn key(
     caller: &ir::CallTarget,
     occurrence: ir::ExprId,
     call: &ir::TraitCall,
     budget: &ir::PlanBudget,
 ) -> Result<Key, Error> {
-    if !call.trait_ref.args.is_empty() || !call.method_args.is_empty() {
-        return Err(Error::new(
-            "unsupported: opaque dispatch with trait or method actuals",
-        ));
-    }
     let ir::Ty::Opaque(opaque) = &call.trait_ref.self_ty else {
         return Err(Error::new(
             "opaque dispatch requires the exact public opaque receiver",
@@ -178,7 +172,111 @@ pub(super) fn key(
         opaque.len() as u64,
     ]);
     words.extend(opaque);
+    for application in [
+        ir::CallTarget {
+            declaration: call.trait_ref.declaration,
+            type_args: call.trait_ref.args.clone(),
+        },
+        ir::CallTarget {
+            declaration: call.item,
+            type_args: call.method_args.clone(),
+        },
+    ] {
+        let encoded = instances::graph_key::encode(&application, budget).map_err(Error::new)?;
+        words.push(encoded.len() as u64);
+        words.extend(encoded);
+    }
     crate::compiler::keys::words(OPAQUE_CALL_DISPATCH, words)
+}
+
+/// Demand physical targets only through per-occurrence graph authorization.
+/// This extends one instance frontier and never scans unrelated declarations.
+pub(super) async fn extend_instance_demands(
+    provider: &CompilerProvider,
+    cx: &Context,
+    target: &ir::CallTarget,
+    template: &TemplateBodyFact,
+    types: &frontend::PlanCtx,
+    demands: &mut instances::DirectDemands,
+) -> Result<(), Error> {
+    let mut has_opaque_actual = false;
+    for actual in target.type_args.iter() {
+        if opaque_instances::contains(actual, &provider.0.budget)? {
+            has_opaque_actual = true;
+            break;
+        }
+    }
+    if let Some(publication) = template.publication.as_ref() {
+        provider
+            .0
+            .budget
+            .charge_work(publication.source().exprs.len())
+            .map_err(Error::new)?;
+    }
+    if !has_opaque_actual
+        && !template.publication.as_ref().is_some_and(|publication| {
+            publication.source().exprs.iter().any(|expression| {
+                matches!(
+                    &expression.kind,
+                    ir::ExprKind::Call { target: ir::Callee::TraitItem(call), .. }
+                        if matches!(call.trait_ref.self_ty, ir::Ty::Opaque(_))
+                )
+            })
+        })
+    {
+        return Ok(());
+    }
+    let publication = template
+        .publication
+        .as_ref()
+        .ok_or_else(|| Error::new("opaque instance dispatch lost source publication"))?;
+    let mut specialization =
+        opaque_specialization::Specialization::new(publication, target, types, &provider.0.budget)?;
+    let (mut pending, _storage) = provider.scratch_vec(publication.source().exprs.len())?;
+    for (index, expression) in publication.source().exprs.iter().enumerate() {
+        provider.0.budget.charge_work(1).map_err(Error::new)?;
+        if !matches!(
+            expression.kind,
+            ir::ExprKind::Call {
+                target: ir::Callee::TraitItem(_),
+                ..
+            }
+        ) {
+            continue;
+        }
+        let site = ir::ExprId(index);
+        if let (ir::Callee::TraitItem(call), _) = specialization.call(site)?
+            && matches!(call.trait_ref.self_ty, ir::Ty::Opaque(_))
+        {
+            pending.push((
+                site,
+                cx.request(key(target, site, &call, &provider.0.budget)?)
+                    .get(0),
+            ));
+        }
+    }
+    let (mut proofs, _proof_storage) = provider.scratch_vec(pending.len())?;
+    let (mut roots, _root_storage) = provider.scratch_vec(pending.len())?;
+    for (site, handle) in pending {
+        let authorization: Arc<OpaqueCallAuthorization> = cx.read_fact(handle).await?;
+        roots.push(ir::Ty::Opaque(authorization.opaque.clone()));
+        proofs.push((site, authorization));
+    }
+    let representations = opaque_instances::read(&Facts { cx }, &roots, &provider.0.budget).await?;
+    for (site, authorization) in proofs {
+        authorization.replay(
+            publication,
+            target,
+            site,
+            &representations,
+            types,
+            &provider.0.budget,
+        )?;
+        demands
+            .call(authorization.target().clone(), &provider.0.budget)
+            .map_err(Error::new)?;
+    }
+    Ok(())
 }
 
 fn original_occurrence(

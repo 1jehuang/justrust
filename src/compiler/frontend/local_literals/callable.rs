@@ -241,8 +241,49 @@ impl<'a: 's, 'b: 's, 's> Solver<'a, 'b, 's> {
                 continue;
             }
             let term = self.schema(&trait_ref.self_ty, params, 0)?;
-            let Domain::Callable(callable) = self.domain(self.peel_refs(term)) else {
-                continue;
+            let peeled = self.peel_refs(term);
+            let callable = match self.domain(peeled) {
+                Domain::Callable(callable) => callable,
+                Domain::Opaque(_, _) | Domain::Fixed(ir::Ty::Opaque(_)) => {
+                    let Some(ir::Ty::Opaque(opaque)) = self.resolve(peeled, 0)? else {
+                        continue;
+                    };
+                    for _ in opaque.bounds() {
+                        self.checker.infer_work(0)?;
+                    }
+                    let Some(bound) = opaque.bounds().iter().find(|bound| {
+                        bound
+                            .application(ir::Ty::Opaque(opaque.clone()))
+                            .declaration
+                            == trait_ref.declaration
+                    }) else {
+                        continue;
+                    };
+                    let application = bound.application(ir::Ty::Opaque(opaque.clone()));
+                    if let (Some(expected), Some(actual)) =
+                        (trait_ref.args.first(), application.args.first())
+                    {
+                        let expected = self.schema(expected, params, 0)?;
+                        let actual = self.fixed(actual.clone())?;
+                        self.unify(expected, actual)?;
+                    }
+                    if let ir::Predicate::ProjectionEq { projection, ty } = predicate {
+                        for _ in bound.equalities() {
+                            self.checker.infer_work(0)?;
+                        }
+                        if let Some((_, result)) = bound
+                            .equalities()
+                            .iter()
+                            .find(|(item, _)| *item == projection.item)
+                        {
+                            let expected = self.schema(ty, params, 0)?;
+                            let actual = self.fixed(result.clone())?;
+                            self.coerce(actual, expected)?;
+                        }
+                    }
+                    continue;
+                }
+                _ => continue,
             };
             if let Some(arguments) = trait_ref.args.first() {
                 let arguments = self.schema(arguments, params, 0)?;

@@ -3022,9 +3022,20 @@ fn substitute_ty_walk(
                 std::mem::size_of::<ClosureTy>()
                     + closure.types().count() * std::mem::size_of::<Ty>(),
             )?;
-            Ty::Closure(Arc::new(closure.try_map(|ty| {
-                substitute_ty_walk(ty, env, args, caller, cx, budget, depth + 1)
-            })?))
+            let mapped = closure
+                .try_map(|ty| substitute_ty_walk(ty, env, args, caller, cx, budget, depth + 1))?;
+            let mut unchanged = true;
+            for (before, after) in closure.types().zip(mapped.types()) {
+                if !identical_type(before, after, budget)? {
+                    unchanged = false;
+                    break;
+                }
+            }
+            if unchanged {
+                Ty::Closure(closure.clone())
+            } else {
+                Ty::Closure(Arc::new(mapped))
+            }
         }
         Ty::FnItem(item) => {
             budget.retain_bytes(

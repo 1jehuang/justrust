@@ -7,6 +7,35 @@ mod oracle;
 use oracle::{Case, Expect};
 
 #[test]
+fn opaque_callable_bounds_drive_generic_calls() {
+    oracle::check(
+        "opaque_callable_generic_calls",
+        &[
+            Case {
+                name: "owned_opaque",
+                source: "fn ap<F:Fn(i32)->i32>(f:F,x:i32)->i32{f(x)}fn add(n:i32)->impl Fn(i32)->i32{move|x|x+n}fn main(){println!(\"{}\",ap(add(5),10));}",
+                expect: Expect::Run("15\n"),
+            },
+            Case {
+                name: "generic_output_inference",
+                source: "fn ap<A,B,F:Fn(A)->B>(f:F,x:A)->B{f(x)}fn add(n:i32)->impl Fn(i32)->i32{move|x|x+n}fn main(){println!(\"{}\",ap(add(2),5));}",
+                expect: Expect::Run("7\n"),
+            },
+            Case {
+                name: "wrong_public_output",
+                source: "fn ap<F:Fn(i32)->bool>(f:F)->bool{f(1)}fn add()->impl Fn(i32)->i32{|x|x+1}fn unused(){ap(add());}fn main(){}",
+                expect: Expect::Invalid("E0271"),
+            },
+            Case {
+                name: "hidden_fn_not_public",
+                source: "fn ap<F:Fn(i32)->i32>(f:F)->i32{f(1)}fn add()->impl FnMut(i32)->i32{|x|x+1}fn unused(){ap(add());}fn main(){}",
+                expect: Expect::Invalid("E0277"),
+            },
+        ],
+    );
+}
+
+#[test]
 fn inline_closure_arguments_to_generic_functions() {
     oracle::check(
         "inline_closure_arguments",

@@ -1542,6 +1542,82 @@ impl<'s> Checker<'s> {
         if !solver.constrain_projected_formals(projected_constraints, fallback)? {
             return Ok(None);
         }
+        for predicate in schema.predicates.predicates() {
+            self.infer_work(0)?;
+            let application = predicate.trait_ref();
+            let ir::Ty::Param(parameter) = &application.self_ty else {
+                continue;
+            };
+            if !schema.env.scopes()[0].contains(*parameter) {
+                continue;
+            }
+            let Some(term) = solver
+                .core
+                .slots()
+                .get(parameter.index as usize)
+                .cloned()
+                .flatten()
+            else {
+                continue;
+            };
+            let Some(resolved) = solver.resolve(&term, false, 0)? else {
+                continue;
+            };
+            if let ir::Ty::Closure(closure) = &resolved {
+                let world = plan.trait_world()?;
+                let Some(kind) = world
+                    .closure_trait_kind(application.declaration)
+                    .map_err(|e| e.into_legacy_diagnostic(&plan.budget))?
+                else {
+                    continue;
+                };
+                if !closure.supports(kind) {
+                    continue;
+                }
+                if let Some(formal) = application.args.first() {
+                    self.infer_storage(closure.params().len())?;
+                    let arguments = if closure.params().is_empty() {
+                        ir::Ty::Unit
+                    } else {
+                        ir::Ty::Tuple(closure.params().into())
+                    };
+                    let formal = solver.schema(formal, 0)?;
+                    let actual = self.infer_type_term(&arguments, None, 0)?;
+                    solver.constrain(&formal, &actual, 0)?;
+                }
+                if let ir::Predicate::ProjectionEq { ty, .. } = predicate {
+                    let formal = solver.schema(ty, 0)?;
+                    let actual = self.infer_type_term(closure.result(), None, 0)?;
+                    solver.constrain(&formal, &actual, 0)?;
+                }
+                continue;
+            }
+            let ir::Ty::Opaque(opaque) = resolved else {
+                continue;
+            };
+            for bound in opaque.bounds() {
+                self.infer_work(0)?;
+                let actual = bound.application(ir::Ty::Opaque(opaque.clone()));
+                if actual.declaration != application.declaration {
+                    continue;
+                }
+                for (formal, actual) in application.args.iter().zip(actual.args.iter()) {
+                    let formal = solver.schema(formal, 0)?;
+                    let actual = self.infer_type_term(actual, None, 0)?;
+                    solver.constrain(&formal, &actual, 0)?;
+                }
+                if let ir::Predicate::ProjectionEq { projection, ty } = predicate {
+                    for (item, actual) in bound.equalities() {
+                        self.infer_work(0)?;
+                        if *item == projection.item {
+                            let formal = solver.schema(ty, 0)?;
+                            let actual = self.infer_type_term(actual, None, 0)?;
+                            solver.constrain(&formal, &actual, 0)?;
+                        }
+                    }
+                }
+            }
+        }
         // Equalities whose projection inputs stay unsolved add no evidence;
         // the obligation itself is still checked against the final actuals.
         for (projection, rhs) in &equalities {

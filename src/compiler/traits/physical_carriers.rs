@@ -36,6 +36,10 @@ impl CarrierContractView {
         view.contract = contract;
         view.fixed = signature.ref_contract.clone();
         view.result_signature = signature;
+        // The borrowed physical boundary replays the original view before
+        // constructing this one. Its source-signature equality result cannot
+        // authorize the different physical signature and is not retained.
+        view.equality_results = None;
         // The factory admits no declared lifetime constraints. Keep original
         // source identities and input mapping, but do not invent region rows.
         view

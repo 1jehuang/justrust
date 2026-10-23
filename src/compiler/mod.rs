@@ -1456,7 +1456,7 @@ impl Provider for CompilerProvider {
                     let template = facts.template(source_index).await?;
                     let source = this.validated_body(&types, source_index, &template)?;
                     let mut context = types.as_ref().clone();
-                    let demands = instances::direct_demands(
+                    let mut demands = instances::direct_demands(
                         &target,
                         &source,
                         &mut context,
@@ -1466,6 +1466,15 @@ impl Provider for CompilerProvider {
                     .map_err(|error| {
                         Error::new(format!("{error}; instance caller={:?}", target.declaration))
                     })?;
+                    opaque_dispatch::extend_instance_demands(
+                        &this,
+                        &cx,
+                        &target,
+                        &template,
+                        &types,
+                        &mut demands,
+                    )
+                    .await?;
                     cx.publish_fact(0, demands)
                 }
                 OPAQUE_REPRESENTATION => {

@@ -6,6 +6,29 @@ use justrust_engine::compiler::traits::{FactsErrorKind, FactsPhase, ValidatedFac
 use justrust_engine::compiler::{backend, cfg, frontend, ir, ownership};
 use std::sync::Arc;
 
+#[path = "support/closure_oracle.rs"]
+mod rigid_oracle;
+
+#[test]
+fn rigid_projection_identity_matches_stock() {
+    use rigid_oracle::{Case, Expect};
+    rigid_oracle::check(
+        "rigid_projection_identity",
+        &[
+            Case {
+                name: "concrete_instantiation",
+                source: "trait Has<A>{type Out;}struct S;impl Has<i32> for S{type Out=i32;}fn rigid<T:Has<i32>>(value:<T as Has<i32>>::Out)-><T as Has<i32>>::Out{value}fn main(){println!(\"{}\",rigid::<S>(42));}",
+                expect: Expect::Run("42\n"),
+            },
+            Case {
+                name: "distinct_projections_are_not_equal",
+                source: "trait Has<A>{type Out;}fn bad<T:Has<i32>+Has<bool>>(value:<T as Has<i32>>::Out)-><T as Has<bool>>::Out{value}fn main(){}",
+                expect: Expect::Invalid("E0308"),
+            },
+        ],
+    );
+}
+
 const SOURCE: &str = r#"
 struct S;
 struct Token {value:i32}
@@ -745,15 +768,11 @@ fn missing_duplicate_extra_and_unused_invalid_assignments_fail_semantically() {
     }
 }
 #[test]
-fn rigid_projection_remains_unsupported_and_required_method_schema_is_admitted() {
+fn rigid_projection_identity_and_required_method_schema_are_admitted() {
     let source = "trait Has<A>{type Out;}fn rigid<T:Has<i32>>(value:<T as Has<i32>>::Out)-><T as Has<i32>>::Out{value}fn main(){}";
-    let error = frontend::parse(source)
+    frontend::parse(source)
         .and_then(|program| frontend::check(&program))
-        .expect_err("rigid caller projection still requires symbolic equality authority");
-    assert!(
-        error.to_ascii_lowercase().contains("unsupported"),
-        "{error}"
-    );
+        .expect("identical rigid projections retain their declared identity");
 
     let source = "trait Has<A>{type Out;fn project(value:Self::Out)->Self::Out;}fn main(){}";
     let program = frontend::parse(source).unwrap();

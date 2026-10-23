@@ -6,6 +6,25 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 
 ## Completed foundations, not full compatibility
 
+- [x] Owned closure-backed opaque values can cross generic `Fn` call
+      boundaries without exposing their hidden type to source CHECK. Public
+      callable argument and Output equalities drive local inference, while
+      per-occurrence opaque dispatch proofs add exact physical targets to the
+      existing INSTANCE frontier. Callers retain public instance identities
+      and replay physical ABI/carrier normalization from graph-read facts.
+      Scalar captured closures, generic argument/result inference, unused
+      wrong Output and insufficient public `FnMut` bounds are covered at
+      workers 1/8. Nested opaque composition still stops at closure-bearing
+      opaque graph keys, and borrowed callable forwarding remains incomplete.
+      The exact-snapshot library, graph, authority, inference, iterator, slice
+      and corpus suite passes 1,926 tests with zero failures and three ignored
+      (`20261023-062249866-883524`). All-target clippy passes with baseline
+      warnings (`20261023-062229413-870425`). A stale rigid-projection identity
+      rejection also failed unchanged HEAD (`20261023-061830581-870003`);
+      its replacement now runs stock-differential identity and distinct
+      projection rejection at workers 1/8 (`20261023-062002505-874656`).
+      Full corpus status remains 11/20, not full Rust support.
+
 - [x] Contextual numeric range receivers retain their inferred scalar type
       through graph preparation and ordinary checked method lowering. Signed
       and unsigned collection, nested scopes, literal overflow and unused
@@ -703,11 +722,12 @@ missing-file changes invalidate only justified consumers without stale lookup.
       source CHECK through authenticated candidate discovery and a dedicated
       declaration-bound normalization origin. Worker-1/8 provider tests retain
       zero representation/dispatch/MONO/codegen demands; foreign owner/site/capture,
-      Output and caller world/env/phase replay controls reject. This does not add
-      executable closure-backed opaque support or complete the closure corpus.
-      Generic opaque callers with bound calls, generic defining bodies with calls,
-      closure-backed opaque values, reference-bearing hidden representations and
-      realized destructor dependencies remain unsupported, not approximated.
+      Output and caller world/env/phase replay controls reject. The later owned
+      generic callable increment listed above adds executable scalar-capturing
+      closure-backed opaque values passed by value to generic `Fn` consumers.
+      Nested opaque closure composition, borrowed callable forwarding,
+      reference-bearing hidden representations and realized destructor
+      dependencies remain incomplete, not approximated.
       Partial method inference substitutes canonical enclosing impl bindings.
       Delivered body-local structural union-find constraints: later inherent
       receiver uses, assignments and call parameters solve nested generic local

@@ -1,5 +1,162 @@
 use super::*;
 
+#[test]
+fn opaque_dispatch_v3_argument_identity_and_malformed_keys() {
+    struct Probe(CompilerProvider);
+    impl Provider for Probe {
+        fn outputs(&self, key: &Key) -> usize {
+            self.0.outputs(key)
+        }
+
+        fn start(&self, cx: Context, requested: Key) -> TaskFuture {
+            if requested.kind != 9002 {
+                return self.0.start(cx, requested);
+            }
+            let provider = self.0.clone();
+            Box::pin(async move {
+                let facts = Facts { cx: &cx };
+                let types = facts.types().await?;
+                let template: Arc<TemplateBodyFact> = facts
+                    .get(crate::compiler::keys::item(TEMPLATE_BODY, 1))
+                    .await?;
+                let caller = ir::CallTarget {
+                    declaration: types.callable_decl(1).map_err(Error::new)?,
+                    type_args: Arc::from([]),
+                };
+                let source = provider.validated_body(&types, 1, &template)?;
+                let (occurrence, call) = source
+                    .exprs
+                    .iter()
+                    .enumerate()
+                    .find_map(|(index, expression)| match &expression.kind {
+                        ir::ExprKind::Call {
+                            target: ir::Callee::TraitItem(call),
+                            ..
+                        } if matches!(call.trait_ref.self_ty, ir::Ty::Opaque(_)) => {
+                            Some((ir::ExprId(index), call.clone()))
+                        }
+                        _ => None,
+                    })
+                    .ok_or_else(|| Error::new("fixture has no opaque bound call"))?;
+                let budget = &provider.0.budget;
+                let canonical = opaque_dispatch::key(&caller, occurrence, &call, budget)?;
+                assert_eq!(canonical.params[0], 3);
+
+                // Keep the caller, occurrence, receiver and declarations identical:
+                // only the ordered public trait/method actuals may distinguish these.
+                let u8_ty = ir::Ty::Int(ir::IntTy::U8);
+                let u16_ty = ir::Ty::Int(ir::IntTy::U16);
+                let mut argument_keys = vec![canonical.clone()];
+                for (trait_args, method_args) in [
+                    (vec![u8_ty.clone()], vec![]),
+                    (vec![u16_ty.clone()], vec![]),
+                    (vec![], vec![u8_ty.clone()]),
+                    (vec![], vec![u16_ty.clone()]),
+                    (vec![u8_ty.clone(), u16_ty.clone()], vec![]),
+                    (vec![u16_ty.clone(), u8_ty.clone()], vec![]),
+                    (vec![], vec![u8_ty.clone(), u16_ty.clone()]),
+                    (vec![], vec![u16_ty.clone(), u8_ty.clone()]),
+                    (vec![u8_ty.clone()], vec![u16_ty.clone()]),
+                    (vec![u16_ty], vec![u8_ty]),
+                ] {
+                    let mut changed = call.clone();
+                    changed.trait_ref.args = trait_args.into();
+                    changed.method_args = method_args.into();
+                    let key = opaque_dispatch::key(&caller, occurrence, &changed, budget)?;
+                    assert!(
+                        !argument_keys.contains(&key),
+                        "different ordered trait/method arguments shared a dispatch key"
+                    );
+                    argument_keys.push(key);
+                }
+
+                let caller_end = 2 + canonical.params[1] as usize;
+                let opaque_len_index = caller_end + 6;
+                let trait_frame =
+                    opaque_len_index + 1 + canonical.params[opaque_len_index] as usize;
+                let method_frame = trait_frame + 1 + canonical.params[trait_frame] as usize;
+                assert_eq!(
+                    method_frame + 1 + canonical.params[method_frame] as usize,
+                    canonical.params.len(),
+                    "v3 must end with exactly the trait and method argument frames"
+                );
+                let mut rejected = argument_keys.into_iter().skip(1).collect::<Vec<_>>();
+                // Every proper prefix, including cuts inside each application frame,
+                // must fail rather than recovering an authorization from the prefix.
+                for end in 0..canonical.params.len() {
+                    let mut key = canonical.clone();
+                    key.params.truncate(end);
+                    rejected.push(key);
+                }
+                for index in [1, opaque_len_index, trait_frame, method_frame] {
+                    let mut key = canonical.clone();
+                    key.params[index] = u64::MAX;
+                    rejected.push(key);
+                }
+                for (index, value) in [
+                    (0, 2), // The pre-argument version cannot authorize a v3 call.
+                    (caller_end, u64::MAX),
+                    (caller_end + 1, 1), // Unsupported invocation capability.
+                    (trait_frame, 0),
+                    (method_frame, 0),
+                ] {
+                    let mut key = canonical.clone();
+                    key.params[index] = value;
+                    rejected.push(key);
+                }
+                let mut trailing = canonical.clone();
+                trailing.params.push(0);
+                rejected.push(trailing);
+                let mut swapped = canonical.clone();
+                swapped.params.truncate(trait_frame);
+                swapped
+                    .params
+                    .extend_from_slice(&canonical.params[method_frame..]);
+                swapped
+                    .params
+                    .extend_from_slice(&canonical.params[trait_frame..method_frame]);
+                rejected.push(swapped);
+
+                for key in rejected {
+                    assert_ne!(key, canonical);
+                    let request = cx.request(key.clone());
+                    assert!(
+                        cx.read_fact::<opaque_dispatch::OpaqueCallAuthorization>(request.get(0))
+                            .await
+                            .is_err(),
+                        "altered key authorized dispatch: {key:?}"
+                    );
+                    assert!(
+                        cx.read_fact::<opaque_dispatch::PhysicalCalleeReady>(request.get(1))
+                            .await
+                            .is_err(),
+                        "altered key published physical readiness: {key:?}"
+                    );
+                }
+                // Failed requests must not poison the independently canonical key.
+                let request = cx.request(canonical);
+                let authorization: Arc<opaque_dispatch::OpaqueCallAuthorization> =
+                    cx.read_fact(request.get(0)).await?;
+                let ready: Arc<opaque_dispatch::PhysicalCalleeReady> =
+                    cx.read_fact(request.get(1)).await?;
+                assert_eq!(authorization.target(), ready.target());
+                cx.publish_fact(0, ())
+            })
+        }
+    }
+    for workers in [1, 8] {
+        let snapshot = Arc::new(Snapshot {
+            input: Input::Text("trait Read { fn read(&self)->i32; } struct Number { value:i32 } impl Read for Number { fn read(&self)->i32 { self.value } } fn make()->impl Read { Number {value:42} } fn use_value()->i32 { let value=make(); value.read() } fn main(){assert!(use_value()==42);}".into()),
+            source_options: source::SourceOptions::default(),
+            budget: ir::PlanBudget::default(),
+        });
+        let engine = Engine::new(Probe(CompilerProvider(snapshot)));
+        let probe = engine.request(crate::compiler::keys::test_key(9002, vec![]));
+        engine.run(workers).unwrap();
+        probe.completion().unwrap();
+    }
+}
+
 /// This is a real compiler-provider dependency test, not a replacement solver.
 #[test]
 fn opaque_bound_dispatch_reads_exact_representation_before_physical_body() {

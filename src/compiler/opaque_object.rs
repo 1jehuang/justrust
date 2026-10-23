@@ -12,6 +12,33 @@ pub(super) async fn produce(
     let (target, source_index) = facts.instance_of(key, &provider.0.budget).await?;
     let template = facts.template(source_index).await?;
     let source = provider.validated_body(&types, source_index, &template)?;
+    let mut candidate = false;
+    for ty in source
+        .locals
+        .iter()
+        .map(|local| &local.ty)
+        .chain(source.exprs.iter().map(|expression| &expression.ty))
+        .chain(std::iter::once(&source.result))
+        .chain(target.type_args.iter())
+    {
+        if opaque_instances::contains(ty, &provider.0.budget)? {
+            candidate = true;
+            break;
+        }
+    }
+    if !candidate {
+        return Ok(None);
+    }
+    let publication = template
+        .publication
+        .as_ref()
+        .ok_or_else(|| Error::new("physical opaque object omitted original publication"))?;
+    let mut specialization = opaque_specialization::Specialization::new(
+        publication,
+        &target,
+        &types,
+        &provider.0.budget,
+    )?;
     let mut encountered = false;
     for ty in source
         .locals
@@ -20,7 +47,7 @@ pub(super) async fn produce(
         .chain(source.exprs.iter().map(|expression| &expression.ty))
         .chain(std::iter::once(&source.result))
     {
-        if opaque_instances::contains(ty, &provider.0.budget)? {
+        if opaque_instances::contains(&specialization.ty(ty)?, &provider.0.budget)? {
             encountered = true;
             break;
         }
@@ -33,21 +60,11 @@ pub(super) async fn produce(
             "unsupported: physical opaque closure owner requires parent specialization replay",
         ));
     }
-    let publication = template
-        .publication
-        .as_ref()
-        .ok_or_else(|| Error::new("physical opaque object omitted original publication"))?;
     if publication.facts().declaration() != target.declaration {
         return Err(Error::new(
             "physical opaque object changed exact source owner",
         ));
     }
-    let mut specialization = opaque_specialization::Specialization::new(
-        publication,
-        &target,
-        &types,
-        &provider.0.budget,
-    )?;
     let admission = cx
         .request(crate::compiler::keys::item(SOURCE_ADMISSION, source_index))
         .get(0);
@@ -56,8 +73,11 @@ pub(super) async fn produce(
         .iter()
         .filter(|expression| {
             matches!(
-                &expression.kind, ir::ExprKind::Call { target: ir::Callee::TraitItem(call), .. }
-                    if matches!(call.trait_ref.self_ty, ir::Ty::Opaque(_))
+                &expression.kind,
+                ir::ExprKind::Call {
+                    target: ir::Callee::TraitItem(_),
+                    ..
+                }
             )
         })
         .count();
@@ -65,17 +85,18 @@ pub(super) async fn produce(
     for (index, expression) in source.exprs.iter().enumerate() {
         provider.0.budget.charge_work(1).map_err(Error::new)?;
         if let ir::ExprKind::Call {
-            target: ir::Callee::TraitItem(call),
+            target: ir::Callee::TraitItem(_),
             ..
         } = &expression.kind
-            && matches!(call.trait_ref.self_ty, ir::Ty::Opaque(_))
         {
             let site = ir::ExprId(index);
-            let (ir::Callee::TraitItem(specialized), _) = specialization.call(site)? else {
-                return Err(Error::new(
-                    "opaque dispatch specialization changed original call kind",
-                ));
+            let (callee, _) = specialization.call(site)?;
+            let ir::Callee::TraitItem(specialized) = callee else {
+                continue;
             };
+            if !matches!(specialized.trait_ref.self_ty, ir::Ty::Opaque(_)) {
+                continue;
+            }
             let request = cx.request(opaque_dispatch::key(
                 &target,
                 site,
@@ -123,24 +144,11 @@ pub(super) async fn produce(
                 "physical opaque callee readiness changed authorized target",
             ));
         }
-        if !authorization.target().type_args.is_empty() {
-            return Err(Error::new(
-                "unsupported: physical generic callee needs canonical object producer",
-            ));
-        }
-        let callable = types
-            .callable_index(authorization.target().declaration)
+        let params = instances::graph_key::encode(authorization.target(), &provider.0.budget)
             .map_err(Error::new)?;
-        if !types.is_closed_root(callable).map_err(Error::new)? {
-            return Err(Error::new(
-                "unsupported: physical callee has no declaration-owned object root",
-            ));
-        }
-        let slot = callable;
-        // Exact target replay precedes this demand. Object producers do not wait
-        // for one another, so recursive calls cannot create object/body joins.
-        // BUILD waits on every declared root object before linking any symbol.
-        cx.request(crate::compiler::keys::item(OBJECT, slot));
+        // The INSTANCE frontier reads the same authorization and retains this
+        // exact target for linking. Only demand the object here, never await it.
+        cx.request(crate::compiler::keys::words(OBJECT, params)?);
         calls.push(authorization);
     }
     let original = cfg::lower_source_template(publication, &provider.0.budget)

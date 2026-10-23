@@ -833,6 +833,9 @@ impl ValidatedTraitWorld {
             );
         }
         if self.checked_closure_projection(projection, context.env())?
+            || self
+                .opaque_associated_binding(projection, context.env())?
+                .is_some()
             || self.goal_is_closed(&projection.trait_ref, context.env())?
         {
             let normalization =

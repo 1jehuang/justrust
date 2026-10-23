@@ -7883,7 +7883,9 @@ impl TraitCx for ValidatedTraitWorld {
         facts: &ValidatedFacts,
     ) -> Result<Signature> {
         self.check_facts(facts, true)?;
-        if self.schema_contains_projection(&self.item_header(call.item)?.schema)?
+        if (facts.phase() == FactsPhase::Universal
+            || !matches!(call.trait_ref.self_ty, Ty::Opaque(_)))
+            && self.schema_contains_projection(&self.item_header(call.item)?.schema)?
             && !self.goal_is_closed(&call.trait_ref, facts.env())?
             && !matches!(&call.trait_ref.self_ty, Ty::Dyn(_))
         {
@@ -7993,7 +7995,9 @@ impl TraitCx for ValidatedTraitWorld {
                 _required: None,
             });
         }
-        if self.schema_contains_projection(&self.item_header(call.item)?.schema)?
+        if (facts.phase() == FactsPhase::Universal
+            || !matches!(call.trait_ref.self_ty, Ty::Opaque(_)))
+            && self.schema_contains_projection(&self.item_header(call.item)?.schema)?
             && !self.goal_is_closed(&call.trait_ref, facts.env())?
             && !matches!(&call.trait_ref.self_ty, Ty::Dyn(_))
         {
@@ -8020,9 +8024,10 @@ impl TraitCx for ValidatedTraitWorld {
         // caller's own type parameter forwarded to a generic trait method)
         // stays in the caller's environment and phase; only a genuinely
         // closed instantiation is re-resolved in the empty closed world.
-        if facts.phase() == FactsPhase::Universal
-            && (!self.goal_is_closed(&call.trait_ref, facts.env())?
-                || !self.method_args_are_closed(call, facts.env())?)
+        if matches!(call.trait_ref.self_ty, Ty::Opaque(_))
+            || (facts.phase() == FactsPhase::Universal
+                && (!self.goal_is_closed(&call.trait_ref, facts.env())?
+                    || !self.method_args_are_closed(call, facts.env())?))
         {
             let evidence = self.require_in(&predicate, caller, scratch)?;
             return Ok(ResolvedTraitCall {

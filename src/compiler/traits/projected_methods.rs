@@ -1170,7 +1170,9 @@ impl ValidatedTraitWorld {
                 "projected required application changed item owner",
             ));
         }
-        if !self.goal_is_closed(goal, context.env())? && !matches!(&goal.self_ty, Ty::Dyn(_)) {
+        if !self.goal_is_closed(goal, context.env())?
+            && !matches!(&goal.self_ty, Ty::Dyn(_) | Ty::Opaque(_))
+        {
             return Err(FactsError::unsupported(
                 &self.budget,
                 "unsupported: rigid caller projected method application",
@@ -1178,7 +1180,7 @@ impl ValidatedTraitWorld {
         }
         let selection = self.require_in(
             &Predicate::Implements(goal.clone()),
-            if matches!(&goal.self_ty, Ty::Dyn(_)) {
+            if matches!(&goal.self_ty, Ty::Dyn(_) | Ty::Opaque(_)) {
                 context
             } else {
                 ProofContext {
@@ -1194,6 +1196,7 @@ impl ValidatedTraitWorld {
                 | ProofOrigin::Closure { .. }
                 | ProofOrigin::FnItem { .. }
                 | ProofOrigin::TraitObject
+                | ProofOrigin::OpaqueDeclared
         ) {
             return Err(FactsError::invalid(
                 &self.budget,
@@ -1343,13 +1346,19 @@ impl ValidatedTraitWorld {
     ) -> Result<ProjectedCarrierBase> {
         if evidence.selection.0.world != self.id
             || evidence.selection.0.environment
-                != if matches!(&evidence.selection.0.origin, ProofOrigin::TraitObject) {
+                != if matches!(
+                    &evidence.selection.0.origin,
+                    ProofOrigin::TraitObject | ProofOrigin::OpaqueDeclared
+                ) {
                     facts.predicates.index
                 } else {
                     self.empty.index
                 }
             || evidence.selection.0.phase
-                != if matches!(&evidence.selection.0.origin, ProofOrigin::TraitObject) {
+                != if matches!(
+                    &evidence.selection.0.origin,
+                    ProofOrigin::TraitObject | ProofOrigin::OpaqueDeclared
+                ) {
                     facts.phase()
                 } else {
                     FactsPhase::Closed
@@ -1391,9 +1400,15 @@ impl ValidatedTraitWorld {
         }
         if matches!(
             &evidence.selection.0.origin,
-            ProofOrigin::Closure { .. } | ProofOrigin::FnItem { .. } | ProofOrigin::TraitObject
+            ProofOrigin::Closure { .. }
+                | ProofOrigin::FnItem { .. }
+                | ProofOrigin::TraitObject
+                | ProofOrigin::OpaqueDeclared
         ) {
-            let env = if matches!(&evidence.selection.0.origin, ProofOrigin::TraitObject) {
+            let env = if matches!(
+                &evidence.selection.0.origin,
+                ProofOrigin::TraitObject | ProofOrigin::OpaqueDeclared
+            ) {
                 facts.env().clone()
             } else {
                 self.empty.env.clone()
@@ -1556,7 +1571,8 @@ impl ValidatedTraitWorld {
             (ProofOrigin::Closure { kind: left }, ProofOrigin::Closure { kind: right })
             | (ProofOrigin::FnItem { kind: left }, ProofOrigin::FnItem { kind: right })
                 if left == right => {}
-            (ProofOrigin::TraitObject, ProofOrigin::TraitObject) => {}
+            (ProofOrigin::TraitObject, ProofOrigin::TraitObject)
+            | (ProofOrigin::OpaqueDeclared, ProofOrigin::OpaqueDeclared) => {}
             (
                 ProofOrigin::Implementation {
                     declaration: left,

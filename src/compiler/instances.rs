@@ -739,7 +739,7 @@ impl Plan {
 /// The direct executable demands of one closed instance, read from its own
 /// universally checked template body alone: explicit direct callees, trait
 /// object vtable slots and implicit cleanup destructors. Opaque trait-item
-/// calls are deferred to operation 140 and not listed here.
+/// calls are appended only after operation 140 authenticates their occurrence.
 #[derive(Default)]
 pub(super) struct DirectDemands {
     /// Every demanded target in first-occurrence order, deduplicated.
@@ -768,7 +768,11 @@ impl DirectDemands {
         }
         Ok(())
     }
-    fn call(&mut self, target: ir::CallTarget, budget: &ir::PlanBudget) -> Result<(), String> {
+    pub(super) fn call(
+        &mut self,
+        target: ir::CallTarget,
+        budget: &ir::PlanBudget,
+    ) -> Result<(), String> {
         budget.charge_work(self.targets.len().max(1))?;
         if !self.targets.contains(&target) {
             budget.retain_bytes(2 * std::mem::size_of::<ir::CallTarget>())?;
@@ -927,6 +931,11 @@ pub(super) fn direct_demands(
                 engine,
             )?;
             let next = match resolved {
+                ir::Callee::TraitItem(call)
+                    if matches!(call.trait_ref.self_ty, ir::Ty::Opaque(_)) =>
+                {
+                    continue;
+                }
                 ir::Callee::Direct(next) => next,
                 // Builtin function item dispatch executes the item itself.
                 ir::Callee::Untupled(call) => {

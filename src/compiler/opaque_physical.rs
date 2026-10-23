@@ -55,12 +55,11 @@ impl DirectPhysicalCall {
                 "physical direct call changed its original callee kind",
             ));
         };
+        // Keep the public instance identity. Its object producer performs the
+        // same authenticated physical normalization, so callers and callees
+        // agree on the ABI without creating a hidden-type instance alias.
         for actual in target.type_args.iter() {
-            if representations.normalize(actual, budget)? != *actual {
-                return Err(Error::new(
-                    "unsupported: physical direct callee has opaque generic actuals",
-                ));
-            }
+            representations.normalize(actual, budget)?;
         }
         let params = specialized_signature
             .params
@@ -470,8 +469,8 @@ pub(super) fn normalize(
                 .origin
                 .ok_or_else(|| Error::new("physical call lost original occurrence"))?;
             match callee {
-                ir::Callee::TraitItem(call)
-                    if matches!(call.trait_ref.self_ty, ir::Ty::Opaque(_)) =>
+                ir::Callee::TraitItem(_)
+                    if calls.iter().any(|proof| proof.occurrence() == occurrence) =>
                 {
                     let authorization = calls
                         .iter()
