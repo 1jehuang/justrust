@@ -5,6 +5,63 @@
 mod oracle;
 use oracle::{Case, Expect};
 
+#[path = "support/closure_oracle.rs"]
+mod closure_oracle;
+#[path = "support/stock_rustc.rs"]
+mod stock_rustc;
+
+#[test]
+fn returned_reference_reborrows_match_stock() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check_with_compiler(
+        "returned-reference-reborrows",
+        &[
+            Case {
+                name: "shared_noncopy_reference_not_moved",
+                source: r#"struct Value { n: i32 }
+fn get(v: &Value) -> &Value { v }
+fn main() { let v=Value { n: 42 }; let r=&*get(&v); assert_eq!(r.n,42); assert_eq!(v.n,42); }"#,
+                expect: Expect::Run(""),
+            },
+            Case {
+                name: "mutable_reference_preserves_aliasing",
+                source: r#"fn get(v: &mut i32) -> &mut i32 { v }
+fn main() { let mut n=1; let r=&mut *get(&mut n); *r=42; assert_eq!(n,42); }"#,
+                expect: Expect::Run(""),
+            },
+            Case {
+                name: "call_evaluated_once",
+                source: r#"struct Value { n: i32 }
+impl Value { fn get(&mut self)->&i32 { self.n+=1; &self.n } }
+fn main() { let mut v=Value { n: 1 }; let r=&*v.get(); assert_eq!(*r,2); assert_eq!(v.n,2); }"#,
+                expect: Expect::Run(""),
+            },
+            Case {
+                name: "returned_error_kind_assertion",
+                source: r#"use std::num::IntErrorKind;
+fn main() { assert_eq!(*u8::from_str_radix("100",16).unwrap_err().kind(),IntErrorKind::PosOverflow); }"#,
+                expect: Expect::Run(""),
+            },
+            Case {
+                name: "shared_result_cannot_be_mutated",
+                source: "fn get(v:&i32)->&i32{v}fn main(){let n=1;let r=&mut *get(&n);*r=2;}",
+                expect: Expect::Invalid("E0596"),
+            },
+            Case {
+                name: "overlapping_mutable_reborrow",
+                source: "fn get(v:&mut i32)->&mut i32{v}fn main(){let mut n=1;let r=&mut *get(&mut n);let s=&mut n;*r+=*s;}",
+                expect: Expect::Invalid("E0499"),
+            },
+            Case {
+                name: "reborrow_cannot_outlive_owner",
+                source: "fn get(v:&i32)->&i32{v}fn main(){let r;{let n=1;r=&*get(&n);}println!(\"{}\",r);}",
+                expect: Expect::Invalid("E0597"),
+            },
+        ],
+        std::path::Path::new(&stock_rustc::stock_rustc()),
+    );
+}
+
 #[test]
 fn indexed_borrows_match_stock() {
     oracle::check(

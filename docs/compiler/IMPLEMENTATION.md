@@ -992,6 +992,9 @@ acceptance.
       Delivered: assignment/compound assignment through call-returned `&mut`
       places with stock value->carrier->index order (TEMP-PLACES.md); by-value
       temporary fields and plain runtime index through a call stay Unsupported.
+      Explicit `&*call()` / `&mut *call()` now retain the original returned loan
+      rather than copying its referent, with single evaluation and invalid
+      alias/escape rejection (`indexed_borrows::returned_reference_reborrows_match_stock`).
 - [x] Normal-path canonical `Drop` for nongeneric scalar-field named structs
       under DROP-NORMAL.md: runtime drop flags, reverse lexical/parameter order,
       moves, conditional init/move, RHS-first replacement, loops, labeled exits,

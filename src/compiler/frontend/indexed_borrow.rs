@@ -14,14 +14,61 @@ enum IndexedBorrowStep<'e> {
 }
 
 impl type_check::Checker<'_> {
-    /// Lower `&place` / `&mut place` for a local-rooted place containing a
-    /// runtime index. Returns `None` when `value` is not such a place.
+    /// Lower `&place` / `&mut place` for an indexed local-rooted place or a
+    /// dereferenced call result. Returns `None` for other place shapes.
     pub(super) fn borrow_indexed_place(
         &mut self,
         kind: ir::BorrowKind,
         value: &Expr,
     ) -> Result<Option<ir::ExprId>, String> {
+        if let Expr::Deref { value } = value
+            && type_check::genuine_call(value)
+        {
+            return self.borrow_call_referent(kind, value).map(Some);
+        }
         self.indexed_place_borrow(kind, value, true)
+    }
+
+    /// `&*call()` reborrows the returned reference. Storing the referent would
+    /// copy or move it and lose both aliasing and its original loan provenance.
+    fn borrow_call_referent(
+        &mut self,
+        kind: ir::BorrowKind,
+        source: &Expr,
+    ) -> Result<ir::ExprId, String> {
+        let value = self.expr(source)?;
+        let ty = self.exprs[value.0].ty.clone();
+        if self.exprs[value.0].completion == ir::Completion::Never {
+            return Ok(value);
+        }
+        let ir::Ty::Ref { kind: original, .. } = &ty else {
+            return Err("unsupported: reborrowing a call result requires a reference".into());
+        };
+        if kind == ir::BorrowKind::Mut && *original == ir::BorrowKind::Shared {
+            return Err("cannot borrow as mutable through a shared reference".into());
+        }
+        let local = self.temporary("$reborrow_call", ty, true)?;
+        self.charge_node(std::mem::size_of::<ir::LocalId>())?;
+        self.borrow_temporaries.push((local, false));
+        let borrowed = self.borrow_expression(
+            kind,
+            ir::Place {
+                local,
+                projection: vec![ir::Projection::Deref],
+            },
+        )?;
+        let ty = self.exprs[borrowed.0].ty.clone();
+        self.charge_node(std::mem::size_of::<ir::TypedExpr>() + 64)?;
+        let id = ir::ExprId(self.exprs.len());
+        self.exprs.push(ir::TypedExpr {
+            ty,
+            completion: ir::Completion::Returns,
+            kind: ir::ExprKind::Block(ir::TypedBlock {
+                statements: vec![ir::TypedStmt::Assign { local, value }],
+                tail: Some(borrowed),
+            }),
+        });
+        Ok(id)
     }
 
     pub(super) fn format_indexed_place_borrow(

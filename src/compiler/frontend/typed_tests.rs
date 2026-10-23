@@ -536,6 +536,42 @@ fn projected_mutable_reborrow_rejects_forged_carrier_and_place() {
 }
 
 #[test]
+fn call_result_reborrow_rejects_forged_place_and_mutability() {
+    let p =
+        parse("fn get(v:&i32)->&i32{v}fn main(){let n=1;let r=&*get(&n);let copy=*r;}").unwrap();
+    let budget = ir::PlanBudget::default();
+    let plan = PlanCtx::from_program(&p, &budget).unwrap();
+    let typed =
+        type_callable_with_plan(&p, plan.callable_decl(1).unwrap(), &plan, &budget).unwrap();
+    typed.validate().unwrap();
+    let borrow = typed
+        .exprs
+        .iter()
+        .position(|expr| {
+            matches!(&expr.kind,
+                ir::ExprKind::Borrow { place, .. } if place.projection == [ir::Projection::Deref]
+            )
+        })
+        .unwrap();
+    let mut forged = typed.clone();
+    if let ir::ExprKind::Borrow { place, .. } = &mut forged.exprs[borrow].kind {
+        place.projection.clear();
+    }
+    assert!(
+        forged.validate().is_err(),
+        "reference slot mistaken for its referent"
+    );
+    let mut forged = typed.clone();
+    if let ir::ExprKind::Borrow { kind, .. } = &mut forged.exprs[borrow].kind {
+        *kind = ir::BorrowKind::Mut;
+    }
+    assert!(
+        forged.validate().is_err(),
+        "shared returned reference made mutable"
+    );
+}
+
+#[test]
 fn trait_default_sources_have_separate_identity_and_rigid_self_facts() {
     let p =
         parse("mod m{fn helper()->i32{7}pub trait V{fn value(&self)->i32{helper()}}}fn main(){}")

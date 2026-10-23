@@ -96,6 +96,19 @@ substitution. Reference-containing aggregates, temporary lifetime extension,
 Drop, method two-phase borrowing, slices and general Rust lifetimes follow.
 B1 is not advertised as a complete Rust borrow checker.
 
+### Reborrowing returned references
+
+Explicit `&*call()` and `&mut *call()` borrow the returned reference's referent,
+including method calls. The returned reference is evaluated once and stored in
+a statement-scoped temporary. The referent is never copied into that temporary,
+so non-Copy referents, aliasing, and original loan dependencies are preserved.
+Shared returned references cannot become mutable and reborrows cannot outlive
+their owners. This does not add arbitrary projections through value expressions.
+`indexed_borrows::returned_reference_reborrows_match_stock` exercises stock
+CHECK/BUILD/run at workers 1/8, evaluation count, non-Copy values, and invalid
+aliasing/lifetimes. `call_result_reborrow_rejects_forged_place_and_mutability`
+rejects altered typed projections and borrow capabilities.
+
 ## Acceptance gates
 
 External stock cases must cover shared aliases and last use, exclusive owner
