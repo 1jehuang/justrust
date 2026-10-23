@@ -6,6 +6,18 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 
 ## Completed foundations, not full compatibility
 
+- [x] Contextual numeric range receivers retain their inferred scalar type
+      through graph preparation and ordinary checked method lowering. Signed
+      and unsigned collection, nested scopes, literal overflow and unused
+      mismatched-result rejection pass stock CHECK/BUILD/run at workers 1/8.
+      Candidate inference requires a unique closed associated output and never
+      grants executable proof authority. The final hosted library, graph,
+      body-inference, iterator, slice and corpus replay passes 1,844 tests with
+      zero failures and three ignored (`20261023-054904139-767929`). All-target
+      clippy passes with existing warnings. The unchanged iterator program now
+      reaches opaque callable equality and generic composition boundaries;
+      the full corpus remains 11/20, not full Rust support.
+
 - [x] Contextual result types propagate through unique, unspecialized nominal
       trait implementations as local inference equations, never executable
       proof authority. Nested chunk `map`/`sum` and `map`/`product` collection
@@ -14,8 +26,8 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
       at workers 1/8 and unused wrong-result rejection pass. The full library,
       graph, body-inference, iterator, slice-method and corpus suites pass 1,843
       tests with three ignored; graph ratchets and all-target lints pass.
-      Untyped integer-range method inference and a nested generic collection
-      equality-authority case remain open. The unchanged corpus is still 11/20.
+      A nested generic collection equality-authority case remains open.
+      The unchanged corpus is still 11/20.
 
 - [x] Shared chunk iteration and physical aggregate slice descriptors pass
       stock CHECK/BUILD/run acceptance at workers 1 and 8. General heap-stored

@@ -1794,6 +1794,7 @@ pub(super) struct Checker<'a> {
     pub(super) checked_closures: Vec<closures::check::CheckedClosure>,
     pub(super) closure_source_recipe: Option<sr::OriginalBodyId>,
     closure_signature_hints: HashMap<PathKey, ir::Signature>,
+    method_receiver_hints: HashMap<usize, ir::Ty>,
     pub(super) capture_bindings: std::collections::HashSet<LocalKey>,
     pub(super) capture_parent_scope: Option<super::super::semantic_scope::ScopeId>,
     pub(super) opaque_hidden: Vec<ir::OpaqueHiddenType>,
@@ -3807,6 +3808,7 @@ impl<'a> Checker<'a> {
             checked_closures: Vec::new(),
             closure_source_recipe: None,
             closure_signature_hints: HashMap::new(),
+            method_receiver_hints: HashMap::new(),
             capture_bindings: std::collections::HashSet::new(),
             capture_parent_scope: None,
             inferred_closure_result: false,
@@ -4567,6 +4569,15 @@ impl<'a> Checker<'a> {
         })
     }
     pub(super) fn method_receiver_hint(&self, receiver: &Expr) -> Result<Option<ir::Ty>, String> {
+        if let Some(ty) = self
+            .method_receiver_hints
+            .get(&(receiver as *const Expr as usize))
+        {
+            return Ok(Some(ty.clone()));
+        }
+        self.independent_method_receiver_hint(receiver)
+    }
+    fn independent_method_receiver_hint(&self, receiver: &Expr) -> Result<Option<ir::Ty>, String> {
         if let Some(ty) = self.scalar_hint(receiver)? {
             return Ok(Some(ty));
         }
@@ -6542,6 +6553,8 @@ impl<'a> Checker<'a> {
         hints: local_literals::Hints,
     ) -> Result<(ir::TypedBlock, Flow), String> {
         self.closure_signature_hints.extend(hints.closures);
+        let previous_receiver_hints =
+            std::mem::replace(&mut self.method_receiver_hints, hints.receivers);
         let literal_hints = hints.locals;
         let entered_reachable = self.reachable;
         let pending_start = self.pending_references.len();
@@ -7118,6 +7131,7 @@ impl<'a> Checker<'a> {
             statements.insert(position, ir::TypedStmt::Declare { local });
         }
         self.scopes.pop();
+        self.method_receiver_hints = previous_receiver_hints;
         Ok((ir::TypedBlock { statements, tail }, flow))
     }
     pub(super) fn expr(&mut self, e: &Expr) -> Result<ir::ExprId, String> {
@@ -8221,6 +8235,9 @@ impl<'a> Checker<'a> {
         args: &[Expr],
         expected: Option<&ir::Ty>,
     ) -> Result<ir::ExprId, String> {
+        let inferred_receiver = self
+            .method_receiver_hints
+            .contains_key(&(receiver as *const Expr as usize));
         let ty = self
             .method_receiver_hint(receiver)?
             .ok_or("unsupported unresolved receiver type")?;
@@ -8272,7 +8289,7 @@ impl<'a> Checker<'a> {
             && static_source_place(receiver).is_err()
         {
             let mutable = matches!(selected.adjustment, ReceiverAdjustment::MutAutoref);
-            let value = self.expr(receiver)?;
+            let value = self.expr_expected(receiver, inferred_receiver.then_some(&ty))?;
             let receiver_ty = self.exprs[value.0].ty.clone();
             let local = self.temporary("$method_receiver", receiver_ty, mutable)?;
             self.borrow_temporaries.push((local, false));
@@ -8312,7 +8329,7 @@ impl<'a> Checker<'a> {
         let adjusted = match selected.mode {
             ReceiverKind::None => return Err("method has no receiver".into()),
             ReceiverKind::Value { .. } => {
-                let mut id = self.expr(receiver)?;
+                let mut id = self.expr_expected(receiver, inferred_receiver.then_some(&ty))?;
                 for _ in 0..selected.depth {
                     let ir::Ty::Ref { referent, .. } = &self.exprs[id.0].ty else {
                         return Err("invalid receiver dereference".into());

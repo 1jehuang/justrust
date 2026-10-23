@@ -76,6 +76,7 @@ struct Solver<'a: 's, 'b: 's, 's> {
     variables: Vec<Variable>,
     scopes: Vec<HashMap<LocalKey, Term>>,
     sites: Vec<(usize, Term)>,
+    receiver_sites: Vec<(usize, Term)>,
     methods: Vec<Method>,
     projections: Vec<Projection>,
     delayed_results: Vec<Term>,
@@ -112,6 +113,7 @@ struct Solver<'a: 's, 'b: 's, 's> {
 
 pub(in crate::compiler) struct Hints {
     pub locals: HashMap<usize, ir::Ty>,
+    pub receivers: HashMap<usize, ir::Ty>,
     pub closures: HashMap<PathKey, ir::Signature>,
     // Present only for a canonical source-callable solve with explicit inputs.
     // These values still require ordinary executable facts/carrier validation.
@@ -159,7 +161,14 @@ fn finalized_hints(solver: Solver<'_, '_, '_>) -> Result<Hints, String> {
             ));
         }
     }
+    let mut receivers = HashMap::new();
+    for (site, term) in &solver.receiver_sites {
+        if let Some(ty) = solver.resolve(*term, 0)? {
+            receivers.insert(*site, ty);
+        }
+    }
     Ok(Hints {
+        receivers,
         locals: hints,
         closures,
         source_signature: None,
@@ -187,6 +196,7 @@ fn solve_body_with_seed<'a: 's, 'b: 's, 's>(
         variables: Vec::new(),
         scopes: Vec::new(),
         sites: Vec::new(),
+        receiver_sites: Vec::new(),
         methods: Vec::new(),
         projections: Vec::new(),
         delayed_results: Vec::new(),
@@ -1098,7 +1108,8 @@ impl<'s> Solver<'_, '_, 's> {
                     progress = true;
                     continue;
                 }
-                if self.contains_callable(receiver, 0)?
+                if (self.contains_callable(receiver, 0)?
+                    || self.numeric_nominal_actuals(receiver)?)
                     && let Some(result) = self.structural_trait_method_constraints(
                         receiver,
                         method.name,
@@ -2135,7 +2146,12 @@ impl<'s> Solver<'_, '_, 's> {
                 type_args,
                 args,
             } => {
+                let receiver_site = receiver.as_ref() as *const Expr as usize;
                 let receiver = self.expr(receiver, depth + 1)?;
+                if self.numeric_nominal_actuals(receiver)? {
+                    self.checker.infer_storage(1)?;
+                    self.receiver_sites.push((receiver_site, receiver));
+                }
                 let args = args
                     .iter()
                     .map(|a| self.expr(a, depth + 1))

@@ -5,6 +5,41 @@
 mod closure_oracle;
 
 #[test]
+fn contextual_numeric_range_receivers_match_stock() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "contextual-ranges",
+        &[
+            Case {
+                name: "signed_collection",
+                source: r#"fn main(){let values:Vec<i32>=(1..=4).collect();println!("{:?}",values);}"#,
+                expect: Expect::Run("[1, 2, 3, 4]\n"),
+            },
+            Case {
+                name: "unsigned_collection",
+                source: r#"fn main(){let values:Vec<u64>=(1..4).collect();println!("{:?}",values);}"#,
+                expect: Expect::Run("[1, 2, 3]\n"),
+            },
+            Case {
+                name: "nested_scope_receivers",
+                source: r#"fn main(){let a:Vec<i32>=(1..3).collect();{let b:Vec<u64>=(3..5).collect();println!("{:?}",b);}let c:Vec<i32>=(5..7).collect();println!("{:?} {:?}",a,c);}"#,
+                expect: Expect::Run("[3, 4]\n[1, 2] [5, 6]\n"),
+            },
+            Case {
+                name: "contextual_literal_overflow",
+                source: r#"fn unused(){let _:Vec<u8>=(0..300).collect();}fn main(){}"#,
+                expect: Expect::Invalid("out of range"),
+            },
+            Case {
+                name: "explicit_type_mismatch",
+                source: r#"fn unused(){let _:Vec<u64>=(1i32..4i32).collect();}fn main(){}"#,
+                expect: Expect::Invalid("E0277"),
+            },
+        ],
+    );
+}
+
+#[test]
 fn iterator_zip_matches_stock() {
     use closure_oracle::{Case, Expect};
     closure_oracle::check(

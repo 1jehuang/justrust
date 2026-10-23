@@ -175,6 +175,25 @@ impl Solver<'_, '_, '_> {
         result
     }
 
+    pub(super) fn numeric_nominal_actuals(&self, receiver: Term) -> Result<bool, String> {
+        let Domain::Nominal(_, actuals) = self.domain(receiver) else {
+            return Ok(false);
+        };
+        let numeric = actuals
+            .iter()
+            .any(|actual| matches!(self.domain(*actual), Domain::Integer | Domain::Float));
+        if !numeric {
+            return Ok(false);
+        }
+        for actual in actuals {
+            self.checker.infer_work(0)?;
+            if self.resolve(actual, 0)?.is_none() {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
     pub(super) fn structural_trait_method_constraints(
         &mut self,
         receiver: Term,
@@ -204,15 +223,37 @@ impl Solver<'_, '_, '_> {
             if !visible {
                 continue;
             }
-            let Some(header) = self.structural_impl(receiver, *trait_id)? else {
-                continue;
-            };
-            // An inherent method would already have won before this path.
-            if selected.replace((header, item)).is_some() {
+            let header = self.structural_impl(receiver, *trait_id)?;
+            if header.is_none() {
+                if !self.numeric_nominal_actuals(receiver)? {
+                    continue;
+                }
+                let Domain::Nominal(nominal, _) = self.domain(receiver) else {
+                    continue;
+                };
+                if plan.param_env(*trait_id)?.arity() != 1 {
+                    continue;
+                }
+                let mut exists = false;
+                for candidate in plan.trait_world()?.impl_headers() {
+                    self.checker.infer_work(0)?;
+                    if candidate.trait_ref.declaration == *trait_id
+                        && nominal_parts(&candidate.trait_ref.self_ty)
+                            .is_some_and(|(owner, _)| owner == nominal)
+                    {
+                        exists = true;
+                    }
+                }
+                if !exists {
+                    continue;
+                }
+            }
+            // A method schema contributes equations, not an impl selection.
+            if selected.replace((header, *trait_id, item)).is_some() {
                 return Ok(None);
             }
         }
-        let Some((header, item)) = selected else {
+        let Some((header, trait_id, item)) = selected else {
             return Ok(None);
         };
         let schema = plan.raw_schema(item)?;
@@ -222,9 +263,12 @@ impl Solver<'_, '_, '_> {
         {
             return Ok(None);
         }
-        let impl_params = self.structural_impl_parameters(receiver, &header, 0)?;
+        let impl_params = match &header {
+            Some(header) => self.structural_impl_parameters(receiver, header, 0)?,
+            None => HashMap::new(),
+        };
         let mut params = self.parameters(&schema.env)?;
-        let owner = plan.param_env(header.trait_ref.declaration)?;
+        let owner = plan.param_env(trait_id)?;
         params.insert(
             ir::ParamId {
                 owner: owner.binder(),
@@ -232,7 +276,11 @@ impl Solver<'_, '_, '_> {
             },
             receiver,
         );
-        for (index, actual) in header.trait_ref.args.iter().enumerate() {
+        for (index, actual) in header
+            .iter()
+            .flat_map(|h| h.trait_ref.args.iter())
+            .enumerate()
+        {
             let actual = self.schema(actual, &impl_params, 0)?;
             params.insert(
                 ir::ParamId {

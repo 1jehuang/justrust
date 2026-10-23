@@ -197,10 +197,72 @@ impl<'s> Solver<'_, '_, 's> {
         Ok(true)
     }
 
+    /// Reverse an associated equation only across a complete family of closed
+    /// nominal impls. No branch is chosen if an open impl or a second matching
+    /// output could apply. This is an inference hint, never a trait proof.
+    fn infer_closed_projection_input(&mut self, left: Term, right: Term) -> Result<bool, String> {
+        let Domain::AssociatedProjection(projection) = self.domain(left) else {
+            return Ok(false);
+        };
+        let Domain::Nominal(nominal, _) = self.domain(projection.receiver) else {
+            return Ok(false);
+        };
+        if !self.numeric_nominal_actuals(projection.receiver)?
+            || !projection.arguments.is_empty()
+            || self.projection_input_ready(projection.receiver, 0)?
+            || !self.projection_input_ready(right, 0)?
+        {
+            return Ok(false);
+        }
+        let Some(expected) = self.resolve(right, 0)? else {
+            return Ok(false);
+        };
+        let plan = self.checker.signatures.plan()?;
+        let world = plan.trait_world()?;
+        let mut selected = None;
+        for header in world.impl_headers() {
+            self.checker.infer_work(0)?;
+            if header.trait_ref.declaration != projection.declaration {
+                continue;
+            }
+            let Some((owner, _)) = nominal_parts(&header.trait_ref.self_ty) else {
+                if matches!(header.trait_ref.self_ty, ir::Ty::Param(_)) {
+                    return Ok(false);
+                }
+                continue;
+            };
+            if owner != nominal {
+                continue;
+            }
+            if header.schema_env.is_generic() {
+                return Ok(false);
+            }
+            let Some(value) = header
+                .associated_types
+                .iter()
+                .find(|v| v.associated == projection.item)
+            else {
+                continue;
+            };
+            if value.rhs == expected && selected.replace(header.trait_ref.self_ty.clone()).is_some()
+            {
+                return Ok(false);
+            }
+        }
+        let Some(receiver) = selected else {
+            return Ok(false);
+        };
+        let receiver = self.fixed(receiver)?;
+        self.unify(projection.receiver, receiver)?;
+        Ok(true)
+    }
+
     pub(super) fn solve_associated_equalities(&mut self) -> Result<bool, String> {
         let pending = std::mem::take(&mut self.associated_equalities);
         let mut progress = false;
         for (left, right) in pending {
+            progress |= self.infer_closed_projection_input(left, right)?;
+            progress |= self.infer_closed_projection_input(right, left)?;
             progress |= self.reduce_associated_projection(left)?;
             progress |= self.reduce_associated_projection(right)?;
             if matches!(self.domain(left), Domain::AssociatedProjection(_))
