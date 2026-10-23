@@ -19,6 +19,16 @@ fn generic_nominal_iterator_closure_inputs() {
 }
 
 #[test]
+fn generic_iterator_format_collect_reuses_membership_proofs() {
+    oracle::stock_native(
+        "use std::fmt::Display;struct Bag<T>{data:Vec<T>}impl<T:Display> Bag<T>{fn render(&self)->String{let parts:Vec<String>=self.data.iter().map(|x|format!(\"{}\",x)).collect();parts.join(\" < \")}}fn main(){let bag=Bag{data:vec![3i32,1,4]};println!(\"{}\",bag.render());}",
+    );
+    oracle::stock_and_native_reject(
+        "fn unused<T>(values:&[T]){let _:Vec<String>=values.iter().map(|x|format!(\"{}\",x)).collect();}fn main(){}",
+    );
+}
+
+#[test]
 fn native_iterator_prelude_preserves_plain_program() {
     oracle::stock_native("fn main(){println!(\"ok\");}");
 }

@@ -750,6 +750,34 @@ impl ValidatedTraitWorld {
     // Keep formation replays local to the current proof computation. This
     // shares only successful metadata authentication: raw projection membership,
     // closedness, depth and executable-type checks still run below.
+    fn validate_projection_input(
+        &self,
+        ty: &Ty,
+        projection: &ir::AssociatedTypeProjection,
+        env: &GenericEnv,
+        depth: usize,
+        replays: &mut NominalReplays,
+    ) -> Result<()> {
+        let item = self.associated_header(projection.item)?;
+        if item.trait_decl != projection.trait_ref.declaration {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "associated projection item belongs to another trait",
+            ));
+        }
+        self.validate_ty_metadata_with(ty, env, depth, replays)?;
+        self.validate_raw_associated_ty_with(
+            &projection.trait_ref.self_ty,
+            env,
+            depth + 1,
+            replays,
+        )?;
+        for argument in projection.trait_ref.args.iter() {
+            self.validate_raw_associated_ty_with(argument, env, depth + 1, replays)?;
+        }
+        Ok(())
+    }
+
     fn validate_raw_associated_ty_with(
         &self,
         ty: &Ty,
@@ -762,23 +790,7 @@ impl ValidatedTraitWorld {
         charged(&self.budget, self.budget.charge_nodes(1))?;
         match ty {
             Ty::AssociatedType(projection) => {
-                let item = self.associated_header(projection.item)?;
-                if item.trait_decl != projection.trait_ref.declaration {
-                    return Err(FactsError::invalid(
-                        &self.budget,
-                        "associated projection item belongs to another trait",
-                    ));
-                }
-                self.validate_ty_metadata_with(ty, env, depth, replays)?;
-                self.validate_raw_associated_ty_with(
-                    &projection.trait_ref.self_ty,
-                    env,
-                    depth + 1,
-                    replays,
-                )?;
-                for argument in projection.trait_ref.args.iter() {
-                    self.validate_raw_associated_ty_with(argument, env, depth + 1, replays)?;
-                }
+                self.validate_projection_input(ty, projection, env, depth, replays)?;
                 if !self.raw_associated_ty_is_closed(ty, depth + 1)?
                     && !matches!(&projection.trait_ref.self_ty, Ty::Dyn(_))
                     && !self.checked_closure_projection(projection, env)?
@@ -1309,8 +1321,12 @@ impl ValidatedTraitWorld {
         charged(&self.budget, self.budget.check_depth(stack.active.len()))?;
         charged(&self.budget, self.budget.charge_work(1))?;
         retain::<ir::AssociatedTypeProjection>(&self.budget, 1)?;
-        self.validate_raw_associated_ty_with(
+        // The selected implementation below proves root membership using this
+        // same proof scratch. Do not first repeat that proof in a fresh scratch.
+        // Input metadata and nested projection membership still require replay.
+        self.validate_projection_input(
             &Ty::AssociatedType(Arc::new(projection.clone())),
+            projection,
             context.proof.env(),
             0,
             &mut stack.obligations.replays,
