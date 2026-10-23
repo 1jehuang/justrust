@@ -399,13 +399,26 @@ fn preparation_status(
             solver.record_missing_nominal(demand.clone())?;
         }
     }
+    // Iterator items of closure-bearing sources (`Map<Iter<T>, {closure}>`)
+    // are likewise typed by checked lowering, which owns the closure type.
+    let mut closure_items = !solver.iterator_items.is_empty();
+    for pending in &solver.iterator_items {
+        let source = match pending {
+            super::iteration::Pending::Ordinary(source, _) => *source,
+            super::iteration::Pending::ArrayMethod { receiver, .. } => *receiver,
+        };
+        if !solver.contains_callable(solver.peel_refs(source), 0)? {
+            closure_items = false;
+            break;
+        }
+    }
     // With closure-receiver calls deferred, constraints that read their
     // results are also typed (and diagnosed) by checked lowering.
     let unresolved_constraints = !closure_methods
         && (!solver.methods.is_empty()
             || !solver.operators.is_empty()
             || !solver.projections.is_empty()
-            || !solver.iterator_items.is_empty()
+            || (!solver.iterator_items.is_empty() && !closure_items)
             || !solver.associated_equalities.is_empty()
             || !solver.coercions.is_empty()
             || !solver.patterns.is_empty());
@@ -670,11 +683,7 @@ impl<'s> Solver<'_, '_, 's> {
                 | ir::Ty::Float(_)
                 | ir::Ty::Param(_) => Domain::Fixed(ty.clone()),
                 // Closed nongeneric object principal (nominal_source_shapes).
-                ir::Ty::Dyn(object)
-                    if object.is_closed_leaf() =>
-                {
-                    Domain::Fixed(ty.clone())
-                }
+                ir::Ty::Dyn(object) if object.is_closed_leaf() => Domain::Fixed(ty.clone()),
                 _ => return Err("invalid metadata: non-leaf source recipe".into()),
             },
             Shape::Nominal(declaration, arguments) => Domain::Nominal(
@@ -848,11 +857,7 @@ impl<'s> Solver<'_, '_, 's> {
                 | ir::Ty::Param(_) => Shape::Leaf(ty),
                 // Closed nongeneric object principal: a rigid leaf with no
                 // inference-bearing children (nominal_source_shapes).
-                ir::Ty::Dyn(ref object)
-                    if object.is_closed_leaf() =>
-                {
-                    Shape::Leaf(ty)
-                }
+                ir::Ty::Dyn(ref object) if object.is_closed_leaf() => Shape::Leaf(ty),
                 _ => {
                     return Err(
                         "unsupported: compound fixed type needs an explicit manifest recipe".into(),

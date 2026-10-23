@@ -164,6 +164,27 @@ impl ValidatedTraitWorld {
                         "raw impl equality substitution changed projection shape",
                     ));
                 };
+                if !self.goal_is_closed(&projection.trait_ref, facts.env())?
+                    && !self.checked_closure_projection(&projection, facts.env())?
+                {
+                    // A symbolic input (`<I as Iterator>::Item` for a caller
+                    // parameter `I`): the output is the caller's declared
+                    // equality when one exists, else the rigid projection
+                    // itself. Ordinary predicate discharge still proves the
+                    // completed candidate's bounds afterwards.
+                    let symbolic = match self.declared_equality_rhs(
+                        &projection,
+                        &facts.predicates.predicates,
+                        facts.env(),
+                    )? {
+                        Some(normal) => normal,
+                        None => Ty::AssociatedType(projection.clone()),
+                    };
+                    if !self.match_head(ty, &symbolic, &header.schema_env, slots, 0)? {
+                        return Ok(false);
+                    }
+                    continue;
+                }
                 let normalized =
                     match self.normalize_closed_equality_projection(&projection, facts, active) {
                         Ok(value) => value,
