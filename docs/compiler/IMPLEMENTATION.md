@@ -2026,10 +2026,14 @@ latest scoped changes. FULL-PROGRAMS.md ranks the recorded blocking features.
 The current work advances `11_closures_iterators.rs` through CHECK. Opaque
 specialization now retains current-engine nominal reads and exact call ABI
 identities (`closure_generic_owners::opaque_callable_with_realized_nominal_local`).
-BUILD still rejects nontrivial cleanup in a physical opaque body
-(`justrust run --bin jr-rust -- tests/fixtures/full_programs/11_closures_iterators.rs
--o .jcode/closure-probe --workers 8`). This is an open destructor-dependency
-integration blocker, not a native-corpus promotion.
+Opaque bodies also retain unchanged source destructors through their canonical
+INSTANCE cleanup demands, including root and generic-owner drop order
+(`closure_generic_owners::opaque_callable_preserves_existing_cleanup`). Cleanup
+introduced by hidden representation changes remains unsupported. The full
+closure corpus now reaches a module-authority resource boundary during physical
+ownership validation (`justrust run --bin jr-rust --
+tests/fixtures/full_programs/11_closures_iterators.rs -o .jcode/closure-probe
+--workers 8`), so this is not a native-corpus promotion.
 
 The source-type-alias checkpoint passes all 1,649 hosted tests in 86 binaries
 (`20261017-043356389-4183342`), all-target checking

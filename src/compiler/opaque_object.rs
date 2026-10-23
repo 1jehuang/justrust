@@ -125,6 +125,19 @@ pub(super) async fn produce(
     {
         roots.push(specialization.ty(ty)?);
     }
+    let original = cfg::lower_source_template(publication, &provider.0.budget)
+        .map_err(|error| Error::new(error.to_string()))?;
+    // Unchanged owning locals retain their original cleanup. Demand the same
+    // owner-local frontier used by ordinary objects before any independent
+    // representation read suspends this producer.
+    let cleanup = if has_drop(original.function()) {
+        // Opaque roots are published universally even when they have no type
+        // arguments. Their canonical INSTANCE frontier, not the closed-source
+        // root-only publication protocol, owns the destructor dependencies.
+        Some(cx.request(keys::words(INSTANCE, key.params.clone())?).get(0))
+    } else {
+        None
+    };
     // All independent source and call-authority producers are requested before
     // representation reads suspend this branch. No global hidden-type inventory.
     let representations = opaque_instances::read(&facts, &roots, &provider.0.budget).await?;
@@ -154,8 +167,6 @@ pub(super) async fn produce(
         cx.request(crate::compiler::keys::words(OBJECT, params)?);
         calls.push(authorization);
     }
-    let original = cfg::lower_source_template(publication, &provider.0.budget)
-        .map_err(|error| Error::new(error.to_string()))?;
     let closed = types.instance_facts(&target).map_err(Error::new)?;
     let mut physical = opaque_physical::normalize(
         publication,
@@ -176,17 +187,29 @@ pub(super) async fn produce(
             &provider.0.budget,
         )
         .map_err(Error::new)?;
-    // Cleanup of hidden owning representations needs its own exact dependency
-    // protocol. The first slice proves trivial cleanup rather than silently
-    // omitting a destructor from the sealed executable frontier.
+    // Only unchanged source owning types may reuse their original cleanup.
+    // A hidden representation or generic substitution that introduces Drop
+    // still requires a separate exact cleanup-elaboration protocol.
     if closed.has_normal_drop_impls() {
-        for local in &physical.function().locals {
+        for (index, local) in physical.function().locals.iter().enumerate() {
             provider.0.budget.charge_work(1).map_err(Error::new)?;
             match closed
                 .normal_drop_plan(&local.ty)
                 .map_err(|error| source_fact_error(error, &provider.0.budget))?
             {
                 traits::NormalDropPlan::Trivial => {}
+                traits::NormalDropPlan::Destructor(_) => {
+                    let source = original.function().locals.get(index).ok_or_else(|| {
+                        Error::new("physical opaque cleanup has no original owning local")
+                    })?;
+                    if !ir::identical_type(&source.ty, &local.ty, &provider.0.budget)
+                        .map_err(Error::new)?
+                    {
+                        return Err(Error::new(
+                            "unsupported: physical opaque cleanup requires exact realized destructor dependencies",
+                        ));
+                    }
+                }
                 _ => {
                     return Err(Error::new(
                         "unsupported: physical opaque cleanup requires exact realized destructor dependencies",
@@ -194,6 +217,12 @@ pub(super) async fn produce(
                 }
             }
         }
+    }
+    if let Some(handle) = cleanup {
+        let demand: Arc<instances::DirectDemands> = cx.read_fact(handle).await?;
+        demand
+            .validate_cleanup(physical.function(), &provider.0.budget)
+            .map_err(Error::new)?;
     }
     let validation = physical
         .validation(

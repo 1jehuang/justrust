@@ -17,6 +17,25 @@ fn opaque_callable_with_realized_nominal_local() {
     );
 }
 
+#[test]
+fn opaque_callable_preserves_existing_cleanup() {
+    oracle::check(
+        "opaque_existing_cleanup",
+        &[
+            Case {
+                name: "root_and_generic_owner_drop_order",
+                source: "struct Guard{n:i32}impl Drop for Guard{fn drop(&mut self){println!(\"drop {}\",self.n);}}fn add(n:i32)->impl Fn(i32)->i32{move|x|x+n}fn apply<F:Fn(i32)->i32>(f:F)->i32{let guard=Guard{n:1};f(10)}fn main(){let guard=Guard{n:2};let f=add(5);println!(\"{}\",apply(f));}",
+                expect: Expect::Run("drop 1\n15\ndrop 2\n"),
+            },
+            Case {
+                name: "vec_with_opaque_callable",
+                source: "fn add(n:i32)->impl Fn(i32)->i32{move|x|x+n}fn main(){let values=vec![1i32,2i32];let f=add(5);println!(\"{} {}\",values.len(),f(10));}",
+                expect: Expect::Run("2 15\n"),
+            },
+        ],
+    );
+}
+
 fn callable_reference_forwarding(name: &str) {
     let cases = [
         Case {
