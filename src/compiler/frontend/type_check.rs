@@ -1086,9 +1086,9 @@ impl<'s> Checker<'s> {
             })?,
             Expr::Bool(_) => self.infer_node(InferKind::Rigid(ir::Ty::Bool))?,
             Expr::Char(_) => self.infer_node(InferKind::Rigid(ir::Ty::Char))?,
-            Expr::Str(_) => self.infer_node(InferKind::Rigid(ir::Ty::shared_str_ty()))?,
+            Expr::Str(_) => self.infer_type_term(&ir::Ty::shared_str_ty(), None, depth + 1)?,
             Expr::ByteStr(bytes) => {
-                self.infer_node(InferKind::Rigid(ir::Ty::byte_string_ty(bytes.len())))?
+                self.infer_type_term(&ir::Ty::byte_string_ty(bytes.len()), None, depth + 1)?
             }
             Expr::ConstItem(_) | Expr::AssociatedConst(_) => {
                 let ty = self

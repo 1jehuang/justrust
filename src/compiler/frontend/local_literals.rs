@@ -2179,6 +2179,36 @@ impl<'s> Solver<'_, '_, 's> {
                 if let Some(candidate) = self.candidate_for_receiver(owner, *name)? {
                     return self.callable(candidate, &args, None, Some(owner), &actuals);
                 }
+                // A static trait method may be reached through a concrete type
+                // (T::from_str). Reuse ordinary selection only after its owner
+                // and all written type arguments are known. No unresolved slot
+                // may choose an implementation or supply projection authority.
+                if let Some(owner) = self.resolve(owner, 0)? {
+                    let resolved = actuals
+                        .iter()
+                        .map(|actual| self.resolve(*actual, 0))
+                        .collect::<Result<Option<Vec<_>>, _>>()?;
+                    if let Some(actuals) = resolved {
+                        let plan = self.checker.signatures.plan()?;
+                        if let Ok((_, signature, _)) = plan.select_associated(
+                            &owner,
+                            name,
+                            &actuals,
+                            self.checker.facts(),
+                            &self.checker.module,
+                            false,
+                            &plan.budget,
+                        ) {
+                            if signature.params.len() == args.len() {
+                                for (argument, parameter) in args.iter().zip(&signature.params) {
+                                    let parameter = self.fixed(parameter.clone())?;
+                                    self.coerce(*argument, parameter)?;
+                                }
+                                return self.fixed(signature.result);
+                            }
+                        }
+                    }
+                }
                 self.fresh()
             }
             Expr::MethodCall {
@@ -2189,7 +2219,13 @@ impl<'s> Solver<'_, '_, 's> {
             } => {
                 let receiver_site = receiver.as_ref() as *const Expr as usize;
                 let receiver = self.expr(receiver, depth + 1)?;
-                if self.numeric_nominal_actuals(receiver)? {
+                // A nested generic call may acquire its result type only from
+                // this method's result context. Retain its site now, then emit
+                // a hint only if the complete receiver resolves after solving.
+                // Checked method selection still authenticates that type.
+                if matches!(self.domain(receiver), Domain::Unknown)
+                    || self.numeric_nominal_actuals(receiver)?
+                {
                     self.checker.infer_storage(1)?;
                     self.receiver_sites.push((receiver_site, receiver));
                 }

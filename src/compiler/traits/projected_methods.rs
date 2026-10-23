@@ -142,6 +142,15 @@ impl ValidatedTraitWorld {
         index: usize,
         receiver: ReceiverMode,
     ) -> Result<()> {
+        // A fixed shared str input has no projected referent or hidden type
+        // arguments. Its loan is represented by the original source contract,
+        // independently of an associated result (for example FromStr::Err).
+        // This admits no new result origins or projection-bearing inputs.
+        if matches!(ty, Ty::Ref { kind: ir::BorrowKind::Shared, referent }
+            if matches!(referent.as_ref(), Ty::Str))
+        {
+            return Ok(());
+        }
         // Source-region and declaration-schema validation authenticate receiver
         // identity before this capability check. Only an ordinary projection-
         // free borrowed receiver uses the existing reference-input machinery.
@@ -770,6 +779,21 @@ impl ValidatedTraitWorld {
             let owner = self.owner_context(implementation)?;
             self.validate_declaration_schema(declaration, schema)?;
             if !self.same_parameters(&schema.env, &implementation.schema_env)? {
+                // With no owned assignments there is nothing for the impl-only
+                // reducer to substitute. Method-local projections retain the
+                // full callable environment and its exact declared bounds.
+                if implementation.associated_types.is_empty()
+                    && let Some(normalized) = self.normalize_universal_callable_schema(schema)?
+                {
+                    self.validate_schema_signature(
+                        declaration,
+                        &normalized.signature,
+                        &normalized.env,
+                        None,
+                    )?;
+                    self.validate_source_regions(declaration, &normalized.signature)?;
+                    return Ok(Some(normalized));
+                }
                 return Err(FactsError::unsupported(
                     &self.budget,
                     "unsupported: generic projected implementation method",
@@ -1735,6 +1759,39 @@ mod tests {
                 .is_err()
         );
         assert!(world.reject_projected_references(&shared, 0).is_err());
+    }
+
+    #[test]
+    fn projected_fixed_string_input_does_not_authorize_results_or_mutable_inputs() {
+        let world = paired();
+        let shared = Ty::Ref {
+            kind: ir::BorrowKind::Shared,
+            referent: Arc::new(Ty::Str),
+        };
+        for index in [0, 1] {
+            world
+                .validate_projected_parameter_references(&shared, index, ReceiverMode::None)
+                .unwrap();
+        }
+        assert!(world.reject_projected_references(&shared, 0).is_err());
+        let mutable = Ty::Ref {
+            kind: ir::BorrowKind::Mut,
+            referent: Arc::new(Ty::Str),
+        };
+        assert!(
+            world
+                .validate_projected_parameter_references(&mutable, 0, ReceiverMode::None)
+                .is_err()
+        );
+        let nested = Ty::Ref {
+            kind: ir::BorrowKind::Shared,
+            referent: Arc::new(shared),
+        };
+        assert!(
+            world
+                .validate_projected_parameter_references(&nested, 0, ReceiverMode::None)
+                .is_err()
+        );
     }
 
     fn owners(world: &ValidatedTraitWorld) -> Vec<&ImplHeader> {

@@ -15,6 +15,8 @@ pub mod core_surface {
     pub use super::cmp;
     pub use super::default;
     pub use super::convert;
+    pub use super::str;
+    pub use super::num;
     pub mod hash {
         pub use super::super::hash::{Hash, Hasher};
     }
@@ -46,6 +48,12 @@ pub mod string;
 mod unicode_uppercase;
 pub mod fmt;
 pub mod primitive;
+pub mod str {
+    pub use super::primitive::FromStr;
+}
+pub mod num {
+    pub use super::primitive::{IntErrorKind, ParseIntError};
+}
 pub mod primitive_constants;
 pub mod ptr;
 pub mod slice;

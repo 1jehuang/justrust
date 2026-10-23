@@ -343,9 +343,7 @@ impl ValidatedTraitWorld {
     ) -> Result<(InstantiatedSchema, Arc<UniversalMethodEvidence>)> {
         self.check_facts(facts, true)?;
         facts.validate_callee_metadata(&Callee::TraitItem(call.clone()))?;
-        if facts.phase() != FactsPhase::Universal
-            || self.goal_is_closed(&call.trait_ref, facts.env())?
-        {
+        if facts.phase() != FactsPhase::Universal || self.trait_call_is_closed(call, facts.env())? {
             return Err(FactsError::invalid(
                 &self.budget,
                 "universal required method needs a rigid universal application",

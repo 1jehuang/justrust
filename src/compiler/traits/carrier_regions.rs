@@ -65,6 +65,12 @@ impl ValidatedTraitWorld {
         longer: &ir::CarrierRegionTerm,
         shorter: &ir::CarrierRegionTerm,
     ) -> Result<bool> {
+        if matches!(longer, ir::CarrierRegionTerm::Static) {
+            return Ok(true);
+        }
+        if matches!(shorter, ir::CarrierRegionTerm::Static) {
+            return Ok(false);
+        }
         let mut edges = Vec::new();
         for &(a, b) in source.outlives.iter() {
             push(
@@ -426,6 +432,7 @@ impl ValidatedTraitWorld {
             };
             let location = self.rebase_source_location(&row.location, original, actual)?;
             match row.region {
+                ir::CarrierRegionTerm::Static => {}
                 ir::CarrierRegionTerm::Named(id)
                     if id.declaration == source.declaration && id.index < source.region_count => {}
                 ir::CarrierRegionTerm::Fixed(id) if id.0 < signature.ref_contract.region_count => {}
@@ -566,6 +573,54 @@ pub(super) fn enclosing(parent: &ir::CarrierLocation, child: &ir::CarrierLocatio
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn static_result_carrier_never_borrows_a_nonstatic_input() {
+        let budget = PlanBudget::default();
+        let program = crate::compiler::frontend::parse(
+            "enum Result<T, E> { Ok(T), Err(E) } fn value(s: &str) -> Result<i32, &'static str> { Result::Err(s) } fn main() {}",
+        )
+        .unwrap();
+        let plan = crate::compiler::frontend::PlanCtx::from_program(&program, &budget).unwrap();
+        let world = plan.trait_world().unwrap();
+        let declaration = plan.function_decl(0).unwrap();
+        let signature = world
+            .normalized_declaration_schema(declaration)
+            .unwrap()
+            .signature;
+        let source = world
+            .validate_source_regions(declaration, &signature)
+            .unwrap();
+        let output = source
+            .carriers
+            .iter()
+            .find(|row| row.parameter.is_none())
+            .unwrap();
+        assert_eq!(output.region, ir::CarrierRegionTerm::Static);
+        let input = ir::InputCarrier {
+            param: 0,
+            location: ir::CarrierLocation {
+                path: ir::CarrierPath(Arc::from([])),
+                channel: ir::CarrierChannel::Fixed(ir::ReferencePosition { depth: 0 }),
+            },
+        };
+        assert_eq!(
+            world
+                .source_carrier_eligible(&source, &signature, &output.location, &input)
+                .unwrap(),
+            Some(false)
+        );
+        assert!(
+            world
+                .source_carrier_outlives(
+                    &source,
+                    &signature,
+                    &ir::CarrierRegionTerm::Static,
+                    &ir::CarrierRegionTerm::Fixed(ir::RegionParamId(0))
+                )
+                .unwrap()
+        );
+    }
 
     #[test]
     fn generic_slice_family_rows_reject_missing_foreign_and_offset_metadata() {

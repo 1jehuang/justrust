@@ -17,6 +17,18 @@ impl SourceInventory {
         loop {
             sr::depth(budget, depth)?;
             sr::work(budget, 1)?;
+            if let Expr::MethodCall { receiver, .. } = expr
+                && type_check::genuine_call(receiver)
+            {
+                let receiver_node = node.child(10, 0, budget)?;
+                for step in 1..=deref_coercion::MAX_DEREF_STEPS {
+                    self.operator_site(
+                        deref_coercion::site(receiver.as_ref() as *const Expr as usize, step),
+                        &receiver_node,
+                        budget,
+                    )?;
+                }
+            }
             if deref_coercion::candidate(expr)
                 && !self
                     .call_pointers

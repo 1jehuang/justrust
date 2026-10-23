@@ -130,6 +130,9 @@ impl Collector<'_> {
         {
             return Err("unsupported: explicit 'static slice element references require static input authority".into());
         }
+        if matches!(region, Some(RegionName::Static)) {
+            return Ok(Some(ir::CarrierRegionTerm::Static));
+        }
         if parameter.is_some() && path.contains(&ir::CarrierStep::SliceElement) {
             if self.next_region as usize >= ir::MAX_REGION_PARAMS {
                 return Err("combined source carrier lifetime limit exceeded".into());

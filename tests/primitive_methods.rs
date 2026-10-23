@@ -6,6 +6,356 @@ mod oracle;
 mod stock_rustc;
 use oracle::{Case, Expect};
 
+#[path = "support/closure_oracle.rs"]
+mod closure_oracle;
+
+fn parse_oracle(tag: &str, cases: &[closure_oracle::Case]) {
+    closure_oracle::check_with_compiler(
+        tag,
+        cases,
+        std::path::Path::new(&stock_rustc::stock_rustc()),
+    );
+}
+
+#[test]
+fn integer_from_str_explicit_dispatch() {
+    parse_oracle(
+        "parse-explicit",
+        &[
+            closure_oracle::Case {
+                name: "explicit_dispatch",
+                source: "fn main() { let r: Result<i32, std::num::ParseIntError> = \"42\".parse::<i32>(); match r { Ok(n) => assert_eq!(n, 42), Err(_) => panic!(\"parse failed\") } }",
+                expect: closure_oracle::Expect::Run(""),
+            },
+            closure_oracle::Case {
+                name: "contextual_result",
+                source: "fn main() { let r: Result<i32, std::num::ParseIntError> = \"42\".parse(); assert_eq!(r.unwrap(), 42); }",
+                expect: closure_oracle::Expect::Run(""),
+            },
+            closure_oracle::Case {
+                name: "explicit_chain",
+                source: "fn main() { let n: i32 = \"42\".parse::<i32>().unwrap(); assert_eq!(n, 42); }",
+                expect: closure_oracle::Expect::Run(""),
+            },
+            closure_oracle::Case {
+                name: "contextual_chain",
+                source: "fn main() { let n: i32 = \"42\".parse().unwrap(); assert_eq!(n, 42); }",
+                expect: closure_oracle::Expect::Run(""),
+            },
+        ],
+    );
+}
+
+#[test]
+fn integer_from_str_receiver_forms() {
+    for (name, source) in [
+        (
+            "narrow_context",
+            "fn main(){let n:i8=\"-128\".parse().unwrap();assert_eq!(n,i8::MIN);}",
+        ),
+        (
+            "wide_context",
+            "use std::str::FromStr;fn main(){assert_eq!(i128::from_str(\"-170141183460469231731687303715884105728\").unwrap(),i128::MIN);}",
+        ),
+        (
+            "owned_receiver",
+            "fn main(){assert_eq!(String::from(\"+00042\").parse::<i32>().unwrap(),42);}",
+        ),
+        (
+            "borrowed_owned_receiver",
+            "fn main(){let s=String::from(\"42\");assert_eq!((&s).parse::<i32>().unwrap(),42);}",
+        ),
+    ] {
+        parse_oracle(
+            name,
+            &[closure_oracle::Case {
+                name,
+                source,
+                expect: closure_oracle::Expect::Run(""),
+            }],
+        );
+    }
+    parse_oracle(
+        "parse-owned-drop",
+        &[
+            closure_oracle::Case {
+                name: "owned_deref_temporary_drop_order",
+                source: r#"
+use std::ops::Deref;
+struct Input { text: String }
+impl Deref for Input {
+    type Target = str;
+    fn deref(&self) -> &str { self.text.as_str() }
+}
+impl Drop for Input { fn drop(&mut self) { println!("drop"); } }
+fn make() -> Input { println!("make"); Input { text: String::from("42") } }
+fn main() {
+    let value = make().parse::<i32>().unwrap();
+    println!("value {}", value);
+}
+"#,
+                expect: closure_oracle::Expect::Run("make\ndrop\nvalue 42\n"),
+            },
+            closure_oracle::Case {
+                name: "borrowed_result_cannot_escape_owned_deref_temporary",
+                source: "fn make() -> String { String::from(\"one two\") } fn main() { let mut words = make().split_whitespace(); println!(\"{}\", words.next().unwrap()); }",
+                expect: closure_oracle::Expect::Invalid("E0716"),
+            },
+        ],
+    );
+}
+
+#[test]
+fn integer_from_str_matches_stock() {
+    use closure_oracle::{Case, Expect};
+    parse_oracle(
+        "integer-from-str",
+        &[
+            Case {
+                name: "all_integer_widths_and_context",
+                source: r#"
+use std::str::FromStr;
+fn main() {
+    let a: i8 = "-128".parse().unwrap(); assert_eq!(a, i8::MIN);
+    let b: i16 = "32767".parse().unwrap(); assert_eq!(b, i16::MAX);
+    let c: i32 = "-2147483648".parse().unwrap(); assert_eq!(c, i32::MIN);
+    let d: i64 = "9223372036854775807".parse().unwrap(); assert_eq!(d, i64::MAX);
+    let e: isize = "-9223372036854775808".parse().unwrap(); assert_eq!(e, isize::MIN);
+    assert_eq!("255".parse::<u8>().unwrap(), u8::MAX);
+    assert_eq!("65535".parse::<u16>().unwrap(), u16::MAX);
+    assert_eq!("4294967295".parse::<u32>().unwrap(), u32::MAX);
+    assert_eq!("18446744073709551615".parse::<u64>().unwrap(), u64::MAX);
+    assert_eq!("18446744073709551615".parse::<usize>().unwrap(), usize::MAX);
+    assert_eq!(i128::from_str("-170141183460469231731687303715884105728").unwrap(), i128::MIN);
+    assert_eq!("170141183460469231731687303715884105727".parse::<i128>().unwrap(), i128::MAX);
+    assert_eq!("340282366920938463463374607431768211455".parse::<u128>().unwrap(), u128::MAX);
+    assert_eq!(String::from("+00042").parse::<i32>().unwrap(), 42);
+    assert_eq!("-0".parse::<i8>().unwrap(), 0);
+    assert_eq!("+0".parse::<u128>().unwrap(), 0);
+}
+"#,
+                expect: Expect::Run(""),
+            },
+            Case {
+                name: "error_kinds_and_formatting",
+                source: r#"
+use std::num::{IntErrorKind, ParseIntError};
+fn main() {
+    let empty: ParseIntError = "".parse::<i32>().unwrap_err();
+    assert_eq!(empty.kind(), &IntErrorKind::Empty);
+    println!("{} {:?}", empty, empty);
+    let digit = " 42".parse::<i32>().unwrap_err();
+    assert_eq!(digit.kind(), &IntErrorKind::InvalidDigit);
+    println!("{} {:?}", digit, digit);
+    let positive = "128".parse::<i8>().unwrap_err();
+    assert_eq!(positive.kind(), &IntErrorKind::PosOverflow);
+    println!("{} {:?}", positive, positive);
+    let negative = "-129".parse::<i8>().unwrap_err();
+    assert_eq!(negative.kind(), &IntErrorKind::NegOverflow);
+    println!("{} {:?}", negative, negative);
+    assert!("-0".parse::<u8>().is_err());
+    assert!("+".parse::<u128>().is_err());
+    assert!("-".parse::<i128>().is_err());
+    assert!("1_0".parse::<u64>().is_err());
+    assert!("42 ".parse::<i32>().is_err());
+    assert!("１２".parse::<i32>().is_err());
+    assert!("1\0".parse::<u32>().is_err());
+    assert!("170141183460469231731687303715884105728".parse::<i128>().is_err());
+    assert!("-170141183460469231731687303715884105729".parse::<i128>().is_err());
+    assert!("340282366920938463463374607431768211456".parse::<u128>().is_err());
+}
+"#,
+                expect: Expect::Run(
+                    "cannot parse integer from empty string ParseIntError { kind: Empty }\ninvalid digit found in string ParseIntError { kind: InvalidDigit }\nnumber too large to fit in target type ParseIntError { kind: PosOverflow }\nnumber too small to fit in target type ParseIntError { kind: NegOverflow }\n",
+                ),
+            },
+            Case {
+                name: "custom_from_str_and_core_path",
+                source: r#"
+use core::str::FromStr;
+struct Value { n: i32 }
+impl FromStr for Value {
+    type Err = core::num::ParseIntError;
+    fn from_str(s: &str) -> Result<Value, Self::Err> {
+        match s.parse::<i32>() {
+            Ok(n) => Ok(Value { n }),
+            Err(e) => Err(e),
+        }
+    }
+}
+fn parse<T: FromStr>(s: &str) -> Result<T, T::Err> { s.parse() }
+fn main() {
+    let value = parse::<Value>("42").ok().unwrap();
+    assert_eq!(value.n, 42);
+    assert!(parse::<Value>("no").is_err());
+}
+"#,
+                expect: Expect::Run(""),
+            },
+            Case {
+                name: "unused_missing_from_str",
+                source: "struct Value; fn unused() { let _v = \"1\".parse::<Value>(); } fn main() {}",
+                expect: Expect::Invalid("E0277"),
+            },
+            Case {
+                name: "unused_wrong_error_type",
+                source: "fn unused() { let _v: Result<i32, u8> = \"1\".parse::<i32>(); } fn main() {}",
+                expect: Expect::Invalid("E0308"),
+            },
+            Case {
+                name: "parser_static_error_does_not_borrow_input",
+                source: r#"use std::str::FromStr;
+struct Value;
+impl FromStr for Value {
+    type Err = &'static str;
+    fn from_str(_s: &str) -> Result<Value, Self::Err> { Err("invalid") }
+}
+fn main() {
+    let error;
+    { let text = String::from("42"); error = text.parse::<Value>().err().unwrap(); }
+    println!("{}", error);
+}"#,
+                expect: Expect::Run("invalid\n"),
+            },
+            Case {
+                name: "unused_nested_static_cannot_borrow_input",
+                source: "fn bad(s: &str) -> Result<i32, &'static str> { Err(s) } fn main() {}",
+                expect: Expect::Invalid("lifetime may not live long enough"),
+            },
+            Case {
+                name: "unused_parser_cannot_return_input_as_static_error",
+                source: r#"use std::str::FromStr;
+struct Value;
+impl FromStr for Value {
+    type Err = &'static str;
+    fn from_str(s: &str) -> Result<Value, Self::Err> { Err(s) }
+}
+fn main() {}"#,
+                expect: Expect::Invalid("lifetime may not live long enough"),
+            },
+            Case {
+                name: "method_local_projection_preserves_exact_binder",
+                source: r#"
+trait Has { type Out; }
+struct Item;
+impl Has for Item { type Out = i32; }
+trait Forward { fn forward<T: Has>(&self, value: T::Out) -> T::Out; }
+struct Sender;
+impl Forward for Sender {
+    fn forward<T: Has>(&self, value: T::Out) -> T::Out { value }
+}
+fn main() { assert_eq!(Sender.forward::<Item>(42), 42); }
+"#,
+                expect: Expect::Run(""),
+            },
+            Case {
+                name: "unused_generic_projected_method_wrong_body",
+                source: r#"
+trait Has { type Out; }
+trait Forward { fn forward<T: Has>(&self, value: T::Out) -> T::Out; }
+struct Sender;
+impl Forward for Sender {
+    fn forward<T: Has>(&self, value: T::Out) -> T::Out { 42i32 }
+}
+fn main() {}
+"#,
+                expect: Expect::Invalid("E0308"),
+            },
+        ],
+    );
+}
+
+#[test]
+fn integer_from_str_boundary_matrix() {
+    let mut inputs = vec![
+        "".to_owned(),
+        "+".to_owned(),
+        "-".to_owned(),
+        "+0".to_owned(),
+        "-0".to_owned(),
+        "00042".to_owned(),
+        " 1".to_owned(),
+        "1 ".to_owned(),
+        "\t1".to_owned(),
+        "1\n".to_owned(),
+        "1_0".to_owned(),
+        "0x10".to_owned(),
+        "++1".to_owned(),
+        "+-1".to_owned(),
+        "١".to_owned(),
+        "１２".to_owned(),
+        "1\0".to_owned(),
+        "127".to_owned(),
+        "128".to_owned(),
+        "-128".to_owned(),
+        "-129".to_owned(),
+        "255".to_owned(),
+        "256".to_owned(),
+        "32767".to_owned(),
+        "32768".to_owned(),
+        "-32768".to_owned(),
+        "-32769".to_owned(),
+        "65535".to_owned(),
+        "65536".to_owned(),
+        "2147483647".to_owned(),
+        "2147483648".to_owned(),
+        "-2147483648".to_owned(),
+        "-2147483649".to_owned(),
+        "4294967295".to_owned(),
+        "4294967296".to_owned(),
+        "9223372036854775807".to_owned(),
+        "9223372036854775808".to_owned(),
+        "-9223372036854775808".to_owned(),
+        "-9223372036854775809".to_owned(),
+        "18446744073709551615".to_owned(),
+        "18446744073709551616".to_owned(),
+        "170141183460469231731687303715884105727".to_owned(),
+        "170141183460469231731687303715884105728".to_owned(),
+        "-170141183460469231731687303715884105728".to_owned(),
+        "-170141183460469231731687303715884105729".to_owned(),
+        "340282366920938463463374607431768211455".to_owned(),
+        "340282366920938463463374607431768211456".to_owned(),
+        "99999999999999999999999999999999999999999999x".to_owned(),
+        "-99999999999999999999999999999999999999999999x".to_owned(),
+    ];
+    inputs.push(format!("{}42", "0".repeat(1024)));
+    let mut source = String::new();
+    let mut calls = String::from("fn main() {");
+    let mut expected = String::new();
+    macro_rules! add_type {
+        ($ty:ty) => {{
+            let name = stringify!($ty);
+            source.push_str(&format!("fn cases_{name}() {{ for text in {inputs:?} {{ println!(\"{{:?}}\", text.parse::<{name}>()); }} }}\n"));
+            calls.push_str(&format!("cases_{name}();"));
+            for input in &inputs {
+                expected.push_str(&format!("{:?}\n", input.parse::<$ty>()));
+            }
+        }};
+    }
+    add_type!(i8);
+    add_type!(i16);
+    add_type!(i32);
+    add_type!(i64);
+    add_type!(i128);
+    add_type!(isize);
+    add_type!(u8);
+    add_type!(u16);
+    add_type!(u32);
+    add_type!(u64);
+    add_type!(u128);
+    add_type!(usize);
+    calls.push('}');
+    source.push_str(&calls);
+    parse_oracle(
+        "parse-boundaries",
+        &[closure_oracle::Case {
+            name: "all_widths_syntax_and_overflow",
+            source: Box::leak(source.into_boxed_str()),
+            expect: closure_oracle::Expect::Run(Box::leak(expected.into_boxed_str())),
+        }],
+    );
+}
+
 #[test]
 fn primitive_methods_match_stock() {
     assert!(

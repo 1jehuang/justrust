@@ -67,6 +67,12 @@ pub trait PartialEq<Rhs = Self> {
 
 pub trait Eq: PartialEq {}
 
+impl<T: PartialEq> PartialEq for &T {
+    fn eq(&self, other: &&T) -> bool {
+        <T as PartialEq>::eq(*self, *other)
+    }
+}
+
 pub trait PartialOrd: PartialEq {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering>;
     fn lt(&self, other: &Self) -> bool {

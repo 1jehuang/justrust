@@ -1000,6 +1000,8 @@ pub struct CarrierContract {
 }
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum CarrierRegionTerm {
+    /// Source-written `'static`, independent of every caller input region.
+    Static,
     Fixed(RegionParamId),
     Named(SourceRegionId),
     Family {

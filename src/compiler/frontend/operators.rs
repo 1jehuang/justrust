@@ -568,7 +568,8 @@ impl type_check::Checker<'_> {
                 if !overloadable(&lhs)
                     && !(spec.0 == "cmp"
                         && matches!(lhs, ir::Ty::Ref { .. })
-                        && rhs.as_ref().is_some_and(overloadable))
+                        && (rhs.as_ref().is_some_and(overloadable)
+                            || matches!(&lhs, ir::Ty::Ref { referent, .. } if overloadable(referent))))
                 {
                     return Ok(None);
                 }

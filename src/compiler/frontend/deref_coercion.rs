@@ -14,6 +14,10 @@ pub(super) fn candidate(e: &Expr) -> bool {
     )
 }
 
+pub(super) fn receiver_candidate(e: &Expr) -> bool {
+    candidate(e) || type_check::genuine_call(e)
+}
+
 /// Tagged source pointer for coercion step `step` (1-based) of an expression.
 /// Expr pointers are 8-aligned; tag 1 is reserved for statements.
 pub(super) fn site(pointer: usize, step: usize) -> usize {
@@ -147,7 +151,7 @@ impl type_check::Checker<'_> {
         receiver_ty: &ir::Ty,
         kind: ir::BorrowKind,
     ) -> Result<Option<ir::ExprId>, String> {
-        if !candidate(receiver) {
+        if !receiver_candidate(receiver) {
             return Ok(None);
         }
         let (owner, behind_ref) = match receiver_ty {
@@ -164,6 +168,60 @@ impl type_check::Checker<'_> {
         } else {
             ("ops", "Deref", "deref")
         };
+        if !behind_ref && type_check::genuine_call(receiver) {
+            // Method autoref keeps an owned call result alive through the full
+            // expression, including its destructor. The original expression
+            // remains the sole source occurrence for the recorded Deref call.
+            let value = self.expr_expected(receiver, Some(&owner))?;
+            let owner = self.exprs[value.0].ty.clone();
+            let local = self.temporary(
+                "$deref_receiver",
+                owner.clone(),
+                kind == ir::BorrowKind::Mut,
+            )?;
+            self.borrow_temporaries.push((local, false));
+            let borrowed = self.borrow_expression(
+                kind,
+                ir::Place {
+                    local,
+                    projection: Vec::new(),
+                },
+            )?;
+            let (declaration, name) = self.operator_trait(spec.0, spec.1, spec.2)?;
+            let plan = self.signatures.plan()?;
+            let goal = ir::TraitRef {
+                declaration,
+                self_ty: owner,
+                args: Arc::from([]),
+            };
+            let Some((target, signature, _)) =
+                plan.select_trait(&goal, &name, &[], self.facts(), false, &plan.budget)?
+            else {
+                return Err("overloaded deref receiver has no selected implementation".into());
+            };
+            let call = self.finish_checked_call(
+                target,
+                name,
+                signature,
+                &[],
+                Arc::from([]),
+                Some((borrowed, None)),
+            )?;
+            self.record_operator(site(receiver as *const Expr as usize, 1), call)?;
+            let ty = self.exprs[call.0].ty.clone();
+            let completion = self.exprs[call.0].completion;
+            self.charge_node(std::mem::size_of::<ir::TypedExpr>() + 128)?;
+            let result = ir::ExprId(self.exprs.len());
+            self.exprs.push(ir::TypedExpr {
+                ty,
+                completion,
+                kind: ir::ExprKind::Block(ir::TypedBlock {
+                    statements: vec![ir::TypedStmt::Assign { local, value }],
+                    tail: Some(call),
+                }),
+            });
+            return Ok(Some(result));
+        }
         let first = if behind_ref {
             if kind == ir::BorrowKind::Mut
                 && !matches!(

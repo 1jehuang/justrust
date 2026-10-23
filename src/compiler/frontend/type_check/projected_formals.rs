@@ -226,7 +226,10 @@ impl Inference<'_, '_> {
         constraints: Vec<(InferTerm, InferTerm)>,
         fallback: bool,
     ) -> Result<bool, String> {
-        let mut pending = constraints;
+        let mut pending = Vec::new();
+        for (formal, actual) in constraints {
+            self.split_projected_constraint(formal, actual, &mut pending, 0)?;
+        }
         let mut defaults = false;
         while !pending.is_empty() {
             let count = pending.len();
@@ -250,6 +253,64 @@ impl Inference<'_, '_> {
             pending = deferred;
         }
         Ok(true)
+    }
+
+    // A projected child must not block an independent sibling from binding the
+    // very slot it reads: Result<F, F::Err> first learns F from the expected
+    // Result's success type, then normalizes F::Err. Decompose only identical
+    // constructors and canonical nominal declarations. This is an inference
+    // equation, never evidence for a cast or for projection membership.
+    fn split_projected_constraint(
+        &self,
+        formal: InferTerm,
+        actual: InferTerm,
+        output: &mut Vec<(InferTerm, InferTerm)>,
+        depth: usize,
+    ) -> Result<(), String> {
+        self.checker.infer_work(depth)?;
+        match (formal.as_ref(), actual.as_ref()) {
+            (InferKind::Tuple(left), InferKind::Tuple(right)) if left.len() == right.len() => {
+                for (left, right) in left.iter().zip(right.iter()) {
+                    self.split_projected_constraint(
+                        left.clone(),
+                        right.clone(),
+                        output,
+                        depth + 1,
+                    )?;
+                }
+            }
+            (InferKind::Nominal(left_id, left), InferKind::Nominal(right_id, right))
+                if left_id == right_id && left.len() == right.len() =>
+            {
+                for (left, right) in left.iter().zip(right.iter()) {
+                    self.split_projected_constraint(
+                        left.clone(),
+                        right.clone(),
+                        output,
+                        depth + 1,
+                    )?;
+                }
+            }
+            (InferKind::Ref(left_kind, left), InferKind::Ref(right_kind, right))
+            | (InferKind::RawPtr(left_kind, left), InferKind::RawPtr(right_kind, right))
+                if left_kind == right_kind =>
+            {
+                self.split_projected_constraint(left.clone(), right.clone(), output, depth + 1)?;
+            }
+            (InferKind::Array(left, left_len), InferKind::Array(right, right_len))
+                if left_len == right_len =>
+            {
+                self.split_projected_constraint(left.clone(), right.clone(), output, depth + 1)?;
+            }
+            (InferKind::Slice(left), InferKind::Slice(right)) => {
+                self.split_projected_constraint(left.clone(), right.clone(), output, depth + 1)?;
+            }
+            _ => {
+                self.checker.infer_storage(1)?;
+                output.push((formal, actual));
+            }
+        }
+        Ok(())
     }
 }
 

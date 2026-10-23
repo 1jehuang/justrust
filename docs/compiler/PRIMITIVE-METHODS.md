@@ -19,6 +19,22 @@ CHECK/BUILD/run matrix at workers 1/8, including ordinary same-name trait method
 The new matrix uses the verified pinned stock-rustc helper on hosted builds;
 the older full-suite local-oracle instructions below remain historical.
 
+## Source-backed decimal parsing
+
+`str::parse` dispatches through ordinary `std::str::FromStr` / `core::str::FromStr`
+implementations. The source prelude implements all twelve integer types, including
+full-range `i128` and `u128`, and exposes `ParseIntError::kind`, `IntErrorKind`,
+Display and Debug. Explicit arguments, contextual `Result` and chained `unwrap`
+inference use canonical callable schemas, not a parse-specific intrinsic.
+User implementations and generic callers follow the same path. Owned method
+receiver temporaries keep full-expression drop order, and source-written static
+error lifetimes cannot borrow a parser input.
+
+`justrust test --test primitive_methods integer_from_str` compares stock CHECK,
+BUILD and execution at workers 1/8, including every integer boundary, signs,
+invalid syntax, custom implementations, drop order and unused invalid bodies.
+Floating-point parsing and full standard-library compatibility remain open.
+
 Supported methods:
 
 - Integers: signed abs/signum/is_positive/is_negative, pow with u32 exponent,
@@ -36,10 +52,9 @@ Other primitive methods and general standard-library method resolution remain
 outside this increment. Integer overflow follows the compiler's existing checked
 arithmetic path, not an independently implemented release-overflow mode.
 
-`justrust test --local --test primitive_methods` requires installed stock rustc
-and compares execution/exit status and invalid-input rejection using edition 2024
-and panic=abort. Cases cover all supported operations, reference receivers,
-wide integers, bit boundaries, Unicode/ASCII distinctions, NaN operand ordering,
-and receiver/argument evaluation order. Run oracle tests locally because hosted
-test environments cannot spawn stock rustc. Graph gates and strict clippy run
-hosted. No speed or full Rust compatibility claim is made.
+`justrust test --test primitive_methods` compares execution/exit status and
+invalid-input rejection using edition 2024 and panic=abort. The integer parsing
+cases use the verified stock-rustc helper, including in hosted test environments.
+Cases cover all supported operations, reference receivers, wide integers, bit
+boundaries, Unicode/ASCII distinctions, NaN operand ordering, and receiver/argument
+evaluation order. No speed or full Rust compatibility claim is made.

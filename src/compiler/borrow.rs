@@ -1961,6 +1961,9 @@ impl CarrierBuilder<'_, '_> {
             return Ok(vec![]);
         };
         match term {
+            // Static storage has no finite input-region variable. Its absence
+            // from a result's input envelope rejects borrowed caller storage.
+            ir::CarrierRegionTerm::Static => Ok(vec![]),
             ir::CarrierRegionTerm::Fixed(region) => Ok(vec![(
                 None,
                 self.regions.node(RegionKey::Fixed(*region), self.budget)?,

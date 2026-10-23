@@ -551,6 +551,7 @@ impl StrPattern for &str {
 }
 
 pub trait StrMethods {
+    fn parse<F: super::primitive::FromStr>(&self) -> Result<F, F::Err>;
     fn is_empty(&self) -> bool;
     fn to_uppercase(&self) -> String;
     fn contains<P: StrPattern>(&self, pattern: P) -> bool;
@@ -559,6 +560,10 @@ pub trait StrMethods {
 }
 
 impl StrMethods for str {
+    fn parse<F: super::primitive::FromStr>(&self) -> Result<F, F::Err> {
+        F::from_str(self)
+    }
+
     fn is_empty(&self) -> bool {
         self.len() == 0usize
     }

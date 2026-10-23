@@ -4200,7 +4200,7 @@ impl ValidatedTraitWorld {
         ) = subject
             && self.schema_contains_projection(&self.item_header(call.item)?.schema)?
         {
-            if !self.goal_is_closed(&call.trait_ref, facts.env())?
+            if !self.trait_call_is_closed(call, facts.env())?
                 && !matches!(&call.trait_ref.self_ty, Ty::Dyn(_))
             {
                 return self.universal_required_carrier_contract(call, facts);
@@ -7745,6 +7745,14 @@ impl ValidatedTraitWorld {
         }
         Ok(closed)
     }
+    fn trait_call_is_closed(&self, call: &TraitCall, env: &GenericEnv) -> Result<bool> {
+        let mut scratch = ProofScratch::default();
+        Ok(
+            self.goal_is_closed_with(&call.trait_ref, env, &mut scratch)?
+                && self.method_args_are_closed_with(call, env, &mut scratch)?,
+        )
+    }
+
     /// Same validation walk as `goal_is_closed`, over a call's ordered method
     /// actuals. Open (parameter or opaque) actuals keep the call universal.
     fn method_args_are_closed_with(
@@ -8035,7 +8043,7 @@ impl TraitCx for ValidatedTraitWorld {
         self.check_facts(facts, true)?;
         if facts.phase() == FactsPhase::Universal
             && self.schema_contains_projection(&self.item_header(call.item)?.schema)?
-            && !self.goal_is_closed(&call.trait_ref, facts.env())?
+            && !self.trait_call_is_closed(call, facts.env())?
             && !matches!(&call.trait_ref.self_ty, Ty::Dyn(_))
         {
             return Ok(self
@@ -8146,7 +8154,8 @@ impl TraitCx for ValidatedTraitWorld {
         }
         if facts.phase() == FactsPhase::Universal
             && self.schema_contains_projection(&self.item_header(call.item)?.schema)?
-            && !self.goal_is_closed_with(&call.trait_ref, facts.env(), scratch)?
+            && (!self.goal_is_closed_with(&call.trait_ref, facts.env(), scratch)?
+                || !self.method_args_are_closed_with(call, facts.env(), scratch)?)
             && !matches!(&call.trait_ref.self_ty, Ty::Dyn(_))
         {
             let (application, _) = self.instantiate_universal_required_item(call, facts)?;

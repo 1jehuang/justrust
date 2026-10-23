@@ -169,7 +169,11 @@ impl ValidatedTraitWorld {
         } else {
             result
         };
-        if self.signature_contains_projection(&result.signature)? {
+        // Universal checking retains authenticated caller-bound projections.
+        // Only a closed executable ABI must contain no symbolic projection.
+        if context.phase == FactsPhase::Closed
+            && self.signature_contains_projection(&result.signature)?
+        {
             return Err(FactsError::unsupported(
                 &self.budget,
                 "unsupported: generic projected trait method executable ABI",

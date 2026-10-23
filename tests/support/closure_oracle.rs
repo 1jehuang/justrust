@@ -3,7 +3,7 @@
 //! workers 1 and 8. CHECK must publish no image and demand no code generation.
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 #[derive(Clone, Copy, Debug)]
@@ -29,6 +29,10 @@ pub fn check(tag: &str, cases: &[Case]) {
     let compiler = std::env::var_os("JUSTRUST_REAL_RUSTC")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("rustc"));
+    check_with_compiler(tag, cases, &compiler);
+}
+
+pub fn check_with_compiler(tag: &str, cases: &[Case], compiler: &Path) {
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
@@ -46,7 +50,7 @@ pub fn check(tag: &str, cases: &[Case]) {
         let source = scratch.0.join(format!("case-{index}.rs"));
         let stock_image = scratch.0.join(format!("stock-{index}"));
         fs::write(&source, case.source).unwrap();
-        let stock = Command::new(&compiler)
+        let stock = Command::new(compiler)
             .env_remove("RUSTC_BOOTSTRAP")
             .args([
                 "--edition=2024",

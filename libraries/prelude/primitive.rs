@@ -762,18 +762,39 @@ impl IntMethods for usize {
 
 // ---- parsing (str::parse) ----
 
+pub trait FromStr: Sized {
+    type Err;
+    fn from_str(s: &str) -> Result<Self, Self::Err>;
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum IntErrorKind {
+    Empty,
+    InvalidDigit,
+    PosOverflow,
+    NegOverflow,
+    Zero,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParseIntError {
-    kind: u8,
+    kind: IntErrorKind,
+}
+
+impl ParseIntError {
+    pub fn kind(&self) -> &IntErrorKind {
+        &self.kind
+    }
 }
 
 impl super::fmt::Display for ParseIntError {
     fn fmt(&self, f: &mut super::fmt::Formatter) -> super::fmt::Result {
         f.pad(match self.kind {
-            0u8 => "cannot parse integer from empty string",
-            1u8 => "invalid digit found in string",
-            2u8 => "number too large to fit in target type",
-            _ => "number too small to fit in target type",
+            IntErrorKind::Empty => "cannot parse integer from empty string",
+            IntErrorKind::InvalidDigit => "invalid digit found in string",
+            IntErrorKind::PosOverflow => "number too large to fit in target type",
+            IntErrorKind::NegOverflow => "number too small to fit in target type",
+            IntErrorKind::Zero => "number would be zero for non-zero type",
         })
     }
 }
@@ -782,7 +803,7 @@ impl super::fmt::Display for ParseIntError {
 pub fn parse_i128(s: &str, min: i128, max: i128) -> Result<i128, ParseIntError> {
     let (p, n) = super::string::str_parts(s);
     if n == 0usize {
-        return Result::Err(ParseIntError { kind: 0u8 });
+        return Result::Err(ParseIntError { kind: IntErrorKind::Empty });
     }
     let mut i = 0usize;
     let mut negative = false;
@@ -791,37 +812,170 @@ pub fn parse_i128(s: &str, min: i128, max: i128) -> Result<i128, ParseIntError> 
         negative = first == 45u8;
         i = 1usize;
         if n == 1usize {
-            return Result::Err(ParseIntError { kind: 1u8 });
+            return Result::Err(ParseIntError { kind: IntErrorKind::InvalidDigit });
         }
         if negative && min == 0i128 {
-            return Result::Err(ParseIntError { kind: 1u8 });
+            return Result::Err(ParseIntError { kind: IntErrorKind::InvalidDigit });
         }
     }
     let mut value = 0i128;
     while i < n {
         let b = super::string::read_u8(p + i);
         if b < 48u8 || b > 57u8 {
-            return Result::Err(ParseIntError { kind: 1u8 });
+            return Result::Err(ParseIntError { kind: IntErrorKind::InvalidDigit });
         }
         let d = (b - 48u8) as i128;
         if negative {
             if value < (min + d) / 10i128 {
-                return Result::Err(ParseIntError { kind: 3u8 });
+                return Result::Err(ParseIntError { kind: IntErrorKind::NegOverflow });
             }
             value = value * 10i128 - d;
             if value < min {
-                return Result::Err(ParseIntError { kind: 3u8 });
+                return Result::Err(ParseIntError { kind: IntErrorKind::NegOverflow });
             }
         } else {
             if value > (max - d) / 10i128 {
-                return Result::Err(ParseIntError { kind: 2u8 });
+                return Result::Err(ParseIntError { kind: IntErrorKind::PosOverflow });
             }
             value = value * 10i128 + d;
             if value > max {
-                return Result::Err(ParseIntError { kind: 2u8 });
+                return Result::Err(ParseIntError { kind: IntErrorKind::PosOverflow });
             }
         }
         i += 1usize;
     }
     Result::Ok(value)
+}
+
+// Accumulate unsigned values directly so the upper half of u128 is never
+// transported through i128. Check both operations before executing them.
+fn parse_u128(s: &str) -> Result<u128, ParseIntError> {
+    let (p, n) = super::string::str_parts(s);
+    if n == 0usize {
+        return Result::Err(ParseIntError { kind: IntErrorKind::Empty });
+    }
+    let mut i = 0usize;
+    if super::string::read_u8(p) == 43u8 {
+        i = 1usize;
+        if i == n {
+            return Result::Err(ParseIntError { kind: IntErrorKind::InvalidDigit });
+        }
+    }
+    let mut value = 0u128;
+    while i < n {
+        let b = super::string::read_u8(p + i);
+        if b < 48u8 || b > 57u8 {
+            return Result::Err(ParseIntError { kind: IntErrorKind::InvalidDigit });
+        }
+        let digit = (b - 48u8) as u128;
+        if value > (u128::MAX - digit) / 10u128 {
+            return Result::Err(ParseIntError { kind: IntErrorKind::PosOverflow });
+        }
+        value = value * 10u128 + digit;
+        i += 1usize;
+    }
+    Result::Ok(value)
+}
+
+impl FromStr for i8 {
+    type Err = ParseIntError;
+    fn from_str(s: &str) -> Result<i8, ParseIntError> {
+        match parse_i128(s, i8::MIN as i128, i8::MAX as i128) {
+            Result::Ok(value) => Result::Ok(value as i8),
+            Result::Err(error) => Result::Err(error),
+        }
+    }
+}
+impl FromStr for i16 {
+    type Err = ParseIntError;
+    fn from_str(s: &str) -> Result<i16, ParseIntError> {
+        match parse_i128(s, i16::MIN as i128, i16::MAX as i128) {
+            Result::Ok(value) => Result::Ok(value as i16),
+            Result::Err(error) => Result::Err(error),
+        }
+    }
+}
+impl FromStr for i32 {
+    type Err = ParseIntError;
+    fn from_str(s: &str) -> Result<i32, ParseIntError> {
+        match parse_i128(s, i32::MIN as i128, i32::MAX as i128) {
+            Result::Ok(value) => Result::Ok(value as i32),
+            Result::Err(error) => Result::Err(error),
+        }
+    }
+}
+impl FromStr for i64 {
+    type Err = ParseIntError;
+    fn from_str(s: &str) -> Result<i64, ParseIntError> {
+        match parse_i128(s, i64::MIN as i128, i64::MAX as i128) {
+            Result::Ok(value) => Result::Ok(value as i64),
+            Result::Err(error) => Result::Err(error),
+        }
+    }
+}
+impl FromStr for i128 {
+    type Err = ParseIntError;
+    fn from_str(s: &str) -> Result<i128, ParseIntError> {
+        parse_i128(s, i128::MIN, i128::MAX)
+    }
+}
+impl FromStr for isize {
+    type Err = ParseIntError;
+    fn from_str(s: &str) -> Result<isize, ParseIntError> {
+        match parse_i128(s, isize::MIN as i128, isize::MAX as i128) {
+            Result::Ok(value) => Result::Ok(value as isize),
+            Result::Err(error) => Result::Err(error),
+        }
+    }
+}
+impl FromStr for u8 {
+    type Err = ParseIntError;
+    fn from_str(s: &str) -> Result<u8, ParseIntError> {
+        match parse_i128(s, 0i128, u8::MAX as i128) {
+            Result::Ok(value) => Result::Ok(value as u8),
+            Result::Err(error) => Result::Err(error),
+        }
+    }
+}
+impl FromStr for u16 {
+    type Err = ParseIntError;
+    fn from_str(s: &str) -> Result<u16, ParseIntError> {
+        match parse_i128(s, 0i128, u16::MAX as i128) {
+            Result::Ok(value) => Result::Ok(value as u16),
+            Result::Err(error) => Result::Err(error),
+        }
+    }
+}
+impl FromStr for u32 {
+    type Err = ParseIntError;
+    fn from_str(s: &str) -> Result<u32, ParseIntError> {
+        match parse_i128(s, 0i128, u32::MAX as i128) {
+            Result::Ok(value) => Result::Ok(value as u32),
+            Result::Err(error) => Result::Err(error),
+        }
+    }
+}
+impl FromStr for u64 {
+    type Err = ParseIntError;
+    fn from_str(s: &str) -> Result<u64, ParseIntError> {
+        match parse_i128(s, 0i128, u64::MAX as i128) {
+            Result::Ok(value) => Result::Ok(value as u64),
+            Result::Err(error) => Result::Err(error),
+        }
+    }
+}
+impl FromStr for u128 {
+    type Err = ParseIntError;
+    fn from_str(s: &str) -> Result<u128, ParseIntError> {
+        parse_u128(s)
+    }
+}
+impl FromStr for usize {
+    type Err = ParseIntError;
+    fn from_str(s: &str) -> Result<usize, ParseIntError> {
+        match parse_i128(s, 0i128, usize::MAX as i128) {
+            Result::Ok(value) => Result::Ok(value as usize),
+            Result::Err(error) => Result::Err(error),
+        }
+    }
 }

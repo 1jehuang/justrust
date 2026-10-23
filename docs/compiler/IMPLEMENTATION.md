@@ -789,6 +789,12 @@ missing-file changes invalidate only justified consumers without stale lookup.
 - [x] Raw UTF-8 strings and normal/raw byte strings with exact `&'static [u8; N]` typing, native static data, issued literal provenance, array-to-slice coercion and worker-1/8 stock differential gates (RAW-BYTE-LITERALS.md). C strings and explicit named-lifetime local annotations remain explicitly Unsupported. This advances G1/G2/G3/G5/G6/G10 without closing their remaining full-Rust work.
 - [x] Character literal patterns and integer/char range patterns with exact interval exhaustiveness (SCALAR-PATTERNS.md).
 - [x] Canonical primitive and alias associated-call owners plus ordinary source `From<u8> for char`, with all 256 bytes stock-differential at workers 1/8, namespace/invalid controls and exact checked-call value authority (PRIMITIVE-CONVERSIONS.md). Implicit primitive trait-argument inference requiring coercion remains explicitly Unsupported. This advances G1/G2/G3/G5/G10, not the full conversion library.
+- [x] Source-backed `str::parse` and `FromStr` for all twelve integer types,
+      including full-width u128, contextual generic results, custom implementations,
+      owned receiver drop order and static error-carrier rejection. Stock-differential
+      CHECK/BUILD/run at workers 1/8: `justrust test --test primitive_methods`.
+      Float parsing and the rest of the standard parsing surface remain open
+      (PRIMITIVE-METHODS.md).
 - [x] Width-correct primitive integer `.leading_zeros()` and unchanged original
       core exponent-estimator module acceptance under LEADING-ZEROS.md. This is
       not the original numeric method provider, a core crate artifact or CTFE.
@@ -2017,6 +2023,11 @@ realistic std-only programs with stock oracle stdout and a pass/fail ratchet
 manifest. The committed manifest ratchet records 5/20 passing programs, as
 reported in FULL-PROGRAMS.md. This is not a fresh corpus measurement after the
 latest scoped changes. FULL-PROGRAMS.md ranks the recorded blocking features.
+The current work advances `11_closures_iterators.rs` through CHECK, but BUILD
+still rejects a nominal substitution without current-engine typed reads
+(`justrust run --bin jr-rust -- tests/fixtures/full_programs/11_closures_iterators.rs
+-o .jcode/closure-probe --workers 8`). This is an open graph-authority integration
+blocker, not a native-corpus promotion.
 
 The source-type-alias checkpoint passes all 1,649 hosted tests in 86 binaries
 (`20261017-043356389-4183342`), all-target checking
