@@ -6,6 +6,21 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 
 ## Completed foundations, not full compatibility
 
+- [x] A flat pair of mutable slices can retain two independently borrowed
+      input origins through a function result. The bounded affine proof requires
+      two distinct fixed input roots with exact result-field mappings and no
+      write effects. It does not infer a disjoint partition from one input.
+      Concrete and generic carrier-free element cases match stock CHECK/BUILD/run
+      at workers 1/8; overlapping inputs, duplicated handles, wrong lifetime
+      mappings and escaping results reject. The exact isolated source passes
+      all 18 slice-method tests, 1,814 library tests and 17 graph checks
+      (`20261023-113035449-1943515`, `20261023-113352768-1953841`,
+      `20261023-113713166-1943514`). Library/test clippy also passes
+      (`20261023-114158554-1981406`), with pre-existing warnings and unrelated
+      global formatting debt left intact. This does not implement `split_at_mut`,
+      mutable reference-containing element families or full Rust compatibility.
+      Additional shared element-family transport remains a separate open change.
+
 - [x] Node-local authority replay avoids rebuilding parameter-name bindings on
       nominal cache hits, repeating same-module ancestry lookups, and discarding
       call/proof scratch within a source body. Successful closure and associated

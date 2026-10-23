@@ -9,6 +9,56 @@ use oracle::{Case, Expect, check};
 use std::process::Command;
 
 #[test]
+fn independent_mutable_slice_tuple_matches_stock() {
+    #[path = "support/closure_oracle.rs"]
+    mod closure_oracle;
+    closure_oracle::check(
+        "independent-mutable-slice-tuple",
+        &[
+            closure_oracle::Case {
+                name: "separate_named_origins",
+                source: "fn pair<'a,'b>(a:&'a mut[i32],b:&'b mut[i32])->(&'a mut[i32],&'b mut[i32]){(a,b)} fn main(){let mut a=[1i32,2];let mut b=[3i32,4];let (x,y)=pair(&mut a,&mut b);x[0]=10;y[1]=40;println!(\"{} {}\",x[0],y[1]);println!(\"{} {}\",a[0],b[1]);}",
+                expect: closure_oracle::Expect::Run("10 40\n10 40\n"),
+            },
+            closure_oracle::Case {
+                name: "overlapping_actuals",
+                source: "fn pair<'a,'b>(a:&'a mut[i32],b:&'b mut[i32])->(&'a mut[i32],&'b mut[i32]){(a,b)} fn main(){let mut a=[1i32];let(x,y)=pair(&mut a,&mut a);x[0]=2;y[0]=3;}",
+                expect: closure_oracle::Expect::Invalid("E0499"),
+            },
+            closure_oracle::Case {
+                name: "duplicate_handle",
+                source: "fn pair<'a,'b>(a:&'a mut[i32],b:&'b mut[i32])->(&'a mut[i32],&'b mut[i32]){(a,b)} fn main(){let mut a=[1i32];let s:&mut[i32]=&mut a;let(x,y)=pair(s,s);x[0]=2;y[0]=3;}",
+                expect: closure_oracle::Expect::Invalid("E0499"),
+            },
+            closure_oracle::Case {
+                name: "wrong_result_source",
+                source: "fn pair<'a,'b>(a:&'a mut[i32],b:&'b mut[i32])->(&'a mut[i32],&'b mut[i32]){(b,a)} fn main(){}",
+                expect: closure_oracle::Expect::Invalid("lifetime may not live long enough"),
+            },
+            closure_oracle::Case {
+                name: "output_outlives_owner",
+                source: "fn pair<'a,'b>(a:&'a mut[i32],b:&'b mut[i32])->(&'a mut[i32],&'b mut[i32]){(a,b)} fn main(){let mut a=[1i32];let escaped;{let mut b=[2i32];let(x,y)=pair(&mut a,&mut b);x[0]=3;escaped=y;}escaped[0]=4;}",
+                expect: closure_oracle::Expect::Invalid("E0597"),
+            },
+        ],
+    );
+}
+
+#[test]
+fn generic_independent_mutable_slice_tuple_matches_stock() {
+    #[path = "support/closure_oracle.rs"]
+    mod closure_oracle;
+    closure_oracle::check(
+        "generic-independent-mutable-slice-tuple",
+        &[closure_oracle::Case {
+            name: "generic_empty_and_reverse_mapping",
+            source: "fn pair<'a,'b,T>(a:&'a mut[T],b:&'b mut[T])->(&'b mut[T],&'a mut[T]){(b,a)} fn main(){let mut a:[u64;0]=[];let mut b=[3u64];let (x,y)=pair(&mut a,&mut b);x[0]=9;println!(\"{} {}\",x[0],y.len());}",
+            expect: closure_oracle::Expect::Run("9 0\n"),
+        }],
+    );
+}
+
+#[test]
 fn slice_data_pointer_primitive_matches_stock() {
     use std::os::unix::fs::PermissionsExt;
     let source = r#"

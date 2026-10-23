@@ -2,6 +2,90 @@
 use super::*;
 use crate::compiler::frontend;
 
+#[test]
+fn independent_mutable_slice_tuple_retains_source_origins() {
+    use crate::compiler::{cfg, ownership};
+    let program = frontend::parse("fn pair<'a,'b>(a:&'a mut[i32],b:&'b mut[i32])->(&'a mut[i32],&'b mut[i32]){(a,b)}fn main(){}").unwrap();
+    let budget = PlanBudget::default();
+    let plan = frontend::PlanCtx::from_program(&program, &budget).unwrap();
+    let declaration = plan.function_decl(0).unwrap();
+    let frontend::PublishedCallableBody::Source(publication) =
+        plan.publish_callable_body(declaration, &budget).unwrap()
+    else {
+        panic!("source body")
+    };
+    let lowered = cfg::lower_source_closed(&publication, publication.facts().budget()).unwrap();
+    let closed = cfg::close(
+        Arc::new(lowered),
+        publication.facts().clone(),
+        publication.facts().budget(),
+    )
+    .unwrap();
+    ownership::analyze_closed(closed).unwrap();
+    let function = publication.source();
+    let index = function
+        .exprs
+        .iter()
+        .position(|e| matches!(e.kind, ExprKind::Tuple(_)))
+        .unwrap();
+    for mode in 0..2 {
+        let mut forged = function.as_ref().clone();
+        let ExprKind::Tuple(fields) = &mut forged.exprs[index].kind else {
+            unreachable!()
+        };
+        if mode == 0 {
+            fields[1] = fields[0];
+        } else {
+            fields.swap(0, 1);
+        }
+        assert!(
+            publication
+                .validate_source(
+                    &Arc::new(forged),
+                    publication.facts(),
+                    publication.facts().budget()
+                )
+                .is_err(),
+            "forged tuple source {mode}"
+        );
+    }
+    for (body, valid) in [
+        (
+            "let mut a=[1i32];let mut b=[2i32];let(x,y)=pair(&mut a,&mut b);x[0]=3;y[0]=4;",
+            true,
+        ),
+        (
+            "let mut a=[1i32];let(x,y)=pair(&mut a,&mut a);x[0]=3;y[0]=4;",
+            false,
+        ),
+        (
+            "let mut a=[1i32];let s:&mut[i32]=&mut a;let(x,y)=pair(s,s);x[0]=3;y[0]=4;",
+            false,
+        ),
+    ] {
+        let source = format!(
+            "fn pair<'a,'b>(a:&'a mut[i32],b:&'b mut[i32])->(&'a mut[i32],&'b mut[i32]){{(a,b)}}fn main(){{{body}}}"
+        );
+        let program = frontend::parse(&source).unwrap();
+        let budget = PlanBudget::default();
+        let plan = frontend::PlanCtx::from_program(&program, &budget).unwrap();
+        let frontend::PublishedCallableBody::Source(publication) = plan
+            .publish_callable_body(plan.function_decl(1).unwrap(), &budget)
+            .unwrap()
+        else {
+            panic!("source body")
+        };
+        let lowered = cfg::lower_source_closed(&publication, publication.facts().budget()).unwrap();
+        let closed = cfg::close(
+            Arc::new(lowered),
+            publication.facts().clone(),
+            publication.facts().budget(),
+        )
+        .unwrap();
+        assert_eq!(ownership::analyze_closed(closed).is_ok(), valid, "{body}");
+    }
+}
+
 fn shared(referent: Ty) -> Ty {
     Ty::Ref {
         kind: BorrowKind::Shared,

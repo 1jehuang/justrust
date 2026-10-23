@@ -3929,9 +3929,49 @@ impl CarrierBuilder<'_, '_> {
                 }
             }
         }
+        // A flat pair is not a partition of one loan. Each component must
+        // retain its own, distinct declaration input. Ordinary call/body loan
+        // checks still reject overlapping actuals and invalid returned origins.
+        let mut independent_pair = affine_results == 2
+            && result_channels == 2
+            && write_channels == 0
+            && matches!(result, Ty::Tuple(fields) if fields.len() == 2
+                && fields.iter().all(|field| field.mut_slice_element().is_some()));
+        for contract in [view.original_contract(), view.contract()] {
+            self.budget.spend(1)?;
+            if !independent_pair || contract.results.len() != 2 {
+                independent_pair = false;
+                break;
+            }
+            let mut previous = None;
+            for (index, row) in contract.results.iter().enumerate() {
+                self.budget.spend(1)?;
+                let [source] = row.sources.as_ref() else {
+                    independent_pair = false;
+                    break;
+                };
+                if row.location.path.0.as_ref() != [ir::CarrierStep::Field(index)]
+                    || row.location.channel
+                        != CarrierChannel::Fixed(ir::ReferencePosition { depth: 0 })
+                    || !source.location.path.0.is_empty()
+                    || source.location.channel
+                        != CarrierChannel::Fixed(ir::ReferencePosition { depth: 0 })
+                    || params
+                        .get(source.param)
+                        .and_then(Ty::mut_slice_element)
+                        .is_none()
+                    || previous == Some(source.param)
+                {
+                    independent_pair = false;
+                    break;
+                }
+                previous = Some(source.param);
+            }
+        }
         Ok((affine_results == 0 && affine_writes == 0)
             || (affine_results <= 1 && write_channels == 0)
-            || (affine_writes <= 1 && result_channels == 0))
+            || (affine_writes <= 1 && result_channels == 0)
+            || independent_pair)
     }
     fn audit_call_admission(&mut self) -> Result<(), Exhausted> {
         for index in 0..self.f.blocks.len() {

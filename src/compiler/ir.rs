@@ -6082,8 +6082,17 @@ fn slice_boundary_walk(
                     continue;
                 }
                 if allow_references && let Some((kind, element)) = node.slice_ref_element() {
-                    if kind != BorrowKind::Shared {
+                    let direct_mutable_pair = matches!(ty, Ty::Tuple(fields)
+                        if fields.len() == 2
+                            && fields.iter().all(|field| field.mut_slice_element().is_some()))
+                        && at == depth.checked_add(1).ok_or("slice type depth overflow")?;
+                    if kind != BorrowKind::Shared && !direct_mutable_pair {
                         return Err("unsupported: nested mutable slice carriers".into());
+                    }
+                    if kind == BorrowKind::Mut && matches!(element, Ty::Ref { .. }) {
+                        return Err(
+                            "unsupported: mutable slice elements containing references".into()
+                        );
                     }
                     let (element, layers) = match element {
                         Ty::Ref {
@@ -10998,6 +11007,44 @@ mod conditional_validation_tests {
                 element: Arc::new(Ty::Int(IntTy::I32)),
             }),
         };
+        let pair = Ty::Tuple(Arc::from([mutable.clone(), mutable.clone()]));
+        assert_eq!(
+            slice_boundary_walk(&pair, true, false, Some(&PlanBudget::default()), 0, &mut 0)
+                .unwrap(),
+            3
+        );
+        let referenced_element = Ty::Ref {
+            kind: BorrowKind::Mut,
+            referent: Arc::new(Ty::Slice {
+                element: Arc::new(shared.clone()),
+            }),
+        };
+        for excluded in [
+            Ty::Tuple(Arc::from([referenced_element.clone(), referenced_element])),
+            Ty::Tuple(Arc::from([pair.clone()])),
+            Ty::Array {
+                element: Arc::new(pair),
+                len: 2,
+            },
+            Ty::Tuple(Arc::from([mutable.clone(), shared.clone()])),
+            Ty::Tuple(Arc::from([
+                mutable.clone(),
+                mutable.clone(),
+                mutable.clone(),
+            ])),
+        ] {
+            assert!(
+                slice_boundary_walk(
+                    &excluded,
+                    true,
+                    false,
+                    Some(&PlanBudget::default()),
+                    0,
+                    &mut 0
+                )
+                .is_err()
+            );
+        }
         assert!(
             slice_boundary_walk(
                 &Ty::Tuple(Arc::from([mutable])),
