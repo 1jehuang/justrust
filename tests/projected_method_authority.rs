@@ -764,16 +764,30 @@ fn owning_impl_projection_does_not_authorize_a_different_item_on_the_same_trait(
 }
 
 #[test]
-fn rigid_caller_projected_defaults_and_reference_forms_remain_explicit_boundaries() {
+fn rigid_callers_and_projected_defaults_match_stock() {
+    #[path = "support/iterator_oracle.rs"]
+    mod oracle;
     for source in [
         r#"struct S;trait Get:Sized{type Out;fn get(self)->Self::Out;}impl Get for S{type Out=i32;fn get(self)->Self::Out{7i32}}fn forward<T:Get>(value:T)-><T as Get>::Out{<T as Get>::get(value)}fn main(){let value=forward::<S>(S);}"#,
         r#"trait Get:Sized{type Out;fn relay(self,value:Self::Out)->Self::Out{value}}fn main(){}"#,
+        r#"struct S;trait Get:Sized{type Out;fn get(self)->Self::Out;}impl Get for S{type Out=i32;fn get(self)->Self::Out{7i32}}fn forward<T:Get>(value:T)-><T as Get>::Out{<T as Get>::get(value)}fn main(){println!("{}",forward::<S>(S));}"#,
+        r#"trait Get:Sized{type Out;fn relay(self,value:Self::Out)->Self::Out{value}}struct S;impl Get for S{type Out=i32;}fn main(){println!("{}",S.relay(9i32));}"#,
+    ] {
+        oracle::stock_native(source);
+    }
+}
+
+#[test]
+fn projected_static_reference_and_lifetime_forms_remain_explicit_boundaries() {
+    for source in [
         r#"struct S;trait Get:Sized{type Out;fn get(self)->Self::Out;}impl Get for S{type Out=&'static i32;fn get(self)->Self::Out{&7i32}}fn main(){}"#,
         r#"trait Get:Sized{type Out;fn relay<'a>(self,value:&'a Self::Out)->&'a Self::Out;}fn main(){}"#,
     ] {
         let error = frontend::parse(source)
             .and_then(|program| frontend::check(&program))
-            .expect_err("separate projected-method boundary was accidentally admitted");
+            .expect_err(&format!(
+                "separate projected-method boundary was accidentally admitted: {source}"
+            ));
         assert!(
             error.to_ascii_lowercase().contains("unsupported"),
             "{error}"

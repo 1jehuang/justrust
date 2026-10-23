@@ -164,6 +164,17 @@ impl ValidatedTraitWorld {
     /// After normalizing a projected declaration (`&Self::Target`), derive the
     /// return origins the raw schema deliberately left unresolved.
     fn complete_projected_contract(&self, signature: &mut Signature) -> Result<()> {
+        if !charged(
+            &self.budget,
+            ir::contains_associated_types(&signature.result, &self.budget),
+        )? && charged(&self.budget, ir::root_reference_layers(&signature.result))?
+            > signature.ref_contract.results.len()
+        {
+            return Err(FactsError::unsupported(
+                &self.budget,
+                "unsupported: projected result introduces reference layers without source lifetime authority",
+            ));
+        }
         if !signature
             .ref_contract
             .results
