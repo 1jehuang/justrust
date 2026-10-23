@@ -6,6 +6,26 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 
 ## Completed foundations, not full compatibility
 
+- [x] Nested owned opaque callable composition supports concrete and generic
+      argument/result types and deeper composed owners. Closure-bearing opaque
+      keys replay canonical graph templates. Physical closure descriptors are
+      authenticated once per consumer against their source seals and all
+      ordered actuals, then reused through an immutable local mapping. Physical
+      validation similarly retains one independently replayed immutable CFG,
+      while checking every candidate and call against its exact authority.
+      Stock CHECK/BUILD/run at workers 1/8 passes all three composition cases
+      (`20261023-064617783-963157`); unused wrong Output and insufficient public
+      bounds reject. Copied-seal descriptor, foreign provider and changed
+      physical CFG/ABI controls remain rejection gates. No graph kinds,
+      resource ceilings or source-type equality rules were relaxed. The exact
+      snapshot library and fourteen integration targets pass 1,874 tests with
+      zero failures and two ignored (`20261023-064739519-969367`); library/test
+      clippy passes with existing warnings (`20261023-065119948-980785`). The
+      supplementary corpus, slice and borrow/trait authority suite passes 42
+      tests with one ignored (`20261023-065145657-982178`). Borrowed
+      opaque callable forwarding and general hidden nominal/reference carriers
+      remain incomplete; the unchanged full corpus is still 11/20.
+
 - [x] Owned closure-backed opaque values can cross generic `Fn` call
       boundaries without exposing their hidden type to source CHECK. Public
       callable argument and Output equalities drive local inference, while
@@ -14,8 +34,8 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
       and replay physical ABI/carrier normalization from graph-read facts.
       Scalar captured closures, generic argument/result inference, unused
       wrong Output and insufficient public `FnMut` bounds are covered at
-      workers 1/8. Nested opaque composition still stops at closure-bearing
-      opaque graph keys, and borrowed callable forwarding remains incomplete.
+      workers 1/8. Nested owned composition is covered by the follow-up above;
+      borrowed callable forwarding remains incomplete.
       The exact-snapshot library, graph, authority, inference, iterator, slice
       and corpus suite passes 1,926 tests with zero failures and three ignored
       (`20261023-062249866-883524`). All-target clippy passes with baseline

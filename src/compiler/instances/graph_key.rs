@@ -292,13 +292,24 @@ pub(in crate::compiler) fn decode_opaque(
     context: &frontend::PlanCtx,
     budget: &ir::PlanBudget,
 ) -> Result<Arc<ir::OpaqueTy>, String> {
+    decode_opaque_with_closures(words, context, budget, &|_, _| {
+        Err("unsupported: canonical closure graph key requires parent metadata replay".into())
+    })
+}
+
+pub(in crate::compiler) fn decode_opaque_with_closures(
+    words: &[u64],
+    context: &frontend::PlanCtx,
+    budget: &ir::PlanBudget,
+    closures: &ClosureReplay<'_>,
+) -> Result<Arc<ir::OpaqueTy>, String> {
     budget.charge_work(words.len())?;
     let mut reader = Reader {
         words,
         at: 0,
         context,
         budget,
-        closures: &|_, _| Err("unsupported: closure in opaque graph key".into()),
+        closures,
     };
     if reader.word()? != VERSION {
         return Err("unsupported opaque graph key version".into());
@@ -636,6 +647,109 @@ mod tests {
         opaque[4] = 16;
         assert!(decode(&opaque, &context, &budget).is_err());
     }
+    #[test]
+    fn opaque_closure_actuals_replay_canonical_templates_and_reject_forgery() {
+        let program = frontend::parse(
+            "trait Marker{} impl<T> Marker for T{} fn owner<T>(x:T){let f=move||{let _y=x;};} fn take<T>(x:T)->impl Marker{x} fn main(){}",
+        )
+        .unwrap();
+        let budget = ir::PlanBudget::default();
+        let context = frontend::PlanCtx::from_program(&program, &budget).unwrap();
+        let (provider, owner) = (0..context.callable_count())
+            .find_map(|index| {
+                let provider = context.callable_decl(index).ok()?;
+                context
+                    .stored_closure_owner(provider)
+                    .ok()
+                    .flatten()
+                    .map(|(owner, _)| (provider, owner))
+            })
+            .unwrap();
+        let constants = context.prepare_body_constants(owner, &budget).unwrap();
+        let constants = context
+            .seal_body_constants(constants, Vec::new(), &budget)
+            .unwrap();
+        let (_, closures) = context
+            .publish_callable_body_with_closures(owner, constants, &budget)
+            .unwrap();
+        let template = closures
+            .iter()
+            .find(|closure| closure.ty.provider() == provider)
+            .unwrap()
+            .ty
+            .clone();
+        let mut templates = ClosureTemplates::new();
+        templates.insert(provider, template.clone());
+        let missing = std::cell::RefCell::new(Vec::new());
+        let replay = |provider, args: &[ir::Ty]| {
+            replay_closure(&context, &templates, &missing, &budget, provider, args)
+        };
+        let inner = replay(provider, &[ir::Ty::Bool]).unwrap();
+        let outer = replay(provider, &[inner]).unwrap();
+        let take = (0..context.callable_count())
+            .map(|i| context.callable_decl(i).unwrap())
+            .find(|id| {
+                matches!(
+                    context.persistent_decl_path(*id).unwrap().item(),
+                    frontend::PersistentDeclItem::Name("take")
+                )
+            })
+            .unwrap();
+        let ir::Ty::Opaque(schema) = context.signature(take).unwrap().signature.result else {
+            panic!("fixture must declare an opaque return");
+        };
+        let opaque = Arc::new(ir::OpaqueTy::new(
+            take,
+            Arc::from([outer]),
+            schema.site(),
+            Arc::from(schema.bounds()),
+            Arc::from(schema.captured_regions()),
+        ));
+        let words = encode_opaque(&opaque, &budget).unwrap();
+        assert!(decode_opaque(&words, &context, &budget).is_err());
+        assert!(
+            decode_opaque_with_closures(&words, &context, &budget, &|p, a| {
+                replay_closure(&context, &ClosureTemplates::new(), &missing, &budget, p, a)
+            })
+            .is_err()
+        );
+        assert_eq!(missing.borrow().as_slice(), &[provider]);
+        assert_eq!(
+            decode_opaque_with_closures(&words, &context, &budget, &replay).unwrap(),
+            opaque
+        );
+        for end in 0..words.len() {
+            assert!(
+                decode_opaque_with_closures(&words[..end], &context, &budget, &replay).is_err()
+            );
+        }
+        let mut trailing = words.clone();
+        trailing.push(0);
+        assert!(decode_opaque_with_closures(&trailing, &context, &budget, &replay).is_err());
+        let mut foreign = words.clone();
+        foreign[1] = ir::SnapshotId::standalone().unwrap().graph_word();
+        assert!(decode_opaque_with_closures(&foreign, &context, &budget, &replay).is_err());
+        // A valid closure with different owner actuals cannot replace the key's
+        // requested closure, even though its provider and arity match.
+        assert!(
+            decode_opaque_with_closures(&words, &context, &budget, &|p, _| {
+                replay(p, &[ir::Ty::Unit])
+            })
+            .is_err()
+        );
+        let concrete = match replay(provider, &[ir::Ty::Bool]).unwrap() {
+            ir::Ty::Closure(value) => value,
+            _ => unreachable!(),
+        };
+        let forged = ClosureTemplates::from([(provider, concrete)]);
+        assert!(
+            decode_opaque_with_closures(&words, &context, &budget, &|p, a| {
+                replay_closure(&context, &forged, &missing, &budget, p, a)
+            })
+            .is_err()
+        );
+    }
+
     #[test]
     fn tags_boundaries_and_order_are_injective() {
         let budget = ir::PlanBudget::default();

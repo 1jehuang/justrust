@@ -1480,8 +1480,8 @@ impl Provider for CompilerProvider {
                 OPAQUE_REPRESENTATION => {
                     let types = facts.types().await?;
                     let opaque =
-                        instances::graph_key::decode_opaque(&key.params, &types, &this.0.budget)
-                            .map_err(Error::new)?;
+                        opaque_instances::decode(&facts, &key.params, &types, &this.0.budget)
+                            .await?;
                     let source = types.callable_index(opaque.owner()).map_err(Error::new)?;
                     let request = cx.request(function(TEMPLATE_BODY, source));
                     let template_handle = request.get(0);

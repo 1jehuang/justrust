@@ -133,14 +133,14 @@ impl PhysicalCfgDraft {
         closed: &traits::ValidatedFacts,
         budget: &ir::PlanBudget,
     ) -> Result<(), String> {
-        let validation = PhysicalValidation {
-            proof: &self.proof,
+        let validation = PhysicalValidation::new(
+            &self.proof,
             publication,
             original,
             representations,
             context,
             budget,
-        };
+        )?;
         validation.validate_mapping(&self.function, closed)?;
         self.function
             .seal_physical_shape(closed, self.proof.clone(), budget)?;
@@ -153,15 +153,15 @@ impl PhysicalCfgDraft {
         representations: &'a opaque_instances::Representations,
         context: &'a frontend::PlanCtx,
         budget: &'a ir::PlanBudget,
-    ) -> PhysicalValidation<'a> {
-        PhysicalValidation {
-            proof: &self.proof,
+    ) -> Result<PhysicalValidation<'a>, String> {
+        PhysicalValidation::new(
+            &self.proof,
             publication,
             original,
             representations,
             context,
             budget,
-        }
+        )
     }
 }
 
@@ -170,12 +170,46 @@ impl PhysicalCfgDraft {
 pub(super) struct PhysicalValidation<'a> {
     proof: &'a PhysicalNormalizationProof,
     publication: &'a Arc<source_replay::CanonicalSourcePublication>,
+    expected: PhysicalCfgDraft,
     original: &'a cfg::Function,
     representations: &'a opaque_instances::Representations,
     context: &'a frontend::PlanCtx,
     budget: &'a ir::PlanBudget,
 }
-impl PhysicalValidation<'_> {
+impl<'a> PhysicalValidation<'a> {
+    fn new(
+        proof: &'a PhysicalNormalizationProof,
+        publication: &'a Arc<source_replay::CanonicalSourcePublication>,
+        original: &'a cfg::Function,
+        representations: &'a opaque_instances::Representations,
+        context: &'a frontend::PlanCtx,
+        budget: &'a ir::PlanBudget,
+    ) -> Result<Self, String> {
+        // Replay once from the immutable original inputs. Every later check
+        // compares its candidate with this independent, immutable result, not
+        // with a previously accepted candidate. This capability stays local to
+        // the consumer and is never stored in a graph fact.
+        let expected = normalize(
+            publication,
+            &proof.target,
+            original,
+            representations,
+            &proof.calls,
+            context,
+            budget,
+        )
+        .map_err(|error| error.to_string())?;
+        Ok(Self {
+            proof,
+            publication,
+            expected,
+            original,
+            representations,
+            context,
+            budget,
+        })
+    }
+
     pub(super) fn validate_cfg(
         &self,
         candidate: &cfg::Function,
@@ -199,16 +233,7 @@ impl PhysicalValidation<'_> {
                 "physical CFG changed original publication, target or world authority".into(),
             );
         }
-        let expected = normalize(
-            self.publication,
-            &self.proof.target,
-            self.original,
-            self.representations,
-            &self.proof.calls,
-            self.context,
-            self.budget,
-        )
-        .map_err(|e| e.to_string())?;
+        let expected = &self.expected;
         if self.proof.local_types != expected.proof.local_types
             || self.proof.result != expected.proof.result
             || self.proof.packs.len() != expected.proof.packs.len()
@@ -422,9 +447,11 @@ pub(super) fn normalize(
                             ));
                         };
                         let actual_family = specialization.ty(&ir::Ty::Param(*parameter))?;
-                        require_empty_physical_capture(&actual_family, budget)?;
+                        let physical_family = representations.normalize(&actual_family, budget)?;
+                        require_empty_physical_capture(&physical_family, budget)?;
                     }
-                    if !ir::carrier_locations(record.hidden(), budget)
+                    let physical_hidden = representations.normalize(record.hidden(), budget)?;
+                    if !ir::carrier_locations(&physical_hidden, budget)
                         .map_err(Error::new)?
                         .is_empty()
                     {
@@ -440,7 +467,15 @@ pub(super) fn normalize(
                         )
                         .map_err(Error::new)?;
                     let actual = specialization.ty(&actual)?;
-                    if !ir::identical_type(&actual, record.hidden(), budget).map_err(Error::new)? {
+                    if !context
+                        .trait_world()
+                        .map_err(Error::new)?
+                        .types_equal(
+                            std::slice::from_ref(&actual),
+                            std::slice::from_ref(record.hidden()),
+                        )
+                        .map_err(|error| Error::new(error.into_legacy_diagnostic(budget)))?
+                    {
                         return Err(Error::new(
                             "physical pack operand differs from exact defining representation",
                         ));

@@ -192,13 +192,15 @@ pub(super) async fn produce(
             }
         }
     }
-    let validation = physical.validation(
-        publication,
-        original.function(),
-        &representations,
-        &types,
-        &provider.0.budget,
-    );
+    let validation = physical
+        .validation(
+            publication,
+            original.function(),
+            &representations,
+            &types,
+            &provider.0.budget,
+        )
+        .map_err(Error::new)?;
     scale_task_work_by_cfg(physical.function());
     let concrete =
         ownership::analyze_physical(Arc::new(physical.function().clone()), closed, &validation)

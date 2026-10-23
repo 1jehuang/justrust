@@ -8,6 +8,9 @@ pub(super) struct Specialization<'a> {
     context: frontend::PlanCtx,
     closed: Arc<traits::ValidatedFacts>,
     budget: &'a ir::PlanBudget,
+    // Reuse only within this authenticated publication/target substitution.
+    // This scratch never escapes the OBJECT operation or becomes a fact.
+    types: Vec<(ir::Ty, ir::Ty)>,
 }
 
 impl<'a> Specialization<'a> {
@@ -56,11 +59,17 @@ impl<'a> Specialization<'a> {
             context: context.clone(),
             closed,
             budget,
+            types: Vec::new(),
         })
     }
 
     pub(super) fn ty(&mut self, original: &ir::Ty) -> Result<ir::Ty, Error> {
-        ir::substitute_ty(
+        for (source, mapped) in &self.types {
+            if ir::identical_type(source, original, self.budget).map_err(Error::new)? {
+                return Ok(mapped.clone());
+            }
+        }
+        let mapped = ir::substitute_ty(
             original,
             self.publication.facts().env(),
             &self.target.type_args,
@@ -68,7 +77,21 @@ impl<'a> Specialization<'a> {
             &mut self.context,
             self.budget,
         )
-        .map_err(Error::new)
+        .map_err(Error::new)?;
+        self.budget
+            .retain_bytes(std::mem::size_of::<(ir::Ty, ir::Ty)>())
+            .map_err(Error::new)?;
+        self.types.try_reserve_exact(1).map_err(|_| {
+            source_fact_error(
+                traits::FactsError::resource(
+                    self.budget,
+                    "opaque substitution reuse allocation failed",
+                ),
+                self.budget,
+            )
+        })?;
+        self.types.push((original.clone(), mapped.clone()));
+        Ok(mapped)
     }
 
     /// Authenticate the original occurrence before substituting its exact

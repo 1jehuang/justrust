@@ -7,6 +7,49 @@ mod oracle;
 use oracle::{Case, Expect};
 
 #[test]
+fn nested_opaque_callable_composition_matches_stock() {
+    oracle::check(
+        "nested_opaque_composition",
+        &[
+            Case {
+                name: "compose_owned_closures",
+                source: r#"fn compose<F:Fn(i32)->i32,G:Fn(i32)->i32>(f:F,g:G)->impl Fn(i32)->i32{move|x|f(g(x))}fn add(n:i32)->impl Fn(i32)->i32{move|x|x+n}fn main(){let c=compose(add(2),add(3));println!("{}",c(7));}"#,
+                expect: Expect::Run("12\n"),
+            },
+            Case {
+                name: "generic_argument_output_composition",
+                source: r#"fn compose<A,B,C>(f:impl Fn(A)->B,g:impl Fn(B)->C)->impl Fn(A)->C{move|x|g(f(x))}fn add(n:i32)->impl Fn(i32)->i32{move|x|x+n}fn main(){let c=compose(|x:i32|x*2,add(1));println!("{}",c(3));}"#,
+                expect: Expect::Run("7\n"),
+            },
+            Case {
+                name: "nested_opaque_owners",
+                source: r#"fn compose<F:Fn(i32)->i32,G:Fn(i32)->i32>(f:F,g:G)->impl Fn(i32)->i32{move|x|f(g(x))}fn add(n:i32)->impl Fn(i32)->i32{move|x|x+n}fn main(){let c=compose(compose(add(1),add(2)),add(3));println!("{}",c(7));}"#,
+                expect: Expect::Run("13\n"),
+            },
+        ],
+    );
+}
+
+#[test]
+fn nested_opaque_public_contracts_reject_invalid_unused_calls() {
+    oracle::check(
+        "nested_opaque_invalid",
+        &[
+            Case {
+                name: "nested_wrong_output",
+                source: r#"fn compose<F:Fn(i32)->i32,G:Fn(i32)->i32>(f:F,g:G)->impl Fn(i32)->i32{move|x|f(g(x))}fn add(n:i32)->impl Fn(i32)->i32{move|x|x+n}fn accept<F:Fn(i32)->bool>(f:F)->bool{f(0)}fn unused(){accept(compose(add(1),add(2)));}fn main(){}"#,
+                expect: Expect::Invalid("E0271"),
+            },
+            Case {
+                name: "nested_hidden_fn_is_not_public",
+                source: r#"fn compose<F:Fn(i32)->i32,G:Fn(i32)->i32>(f:F,g:G)->impl Fn(i32)->i32{move|x|f(g(x))}fn add(n:i32)->impl FnMut(i32)->i32{move|x|x+n}fn unused(){let _c=compose(add(1),add(2));}fn main(){}"#,
+                expect: Expect::Invalid("E0277"),
+            },
+        ],
+    );
+}
+
+#[test]
 fn opaque_callable_bounds_drive_generic_calls() {
     oracle::check(
         "opaque_callable_generic_calls",

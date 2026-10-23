@@ -76,7 +76,15 @@ impl OpaqueCallAuthorization {
             ));
         }
         let hidden = representations.normalize(&specialized.trait_ref.self_ty, budget)?;
-        if !ir::identical_type(&hidden, &self.hidden, budget).map_err(Error::new)? {
+        if !context
+            .trait_world()
+            .map_err(Error::new)?
+            .types_equal(
+                std::slice::from_ref(&hidden),
+                std::slice::from_ref(&self.hidden),
+            )
+            .map_err(|error| Error::new(error.into_legacy_diagnostic(budget)))?
+        {
             return Err(Error::new(
                 "opaque dispatch hidden representation was replaced",
             ));

@@ -274,13 +274,15 @@ fn opaque_bound_dispatch_reads_exact_representation_before_physical_body() {
                         &provider.0.budget,
                     )
                     .map_err(Error::new)?;
-                let validation = physical.validation(
-                    publication,
-                    lowered.function(),
-                    &representations,
-                    &types,
-                    &provider.0.budget,
-                );
+                let validation = physical
+                    .validation(
+                        publication,
+                        lowered.function(),
+                        &representations,
+                        &types,
+                        &provider.0.budget,
+                    )
+                    .map_err(Error::new)?;
                 physical
                     .function()
                     .validate_physical(&closed, &validation)
@@ -301,11 +303,7 @@ fn opaque_bound_dispatch_reads_exact_representation_before_physical_body() {
                     &types,
                     &provider.0.budget,
                 );
-                assert!(
-                    foreign_publication
-                        .validate_cfg(physical.function(), &closed)
-                        .is_err()
-                );
+                assert!(foreign_publication.is_err());
                 assert!(
                     authorization
                         .replay(
@@ -515,13 +513,15 @@ fn opaque_bound_dispatch_reads_exact_representation_before_physical_body() {
                         &provider.0.budget,
                     )
                     .map_err(Error::new)?;
-                let defining_validation = defining_physical.validation(
-                    defining_publication,
-                    defining_lowered.function(),
-                    &representations,
-                    &types,
-                    &provider.0.budget,
-                );
+                let defining_validation = defining_physical
+                    .validation(
+                        defining_publication,
+                        defining_lowered.function(),
+                        &representations,
+                        &types,
+                        &provider.0.budget,
+                    )
+                    .map_err(Error::new)?;
                 defining_physical
                     .function()
                     .validate_physical(&defining_closed, &defining_validation)
