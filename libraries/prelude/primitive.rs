@@ -1,8 +1,10 @@
 // Inherent methods of the primitive types that are not compiler intrinsics,
 // as ordinary Rust source. They are trait methods (traits injected by the
 // prelude) because primitive inherent impls are reserved to the compiler.
+use super::iter::Iterator;
 use super::option::Option;
 use super::result::Result;
+use super::string::StrChars;
 
 // ---- char ----
 
@@ -765,6 +767,82 @@ impl IntMethods for usize {
 pub trait FromStr: Sized {
     type Err;
     fn from_str(s: &str) -> Result<Self, Self::Err>;
+}
+
+#[derive(Copy, Clone, PartialEq, Eq)]
+pub struct ParseBoolError {
+    private: (),
+}
+
+impl super::fmt::Debug for ParseBoolError {
+    fn fmt(&self, f: &mut super::fmt::Formatter) -> super::fmt::Result {
+        f.pad("ParseBoolError")
+    }
+}
+
+impl super::fmt::Display for ParseBoolError {
+    fn fmt(&self, f: &mut super::fmt::Formatter) -> super::fmt::Result {
+        f.pad("provided string was not `true` or `false`")
+    }
+}
+
+impl FromStr for bool {
+    type Err = ParseBoolError;
+    fn from_str(s: &str) -> Result<bool, ParseBoolError> {
+        let (p, n) = super::string::str_parts(s);
+        if n == 4usize
+            && super::string::read_u8(p) == b't'
+            && super::string::read_u8(p + 1usize) == b'r'
+            && super::string::read_u8(p + 2usize) == b'u'
+            && super::string::read_u8(p + 3usize) == b'e'
+        {
+            Result::Ok(true)
+        } else if n == 5usize
+            && super::string::read_u8(p) == b'f'
+            && super::string::read_u8(p + 1usize) == b'a'
+            && super::string::read_u8(p + 2usize) == b'l'
+            && super::string::read_u8(p + 3usize) == b's'
+            && super::string::read_u8(p + 4usize) == b'e'
+        {
+            Result::Ok(false)
+        } else {
+            Result::Err(ParseBoolError { private: () })
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CharErrorKind {
+    EmptyString,
+    TooManyChars,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParseCharError {
+    kind: CharErrorKind,
+}
+
+impl super::fmt::Display for ParseCharError {
+    fn fmt(&self, f: &mut super::fmt::Formatter) -> super::fmt::Result {
+        f.pad(match self.kind {
+            CharErrorKind::EmptyString => "cannot parse char from empty string",
+            CharErrorKind::TooManyChars => "too many characters in string",
+        })
+    }
+}
+
+impl FromStr for char {
+    type Err = ParseCharError;
+    fn from_str(s: &str) -> Result<char, ParseCharError> {
+        let mut chars = s.chars();
+        match chars.next() {
+            Option::None => Result::Err(ParseCharError { kind: CharErrorKind::EmptyString }),
+            Option::Some(value) => match chars.next() {
+                Option::None => Result::Ok(value),
+                Option::Some(_) => Result::Err(ParseCharError { kind: CharErrorKind::TooManyChars }),
+            },
+        }
+    }
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]

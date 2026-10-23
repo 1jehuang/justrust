@@ -17,6 +17,7 @@ pub mod core_surface {
     pub use super::convert;
     pub use super::str;
     pub use super::num;
+    pub use super::char;
     pub mod hash {
         pub use super::super::hash::{Hash, Hasher};
     }
@@ -49,7 +50,10 @@ mod unicode_uppercase;
 pub mod fmt;
 pub mod primitive;
 pub mod str {
-    pub use super::primitive::FromStr;
+    pub use super::primitive::{FromStr, ParseBoolError};
+}
+pub mod char {
+    pub use super::primitive::ParseCharError;
 }
 pub mod num {
     pub use super::primitive::{IntErrorKind, ParseIntError};

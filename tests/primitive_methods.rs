@@ -18,6 +18,78 @@ fn parse_oracle(tag: &str, cases: &[closure_oracle::Case]) {
 }
 
 #[test]
+fn bool_and_char_from_str_match_stock() {
+    use closure_oracle::{Case, Expect};
+    parse_oracle(
+        "parse-bool-char",
+        &[
+            Case {
+                name: "boolean_exact_spelling_and_errors",
+                source: r#"use std::str::{FromStr, ParseBoolError};
+fn parse<T: FromStr>(s: &str) -> Result<T, T::Err> { s.parse() }
+fn main() {
+    assert_eq!(bool::from_str("true").unwrap(), true);
+    assert_eq!("false".parse::<bool>().unwrap(), false);
+    let value: bool = parse::<bool>("true").unwrap();
+    assert!(value);
+    assert_eq!(String::from("false").parse::<bool>().unwrap(), false);
+    for text in ["", "True", "FALSE", " true", "false ", "1", "0", "truefalse"] {
+        let error: ParseBoolError = text.parse::<bool>().unwrap_err();
+        assert_eq!(error, error.clone());
+        println!("{} {:?}", error, error);
+    }
+}"#,
+                expect: Expect::Run(concat!(
+                    "provided string was not `true` or `false` ParseBoolError\n",
+                    "provided string was not `true` or `false` ParseBoolError\n",
+                    "provided string was not `true` or `false` ParseBoolError\n",
+                    "provided string was not `true` or `false` ParseBoolError\n",
+                    "provided string was not `true` or `false` ParseBoolError\n",
+                    "provided string was not `true` or `false` ParseBoolError\n",
+                    "provided string was not `true` or `false` ParseBoolError\n",
+                    "provided string was not `true` or `false` ParseBoolError\n",
+                )),
+            },
+            Case {
+                name: "unicode_scalar_not_byte_or_grapheme",
+                source: r#"use core::str::FromStr;
+use core::char::ParseCharError;
+fn parse<T: FromStr>(s: &str) -> Result<T, T::Err> { s.parse() }
+fn main() {
+    assert_eq!(char::from_str("a").unwrap(), 'a');
+    assert_eq!("é".parse::<char>().unwrap(), 'é');
+    assert_eq!("🙂".parse::<char>().unwrap(), '🙂');
+    let scalar: char = parse::<char>("中").unwrap();
+    assert_eq!(scalar, '中');
+    assert_eq!(" ".parse::<char>().unwrap(), ' ');
+    assert_eq!("\0".parse::<char>().unwrap(), '\0');
+    assert_eq!(String::from("é").parse::<char>().unwrap(), 'é');
+    let empty: ParseCharError = "".parse::<char>().unwrap_err();
+    assert_eq!(empty, empty.clone());
+    println!("{} {:?}", empty, empty);
+    for text in ["ab", "éa", "🙂🙂", "é"] {
+        let error = text.parse::<char>().unwrap_err();
+        println!("{} {:?}", error, error);
+    }
+}"#,
+                expect: Expect::Run(concat!(
+                    "cannot parse char from empty string ParseCharError { kind: EmptyString }\n",
+                    "too many characters in string ParseCharError { kind: TooManyChars }\n",
+                    "too many characters in string ParseCharError { kind: TooManyChars }\n",
+                    "too many characters in string ParseCharError { kind: TooManyChars }\n",
+                    "too many characters in string ParseCharError { kind: TooManyChars }\n",
+                )),
+            },
+            Case {
+                name: "unused_incompatible_boolean_result",
+                source: "fn bad()->Result<bool,core::char::ParseCharError>{\"true\".parse::<bool>()}fn main(){}",
+                expect: Expect::Invalid("E0308"),
+            },
+        ],
+    );
+}
+
+#[test]
 fn integer_from_str_explicit_dispatch() {
     parse_oracle(
         "parse-explicit",

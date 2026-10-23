@@ -35,6 +35,16 @@ BUILD and execution at workers 1/8, including every integer boundary, signs,
 invalid syntax, custom implementations, drop order and unused invalid bodies.
 Floating-point parsing and full standard-library compatibility remain open.
 
+Source-backed `FromStr` also covers `bool` and `char`, with public
+`str::ParseBoolError` and `char::ParseCharError` exports through std and core.
+Booleans accept only exact lowercase `true` and `false`. Character parsing
+accepts exactly one Unicode scalar, not one byte or one grapheme cluster.
+`justrust test --test primitive_methods bool_and_char_from_str_match_stock`
+checks direct and generic dispatch, owned strings, error Display/Debug,
+Unicode and invalid result types against stock at workers 1/8.
+Contextual inference through a generic free call followed by `unwrap` and
+some string-reference equality lowering remain separate open compiler gaps.
+
 Supported methods:
 
 - Integers: signed abs/signum/is_positive/is_negative, pow with u32 exponent,

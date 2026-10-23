@@ -795,6 +795,10 @@ missing-file changes invalidate only justified consumers without stale lookup.
       CHECK/BUILD/run at workers 1/8: `justrust test --test primitive_methods`.
       Float parsing and the rest of the standard parsing surface remain open
       (PRIMITIVE-METHODS.md).
+- [x] Source-backed boolean and Unicode-scalar `FromStr`, public bool/char error
+      types and exact error formatting. Stock CHECK/BUILD/run at workers 1/8:
+      `justrust test --test primitive_methods bool_and_char_from_str_match_stock`.
+      Floating parsing and contextual generic-free-call receiver inference remain open.
 - [x] Width-correct primitive integer `.leading_zeros()` and unchanged original
       core exponent-estimator module acceptance under LEADING-ZEROS.md. This is
       not the original numeric method provider, a core crate artifact or CTFE.
