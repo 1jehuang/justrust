@@ -213,13 +213,26 @@ impl Inference<'_, '_> {
         constraints: Vec<(&ir::Ty, InferTerm)>,
         fallback: bool,
     ) -> Result<bool, String> {
+        let mut terms = Vec::new();
+        self.checker.infer_storage(constraints.len())?;
+        for (formal, actual) in constraints {
+            terms.push((self.schema(formal, 0)?, actual));
+        }
+        self.constrain_projected_terms(terms, fallback)
+    }
+
+    pub(super) fn constrain_projected_terms(
+        &mut self,
+        constraints: Vec<(InferTerm, InferTerm)>,
+        fallback: bool,
+    ) -> Result<bool, String> {
         let mut pending = constraints;
         let mut defaults = false;
         while !pending.is_empty() {
             let count = pending.len();
             let mut deferred = Vec::new();
             for (formal, actual) in pending {
-                if let Some(formal) = self.projected_schema(formal, 0, defaults)? {
+                if let Some(formal) = self.normalize_schema_projections(&formal, 0, defaults)? {
                     self.constrain(&formal, &actual, 0)?;
                 } else {
                     deferred.push((formal, actual));

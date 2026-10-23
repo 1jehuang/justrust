@@ -5,6 +5,58 @@
 mod closure_oracle;
 
 #[test]
+fn iterator_zip_matches_stock() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "zip",
+        &[
+            Case {
+                name: "conversion_at_construction",
+                source: r#"struct Bag; impl IntoIterator for Bag {type Item=i32;type IntoIter=std::ops::Range<i32>;fn into_iter(self)->Self::IntoIter{println!("converted");1i32..3i32}} fn main(){let z=(5i32..8i32).zip(Bag);println!("created");let v:Vec<(i32,i32)>=z.collect();println!("{:?}",v);}"#,
+                expect: Expect::Run("converted\ncreated\n[(5, 1), (6, 2)]\n"),
+            },
+            Case {
+                name: "wrong_projected_item",
+                source: r#"fn main(){let _:Vec<(i32,bool)>=(1i32..4i32).zip("ab".chars()).collect();}"#,
+                expect: Expect::Invalid("E0277"),
+            },
+            Case {
+                name: "borrowed_zip_escape",
+                source: r#"fn main(){let z;{let values=vec![1i32,2i32];z=(0i32..2i32).zip(values.iter());}println!("{:?}",z.collect::<Vec<_>>());}"#,
+                expect: Expect::Invalid("E0597"),
+            },
+            Case {
+                name: "unequal_lengths",
+                source: r#"fn main(){let v:Vec<(i32,char)>=(1i32..5i32).zip("abc".chars()).collect();println!("{:?}",v);let w:Vec<(i32,i32)>=(0i32..0i32).zip(1i32..3i32).collect();println!("{}",w.len());}"#,
+                expect: Expect::Run(
+                    "[(1, 'a'), (2, 'b'), (3, 'c')]
+0
+",
+                ),
+            },
+            Case {
+                name: "poll_order",
+                source: r#"struct P{n:i32,id:i32} impl Iterator for P{type Item=i32;fn next(&mut self)->Option<i32>{self.n+=1;println!("{}:{}",self.id,self.n);if self.n==2{None}else{Some(self.n)}}} struct Source; impl IntoIterator for Source{type Item=i32;type IntoIter=P;fn into_iter(self)->P{P{n:0,id:2}}} fn main(){let mut z=P{n:0,id:1}.zip(Source);println!("{:?}",z.next());println!("{:?}",z.next());println!("{:?}",z.next());println!("{:?}",z.next());}"#,
+                expect: Expect::Run(
+                    "1:1
+2:1
+Some((1, 1))
+1:2
+None
+1:3
+2:2
+None
+1:4
+2:3
+Some((4, 3))
+",
+                ),
+            },
+        ],
+    );
+}
+
+#[test]
 fn iterator_bounded_adapters_match_stock() {
     use closure_oracle::{Case, Expect};
     closure_oracle::check(

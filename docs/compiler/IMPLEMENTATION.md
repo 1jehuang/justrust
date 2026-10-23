@@ -6,6 +6,17 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 
 ## Completed foundations, not full compatibility
 
+- [x] Source `Iterator::zip` supports existing and custom `IntoIterator` inputs,
+      unequal lengths, conversion at construction, and non-fused polling order.
+      Projected generic method constraints now wait for their input slots before
+      normalization rather than treating an open projection as a rigid result.
+      Stock CHECK/BUILD/run at workers 1/8 covers values, wrong projected item
+      rejection and borrowed-owner escape. All 1785 library and 48 integration
+      tests pass, including graph integrity. The general `Iterator` to
+      `IntoIterator` blanket implementation still needs coherence support;
+      concrete source conversions remain explicit. Zip reverse/exact-size
+      implementations are also open.
+
 - [x] Source `skip`, `take` and `step_by` preserve lazy consumption, non-fused
       iterator behavior and owner loans. `iterator_fold` compares chained values,
       zero limits, maximal steps and borrow escape rejection against stock at

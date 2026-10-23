@@ -70,16 +70,21 @@ impl Checker<'_> {
             let actual = self.partial_type_term(actual, 0)?;
             solver.constrain(&formal, &actual, 0)?;
         }
+        self.infer_storage(arguments.len() + usize::from(expected.is_some()))?;
+        let mut constraints = Vec::new();
         if let Some(expected) = expected {
             let formal =
                 self.method_owner_term(&solver.schema(&schema.signature.result, 0)?, &bindings, 0)?;
             let evidence = self.infer_type_term(expected, None, 0)?;
-            solver.constrain(&formal, &evidence, 0)?;
+            constraints.push((formal, evidence));
         }
         for (formal, argument) in schema.signature.params[offset..].iter().zip(arguments) {
             let formal = self.method_owner_term(&solver.schema(formal, 0)?, &bindings, 0)?;
             let evidence = self.inference_evidence(argument, 0)?;
-            solver.constrain(&formal, &evidence, 0)?;
+            constraints.push((formal, evidence));
+        }
+        if !solver.constrain_projected_terms(constraints, true)? {
+            return Ok(None);
         }
         // `F: FnMut(Self::Item) -> B`: once the closure argument and the
         // owner's Self are known, the normalized `Output` is evidence for B.

@@ -12,6 +12,10 @@ pub trait Iterator: Sized {
         }
     }
 
+    fn zip<U: IntoIterator>(self, other: U) -> Zip<Self, U::IntoIter> {
+        Zip { left: self, right: other.into_iter() }
+    }
+
     fn skip(self, n: usize) -> Skip<Self> {
         Skip { iterator: self, remaining: n }
     }
@@ -129,6 +133,82 @@ pub trait Iterator: Sized {
     }
 }
 
+impl<I: DoubleEndedIterator> IntoIterator for Rev<I> {
+    type Item = I::Item;
+    type IntoIter = Self;
+    fn into_iter(self) -> Self {
+        self
+    }
+}
+
+impl<T> IntoIterator for super::ops::Range<T>
+where
+    super::ops::Range<T>: Iterator,
+{
+    type Item = <super::ops::Range<T> as Iterator>::Item;
+    type IntoIter = Self;
+    fn into_iter(self) -> Self { self }
+}
+
+impl<T> IntoIterator for super::ops::RangeInclusive<T>
+where
+    super::ops::RangeInclusive<T>: Iterator,
+{
+    type Item = <super::ops::RangeInclusive<T> as Iterator>::Item;
+    type IntoIter = Self;
+    fn into_iter(self) -> Self { self }
+}
+
+impl<A: Iterator, B: Iterator> IntoIterator for Zip<A, B> {
+    type Item = (A::Item, B::Item);
+    type IntoIter = Self;
+    fn into_iter(self) -> Self { self }
+}
+
+impl<I: Iterator> IntoIterator for Skip<I> {
+    type Item = I::Item;
+    type IntoIter = Self;
+    fn into_iter(self) -> Self { self }
+}
+
+impl<I: Iterator> IntoIterator for Take<I> {
+    type Item = I::Item;
+    type IntoIter = Self;
+    fn into_iter(self) -> Self { self }
+}
+
+impl<I: Iterator> IntoIterator for StepBy<I> {
+    type Item = I::Item;
+    type IntoIter = Self;
+    fn into_iter(self) -> Self { self }
+}
+
+impl<I: Iterator> IntoIterator for Enumerate<I> {
+    type Item = (usize, I::Item);
+    type IntoIter = Enumerate<I>;
+    fn into_iter(self) -> Enumerate<I> {
+        self
+    }
+}
+
+pub struct Zip<A, B> {
+    left: A,
+    right: B,
+}
+
+impl<A: Iterator, B: Iterator> Iterator for Zip<A, B> {
+    type Item = (A::Item, B::Item);
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.left.next() {
+            Option::Some(left) => match self.right.next() {
+                Option::Some(right) => Option::Some((left, right)),
+                Option::None => Option::None,
+            },
+            Option::None => Option::None,
+        }
+    }
+}
+
 pub struct Skip<I> {
     iterator: I,
     remaining: usize,
@@ -150,12 +230,6 @@ impl<I: Iterator> Iterator for Skip<I> {
     }
 }
 
-impl<I: Iterator> IntoIterator for Skip<I> {
-    type Item = I::Item;
-    type IntoIter = Self;
-    fn into_iter(self) -> Self { self }
-}
-
 pub struct Take<I> {
     iterator: I,
     remaining: usize,
@@ -170,12 +244,6 @@ impl<I: Iterator> Iterator for Take<I> {
         self.remaining -= 1usize;
         self.iterator.next()
     }
-}
-
-impl<I: Iterator> IntoIterator for Take<I> {
-    type Item = I::Item;
-    type IntoIter = Self;
-    fn into_iter(self) -> Self { self }
 }
 
 pub struct StepBy<I> {
@@ -201,12 +269,6 @@ impl<I: Iterator> Iterator for StepBy<I> {
         }
         self.iterator.next()
     }
-}
-
-impl<I: Iterator> IntoIterator for StepBy<I> {
-    type Item = I::Item;
-    type IntoIter = Self;
-    fn into_iter(self) -> Self { self }
 }
 
 pub trait Sum<A = Self>: Sized {
@@ -267,14 +329,6 @@ impl<I: DoubleEndedIterator> Iterator for Rev<I> {
 impl<I: DoubleEndedIterator> DoubleEndedIterator for Rev<I> {
     fn next_back(&mut self) -> Option<Self::Item> {
         self.iterator.next()
-    }
-}
-
-impl<I: DoubleEndedIterator> IntoIterator for Rev<I> {
-    type Item = I::Item;
-    type IntoIter = Self;
-    fn into_iter(self) -> Self {
-        self
     }
 }
 
@@ -841,14 +895,6 @@ impl<I: Iterator> IntoIterator for CollectInput<I> {
     type IntoIter = I;
     fn into_iter(self) -> I {
         self.iterator
-    }
-}
-
-impl<I: Iterator> IntoIterator for Enumerate<I> {
-    type Item = (usize, I::Item);
-    type IntoIter = Enumerate<I>;
-    fn into_iter(self) -> Enumerate<I> {
-        self
     }
 }
 
