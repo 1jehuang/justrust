@@ -74,6 +74,66 @@ fn fixture() -> Fixture {
 }
 
 #[test]
+fn closure_type_walk_reuses_only_the_same_checked_allocation() {
+    let f = fixture();
+    let closure = f
+        .facts
+        .instantiate_closure_owner(&f.template, &[Ty::Int(ir::IntTy::U64)])
+        .unwrap();
+    let ty = Ty::Closure(closure.clone());
+    let world = f.plan.trait_world().unwrap();
+    let mut walk = TypeWalk::default();
+    let height = world
+        .validate_ty_inner(&ty, f.facts.env(), 0, TypeUse::Root, &mut walk)
+        .unwrap();
+    let nodes = f.budget.usage_snapshot().nodes;
+    let completed = walk.complete.len();
+    assert_eq!(
+        world
+            .validate_ty_inner(&ty, f.facts.env(), 0, TypeUse::Root, &mut walk)
+            .unwrap(),
+        height
+    );
+    assert_eq!(walk.complete.len(), completed);
+    assert_eq!(f.budget.usage_snapshot().nodes, nodes + 1);
+
+    // Copying the authentic seal onto a different descriptor must not hit
+    // the completed allocation's memo entry.
+    let forged = Ty::Closure(Arc::new(
+        ir::ClosureTy::new(
+            closure.owner(),
+            closure.owner_args().into(),
+            closure.site(),
+            closure.provider(),
+            closure.params().into(),
+            Ty::Bool,
+            closure.captures().into(),
+            closure.kind(),
+        )
+        .with_sources(closure.sources().into())
+        .with_shape_seal(closure.shape_seal().cloned()),
+    ));
+    assert!(
+        world
+            .validate_ty_inner(&forged, f.facts.env(), 0, TypeUse::Root, &mut walk)
+            .is_err()
+    );
+    assert_eq!(walk.complete.len(), completed);
+    // A hit still checks the complete subtree's depth at its new position.
+    assert!(
+        world
+            .validate_ty_inner(
+                &ty,
+                f.facts.env(),
+                f.budget.limits().depth,
+                TypeUse::Root,
+                &mut walk,
+            )
+            .is_err()
+    );
+}
+
+#[test]
 fn checked_owner_reconstruction_preserves_seal_and_discharges_real_bounds() {
     let f = fixture();
     let concrete = f

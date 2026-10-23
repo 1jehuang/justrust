@@ -4002,6 +4002,7 @@ fn canonicalize_call_metadata(
                     &callee,
                     &canonical,
                     signature,
+                    &mut scratch,
                 )?
                 .unwrap_or(canonical)
             } else if facts.phase() == super::traits::FactsPhase::Closed {
@@ -4744,13 +4745,18 @@ impl Visibility {
         modules: &super::module_identity::ModuleArena,
         definition: super::module_identity::ModuleId,
     ) -> Result<(), super::module_identity::ModuleError> {
-        modules.check(definition)?;
-        if let Self::Restricted(scope) = self
-            && !modules.is_descendant(definition, *scope)?
-        {
-            return Err(super::module_identity::ModuleError::InvalidRestriction);
+        match self {
+            Self::Public => modules.check(definition),
+            Self::Restricted(scope) => {
+                // is_descendant validates both handles, including definition.
+                // The usual private-in-own-module case needs only one lookup.
+                if modules.is_descendant(definition, *scope)? {
+                    Ok(())
+                } else {
+                    Err(super::module_identity::ModuleError::InvalidRestriction)
+                }
+            }
         }
-        Ok(())
     }
 }
 

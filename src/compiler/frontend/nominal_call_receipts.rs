@@ -185,6 +185,7 @@ impl CanonicalSourceCapability {
         target: &ir::Callee,
         canonical: &ir::Signature,
         current: &ir::Signature,
+        scratch: &mut tr::TraitScratch,
     ) -> Result<Option<ir::Signature>, FactsError> {
         let budget = &self.plan.budget;
         let inventory = self.nominal_call_realizations.borrow();
@@ -200,10 +201,13 @@ impl CanonicalSourceCapability {
                     "nominal call realization omitted before canonical rebuild",
                 )
             })?;
-        validate(row, &self.facts, budget, &mut tr::TraitScratch::default())?;
+        validate(row, &self.facts, budget, scratch)?;
         validate_original_callee(&row.target, target, budget)?;
-        self.facts
-            .validate_signature(ir::SignatureSubject::Call(target), canonical)?;
+        self.facts.validate_signature_with(
+            ir::SignatureSubject::Call(target),
+            canonical,
+            scratch,
+        )?;
         let mut same_original = row.original.params.len() == canonical.params.len()
             && row.original.ref_contract == canonical.ref_contract;
         for (retained, fresh) in row

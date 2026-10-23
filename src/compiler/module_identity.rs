@@ -518,6 +518,9 @@ impl ModuleArena {
     }
     pub fn is_descendant(&self, module: ModuleId, ancestor: ModuleId) -> Result<bool, ModuleError> {
         let mut module_node = *self.node(module)?;
+        if module == ancestor {
+            return Ok(true);
+        }
         let ancestor_node = *self.node(ancestor)?;
         if module_node.root != ancestor_node.root || module_node.depth < ancestor_node.depth {
             return Ok(false);
@@ -677,6 +680,21 @@ mod tests {
         )
         .unwrap();
         let core = builder.core_root();
+        let work = builder.budget().snapshot().counters[Counter::Work as usize];
+        assert!(builder.is_descendant(core, core).unwrap());
+        assert_eq!(
+            builder.budget().snapshot().counters[Counter::Work as usize] - work,
+            1,
+            "self ancestry must validate the shared handle exactly once"
+        );
+        let forged = ModuleId {
+            index: u32::MAX,
+            ..core
+        };
+        assert!(matches!(
+            builder.is_descendant(forged, forged),
+            Err(ModuleError::InvalidHandle)
+        ));
         assert!(matches!(
             builder.check(ModuleId {
                 index: u32::MAX,

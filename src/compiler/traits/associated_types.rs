@@ -122,6 +122,18 @@ pub(super) struct NormalizationMemo {
     result: Result<Arc<NormalizationEvidence>>,
 }
 
+/// One exact immutable proof already replayed successfully in this node.
+/// Keeping its Arc prevents address reuse. Caller authority and normalization
+/// staging are separate from the proof allocation and are part of the key.
+pub(super) struct NormalizationValidation {
+    evidence: Arc<NormalizationEvidence>,
+    world: WorldId,
+    environment: usize,
+    phase: FactsPhase,
+    staged: bool,
+    finalized: bool,
+}
+
 #[derive(Clone, Copy)]
 struct NormalizationContext<'a> {
     proof: ProofContext<'a>,
@@ -515,9 +527,9 @@ impl ValidatedTraitWorld {
             proof: ProofContext::from_facts(facts),
             staged: false,
         };
-        let evidence =
-            self.normalize_projection_in(projection, context, &mut NormalizationStack::default())?;
-        self.validate_normalization_evidence(&evidence, context)?;
+        let mut stack = NormalizationStack::default();
+        let evidence = self.normalize_projection_in(projection, context, &mut stack)?;
+        self.validate_normalization_evidence_with(&evidence, context, &mut stack.obligations)?;
         Ok(NormalizedAssociatedType(evidence))
     }
 
@@ -1847,13 +1859,62 @@ impl ValidatedTraitWorld {
 
     fn validate_normalization_evidence(
         &self,
-        evidence: &NormalizationEvidence,
+        evidence: &Arc<NormalizationEvidence>,
         context: NormalizationContext<'_>,
     ) -> Result<()> {
         self.validate_normalization_evidence_with(evidence, context, &mut ProofScratch::default())
     }
 
     fn validate_normalization_evidence_with(
+        &self,
+        evidence: &Arc<NormalizationEvidence>,
+        context: NormalizationContext<'_>,
+        proofs: &mut ProofScratch,
+    ) -> Result<()> {
+        self.check_normalization_budget()?;
+        self.check_context(context.proof)?;
+        checked_module(
+            &self.budget,
+            self.catalog
+                .modules()
+                .budget()
+                .check()
+                .map_err(ModuleError::from),
+        )?;
+        for previous in &proofs.normalization_validations {
+            charged(&self.budget, self.budget.charge_work(1))?;
+            if Arc::ptr_eq(&previous.evidence, evidence)
+                && previous.world == self.id
+                && previous.environment == context.proof.predicates.index
+                && previous.phase == context.proof.phase
+                && previous.staged == context.staged
+                && previous.finalized == self.owner_normalization_finalized
+            {
+                return Ok(());
+            }
+        }
+        let cycles = proofs.cycles;
+        self.validate_normalization_evidence_uncached(evidence, context, proofs)?;
+        if proofs.cycles == cycles
+            && proofs.normalization_validations.len() < MAX_SCRATCH_OBLIGATIONS
+        {
+            push(
+                &self.budget,
+                &mut proofs.normalization_validations,
+                NormalizationValidation {
+                    evidence: evidence.clone(),
+                    world: self.id,
+                    environment: context.proof.predicates.index,
+                    phase: context.proof.phase,
+                    staged: context.staged,
+                    finalized: self.owner_normalization_finalized,
+                },
+            )?;
+        }
+        Ok(())
+    }
+
+    fn validate_normalization_evidence_uncached(
         &self,
         evidence: &NormalizationEvidence,
         context: NormalizationContext<'_>,
@@ -2280,6 +2341,50 @@ mod tests {
             .normalize_associated_type(&projection, &facts)
             .unwrap();
         normalized.validate_for(&projection, &facts).unwrap();
+        let context = NormalizationContext {
+            proof: ProofContext::from_facts(&facts),
+            staged: false,
+        };
+        let mut proofs = ProofScratch::default();
+        let before = budget.usage_snapshot().bytes;
+        world
+            .validate_normalization_evidence_with(&normalized.0, context, &mut proofs)
+            .unwrap();
+        assert!(
+            budget.usage_snapshot().bytes > before,
+            "memo storage is paid"
+        );
+        let entries = proofs.normalization_validations.len();
+        assert!(entries > 0);
+        let before = budget.usage_snapshot().work;
+        world
+            .validate_normalization_evidence_with(&normalized.0, context, &mut proofs)
+            .unwrap();
+        assert_eq!(budget.usage_snapshot().work - before, 1);
+        assert_eq!(proofs.normalization_validations.len(), entries);
+        // The same allocation is not proof under a changed caller or stage.
+        let mut wrong_context = context;
+        wrong_context.staged = true;
+        assert!(
+            world
+                .validate_normalization_evidence_with(&normalized.0, wrong_context, &mut proofs)
+                .is_err()
+        );
+        let mut wrong_context = context;
+        wrong_context.proof.phase = FactsPhase::Closed;
+        assert!(
+            world
+                .validate_normalization_evidence_with(&normalized.0, wrong_context, &mut proofs)
+                .is_err()
+        );
+        let mut wrong_context = context;
+        wrong_context.proof.predicates = &world.empty;
+        assert!(
+            world
+                .validate_normalization_evidence_with(&normalized.0, wrong_context, &mut proofs)
+                .is_err()
+        );
+        assert_eq!(proofs.normalization_validations.len(), entries);
         assert_eq!(
             normalized.0.membership.0.environment,
             normalized.0.key.environment
@@ -2299,8 +2404,16 @@ mod tests {
         let mut wrong_world = (*normalized.0).clone();
         wrong_world.world = fixture().id;
         for forged in [wrong_phase, wrong_environment, wrong_result, wrong_world] {
+            let forged = Arc::new(forged);
             assert!(
-                NormalizedAssociatedType(Arc::new(forged))
+                world
+                    .validate_normalization_evidence_with(&forged, context, &mut proofs)
+                    .is_err(),
+                "changed evidence must miss the exact-allocation memo"
+            );
+            assert_eq!(proofs.normalization_validations.len(), entries);
+            assert!(
+                NormalizedAssociatedType(forged)
                     .validate_for(&projection, &facts)
                     .is_err()
             );

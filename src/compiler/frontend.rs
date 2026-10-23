@@ -4992,6 +4992,7 @@ pub(super) fn replay_source_body(
     let intrinsic_sources =
         replay_builtin_intrinsics(original, checked, &positions, &mut seen, budget)?;
     replay_unsizes(original, checked, budget)?;
+    let mut call_scratch = tr::TraitScratch::default();
     for (index, site) in original.calls.iter().enumerate() {
         sr::work(budget, 1)?;
         if builtin_sources[index]
@@ -5034,8 +5035,13 @@ pub(super) fn replay_source_body(
         validate_original_callee(original_target, target, budget)?;
         let Some(name) = &site.ordinary else {
             // Source provider/selection role is frozen before publication; no ordinary omitted-call exemption.
-            ir::validate_callee(target, signature, ir::FactsCtx::Validated(facts))
-                .map_err(|e| source_error(budget, &e))?;
+            ir::validate_callee_scratch(
+                target,
+                signature,
+                ir::FactsCtx::Validated(facts),
+                &mut call_scratch,
+            )
+            .map_err(|e| source_error(budget, &e))?;
             if let ir::Callee::TraitItem(call) = target
                 && facts.uses_equality_required_call(call)?
             {

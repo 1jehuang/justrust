@@ -597,7 +597,14 @@ impl PlanState {
         budget.check_depth(depth)?;
         budget.charge_work(args.len().checked_add(1).ok_or("nominal work overflow")?)?;
         let info = registry.declaration(decl)?;
-        let bindings = param_bindings(registry, info, args)?;
+        // Arity is authority even on a cache hit. Parameter-name bindings are
+        // only needed when a fresh schema application must be constructed.
+        if info.type_params.len() != args.len() {
+            return Err(format!(
+                "wrong generic arity for {}; omitted generic inference is unsupported",
+                info.name
+            ));
+        }
         for arg in args {
             if transport.is_some() {
                 // Only IR's unforgeable structural request can reach this path.
@@ -644,6 +651,7 @@ impl PlanState {
             // by-value cycle is rejected once the outer definition completes.
             return Ok(back.clone());
         }
+        let bindings = param_bindings(registry, info, args)?;
         if self.nominals.active.contains(&decl) {
             return Err(format!(
                 "unsupported: polymorphically recursive nominal {}",
@@ -1064,6 +1072,71 @@ mod tests {
         let one = schema_field_key(program.names.as_ref(), FieldName::Tuple(1)).unwrap();
         assert_ne!(zero, one);
         assert_ne!(zero, named);
+    }
+
+    #[test]
+    fn cached_nominal_application_does_not_rebuild_parameter_name_bindings() {
+        let program = parse("struct Pair<T,U>(T,U);fn main(){}").unwrap();
+        let budget = ir::PlanBudget::default();
+        let plan = PlanCtx::from_program(&program, &budget).unwrap();
+        let key = name_scope::path_key(
+            program.names.as_ref(),
+            &program.structs[0].name,
+            Namespace::Type,
+        )
+        .unwrap();
+        let declaration = *plan.registry.nominals.get(&key).unwrap();
+        let args = [ir::Ty::Bool, ir::Ty::Unit];
+        let mut state = plan.scratch();
+        let first = state
+            .intern(
+                &plan.registry,
+                declaration,
+                &args,
+                ir::FactsCtx::Concrete,
+                &budget,
+                0,
+            )
+            .unwrap();
+        let name_work = || {
+            program.names.budget().snapshot().counters
+                [crate::compiler::expansion_budget::Counter::Work as usize]
+        };
+        let before = name_work();
+        let again = state
+            .intern(
+                &plan.registry,
+                declaration,
+                &args,
+                ir::FactsCtx::Concrete,
+                &budget,
+                0,
+            )
+            .unwrap();
+        assert_eq!(first, again);
+        assert_eq!(
+            name_work(),
+            before,
+            "a hit must not rebuild parameter names"
+        );
+        assert!(
+            state
+                .intern(
+                    &plan.registry,
+                    declaration,
+                    &args[..1],
+                    ir::FactsCtx::Concrete,
+                    &budget,
+                    0
+                )
+                .unwrap_err()
+                .contains("wrong generic arity")
+        );
+        assert_eq!(
+            name_work(),
+            before,
+            "arity rejection needs no parameter lookup"
+        );
     }
 
     #[test]

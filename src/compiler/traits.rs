@@ -1295,6 +1295,7 @@ struct ProofScratch {
     /// provisional (it depended on its ancestry) and is not memoized.
     cycles: usize,
     projections: Vec<associated_types::NormalizationMemo>,
+    normalization_validations: Vec<associated_types::NormalizationValidation>,
 }
 /// Realized nominal facts whose world replay already succeeded inside this
 /// node's computation, keyed by the retained immutable fact allocation. Owned
@@ -1815,6 +1816,7 @@ enum TypeNode {
     Tuple(usize, usize),
     Array(usize, usize),
     Reference(usize, ir::BorrowKind),
+    Closure(usize),
 }
 #[derive(Default)]
 struct TypeWalk {
@@ -1845,6 +1847,7 @@ impl TypeWalk {
                 t.def().id,
                 t.def() as *const ir::EnumDef as usize,
             )),
+            Ty::Closure(closure) => Some(TypeNode::Closure(Arc::as_ptr(closure) as usize)),
             Ty::Tuple(t) => Some(TypeNode::Tuple(t.as_ptr() as usize, t.len())),
             Ty::Array { element, len } => {
                 Some(TypeNode::Array(Arc::as_ptr(element) as usize, *len))

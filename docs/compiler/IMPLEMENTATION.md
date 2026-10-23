@@ -6,6 +6,20 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 
 ## Completed foundations, not full compatibility
 
+- [x] Node-local authority replay avoids rebuilding parameter-name bindings on
+      nominal cache hits, repeating same-module ancestry lookups, and discarding
+      call/proof scratch within a source body. Successful closure and associated
+      normalization checks retain exact immutable allocation identity, caller
+      environment, phase and staging; forged evidence and changed contexts still
+      reject. The isolated library/graph suite passes 1,821 tests
+      (`20261023-084646034-1382688`), with targeted nominal and source-replay
+      rejection checks and the final root graph gate passing
+      (`20261023-090042025-1432621`). Library/test clippy succeeds with existing
+      warnings (`20261023-090235525-1437867`). This is not an iterator-program
+      completion or a measured speedup: unchanged fixture 11 still reaches its
+      authority resource boundary (`20261023-085826114-1425185`), and the full
+      compatibility program remains open. No graph or resource ceiling changed.
+
 - [x] `str::is_empty` is supplied by the source prelude using the existing byte
       length operation. Empty, Unicode, embedded-NUL and borrowed-String inputs,
       plus a nominal-error decimal parser using `ok_or` and `?`, match stock
