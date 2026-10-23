@@ -42,8 +42,10 @@ accepts exactly one Unicode scalar, not one byte or one grapheme cluster.
 `justrust test --test primitive_methods bool_and_char_from_str_match_stock`
 checks direct and generic dispatch, owned strings, error Display/Debug,
 Unicode and invalid result types against stock at workers 1/8.
-Contextual inference through a generic free call followed by `unwrap` and
-some string-reference equality lowering remain separate open compiler gaps.
+Contextual results of generic free calls remain connected through nominal
+method receivers such as `parse(s).unwrap()`; the inferred type is still checked
+against canonical method and callable metadata. Some string-reference equality
+lowering remains a separate open compiler gap.
 
 Supported methods:
 

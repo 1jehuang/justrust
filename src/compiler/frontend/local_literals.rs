@@ -2223,9 +2223,7 @@ impl<'s> Solver<'_, '_, 's> {
                 // this method's result context. Retain its site now, then emit
                 // a hint only if the complete receiver resolves after solving.
                 // Checked method selection still authenticates that type.
-                if matches!(self.domain(receiver), Domain::Unknown)
-                    || self.numeric_nominal_actuals(receiver)?
-                {
+                if matches!(self.domain(receiver), Domain::Unknown | Domain::Nominal(..)) {
                     self.checker.infer_storage(1)?;
                     self.receiver_sites.push((receiver_site, receiver));
                 }

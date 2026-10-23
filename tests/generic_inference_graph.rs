@@ -115,6 +115,36 @@ fn contextual_and_nested_inference_matches_stock() {
 }
 
 #[test]
+fn contextual_generic_call_receivers_match_stock() {
+    use oracle::{Case, Expect};
+    oracle::check(
+        "contextual_generic_call_receivers",
+        &[
+            Case {
+                name: "parse_result_receiver",
+                source: "use std::str::FromStr; fn parse<T:FromStr>(s:&str)->Result<T,T::Err>{s.parse()} fn main(){let a:bool=parse(\"true\").unwrap();let b:char=parse(\"é\").unwrap();assert!(a);assert_eq!(b,'é');}",
+                expect: Expect::Run(""),
+            },
+            Case {
+                name: "ordinary_generic_nominal_receiver",
+                source: "struct Wrap<T>{value:T} impl<T> Wrap<T>{fn take(self)->T{self.value}} fn wrap<T>(x:T)->Wrap<T>{Wrap{value:x}} fn main(){let x:u8=wrap(7).take();assert_eq!(x,7u8);}",
+                expect: Expect::Run(""),
+            },
+            Case {
+                name: "conflicting_generic_nominal_receiver",
+                source: "struct Wrap<T>{value:T} impl<T> Wrap<T>{fn take(self)->T{self.value}} fn wrap<T>(x:T)->Wrap<T>{Wrap{value:x}} fn main(){let x:u8=wrap(7u16).take();}",
+                expect: Expect::Invalid("E0308"),
+            },
+            Case {
+                name: "unconstrained_generic_nominal_receiver",
+                source: "fn empty<T>()->Option<T>{None} fn main(){let value=empty().unwrap();}",
+                expect: Expect::Invalid("E0282"),
+            },
+        ],
+    );
+}
+
+#[test]
 fn inferred_nominal_instances_are_deterministic_across_workers() {
     let source = "struct Wrap<T>{value:T}fn id<T>(x:T)->T{x}fn relay<T>(x:T,n:i32)->T{if n==0{x}else{relay(x,n-1)}}fn main(){let a=Wrap{value:7u8};let b:Wrap<u64>=Wrap{value:18446744073709551615u64};let c=relay(a,3);let d=id::<Wrap<u64>>(b);if c.value==7u8&&d.value==18446744073709551615u64{println!(\"ok\");}}";
     let one = compiler::compile(source.to_owned(), 1, false).unwrap();
