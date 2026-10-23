@@ -165,6 +165,7 @@ impl ValidatedTraitWorld {
         &self,
         signature: &mut Signature,
         context: ProofContext<'_>,
+        active: &mut ProofScratch,
     ) -> Result<()> {
         self.check_context(context)?;
         if !self.signature_contains_projection(signature)? {
@@ -179,7 +180,8 @@ impl ValidatedTraitWorld {
             }
             // normalize_closed_projected_type validates every returned
             // dependency under this exact context before returning.
-            let (normal, _) = self.normalize_closed_projected_type(&raw, context, false)?;
+            let (normal, _) =
+                self.normalize_closed_projected_type_with(&raw, context, false, active)?;
             Ok(normal)
         };
         for parameter in &mut signature.params {
@@ -199,6 +201,7 @@ impl ValidatedTraitWorld {
         &self,
         predicates: &[Predicate],
         context: ProofContext<'_>,
+        active: &mut ProofScratch,
     ) -> Result<Arc<[Predicate]>> {
         self.check_context(context)?;
         let mut normalize = |projection: &ir::AssociatedTypeProjection| -> Result<Ty> {
@@ -210,7 +213,8 @@ impl ValidatedTraitWorld {
             }
             // normalize_closed_projected_type validates every returned
             // dependency under this exact context before returning.
-            let (normal, _) = self.normalize_closed_projected_type(&raw, context, false)?;
+            let (normal, _) =
+                self.normalize_closed_projected_type_with(&raw, context, false, active)?;
             Ok(normal)
         };
         let mut rows = Vec::new();

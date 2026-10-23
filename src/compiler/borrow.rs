@@ -872,6 +872,10 @@ struct CarrierBuilder<'a, 'b> {
     parents: Vec<Set>,
     dependencies: Vec<Set>,
     calls: Vec<Option<Arc<super::traits::CarrierContractView>>>,
+    // Each block has one immutable callee/view and this builder has one fixed
+    // facts/table pair. Cache only successful lookups, including no summary,
+    // so dataflow revisits do not replay identical authority proofs.
+    call_effects: Vec<Option<Option<Arc<CarrierEffects>>>>,
     body: Option<Arc<super::traits::CarrierContractView>>,
     body_signature: Option<ir::Signature>,
     call_rows: Vec<Vec<(CarrierLocation, ReferenceOriginId)>>,
@@ -905,7 +909,11 @@ impl CarrierBuilder<'_, '_> {
         }
         if let Some(physical) = self.physical {
             physical.validate_cfg(function, facts)?;
+            if let Some(proof) = &function.body_substitution {
+                proof.validate_cfg(function, facts, &self.ledger)?;
+            }
         } else {
+            // Canonical provenance includes the exact body-substitution proof.
             function.validate_provenance(facts, &self.ledger)?;
         }
         self.validated_provenance = Some((function.clone(), facts.clone()));
@@ -1002,30 +1010,17 @@ impl CarrierBuilder<'_, '_> {
             )?;
             return Ok(None);
         }
-        if let Some(proof) = &function.body_substitution
-            && let Err(message) = proof.validate_cfg(&function, &facts, &self.ledger)
+        // `calls` is populated only by the checked call-view constructors in
+        // `new`, after result-flow validation. Reuse that exact immutable Arc
+        // instead of replaying its entire nominal authority for each binding.
+        if !self.calls[block.0]
+            .as_ref()
+            .is_some_and(|validated| Arc::ptr_eq(validated, view))
         {
-            if message.contains("limit") || message.contains("exhaust") {
-                return Err(Exhausted);
-            }
-            self.problem(block, None, Problem::Invalid(message))?;
-            return Ok(None);
-        }
-        let view_validation = if let Some(physical) = self.physical {
-            physical
-                .validate_carrier_view(&function, &facts, Some(call), view)
-                .map_err(|message| super::traits::FactsError::from_message(&self.ledger, &message))
-        } else {
-            view.validate_for(&facts)
-        };
-        if let Err(error) = view_validation {
-            if error.is_resource() {
-                return Err(Exhausted);
-            }
             self.problem(
                 block,
                 None,
-                Problem::Invalid(error.into_diagnostic(&self.ledger).map_err(|_| Exhausted)?),
+                Problem::Invalid("call binding changed its validated carrier view".into()),
             )?;
             return Ok(None);
         }
@@ -2323,6 +2318,7 @@ impl<'a, 'b> CarrierBuilder<'a, 'b> {
             parents: vec![Set::new(n); n],
             dependencies: vec![Set::new(n); n],
             calls: vec![None; f.blocks.len()],
+            call_effects: vec![None; f.blocks.len()],
             body: None,
             body_signature: None,
             call_rows,
@@ -3380,7 +3376,9 @@ impl CarrierBuilder<'_, '_> {
         }
         let mut writes: Vec<(usize, CarrierOrigins, bool)> = Vec::new();
         if let Some(view) = &view {
-            let summary = if let (Some(table), Some(facts)) =
+            let summary = if let Some(summary) = &self.call_effects[block.0] {
+                summary.clone()
+            } else if let (Some(table), Some(facts)) =
                 (self.effect_table.clone(), self.authority.clone())
             {
                 let caller_validated = match self.function.clone() {
@@ -3399,7 +3397,10 @@ impl CarrierBuilder<'_, '_> {
                     _ => false,
                 };
                 match table.lookup(&target, self.f, &facts, view, caller_validated) {
-                    Ok(summary) => summary,
+                    Ok(summary) => {
+                        self.call_effects[block.0] = Some(summary.clone());
+                        summary
+                    }
                     Err(error) => {
                         if error.is_resource() {
                             return Err(Exhausted);
@@ -4922,7 +4923,10 @@ fn overlap(a: &CanonicalPlace, b: &CanonicalPlace, budget: &mut Budget) -> Resul
 /// The same checked accounting is used before recipe registration and before
 /// the real solver allocates. These are sizes, never evidence or permissions.
 pub(super) fn plan_metadata_bytes(locals: usize, blocks: usize) -> Result<usize, Exhausted> {
-    add(mul(locals, 96)?, mul(add(blocks, 1)?, 96)?)
+    add(
+        add(mul(locals, 96)?, mul(add(blocks, 1)?, 96)?)?,
+        mul(blocks, size_of::<Option<Option<Arc<CarrierEffects>>>>())?,
+    )
 }
 
 fn carrier_bitmap_bytes(

@@ -1,10 +1,16 @@
 use justrust_engine::{Key, compiler};
 
+#[path = "support/closure_oracle.rs"]
+mod closure_oracle;
+
+const WRAPPED_REFERENCE: &str = "struct Wrap<T>{value:T}fn id<T>(x:T)->T{x}fn outer<T>(x:T)->T{let wrapped=Wrap{value:x};let out=id::<Wrap<T>>(wrapped);out.value}fn run()->i32{let v=32;let r=outer::<&i32>(&v);*r}\nfn main(){if run()==32{println!(\"generic carriers oracle ok\");}}\n";
+
 // Every source below is byte-identical to the independently frozen carrier oracle.
 const ACCEPTED: &[&str] = &[
     "fn put<T>(dst:&mut T,x:T){*dst=x;}fn run()->i32{let a=1;let b=9;let mut slot=&a;put::<&i32>(&mut slot,&b);*slot}\nfn main(){if run()==9{println!(\"generic carriers oracle ok\");}}\n",
     "fn id<T>(x:T)->T{x}fn run()->i32{let mut v=1;let r=&mut v;{let child=id::<&mut i32>(r);*child=14;}*r=15;*r}\nfn main(){if run()==15{println!(\"generic carriers oracle ok\");}}\n",
     "fn walk<T:Copy>(x:T,n:i32)->T{if n==0{x}else{walk::<T>(x,n-1)}}fn run()->i32{let v=16;let r=walk::<&i32>(&v,3);*r}\nfn main(){if run()==16{println!(\"generic carriers oracle ok\");}}\n",
+    WRAPPED_REFERENCE,
 ];
 const REJECTED: &[(&str, bool)] = &[
     (
@@ -19,11 +25,19 @@ const REJECTED: &[(&str, bool)] = &[
         "fn bad<'a,T>(x:T)->&'a i32{let local=28;let _=x;&local}fn run()->i32{0}\nfn main(){if run()==0{println!(\"generic carriers oracle ok\");}}\n",
         false,
     ),
-    (
-        "struct Wrap<T>{value:T}fn id<T>(x:T)->T{x}fn outer<T>(x:T)->T{let wrapped=Wrap{value:x};let out=id::<Wrap<T>>(wrapped);out.value}fn run()->i32{let v=32;let r=outer::<&i32>(&v);*r}\nfn main(){if run()==32{println!(\"generic carriers oracle ok\");}}\n",
-        true,
-    ),
 ];
+
+#[test]
+fn wrapped_reference_carrier_matches_stock() {
+    closure_oracle::check(
+        "wrapped-reference-carrier",
+        &[closure_oracle::Case {
+            name: "nested_nominal_identity",
+            source: WRAPPED_REFERENCE,
+            expect: closure_oracle::Expect::Run("generic carriers oracle ok\n"),
+        }],
+    );
+}
 
 fn discovered(report: &justrust_engine::engine::Report, key: Key) -> (u64, u64) {
     let spelling = format!("{key:?}");
@@ -161,7 +175,7 @@ fn invalid_unused_carriers_and_excluded_inner_actuals_never_emit_objects() {
             for check_only in [true, false] {
                 let failure = compiler::compile_observed((*source).to_owned(), workers, check_only)
                     .err()
-                    .expect("invalid or excluded carrier program was accepted");
+                    .unwrap_or_else(|| panic!("invalid or excluded carrier program was accepted: workers={workers} check_only={check_only} source={source}"));
                 let error = failure.error.to_string().to_lowercase();
                 assert!(
                     !["parse error", "unexpected token", "panicked at"]

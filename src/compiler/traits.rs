@@ -6196,7 +6196,7 @@ impl ValidatedTraitWorld {
             args,
             facts,
             declaration,
-            &mut NominalReplays::default(),
+            &mut ProofScratch::default(),
         )
     }
     fn instantiate_scratch(
@@ -6205,10 +6205,10 @@ impl ValidatedTraitWorld {
         args: &[Ty],
         facts: ProofContext<'_>,
         declaration: Option<DeclId>,
-        replays: &mut NominalReplays,
+        active: &mut ProofScratch,
     ) -> Result<InstantiatedSchema> {
         for argument in args {
-            self.validate_ty_metadata_with(argument, facts.env(), 0, replays)?;
+            self.validate_ty_metadata_with(argument, facts.env(), 0, &mut active.replays)?;
         }
         if args.len() != schema.env.total_arity() {
             return Err(FactsError::invalid(
@@ -6231,7 +6231,7 @@ impl ValidatedTraitWorld {
                 "instantiation changed declaration-derived return authority",
             ));
         }
-        self.normalize_instantiated_projection_signature(&mut result.signature, facts)?;
+        self.normalize_instantiated_projection_signature(&mut result.signature, facts, active)?;
         result.signature.ref_contract =
             self.realize_ref_contract(schema, args, &result.signature, declaration)?;
         if result.predicates.len() != schema.predicates.len() {
@@ -6244,17 +6244,13 @@ impl ValidatedTraitWorld {
             self.validate_predicate_substitution(raw, actual, &schema.env, args)?;
         }
         result.predicates =
-            self.normalize_instantiated_projection_predicates(&result.predicates, facts)?;
+            self.normalize_instantiated_projection_predicates(&result.predicates, facts, active)?;
         self.validate_signature_shape(&result.signature, facts.env(), None)?;
         self.validate_predicates(&result.predicates, facts.env(), None)?;
         // The complete predicate batch, including ordinary membership rows,
         // already passed metadata validation above. Only equality discharge is
         // new work here; replaying metadata repeats deep actual-type walks.
-        self.replay_validated_equality_rows(
-            &result.predicates,
-            facts,
-            &mut ProofScratch::default(),
-        )?;
+        self.replay_validated_equality_rows(&result.predicates, facts, active)?;
         Ok(result)
     }
     fn validate_executable_actual(&self, actual: &Ty, env: &GenericEnv) -> Result<()> {
@@ -7312,8 +7308,7 @@ impl ValidatedTraitWorld {
                 },
                 predicates: implementation.predicates.clone(),
             };
-            let instantiated =
-                self.instantiate_scratch(&schema, &args, facts, None, &mut active.replays)?;
+            let instantiated = self.instantiate_scratch(&schema, &args, facts, None, active)?;
             let head_self = match (
                 &implementation.trait_ref.self_ty,
                 &instantiated.signature.result,
@@ -7538,7 +7533,7 @@ impl ValidatedTraitWorld {
             &target.type_args,
             context,
             Some(target.declaration),
-            &mut scratch.replays,
+            scratch,
         )?;
         self.validate_owner_callable_instantiation(target, &instantiated.signature, context)?;
         let mut evidence = Vec::new();

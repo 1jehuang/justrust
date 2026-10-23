@@ -920,7 +920,7 @@ mod tests {
     fn closed_call_replay_rejects_changed_source_application() {
         let budget = ir::PlanBudget::default();
         let program =
-            super::super::frontend::parse("struct Empty;fn consume(value:Empty){}fn main(){}")
+            super::super::frontend::parse("struct Empty;struct Wrapper<T>{value:T}fn consume(value:Empty){}fn main(){}fn nested(value:Wrapper<Empty>){}")
                 .unwrap();
         let plan = super::super::frontend::PlanCtx::from_program(&program, &budget).unwrap();
         let declaration = plan.nominal_declaration(0).unwrap();
@@ -973,6 +973,55 @@ mod tests {
             &budget,
         )
         .unwrap();
+        let nested_target = ir::CallTarget {
+            declaration: plan.function_decl(2).unwrap(),
+            type_args: Arc::from([]),
+        };
+        let nested_canonical = facts
+            .service()
+            .discharge_direct(&nested_target, &facts)
+            .unwrap()
+            .signature()
+            .clone();
+        let wrapper = plan.nominal_declaration(1).unwrap();
+        let mut nested_mapped = nested_canonical.clone();
+        nested_mapped.params[0] = plan
+            .intern_nominal(
+                wrapper,
+                &[capability.definition().unwrap()],
+                ir::FactsCtx::from_validated(&facts),
+                &budget,
+            )
+            .unwrap();
+        substitution::replay_closed_signature(
+            engine.authority(),
+            &ir::Callee::Direct(nested_target.clone()),
+            &nested_canonical,
+            &nested_mapped,
+            ir::FactsCtx::from_validated(&facts),
+            &budget,
+        )
+        .unwrap();
+        nested_mapped.params[0] = plan
+            .intern_nominal(
+                wrapper,
+                &[ir::Ty::Bool],
+                ir::FactsCtx::from_validated(&facts),
+                &budget,
+            )
+            .unwrap();
+        assert!(
+            substitution::replay_closed_signature(
+                engine.authority(),
+                &ir::Callee::Direct(nested_target),
+                &nested_canonical,
+                &nested_mapped,
+                ir::FactsCtx::from_validated(&facts),
+                &budget,
+            )
+            .is_err(),
+            "nested source-slot equivalence accepted a changed actual"
+        );
         let mut changed_contract = mapped.clone();
         let mut invalid_contract = changed_contract.ref_contract.as_ref().clone();
         invalid_contract.region_count = invalid_contract.region_count.checked_add(1).unwrap();

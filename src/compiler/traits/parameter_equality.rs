@@ -281,7 +281,8 @@ impl ValidatedTraitWorld {
         // The helper validates every normalization dependency and preserves the
         // root associated item and ordered trait application. Open families
         // are retained unchanged, never assigned by this replay operation.
-        let normalized = self.normalize_instantiated_projection_predicates(rows, context)?;
+        let normalized =
+            self.normalize_instantiated_projection_predicates(rows, context, active)?;
         for row in normalized.iter() {
             if let Predicate::ProjectionEq { projection, ty } = row {
                 self.validate_equality_domain_in(projection, ty, context, active)?;

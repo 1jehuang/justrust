@@ -133,8 +133,9 @@ impl ValidatedTraitWorld {
                 ));
             }
         }
+        let mut replays = NominalReplays::default();
         for ty in closure.types() {
-            self.validate_ty_metadata_in(ty, env, 0)?;
+            self.validate_ty_metadata_with(ty, env, 0, &mut replays)?;
         }
         if let Some(receipt) = closure.result_receipt() {
             if receipt.owner() != closure.owner()

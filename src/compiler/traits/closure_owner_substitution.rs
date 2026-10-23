@@ -135,7 +135,7 @@ impl ValidatedTraitWorld {
             closure.owner_args(),
             context,
             Some(closure.owner()),
-            &mut active.replays,
+            active,
         )?;
         for predicate in instantiated.predicates.iter() {
             self.require_in(predicate, context, active)?;

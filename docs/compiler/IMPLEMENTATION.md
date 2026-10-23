@@ -19,8 +19,9 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
       honors contextual types and exact caller projection equalities. Local
       proof reuse preserves canonical receipt and normalization checks without
       raising resource limits (`PROJECTED-METHODS.md`). The unchanged corpus
-      remains 9/20: matrix now reaches ownership resource limits, and additional
-      library/iterator operations and recursive layouts remain open.
+      remains 9/20. Mapped `Vec<String>` collection now passes without the prior
+      ownership resource failure. Matrix next reaches missing `Iterator::sum`;
+      additional library/iterator operations and recursive layouts remain open.
 
 - [x] Generic trait-method inference substitutes exact owner projections before
       constraining arguments and expected results. Closed projected signatures

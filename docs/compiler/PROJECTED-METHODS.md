@@ -59,8 +59,20 @@ current engine and original/mapped signature. No resource ceiling is increased.
 The graph regression also exposed nominal declaration demands being issued only
 by BUILD. CHECK now requests and awaits the same per-declaration facts, including
 unused nominal membership checks, before publishing success.
-The unchanged full-program corpus remains 9/20, with matrix ownership work,
-additional iterator/library APIs and recursive layouts still open.
+Mapped `Vec<String>` collection now also passes stock-first CHECK/BUILD/run at
+workers 1/8. Repeated calls reuse their already-validated immutable carrier views
+and successful effect lookups inside the current borrow task. Projection and
+closure validation carry one node-local proof scratch through nested checks,
+including normalization. No fact contains mutable scratch and no budget is raised.
+Nested source-slot identities are paired by independently validated declarations
+and ordered actuals, including graph/source representations of the same actual.
+A changed nested actual still fails the forged-signature regression. The frozen
+wrapped-reference carrier is now native-positive and has independent stock/runtime
+coverage; all three invalid carrier witnesses remain rejected before image publication.
+The combined iterator, carrier, projection and graph suite passes 48 tests with one
+ignored. Selected receipts: `data/runs/xps14/2026-10-23-collection-proof.jsonl`.
+The unchanged full-program corpus remains 9/20; matrix next reaches missing
+`Iterator::sum`, with additional library APIs and recursive layouts still open.
 
 Validation: 1,781 library tests pass with one ignored; the combined collection,
 projection, nominal-authority and graph suites pass 67 tests with one ignored.

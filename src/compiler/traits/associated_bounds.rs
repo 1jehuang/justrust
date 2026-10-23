@@ -132,33 +132,34 @@ impl ValidatedTraitWorld {
         implementation: Option<&projected_methods::OwnerNormalizationContext<'_>>,
     ) -> Result<()> {
         let predicates = self.associated_bounds_for(associated, owner, context.env())?;
-        let mut reduce = |projection: &ir::AssociatedTypeProjection| -> Result<Ty> {
-            if projection.item == associated
-                && self.eq_predicate(
-                    &Predicate::Implements(projection.trait_ref.clone()),
-                    &Predicate::Implements(owner.clone()),
-                )?
-            {
-                return Ok(normal.clone());
-            }
-            let raw = Ty::AssociatedType(Arc::new(projection.clone()));
-            if let Some(implementation) = implementation {
-                return self.normalize_owner_type(&raw, implementation, &mut Vec::new(), 0);
-            }
-            if self.goal_is_closed(&projection.trait_ref, context.env())? {
-                let (normal, dependencies) = self.normalize_closed_projected_type(
-                    &raw,
-                    context,
-                    !self.owner_normalization_finalized,
-                )?;
-                for dependency in dependencies.iter() {
-                    self.validate_projected_dependency(dependency, context)?;
-                }
-                return Ok(normal);
-            }
-            Ok(raw)
-        };
         for predicate in predicates.iter() {
+            let mut reduce = |projection: &ir::AssociatedTypeProjection| -> Result<Ty> {
+                if projection.item == associated
+                    && self.eq_predicate(
+                        &Predicate::Implements(projection.trait_ref.clone()),
+                        &Predicate::Implements(owner.clone()),
+                    )?
+                {
+                    return Ok(normal.clone());
+                }
+                let raw = Ty::AssociatedType(Arc::new(projection.clone()));
+                if let Some(implementation) = implementation {
+                    return self.normalize_owner_type(&raw, implementation, &mut Vec::new(), 0);
+                }
+                if self.goal_is_closed(&projection.trait_ref, context.env())? {
+                    let (normal, dependencies) = self.normalize_closed_projected_type_with(
+                        &raw,
+                        context,
+                        !self.owner_normalization_finalized,
+                        active,
+                    )?;
+                    for dependency in dependencies.iter() {
+                        self.validate_projected_dependency(dependency, context)?;
+                    }
+                    return Ok(normal);
+                }
+                Ok(raw)
+            };
             let normalized = match predicate {
                 Predicate::Implements(goal) => {
                     let mut args = Vec::new();

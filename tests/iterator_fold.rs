@@ -58,6 +58,19 @@ fn iterator_collect_mapped_range_matches_stock() {
 }
 
 #[test]
+fn iterator_collect_mapped_strings_match_stock() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "iterator-collect-mapped-strings",
+        &[Case {
+            name: "borrowed_integer_strings",
+            source: r#"fn main() { let row = [1i64, 2i64]; let parts: Vec<String> = row.iter().map(|x| x.to_string()).collect(); println!("[{}]", parts.join(", ")); }"#,
+            expect: Expect::Run("[1, 2]\n"),
+        }],
+    );
+}
+
+#[test]
 fn generic_method_owner_projections_match_stock() {
     use closure_oracle::{Case, Expect};
     closure_oracle::check(

@@ -139,7 +139,7 @@ impl ClosedReceipt {
             ),
             ir::Callee::TraitItem(call) => facts
                 .service()
-                .resolve_trait_call(call, facts)
+                .resolve_trait_call_with(call, facts, &mut scratch)
                 .map_err(|e| e.into_legacy_diagnostic(budget))?
                 .callee()
                 .clone(),

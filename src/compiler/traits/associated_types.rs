@@ -553,26 +553,43 @@ impl ValidatedTraitWorld {
         proof: ProofContext<'_>,
         staged: bool,
     ) -> Result<(Ty, Vec<NormalizedAssociatedType>)> {
+        self.normalize_closed_projected_type_with(ty, proof, staged, &mut ProofScratch::default())
+    }
+
+    pub(super) fn normalize_closed_projected_type_with(
+        &self,
+        ty: &Ty,
+        proof: ProofContext<'_>,
+        staged: bool,
+        active: &mut ProofScratch,
+    ) -> Result<(Ty, Vec<NormalizedAssociatedType>)> {
         self.check_normalization_budget()?;
         self.check_context(proof)?;
         let context = NormalizationContext { proof, staged };
         let mut dependencies = Vec::new();
-        let mut stack = NormalizationStack::default();
-        let normal = self.normalize_type_in(ty, context, &mut stack, &mut dependencies, 0)?;
-        let mut retained = Vec::new();
-        for dependency in dependencies {
-            self.validate_normalization_evidence_with(
-                &dependency,
-                context,
-                &mut stack.obligations,
-            )?;
-            push(
-                &self.budget,
-                &mut retained,
-                NormalizedAssociatedType(dependency),
-            )?;
-        }
-        Ok((normal, retained))
+        let mut stack = NormalizationStack {
+            active: Vec::new(),
+            obligations: std::mem::take(active),
+        };
+        let result = (|| {
+            let normal = self.normalize_type_in(ty, context, &mut stack, &mut dependencies, 0)?;
+            let mut retained = Vec::new();
+            for dependency in dependencies {
+                self.validate_normalization_evidence_with(
+                    &dependency,
+                    context,
+                    &mut stack.obligations,
+                )?;
+                push(
+                    &self.budget,
+                    &mut retained,
+                    NormalizedAssociatedType(dependency),
+                )?;
+            }
+            Ok((normal, retained))
+        })();
+        *active = stack.obligations;
+        result
     }
 
     pub(super) fn normalize_closed_equality_projection(

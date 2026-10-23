@@ -21118,8 +21118,7 @@ impl tr::SchemaCx for SchemaAdapter {
                                 _ => unreachable!(),
                             };
                             cx.scratch()
-                                .intern(&cx.registry, decl, &args, caller, b, 0)
-                                .map_err(|_| "noncanonical nominal application")?
+                                .intern(&cx.registry, decl, &args, caller, b, 0)?
                         }
                     };
                     let same = match (&canonical, ty) {
