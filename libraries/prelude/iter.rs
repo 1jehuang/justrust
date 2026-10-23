@@ -84,12 +84,308 @@ pub trait Iterator: Sized {
         B::from_iter(CollectInput { iterator: self })
     }
 
+    fn sum<S: Sum<Self::Item>>(self) -> S {
+        <S as Sum<Self::Item>>::sum(self)
+    }
+
     fn fold<B, F: FnMut(B, Self::Item) -> B>(mut self, init: B, mut f: F) -> B {
         let mut acc = init;
         loop {
             match self.next() {
                 Option::Some(item) => acc = f(acc, item),
                 Option::None => return acc,
+            }
+        }
+    }
+}
+
+pub trait Sum<A = Self>: Sized {
+    fn sum<I: Iterator<Item = A>>(iter: I) -> Self;
+}
+
+impl Sum for i8 {
+    fn sum<I: Iterator<Item = i8>>(mut iter: I) -> i8 {
+        let mut total = 0i8;
+        loop {
+            match iter.next() {
+                Option::Some(value) => total += value,
+                Option::None => return total,
+            }
+        }
+    }
+}
+
+impl<'a> Sum<&'a i8> for i8 {
+    fn sum<I: Iterator<Item = &'a i8>>(mut iter: I) -> i8 {
+        let mut total = 0i8;
+        loop {
+            match iter.next() {
+                Option::Some(value) => total += *value,
+                Option::None => return total,
+            }
+        }
+    }
+}
+
+impl Sum for i16 {
+    fn sum<I: Iterator<Item = i16>>(mut iter: I) -> i16 {
+        let mut total = 0i16;
+        loop {
+            match iter.next() {
+                Option::Some(value) => total += value,
+                Option::None => return total,
+            }
+        }
+    }
+}
+
+impl<'a> Sum<&'a i16> for i16 {
+    fn sum<I: Iterator<Item = &'a i16>>(mut iter: I) -> i16 {
+        let mut total = 0i16;
+        loop {
+            match iter.next() {
+                Option::Some(value) => total += *value,
+                Option::None => return total,
+            }
+        }
+    }
+}
+
+impl Sum for i32 {
+    fn sum<I: Iterator<Item = i32>>(mut iter: I) -> i32 {
+        let mut total = 0i32;
+        loop {
+            match iter.next() {
+                Option::Some(value) => total += value,
+                Option::None => return total,
+            }
+        }
+    }
+}
+
+impl<'a> Sum<&'a i32> for i32 {
+    fn sum<I: Iterator<Item = &'a i32>>(mut iter: I) -> i32 {
+        let mut total = 0i32;
+        loop {
+            match iter.next() {
+                Option::Some(value) => total += *value,
+                Option::None => return total,
+            }
+        }
+    }
+}
+
+impl Sum for i64 {
+    fn sum<I: Iterator<Item = i64>>(mut iter: I) -> i64 {
+        let mut total = 0i64;
+        loop {
+            match iter.next() {
+                Option::Some(value) => total += value,
+                Option::None => return total,
+            }
+        }
+    }
+}
+
+impl<'a> Sum<&'a i64> for i64 {
+    fn sum<I: Iterator<Item = &'a i64>>(mut iter: I) -> i64 {
+        let mut total = 0i64;
+        loop {
+            match iter.next() {
+                Option::Some(value) => total += *value,
+                Option::None => return total,
+            }
+        }
+    }
+}
+
+impl Sum for i128 {
+    fn sum<I: Iterator<Item = i128>>(mut iter: I) -> i128 {
+        let mut total = 0i128;
+        loop {
+            match iter.next() {
+                Option::Some(value) => total += value,
+                Option::None => return total,
+            }
+        }
+    }
+}
+
+impl<'a> Sum<&'a i128> for i128 {
+    fn sum<I: Iterator<Item = &'a i128>>(mut iter: I) -> i128 {
+        let mut total = 0i128;
+        loop {
+            match iter.next() {
+                Option::Some(value) => total += *value,
+                Option::None => return total,
+            }
+        }
+    }
+}
+
+impl Sum for isize {
+    fn sum<I: Iterator<Item = isize>>(mut iter: I) -> isize {
+        let mut total = 0isize;
+        loop {
+            match iter.next() {
+                Option::Some(value) => total += value,
+                Option::None => return total,
+            }
+        }
+    }
+}
+
+impl<'a> Sum<&'a isize> for isize {
+    fn sum<I: Iterator<Item = &'a isize>>(mut iter: I) -> isize {
+        let mut total = 0isize;
+        loop {
+            match iter.next() {
+                Option::Some(value) => total += *value,
+                Option::None => return total,
+            }
+        }
+    }
+}
+
+impl Sum for u8 {
+    fn sum<I: Iterator<Item = u8>>(mut iter: I) -> u8 {
+        let mut total = 0u8;
+        loop {
+            match iter.next() {
+                Option::Some(value) => total += value,
+                Option::None => return total,
+            }
+        }
+    }
+}
+
+impl<'a> Sum<&'a u8> for u8 {
+    fn sum<I: Iterator<Item = &'a u8>>(mut iter: I) -> u8 {
+        let mut total = 0u8;
+        loop {
+            match iter.next() {
+                Option::Some(value) => total += *value,
+                Option::None => return total,
+            }
+        }
+    }
+}
+
+impl Sum for u16 {
+    fn sum<I: Iterator<Item = u16>>(mut iter: I) -> u16 {
+        let mut total = 0u16;
+        loop {
+            match iter.next() {
+                Option::Some(value) => total += value,
+                Option::None => return total,
+            }
+        }
+    }
+}
+
+impl<'a> Sum<&'a u16> for u16 {
+    fn sum<I: Iterator<Item = &'a u16>>(mut iter: I) -> u16 {
+        let mut total = 0u16;
+        loop {
+            match iter.next() {
+                Option::Some(value) => total += *value,
+                Option::None => return total,
+            }
+        }
+    }
+}
+
+impl Sum for u32 {
+    fn sum<I: Iterator<Item = u32>>(mut iter: I) -> u32 {
+        let mut total = 0u32;
+        loop {
+            match iter.next() {
+                Option::Some(value) => total += value,
+                Option::None => return total,
+            }
+        }
+    }
+}
+
+impl<'a> Sum<&'a u32> for u32 {
+    fn sum<I: Iterator<Item = &'a u32>>(mut iter: I) -> u32 {
+        let mut total = 0u32;
+        loop {
+            match iter.next() {
+                Option::Some(value) => total += *value,
+                Option::None => return total,
+            }
+        }
+    }
+}
+
+impl Sum for u64 {
+    fn sum<I: Iterator<Item = u64>>(mut iter: I) -> u64 {
+        let mut total = 0u64;
+        loop {
+            match iter.next() {
+                Option::Some(value) => total += value,
+                Option::None => return total,
+            }
+        }
+    }
+}
+
+impl<'a> Sum<&'a u64> for u64 {
+    fn sum<I: Iterator<Item = &'a u64>>(mut iter: I) -> u64 {
+        let mut total = 0u64;
+        loop {
+            match iter.next() {
+                Option::Some(value) => total += *value,
+                Option::None => return total,
+            }
+        }
+    }
+}
+
+impl Sum for u128 {
+    fn sum<I: Iterator<Item = u128>>(mut iter: I) -> u128 {
+        let mut total = 0u128;
+        loop {
+            match iter.next() {
+                Option::Some(value) => total += value,
+                Option::None => return total,
+            }
+        }
+    }
+}
+
+impl<'a> Sum<&'a u128> for u128 {
+    fn sum<I: Iterator<Item = &'a u128>>(mut iter: I) -> u128 {
+        let mut total = 0u128;
+        loop {
+            match iter.next() {
+                Option::Some(value) => total += *value,
+                Option::None => return total,
+            }
+        }
+    }
+}
+
+impl Sum for usize {
+    fn sum<I: Iterator<Item = usize>>(mut iter: I) -> usize {
+        let mut total = 0usize;
+        loop {
+            match iter.next() {
+                Option::Some(value) => total += value,
+                Option::None => return total,
+            }
+        }
+    }
+}
+
+impl<'a> Sum<&'a usize> for usize {
+    fn sum<I: Iterator<Item = &'a usize>>(mut iter: I) -> usize {
+        let mut total = 0usize;
+        loop {
+            match iter.next() {
+                Option::Some(value) => total += *value,
+                Option::None => return total,
             }
         }
     }

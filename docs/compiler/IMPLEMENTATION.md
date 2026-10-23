@@ -6,6 +6,13 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 
 ## Completed foundations, not full compatibility
 
+- [x] Source-level `Iterator::sum` dispatches through `Sum`, with owned and
+      borrowed implementations for all integer widths and user-defined result
+      implementations. Explicit trait arguments retain the validated caller's
+      source-projection context, and transplanted occurrences remain rejected.
+      The unchanged matrix program now passes, raising the full-program corpus
+      to 10/20. Floating-point and other standard sum implementations remain open.
+
 - [x] Body inference rejects producer-free unresolved nominal bindings with
       E0282. Owned rvalue method autoref uses full-expression temporary storage
       and its checked receiver type, preserving destructor order and rejecting
@@ -19,9 +26,9 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
       honors contextual types and exact caller projection equalities. Local
       proof reuse preserves canonical receipt and normalization checks without
       raising resource limits (`PROJECTED-METHODS.md`). The unchanged corpus
-      remains 9/20. Mapped `Vec<String>` collection now passes without the prior
-      ownership resource failure. Matrix next reaches missing `Iterator::sum`;
-      additional library/iterator operations and recursive layouts remain open.
+      reached 9/20 at this milestone. The subsequent integer `Sum` integration
+      admits matrix (10/20); additional library operations and recursive layouts
+      remain open.
 
 - [x] Generic trait-method inference substitutes exact owner projections before
       constraining arguments and expected results. Closed projected signatures

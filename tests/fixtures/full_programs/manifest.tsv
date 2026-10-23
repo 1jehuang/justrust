@@ -19,7 +19,7 @@
 03_collatz	pass
 04_primes_sieve	pass
 05_gcd_fib	pass
-06_matrix	fail	fmt-display,for,autoderef,vec,iter,closure,string
+06_matrix	pass
 07_bank_account	pass
 08_enum_state_machine	pass
 09_vec_stack	pass

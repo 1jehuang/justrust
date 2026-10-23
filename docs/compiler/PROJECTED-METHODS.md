@@ -102,6 +102,22 @@ Drop or temporary-lifetime completeness.
 Receipts: `data/runs/xps14/2026-10-23-temporary-inference.jsonl` and
 `data/runs/xps14/2026-10-23-drop-corpus.jsonl`.
 
+## Integer summation and unchanged matrix (2026-10-23)
+
+`Iterator::sum` is an ordinary default method delegating to the public `Sum`
+trait. Source loops implement owned and borrowed sums for all twelve integer
+widths. User implementations remain ordinary trait dispatch, not compiler
+special cases. Floating-point and other standard `Sum` implementations remain
+open. Explicit projected trait arguments now carry the exact validated caller's
+source context into lowering; a same-world transplanted projection is rejected.
+
+The unchanged `06_matrix.rs` now passes stock/native CHECK/BUILD/run at workers
+1/8, including its mapped string formatting and integer trace summation. The
+full-program ratchet is 10/20. The combined graph, projected-method, iterator and
+full-program suites pass 49 tests with one ignored. The sum cases include empty
+and borrowed input, signed/unsigned widths, custom result types and an invalid
+unused result type. Receipts: `data/runs/xps14/2026-10-23-integer-sum.jsonl`.
+
 ## Separate authority paths
 
 A private owning-impl normalization context may be issued only after complete metadata, assignment-map and coherence checks. It binds the current world/stage, implementation DeclId, exact full impl TraitRef, real impl GenericEnv and original assignment pair/RHS. It is not public ValidatedFacts, an Implements proof or closed normalization evidence.

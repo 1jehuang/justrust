@@ -17676,6 +17676,10 @@ impl PlanCtx {
         caller.validate_ty_with_budget(owner, budget)?;
         let application = {
             let mut state = self.scratch();
+            if let ir::FactsCtx::Validated(facts) = caller {
+                state.source_context =
+                    Some(self.registry.source_type_context(facts.declaration())?);
+            }
             state
                 .source_trait_application(
                     &self.registry,
@@ -22329,6 +22333,56 @@ mod associated_registry_tests {
             plan.source_ty(
                 &transplanted,
                 &HashMap::new(),
+                ir::FactsCtx::Validated(&facts),
+                &plan.budget
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn trait_use_projection_retains_its_original_source_occurrence() {
+        let program = parse("trait A{type Out;type Other;}trait Sink<T>{}fn f<T:A,U:Sink<T::Out>>(x:T::Other){}fn main(){}").unwrap();
+        let plan = PlanCtx::from_program(&program, &ir::PlanBudget::default()).unwrap();
+        let declaration = plan.function_decl(0).unwrap();
+        let env = plan.environment(Some(declaration)).unwrap();
+        let facts = plan.callable_facts(declaration).unwrap();
+        let owner = ir::Ty::Param(ir::ParamId {
+            owner: plan.param_env(declaration).unwrap().binder(),
+            index: 1,
+        });
+        let path = &plan.program.functions[0].bounds[1].traits[0];
+        plan.resolve_trait_use(
+            &owner,
+            path,
+            &env,
+            ir::FactsCtx::Validated(&facts),
+            &plan.budget,
+        )
+        .unwrap();
+        let Type::Projection(donor) = &plan.program.functions[0].params[0].1 else {
+            panic!("missing donor projection")
+        };
+        let mut forged = path.clone();
+        let TraitPath::Source(forged_path) = &mut forged else {
+            panic!("missing source path")
+        };
+        let Type::Projection(projection) = &mut forged_path.segments.last_mut().unwrap().args[0]
+        else {
+            panic!("missing bound projection")
+        };
+        match (projection.as_mut(), donor.as_ref()) {
+            (
+                SourceProjection::Qualified { item, .. },
+                SourceProjection::Qualified { item: other, .. },
+            ) => *item = *other,
+            _ => panic!("missing qualified projection"),
+        }
+        assert!(
+            plan.resolve_trait_use(
+                &owner,
+                &forged,
+                &env,
                 ir::FactsCtx::Validated(&facts),
                 &plan.budget
             )

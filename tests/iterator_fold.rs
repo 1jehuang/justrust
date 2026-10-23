@@ -5,6 +5,60 @@
 mod closure_oracle;
 
 #[test]
+fn unchanged_matrix_matches_stock_at_both_worker_counts() {
+    closure_oracle::check(
+        "unchanged-matrix",
+        &[closure_oracle::Case {
+            name: "full_matrix_program",
+            source: include_str!("fixtures/full_programs/06_matrix.rs"),
+            expect: closure_oracle::Expect::Run(include_str!(
+                "fixtures/full_programs/06_matrix.stdout"
+            )),
+        }],
+    );
+}
+
+#[test]
+fn iterator_sum_matches_stock() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "iterator-sum",
+        &[
+            Case {
+                name: "mapped_integer",
+                source: "fn main(){let a=[1i64,2,3]; let n:i64=(0usize..3usize).map(|i|a[i]).sum();println!(\"{}\",n);}",
+                expect: Expect::Run("6\n"),
+            },
+            Case {
+                name: "borrowed_and_empty",
+                source: "fn main(){let a=[2i32,3,4];let n:i32=a.iter().sum();let empty:[i32;0]=[];let z:i32=empty.iter().sum();println!(\"{} {}\",n,z);}",
+                expect: Expect::Run("9 0\n"),
+            },
+            Case {
+                name: "signed_widths",
+                source: "fn main(){let a=[1i8,2];let b=[1i16,2];let c=[1i128,2];let d=[1isize,2];println!(\"{} {} {} {}\",a.iter().copied().sum::<i8>(),b.iter().sum::<i16>(),c.iter().copied().sum::<i128>(),d.iter().sum::<isize>());}",
+                expect: Expect::Run("3 3 3 3\n"),
+            },
+            Case {
+                name: "unsigned_widths",
+                source: "fn main(){let a=[1u8,2];let b=[1u16,2];let c=[1u32,2];let d=[1u64,2];let e=[1u128,2];let f=[1usize,2];println!(\"{} {} {} {} {} {}\",a.iter().sum::<u8>(),b.iter().copied().sum::<u16>(),c.iter().sum::<u32>(),d.iter().copied().sum::<u64>(),e.iter().sum::<u128>(),f.iter().copied().sum::<usize>());}",
+                expect: Expect::Run("3 3 3 3 3 3\n"),
+            },
+            Case {
+                name: "user_defined_sum",
+                source: "use std::iter::Sum;struct Total{value:i32}impl Sum<i32> for Total{fn sum<I:Iterator<Item=i32>>(mut iter:I)->Self{let mut result=Total{value:10};loop{match iter.next(){Some(n)=>result.value+=n,None=>return result,}}}}fn main(){let result:Total=(0i32..4i32).sum();println!(\"{}\",result.value);}",
+                expect: Expect::Run("16\n"),
+            },
+            Case {
+                name: "wrong_sum_result_unused",
+                source: "fn bad(){let a=[1i32];let n:u64=a.iter().sum();}fn main(){}",
+                expect: Expect::Invalid("E0277"),
+            },
+        ],
+    );
+}
+
+#[test]
 fn iterator_collect_matches_stock() {
     use closure_oracle::{Case, Expect};
     closure_oracle::check(
