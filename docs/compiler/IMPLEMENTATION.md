@@ -116,6 +116,31 @@ graph-integrity evidence are recorded in the feature contracts. G0-G12 remain op
       those maps first. Next: per-module
       declaration fact keyed by module-path key, TRAIT_IMPLS from it, move
       `facts.types()` consumers kind by kind, then delete SIGNATURES.
+      PARSE split resume notes (2026-10-22, after steps 1a-1h, A, 7341a8948;
+      steps B-D not started). Keys: `PARSE_FILE` kind 121 keyed by SOURCE
+      ordinal words; `MODULE_TREE` (new kind, keyed `[0]` = crate root
+      ordinal) merges PARSE_FILEs depth-first; RESOLVE reads MODULE_TREE.
+      Blocker found for step B: the child site needs the parent's names,
+      modules and scope arena as frozen `Arc`s (`link_crate_files` takes
+      frozen arenas), but `parse_syntax_unit` (frontend.rs) only freezes
+      them after the whole file. Needed first: a checkpoint API on
+      `NameStoreBuilder`, `ModuleArenaBuilder` and `ScopeArenaBuilder` that
+      publishes an immutable prefix (records `0..len` behind an `Arc`
+      receipt, later records appended to a fresh tail) so the parent can
+      publish output `1 + i` at `mod child;` without finishing. Simpler
+      alternative: two-pass, the parent PARSE_FILE publishes everything at
+      its end and children wait on it (sequential along the ancestor chain
+      only, siblings and unrelated subtrees still parallel); this loses
+      early child start but keeps the graph per file. Parser entry points
+      to change: `Parser::with_purpose` (take parent ModuleId/frontier and
+      joined builders), `items()` at the `mod` branch (frontend.rs ~10999:
+      on an empty group at a recorded `FileView::child_sites` offset, record
+      the child ModuleId and `module_frontier` instead of recursing), and
+      closure serials (`closures.rs:134`, `closures/stored.rs:69`) must be
+      prefixed with the file ordinal (`$closure${file}_{serial}`;
+      `tests/closures.rs:440` and `sema/adapter.rs:715` match on prefix).
+      Consumers of PARSE output 1 (`PREPARED_SOURCE_OUTPUT`, mod.rs ~2800
+      source accounting) must move to SOURCE facts summed by MODULE_TREE.
 - [x] Scalar checked-function IR shared directly by checking and native emission.
 - [x] Unlabelled loop values, break/continue and exact native temporary cleanup.
 - [x] Separate semantic Never typing from completion, including typed dead tails.
