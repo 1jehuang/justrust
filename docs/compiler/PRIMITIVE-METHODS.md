@@ -19,7 +19,7 @@ CHECK/BUILD/run matrix at workers 1/8, including ordinary same-name trait method
 The new matrix uses the verified pinned stock-rustc helper on hosted builds;
 the older full-suite local-oracle instructions below remain historical.
 
-## Source-backed decimal parsing
+## Source-backed integer and scalar parsing
 
 `str::parse` dispatches through ordinary `std::str::FromStr` / `core::str::FromStr`
 implementations. The source prelude implements all twelve integer types, including
@@ -34,6 +34,17 @@ error lifetimes cannot borrow a parser input.
 BUILD and execution at workers 1/8, including every integer boundary, signs,
 invalid syntax, custom implementations, drop order and unused invalid bodies.
 Floating-point parsing and full standard-library compatibility remain open.
+
+All twelve integer types also support `from_str_radix` for bases 2 through 36.
+The ordinary source prelude supplies this associated method and shares checked
+accumulation with decimal parsing. It accepts ASCII digits and either letter
+case, preserves signed minima and the full unsigned 128-bit range, and rejects
+prefixes, separators, whitespace and digits outside the radix. Out-of-range
+radices panic before inspecting the input, including an empty string.
+`primitive_methods::integer_radix_parsing_matches_stock` covers every width,
+all valid radices, overflow and invalid input at workers 1/8.
+`integer_radix_out_of_range_panics_like_stock` compares the abort signal and
+panic message for invalid radices against stock.
 
 Source-backed `FromStr` also covers `bool` and `char`, with public
 `str::ParseBoolError` and `char::ParseCharError` exports through std and core.

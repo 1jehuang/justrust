@@ -879,6 +879,30 @@ impl super::fmt::Display for ParseIntError {
 
 /// Parse a decimal integer into the range [min, max] (as i128).
 pub fn parse_i128(s: &str, min: i128, max: i128) -> Result<i128, ParseIntError> {
+    parse_i128_radix(s, 10u32, min, max)
+}
+
+fn radix_digit(byte: u8, radix: u32) -> Option<u32> {
+    let digit = if byte >= 48u8 && byte <= 57u8 {
+        (byte - 48u8) as u32
+    } else if byte >= 65u8 && byte <= 90u8 {
+        (byte - 65u8) as u32 + 10u32
+    } else if byte >= 97u8 && byte <= 122u8 {
+        (byte - 97u8) as u32 + 10u32
+    } else {
+        return Option::None;
+    };
+    if digit < radix { Option::Some(digit) } else { Option::None }
+}
+
+fn check_radix(radix: u32) {
+    if radix < 2u32 || radix > 36u32 {
+        panic!("from_ascii_radix: radix must lie in the range `[2, 36]` - found {}", radix);
+    }
+}
+
+fn parse_i128_radix(s: &str, radix: u32, min: i128, max: i128) -> Result<i128, ParseIntError> {
+    check_radix(radix);
     let (p, n) = super::string::str_parts(s);
     if n == 0usize {
         return Result::Err(ParseIntError { kind: IntErrorKind::Empty });
@@ -898,24 +922,23 @@ pub fn parse_i128(s: &str, min: i128, max: i128) -> Result<i128, ParseIntError> 
     }
     let mut value = 0i128;
     while i < n {
-        let b = super::string::read_u8(p + i);
-        if b < 48u8 || b > 57u8 {
-            return Result::Err(ParseIntError { kind: IntErrorKind::InvalidDigit });
-        }
-        let d = (b - 48u8) as i128;
+        let d = match radix_digit(super::string::read_u8(p + i), radix) {
+            Option::Some(digit) => digit as i128,
+            Option::None => return Result::Err(ParseIntError { kind: IntErrorKind::InvalidDigit }),
+        };
         if negative {
-            if value < (min + d) / 10i128 {
+            if value < (min + d) / (radix as i128) {
                 return Result::Err(ParseIntError { kind: IntErrorKind::NegOverflow });
             }
-            value = value * 10i128 - d;
+            value = value * (radix as i128) - d;
             if value < min {
                 return Result::Err(ParseIntError { kind: IntErrorKind::NegOverflow });
             }
         } else {
-            if value > (max - d) / 10i128 {
+            if value > (max - d) / (radix as i128) {
                 return Result::Err(ParseIntError { kind: IntErrorKind::PosOverflow });
             }
-            value = value * 10i128 + d;
+            value = value * (radix as i128) + d;
             if value > max {
                 return Result::Err(ParseIntError { kind: IntErrorKind::PosOverflow });
             }
@@ -928,6 +951,11 @@ pub fn parse_i128(s: &str, min: i128, max: i128) -> Result<i128, ParseIntError> 
 // Accumulate unsigned values directly so the upper half of u128 is never
 // transported through i128. Check both operations before executing them.
 fn parse_u128(s: &str) -> Result<u128, ParseIntError> {
+    parse_u128_radix(s, 10u32)
+}
+
+fn parse_u128_radix(s: &str, radix: u32) -> Result<u128, ParseIntError> {
+    check_radix(radix);
     let (p, n) = super::string::str_parts(s);
     if n == 0usize {
         return Result::Err(ParseIntError { kind: IntErrorKind::Empty });
@@ -941,18 +969,112 @@ fn parse_u128(s: &str) -> Result<u128, ParseIntError> {
     }
     let mut value = 0u128;
     while i < n {
-        let b = super::string::read_u8(p + i);
-        if b < 48u8 || b > 57u8 {
-            return Result::Err(ParseIntError { kind: IntErrorKind::InvalidDigit });
-        }
-        let digit = (b - 48u8) as u128;
-        if value > (u128::MAX - digit) / 10u128 {
+        let digit = match radix_digit(super::string::read_u8(p + i), radix) {
+            Option::Some(digit) => digit as u128,
+            Option::None => return Result::Err(ParseIntError { kind: IntErrorKind::InvalidDigit }),
+        };
+        if value > (u128::MAX - digit) / (radix as u128) {
             return Result::Err(ParseIntError { kind: IntErrorKind::PosOverflow });
         }
-        value = value * 10u128 + digit;
+        value = value * (radix as u128) + digit;
         i += 1usize;
     }
     Result::Ok(value)
+}
+
+pub trait RadixParse: Sized {
+    fn from_str_radix(src: &str, radix: u32) -> Result<Self, ParseIntError>;
+}
+
+impl RadixParse for i8 {
+    fn from_str_radix(src: &str, radix: u32) -> Result<i8, ParseIntError> {
+        match parse_i128_radix(src, radix, i8::MIN as i128, i8::MAX as i128) {
+            Result::Ok(value) => Result::Ok(value as i8),
+            Result::Err(error) => Result::Err(error),
+        }
+    }
+}
+impl RadixParse for i16 {
+    fn from_str_radix(src: &str, radix: u32) -> Result<i16, ParseIntError> {
+        match parse_i128_radix(src, radix, i16::MIN as i128, i16::MAX as i128) {
+            Result::Ok(value) => Result::Ok(value as i16),
+            Result::Err(error) => Result::Err(error),
+        }
+    }
+}
+impl RadixParse for i32 {
+    fn from_str_radix(src: &str, radix: u32) -> Result<i32, ParseIntError> {
+        match parse_i128_radix(src, radix, i32::MIN as i128, i32::MAX as i128) {
+            Result::Ok(value) => Result::Ok(value as i32),
+            Result::Err(error) => Result::Err(error),
+        }
+    }
+}
+impl RadixParse for i64 {
+    fn from_str_radix(src: &str, radix: u32) -> Result<i64, ParseIntError> {
+        match parse_i128_radix(src, radix, i64::MIN as i128, i64::MAX as i128) {
+            Result::Ok(value) => Result::Ok(value as i64),
+            Result::Err(error) => Result::Err(error),
+        }
+    }
+}
+impl RadixParse for i128 {
+    fn from_str_radix(src: &str, radix: u32) -> Result<i128, ParseIntError> {
+        parse_i128_radix(src, radix, i128::MIN, i128::MAX)
+    }
+}
+impl RadixParse for isize {
+    fn from_str_radix(src: &str, radix: u32) -> Result<isize, ParseIntError> {
+        match parse_i128_radix(src, radix, isize::MIN as i128, isize::MAX as i128) {
+            Result::Ok(value) => Result::Ok(value as isize),
+            Result::Err(error) => Result::Err(error),
+        }
+    }
+}
+impl RadixParse for u8 {
+    fn from_str_radix(src: &str, radix: u32) -> Result<u8, ParseIntError> {
+        match parse_i128_radix(src, radix, 0i128, u8::MAX as i128) {
+            Result::Ok(value) => Result::Ok(value as u8),
+            Result::Err(error) => Result::Err(error),
+        }
+    }
+}
+impl RadixParse for u16 {
+    fn from_str_radix(src: &str, radix: u32) -> Result<u16, ParseIntError> {
+        match parse_i128_radix(src, radix, 0i128, u16::MAX as i128) {
+            Result::Ok(value) => Result::Ok(value as u16),
+            Result::Err(error) => Result::Err(error),
+        }
+    }
+}
+impl RadixParse for u32 {
+    fn from_str_radix(src: &str, radix: u32) -> Result<u32, ParseIntError> {
+        match parse_i128_radix(src, radix, 0i128, u32::MAX as i128) {
+            Result::Ok(value) => Result::Ok(value as u32),
+            Result::Err(error) => Result::Err(error),
+        }
+    }
+}
+impl RadixParse for u64 {
+    fn from_str_radix(src: &str, radix: u32) -> Result<u64, ParseIntError> {
+        match parse_i128_radix(src, radix, 0i128, u64::MAX as i128) {
+            Result::Ok(value) => Result::Ok(value as u64),
+            Result::Err(error) => Result::Err(error),
+        }
+    }
+}
+impl RadixParse for u128 {
+    fn from_str_radix(src: &str, radix: u32) -> Result<u128, ParseIntError> {
+        parse_u128_radix(src, radix)
+    }
+}
+impl RadixParse for usize {
+    fn from_str_radix(src: &str, radix: u32) -> Result<usize, ParseIntError> {
+        match parse_i128_radix(src, radix, 0i128, usize::MAX as i128) {
+            Result::Ok(value) => Result::Ok(value as usize),
+            Result::Err(error) => Result::Err(error),
+        }
+    }
 }
 
 impl FromStr for i8 {

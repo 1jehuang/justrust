@@ -18,6 +18,145 @@ fn parse_oracle(tag: &str, cases: &[closure_oracle::Case]) {
 }
 
 #[test]
+fn integer_radix_parsing_matches_stock() {
+    use closure_oracle::{Case, Expect};
+    parse_oracle(
+        "parse-radix",
+        &[
+            Case {
+                name: "all_widths_and_radices",
+                source: r#"fn main() {
+                assert_eq!(i8::from_str_radix("-80", 16).unwrap(), i8::MIN);
+                assert_eq!(i16::from_str_radix("-8000", 16).unwrap(), i16::MIN);
+                assert_eq!(i32::from_str_radix("-80000000", 16).unwrap(), i32::MIN);
+                assert_eq!(i64::from_str_radix("-8000000000000000", 16).unwrap(), i64::MIN);
+                assert_eq!(i128::from_str_radix("-80000000000000000000000000000000", 16).unwrap(), i128::MIN);
+                assert_eq!(isize::from_str_radix("-8000000000000000", 16).unwrap(), isize::MIN);
+                assert_eq!(u8::from_str_radix("ff", 16).unwrap(), u8::MAX);
+                assert_eq!(u16::from_str_radix("fFff", 16).unwrap(), u16::MAX);
+                assert_eq!(u32::from_str_radix("FFFFFFFF", 16).unwrap(), u32::MAX);
+                assert_eq!(u64::from_str_radix("ffffffffffffffff", 16).unwrap(), u64::MAX);
+                assert_eq!(u128::from_str_radix("ffffffffffffffffffffffffffffffff", 16).unwrap(), u128::MAX);
+                assert_eq!(usize::from_str_radix("ffffffffffffffff", 16).unwrap(), usize::MAX);
+                for radix in 2u32..37u32 {
+                    assert_eq!(u32::from_str_radix("10", radix).unwrap(), radix);
+                    assert_eq!(i32::from_str_radix("-10", radix).unwrap(), -(radix as i32));
+                    assert_eq!(u128::from_str_radix("+00010", radix).unwrap(), radix as u128);
+                }
+                assert_eq!(u32::from_str_radix("Zz", 36).unwrap(), 1295);
+                assert_eq!(i32::from_str_radix("-0", 2).unwrap(), 0);
+            }"#,
+                expect: Expect::Run(""),
+            },
+            Case {
+                name: "digits_signs_and_overflow",
+                source: r#"use std::num::IntErrorKind;
+            fn main() {
+                for text in ["", "+", "-", "0x10", "1_0", " 10", "10 ", "é", "Ｆ", "2"] {
+                    println!("{:?}", u8::from_str_radix(text, 2).unwrap_err().kind());
+                }
+                assert_eq!(i8::from_str_radix("80",16).unwrap_err().kind(), &IntErrorKind::PosOverflow);
+                assert_eq!(i8::from_str_radix("-81",16).unwrap_err().kind(), &IntErrorKind::NegOverflow);
+                assert_eq!(u8::from_str_radix("100",16).unwrap_err().kind(), &IntErrorKind::PosOverflow);
+                assert_eq!(u128::from_str_radix("100000000000000000000000000000000",16).unwrap_err().kind(), &IntErrorKind::PosOverflow);
+                assert_eq!(i128::from_str_radix("-80000000000000000000000000000001",16).unwrap_err().kind(), &IntErrorKind::NegOverflow);
+                assert_eq!(u128::from_str_radix("-0",16).unwrap_err().kind(), &IntErrorKind::InvalidDigit);
+                assert_eq!(u8::from_str_radix("z",35).unwrap_err().kind(), &IntErrorKind::InvalidDigit);
+            }"#,
+                expect: Expect::Run(
+                    "Empty\nInvalidDigit\nInvalidDigit\nInvalidDigit\nInvalidDigit\nInvalidDigit\nInvalidDigit\nInvalidDigit\nInvalidDigit\nInvalidDigit\n",
+                ),
+            },
+            Case {
+                name: "unused_wrong_radix_type",
+                source: "fn bad(){let _=u32::from_str_radix(\"1\", 16u64);}fn main(){}",
+                expect: Expect::Invalid("E0308"),
+            },
+        ],
+    );
+}
+
+#[test]
+fn integer_radix_out_of_range_panics_like_stock() {
+    use std::io::Read;
+    use std::os::unix::process::{CommandExt, ExitStatusExt};
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    unsafe extern "C" {
+        fn prctl(option: std::ffi::c_int, ...) -> std::ffi::c_int;
+    }
+    let root = std::env::temp_dir().join(format!("jr-radix-panic-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    for radix in [0u32, 1, 37] {
+        let source = root.join(format!("radix-{radix}.rs"));
+        std::fs::write(
+            &source,
+            format!("fn main() {{ let _ = u32::from_str_radix(\"\", {radix}); }}"),
+        )
+        .unwrap();
+        let message =
+            format!("from_ascii_radix: radix must lie in the range `[2, 36]` - found {radix}");
+        for workers in [0, 1, 8] {
+            let image = root.join(format!("radix-{radix}-{workers}"));
+            let mut command = if workers == 0 {
+                let mut command = Command::new(stock_rustc::stock_rustc());
+                command.args(["--edition=2024", "-Cpanic=abort", "--crate-name=radix"]);
+                command
+            } else {
+                let mut command = Command::new(env!("CARGO_BIN_EXE_jr-rust"));
+                command.args(["--workers", &workers.to_string()]);
+                command
+            };
+            let built = command.arg(&source).arg("-o").arg(&image).output().unwrap();
+            assert!(
+                built.status.success(),
+                "{}",
+                String::from_utf8_lossy(&built.stderr)
+            );
+            let mut run = Command::new(&image);
+            run.stdout(Stdio::null())
+                .stderr(Stdio::piped())
+                .env("RUST_BACKTRACE", "0");
+            // SAFETY: only a libc syscall runs between fork and exec. Disabling
+            // dumpability prevents a piped core service from delaying SIGABRT.
+            unsafe {
+                run.pre_exec(|| {
+                    if prctl(4, 0usize, 0usize, 0usize, 0usize) == 0 {
+                        Ok(())
+                    } else {
+                        Err(std::io::Error::last_os_error())
+                    }
+                });
+            }
+            let mut child = run.spawn().unwrap();
+            let start = Instant::now();
+            let status = loop {
+                if let Some(status) = child.try_wait().unwrap() {
+                    break status;
+                }
+                if start.elapsed() > Duration::from_secs(10) {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    panic!("radix panic timed out: {radix}, workers={workers}");
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            };
+            let mut stderr = String::new();
+            child
+                .stderr
+                .take()
+                .unwrap()
+                .read_to_string(&mut stderr)
+                .unwrap();
+            assert_eq!(status.signal(), Some(6), "{stderr}");
+            assert!(stderr.contains(&message), "{stderr}");
+        }
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn bool_and_char_from_str_match_stock() {
     use closure_oracle::{Case, Expect};
     parse_oracle(

@@ -795,6 +795,10 @@ missing-file changes invalidate only justified consumers without stale lookup.
       CHECK/BUILD/run at workers 1/8: `justrust test --test primitive_methods`.
       Float parsing and the rest of the standard parsing surface remain open
       (PRIMITIVE-METHODS.md).
+- [x] Source-backed `from_str_radix` for all twelve integer types, checked
+      accumulation in bases 2 through 36, exact error kinds and invalid-radix
+      abort behavior. Stock CHECK/BUILD/run at workers 1/8 and panic comparison:
+      `justrust test --test primitive_methods integer_radix`.
 - [x] Source-backed boolean and Unicode-scalar `FromStr`, public bool/char error
       types and exact error formatting. Stock CHECK/BUILD/run at workers 1/8:
       `justrust test --test primitive_methods bool_and_char_from_str_match_stock`.

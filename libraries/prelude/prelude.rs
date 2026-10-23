@@ -10,7 +10,7 @@ pub mod core_v1 {
     pub use super::super::cmp::{Eq, Ord, PartialEq, PartialOrd};
     pub use super::super::default::Default;
     pub use super::super::convert::From;
-    pub use super::super::primitive::{CharMethods, IntMethods};
+    pub use super::super::primitive::{CharMethods, IntMethods, RadixParse};
 }
 
 pub mod v1 {
@@ -28,5 +28,5 @@ pub mod v1 {
     pub use super::super::cmp::{Eq, Ord, PartialEq, PartialOrd};
     pub use super::super::default::Default;
     pub use super::super::convert::From;
-    pub use super::super::primitive::{CharMethods, IntMethods};
+    pub use super::super::primitive::{CharMethods, IntMethods, RadixParse};
 }
