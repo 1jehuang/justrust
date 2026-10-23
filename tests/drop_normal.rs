@@ -118,10 +118,15 @@ fn capture(command: &mut Command, scratch: &Scratch, seconds: u64) -> Captured {
         if let Some(status) = child.0.try_wait().unwrap() {
             break status;
         }
-        assert!(
-            start.elapsed() < Duration::from_secs(seconds),
-            "timed out: {command:?}"
-        );
+        if start.elapsed() >= Duration::from_secs(seconds) {
+            let _ = child.0.kill();
+            let _ = child.0.wait();
+            panic!(
+                "timed out: {command:?}\nstdout:\n{}\nstderr:\n{}",
+                String::from_utf8_lossy(&fs::read(&stdout).unwrap()),
+                String::from_utf8_lossy(&fs::read(&stderr).unwrap()),
+            );
+        }
         std::thread::sleep(Duration::from_millis(5));
     };
     Captured {
@@ -298,6 +303,7 @@ fn native_accepted(case: &Case) -> bool {
                 | "unsupported/generic.rs"
                 | "unsupported/nested.rs"
                 | "unsupported/tuple.rs"
+                | "unsupported/reference_field.rs"
         ))
         && !attribute_blocked(case)
         && !path_blocked(case)
@@ -309,12 +315,6 @@ fn native_accepted(case: &Case) -> bool {
 /// positive since MUT-PARAMS support.
 fn path_blocked(case: &Case) -> bool {
     matches!(case.path.as_str(), "negative/explicit_ufcs.rs")
-}
-/// Rejected by earlier parser/library boundaries before Drop admission runs:
-/// `String::from` (no alloc/std String) and nominal lifetime parameters.
-/// These neither claim nor refute Drop behavior.
-fn precedent_blocked(case: &Case) -> bool {
-    matches!(case.path.as_str(), "unsupported/reference_field.rs")
 }
 fn rejection_reason(message: &str, case: &Case) {
     let lower = message.to_ascii_lowercase();
@@ -352,18 +352,6 @@ fn rejection_reason(message: &str, case: &Case) {
             lower.contains("non-module declaration in path")
                 || lower.contains("unresolved function"),
             "{}: expected explicit parser/resolver boundary: {message}",
-            case.path
-        );
-        return;
-    }
-    if precedent_blocked(case) {
-        let expected = match case.path.as_str() {
-            "negative/move_field.rs" => "unresolved type",
-            _ => "lifetime parameters on nominal and impl declarations are unsupported",
-        };
-        assert!(
-            lower.contains(expected),
-            "{}: expected precedent syntax boundary `{expected}`: {message}",
             case.path
         );
         return;
@@ -510,19 +498,39 @@ fn frozen_stock_before_native_normal_drop() {
     );
     assert_eq!(
         cases.iter().filter(|case| native_accepted(case)).count(),
-        37
+        38
     );
     assert_eq!(
         cases.iter().filter(|case| attribute_blocked(case)).count(),
         6
     );
     if std::env::var(CHILD).ok().as_deref() == Some(MANIFEST_HASH) {
-        // Exercise genuine positives before compatibility-domain diagnostics.
-        for case in cases.iter().filter(|case| native_accepted(case)) {
-            native(case);
-        }
-        for case in cases.iter().filter(|case| !native_accepted(case)) {
-            native(case);
+        // Stock has already checked the entire corpus before this child starts.
+        // Cases own disjoint scratch directories and compiler graphs, so bounded
+        // parallel lanes preserve every workers-1/8 check without making the
+        // child deadline a limit on the sum of unrelated compilation times.
+        for accepted in [true, false] {
+            let selected: Vec<_> = cases
+                .iter()
+                .filter(|case| native_accepted(case) == accepted)
+                .collect();
+            std::thread::scope(|scope| {
+                let handles: Vec<_> = (0..4)
+                    .map(|lane| {
+                        let selected = &selected;
+                        scope.spawn(move || {
+                            for case in selected.iter().skip(lane).step_by(4) {
+                                native(case);
+                            }
+                        })
+                    })
+                    .collect();
+                for handle in handles {
+                    if let Err(error) = handle.join() {
+                        std::panic::resume_unwind(error);
+                    }
+                }
+            });
         }
         return;
     }

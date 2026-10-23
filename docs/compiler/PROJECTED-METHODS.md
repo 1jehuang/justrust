@@ -81,9 +81,14 @@ Follow-up validation: 1,781 library tests pass (one ignored), graph-integrity
 and projected-method authority suites pass 37 tests (one ignored), and
 all-target clippy succeeds with existing warnings. The isolated inferred
 reference move-authority test also passes. The unchanged full-program corpus
-remains 9/20. The broader `drop_normal` gate is not green: its native child
-exceeded the existing 360-second timeout, without a semantic verdict.
-Receipts: `data/runs/xps14/2026-10-23-temporary-inference.jsonl`.
+remains 9/20. The broader `drop_normal` gate subsequently passed all 56 frozen
+sources, including 38 native-positive cases, through stock-first CHECK/BUILD/run
+at workers 1/8. Four independent case lanes avoid the serial aggregate child
+timeout without changing its 360-second deadline or any per-case assertions.
+The reference-field Drop case is now accepted. This does not establish general
+Drop or temporary-lifetime completeness.
+Receipts: `data/runs/xps14/2026-10-23-temporary-inference.jsonl` and
+`data/runs/xps14/2026-10-23-drop-corpus.jsonl`.
 
 ## Separate authority paths
 
