@@ -134,7 +134,10 @@ pub(super) async fn produce(
         // Opaque roots are published universally even when they have no type
         // arguments. Their canonical INSTANCE frontier, not the closed-source
         // root-only publication protocol, owns the destructor dependencies.
-        Some(cx.request(keys::words(INSTANCE, key.params.clone())?).get(0))
+        Some(
+            cx.request(keys::words(INSTANCE, key.params.clone())?)
+                .get(0),
+        )
     } else {
         None
     };
@@ -177,7 +180,7 @@ pub(super) async fn produce(
         &types,
         &provider.0.budget,
     )?;
-    physical
+    let validation = physical
         .seal(
             publication,
             original.function(),
@@ -224,15 +227,6 @@ pub(super) async fn produce(
             .validate_cleanup(physical.function(), &provider.0.budget)
             .map_err(Error::new)?;
     }
-    let validation = physical
-        .validation(
-            publication,
-            original.function(),
-            &representations,
-            &types,
-            &provider.0.budget,
-        )
-        .map_err(Error::new)?;
     scale_task_work_by_cfg(physical.function());
     let concrete =
         ownership::analyze_physical(Arc::new(physical.function().clone()), closed, &validation)

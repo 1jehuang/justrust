@@ -574,6 +574,21 @@ fn opaque_bound_dispatch_reads_exact_representation_before_physical_body() {
                 let mut changed_type = physical.function().clone();
                 changed_type.result = ir::Ty::Bool;
                 assert!(validation.validate_cfg(&changed_type, &closed).is_err());
+                let mut detached_shape = physical.function().clone();
+                detached_shape.lowering_proof = None;
+                assert!(validation.validate_cfg(&detached_shape, &closed).is_err());
+                let mut copied_shape = physical.function().clone();
+                copied_shape.lowering_proof = physical
+                    .function()
+                    .lowering_proof
+                    .as_ref()
+                    .map(|shape| Arc::new(shape.as_ref().clone()));
+                assert!(validation.validate_cfg(&copied_shape, &closed).is_err());
+                assert!(
+                    validation
+                        .validate_cfg(&physical.function().clone(), &closed)
+                        .is_ok()
+                );
                 let mut direct_abi_controls = 0;
                 for block in &physical.function().blocks {
                     if let cfg::Terminator::Call {

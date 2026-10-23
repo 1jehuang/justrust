@@ -121,17 +121,17 @@ impl PhysicalCfgDraft {
     pub(super) fn function(&self) -> &cfg::Function {
         &self.function
     }
-    pub(super) fn seal(
+    pub(super) fn seal<'a>(
         &mut self,
-        publication: &Arc<source_replay::CanonicalSourcePublication>,
-        original: &cfg::Function,
-        representations: &opaque_instances::Representations,
-        context: &frontend::PlanCtx,
+        publication: &'a Arc<source_replay::CanonicalSourcePublication>,
+        original: &'a cfg::Function,
+        representations: &'a opaque_instances::Representations,
+        context: &'a frontend::PlanCtx,
         closed: &traits::ValidatedFacts,
-        budget: &ir::PlanBudget,
-    ) -> Result<(), String> {
-        let validation = PhysicalValidation::new(
-            &self.proof,
+        budget: &'a ir::PlanBudget,
+    ) -> Result<PhysicalValidation<'a>, String> {
+        let mut validation = PhysicalValidation::new(
+            self.proof.clone(),
             publication,
             original,
             representations,
@@ -141,8 +141,11 @@ impl PhysicalCfgDraft {
         validation.validate_mapping(&self.function, closed)?;
         self.function
             .seal_physical_shape(closed, self.proof.clone(), budget)?;
-        validation.validate_cfg(&self.function, closed)
+        validation.validate_cfg(&self.function, closed)?;
+        validation.sealed_shape = self.function.lowering_proof.clone();
+        Ok(validation)
     }
+    #[cfg(test)]
     pub(super) fn validation<'a>(
         &'a self,
         publication: &'a Arc<source_replay::CanonicalSourcePublication>,
@@ -151,23 +154,28 @@ impl PhysicalCfgDraft {
         context: &'a frontend::PlanCtx,
         budget: &'a ir::PlanBudget,
     ) -> Result<PhysicalValidation<'a>, String> {
-        PhysicalValidation::new(
-            &self.proof,
+        let mut validation = PhysicalValidation::new(
+            self.proof.clone(),
             publication,
             original,
             representations,
             context,
             budget,
-        )
+        )?;
+        let closed = context.instance_facts(&self.proof.target)?;
+        validation.validate_cfg(&self.function, &closed)?;
+        validation.sealed_shape = self.function.lowering_proof.clone();
+        Ok(validation)
     }
 }
 
 /// Ephemeral borrowed authority. It is never published or retained in a proof.
 /// Ordinary CFG validation cannot manufacture this context from a type map.
 pub(super) struct PhysicalValidation<'a> {
-    proof: &'a PhysicalNormalizationProof,
+    proof: Arc<PhysicalNormalizationProof>,
     publication: &'a Arc<source_replay::CanonicalSourcePublication>,
     expected: PhysicalCfgDraft,
+    sealed_shape: Option<Arc<cfg::GeneratedCfgShape>>,
     original: &'a cfg::Function,
     representations: &'a opaque_instances::Representations,
     context: &'a frontend::PlanCtx,
@@ -175,7 +183,7 @@ pub(super) struct PhysicalValidation<'a> {
 }
 impl<'a> PhysicalValidation<'a> {
     fn new(
-        proof: &'a PhysicalNormalizationProof,
+        proof: Arc<PhysicalNormalizationProof>,
         publication: &'a Arc<source_replay::CanonicalSourcePublication>,
         original: &'a cfg::Function,
         representations: &'a opaque_instances::Representations,
@@ -200,6 +208,7 @@ impl<'a> PhysicalValidation<'a> {
             proof,
             publication,
             expected,
+            sealed_shape: None,
             original,
             representations,
             context,
@@ -213,7 +222,20 @@ impl<'a> PhysicalValidation<'a> {
         facts: &traits::ValidatedFacts,
     ) -> Result<(), String> {
         self.validate_mapping(candidate, facts)?;
-        candidate.validate_physical_shape(self.proof, facts, self.budget)
+        if let Some(shape) = &self.sealed_shape {
+            // The private snapshot was checked against the independently
+            // normalized body before this borrowed context was returned.
+            // Mapping still checks every candidate field on every use.
+            if candidate
+                .lowering_proof
+                .as_ref()
+                .is_some_and(|candidate| Arc::ptr_eq(candidate, shape))
+            {
+                return Ok(());
+            }
+            return Err("physical CFG changed its authenticated shape snapshot".into());
+        }
+        candidate.validate_physical_shape(&self.proof, facts, self.budget)
     }
     fn validate_mapping(
         &self,
@@ -287,41 +309,32 @@ impl<'a> PhysicalValidation<'a> {
         signature: &ir::Signature,
     ) -> Result<(), String> {
         let site = occurrence.ok_or("physical call has no original occurrence")?;
+        // `new` independently replays every call from the immutable original
+        // publication into `expected`. Reuse only that private replay result,
+        // never the candidate's proof or a graph-global cache. Re-deriving it
+        // for each ownership/borrow pass repeats full source/module walks.
+        self.budget.charge_work(self.expected.proof.calls.len())?;
         if let Some(call) = self
+            .expected
             .proof
             .calls
             .iter()
             .find(|call| call.occurrence() == site)
         {
-            call.replay(
-                self.publication,
-                &self.proof.target,
-                site,
-                self.representations,
-                self.context,
-                self.budget,
-            )
-            .map_err(|e| e.to_string())?;
             if callee == &ir::Callee::Direct(call.target().clone()) && signature == call.signature()
             {
                 return Ok(());
             }
-        } else if self
-            .proof
-            .direct_calls
-            .iter()
-            .any(|call| call.occurrence == site)
-        {
-            let expected = DirectPhysicalCall::seal(
-                self.publication,
-                &self.proof.target,
-                site,
-                self.representations,
-                self.context,
-                self.budget,
-            )
-            .map_err(|e| e.to_string())?;
-            if callee == &ir::Callee::Direct(expected.target)
+        } else {
+            self.budget
+                .charge_work(self.expected.proof.direct_calls.len())?;
+            if let Some(expected) = self
+                .expected
+                .proof
+                .direct_calls
+                .iter()
+                .find(|call| call.occurrence == site)
+                && callee == &ir::Callee::Direct(expected.target.clone())
                 && signature == &expected.physical_signature
             {
                 return Ok(());
