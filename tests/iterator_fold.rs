@@ -5,6 +5,79 @@
 mod closure_oracle;
 
 #[test]
+fn iterator_bounded_adapters_match_stock() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "bounded-adapters",
+        &[
+            Case {
+                name: "chained_values",
+                source: r#"fn main(){let v:Vec<i32>=(0i32..10i32).rev().skip(2).step_by(3).take(3).collect();println!("{} {} {} {}",v.len(),v[0],v[1],v[2]);println!("{} {} {}",(0i32..5i32).skip(99).count(),(0i32..5i32).take(0).count(),(0i32..5i32).step_by(1).count());}"#,
+                expect: Expect::Run("3 7 4 1\n0 0 5\n"),
+            },
+            Case {
+                name: "non_fused_inputs",
+                source: r#"struct Pulse{n:i32}impl Iterator for Pulse{type Item=i32;fn next(&mut self)->Option<i32>{self.n+=1;if self.n==2||self.n==4{None}else{Some(self.n)}}}fn main(){let mut t=Pulse{n:0}.take(3);println!("{:?} {:?} {:?} {:?}",t.next(),t.next(),t.next(),t.next());let mut s=Pulse{n:0}.skip(1);println!("{:?} {:?} {:?} {:?}",s.next(),s.next(),s.next(),s.next());let mut p=Pulse{n:0}.step_by(2);println!("{:?} {:?} {:?} {:?}",p.next(),p.next(),p.next(),p.next());}"#,
+                expect: Expect::Run(
+                    "Some(1) None Some(3) None\nNone Some(3) None Some(5)\nSome(1) None None Some(6)\n",
+                ),
+            },
+            Case {
+                name: "zero_take_and_large_steps",
+                source: r#"struct Probe;impl Iterator for Probe{type Item=i32;fn next(&mut self)->Option<i32>{println!("polled");Some(1)}}fn main(){let mut p=Probe.take(0);println!("{:?}",p.next());println!("{} {}",(0i32..0i32).skip(usize::MAX).count(),(0i32..1i32).step_by(usize::MAX).count());}"#,
+                expect: Expect::Run("None\n0 1\n"),
+            },
+            Case {
+                name: "bounded_borrow_cannot_escape",
+                source: r#"fn main(){let mut it={let v=vec![1i32,2];v.iter().skip(1).take(1)};println!("{:?}",it.next());}"#,
+                expect: Expect::Invalid("E0597"),
+            },
+        ],
+    );
+}
+
+#[test]
+fn zero_step_panics_like_stock() {
+    use std::os::unix::fs::PermissionsExt;
+    let source =
+        r#"fn main(){println!("before");let _=(0i32..3i32).step_by(0);println!("after");}"#;
+    let root = std::env::var_os("JCODE_SCRATCH_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join(format!("jr-zero-step-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let source_path = root.join("main.rs");
+    std::fs::write(&source_path, source).unwrap();
+    let stock_image = root.join("stock");
+    let stock = std::process::Command::new(
+        std::env::var_os("JUSTRUST_REAL_RUSTC").unwrap_or_else(|| "rustc".into()),
+    )
+    .env_remove("RUSTC_BOOTSTRAP")
+    .args(["--edition=2024", "-Cpanic=abort"])
+    .arg(&source_path)
+    .arg("-o")
+    .arg(&stock_image)
+    .output()
+    .unwrap();
+    assert!(stock.status.success(), "{stock:?}");
+    let stock = std::process::Command::new(stock_image).output().unwrap();
+    assert!(!stock.status.success());
+    assert_eq!(stock.stdout, b"before\n");
+    for workers in [1, 8] {
+        let checked = justrust_engine::compiler::compile(source.into(), workers, true).unwrap();
+        assert!(checked.executable.is_none());
+        let compiled = justrust_engine::compiler::compile(source.into(), workers, false).unwrap();
+        let image = root.join(format!("native-{workers}"));
+        std::fs::write(&image, compiled.executable.unwrap()).unwrap();
+        std::fs::set_permissions(&image, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let native = std::process::Command::new(image).output().unwrap();
+        assert!(!native.status.success());
+        assert_eq!(native.stdout, stock.stdout);
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn custom_iterator_product_matches_stock() {
     closure_oracle::check(
         "custom-product",

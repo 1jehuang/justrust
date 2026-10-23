@@ -12,6 +12,19 @@ pub trait Iterator: Sized {
         }
     }
 
+    fn skip(self, n: usize) -> Skip<Self> {
+        Skip { iterator: self, remaining: n }
+    }
+
+    fn take(self, n: usize) -> Take<Self> {
+        Take { iterator: self, remaining: n }
+    }
+
+    fn step_by(self, step: usize) -> StepBy<Self> {
+        assert!(step != 0usize);
+        StepBy { iterator: self, skip: step - 1usize, first: true }
+    }
+
     fn copied(self) -> Copied<Self> {
         Copied { iterator: self }
     }
@@ -114,6 +127,86 @@ pub trait Iterator: Sized {
             }
         }
     }
+}
+
+pub struct Skip<I> {
+    iterator: I,
+    remaining: usize,
+}
+
+impl<I: Iterator> Iterator for Skip<I> {
+    type Item = I::Item;
+    fn next(&mut self) -> Option<Self::Item> {
+        let mut remaining = self.remaining;
+        self.remaining = 0usize;
+        while remaining != 0usize {
+            remaining -= 1usize;
+            match self.iterator.next() {
+                Option::Some(_) => {},
+                Option::None => return Option::None,
+            }
+        }
+        self.iterator.next()
+    }
+}
+
+impl<I: Iterator> IntoIterator for Skip<I> {
+    type Item = I::Item;
+    type IntoIter = Self;
+    fn into_iter(self) -> Self { self }
+}
+
+pub struct Take<I> {
+    iterator: I,
+    remaining: usize,
+}
+
+impl<I: Iterator> Iterator for Take<I> {
+    type Item = I::Item;
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.remaining == 0usize {
+            return Option::None;
+        }
+        self.remaining -= 1usize;
+        self.iterator.next()
+    }
+}
+
+impl<I: Iterator> IntoIterator for Take<I> {
+    type Item = I::Item;
+    type IntoIter = Self;
+    fn into_iter(self) -> Self { self }
+}
+
+pub struct StepBy<I> {
+    iterator: I,
+    skip: usize,
+    first: bool,
+}
+
+impl<I: Iterator> Iterator for StepBy<I> {
+    type Item = I::Item;
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.first {
+            self.first = false;
+            return self.iterator.next();
+        }
+        let mut remaining = self.skip;
+        while remaining != 0usize {
+            remaining -= 1usize;
+            match self.iterator.next() {
+                Option::Some(_) => {},
+                Option::None => return Option::None,
+            }
+        }
+        self.iterator.next()
+    }
+}
+
+impl<I: Iterator> IntoIterator for StepBy<I> {
+    type Item = I::Item;
+    type IntoIter = Self;
+    fn into_iter(self) -> Self { self }
 }
 
 pub trait Sum<A = Self>: Sized {

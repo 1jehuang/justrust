@@ -6,6 +6,13 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 
 ## Completed foundations, not full compatibility
 
+- [x] Source `skip`, `take` and `step_by` preserve lazy consumption, non-fused
+      iterator behavior and owner loans. `iterator_fold` compares chained values,
+      zero limits, maximal steps and borrow escape rejection against stock at
+      workers 1/8, plus matching runtime panic behavior for a zero step.
+      All 41 graph, iterator, slice and full-program integration tests pass.
+      Reverse/exact-size adapter implementations and other adapters remain open.
+
 - [x] Shared slice iterators implement `DoubleEndedIterator` through ordinary
       source. `slice_methods::double_ended_slice_iteration_matches_stock`
       checks mixed front/back consumption, reversed collection, empty and
