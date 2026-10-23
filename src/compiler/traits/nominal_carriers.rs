@@ -7,7 +7,7 @@ use crate::compiler::cfg;
 #[derive(Clone, Debug)]
 pub(super) struct NominalCarrierAuthority {
     canonical: Arc<CarrierContractView>,
-    target: Callee,
+    target: Option<Callee>,
     signature: Signature,
 }
 
@@ -38,6 +38,68 @@ impl<'a> NominalCarrierSource<'a> {
             facts,
             validated: false,
         }
+    }
+
+    pub(in crate::compiler) fn body(&mut self) -> Result<Arc<CarrierContractView>> {
+        let facts = self.facts;
+        let canonical = facts.carrier_contract(SignatureSubject::Body)?;
+        let mut params = Vec::new();
+        for id in &self.function.params {
+            push(
+                facts.budget(),
+                &mut params,
+                self.function.locals[id.0].ty.clone(),
+            )?;
+        }
+        let signature = Signature {
+            params,
+            result: self.function.result.clone(),
+            ref_contract: self.function.ref_contract.clone(),
+        };
+        facts.validate_signature(SignatureSubject::Body, &signature)?;
+        let mut different = false;
+        for (before, after) in canonical
+            .result_signature
+            .params
+            .iter()
+            .zip(&signature.params)
+            .chain(std::iter::once((
+                &canonical.result_signature.result,
+                &signature.result,
+            )))
+        {
+            different |=
+                charged(
+                    facts.budget(),
+                    ir::carrier_locations(before, facts.budget()),
+                )? != charged(facts.budget(), ir::carrier_locations(after, facts.budget()))?;
+        }
+        if !different {
+            return Ok(canonical);
+        }
+        if self.function.lowering_proof.is_none() {
+            return Err(FactsError::invalid(
+                facts.budget(),
+                "graph body carrier transport requires exact source lowering proof",
+            ));
+        }
+        if !self.validated {
+            self.function
+                .validate_provenance(facts, facts.budget())
+                .map_err(|error| FactsError::from_message(facts.budget(), &error))?;
+            self.validated = true;
+        }
+        retain::<NominalCarrierAuthority>(facts.budget(), 1)?;
+        let authority = Arc::new(NominalCarrierAuthority {
+            canonical,
+            target: None,
+            signature,
+        });
+        let mut view = authority.derive(facts)?;
+        view.nominal = Some(authority);
+        view.validate_for(facts)?;
+        retain::<CarrierContractView>(facts.budget(), 1)?;
+        Ok(Arc::new(view))
     }
 
     pub(in crate::compiler) fn call(
@@ -101,7 +163,7 @@ impl<'a> NominalCarrierSource<'a> {
         retain::<NominalCarrierAuthority>(facts.budget(), 1)?;
         let authority = Arc::new(NominalCarrierAuthority {
             canonical,
-            target: target.clone(),
+            target: Some(target.clone()),
             signature: signature_copy(signature, facts.budget())?,
         });
         let mut view = authority.derive(facts)?;
@@ -127,30 +189,47 @@ impl NominalCarrierAuthority {
     fn derive(&self, facts: &ValidatedFacts) -> Result<CarrierContractView> {
         let original = &self.canonical;
         original.validate_for(facts)?;
-        if !matches!((&original.result_subject, &self.target),
-            (parameter_equality::EqualityResultSubject::Direct(a), Callee::Direct(b)) if a == b)
-        {
-            return Err(FactsError::invalid(
-                facts.budget(),
-                "graph carrier transport differs from its canonical target",
-            ));
-        }
+        let subject = match &self.target {
+            Some(Callee::Direct(target)) => {
+                if !matches!(&original.result_subject, parameter_equality::EqualityResultSubject::Direct(actual) if actual == target)
+                {
+                    return Err(FactsError::invalid(
+                        facts.budget(),
+                        "graph carrier transport differs from its canonical target",
+                    ));
+                }
+                SignatureSubject::Call(self.target.as_ref().unwrap())
+            }
+            None if matches!(
+                &original.result_subject,
+                parameter_equality::EqualityResultSubject::Body { .. }
+            ) =>
+            {
+                SignatureSubject::Body
+            }
+            _ => {
+                return Err(FactsError::invalid(
+                    facts.budget(),
+                    "graph carrier transport differs from its canonical subject",
+                ));
+            }
+        };
         if original.nominal.is_some()
             || original.physical.is_some()
             || original.closure_result.is_some()
             || original.projected.is_some()
             || original.equality_required.is_some()
             || original.equality_results.is_some()
-            || !matches!(self.target, Callee::Direct(_))
+            || matches!(self.target, Some(ref target) if !matches!(target, Callee::Direct(_)))
         {
             return Err(FactsError::unsupported(
                 facts.budget(),
                 "graph carrier transport requires an ordinary direct declaration",
             ));
         }
-        facts.validate_signature(SignatureSubject::Call(&self.target), &self.signature)?;
+        facts.validate_signature(subject, &self.signature)?;
         let world = facts.world();
-        let subject = world.equality_result_subject(SignatureSubject::Call(&self.target), facts)?;
+        let subject = world.equality_result_subject(subject, facts)?;
         let raw = world.normalized_declaration_schema(original.declaration)?;
         let retained = world.declaration_carriers(original.declaration)?;
         world.transport_carrier_parts(
@@ -186,9 +265,9 @@ impl NominalCarrierAuthority {
             || view.components != expected.components
             || view.nominals != expected.nominals
             || view.result_signature != expected.result_signature
-            || !matches!((&view.result_subject, &expected.result_subject),
-                (parameter_equality::EqualityResultSubject::Direct(a),
-                 parameter_equality::EqualityResultSubject::Direct(b)) if a == b)
+            || !facts
+                .world()
+                .same_equality_result_subject(&view.result_subject, &expected.result_subject)?
             || view.closure_result.is_some()
             || view.projected.is_some()
             || view.projected_subject.is_some()
@@ -218,8 +297,24 @@ mod tests {
         cfg::BlockId,
         Arc<CarrierContractView>,
     ) {
+        graph_subject(workers, false)
+    }
+
+    fn graph_subject(
+        workers: usize,
+        body: bool,
+    ) -> (
+        Arc<cfg::Function>,
+        Arc<ValidatedFacts>,
+        cfg::BlockId,
+        Arc<CarrierContractView>,
+    ) {
         let snapshot = Arc::new(Snapshot {
-            input: Input::Text("struct W<'a,T>{r:&'a T} impl<'a,T> W<'a,T>{fn next(&mut self)->Option<&'a T>{Some(self.r)}} fn main(){let n=7i32;let mut w=W{r:&n};let x=w.next();match x{Some(r)=>println!(\"{}\",*r),None=>()}}".into()),
+            input: Input::Text(if body {
+                "fn split(s:&[i32])->(Option<&[i32]>,&[i32]){(Some(&s[..2]),&s[2..])} fn main(){let a=[1i32,2,3];let(x,y)=split(&a);println!(\"{} {}\",x.unwrap().len(),y.len());}"
+            } else {
+                "struct W<'a,T>{r:&'a T} impl<'a,T> W<'a,T>{fn next(&mut self)->Option<&'a T>{Some(self.r)}} fn main(){let n=7i32;let mut w=W{r:&n};let x=w.next();match x{Some(r)=>println!(\"{}\",*r),None=>()}}"
+            }.into()),
             source_options: source::SourceOptions::default(),
             budget: PlanBudget::default(),
         });
@@ -268,6 +363,13 @@ mod tests {
                 }
                 _ => continue,
             };
+            if body {
+                let view = NominalCarrierSource::new(&function, &facts).body().unwrap();
+                if view.nominal.is_some() {
+                    return (function, facts, cfg::BlockId(0), view);
+                }
+                continue;
+            }
             for (index, block) in function.blocks.iter().enumerate() {
                 if !matches!(block.terminator.value, cfg::Terminator::Call { .. }) {
                     continue;
@@ -280,6 +382,35 @@ mod tests {
             }
         }
         panic!("CHECK did not publish the expected graph nominal call");
+    }
+
+    #[test]
+    fn graph_body_carriers_reject_forged_authority() {
+        for workers in [1, 8] {
+            let (function, facts, _, view) = graph_subject(workers, true);
+            view.validate_for(&facts).unwrap();
+            let (_, foreign, _, _) = graph_subject(workers, true);
+            assert!(view.validate_for(&foreign).is_err());
+            let mut detached = (*function).clone();
+            detached.lowering_proof = None;
+            assert!(NominalCarrierSource::new(&detached, &facts).body().is_err());
+            let mut forged = (*function).clone();
+            forged.result = Ty::Bool;
+            assert!(NominalCarrierSource::new(&forged, &facts).body().is_err());
+            let mut changed = (*view).clone();
+            Arc::make_mut(changed.nominal.as_mut().unwrap())
+                .signature
+                .result = Ty::Bool;
+            assert!(changed.validate_for(&facts).is_err());
+            let (_, _, _, call) = graph_view(workers);
+            let mut changed = (*view).clone();
+            Arc::make_mut(changed.nominal.as_mut().unwrap()).target =
+                call.nominal.as_ref().unwrap().target.clone();
+            assert!(changed.validate_for(&facts).is_err());
+            let mut changed = (*view).clone();
+            changed.contract.results = Arc::from([]);
+            assert!(changed.validate_for(&facts).is_err());
+        }
     }
 
     #[test]
@@ -331,7 +462,7 @@ mod tests {
             assert!(changed.validate_for(&facts).is_err());
             let mut changed = (*view).clone();
             let authority = Arc::make_mut(changed.nominal.as_mut().unwrap());
-            let Callee::Direct(target) = &mut authority.target else {
+            let Some(Callee::Direct(target)) = &mut authority.target else {
                 unreachable!()
             };
             target.declaration = facts.declaration();

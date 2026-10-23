@@ -2452,7 +2452,7 @@ impl<'a, 'b> CarrierBuilder<'a, 'b> {
                         super::traits::FactsError::from_message(authority.budget(), &message)
                     })
             } else {
-                authority.carrier_contract(ir::SignatureSubject::Body)
+                super::traits::NominalCarrierSource::new(f, authority).body()
             };
             match body_view {
                 Ok(view) => {

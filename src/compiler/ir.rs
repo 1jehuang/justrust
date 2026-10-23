@@ -1527,6 +1527,7 @@ pub(super) fn identical_type(a: &Ty, b: &Ty, budget: &PlanBudget) -> Result<bool
                 len: bn,
             },
         ) => an == bn && Arc::ptr_eq(a, b),
+        (Ty::Slice { element: a }, Ty::Slice { element: b }) => Arc::ptr_eq(a, b),
         (Ty::Opaque(a), Ty::Opaque(b)) => Arc::ptr_eq(a, b),
         (Ty::Closure(a), Ty::Closure(b)) => Arc::ptr_eq(a, b),
         (Ty::FnItem(a), Ty::FnItem(b)) => {
@@ -5944,7 +5945,7 @@ fn slice_boundary_walk(
     budget: Option<&PlanBudget>,
     depth: usize,
     work: &mut usize,
-) -> Result<(), String> {
+) -> Result<usize, String> {
     struct Scratch<T> {
         values: Vec<T>,
         base: Option<PlanReservation>,
@@ -6058,7 +6059,37 @@ fn slice_boundary_walk(
                     heights.push(0usize, budget)?;
                     continue;
                 }
+                if allow_references && let Some((kind, element)) = node.slice_ref_element() {
+                    if kind != BorrowKind::Shared {
+                        return Err("unsupported: nested mutable slice carriers".into());
+                    }
+                    let (element, layers) = match element {
+                        Ty::Ref {
+                            kind: BorrowKind::Shared,
+                            referent,
+                        } => (referent.as_ref(), 3usize),
+                        _ => (element, 2usize),
+                    };
+                    let height = slice_boundary_walk(
+                        element,
+                        false,
+                        allow_universal_projections,
+                        budget,
+                        at.checked_add(layers).ok_or("slice type depth overflow")?,
+                        work,
+                    )?;
+                    heights.push(
+                        height
+                            .checked_add(layers)
+                            .ok_or("slice type depth overflow")?,
+                        budget,
+                    )?;
+                    continue;
+                }
                 let key = match node {
+                    Ty::RawPtr { pointee, .. } if pointee.contains_slice() => {
+                        return Err("unsupported: raw storage of slice carriers requires heap lifetime retention".into());
+                    }
                     Ty::AssociatedType(_) if allow_universal_projections => None,
                     Ty::AssociatedType(_) => return Err("unsupported: residual associated type projection at slice boundary".into()),
                     Ty::Ref { .. } if !allow_references => return Err("unsupported: slice elements containing references or slices, or nested slice carriers".into()),
@@ -6142,7 +6173,7 @@ fn slice_boundary_walk(
     if heights.values.len() != 1 {
         return Err("slice DAG result count mismatch".into());
     }
-    Ok(())
+    Ok(heights.values[0])
 }
 
 fn validate_shared_slice_element_inner(
@@ -6175,6 +6206,7 @@ fn validate_shared_slice_element_inner(
         0,
         &mut 0,
     )
+    .map(|_| ())
 }
 
 /// Validate exact element metadata and Sized obligations. Admit reference-free
@@ -6218,6 +6250,7 @@ pub(super) fn validate_slice_carrier_with_facts(
             0,
             &mut 0,
         )
+        .map(|_| ())
     }
 }
 
@@ -10866,6 +10899,72 @@ mod conditional_validation_tests {
         for other in [Ty::Int(IntTy::U32), Ty::Bool, Ty::Float(FloatTy::F32)] {
             assert!(!identical_type(&Ty::Char, &other, &PlanBudget::default()).unwrap());
         }
+    }
+
+    #[test]
+    fn nested_slice_shape_keeps_mutability_and_element_gates() {
+        let shared = Ty::Ref {
+            kind: BorrowKind::Shared,
+            referent: Arc::new(Ty::Slice {
+                element: Arc::new(Ty::Int(IntTy::I32)),
+            }),
+        };
+        let ty = Ty::Tuple(Arc::from([shared.clone()]));
+        assert_eq!(
+            slice_boundary_walk(&ty, true, false, Some(&PlanBudget::default()), 0, &mut 0).unwrap(),
+            3
+        );
+        let mutable = Ty::Ref {
+            kind: BorrowKind::Mut,
+            referent: Arc::new(Ty::Slice {
+                element: Arc::new(Ty::Int(IntTy::I32)),
+            }),
+        };
+        assert!(
+            slice_boundary_walk(
+                &Ty::Tuple(Arc::from([mutable])),
+                true,
+                false,
+                Some(&PlanBudget::default()),
+                0,
+                &mut 0
+            )
+            .is_err()
+        );
+        let nested = Ty::Ref {
+            kind: BorrowKind::Shared,
+            referent: Arc::new(Ty::Slice {
+                element: Arc::new(shared),
+            }),
+        };
+        assert!(
+            slice_boundary_walk(
+                &nested,
+                true,
+                false,
+                Some(&PlanBudget::default()),
+                0,
+                &mut 0
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn slice_identity_preserves_canonical_element_allocation() {
+        let budget = PlanBudget::default();
+        let original = Ty::Slice {
+            element: Arc::new(Ty::Int(IntTy::I32)),
+        };
+        assert!(identical_type(&original, &original.clone(), &budget).unwrap());
+        let copied = Ty::Slice {
+            element: Arc::new(Ty::Int(IntTy::I32)),
+        };
+        assert!(!identical_type(&original, &copied, &budget).unwrap());
+        let changed = Ty::Slice {
+            element: Arc::new(Ty::Bool),
+        };
+        assert!(!identical_type(&original, &changed, &budget).unwrap());
     }
 
     #[test]

@@ -52,6 +52,10 @@ impl<T> Vec<T> {
         self.len == 0usize
     }
 
+    pub fn chunks<'a>(&'a self, size: usize) -> super::slice::Chunks<'a, T> {
+        super::slice::Chunks::new(self.as_slice(), size)
+    }
+
     pub fn iter<'a>(&'a self) -> super::slice::Iter<'a, T> {
         super::slice::Iter::new(self.as_slice())
     }

@@ -1008,6 +1008,18 @@ impl<T: Debug> Debug for super::vec::Vec<T> {
     }
 }
 
+impl<T: Debug> Debug for [T] {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        let mut list = f.debug_list();
+        let mut i = 0usize;
+        while i < self.len() {
+            list = list.entry::<T>(&self[i]);
+            i += 1usize;
+        }
+        list.finish()
+    }
+}
+
 impl<T: Debug> Debug for Option<T> {
     fn fmt(&self, f: &mut Formatter) -> Result {
         match self {
@@ -1107,6 +1119,17 @@ pub trait DisplayArg {
 }
 impl<T: Display + ?Sized> DisplayArg for T {
     fn __jr_fmt(&self, fd: usize, fill: char, align: u8, width: usize, precision: usize, flags: u32) {
+        let mut f = arg_formatter(fill, align, width, precision, flags);
+        let _ = self.fmt(&mut f);
+        print_formatter(f, fd);
+    }
+}
+
+pub trait SliceDebugArg {
+    fn __jr_fmt_slice(&self, fd: usize, fill: char, align: u8, width: usize, precision: usize, flags: u32);
+}
+impl<T: Debug> SliceDebugArg for [T] {
+    fn __jr_fmt_slice(&self, fd: usize, fill: char, align: u8, width: usize, precision: usize, flags: u32) {
         let mut f = arg_formatter(fill, align, width, precision, flags);
         let _ = self.fmt(&mut f);
         print_formatter(f, fd);

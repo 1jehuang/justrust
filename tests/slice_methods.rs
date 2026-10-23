@@ -8,6 +8,57 @@ mod stock_rustc;
 use oracle::{Case, Expect, check};
 use std::process::Command;
 
+#[test]
+fn heap_stored_slice_carriers_are_explicitly_unsupported() {
+    let cases = [
+        (
+            "valid",
+            "fn main(){let a=[1i32,2];let v:Vec<&[i32]>=a.chunks(1).collect();println!(\"{}\",v.len());}",
+            true,
+        ),
+        (
+            "escape",
+            "fn main(){let v:Vec<&[i32]>;{let a=[1i32,2];v=a.chunks(1).collect();}println!(\"{}\",v.len());}",
+            false,
+        ),
+    ];
+    for (name, source, valid) in cases {
+        let dir = scratch(&format!("heap-{name}"));
+        let src = dir.join("main.rs");
+        std::fs::write(&src, source).unwrap();
+        let stock = Command::new(stock_rustc::stock_rustc())
+            .args(["--edition=2024", "--emit=metadata"])
+            .arg(&src)
+            .arg("-o")
+            .arg(dir.join("stock.rmeta"))
+            .output()
+            .unwrap();
+        assert_eq!(
+            stock.status.success(),
+            valid,
+            "{}",
+            String::from_utf8_lossy(&stock.stderr)
+        );
+        for workers in ["1", "8"] {
+            for check in [true, false] {
+                let image = dir.join(format!("native-{workers}-{check}"));
+                let mut command = Command::new(env!("CARGO_BIN_EXE_jr-rust"));
+                command.arg(&src).args(["--workers", workers]);
+                if check {
+                    command.arg("--check");
+                } else {
+                    command.arg("-o").arg(&image);
+                }
+                let result = command.output().unwrap();
+                assert!(!result.status.success());
+                assert!(String::from_utf8_lossy(&result.stderr).contains("unsupported: raw storage of slice carriers requires heap lifetime retention"), "{}", String::from_utf8_lossy(&result.stderr));
+                assert!(!image.exists());
+            }
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
 const POSITIVE: &str = r#"
 fn f(v: &mut [i32]) { v.swap(0, 1); }
 fn merge(v: &[i32]) -> Vec<i32> {
@@ -43,6 +94,32 @@ fn main() {
 }
 "#;
 const POSITIVE_OUT: &str = "2 true false false Some(2) Some(4)\n2 1 3 true None\n";
+
+#[test]
+fn shared_slice_carriers_match_stock() {
+    #[path = "support/closure_oracle.rs"]
+    mod closure_oracle;
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "shared-slice-carriers",
+        &[Case {
+            name: "reference_tuple_array_and_generic_identity",
+            source: r#"
+fn indirect(s: &&[u8]) -> usize { (*s).len() }
+fn tuple(s: (&[u8], u8)) -> usize { s.0.len() + s.1 as usize }
+fn array(s: [&[u8]; 1]) -> usize { s[0].len() }
+fn id<T>(x: T) -> T { x }
+fn main() {
+    let a = [1u8, 2, 3];
+    let s: &[u8] = &a;
+    let t = id(s);
+    println!("{} {} {} {}", indirect(&s), tuple((s, 2)), array([s]), t.len());
+}
+"#,
+            expect: Expect::Run("3 5 3 3\n"),
+        }],
+    );
+}
 
 #[test]
 fn slice_methods_match_stock() {
@@ -237,6 +314,121 @@ fn main() {
             },
         ],
     );
+}
+
+#[test]
+#[ignore = "pending general heap-stored reference lifetime authority; not supported by chunks milestone"]
+fn collected_slice_references_require_heap_lifetime_authority() {
+    #[path = "support/closure_oracle.rs"]
+    mod closure_oracle;
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "heap-slice-retention",
+        &[
+            Case {
+                name: "collected_slices",
+                source: r#"fn main(){let a=[1i32,2,3,4];let saved:Vec<&[i32]>=a.chunks(3).collect();println!("{} {}",saved[0][2],saved[1][0]);}"#,
+                expect: Expect::Run("3 4\n"),
+            },
+            Case {
+                name: "collected_chunks_keep_owner_borrowed",
+                source: r#"fn main(){let mut v=vec![1i32,2];let saved:Vec<&[i32]>=v.chunks(1).collect();v.push(3);println!("{}",saved[0][0]);}"#,
+                expect: Expect::Invalid("E0502"),
+            },
+            Case {
+                name: "collected_chunk_outlives_owner",
+                source: r#"fn main(){let c;{let v=vec![1i32,2];let saved:Vec<&[i32]>=v.chunks(1).collect();c=saved[0];}println!("{}",c[0]);}"#,
+                expect: Expect::Invalid("E0597"),
+            },
+        ],
+    );
+}
+
+#[test]
+fn slice_chunks_match_stock() {
+    #[path = "support/closure_oracle.rs"]
+    mod closure_oracle;
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "slice-chunks",
+        &[
+            Case {
+                name: "chunk_sums",
+                source: r#"fn main(){let v=vec![1i32,2,3,4,5,6,7];let sums:Vec<i32>=v.chunks(3).map(|c|c.iter().sum::<i32>()).collect();println!("{:?}",sums);let a=[1i32,2,3,4,5];let mut c=a.chunks(2);println!("{:?} {:?} {:?} {}",c.next_back().unwrap(),c.next().unwrap(),c.next_back().unwrap(),c.next().is_none());}"#,
+                expect: Expect::Run(
+                    "[6, 15, 7]
+[5] [1, 2] [3, 4] true
+",
+                ),
+            },
+            Case {
+                name: "empty_huge_and_zst",
+                source: r#"fn main(){let a:[i32;0]=[];let b=[1i32,2];let z=[();5];println!("{} {} {}",a.chunks(usize::MAX).count(),b.chunks(usize::MAX).next().unwrap().len(),z.chunks(2).rev().map(|c|c.len()).sum::<usize>());}"#,
+                expect: Expect::Run(
+                    "0 2 5
+",
+                ),
+            },
+            Case {
+                name: "nested_shared_descriptors",
+                source: r#"fn split(s:&[i32])->(Option<&[i32]>,&[i32]){(Some(&s[..2]),&s[2..])}fn main(){let a=[1i32,2,3,4];let (x,y)=split(&a);println!("{:?} {:?}",x.unwrap(),y);}"#,
+                expect: Expect::Run("[1, 2] [3, 4]\n"),
+            },
+            Case {
+                name: "chunks_keep_owner_borrowed",
+                source: r#"fn main(){let mut v=vec![1i32,2];let mut c=v.chunks(1);v.push(3);println!("{:?}",c.next());}"#,
+                expect: Expect::Invalid("E0502"),
+            },
+            Case {
+                name: "chunk_outlives_owner",
+                source: r#"fn main(){let c;{let v=vec![1i32,2];c=v.chunks(1).next().unwrap();}println!("{:?}",c);}"#,
+                expect: Expect::Invalid("E0597"),
+            },
+        ],
+    );
+}
+
+#[test]
+fn zero_chunk_panics_like_stock() {
+    let source =
+        "fn main(){let a=[1i32,2];println!(\"before\");let _=a.chunks(0);println!(\"after\");}";
+    let dir = scratch("zero-chunk");
+    let src = dir.join("main.rs");
+    std::fs::write(&src, source).unwrap();
+    let stock = dir.join("stock");
+    let built = Command::new(stock_rustc::stock_rustc())
+        .env_remove("RUSTC_BOOTSTRAP")
+        .args(["--edition=2024", "-Cpanic=abort"])
+        .arg(&src)
+        .arg("-o")
+        .arg(&stock)
+        .output()
+        .unwrap();
+    assert!(built.status.success(), "{built:?}");
+    let expected = Command::new(stock).output().unwrap();
+    assert!(!expected.status.success());
+    assert_eq!(expected.stdout, b"before\n");
+    for workers in ["1", "8"] {
+        let check = Command::new(env!("CARGO_BIN_EXE_jr-rust"))
+            .arg(&src)
+            .args(["--check", "--workers", workers])
+            .output()
+            .unwrap();
+        assert!(check.status.success(), "{check:?}");
+        let image = dir.join(format!("native-{workers}"));
+        let built = Command::new(env!("CARGO_BIN_EXE_jr-rust"))
+            .arg(&src)
+            .arg("-o")
+            .arg(&image)
+            .args(["--workers", workers])
+            .output()
+            .unwrap();
+        assert!(built.status.success(), "{built:?}");
+        let actual = Command::new(image).output().unwrap();
+        assert!(!actual.status.success());
+        assert_eq!(actual.stdout, expected.stdout);
+    }
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]

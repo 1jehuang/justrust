@@ -1892,7 +1892,6 @@ impl<'a> MoveShape<'a> {
             // An unsized trait object referent is one opaque leaf: dyn
             // places are only reached through method receivers, never moved.
             Ty::Opaque(_) | Ty::Dyn(_) => Self::Scalar,
-            Ty::Ref { referent, .. } if referent.contains_slice() => return Err(Exhausted),
             Ty::Int(_)
             | Ty::Float(_)
             | Ty::Char

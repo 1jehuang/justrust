@@ -5289,16 +5289,11 @@ enum SourceLowering<'a> {
     Original(&'a std::sync::Arc<super::source_replay::CanonicalSourcePublication>),
 }
 
-/// Shared slices are whole root locals/temporaries, never results, aggregates
-/// or nested reference positions. Element authority is checked separately.
-pub(super) const SLICE_UNSUPPORTED: &str =
-    "unsupported: slice type outside root shared slice locals is not supported by CFG lowering";
-
+// Slice descriptors may appear inside value aggregates. Their element and
+// mutability constraints are revalidated at each lowering boundary.
 fn validate_slice_position(ty: &Ty, facts: ir::FactsCtx<'_>) -> Result<(), String> {
-    if ty.slice_ref_element().is_some() {
+    if ty.contains_slice() {
         ir::validate_slice_carrier_with_facts(ty, facts)?;
-    } else if ty.contains_slice() {
-        return Err(SLICE_UNSUPPORTED.into());
     }
     Ok(())
 }

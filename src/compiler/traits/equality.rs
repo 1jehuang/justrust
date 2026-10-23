@@ -608,7 +608,15 @@ impl ValidatedTraitWorld {
             Ty::Ref {
                 kind: ir::BorrowKind::Shared,
                 referent,
-            } => self.reject_projected_references(referent, depth + 1),
+            } => {
+                // A shared slice equality describes a descriptor type, not a loan.
+                // Executable origins still come from the callable carrier proof.
+                let referent = match referent.as_ref() {
+                    Ty::Slice { element } => element.as_ref(),
+                    other => other,
+                };
+                self.reject_projected_references(referent, depth + 1)
+            }
             Ty::Ref { .. } | Ty::Slice { .. } => Err(FactsError::unsupported(
                 &self.budget,
                 "unsupported: mutable or nested reference associated equality",

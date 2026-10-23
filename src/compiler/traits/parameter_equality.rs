@@ -341,7 +341,7 @@ impl ValidatedTraitWorld {
         })
     }
 
-    fn same_equality_result_subject(
+    pub(super) fn same_equality_result_subject(
         &self,
         a: &EqualityResultSubject,
         b: &EqualityResultSubject,

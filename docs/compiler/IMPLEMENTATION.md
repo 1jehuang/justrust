@@ -6,6 +6,23 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 
 ## Completed foundations, not full compatibility
 
+- [x] Shared chunk iteration and physical aggregate slice descriptors pass
+      stock CHECK/BUILD/run acceptance at workers 1 and 8. General heap-stored
+      borrowed elements are not complete: collecting chunks into `Vec<&[T]>`
+      requires lifetime retention distinct from raw-pointer storage and exact
+      projected result authority. Raw storage containing slices is explicitly
+      unsupported, including an escaped collection that stock rejects with
+      E0597, rather than incorrectly accepted. Positive heap support remains
+      tracked by `slice_methods::collected_slice_references_require_heap_lifetime_authority`.
+      Nested `map`/`collect` contextual inference without an explicit `sum`
+      result type is also open. Neither gap may be hidden by weakening issued
+      provenance checks or reported as full Rust support. The final hosted
+      replay passes 1,874 tests across the full library and seven integration
+      suites (slice methods, typed slices, typed-slice authority, slice returns,
+      graph integrity, full programs and iterator fold), with zero failures and
+      three explicit ignored gates. `clippy --all-targets` passes with existing
+      compiler warnings. The unchanged full-program corpus remains 11/20.
+
 - [x] Source `Iterator::zip` supports existing and custom `IntoIterator` inputs,
       unequal lengths, conversion at construction, and non-fused polling order.
       Projected generic method constraints now wait for their input slots before

@@ -153,6 +153,58 @@ impl<'a, T: Clone> SliceToVec<'a, T> for &'a [T] {
     }
 }
 
+/// Non-overlapping borrowed chunks, with the final partial chunk retained.
+pub struct Chunks<'a, T> {
+    values: &'a [T],
+    size: usize,
+    front: usize,
+    back: usize,
+}
+
+impl<'a, T> Chunks<'a, T> {
+    pub(super) fn new(values: &'a [T], size: usize) -> Chunks<'a, T> {
+        assert!(size != 0usize);
+        Chunks { values, size, front: 0usize, back: values.len() }
+    }
+}
+
+impl<'a, T> super::iter::Iterator for Chunks<'a, T> {
+    type Item = &'a [T];
+    fn next(&mut self) -> super::option::Option<&'a [T]> {
+        if self.front == self.back { return super::option::Option::None; }
+        let start = self.front;
+        let remaining = self.back - start;
+        let amount = if self.size < remaining { self.size } else { remaining };
+        self.front += amount;
+        super::option::Option::Some(&self.values[start..self.front])
+    }
+}
+
+impl<'a, T> super::iter::DoubleEndedIterator for Chunks<'a, T> {
+    fn next_back(&mut self) -> super::option::Option<&'a [T]> {
+        if self.front == self.back { return super::option::Option::None; }
+        let end = self.back;
+        let remainder = (end - self.front) % self.size;
+        let amount = if remainder == 0usize { self.size } else { remainder };
+        self.back -= amount;
+        super::option::Option::Some(&self.values[self.back..end])
+    }
+}
+
+impl<'a, T> super::iter::IntoIterator for Chunks<'a, T> {
+    type Item = &'a [T];
+    type IntoIter = Self;
+    fn into_iter(self) -> Self { self }
+}
+
+pub trait SliceChunks<'a, T> {
+    fn chunks(self, size: usize) -> Chunks<'a, T>;
+}
+
+impl<'a, T> SliceChunks<'a, T> for &'a [T] {
+    fn chunks(self, size: usize) -> Chunks<'a, T> { Chunks::new(self, size) }
+}
+
 /// `[T]::iter`: a shared element iterator over the borrowed slice.
 pub trait SliceIter<'a, T> {
     fn iter(self) -> Iter<'a, T>;

@@ -302,16 +302,8 @@ fn rejects_outside_admitted_domain() {
     }
     for (source, index, needle) in [
         ("fn f(b: [u8]) {}", 0, "bare by-value slice"),
-        ("fn f(b: &&[u8]) {}", 0, "slice"),
-        ("fn f(b: (&[u8], u8)) {}", 0, "slice"),
         ("struct S { b: &[u8] } fn f(s: S) {}", 0, ""),
         ("struct S { b: [u8] } fn f(s: S) {}", 0, ""),
-        ("fn f(b: [&[u8]; 1]) {}", 0, "slice"),
-        (
-            "fn id<T>(x: T) -> T { x } fn f(b: &[u8]) { let c = id(b); }",
-            1,
-            "slice generic",
-        ),
     ] {
         let message = match publish(source, index) {
             Ok(_) => panic!("admitted {source}"),

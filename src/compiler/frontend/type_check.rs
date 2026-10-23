@@ -2389,14 +2389,11 @@ pub(super) fn array_unsize_carrier(ty: &ir::Ty) -> Option<ir::Ty> {
     })
 }
 
-/// A slice carrier is admitted only as an exact shared or mutable root reference.
+/// Bare slices are unsized values. References and aggregate descriptors are
+/// validated by recursive carrier admission at the consumption boundary.
 fn admit_slice_value_shape(ty: &ir::Ty) -> Result<(), String> {
-    if ty.contains_slice() && ty.slice_ref_element().is_none() {
-        return Err(if matches!(ty, ir::Ty::Slice { .. }) {
-            BARE_SLICE_UNSUPPORTED.into()
-        } else {
-            "unsupported: slices nested in aggregate or reference types".into()
-        });
+    if matches!(ty, ir::Ty::Slice { .. }) {
+        return Err(BARE_SLICE_UNSUPPORTED.into());
     }
     Ok(())
 }
@@ -3960,7 +3957,7 @@ impl<'a> Checker<'a> {
     pub(super) fn checked_type_actual(&self, source: &Type) -> Result<ir::Ty, String> {
         let ty = self.source_type_actual(source)?;
         if ty.contains_slice() {
-            return Err("unsupported: slice generic arguments".into());
+            ir::validate_slice_carrier_with_facts(&ty, self.facts())?;
         }
         let plan = self
             .signatures
@@ -4267,12 +4264,8 @@ impl<'a> Checker<'a> {
     }
     fn admit_slice_value(&self, ty: &ir::Ty) -> Result<(), String> {
         admit_slice_value_shape(ty)?;
-        if let Some((_, element)) = ty.slice_ref_element() {
-            ir::validate_shared_slice_element(
-                element,
-                self.facts(),
-                &self.signatures.plan()?.budget,
-            )?;
+        if ty.contains_slice() {
+            ir::validate_slice_carrier_with_facts(ty, self.facts())?;
         }
         Ok(())
     }
@@ -7844,7 +7837,7 @@ impl<'a> Checker<'a> {
             );
         }
         if referent.contains_slice() {
-            return Err("unsupported: borrowing or reborrowing slice places".into());
+            ir::validate_slice_carrier_with_facts(referent, self.facts())?;
         }
         self.validate_value_carriers(referent)
     }
@@ -8031,8 +8024,10 @@ impl<'a> Checker<'a> {
                 }
             };
         let actuals = target.type_arguments();
-        if actuals.iter().any(ir::Ty::contains_slice) {
-            return Err("unsupported: slice generic arguments".into());
+        for actual in actuals {
+            if actual.contains_slice() {
+                ir::validate_slice_carrier_with_facts(actual, self.facts())?;
+            }
         }
         plan.budget.charge_work(type_actual_regions.len())?;
         self.charge_node(

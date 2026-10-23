@@ -56,6 +56,9 @@ impl Checker<'_> {
         let referent = &referent;
         let unsized_str = matches!(referent, ir::Ty::Str);
         let (trait_name, method) = match (spec.format, unsized_str) {
+            (FormatTrait::Debug, false) if matches!(referent, ir::Ty::Slice { .. }) => {
+                ("SliceDebugArg", "__jr_fmt_slice")
+            }
             (FormatTrait::Display, false) => ("DisplayArg", "__jr_fmt"),
             (FormatTrait::Debug, false) => ("DebugArg", "__jr_fmt"),
             (FormatTrait::Display, true) => ("StrDisplayArg", "__jr_fmt_str"),

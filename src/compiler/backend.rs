@@ -184,9 +184,6 @@ pub(super) fn indirect(ty: &ir::Ty) -> Result<bool, String> {
     if trait_object_ref(ty).is_some() {
         return Ok(true);
     }
-    if ty.contains_slice() {
-        return Err(SLICE_UNSUPPORTED.into());
-    }
     if wide_integer(ty) {
         return Ok(true);
     }
@@ -230,9 +227,6 @@ pub(super) fn value_size(ty: &ir::Ty) -> Result<i32, String> {
     }
     if trait_object_ref(ty).is_some() {
         return Ok(2 * i32::from(FAT_LAYOUT.word_bytes));
-    }
-    if ty.contains_slice() {
-        return Err(SLICE_UNSUPPORTED.into());
     }
     if matches!(ty, ir::Ty::Closure(closure) if closure.captures().is_empty())
         || matches!(ty, ir::Ty::FnItem(_))
