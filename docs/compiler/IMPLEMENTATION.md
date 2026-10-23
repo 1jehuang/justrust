@@ -20,6 +20,18 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
       Slice/range iteration and nested collection pass differential checks at
       workers 1 and 8 (`20261023-031340786-261093`), including empty and zero-sized
       slices without constructing an uninitialized element reference.
+      Post-commit replay of `9a02506f1` confirms 1,784 library tests and all
+      41 tests across the six integration suites pass together
+      (`20261023-032048200-282537`, `20261023-032338997-282531`):
+      `iterator_fold` checks unchanged matrix/string output, nested inference,
+      reverse iteration, collection and generic dispatch against stock at
+      workers 1 and 8; `slice_methods` checks array/range/slice integration,
+      empty/ZST iteration, owner escape and conflicting-mutation rejection;
+      `string_scalars` checks Unicode mappings, UTF-8 and helper privacy;
+      `comparison_source` checks heterogeneous equality and reference contracts;
+      `full_programs` retains 11 successful programs and nine explicit rejections;
+      `graph_integrity` retains all 17 passing structural gates without raising
+      any ceiling. The two previously ignored tests remain ignored.
 
 - [x] Source-level `Iterator::sum` dispatches through `Sum`, with owned and
       borrowed implementations for all integer widths and user-defined result
