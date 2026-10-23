@@ -14597,10 +14597,14 @@ mod inactive_item_syntax_tests {
         )
         .unwrap();
         let declaration = plan.registry.nominals[&key];
+        let applications_before = budget.usage_snapshot().applications;
         let (_, ty) = plan.nominal_schema(declaration, &budget).unwrap();
         assert!(matches!(ty, ir::Ty::Struct(_)), "{ty:?}");
         assert_eq!(nominal_parts(&ty).unwrap().0, declaration);
-        assert_eq!(budget.usage_snapshot().applications, 1);
+        // The canonical application was sealed during plan construction.
+        // Repeated schema reads preserve it without interning a new one.
+        assert_eq!(plan.nominal_schema(declaration, &budget).unwrap().1, ty);
+        assert_eq!(budget.usage_snapshot().applications, applications_before);
         assert_eq!(budget.usage_snapshot().obligations, 0);
         let error = parse("struct S;type A=S;fn main(){let x=A;}").unwrap_err();
         assert!(!error.contains("unsupported"), "{error}");
