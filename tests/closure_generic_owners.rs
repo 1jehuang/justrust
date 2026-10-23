@@ -6,6 +6,49 @@ mod oracle;
 use oracle::{Case, Expect};
 
 #[test]
+fn unused_outer_opaque_binding_is_not_a_closure_capture() {
+    oracle::check(
+        "unused_outer_opaque_binding",
+        &[
+            Case {
+                name: "stateful_closure",
+                source: "fn token()->impl Fn(i32)->i32{|x|x+1} fn main(){let unused=token();let mut n=0;let mut next=||{n+=1;n};println!(\"{} {}\",next(),next());}",
+                expect: Expect::Run("1 2\n"),
+            },
+            Case {
+                name: "independent_closure",
+                source: "fn token()->impl Fn(i32)->i32{|x|x+1} fn main(){let unused=token();let independent=|x:i32|x+1;println!(\"{}\",independent(41));}",
+                expect: Expect::Run("42\n"),
+            },
+        ],
+    );
+}
+
+#[test]
+fn opaque_owner_preserves_reference_result_flow() {
+    oracle::check(
+        "opaque_reference_result_flow",
+        &[
+            Case {
+                name: "shared_result",
+                source: "fn token()->impl Fn(i32)->i32{|x|x+1} fn relay<T>(x:&i32,y:T)->&i32{x} fn main(){let n=42;let r=relay(&n,token());println!(\"{}\",*r);}",
+                expect: Expect::Run("42\n"),
+            },
+            Case {
+                name: "mutable_result",
+                source: "fn token()->impl Fn(i32)->i32{|x|x+1} fn relay<T>(x:&mut i32,y:T)->&mut i32{x} fn main(){let mut n=1;let r=relay(&mut n,token());*r=42;println!(\"{}\",n);}",
+                expect: Expect::Run("42\n"),
+            },
+            Case {
+                name: "borrowed_local_cannot_escape",
+                source: "fn token()->impl Fn(i32)->i32{|x|x+1} fn relay<T>(x:&i32,y:T)->&i32{x} fn main(){let r;{let n=42;r=relay(&n,token());}println!(\"{}\",*r);}",
+                expect: Expect::Invalid("E0597"),
+            },
+        ],
+    );
+}
+
+#[test]
 fn opaque_callable_with_realized_nominal_local() {
     oracle::check(
         "opaque_realized_nominal",

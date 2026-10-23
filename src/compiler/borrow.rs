@@ -109,6 +109,16 @@ fn ordered_call_bindings(
     Ok(true)
 }
 
+fn call_binding_view_matches(
+    binding: &CallCarrierBinding,
+    calls: &[Option<Arc<super::traits::CarrierContractView>>],
+) -> bool {
+    calls
+        .get(binding.block.0)
+        .and_then(Option::as_ref)
+        .is_some_and(|validated| Arc::ptr_eq(validated, &binding.contract))
+}
+
 /// The diagnostic pass visits blocks in ascending order, and publication
 /// rejects duplicates or reordered rows. Search only that immutable table,
 /// charging before every comparison, including failed/absent-key probes.
@@ -826,6 +836,36 @@ fn result_flow_problem(
 }
 
 /// A root generic result instantiated to one reference retains the element's
+fn physical_result_flow_problem(
+    physical: Option<&super::opaque_physical::PhysicalCarrierFlow>,
+    view: Option<&super::traits::CarrierContractView>,
+    facts: Option<&super::traits::ValidatedFacts>,
+    subject: ir::SignatureSubject<'_>,
+    signature: &ir::Signature,
+    location: &CarrierLocation,
+    view_validated: &mut bool,
+) -> Result<Option<Problem>, Exhausted> {
+    let Some(physical) = physical else {
+        return result_flow_problem(view, facts, subject, signature, location, view_validated);
+    };
+    let (Some(view), Some(facts)) = (view, facts) else {
+        return Ok(Some(Problem::Invalid(
+            "physical result lost its view or facts".into(),
+        )));
+    };
+    match physical.validate_result(view, facts, subject, signature, location) {
+        Ok(()) => Ok(None),
+        Err(message) => {
+            let error = super::traits::FactsError::from_message(facts.budget(), &message);
+            if error.is_resource() {
+                Err(Exhausted)
+            } else {
+                Ok(Some(Problem::Invalid(message)))
+            }
+        }
+    }
+}
+
 /// declared family lifetime, not the lifetime of the slice descriptor. This is
 /// shape selection for the existing authenticated result-flow and origin checks.
 fn borrowed_slice_family_result(
@@ -1057,11 +1097,13 @@ struct CarrierBuilder<'a, 'b> {
     calls: Vec<Option<Arc<super::traits::CarrierContractView>>>,
     // Each block has one immutable callee/view and this builder has one fixed
     // facts/table pair. Cache only successful lookups, including no summary,
+    physical_calls: Vec<Option<super::opaque_physical::PhysicalCarrierFlow>>,
     // so dataflow revisits do not replay identical authority proofs.
     call_effects: Vec<Option<Option<Arc<CarrierEffects>>>>,
     body: Option<Arc<super::traits::CarrierContractView>>,
     body_signature: Option<ir::Signature>,
     call_rows: Vec<Vec<(CarrierLocation, ReferenceOriginId)>>,
+    physical_body: Option<super::opaque_physical::PhysicalCarrierFlow>,
     raw_slice_rows: Vec<(BlockId, usize, ReferenceOriginId)>,
     function: Option<Arc<cfg::Function>>,
     authority: Option<Arc<super::traits::ValidatedFacts>>,
@@ -2305,7 +2347,10 @@ impl<'a, 'b> CarrierBuilder<'a, 'b> {
         ledger: ir::PlanBudget,
         budget: &'b mut Budget,
         max_bytes: usize,
-        physical: Option<&'a super::opaque_physical::PhysicalValidation<'a>>,
+        physical: Option<(
+            &'a super::opaque_physical::PhysicalValidation<'a>,
+            &'a Arc<super::traits::ValidatedFacts>,
+        )>,
     ) -> Result<Self, Exhausted> {
         let allocation_start = budget.reserved_bytes();
         // Closed layouts do not grant new read-cover authority. Retain only
@@ -2314,6 +2359,10 @@ impl<'a, 'b> CarrierBuilder<'a, 'b> {
         let original = f
             .body_substitution
             .as_ref()
+        let (physical, physical_facts) = match physical {
+            Some((validation, facts)) => (Some(validation), Some(facts)),
+            None => (None, None),
+        };
             .map_or(f, |proof| proof.template().function().as_ref());
         // Canonical lowering reserves source locals, one slot per expression,
         // then the return slot before any type-dependent extra temporaries.
@@ -2543,6 +2592,12 @@ impl<'a, 'b> CarrierBuilder<'a, 'b> {
             raw_slice_rows,
             function: None,
             authority: None,
+        if physical.is_some() {
+            budget.reserve_bytes(mul(
+                f.blocks.len(),
+                size_of::<Option<super::opaque_physical::PhysicalCarrierFlow>>(),
+            )?)?;
+        }
             validated_provenance: None,
             bindings: vec![],
             regions: RegionRelations::default(),
@@ -2574,8 +2629,14 @@ impl<'a, 'b> CarrierBuilder<'a, 'b> {
             }
         }
         let mut next_reference = 0usize;
+            physical_calls: if physical.is_some() {
+                (0..f.blocks.len()).map(|_| None).collect()
+            } else {
+                Vec::new()
+            },
         let mut next_family = 0usize;
         for (param, local) in f.params.iter().enumerate() {
+            physical_body: None,
             for location in layouts[local.0].iter() {
                 let component = Place {
                     local: *local,
@@ -2665,7 +2726,14 @@ impl<'a, 'b> CarrierBuilder<'a, 'b> {
             let body_view = if let Some(physical) = physical {
                 physical
                     .body_carriers(f, authority)
-                    .and_then(|boundary| boundary.realize())
+                    .and_then(|boundary| {
+                        boundary.realize_flow(physical_facts.ok_or("physical facts missing")?)
+                    })
+                    .map(|flow| {
+                        let view = flow.view().clone();
+                        builder.physical_body = Some(flow);
+                        view
+                    })
                     .map_err(|message| {
                         super::traits::FactsError::from_message(authority.budget(), &message)
                     })
@@ -2677,7 +2745,8 @@ impl<'a, 'b> CarrierBuilder<'a, 'b> {
                     let mut valid = true;
                     let mut view_validated = false;
                     for result in view.contract().results.iter() {
-                        if let Some(problem) = result_flow_problem(
+                        if let Some(problem) = physical_result_flow_problem(
+                            builder.physical_body.as_ref(),
                             Some(&view),
                             Some(authority),
                             ir::SignatureSubject::Body,
@@ -2713,7 +2782,15 @@ impl<'a, 'b> CarrierBuilder<'a, 'b> {
                     let call_view = if let Some(physical) = physical {
                         physical
                             .call_carriers(f, authority, BlockId(index))
-                            .and_then(|boundary| boundary.realize())
+                            .and_then(|boundary| {
+                                boundary
+                                    .realize_flow(physical_facts.ok_or("physical facts missing")?)
+                            })
+                            .map(|flow| {
+                                let view = flow.view().clone();
+                                builder.physical_calls[index] = Some(flow);
+                                view
+                            })
                             .map_err(|message| {
                                 super::traits::FactsError::from_message(
                                     authority.budget(),
@@ -2728,7 +2805,8 @@ impl<'a, 'b> CarrierBuilder<'a, 'b> {
                             let mut valid = true;
                             let mut view_validated = false;
                             for result in view.contract().results.iter() {
-                                if let Some(problem) = result_flow_problem(
+                                if let Some(problem) = physical_result_flow_problem(
+                                    builder.physical_calls.get(index).and_then(Option::as_ref),
                                     Some(&view),
                                     Some(authority),
                                     ir::SignatureSubject::Call(target),
@@ -3422,7 +3500,8 @@ impl CarrierBuilder<'_, '_> {
         if let Some(view) = &view {
             let mut view_validated = false;
             for result in view.contract().results.iter() {
-                if let Some(problem) = result_flow_problem(
+                if let Some(problem) = physical_result_flow_problem(
+                    self.physical_calls.get(block.0).and_then(Option::as_ref),
                     Some(view),
                     facts,
                     ir::SignatureSubject::Call(&target),
@@ -3448,7 +3527,8 @@ impl CarrierBuilder<'_, '_> {
         }
         let mut view_validated = false;
         for (location, row) in rows {
-            if let Some(problem) = result_flow_problem(
+            if let Some(problem) = physical_result_flow_problem(
+                self.physical_calls.get(block.0).and_then(Option::as_ref),
                 view.as_deref(),
                 facts,
                 ir::SignatureSubject::Call(&target),
@@ -4628,26 +4708,11 @@ impl CarrierBuilder<'_, '_> {
                     self.function.as_ref(),
                     self.authority.as_ref(),
                 );
-                let binding_validation = if let Some(physical) = self.physical {
-                    physical
-                        .validate_carrier_view(
-                            self.f,
-                            &binding.facts,
-                            Some(binding.call),
-                            &binding.contract,
-                        )
-                        .map_err(|message| {
-                            super::traits::FactsError::from_message(&self.ledger, &message)
-                        })
-                } else {
-                    binding.contract.validate_for(&binding.facts)
-                };
-                if let Err(error) = binding_validation {
-                    if error.is_resource() {
-                        return Err(Exhausted);
-                    }
-                    invalid_binding = true;
-                }
+                // `new` authenticated these immutable views, and the subject
+                // check above retains the exact function and facts pair.
+                // A binding must carry that same per-block Arc, not merely an
+                // equivalent contract that requires authority replay.
+                invalid_binding |= !call_binding_view_matches(binding, &self.calls);
                 for entry in &binding.entry {
                     self.budget
                         .spend(binding.contract.contract().inputs.len() + entry.origins.count())?;
@@ -4832,6 +4897,7 @@ fn visit_rvalue_for_statement(
             index,
             value,
         }
+            physical_body: self.physical_body,
         | Statement::IndexAssignOp {
             array,
             index,
@@ -5146,6 +5212,7 @@ fn identity_effect_rows(
         )?;
         if row.destination != expected.destination
             || row.sources.len() != 1
+    physical_body: Option<super::opaque_physical::PhysicalCarrierFlow>,
             || !matches!(row.destination.location.channel, CarrierChannel::Fixed(_))
             || row.destination.location.path.0.iter().any(|step| {
                 !matches!(
@@ -5493,7 +5560,7 @@ impl Plan {
             facts.budget().clone(),
             budget,
             max_bytes,
-            Some(physical),
+            Some((physical, facts)),
         )?;
         builder.function = Some(f.clone());
         builder.authority = Some(facts.clone());
@@ -5929,7 +5996,8 @@ impl Plan {
             }
             let mut view_validated = false;
             for row in body.contract().results.iter() {
-                if let Some(problem) = result_flow_problem(
+                if let Some(problem) = physical_result_flow_problem(
+                    self.physical_body.as_ref(),
                     Some(body),
                     authority,
                     ir::SignatureSubject::Body,
@@ -6777,6 +6845,21 @@ mod parameter_equality_tests {
                     row.block = BlockId(index * 2 + 1);
                     row
                 })
+        let mut calls = vec![None; template.function().blocks.len()];
+        for binding in original.iter() {
+            calls[binding.block.0] = Some(binding.contract.clone());
+        }
+        assert!(
+            original
+                .iter()
+                .all(|binding| call_binding_view_matches(binding, &calls))
+        );
+        let mut foreign_view = original[0].clone();
+        foreign_view.contract = Arc::new(foreign_view.contract.as_ref().clone());
+        assert!(!call_binding_view_matches(&foreign_view, &calls));
+        let mut missing_view = calls.clone();
+        missing_view[original[0].block.0] = None;
+        assert!(!call_binding_view_matches(&original[0], &missing_view));
                 .collect();
             let bound = (usize::BITS - count.leading_zeros()) as usize;
             assert!(ordered_call_bindings(&rows, &mut Budget::new(count - 1)).unwrap());

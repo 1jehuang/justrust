@@ -4,8 +4,8 @@ use super::*;
 
 #[path = "opaque_physical/carriers.rs"]
 mod carriers;
-pub(super) use carriers::PhysicalCarrierIdentity;
 pub(super) use carriers::require_preserved_boundary;
+pub(super) use carriers::{PhysicalCarrierFlow, PhysicalCarrierIdentity};
 
 #[derive(Clone, Debug)]
 struct DirectPhysicalCall {

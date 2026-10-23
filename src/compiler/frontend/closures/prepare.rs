@@ -185,6 +185,12 @@ impl Checker<'_> {
         let mut projections = Vec::new();
         let mut kind = ir::ClosureKind::Fn;
         for ((parent, local), captures) in candidates.into_iter().zip(uses) {
+            // These slots are name-lookup scratch, not declarations inside the
+            // closure. An unused outer binding contributes neither storage nor
+            // a representation dependency to this generated callable.
+            if captures.is_empty() {
+                child.locals[local.0].ty = ir::Ty::Unit;
+            }
             for capture in captures {
                 let usage = capture.usage;
                 kind = match (kind, usage.kind()) {

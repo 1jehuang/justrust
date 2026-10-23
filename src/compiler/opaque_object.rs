@@ -29,10 +29,12 @@ pub(super) async fn produce(
     if !candidate {
         return Ok(None);
     }
-    let publication = template
-        .publication
-        .as_ref()
-        .ok_or_else(|| Error::new("physical opaque object omitted original publication"))?;
+    let publication = template.publication.as_ref().ok_or_else(|| {
+        Error::new(format!(
+            "physical opaque object {} (source {source_index}) omitted original publication",
+            source.name
+        ))
+    })?;
     let mut specialization = opaque_specialization::Specialization::new(
         publication,
         &target,

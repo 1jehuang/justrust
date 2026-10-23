@@ -2,6 +2,7 @@
 //! to physical OBJECT ownership and are never accepted by ordinary facts APIs.
 use super::*;
 
+#[cfg(test)]
 fn same_result_subject(
     left: &parameter_equality::EqualityResultSubject,
     right: &parameter_equality::EqualityResultSubject,
@@ -50,6 +51,7 @@ impl CarrierContractView {
         view
     }
 
+    #[cfg(test)]
     pub(in crate::compiler) fn matches_physical_boundary(
         &self,
         expected: &Self,

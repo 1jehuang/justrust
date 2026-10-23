@@ -23,7 +23,85 @@ pub(in crate::compiler) struct PhysicalCarrierBoundary<'a> {
     contract: ir::CarrierContract,
 }
 
+/// A local consumer's immutable result-flow authority. Construction replays
+/// the borrowed physical boundary, never an ordinary declaration view.
+pub(in crate::compiler) struct PhysicalCarrierFlow {
+    view: Arc<traits::CarrierContractView>,
+    facts: Arc<traits::ValidatedFacts>,
+    target: Option<ir::Callee>,
+}
+
+impl PhysicalCarrierFlow {
+    pub(in crate::compiler) fn view(&self) -> &Arc<traits::CarrierContractView> {
+        &self.view
+    }
+
+    pub(in crate::compiler) fn validate_result(
+        &self,
+        view: &traits::CarrierContractView,
+        facts: &traits::ValidatedFacts,
+        subject: ir::SignatureSubject<'_>,
+        signature: &ir::Signature,
+        location: &ir::CarrierLocation,
+    ) -> Result<(), String> {
+        let budget = self.facts.budget();
+        let same_subject = match (&self.target, subject) {
+            (None, ir::SignatureSubject::Body) => true,
+            (Some(expected), ir::SignatureSubject::Call(actual)) => match (expected, actual) {
+                (ir::Callee::Direct(a), ir::Callee::Direct(b)) => {
+                    a.declaration == b.declaration && Arc::ptr_eq(&a.type_args, &b.type_args)
+                }
+                (ir::Callee::TraitItem(a), ir::Callee::TraitItem(b))
+                | (ir::Callee::Untupled(a), ir::Callee::Untupled(b)) => {
+                    a.item == b.item
+                        && a.trait_ref.declaration == b.trait_ref.declaration
+                        && Arc::ptr_eq(&a.method_args, &b.method_args)
+                        && Arc::ptr_eq(&a.trait_ref.args, &b.trait_ref.args)
+                        && ir::identical_type(&a.trait_ref.self_ty, &b.trait_ref.self_ty, budget)?
+                }
+                (ir::Callee::Virtual(a), ir::Callee::Virtual(b)) => {
+                    a.call.item == b.call.item
+                        && a.call.trait_ref.declaration == b.call.trait_ref.declaration
+                        && Arc::ptr_eq(&a.call.method_args, &b.call.method_args)
+                        && Arc::ptr_eq(&a.call.trait_ref.args, &b.call.trait_ref.args)
+                        && ir::identical_type(
+                            &a.call.trait_ref.self_ty,
+                            &b.call.trait_ref.self_ty,
+                            budget,
+                        )?
+                }
+                _ => false,
+            },
+            _ => false,
+        };
+        let expected = self.view.physical_source_signature();
+        budget.charge_work(1)?;
+        if !std::ptr::eq(view, self.view.as_ref())
+            || !std::ptr::eq(facts, self.facts.as_ref())
+            || !same_subject
+            || signature.params.len() != expected.params.len()
+            || !Arc::ptr_eq(&signature.ref_contract, &expected.ref_contract)
+            || !ir::identical_type(&signature.result, &expected.result, budget)?
+        {
+            return Err("physical result flow changed its authenticated boundary".into());
+        }
+        for (actual, expected) in signature.params.iter().zip(&expected.params) {
+            if !ir::identical_type(actual, expected, budget)? {
+                return Err("physical result flow changed its parameter metadata".into());
+            }
+        }
+        for candidate in ir::carrier_locations(&signature.result, budget)?.iter() {
+            budget.charge_work(1)?;
+            if candidate == location {
+                return Ok(());
+            }
+        }
+        Err("physical result flow location is outside the actual result".into())
+    }
+}
+
 impl PhysicalValidation<'_> {
+    #[cfg(test)]
     pub(in crate::compiler) fn validate_carrier_view(
         &self,
         function: &cfg::Function,
@@ -229,6 +307,42 @@ impl PhysicalValidation<'_> {
 }
 
 impl PhysicalCarrierBoundary<'_> {
+    pub(in crate::compiler) fn realize_flow(
+        &self,
+        facts: &Arc<traits::ValidatedFacts>,
+    ) -> Result<PhysicalCarrierFlow, String> {
+        if !std::ptr::eq(facts.as_ref(), self.facts) {
+            return Err("physical result flow changed its facts authority".into());
+        }
+        let view = self.realize()?;
+        let target = match self.occurrence {
+            None => None,
+            Some(site) => {
+                self.validation
+                    .budget
+                    .charge_work(self.function.blocks.len())?;
+                let block = self
+                    .function
+                    .blocks
+                    .iter()
+                    .find(|block| block.terminator.origin == Some(site))
+                    .ok_or("physical result flow lost its call occurrence")?;
+                let cfg::Terminator::Call { target, .. } = &block.terminator.value else {
+                    return Err("physical result flow changed its call kind".into());
+                };
+                Some(target.clone())
+            }
+        };
+        self.validation
+            .budget
+            .retain_bytes(std::mem::size_of::<PhysicalCarrierFlow>())?;
+        Ok(PhysicalCarrierFlow {
+            view,
+            facts: facts.clone(),
+            target,
+        })
+    }
+
     pub(in crate::compiler) fn realize(&self) -> Result<Arc<traits::CarrierContractView>, String> {
         self.validate()?;
         if (self.original.source_region_env().region_count != 0
@@ -898,6 +1012,78 @@ mod tests {
                     validation
                         .validate_carrier_view(physical.function(), &closed, None, &view)
                         .map_err(Error::new)?;
+                    let flow = boundary.realize_flow(&closed).map_err(Error::new)?;
+                    for location in ir::carrier_locations(&boundary.signature.result, budget)
+                        .map_err(Error::new)?
+                        .iter()
+                    {
+                        flow.validate_result(
+                            flow.view(),
+                            &closed,
+                            ir::SignatureSubject::Body,
+                            &boundary.signature,
+                            location,
+                        )
+                        .map_err(Error::new)?;
+                        let cloned_view = flow.view().as_ref().clone();
+                        assert!(
+                            flow.validate_result(
+                                &cloned_view,
+                                &closed,
+                                ir::SignatureSubject::Body,
+                                &boundary.signature,
+                                location
+                            )
+                            .is_err()
+                        );
+                        let cloned_facts = closed.as_ref().clone();
+                        assert!(
+                            flow.validate_result(
+                                flow.view(),
+                                &cloned_facts,
+                                ir::SignatureSubject::Body,
+                                &boundary.signature,
+                                location
+                            )
+                            .is_err()
+                        );
+                        let other_subject = ir::Callee::Direct(target.clone());
+                        assert!(
+                            flow.validate_result(
+                                flow.view(),
+                                &closed,
+                                ir::SignatureSubject::Call(&other_subject),
+                                &boundary.signature,
+                                location
+                            )
+                            .is_err()
+                        );
+                        let mut changed_signature = boundary.signature.clone();
+                        changed_signature.result = ir::Ty::Bool;
+                        assert!(
+                            flow.validate_result(
+                                flow.view(),
+                                &closed,
+                                ir::SignatureSubject::Body,
+                                &changed_signature,
+                                location
+                            )
+                            .is_err()
+                        );
+                        let mut changed_location = location.clone();
+                        changed_location.path =
+                            ir::CarrierPath(Arc::from([ir::CarrierStep::Field(usize::MAX)]));
+                        assert!(
+                            flow.validate_result(
+                                flow.view(),
+                                &closed,
+                                ir::SignatureSubject::Body,
+                                &boundary.signature,
+                                &changed_location
+                            )
+                            .is_err()
+                        );
+                    }
                     let original_contract = boundary.contract.clone();
                     boundary.contract = ir::CarrierContract::default();
                     assert!(
