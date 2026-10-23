@@ -1286,6 +1286,7 @@ fn validate_call_evidence_with_policy(
             .ok_or("call evidence index overflow")?,
     )?;
     let mut seen = vec![false; source.exprs.len()];
+    let mut trait_scratch = super::traits::TraitScratch::default();
     for evidence in source.call_evidence.iter() {
         budget.charge_work(1)?;
         let slot = seen
@@ -1305,8 +1306,11 @@ fn validate_call_evidence_with_policy(
             return Err("call evidence does not name a call".into());
         };
         facts
-            .service()
-            .validate_signature(SignatureSubject::Call(target), signature, facts)
+            .validate_signature_with(
+                SignatureSubject::Call(target),
+                signature,
+                &mut trait_scratch,
+            )
             .map_err(|error| error.into_legacy_diagnostic(budget))?;
         if evidence.arguments.len() != args.len() || args.len() != signature.params.len() {
             return Err("call evidence argument arity mismatch".into());

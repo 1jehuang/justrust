@@ -119,6 +119,74 @@ fn closure_type_walk_reuses_only_the_same_checked_allocation() {
             .is_err()
     );
     assert_eq!(walk.complete.len(), completed);
+
+    let mut proofs = ProofScratch::default();
+    let bytes = f.budget.usage_snapshot().bytes;
+    let closed = world
+        .closedness_of_root(&ty, f.facts.env(), TypeUse::Root, 0, &mut proofs)
+        .unwrap();
+    assert!(!closed.has_parameters && !closed.has_opaque);
+    assert_eq!(closed.height, height);
+    assert!(
+        f.budget.usage_snapshot().bytes > bytes,
+        "retained inputs are paid"
+    );
+    let work = f.budget.usage_snapshot().work;
+    let nodes = f.budget.usage_snapshot().nodes;
+    let again = world
+        .closedness_of_root(&ty, f.facts.env(), TypeUse::Root, 0, &mut proofs)
+        .unwrap();
+    assert_eq!(again.height, closed.height);
+    assert_eq!(f.budget.usage_snapshot().work - work, 1);
+    assert_eq!(f.budget.usage_snapshot().nodes - nodes, 1);
+    let entries = proofs.closedness.len();
+    assert!(
+        world
+            .closedness_of_root(&forged, f.facts.env(), TypeUse::Root, 0, &mut proofs)
+            .is_err()
+    );
+    assert_eq!(proofs.closedness.len(), entries);
+    let foreign = fixture();
+    assert!(
+        foreign
+            .plan
+            .trait_world()
+            .unwrap()
+            .closedness_of_root(&ty, f.facts.env(), TypeUse::Root, 0, &mut proofs)
+            .is_err()
+    );
+    assert_eq!(proofs.closedness.len(), entries);
+
+    let env = world.info(f.template.owner()).unwrap().env;
+    let parameter = Ty::Param(env.ordered_params().next().unwrap());
+    let open = world
+        .closedness_of_root(&parameter, &env, TypeUse::Actual, 0, &mut proofs)
+        .unwrap();
+    assert!(open.has_parameters && !open.has_opaque);
+    let plain = world
+        .closedness_of_root(&Ty::Bool, &env, TypeUse::Actual, 0, &mut proofs)
+        .unwrap();
+    assert!(
+        !plain.has_parameters && !plain.has_opaque,
+        "flags belong to each root"
+    );
+    assert!(
+        world
+            .closedness_of_root(&parameter, f.facts.env(), TypeUse::Actual, 0, &mut proofs)
+            .is_err()
+    );
+    let open_again = world
+        .closedness_of_root(&parameter, &env, TypeUse::Actual, 0, &mut proofs)
+        .unwrap();
+    assert!(open_again.has_parameters);
+    world
+        .closedness_of_root(&Ty::Str, f.facts.env(), TypeUse::Root, 0, &mut proofs)
+        .unwrap();
+    assert!(
+        world
+            .closedness_of_root(&Ty::Str, f.facts.env(), TypeUse::Actual, 0, &mut proofs)
+            .is_err()
+    );
     // A hit still checks the complete subtree's depth at its new position.
     assert!(
         world
@@ -128,6 +196,32 @@ fn closure_type_walk_reuses_only_the_same_checked_allocation() {
                 f.budget.limits().depth,
                 TypeUse::Root,
                 &mut walk,
+            )
+            .is_err()
+    );
+}
+
+#[test]
+fn closedness_memo_retains_subtree_depth_on_hits() {
+    let f = fixture();
+    let world = f.plan.trait_world().unwrap();
+    let ty = Ty::Array {
+        element: Arc::new(Ty::Bool),
+        len: 1,
+    };
+    let mut scratch = ProofScratch::default();
+    let result = world
+        .closedness_of_root(&ty, f.facts.env(), TypeUse::Root, 0, &mut scratch)
+        .unwrap();
+    assert_eq!(result.height, 1);
+    assert!(
+        world
+            .closedness_of_root(
+                &ty,
+                f.facts.env(),
+                TypeUse::Root,
+                f.budget.limits().depth,
+                &mut scratch
             )
             .is_err()
     );

@@ -1296,6 +1296,61 @@ struct ProofScratch {
     cycles: usize,
     projections: Vec<associated_types::NormalizationMemo>,
     normalization_validations: Vec<associated_types::NormalizationValidation>,
+    closedness: Vec<ClosednessValidation>,
+}
+
+#[derive(Clone, Copy)]
+struct Closedness {
+    height: usize,
+    has_parameters: bool,
+    has_opaque: bool,
+}
+
+/// Successful root validation within one proof computation. Retained inputs
+/// pin every allocation used in the identity test, including the environment.
+struct ClosednessValidation {
+    world: WorldId,
+    ty: Ty,
+    env: GenericEnv,
+    usage: TypeUse,
+    result: Closedness,
+}
+
+fn same_closedness_input(left: &Ty, right: &Ty) -> bool {
+    if left.is_nominal_back_edge() || right.is_nominal_back_edge() {
+        return false;
+    }
+    if let (Some(left_key), Some(right_key)) = (TypeWalk::key(left), TypeWalk::key(right)) {
+        // Equal keys pin the full child allocation. Nominals additionally
+        // require the exact realization capability, not just the same def.
+        return left_key == right_key && same_type_allocation(left, right);
+    }
+    match (left, right) {
+        (Ty::Opaque(a), Ty::Opaque(b)) => Arc::ptr_eq(a, b),
+        (Ty::FnItem(a), Ty::FnItem(b)) => Arc::ptr_eq(a, b),
+        (Ty::AssociatedType(a), Ty::AssociatedType(b)) => Arc::ptr_eq(a, b),
+        (Ty::Dyn(a), Ty::Dyn(b)) => Arc::ptr_eq(a, b),
+        (Ty::Slice { element: a }, Ty::Slice { element: b }) => Arc::ptr_eq(a, b),
+        (
+            Ty::RawPtr {
+                pointee: a,
+                kind: ak,
+            },
+            Ty::RawPtr {
+                pointee: b,
+                kind: bk,
+            },
+        ) => ak == bk && Arc::ptr_eq(a, b),
+        (Ty::Param(a), Ty::Param(b)) => a == b,
+        (Ty::Int(a), Ty::Int(b)) => a == b,
+        (Ty::Float(a), Ty::Float(b)) => a == b,
+        (Ty::Char, Ty::Char)
+        | (Ty::Bool, Ty::Bool)
+        | (Ty::Unit, Ty::Unit)
+        | (Ty::Never, Ty::Never)
+        | (Ty::Str, Ty::Str) => true,
+        _ => false,
+    }
 }
 /// Realized nominal facts whose world replay already succeeded inside this
 /// node's computation, keyed by the retained immutable fact allocation. Owned
@@ -7610,21 +7665,94 @@ impl ValidatedTraitWorld {
         })
     }
     fn goal_is_closed(&self, goal: &TraitRef, env: &GenericEnv) -> Result<bool> {
-        let mut walk = TypeWalk::default();
-        self.validate_ty_inner(&goal.self_ty, env, 0, TypeUse::Root, &mut walk)?;
-        for ty in goal.args.iter() {
-            self.validate_ty_inner(ty, env, 0, TypeUse::Actual, &mut walk)?;
+        self.goal_is_closed_with(goal, env, &mut ProofScratch::default())
+    }
+    fn closedness_of_root(
+        &self,
+        ty: &Ty,
+        env: &GenericEnv,
+        usage: TypeUse,
+        depth: usize,
+        scratch: &mut ProofScratch,
+    ) -> Result<Closedness> {
+        charged(&self.budget, self.budget.check_depth(depth))?;
+        for entry in &scratch.closedness {
+            charged(&self.budget, self.budget.charge_work(1))?;
+            if entry.world == self.id
+                && entry.usage == usage
+                && env.total_arity() == entry.env.total_arity()
+                && std::ptr::eq(env.scopes(), entry.env.scopes())
+                && same_closedness_input(ty, &entry.ty)
+            {
+                charged(&self.budget, self.budget.charge_nodes(1))?;
+                charged(
+                    &self.budget,
+                    self.budget
+                        .check_depth(depth.saturating_add(entry.result.height)),
+                )?;
+                checked_module(
+                    &self.budget,
+                    self.catalog
+                        .modules()
+                        .budget()
+                        .check()
+                        .map_err(ModuleError::from),
+                )?;
+                return Ok(entry.result);
+            }
         }
-        Ok(!walk.has_parameters && !walk.has_opaque)
+        // A fresh walk is essential: sticky flags from a prior root cannot
+        // describe this root, and memo hits must carry their own flags.
+        let mut walk = TypeWalk::default();
+        let height = self.validate_ty_inner(ty, env, depth, usage, &mut walk)?;
+        let result = Closedness {
+            height,
+            has_parameters: walk.has_parameters,
+            has_opaque: walk.has_opaque,
+        };
+        if !ty.is_nominal_back_edge() && scratch.closedness.len() < MAX_SCRATCH_OBLIGATIONS {
+            push(
+                &self.budget,
+                &mut scratch.closedness,
+                ClosednessValidation {
+                    world: self.id,
+                    ty: ty.clone(),
+                    env: env.clone(),
+                    usage,
+                    result,
+                },
+            )?;
+        }
+        Ok(result)
+    }
+    fn goal_is_closed_with(
+        &self,
+        goal: &TraitRef,
+        env: &GenericEnv,
+        scratch: &mut ProofScratch,
+    ) -> Result<bool> {
+        let root = self.closedness_of_root(&goal.self_ty, env, TypeUse::Root, 0, scratch)?;
+        let mut closed = !root.has_parameters && !root.has_opaque;
+        for ty in goal.args.iter() {
+            let actual = self.closedness_of_root(ty, env, TypeUse::Actual, 0, scratch)?;
+            closed &= !actual.has_parameters && !actual.has_opaque;
+        }
+        Ok(closed)
     }
     /// Same validation walk as `goal_is_closed`, over a call's ordered method
     /// actuals. Open (parameter or opaque) actuals keep the call universal.
-    fn method_args_are_closed(&self, call: &TraitCall, env: &GenericEnv) -> Result<bool> {
-        let mut walk = TypeWalk::default();
+    fn method_args_are_closed_with(
+        &self,
+        call: &TraitCall,
+        env: &GenericEnv,
+        scratch: &mut ProofScratch,
+    ) -> Result<bool> {
+        let mut closed = true;
         for ty in call.method_args.iter() {
-            self.validate_ty_inner(ty, env, 0, TypeUse::Actual, &mut walk)?;
+            let actual = self.closedness_of_root(ty, env, TypeUse::Actual, 0, scratch)?;
+            closed &= !actual.has_parameters && !actual.has_opaque;
         }
-        Ok(!walk.has_parameters && !walk.has_opaque)
+        Ok(closed)
     }
     fn match_head(
         &self,
@@ -7776,7 +7904,11 @@ impl ValidatedTraitWorld {
             SignatureSubject::Call(
                 Callee::TraitItem(call) | Callee::Virtual(ir::VirtualCall { call }),
             ) if !(self.schema_contains_projection(&self.item_header(call.item)?.schema)?
-                && !self.goal_is_closed(&call.trait_ref, facts.env())?
+                && !self.goal_is_closed_with(
+                    &call.trait_ref,
+                    facts.env(),
+                    scratch.for_world(self.id),
+                )?
                 && !matches!(&call.trait_ref.self_ty, Ty::Dyn(_))) =>
             {
                 self.trait_signature_scratch(
@@ -8008,7 +8140,7 @@ impl TraitCx for ValidatedTraitWorld {
         }
         if facts.phase() == FactsPhase::Universal
             && self.schema_contains_projection(&self.item_header(call.item)?.schema)?
-            && !self.goal_is_closed(&call.trait_ref, facts.env())?
+            && !self.goal_is_closed_with(&call.trait_ref, facts.env(), scratch)?
             && !matches!(&call.trait_ref.self_ty, Ty::Dyn(_))
         {
             let (application, _) = self.instantiate_universal_required_item(call, facts)?;
@@ -8036,8 +8168,8 @@ impl TraitCx for ValidatedTraitWorld {
         // closed instantiation is re-resolved in the empty closed world.
         if matches!(call.trait_ref.self_ty, Ty::Opaque(_))
             || (facts.phase() == FactsPhase::Universal
-                && (!self.goal_is_closed(&call.trait_ref, facts.env())?
-                    || !self.method_args_are_closed(call, facts.env())?))
+                && (!self.goal_is_closed_with(&call.trait_ref, facts.env(), scratch)?
+                    || !self.method_args_are_closed_with(call, facts.env(), scratch)?))
         {
             let evidence = self.require_in(&predicate, caller, scratch)?;
             return Ok(ResolvedTraitCall {
@@ -9250,6 +9382,39 @@ mod tests {
             leaf,
             boxed,
         }
+    }
+
+    #[test]
+    fn closedness_backedge_never_authorizes_a_strong_nominal_root() {
+        let c = case();
+        let world = c.build().unwrap();
+        let Ty::Struct(original) = &c.leaf else {
+            panic!("nominal fixture")
+        };
+        let mut definition = original.def().clone();
+        definition.module = fixture_modules().core_root();
+        let definition = Arc::new(definition);
+        let back = Ty::Struct(StructTy::from_ref(ir::NominalRef::Back(
+            Arc::downgrade(&definition),
+            definition.id,
+        )));
+        let strong = Ty::Struct(StructTy::from_ref(ir::NominalRef::Strong(definition)));
+        assert!(!same_closedness_input(&back, &strong));
+        assert!(!same_closedness_input(&strong, &back));
+        let mut scratch = ProofScratch::default();
+        world
+            .closedness_of_root(&back, world.empty.env(), TypeUse::Root, 0, &mut scratch)
+            .unwrap();
+        assert!(
+            scratch.closedness.is_empty(),
+            "a backedge has no standalone validation proof"
+        );
+        assert!(
+            world
+                .closedness_of_root(&strong, world.empty.env(), TypeUse::Root, 0, &mut scratch)
+                .is_err()
+        );
+        assert!(scratch.closedness.is_empty());
     }
 
     #[test]

@@ -660,7 +660,8 @@ impl ValidatedTraitWorld {
         context: ProofContext<'_>,
         active: &mut ProofScratch,
     ) -> Result<()> {
-        self.validate_equality_domain(projection, rhs, context.env())?;
+        self.check_context(context)?;
+        self.validate_equality_domain_with(projection, rhs, context.env(), &mut active.replays)?;
         self.require_equality_rhs_sized(rhs, context, active)
     }
 
@@ -1372,6 +1373,58 @@ mod tests {
         let raw = world.schema.declaration_schema(declaration).unwrap();
         assert!(matches!(raw.signature.result, Ty::AssociatedType(_)));
         assert!(matches!(raw.signature.params[1], Ty::AssociatedType(_)));
+        let Ty::AssociatedType(projection) = &raw.signature.params[1] else {
+            unreachable!()
+        };
+        let context = ProofContext::from_facts(&facts);
+        let mut scratch = ProofScratch::default();
+        let rhs = owner.trait_ref.self_ty.clone();
+        let before = budget.usage_snapshot().work;
+        world
+            .validate_equality_domain_in(projection, &rhs, context, &mut scratch)
+            .unwrap();
+        let first_work = budget.usage_snapshot().work - before;
+        let retained = scratch.replays.types.len();
+        assert!(retained > 0);
+        let before = budget.usage_snapshot().work;
+        world
+            .validate_equality_domain_in(projection, &rhs, context, &mut scratch)
+            .unwrap();
+        assert!(budget.usage_snapshot().work - before < first_work);
+        assert_eq!(scratch.replays.types.len(), retained);
+        assert!(
+            world
+                .validate_equality_domain_in(
+                    projection,
+                    &rhs,
+                    ProofContext {
+                        predicates: &world.empty,
+                        phase: FactsPhase::Closed
+                    },
+                    &mut scratch
+                )
+                .is_err()
+        );
+        let foreign_program = frontend::parse("fn main(){}").unwrap();
+        let foreign_plan = PlanCtx::from_program(&foreign_program, &PlanBudget::default()).unwrap();
+        let foreign_world = foreign_plan.trait_world().unwrap();
+        assert!(
+            foreign_world
+                .validate_equality_domain_in(projection, &rhs, context, &mut scratch)
+                .is_err()
+        );
+        let Ty::Struct(nominal) = &rhs else {
+            panic!("fixture nominal")
+        };
+        let mut forged = nominal.def().clone();
+        forged.module = foreign_world.catalog.modules().core_root();
+        let forged = Ty::Struct(ir::StructTy::new(forged));
+        assert!(
+            world
+                .validate_equality_domain_in(projection, &forged, context, &mut scratch)
+                .is_err()
+        );
+        assert_eq!(scratch.replays.types.len(), retained);
         let normalized = world.normalized_callable_schema(declaration).unwrap();
         assert_eq!(normalized.signature.result, Ty::Int(ir::IntTy::I32));
         assert_eq!(normalized.signature.params[1], Ty::Int(ir::IntTy::I32));

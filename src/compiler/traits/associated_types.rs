@@ -1415,7 +1415,8 @@ impl ValidatedTraitWorld {
             self.validate_normalization_evidence_with(&evidence, context, &mut stack.obligations)?;
             return Ok(evidence);
         }
-        let closed_goal = self.goal_is_closed(&selected_goal, context.proof.env())?;
+        let closed_goal =
+            self.goal_is_closed_with(&selected_goal, context.proof.env(), &mut stack.obligations)?;
         let builtin_closure = self.checked_closure_projection(
             &ir::AssociatedTypeProjection {
                 trait_ref: selected_goal.clone(),
@@ -1929,7 +1930,11 @@ impl ValidatedTraitWorld {
             || (matches!(
                 &evidence.membership.0.origin,
                 ProofOrigin::Closure { .. } | ProofOrigin::FnItem { .. }
-            ) && !self.goal_is_closed(&evidence.selected_goal, context.proof.env())?);
+            ) && !self.goal_is_closed_with(
+                &evidence.selected_goal,
+                context.proof.env(),
+                proofs,
+            )?);
         if evidence.world != self.id
             || evidence.key.environment != context.proof.predicates.index
             || evidence.key.phase != context.proof.phase
@@ -2446,6 +2451,22 @@ mod tests {
             })
             .unwrap();
         let facts = world.callable_facts(opaque.owner()).unwrap();
+        let mut closedness = ProofScratch::default();
+        let opaque_root = Ty::Opaque(opaque.clone());
+        let first = world
+            .closedness_of_root(&opaque_root, facts.env(), TypeUse::Root, 0, &mut closedness)
+            .unwrap();
+        assert!(first.has_opaque);
+        let plain = world
+            .closedness_of_root(&Ty::Bool, facts.env(), TypeUse::Root, 0, &mut closedness)
+            .unwrap();
+        assert!(!plain.has_parameters && !plain.has_opaque);
+        let replayed = world
+            .closedness_of_root(&opaque_root, facts.env(), TypeUse::Root, 0, &mut closedness)
+            .unwrap();
+        assert_eq!(first.has_parameters, replayed.has_parameters);
+        assert_eq!(first.has_opaque, replayed.has_opaque);
+        assert_eq!(first.height, replayed.height);
         let bound = &opaque.bounds()[0];
         let projection = ir::AssociatedTypeProjection {
             trait_ref: bound.application(Ty::Opaque(opaque.clone())),

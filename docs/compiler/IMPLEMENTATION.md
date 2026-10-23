@@ -19,6 +19,15 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
       completion or a measured speedup: unchanged fixture 11 still reaches its
       authority resource boundary (`20261023-085826114-1425185`), and the full
       compatibility program remains open. No graph or resource ceiling changed.
+      Follow-up reuse retains independent closedness flags, subtree height and
+      exact root/environment identity, never memoizing nominal backedges.
+      Equality-domain and call-evidence checks retain their existing local
+      proof scratch. The isolated follow-up passes 1,807 library tests and all
+      17 graph gates (`20261023-092829346-1524370`,
+      `20261023-093225000-1523509`). Standalone collection and closure-authority
+      tests pass, but broader integration attempts time out, including the
+      associated-equality matrix's 240-second bound. Those gates are unresolved,
+      and unchanged fixture 11 still rejects at workers 1 and 8.
 
 - [x] `str::is_empty` is supplied by the source prelude using the existing byte
       length operation. Empty, Unicode, embedded-NUL and borrowed-String inputs,
