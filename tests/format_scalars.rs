@@ -4,6 +4,8 @@ use std::{fs, path::PathBuf, process::Command};
 
 #[path = "support/oracle.rs"]
 mod oracle;
+#[path = "support/stock_rustc.rs"]
+mod stock_rustc;
 
 #[test]
 fn scalar_format_place_borrows_and_projection_values() {
@@ -48,12 +50,10 @@ fn scalar_format_frozen_sources_match_stock() {
         for entry in fs::read_dir(root.join(category)).unwrap() {
             let source = entry.unwrap().path();
             let name = source.file_stem().unwrap().to_str().unwrap();
-            let native = scratch.join("native");
             let stock = scratch.join("stock");
-            let _ = fs::remove_file(&native);
             let _ = fs::remove_file(&stock);
-            let expected_live = category == "positive" || matches!(name, "str_arg" | "debug");
-            let stock_build = Command::new("rustc")
+            let expected_live = category != "negative";
+            let stock_build = Command::new(stock_rustc::stock_rustc())
                 .args([
                     "--edition=2024",
                     "-Cpanic=abort",
@@ -64,41 +64,48 @@ fn scalar_format_frozen_sources_match_stock() {
                 .arg("-o")
                 .arg(&stock)
                 .output()
-                .expect("stock oracle installed (run locally)");
+                .expect("stock oracle installed");
             assert_eq!(
                 stock_build.status.success(),
                 category != "negative",
                 "stock {name}: {}",
                 String::from_utf8_lossy(&stock_build.stderr)
             );
-            for mode in ["check", "build"] {
-                let mut command = Command::new(env!("CARGO_BIN_EXE_jr-rust"));
-                command.arg(&source);
-                if mode == "check" {
-                    command.arg("--check");
-                } else {
-                    command.arg("-o").arg(&native);
-                }
-                let result = command.output().unwrap();
-                if result.status.success() != expected_live {
-                    failures.push(format!(
-                        "{category}/{name} {mode}: {}",
-                        String::from_utf8_lossy(&result.stderr)
-                    ));
-                    continue;
-                }
-                if !expected_live {
-                    assert!(!result.stderr.is_empty(), "silent rejection {name}");
-                    assert!(!native.exists(), "rejection published image {name}");
-                } else if mode == "build" {
-                    let actual = Command::new(&native).output().unwrap();
-                    let expected = Command::new(&stock).output().unwrap();
-                    assert!(expected.status.success());
-                    if !actual.status.success()
-                        || actual.stdout != expected.stdout
-                        || actual.stderr != expected.stderr
-                    {
-                        failures.push(format!("{name}: native {actual:?}, stock {expected:?}"));
+            for workers in [1, 8] {
+                let native = scratch.join(format!("native-{workers}"));
+                let _ = fs::remove_file(&native);
+                for mode in ["check", "build"] {
+                    let mut command = Command::new(env!("CARGO_BIN_EXE_jr-rust"));
+                    command
+                        .arg(&source)
+                        .arg("--workers")
+                        .arg(workers.to_string());
+                    if mode == "check" {
+                        command.arg("--check");
+                    } else {
+                        command.arg("-o").arg(&native);
+                    }
+                    let result = command.output().unwrap();
+                    if result.status.success() != expected_live {
+                        failures.push(format!(
+                            "{category}/{name} {mode} workers={workers}: {}",
+                            String::from_utf8_lossy(&result.stderr)
+                        ));
+                        continue;
+                    }
+                    if !expected_live {
+                        assert!(!result.stderr.is_empty(), "silent rejection {name}");
+                        assert!(!native.exists(), "rejection published image {name}");
+                    } else if mode == "build" {
+                        let actual = Command::new(&native).output().unwrap();
+                        let expected = Command::new(&stock).output().unwrap();
+                        assert!(expected.status.success());
+                        if !actual.status.success()
+                            || actual.stdout != expected.stdout
+                            || actual.stderr != expected.stderr
+                        {
+                            failures.push(format!("{name}: native {actual:?}, stock {expected:?}"));
+                        }
                     }
                 }
             }
