@@ -65,9 +65,25 @@ additional iterator/library APIs and recursive layouts still open.
 Validation: 1,781 library tests pass with one ignored; the combined collection,
 projection, nominal-authority and graph suites pass 67 tests with one ignored.
 All-target checking and lint succeed with existing warnings. Selected redacted
-receipts are in `data/runs/xps14/2026-10-23-native-collection.jsonl`. The broader
-`body_inference` suite still exposes separate underconstrained-generic diagnostics
-and autoref-on-owned-call-temporary limitations; this is not full compatibility.
+receipts are in `data/runs/xps14/2026-10-23-native-collection.jsonl`.
+
+Follow-up body-inference coverage now passes all eight tests. Unconstrained
+nominal bindings with no remaining dependency or constraint producer report
+E0282 instead of an unsupported planning stall. Autoref of an owned rvalue
+uses the existing full-expression temporary scope, with storage typed from the
+checked receiver rather than a speculative hint. Stock-differential cases at
+workers 1/8 cover nested generic returns, destructor order across call arguments,
+mutable receivers, references consumed within the statement and rejection of
+an escaping borrow. This does not implement general temporary promotion or
+complete temporary-lifetime compatibility.
+
+Follow-up validation: 1,781 library tests pass (one ignored), graph-integrity
+and projected-method authority suites pass 37 tests (one ignored), and
+all-target clippy succeeds with existing warnings. The isolated inferred
+reference move-authority test also passes. The unchanged full-program corpus
+remains 9/20. The broader `drop_normal` gate is not green: its native child
+exceeded the existing 360-second timeout, without a semantic verdict.
+Receipts: `data/runs/xps14/2026-10-23-temporary-inference.jsonl`.
 
 ## Separate authority paths
 

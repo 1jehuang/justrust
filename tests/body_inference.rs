@@ -2,6 +2,39 @@
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
 use std::process::Command;
 
+#[path = "support/closure_oracle.rs"]
+mod closure_oracle;
+
+#[test]
+fn temporary_method_receivers_match_stock() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "temporary-method-receivers",
+        &[
+            Case {
+                name: "drop_after_enclosing_call",
+                source: r#"struct D { n: i32 } impl Drop for D { fn drop(&mut self) { println!("drop {}", self.n); } } impl D { fn get(&self) -> i32 { println!("get"); self.n } } fn argument() -> i32 { println!("argument"); 2 } fn consume(a: i32, b: i32) { println!("consume {} {}", a, b); } fn main() { consume(D { n: 7 }.get(), argument()); println!("after"); }"#,
+                expect: Expect::Run("get\nargument\nconsume 7 2\ndrop 7\nafter\n"),
+            },
+            Case {
+                name: "mutable_temporary",
+                source: r#"struct D { n: i32 } impl Drop for D { fn drop(&mut self) { println!("drop {}", self.n); } } impl D { fn bump(&mut self) -> i32 { self.n += 1; self.n } } fn main() { println!("value {}", D { n: 4 }.bump()); println!("after"); }"#,
+                expect: Expect::Run("value 5\ndrop 5\nafter\n"),
+            },
+            Case {
+                name: "reference_within_statement",
+                source: r#"struct D { n: i32 } impl Drop for D { fn drop(&mut self) { println!("drop {}", self.n); } } impl D { fn get(&self) -> &i32 { &self.n } } fn consume(n: &i32) { println!("value {}", *n); } fn main() { consume(D { n: 7 }.get()); println!("after"); }"#,
+                expect: Expect::Run("value 7\ndrop 7\nafter\n"),
+            },
+            Case {
+                name: "escaped_temporary_borrow",
+                source: r#"struct D { n: i32 } impl Drop for D { fn drop(&mut self) {} } impl D { fn get(&self) -> &i32 { &self.n } } fn main() { let value = D { n: 7 }.get(); println!("{}", *value); }"#,
+                expect: Expect::Invalid("E0716"),
+            },
+        ],
+    );
+}
+
 fn compare(name: &str, source: &str) {
     let dir = std::env::temp_dir().join(format!("jr-body-inference-{}-{name}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();

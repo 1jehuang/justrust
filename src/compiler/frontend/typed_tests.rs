@@ -55,7 +55,14 @@ fn canonical_clone_receiver_order_and_primitive_temporaries_use_real_borrows() {
     let p = parse("struct S{v:i32}impl Clone for S{fn clone(&self)->Self{S{v:self.v+1}}}impl S{fn set(&mut self,n:i32){self.v=n;}}fn carrier(x:&mut S)->&mut S{x}struct Opaque{v:i32}fn main(){let s=S{v:12};let r=&s;let value=r.clone();let owner=Opaque{v:13};let shared=&owner;let handle=shared.clone();let n=10i32.clone();let yes=true.clone();let unit=().clone();let used=n+value.v+handle.v;let mut temporary=S{v:1};carrier(&mut temporary).set(2);}").unwrap();
     let signatures = signature_table(&p).unwrap();
     let checked = type_function_with_signatures(&p, 1, &signatures).unwrap();
-    assert!(checked.exprs.iter().any(|e| matches!(&e.kind, ir::ExprKind::Block(block) if block.statements.iter().any(|s| matches!(s,ir::TypedStmt::Let{local,..} if checked.locals[local.0].name=="$primitive_receiver")))));
+    let receiver = checked
+        .locals
+        .iter()
+        .position(|local| local.name == "$method_receiver")
+        .map(ir::LocalId)
+        .expect("owned receiver temporary");
+    assert!(checked.exprs.iter().any(|e| matches!(&e.kind, ir::ExprKind::Block(block) if block.statements.iter().any(|s| matches!(s, ir::TypedStmt::Declare { local } if *local == receiver)))));
+    assert!(checked.exprs.iter().any(|e| matches!(&e.kind, ir::ExprKind::Block(block) if block.statements.iter().any(|s| matches!(s, ir::TypedStmt::Assign { local, .. } if *local == receiver)))));
     assert!(checked.exprs.iter().any(|e|matches!(&e.ty,ir::Ty::Ref{referent,..} if matches!(referent.as_ref(),ir::Ty::Struct(t) if t.def().name=="crate::Opaque"))));
     check(&p).unwrap();
 }

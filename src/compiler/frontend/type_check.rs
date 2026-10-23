@@ -8247,10 +8247,9 @@ impl<'a> Checker<'a> {
                 Some((borrowed, None)),
             );
         }
-        // Value temporaries (rvalue receivers such as `Type::new().get()`) are
-        // materialized in a block-scoped local and autoref'd. Values with drop
-        // glue are excluded because the block would end their lifetime before
-        // the enclosing statement does.
+        // Autoref of an owned rvalue borrows a full-expression temporary.
+        // Keep its storage outside the receiver block so a destructor runs
+        // after the entire statement, not immediately after this method call.
         if selected.depth == 0
             && matches!(
                 selected.adjustment,
@@ -8258,17 +8257,12 @@ impl<'a> Checker<'a> {
             )
             && !matches!(ty, ir::Ty::Ref { .. })
             && static_source_place(receiver).is_err()
-            && self.trivially_dropped(&ty)?
         {
             let mutable = matches!(selected.adjustment, ReceiverAdjustment::MutAutoref);
             let value = self.expr(receiver)?;
-            self.charge_node(std::mem::size_of::<ir::LocalDecl>() + 64)?;
-            let local = ir::LocalId(self.locals.len());
-            self.locals.push(ir::LocalDecl {
-                name: "$primitive_receiver".into(),
-                ty,
-                mutable,
-            });
+            let receiver_ty = self.exprs[value.0].ty.clone();
+            let local = self.temporary("$method_receiver", receiver_ty, mutable)?;
+            self.borrow_temporaries.push((local, false));
             let borrowed = self.borrow_expression(
                 if mutable {
                     ir::BorrowKind::Mut
@@ -8296,7 +8290,7 @@ impl<'a> Checker<'a> {
                 ty: result,
                 completion,
                 kind: ir::ExprKind::Block(ir::TypedBlock {
-                    statements: vec![ir::TypedStmt::Let { local, value }],
+                    statements: vec![ir::TypedStmt::Assign { local, value }],
                     tail: Some(call),
                 }),
             });

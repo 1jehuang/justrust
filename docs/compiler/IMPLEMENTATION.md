@@ -6,6 +6,13 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 
 ## Completed foundations, not full compatibility
 
+- [x] Body inference rejects producer-free unresolved nominal bindings with
+      E0282. Owned rvalue method autoref uses full-expression temporary storage
+      and its checked receiver type, preserving destructor order and rejecting
+      escaping borrows. All eight `body_inference` tests pass against stock at
+      workers 1/8, including nested generic returns and mutable temporaries.
+      General temporary promotion and lifetime compatibility remain open.
+
 - [x] Native `Iterator::collect` and `FromIterator` source implementations for
       `Vec<A>` and character/borrowed-character `String` collection, including
       empty, custom and mapped iterators at workers 1/8. Generic result inference

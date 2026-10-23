@@ -385,9 +385,25 @@ fn preparation_status(
             && !solver.manifest_ready(&arguments, 1)?
             && !closure_methods
         {
+            let nominals = solver.pending_nominals()?;
+            let declarations = solver.pending_declarations()?;
+            if nominals.is_empty()
+                && declarations.is_empty()
+                && solver.methods.is_empty()
+                && solver.operators.is_empty()
+                && solver.projections.is_empty()
+                && solver.iterator_items.is_empty()
+                && solver.associated_equalities.is_empty()
+                && solver.coercions.is_empty()
+                && solver.patterns.is_empty()
+            {
+                return Err(solver.user_error(
+                    "E0282: type annotations needed: cannot infer the type of this binding",
+                ));
+            }
             return Ok(Preparation::Blocked {
-                nominals: solver.pending_nominals()?,
-                declarations: solver.pending_declarations()?,
+                nominals,
+                declarations,
                 needs_source_schemas: false,
                 unresolved_constraints: true,
             });
