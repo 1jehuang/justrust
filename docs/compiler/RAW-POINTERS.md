@@ -61,7 +61,16 @@ in the neighboring integration run. Targeted universal-method, copied-origin,
 raw-slice authority and graph tests also pass; CHECK and clippy succeed with
 baseline warnings. Stock differential pointer cases run at workers 1 and 8.
 Receipts: `data/runs/xps14/slice-data-pointer-2026-10-23.jsonl`.
-The neighboring `raw_slices::shared_mutable_empty_noncopy_and_order_match_stock`
-fixture still fails E0606 at an array-reference cast, reproduced identically on
-the pre-pointer `3859c87d4` snapshot. Its expectation is unchanged; the broader
-raw-slice suite is not claimed passing.
+The neighboring raw-slice transport regression was reproduced on the pre-pointer
+`3859c87d4` snapshot: a graph-realized nominal source was compared with a
+source-slot cast target. Cast targets now use the existing authenticated source
+recipe, preserving canonical nominal identity without relaxing `ptr_cast_valid`.
+Unchanged raw-slice and heap pointer fixtures pass stock/native CHECK/BUILD/run
+at workers 1 and 8. Different nominal owners, different array lengths, shared
+to mutable reference casts and slice-to-thin casts still reject with E0606.
+The exact isolated correction passes 1,812 library tests, 17 graph tests (one
+existing ignore in each), and 65 raw-slice/heap/integer-cast integration tests.
+Check, clippy and scoped formatting pass with baseline warnings. The heap suite
+now runs stock-positive aggregate allocation cleanup cases instead of retaining
+stale unsupported expectations; illegal own-Drop field moves require stock's
+E0509. Receipts: `data/runs/xps14/nominal-pointer-casts-2026-10-23.jsonl`.

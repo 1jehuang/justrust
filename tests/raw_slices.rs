@@ -1,6 +1,8 @@
 //! Canonical raw-parts construction. See RAW-SLICES.md.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
 use justrust_engine::compiler;
+#[path = "support/closure_oracle.rs"]
+mod closure_oracle;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::process::{Command, Stdio};
@@ -15,6 +17,79 @@ fn inferred_generic_constructor_signatures_check_at_both_worker_counts() {
         for workers in [1, 8] {
             let output = compiler::compile(source.into(), workers, true).unwrap();
             assert!(output.executable.is_none());
+        }
+    }
+}
+
+#[test]
+fn pointer_cast_targets_preserve_nominal_graph_identity() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "raw-cast-targets",
+        &[
+            Case {
+                name: "unchanged_transport",
+                source: include_str!("fixtures/raw_slices/transport.rs"),
+                expect: Expect::Run(include_str!("fixtures/raw_slices/transport.stdout")),
+            },
+            Case {
+                name: "neighboring_heap_raw_read_write",
+                source: include_str!("fixtures/heap/raw_read_write.rs"),
+                expect: Expect::Run(include_str!("fixtures/heap/raw_read_write.stdout")),
+            },
+            Case {
+                name: "generic_nominal_and_array_targets",
+                source: r#"struct Item<T>{value:T} fn raw<T>(a:&mut[T;2])->*mut T{a as *mut[T;2] as *mut T} fn main(){let mut a=[Item{value:3i32},Item{value:7i32}];let p=raw(&mut a);unsafe{(*p).value=11;}let q=&a as *const[Item<i32>;2] as *const Item<i32>;println!("{} {}",unsafe{(*q).value},a[1].value);}"#,
+                expect: Expect::Run("11 7\n"),
+            },
+        ],
+    );
+}
+
+#[test]
+fn pointer_cast_boundaries_still_reject() {
+    use std::io::Write;
+    for source in [
+        "mod a{pub struct Item{pub value:i32}}mod b{pub struct Item{pub value:i32}}fn main(){let mut a=[a::Item{value:1}];let _=&mut a as *mut[b::Item;1];}",
+        "struct Item{value:i32}fn main(){let mut a=[Item{value:1}];let _=&mut a as *mut[Item;2];}",
+        "struct Item{value:i32}fn main(){let a=Item{value:1};let _=&a as *mut Item;}",
+        "fn bad(a:&mut[i32]){let _=a as *mut i32;}fn main(){}",
+    ] {
+        let mut stock =
+            Command::new(std::env::var_os("JUSTRUST_REAL_RUSTC").unwrap_or_else(|| "rustc".into()))
+                .env_remove("RUSTC_BOOTSTRAP")
+                .args([
+                    "--edition=2024",
+                    "--emit=metadata",
+                    "--crate-name=cast_boundary",
+                    "-o",
+                    "/dev/null",
+                    "-",
+                ])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap();
+        stock
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(source.as_bytes())
+            .unwrap();
+        let output = stock.wait_with_output().unwrap();
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("E0606"));
+        for workers in [1, 8] {
+            for check in [true, false] {
+                let error = match compiler::compile(source.into(), workers, check) {
+                    Err(error) => error,
+                    Ok(_) => {
+                        panic!("invalid pointer cast accepted workers={workers} check={check}")
+                    }
+                };
+                assert!(error.to_string().contains("E0606"), "{error}");
+            }
         }
     }
 }

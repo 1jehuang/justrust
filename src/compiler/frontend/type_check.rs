@@ -8848,7 +8848,7 @@ impl<'a> Checker<'a> {
         value: &Expr,
         target: &Type,
     ) -> Result<ir::ExprId, String> {
-        let target = checked_local_ty(target, self.signatures)?;
+        let target = self.source_local_ty(target)?;
         if matches!(target, ir::Ty::RawPtr { .. })
             || matches!(self.scalar_hint(value)?, Some(ir::Ty::RawPtr { .. }))
         {

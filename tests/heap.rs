@@ -833,17 +833,6 @@ fn source_drop_escaping_borrows_and_unsupported_aggregates_reject() {
             assert!(!result.status.success(), "{body}: {result:?}");
         }
     }
-    for body in [
-        "fn main(){ let pair=(heap::allocate(8usize,8usize),1i32); }",
-        "fn wrap<T>(value:T){let pair=(value,1i32);}fn main(){wrap::<heap::Allocation>(heap::allocate(8usize,8usize));}",
-        "fn wrap<T>(value:T){let array=[value];}fn main(){wrap::<heap::Allocation>(heap::allocate(8usize,8usize));}",
-    ] {
-        rejects_source(
-            "unsupported_drop_position",
-            &format!("use std::native_heap as heap; {body}"),
-            "unsupported",
-        );
-    }
     rejects_source(
         "explicit_allocation_drop",
         "fn main(){let mut owner=std::native_heap::allocate(8usize,8usize);owner.drop();}",
@@ -867,13 +856,43 @@ fn source_drop_escaping_borrows_and_unsupported_aggregates_reject() {
             "{result:?}"
         );
     }
-    // The broader owner shape remains explicitly excluded, never silently
-    // lowered as a partial move or treated as a successful destructor test.
-    rejects_source(
-        "drop_partial_move",
-        "struct N { value:i32 } struct D { value:N } impl Drop for D { fn drop(&mut self){} } fn main(){let owner=D{value:N{value:1}};let moved=owner.value;}",
-        "unsupported",
-    );
+    let partial_move = "struct N { value:i32 } struct D { value:N } impl Drop for D { fn drop(&mut self){} } fn main(){let owner=D{value:N{value:1}};let moved=owner.value;}";
+    rejects_source("drop_partial_move", partial_move, "E0509");
+    if stock {
+        let scratch = Scratch::new();
+        let input = scratch.source(partial_move);
+        let result = capture(
+            Command::new("rustc")
+                .args(["--edition=2024", "-Cpanic=abort"])
+                .arg(input)
+                .arg("-o")
+                .arg(scratch.path("invalid-move")),
+            &scratch,
+            60,
+        );
+        assert!(!result.status.success(), "{result:?}");
+        assert!(String::from_utf8_lossy(&result.stderr).contains("E0509"));
+    }
+}
+
+#[test]
+fn source_drop_aggregate_positions_match_stock() {
+    for (name, body) in [
+        (
+            "allocation_tuple_cleanup",
+            "fn main(){let pair=(heap::allocate(8usize,8usize),1i32);println!(\"ok\");}",
+        ),
+        (
+            "generic_allocation_tuple_cleanup",
+            "fn wrap<T>(value:T){let pair=(value,1i32);}fn main(){wrap::<heap::Allocation>(heap::allocate(8usize,8usize));println!(\"ok\");}",
+        ),
+        (
+            "generic_allocation_array_cleanup",
+            "fn wrap<T>(value:T){let array=[value];}fn main(){wrap::<heap::Allocation>(heap::allocate(8usize,8usize));println!(\"ok\");}",
+        ),
+    ] {
+        heap_case(name, body);
+    }
 }
 
 #[test]

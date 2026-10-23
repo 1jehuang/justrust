@@ -936,7 +936,11 @@ acceptance.
       bound-only projections remain symbolic. Empty/ZST/non-Copy cases and forged
       source/type/evidence controls are covered in `tests/slice_methods.rs` and
       existing IR/trait tests. `split_at_mut` and general tuple-reference origin
-      transport remain open (RAW-POINTERS.md).
+      transport remain open (RAW-POINTERS.md). Nominal pointer-cast targets now
+      use the authenticated source realization rather than a detached source-slot
+      identity; unchanged raw-slice and heap transport fixtures pass, with wrong
+      owner/length/mutability casts still rejected. The exact correction passes
+      1,812 library, 17 graph and 65 related integration tests.
 
 **Next:** agree a shared drop-obligation/cleanup IR contract and freeze observable
 Drop-order plus rejected-escape fixtures. In parallel classify aggregate-region
