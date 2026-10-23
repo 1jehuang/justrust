@@ -49,27 +49,26 @@ full formatting or full Rust support.
 
 ## Current first rejection boundaries
 
-Refreshed 2026-10-20 by `justrust test --test full_programs -- --nocapture`
-on the integrated shared-reference slice snapshot. The earlier local debug replay
-timed out under contention, including hello, and is not a compatibility result.
-The hosted replay completed without timeouts or wrong-output executables.
+Refreshed 2026-10-23 by `justrust test --test full_programs -- --nocapture`
+on the exact committed borrowed-callable source snapshot
+(`20261023-082306614-1289172`). All 20 entries completed: 11 executions
+matched their stored stock output and nine rejected explicitly.
 
 | Programs | First reported boundary |
 |---|---|
-| 04 | per-task proof-node limit: `Vec` `iter().enumerate()` re-proves the same trait goals per check |
-| 06, 14, 15 | unresolved nominal source constraints (`[T; N]` `iter().map(..).collect()`, generic containers) |
-| 10, 18 | `Chars` adapters (`filter`, `collect`) |
-| 11 | implicit associated constant lookup requires a retained caller trait bound |
+| 11 | module authority resource boundary in the combined iterator program |
 | 12 | recursive nominal field realization requires an explicit recursive layout protocol |
 | 13 | trait object types only admitted directly behind a reference (`Box<dyn>`) |
-| 16 | `split_at_mut` (tuple of two `&mut [T]`); `&Vec` index autoderef and generic slice comparisons now pass |
-| 17, 20 | unresolved import `HashMap` (no `std::collections`) |
+| 14, 15 | unresolved nominal source constraints in `main` and `parse_u32`, respectively |
+| 16 | no method `split_at_mut` for `&mut [T]` |
+| 17 | unresolved or cyclic import `BTreeMap` |
+| 18 | no method `parse` for `str` |
+| 20 | unresolved or cyclic import `Rc` |
 
-Most of these trace to the inactive source Iterator library (adapters,
-closure parameter inference through `FnMut(Self::Item)` bounds) and missing
-`std::collections`. See HASHMAP.md work in progress for the latter's
-prerequisites (generic `Hash<H: Hasher>`, `BuildHasher`, `Hash`/`Eq` for
-`str`/`String`).
+The iterator adapters now pass their scoped acceptance suites, but their combined
+use in program 11 reaches an authority resource boundary. Collection libraries
+remain incomplete. See HASHMAP.md for collection prerequisites (generic
+`Hash<H: Hasher>`, `BuildHasher`, `Hash`/`Eq` for `str`/`String`).
 
 These are the first diagnostics, not an exhaustive feature inventory or evidence
 that fixing one diagnostic makes the program pass. In particular, most remaining
