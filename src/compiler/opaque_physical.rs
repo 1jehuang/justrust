@@ -47,8 +47,13 @@ impl DirectPhysicalCall {
         )
         .map_err(Error::new)?;
         let source_target = target.clone();
-        let mut specialization =
-            opaque_specialization::Specialization::new(publication, caller, context, budget)?;
+        let mut specialization = opaque_specialization::Specialization::new(
+            publication,
+            caller,
+            context,
+            budget,
+            representations.engine(),
+        )?;
         let (ir::Callee::Direct(target), specialized_signature) =
             specialization.call(occurrence)?
         else {
@@ -358,8 +363,13 @@ pub(super) fn normalize(
             "physical normalization changed exact original source owner",
         ));
     }
-    let mut specialization =
-        opaque_specialization::Specialization::new(publication, target, context, budget)?;
+    let mut specialization = opaque_specialization::Specialization::new(
+        publication,
+        target,
+        context,
+        budget,
+        representations.engine(),
+    )?;
     original
         .validate_source_publication(publication, budget)
         .map_err(|e| Error::new(e.to_string()))?;

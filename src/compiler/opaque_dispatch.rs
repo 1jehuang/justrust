@@ -103,8 +103,13 @@ impl OpaqueCallAuthorization {
             ir::FactsCtx::from_validated(publication.facts()),
         )
         .map_err(Error::new)?;
-        let mut specialization =
-            opaque_specialization::Specialization::new(publication, caller, context, budget)?;
+        let mut specialization = opaque_specialization::Specialization::new(
+            publication,
+            caller,
+            context,
+            budget,
+            representations.engine(),
+        )?;
         let (ir::Callee::TraitItem(specialized), specialized_signature) =
             specialization.call(occurrence)?
         else {
@@ -320,8 +325,13 @@ pub(super) async fn extend_instance_demands(
         .publication
         .as_ref()
         .ok_or_else(|| Error::new("opaque instance dispatch lost source publication"))?;
-    let mut specialization =
-        opaque_specialization::Specialization::new(publication, target, types, &provider.0.budget)?;
+    let mut specialization = opaque_specialization::Specialization::new(
+        publication,
+        target,
+        types,
+        &provider.0.budget,
+        cx.authority(),
+    )?;
     let (mut pending, _storage) = provider.scratch_vec(publication.source().exprs.len())?;
     for (index, expression) in publication.source().exprs.iter().enumerate() {
         provider.0.budget.charge_work(1).map_err(Error::new)?;
@@ -447,6 +457,7 @@ pub(super) async fn produce(
         &caller,
         &types,
         &provider.0.budget,
+        cx.authority(),
     )?;
     let (ir::Callee::TraitItem(specialized), specialized_signature) =
         specialization.call(occurrence)?

@@ -8,6 +8,7 @@ pub(super) struct Specialization<'a> {
     context: frontend::PlanCtx,
     closed: Arc<traits::ValidatedFacts>,
     budget: &'a ir::PlanBudget,
+    engine: crate::engine::EngineAuthority,
     // Reuse only within this authenticated publication/target substitution.
     // This scratch never escapes the OBJECT operation or becomes a fact.
     types: Vec<(ir::Ty, ir::Ty)>,
@@ -37,6 +38,7 @@ impl<'a> Specialization<'a> {
         target: &'a ir::CallTarget,
         context: &frontend::PlanCtx,
         budget: &'a ir::PlanBudget,
+        engine: crate::engine::EngineAuthority,
     ) -> Result<Self, Error> {
         publication
             .validate_source(publication.source(), publication.facts(), budget)
@@ -59,6 +61,7 @@ impl<'a> Specialization<'a> {
             context: context.clone(),
             closed,
             budget,
+            engine,
             types: Vec::new(),
         })
     }
@@ -69,13 +72,14 @@ impl<'a> Specialization<'a> {
                 return Ok(mapped.clone());
             }
         }
-        let mapped = ir::substitute_ty(
+        let mapped = nominal_realization::substitution::substitute_ty(
             original,
             self.publication.facts().env(),
             &self.target.type_args,
             ir::FactsCtx::from_validated(&self.closed),
             &mut self.context,
             self.budget,
+            Some(self.engine),
         )
         .map_err(Error::new)?;
         self.budget
@@ -190,13 +194,34 @@ impl<'a> Specialization<'a> {
             .types_equal(&parameters, &canonical.params)
             .map_err(|error| source_fact_error(error, self.budget))?
             || !world
-                .types_equal(&[result], std::slice::from_ref(&canonical.result))
+                .types_equal(
+                    std::slice::from_ref(&result),
+                    std::slice::from_ref(&canonical.result),
+                )
                 .map_err(|error| source_fact_error(error, self.budget))?
         {
             return Err(Error::new(
                 "opaque call specialization differs from its exact declaration signature",
             ));
         }
-        Ok((target, canonical))
+        // Preserve the exact typed nominal reads carried by the source call's
+        // substituted ABI. Declaration metadata may use equivalent source-slot
+        // identities, which cannot replace graph identities in CFG operands.
+        let mapped = ir::Signature {
+            params: parameters,
+            result,
+            ref_contract: canonical.ref_contract.clone(),
+        };
+        nominal_realization::substitution::replay_closed_signature_with(
+            self.engine,
+            &target,
+            &canonical,
+            &mapped,
+            ir::FactsCtx::from_validated(&self.closed),
+            self.budget,
+            &mut traits::TraitScratch::default(),
+        )
+        .map_err(Error::new)?;
+        Ok((target, mapped))
     }
 }

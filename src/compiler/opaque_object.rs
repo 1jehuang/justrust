@@ -38,6 +38,7 @@ pub(super) async fn produce(
         &target,
         &types,
         &provider.0.budget,
+        cx.authority(),
     )?;
     let mut encountered = false;
     for ty in source

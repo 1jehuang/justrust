@@ -5,6 +5,18 @@
 mod oracle;
 use oracle::{Case, Expect};
 
+#[test]
+fn opaque_callable_with_realized_nominal_local() {
+    oracle::check(
+        "opaque_realized_nominal",
+        &[Case {
+            name: "nominal_and_opaque_locals",
+            source: "struct Holder<T>{value:T}fn wrap<T>(value:T)->Holder<T>{Holder{value}}fn add(n:i32)->impl Fn(i32)->i32{move|x|x+n}fn main(){let h=wrap(7i32);let f=add(5);println!(\"{} {}\",h.value,f(10));}",
+            expect: Expect::Run("7 15\n"),
+        }],
+    );
+}
+
 fn callable_reference_forwarding(name: &str) {
     let cases = [
         Case {

@@ -56,12 +56,16 @@ pub(super) async fn decode(
 /// Immutable capability assembled from explicit representation-fact reads. It
 /// cannot be constructed by a backend or populated from a side cache.
 pub(super) struct Representations {
+    engine: crate::engine::EngineAuthority,
     records: Arc<[Arc<OpaqueRepresentationFact>]>,
     context: frontend::PlanCtx,
     closures: instances::graph_key::ClosureTemplates,
     normalized: Vec<(Arc<ir::ClosureTy>, Arc<ir::ClosureTy>)>,
 }
 impl Representations {
+    pub(super) fn engine(&self) -> crate::engine::EngineAuthority {
+        self.engine
+    }
     /// Physical normalization is available only to a consumer that has read the
     /// exact immutable representation facts. This is not a source type-equality
     /// operation and must never be used to discharge public source predicates.
@@ -464,6 +468,7 @@ pub(super) async fn read(
         acyclic(root, &edges, &mut Vec::new(), budget)?;
     }
     let mut representations = Representations {
+        engine: facts.cx.authority(),
         records: records.into(),
         context,
         closures,

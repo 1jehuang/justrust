@@ -246,6 +246,7 @@ fn borrowed_opaque_dispatch_replays_exact_source_wrappers() {
                     &caller,
                     &types,
                     budget,
+                    cx.authority(),
                 )?;
                 let (ir::Callee::TraitItem(call), _) = specialization.call(occurrence)? else {
                     return Err(Error::new("fixture changed invocation kind"));
@@ -405,6 +406,7 @@ fn opaque_bound_dispatch_reads_exact_representation_before_physical_body() {
                     &caller,
                     &types,
                     &provider.0.budget,
+                    cx.authority(),
                 )?;
                 let (ir::Callee::TraitItem(specialized_call), _) =
                     specialization.call(occurrence)?

@@ -849,10 +849,39 @@ mod tests {
         let ty = capability.definition().unwrap();
         let facts = plan.callable_facts(plan.function_decl(0).unwrap()).unwrap();
         let caller = ir::FactsCtx::Validated(&facts);
+        let super::super::frontend::PublishedCallableBody::Source(publication) = plan
+            .publish_callable_body(plan.function_decl(0).unwrap(), &budget)
+            .unwrap()
+        else {
+            panic!("expected canonical main publication")
+        };
+        let target = ir::CallTarget {
+            declaration: plan.function_decl(0).unwrap(),
+            type_args: Arc::from([]),
+        };
+        let target = &target;
+        let mut specialization = super::super::opaque_specialization::Specialization::new(
+            &publication,
+            target,
+            &plan,
+            &budget,
+            engine.authority(),
+        )
+        .unwrap();
+        assert!(specialization.ty(&ty).is_ok());
         capability
             .retain_for_substitution(&ty, engine.authority(), caller, &budget)
             .unwrap();
         let foreign_engine = crate::engine::Engine::new(provider);
+        let mut foreign_specialization = super::super::opaque_specialization::Specialization::new(
+            &publication,
+            target,
+            &plan,
+            &budget,
+            foreign_engine.authority(),
+        )
+        .unwrap();
+        assert!(foreign_specialization.ty(&ty).is_err());
         assert!(
             capability
                 .retain_for_substitution(&ty, foreign_engine.authority(), caller, &budget)
@@ -884,6 +913,7 @@ mod tests {
             );
         }
         let missing = ir::Ty::Struct(ir::StructTy::new(nominal.def().clone()));
+        assert!(specialization.ty(&missing).is_err());
         let mut local_plan = plan.clone();
         let empty = ir::GenericEnv::new(&[], &budget).unwrap();
         assert!(
