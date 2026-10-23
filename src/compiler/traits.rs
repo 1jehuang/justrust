@@ -353,14 +353,20 @@ fn push_indexed_environment(
     push(b, environments, env)
 }
 fn push<T>(b: &PlanBudget, values: &mut Vec<T>, value: T) -> Result<()> {
-    // Retain a conservative old-plus-new relocation peak before Vec growth.
+    // Two retained slots per element pay for geometric capacity growth.
+    // Admit the old allocation separately while relocation is in progress.
     retain::<T>(b, 2)?;
     if values.len() == values.capacity() {
         charged(b, b.charge_work(values.len()))?;
+        let bytes = values
+            .len()
+            .checked_mul(std::mem::size_of::<T>())
+            .ok_or_else(|| FactsError::resource(b, "trait relocation size overflow"))?;
+        let _relocation = charged(b, b.reserve_bytes(bytes))?;
+        values
+            .try_reserve_exact(values.len().max(1))
+            .map_err(|_| FactsError::resource(b, "trait metadata allocation failed"))?;
     }
-    values
-        .try_reserve_exact(1)
-        .map_err(|_| FactsError::resource(b, "trait metadata allocation failed"))?;
     values.push(value);
     Ok(())
 }
@@ -9127,6 +9133,29 @@ pub(crate) mod test_support {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn trait_vector_growth_is_paid_and_amortized() {
+        let budget = PlanBudget::new(ir::PlanLimits::default());
+        let mut values = Vec::new();
+        for index in 0u64..1025 {
+            push(&budget, &mut values, index).unwrap();
+            assert!(values.capacity() <= 2 * values.len());
+        }
+        assert_eq!(values, (0u64..1025).collect::<Vec<_>>());
+        assert_eq!(budget.usage_snapshot().work, 2047);
+        let exhausted = PlanBudget::new(ir::PlanLimits {
+            bytes: 0,
+            ..ir::PlanLimits::default()
+        });
+        let mut unpaid = Vec::new();
+        assert!(
+            push(&exhausted, &mut unpaid, 1u64)
+                .unwrap_err()
+                .is_resource()
+        );
+        assert!(unpaid.is_empty());
+    }
+
     #[test]
     fn local_type_memo_growth_is_paid_checked_and_amortized() {
         assert_eq!(TypeWalk::growth_slots(0, 0), Some(1));
