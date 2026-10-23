@@ -1,4 +1,6 @@
 use justrust_engine::compiler;
+#[path = "support/closure_oracle.rs"]
+mod oracle;
 
 #[test]
 fn inferred_and_explicit_instances_share_facts_and_check_has_no_objects() {
@@ -8,8 +10,10 @@ fn inferred_and_explicit_instances_share_facts_and_check_has_no_objects() {
             let compiled = compiler::compile(source.to_owned(), workers, check).unwrap();
             assert!(compiled.report.capture_complete);
             assert_eq!(compiled.executable.is_none(), check);
-            assert_eq!(compiled.control_flow.len(), 3);
-            assert_eq!(compiled.analyses.len(), 3);
+            // CHECK verifies the generic declaration once, without demanding
+            // either concrete id instantiation. BUILD needs both instances.
+            assert_eq!(compiled.control_flow.len(), if check { 2 } else { 3 });
+            assert_eq!(compiled.analyses.len(), if check { 2 } else { 3 });
             assert!(compiled.analyses.iter().all(|analysis| analysis.passed()));
             for kind in [102, 108, 109] {
                 let facts: Vec<_> = compiled
@@ -18,7 +22,7 @@ fn inferred_and_explicit_instances_share_facts_and_check_has_no_objects() {
                     .iter()
                     .filter(|(key, _)| key.kind == kind)
                     .collect();
-                assert_eq!(facts.len(), 3);
+                assert_eq!(facts.len(), if check { 0 } else { 3 });
                 assert!(facts.iter().all(|(_, count)| *count == 1));
             }
             assert_eq!(
@@ -64,8 +68,8 @@ fn inference_failures_never_publish_objects() {
     for source in [
         "fn same<T>(a:T,b:T)->T{b}fn main(){let x=same(1u8,2u16);}",
         "fn empty<T>(){}fn main(){empty();}",
-        "fn id<T>(x:T)->T{x}fn main(){let x=id(id(7));}",
-        "fn same<T>(a:T,b:T)->T{b}fn main(){let x=same(1,{let y=2u8;y});}",
+        "fn id<T>(x:T)->T{x}fn main(){let x:u8=id(id(700u16));}",
+        "fn same<T>(a:T,b:T)->T{b}fn main(){let x=same(1u16,{let y=2u8;y});}",
     ] {
         for workers in [1, 8] {
             for check in [true, false] {
@@ -78,6 +82,36 @@ fn inference_failures_never_publish_objects() {
             }
         }
     }
+}
+
+#[test]
+fn contextual_and_nested_inference_matches_stock() {
+    use oracle::{Case, Expect};
+    oracle::check(
+        "contextual_generic_inference",
+        &[
+            Case {
+                name: "nested_default_integer",
+                source: "fn id<T>(x:T)->T{x}fn main(){let x=id(id(7));println!(\"{}\",x);}",
+                expect: Expect::Run("7\n"),
+            },
+            Case {
+                name: "later_block_constrains_first_literal",
+                source: "fn same<T>(a:T,b:T)->T{b}fn main(){let x=same(1,{let y=2u8;y});println!(\"{}\",x);}",
+                expect: Expect::Run("2\n"),
+            },
+            Case {
+                name: "nested_inconsistent_expected_type",
+                source: "fn id<T>(x:T)->T{x}fn main(){let x:u8=id(id(700u16));}",
+                expect: Expect::Invalid("E0308"),
+            },
+            Case {
+                name: "later_block_conflicts_with_fixed_integer",
+                source: "fn same<T>(a:T,b:T)->T{b}fn main(){let x=same(1u16,{let y=2u8;y});}",
+                expect: Expect::Invalid("E0308"),
+            },
+        ],
+    );
 }
 
 #[test]
