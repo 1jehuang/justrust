@@ -751,6 +751,15 @@ impl<'s> Solver<'_, '_, 's> {
     }
 
     pub(super) fn manifest_ready(&self, terms: &[Term], depth: usize) -> Result<bool, String> {
+        self.manifest_ready_with_defaults(terms, depth, self.projection_defaults)
+    }
+
+    pub(super) fn manifest_ready_with_defaults(
+        &self,
+        terms: &[Term],
+        depth: usize,
+        numeric_defaults: bool,
+    ) -> Result<bool, String> {
         for term in terms {
             self.checker.infer_work(depth)?;
             let ready = match self.domain(*term) {
@@ -761,18 +770,27 @@ impl<'s> Solver<'_, '_, 's> {
                             .into(),
                     );
                 }
-                Domain::Integer | Domain::Float => self.projection_defaults,
+                Domain::Integer | Domain::Float => numeric_defaults,
                 Domain::Fixed(_) => true,
                 Domain::Nominal(_, terms) | Domain::Tuple(terms) | Domain::Opaque(_, terms) => {
-                    self.manifest_ready(&terms, depth + 1)?
+                    self.manifest_ready_with_defaults(&terms, depth + 1, numeric_defaults)?
                 }
                 Domain::Ref(_, inner)
                 | Domain::RawPtr(_, inner)
                 | Domain::Array(inner, _)
-                | Domain::Slice(inner) => self.manifest_ready(&[inner], depth + 1)?,
+                | Domain::Slice(inner) => {
+                    self.manifest_ready_with_defaults(&[inner], depth + 1, numeric_defaults)?
+                }
                 Domain::AssociatedProjection(projection) => {
-                    self.manifest_ready(&[projection.receiver], depth + 1)?
-                        && self.manifest_ready(&projection.arguments, depth + 1)?
+                    self.manifest_ready_with_defaults(
+                        &[projection.receiver],
+                        depth + 1,
+                        numeric_defaults,
+                    )? && self.manifest_ready_with_defaults(
+                        &projection.arguments,
+                        depth + 1,
+                        numeric_defaults,
+                    )?
                 }
             };
             if !ready {

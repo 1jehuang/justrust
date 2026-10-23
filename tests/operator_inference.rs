@@ -4,6 +4,24 @@
 mod oracle;
 
 #[test]
+fn nominal_comparisons_allow_quiescent_numeric_defaulting() {
+    for source in [
+        "#[derive(Clone,PartialEq)] struct Pair<T>{a:T,b:T} impl<T:Copy> Pair<T>{fn swap(self)->Self{Self{a:self.b,b:self.a}}} fn main(){let p=Pair{a:3,b:9};let q=p.clone().swap();println!(\"{}\",p==q);}",
+        "#[derive(Clone,PartialEq)] struct Pair<T>{a:T,b:T} impl<T:Copy> Pair<T>{fn swap(self)->Self{Self{a:self.b,b:self.a}}} fn main(){let p=Pair{a:3.0,b:9.0};let q=p.clone().swap();println!(\"{}\",p==q);}",
+        "#[derive(Clone,PartialEq)] struct Pair<T>{a:T,b:T} fn narrow(_: &Pair<u8>){} fn main(){let p=Pair{a:3,b:9};let q=p.clone();let equal=p==q;narrow(&p);println!(\"{}\",equal);}",
+        "#[derive(Clone,PartialEq)] struct Pair<T>{a:T,b:T} fn narrow(_: &Pair<f32>){} fn main(){let p=Pair{a:3.0,b:9.0};let q=p.clone();let equal=p==q;narrow(&p);println!(\"{}\",equal);}",
+    ] {
+        oracle::stock_native(source);
+    }
+    for source in [
+        "#[derive(PartialEq)] struct Pair<T>{a:T} fn main(){let p=Pair{a:3u8};let q=Pair{a:3u16};let _equal=p==q;}",
+        "struct Pair<T>{a:T} fn unused(){let p=Pair{a:3};let q=Pair{a:3};let _equal=p==q;} fn main(){}",
+    ] {
+        oracle::stock_and_native_reject(source);
+    }
+}
+
+#[test]
 fn independent_rhs_and_output_flow_through_nested_operators() {
     oracle::stock_native(
         "use std::ops::{Add,Mul,Neg};struct A{v:i32}struct B{v:i32}impl Add<u8> for A{type Output=B;fn add(self,n:u8)->B{B{v:self.v+n as i32}}}impl Mul<i32> for B{type Output=i32;fn mul(self,n:i32)->i32{self.v*n}}impl Neg for A{type Output=i32;fn neg(self)->i32{-self.v}}fn main(){let x=(A{v:4}+3u8)*2;let y=-A{v:9};println!(\"{} {}\",x,y);}",

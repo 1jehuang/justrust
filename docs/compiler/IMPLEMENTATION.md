@@ -6,6 +6,10 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 
 ## Completed foundations, not full compatibility
 
+- [x] Numeric-only nominal arguments permit the quiescent defaulting round
+      without masquerading as missing graph inputs. Integer and float generic
+      comparisons, later narrowing constraints, and invalid comparisons are
+      covered by `operator_inference::nominal_comparisons_allow_quiescent_numeric_defaulting`.
 - [x] Inherent method inference consumes callable `Output` equalities after
       binding the receiver's implementation parameters. `Result::map`,
       `Result::map_err` and custom callable methods infer their result parameters

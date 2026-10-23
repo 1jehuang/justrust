@@ -691,7 +691,13 @@ impl<'s> Solver<'_, '_, 's> {
                         return Ok(None);
                     }
                     if !self.manifest_ready(&args, depth + 1)? {
-                        self.preparation_needs_actuals.set(true);
+                        // Numeric literals alone are not a missing graph input.
+                        // Let the normal quiescent defaulting round run before
+                        // selecting a canonical nominal specialization. Unknown
+                        // actuals still suspend, as do missing source/nominal facts.
+                        if !self.manifest_ready_with_defaults(&args, depth + 1, true)? {
+                            self.preparation_needs_actuals.set(true);
+                        }
                         return Ok(None);
                     }
                     let demand = nominal_manifest::Demand {

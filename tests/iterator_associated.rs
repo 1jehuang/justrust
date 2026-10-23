@@ -117,7 +117,9 @@ fn source_iterator_count_and_bound_from_iterator() {
 
 #[test]
 fn unchanged_closures_iterators_match_stock() {
-    oracle::stock_native(include_str!("fixtures/full_programs/11_closures_iterators.rs"));
+    oracle::stock_native(include_str!(
+        "fixtures/full_programs/11_closures_iterators.rs"
+    ));
 }
 
 #[test]
