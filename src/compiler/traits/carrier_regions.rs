@@ -2,6 +2,62 @@
 use super::*;
 
 impl ValidatedTraitWorld {
+    pub(super) fn retains_shared_slice_family(
+        &self,
+        signature: &Signature,
+        destination: &ir::InputCarrier,
+        input: &ir::InputCarrier,
+    ) -> Result<bool> {
+        if destination.param != input.param {
+            return Ok(false);
+        }
+        let ir::CarrierChannel::Fixed(position) = destination.location.channel else {
+            return Ok(false);
+        };
+        let ir::CarrierChannel::ParamTail {
+            parameter,
+            prefix: 0,
+        } = input.location.channel
+        else {
+            return Ok(false);
+        };
+        let Some(suffix) = input
+            .location
+            .path
+            .0
+            .strip_prefix(destination.location.path.0.as_ref())
+        else {
+            return Ok(false);
+        };
+        charged(&self.budget, self.budget.charge_work(suffix.len()))?;
+        if suffix.len() != usize::from(position.depth) + 2
+            || suffix.last() != Some(&ir::CarrierStep::SliceElement)
+            || !suffix[..suffix.len() - 1]
+                .iter()
+                .all(|step| *step == ir::CarrierStep::Referent)
+        {
+            return Ok(false);
+        }
+        let ty = signature.params.get(input.param).ok_or_else(|| {
+            FactsError::invalid(
+                &self.budget,
+                "slice family source parameter outside signature",
+            )
+        })?;
+        let descriptor = charged(
+            &self.budget,
+            ir::carrier_at(ty, &destination.location, &self.budget),
+        )?;
+        let element = charged(
+            &self.budget,
+            ir::carrier_at(ty, &input.location, &self.budget),
+        )?;
+        Ok(
+            descriptor.shared_slice_element() == Some(&Ty::Param(parameter))
+                && element == &Ty::Param(parameter),
+        )
+    }
+
     pub(super) fn source_carrier_outlives(
         &self,
         source: &ir::SourceRegionEnv,
@@ -95,6 +151,56 @@ impl ValidatedTraitWorld {
         destination: &ir::CarrierLocation,
         input: &ir::InputCarrier,
     ) -> Result<Option<bool>> {
+        // Returning a borrowed slice retains its stored element origins as
+        // well as its descriptor origin. An element family is eligible only
+        // through an enclosing shared slice that the original contract already
+        // authorizes as a source for this exact output. This is not an extra
+        // lifetime relation between unrelated parameters.
+        if let ir::CarrierChannel::ParamTail {
+            parameter,
+            prefix: 0,
+        } = input.location.channel
+            && input.location.path.0.last() == Some(&ir::CarrierStep::SliceElement)
+            && matches!(destination.channel, ir::CarrierChannel::Fixed(_))
+            && charged(
+                &self.budget,
+                ir::carrier_at(&signature.result, destination, &self.budget),
+            )?
+            .shared_slice_element()
+                == Some(&Ty::Param(parameter))
+        {
+            let input_ty = signature.params.get(input.param).ok_or_else(|| {
+                FactsError::invalid(
+                    &self.budget,
+                    "slice family source parameter outside signature",
+                )
+            })?;
+            for parent in
+                charged(&self.budget, ir::carrier_locations(input_ty, &self.budget))?.iter()
+            {
+                let parent = ir::InputCarrier {
+                    param: input.param,
+                    location: parent.clone(),
+                };
+                if !self.retains_shared_slice_family(signature, &parent, input)? {
+                    continue;
+                }
+                let eligible =
+                    match self.source_carrier_eligible(source, signature, destination, &parent)? {
+                        Some(eligible) => eligible,
+                        None => self.carrier_source_eligible(
+                            signature,
+                            destination,
+                            &signature.result,
+                            &parent,
+                            None,
+                        )?,
+                    };
+                if eligible {
+                    return Ok(Some(true));
+                }
+            }
+        }
         let output = source
             .carriers
             .iter()
@@ -102,6 +208,24 @@ impl ValidatedTraitWorld {
         let Some(output) = output else {
             return Ok(None);
         };
+        if let ir::CarrierRegionTerm::Family { parameter } = output.region {
+            if !matches!(destination.channel,
+                ir::CarrierChannel::ParamTail { parameter: actual, prefix: 0 }
+                    if actual == parameter)
+                || destination.path.0.last() != Some(&ir::CarrierStep::SliceElement)
+            {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "slice family output changed its exact source channel",
+                ));
+            }
+            // A declared type-family result is not a named lifetime claim.
+            // Use the original canonical family relation, including after
+            // trait Self normalization exposes a slice parameter family.
+            return self
+                .carrier_source_eligible(signature, destination, &signature.result, input, None)
+                .map(Some);
+        }
         let incoming = source
             .carriers
             .iter()
@@ -215,6 +339,12 @@ impl ValidatedTraitWorld {
         destination: &ir::InputCarrier,
         input: &ir::InputCarrier,
     ) -> Result<Option<bool>> {
+        // Replacing a descriptor may retain its own stored element origins.
+        // Exact source-parameter and carrier-path identity prevent introducing
+        // an origin from another slice or an unrelated field.
+        if self.retains_shared_slice_family(signature, destination, input)? {
+            return Ok(Some(true));
+        }
         let Some(output) = source.carriers.iter().find(|row| {
             row.parameter == Some(destination.param) && row.location == destination.location
         }) else {
@@ -247,6 +377,40 @@ impl ValidatedTraitWorld {
                 "source carrier region resource limit exceeded",
             ));
         }
+        // A substituted reference may only expand a family already retained
+        // by the exact source signature. Missing source rows are not permission
+        // to reconstruct an inner lifetime from the concrete type later.
+        for (parameter, ty) in raw
+            .params
+            .iter()
+            .enumerate()
+            .map(|(i, ty)| (Some(i), ty))
+            .chain(std::iter::once((None, &raw.result)))
+        {
+            for location in charged(&self.budget, ir::carrier_locations(ty, &self.budget))?.iter() {
+                let ir::CarrierChannel::ParamTail {
+                    parameter: element,
+                    prefix: 0,
+                } = location.channel
+                else {
+                    continue;
+                };
+                if location.path.0.last() != Some(&ir::CarrierStep::SliceElement) {
+                    continue;
+                }
+                charged(&self.budget, self.budget.charge_work(source.carriers.len()))?;
+                if !source.carriers.iter().any(|row| {
+                    row.parameter == parameter
+                        && row.location == *location
+                        && row.region == (ir::CarrierRegionTerm::Family { parameter: element })
+                }) {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "missing declared slice element family region",
+                    ));
+                }
+            }
+        }
         let mut rows: Vec<ir::SourceCarrierRegion> = Vec::new();
         for row in source.carriers.iter() {
             let (original, actual) = if let Some(parameter) = row.parameter {
@@ -265,6 +429,15 @@ impl ValidatedTraitWorld {
                 ir::CarrierRegionTerm::Named(id)
                     if id.declaration == source.declaration && id.index < source.region_count => {}
                 ir::CarrierRegionTerm::Fixed(id) if id.0 < signature.ref_contract.region_count => {}
+                ir::CarrierRegionTerm::Family { parameter }
+                    if location.path.0.last() == Some(&ir::CarrierStep::SliceElement)
+                        && matches!(location.channel,
+                            ir::CarrierChannel::ParamTail { parameter: actual, prefix: 0 }
+                                if actual == parameter)
+                        && charged(
+                            &self.budget,
+                            ir::carrier_at(original, &row.location, &self.budget),
+                        )? == &Ty::Param(parameter) => {}
                 _ => {
                     return Err(FactsError::invalid(
                         &self.budget,
@@ -393,6 +566,127 @@ pub(super) fn enclosing(parent: &ir::CarrierLocation, child: &ir::CarrierLocatio
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn generic_slice_family_rows_reject_missing_foreign_and_offset_metadata() {
+        let budget = PlanBudget::default();
+        let program =
+            crate::compiler::frontend::parse("fn read<T:Copy,U>(s:&[T],u:U)->T{s[0]}fn main(){}")
+                .unwrap();
+        let plan = crate::compiler::frontend::PlanCtx::from_program(&program, &budget).unwrap();
+        let world = plan.trait_world().unwrap();
+        let declaration = plan.function_decl(0).unwrap();
+        let source = plan.source_region_env(declaration).unwrap();
+        let signature = world
+            .schema
+            .declaration_schema(declaration)
+            .unwrap()
+            .signature;
+        world
+            .checked_source_carriers(&source, &signature, &signature)
+            .unwrap();
+        let index = source
+            .carriers
+            .iter()
+            .position(|row| matches!(row.region, ir::CarrierRegionTerm::Family { .. }))
+            .unwrap();
+        let ir::CarrierRegionTerm::Family { parameter } = source.carriers[index].region else {
+            unreachable!()
+        };
+        let destination = ir::InputCarrier {
+            param: 0,
+            location: ir::CarrierLocation {
+                path: ir::CarrierPath(Arc::from([])),
+                channel: ir::CarrierChannel::Fixed(ir::ReferencePosition { depth: 0 }),
+            },
+        };
+        let input = ir::InputCarrier {
+            param: 0,
+            location: source.carriers[index].location.clone(),
+        };
+        assert!(
+            world
+                .retains_shared_slice_family(&signature, &destination, &input)
+                .unwrap()
+        );
+        let mut borrowed_slice = signature.clone();
+        borrowed_slice.result = signature.params[0].clone();
+        let mut outside = input.clone();
+        outside.param = usize::MAX;
+        assert!(
+            world
+                .source_carrier_eligible(&source, &borrowed_slice, &destination.location, &outside,)
+                .is_err()
+        );
+        for mode in 0..4 {
+            let mut forged = input.clone();
+            match mode {
+                0 => forged.param = 1,
+                1 => forged.location.path = ir::CarrierPath(Arc::from([])),
+                2 => {
+                    forged.location.channel = ir::CarrierChannel::ParamTail {
+                        parameter,
+                        prefix: 1,
+                    }
+                }
+                _ => {
+                    forged.location.channel = ir::CarrierChannel::ParamTail {
+                        parameter: ir::ParamId {
+                            index: parameter.index + 1,
+                            ..parameter
+                        },
+                        prefix: 0,
+                    }
+                }
+            }
+            assert!(
+                !matches!(
+                    world.retains_shared_slice_family(&signature, &destination, &forged),
+                    Ok(true)
+                ),
+                "family offset mode {mode}"
+            );
+        }
+        for mode in 0..6 {
+            let mut forged = source.as_ref().clone();
+            let mut rows = forged.carriers.to_vec();
+            match mode {
+                0 => {
+                    rows.remove(index);
+                }
+                1 => {
+                    rows[index].parameter = Some(1);
+                }
+                2 => {
+                    rows[index].location.path = ir::CarrierPath(Arc::from([]));
+                }
+                3 => {
+                    rows[index].location.channel = ir::CarrierChannel::ParamTail {
+                        parameter,
+                        prefix: 1,
+                    };
+                }
+                4 => {
+                    rows[index].region = ir::CarrierRegionTerm::Family {
+                        parameter: ir::ParamId {
+                            index: parameter.index + 1,
+                            ..parameter
+                        },
+                    };
+                }
+                _ => {
+                    rows.push(rows[index].clone());
+                }
+            }
+            forged.carriers = rows.into();
+            assert!(
+                world
+                    .checked_source_carriers(&forged, &signature, &signature)
+                    .is_err(),
+                "mode {mode}"
+            );
+        }
+    }
 
     #[test]
     fn projected_carrier_refinement_rejects_added_origins_and_changed_topology() {

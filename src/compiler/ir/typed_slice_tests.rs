@@ -3,6 +3,80 @@ use super::*;
 use crate::compiler::frontend;
 
 #[test]
+fn generic_slice_family_keeps_exact_path_and_bounded_substitution() {
+    let program = frontend::parse("fn read<T:Copy>(s:&[T])->T{s[0]}fn main(){}").unwrap();
+    let budget = PlanBudget::default();
+    let mut plan = frontend::PlanCtx::from_program(&program, &budget).unwrap();
+    let facts = plan.callable_facts(plan.function_decl(0).unwrap()).unwrap();
+    let parameter = facts.env().ordered_params().next().unwrap();
+    let slice = shared(Ty::Slice {
+        element: Arc::new(Ty::Param(parameter)),
+    });
+    let locations = carrier_locations(&slice, &budget).unwrap();
+    assert_eq!(locations.len(), 2);
+    let tail = &locations[1];
+    assert_eq!(
+        tail.path.0.as_ref(),
+        &[CarrierStep::Referent, CarrierStep::SliceElement]
+    );
+    assert_eq!(
+        tail.channel,
+        CarrierChannel::ParamTail {
+            parameter,
+            prefix: 0
+        }
+    );
+    assert_eq!(
+        carrier_at(&slice, tail, &budget).unwrap(),
+        &Ty::Param(parameter)
+    );
+    let mut forged = tail.clone();
+    forged.channel = CarrierChannel::ParamTail {
+        parameter,
+        prefix: 1,
+    };
+    assert!(carrier_at(&slice, &forged, &budget).is_err());
+    for element in [shared(Ty::Int(IntTy::I32)), shared(Ty::Str)] {
+        let result = substitute_ty(
+            &slice,
+            facts.env(),
+            &[element.clone()],
+            FactsCtx::Concrete,
+            &mut plan,
+            &budget,
+        )
+        .unwrap();
+        assert_eq!(
+            result,
+            shared(Ty::Slice {
+                element: Arc::new(element)
+            })
+        );
+        assert_eq!(carrier_locations(&result, &budget).unwrap().len(), 2);
+    }
+    for element in [
+        shared(shared(Ty::Bool)),
+        Ty::Ref {
+            kind: BorrowKind::Mut,
+            referent: Arc::new(Ty::Bool),
+        },
+    ] {
+        assert!(
+            substitute_ty(
+                &slice,
+                facts.env(),
+                &[element],
+                FactsCtx::Concrete,
+                &mut plan,
+                &budget
+            )
+            .unwrap_err()
+            .contains("slice elements containing references")
+        );
+    }
+}
+
+#[test]
 fn independent_mutable_slice_tuple_retains_source_origins() {
     use crate::compiler::{cfg, ownership};
     let program = frontend::parse("fn pair<'a,'b>(a:&'a mut[i32],b:&'b mut[i32])->(&'a mut[i32],&'b mut[i32]){(a,b)}fn main(){}").unwrap();

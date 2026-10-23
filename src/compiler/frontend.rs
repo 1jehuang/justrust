@@ -19570,16 +19570,31 @@ impl PlanCtx {
                     &params,
                     &result,
                 )?;
+                let signature = ir::Signature {
+                    ref_contract,
+                    params,
+                    result,
+                };
                 source_schemas.source_regions.insert(
                     source_schemas::decl_slot(id, &registry, budget)?,
-                    original_source_regions(
-                        (program.names.as_ref(), budget),
-                        id,
+                    carrier_regions::attach(
+                        &registry,
                         &h.regions,
                         &h.params,
                         &h.result,
-                        &ref_contract,
+                        None,
+                        &signature,
                         item.receiver,
+                        original_source_regions(
+                            (program.names.as_ref(), budget),
+                            id,
+                            &h.regions,
+                            &h.params,
+                            &h.result,
+                            &signature.ref_contract,
+                            item.receiver,
+                        )?,
+                        budget,
                     )?,
                     budget,
                 )?;
@@ -19604,11 +19619,7 @@ impl PlanCtx {
                     StoredSchema {
                         value: tr::GenericSchema {
                             env: info.env.clone(),
-                            signature: ir::Signature {
-                                ref_contract,
-                                params,
-                                result,
-                            },
+                            signature,
                             predicates: rows.into(),
                         },
                         params_storage,

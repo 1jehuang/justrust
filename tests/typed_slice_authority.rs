@@ -495,10 +495,51 @@ fn unused_slice_body_cannot_import_foreign_source_binding() {
     reject_source(program);
 }
 #[test]
-fn reference_generic_argument_reaches_reference_free_slice_boundary() {
-    observed_generic_argument_unsupported(
-        "fn length<T>(values:&[T])->usize{values.len()}fn main(){let value=1i32;let values=[&value];length::<&i32>(&values);}",
-        "slice elements containing references or slices, or nested slice carriers",
+fn generic_slice_return_requires_its_own_declaration_authority() {
+    let fixture = fixture("generic");
+    let unrelated = self::fixture("length");
+    reject_ir(&fixture.checked, &unrelated.facts);
+}
+
+#[test]
+fn reference_generic_argument_transports_declared_slice_family() {
+    #[path = "support/closure_oracle.rs"]
+    mod closure_oracle;
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "generic-slice-family",
+        &[
+            Case {
+                name: "read_shared_reference",
+                source: "fn read<T:Copy>(s:&[T])->T{s[0]}fn main(){let x=42i32;let a=[&x];let r=read::<&i32>(&a);let n=*r;println!(\"{}\",n);}",
+                expect: Expect::Run("42\n"),
+            },
+            Case {
+                name: "length_shared_reference",
+                source: "fn length<T>(values:&[T])->usize{values.len()}fn main(){let value=1i32;let values=[&value];let n=length::<&i32>(&values);println!(\"{}\",n);}",
+                expect: Expect::Run("1\n"),
+            },
+            Case {
+                name: "inner_reference_survives_array",
+                source: "fn read<T:Copy>(s:&[T])->T{s[0]}fn main(){let x=42i32;let r;{let a=[&x];let value=read::<&i32>(&a);r=value;}let n=*r;println!(\"{}\",n);}",
+                expect: Expect::Run("42\n"),
+            },
+            Case {
+                name: "inner_reference_cannot_escape",
+                source: "fn read<T:Copy>(s:&[T])->T{s[0]}fn main(){let r;{let x=42i32;let a=[&x];let value=read::<&i32>(&a);r=value;}let n=*r;println!(\"{}\",n);}",
+                expect: Expect::Invalid("E0597"),
+            },
+            Case {
+                name: "inner_reference_keeps_loan",
+                source: "fn read<T:Copy>(s:&[T])->T{s[0]}fn main(){let mut x=42i32;let a=[&x];let r=read::<&i32>(&a);x=7;let n=*r;println!(\"{}\",n);}",
+                expect: Expect::Invalid("E0506"),
+            },
+            Case {
+                name: "unrelated_slice_lifetime_unused",
+                source: "fn wrong<'a,'b,T>(a:&'a[T],b:&'b[T])->&'a[T]{b}fn main(){}",
+                expect: Expect::Invalid("lifetime may not live long enough"),
+            },
+        ],
     );
 }
 #[test]
@@ -508,6 +549,21 @@ fn reference_containing_generic_argument_reaches_reference_free_slice_boundary()
         "slice elements containing references or slices, or nested slice carriers",
     );
 }
+
+#[test]
+fn generic_reference_slice_length_matches_stock() {
+    #[path = "support/closure_oracle.rs"]
+    mod closure_oracle;
+    closure_oracle::check(
+        "reference-slice-length",
+        &[closure_oracle::Case {
+            name: "exact_generic_reference_size",
+            source: "fn size<T>(s:&[T])->usize{s.len()}fn main(){let n=1;let data:[&i32;1]=[&n];let len=size::<&i32>(&data);println!(\"{}\",len);}",
+            expect: closure_oracle::Expect::Run("1\n"),
+        }],
+    );
+}
+
 #[test]
 fn contextual_closure_coercions_preserve_standalone_inference() {
     #[path = "support/closure_oracle.rs"]

@@ -9531,33 +9531,29 @@ mod tests {
     }
 
     #[test]
-    fn generic_shared_slice_retains_single_original_reference_carrier() {
-        let mut c = case();
-        let signature = reference_signature(
-            vec![shared_slice(c.caller_parameter.clone())],
-            Ty::Unit,
-            &c.budget,
-        );
-        let caller = &mut Arc::make_mut(&mut c.headers.callables)[1];
-        caller.schema.signature = signature;
-        caller.schema.predicates = Arc::from([]);
-        let world = c.build().unwrap();
-        let facts = world.callable_facts(c.caller).unwrap();
-        facts
-            .validate_ty(&shared_slice(c.caller_parameter.clone()))
-            .unwrap();
+    fn generic_shared_slice_retains_original_descriptor_and_element_family() {
+        let budget = PlanBudget::default();
+        let program =
+            crate::compiler::frontend::parse("fn size<T>(s:&[T])->usize{s.len()}fn main(){}")
+                .unwrap();
+        let plan = crate::compiler::frontend::PlanCtx::from_program(&program, &budget).unwrap();
+        let world = plan.trait_world().unwrap();
+        let declaration = plan.function_decl(0).unwrap();
+        let facts = world.callable_facts(declaration).unwrap();
+        let parameter = Ty::Param(facts.env().ordered_params().next().unwrap());
+        facts.validate_ty(&shared_slice(parameter.clone())).unwrap();
         for element in [
             Ty::Int(IntTy::I32),
             Ty::Int(IntTy::U128),
             Ty::Tuple(Arc::from([Ty::Int(IntTy::I32), Ty::Bool])),
         ] {
             let target = CallTarget {
-                declaration: c.caller,
+                declaration,
                 type_args: Arc::from([element]),
             };
             let closed = world.instance_facts(&target).unwrap();
             let carrier = closed.carrier_contract(SignatureSubject::Body).unwrap();
-            assert_eq!(carrier.original_contract().inputs.len(), 1);
+            assert_eq!(carrier.original_contract().inputs.len(), 2);
             assert_eq!(carrier.contract().inputs.len(), 1);
             assert!(matches!(
                 carrier.contract().inputs[0].location.channel,
@@ -9565,9 +9561,20 @@ mod tests {
             ));
             assert!(carrier.component_mappings().is_empty());
         }
-        let locations =
-            ir::carrier_locations(&shared_slice(c.caller_parameter.clone()), &c.budget).unwrap();
-        assert_eq!(locations.len(), 1);
+        let referenced = world
+            .instance_facts(&CallTarget {
+                declaration,
+                type_args: Arc::from([Ty::Ref {
+                    kind: BorrowKind::Shared,
+                    referent: Arc::new(Ty::Int(IntTy::I32)),
+                }]),
+            })
+            .unwrap();
+        let carrier = referenced.carrier_contract(SignatureSubject::Body).unwrap();
+        assert_eq!(carrier.contract().inputs.len(), 2);
+        assert_eq!(carrier.component_mappings().len(), 1);
+        let locations = ir::carrier_locations(&shared_slice(parameter), &budget).unwrap();
+        assert_eq!(locations.len(), 2);
         assert!(locations[0].path.0.is_empty());
         assert!(matches!(
             locations[0].channel,

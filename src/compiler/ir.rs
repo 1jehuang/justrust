@@ -687,9 +687,10 @@ pub fn carrier_locations(ty: &Ty, budget: &PlanBudget) -> Result<Arc<[CarrierLoc
             Ty::Str => {}
             Ty::Slice { element } => {
                 child(element)?;
-                // Opaque generic elements acquire no invented carrier schema.
-                // Concrete reference elements have one conservative domain.
-                has = matches!(element.as_ref(), Ty::Ref { .. });
+                // A declared element parameter retains its symbolic family at
+                // SliceElement. Concrete substitution must validate the bounded
+                // shared-reference shape before expanding this same family.
+                has = matches!(element.as_ref(), Ty::Ref { .. } | Ty::Param(_));
             }
             Ty::Tuple(fields) => {
                 for ty in fields.iter() {
@@ -3165,7 +3166,14 @@ fn substitute_ty_walk(
             budget.retain_bytes(std::mem::size_of::<Ty>() + std::mem::size_of::<usize>())?;
             let actual = substitute_ty_walk(element, env, args, caller, cx, budget, depth + 1)?;
             if !matches!(element.as_ref(), Ty::Ref { .. }) && matches!(actual, Ty::Ref { .. }) {
-                return Err("unsupported: slice elements containing references or slices, or nested slice carriers introduced through generic substitution".into());
+                if !matches!(element.as_ref(), Ty::Param(_)) {
+                    return Err("unsupported: slice elements containing references or slices, or nested slice carriers introduced through generic substitution".into());
+                }
+                // Only a declared parameter has an original SliceElement
+                // family to transport. Recheck its concrete element using the
+                // existing bounded shared-reference admission, never infer a
+                // carrier contract from the substituted shape.
+                validate_shared_slice_element(&actual, caller, budget)?;
             }
             Ty::Slice {
                 element: Arc::new(actual),

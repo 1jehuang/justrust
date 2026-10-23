@@ -59,6 +59,37 @@ fn generic_independent_mutable_slice_tuple_matches_stock() {
 }
 
 #[test]
+fn mutable_slice_tuple_reference_elements_remain_unsupported() {
+    let source = "fn pair<'a,'b,T>(a:&'a mut[T],b:&'b mut[T])->(&'a mut[T],&'b mut[T]){(a,b)}fn main(){let value=1i32;let mut a=[&value];let mut b=[&value];let(x,y)=pair(&mut a,&mut b);let _=x[0];let _=y[0];}";
+    let root = scratch("tuple-reference-elements");
+    let path = root.join("input.rs");
+    std::fs::write(&path, source).unwrap();
+    let stock = Command::new(stock_rustc::stock_rustc())
+        .args(["--edition=2024", "-Cpanic=abort"])
+        .arg(&path)
+        .arg("-o")
+        .arg(root.join("stock"))
+        .output()
+        .unwrap();
+    assert!(stock.status.success(), "{stock:?}");
+    for workers in [1, 8] {
+        for check_only in [true, false] {
+            let error = justrust_engine::compiler::compile(source.into(), workers, check_only)
+                .err()
+                .expect("mutable slices with reference elements must remain unsupported")
+                .to_string();
+            assert!(
+                error.contains("unsupported")
+                    && error.contains("slice")
+                    && error.contains("reference"),
+                "{error}"
+            );
+        }
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn slice_data_pointer_primitive_matches_stock() {
     use std::os::unix::fs::PermissionsExt;
     let source = r#"

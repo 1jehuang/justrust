@@ -20,6 +20,10 @@ pub(super) fn attach(
         implementation,
         signature,
         declaration: original.declaration,
+        // Trait headers previously retained only their positioned root
+        // contract. Add declared slice families without synthesizing named
+        // lifetime rows from nominal fields or changing that contract.
+        families_only: registry.declaration(original.declaration)?.kind == ir::DeclKind::TraitItem,
         budget,
         rows: Vec::new(),
         next_region: original.region_count,
@@ -82,6 +86,7 @@ struct Collector<'a> {
     implementation: Option<&'a ImplDecl>,
     signature: &'a ir::Signature,
     declaration: ir::DeclId,
+    families_only: bool,
     budget: &'a ir::PlanBudget,
     rows: Vec<ir::SourceCarrierRegion>,
     next_region: u16,
@@ -104,6 +109,9 @@ impl Collector<'_> {
         path: &[ir::CarrierStep],
         prefix: u8,
     ) -> Result<Option<ir::CarrierRegionTerm>, String> {
+        if self.families_only {
+            return Ok(None);
+        }
         if let Some(RegionName::Named(name)) = region {
             let key = self.lifetime_key(name)?;
             for (index, binder) in self.regions.params.iter().enumerate() {
@@ -191,6 +199,35 @@ impl Collector<'_> {
         self.budget.check_depth(depth)?;
         self.budget.charge_work(1)?;
         match source {
+            Type::Param(_) | Type::Named(_)
+                if matches!(semantic, ir::Ty::Param(_))
+                    && path.last() == Some(&ir::CarrierStep::SliceElement)
+                    && prefix == 0 =>
+            {
+                let ir::Ty::Param(element) = semantic else {
+                    unreachable!()
+                };
+                if self.rows.len() >= ir::MAX_LOAN_SITES {
+                    return Err("source carrier region resource limit exceeded".into());
+                }
+                self.budget.retain_bytes(
+                    std::mem::size_of::<ir::SourceCarrierRegion>()
+                        + path.len() * std::mem::size_of::<ir::CarrierStep>(),
+                )?;
+                self.rows.push(ir::SourceCarrierRegion {
+                    parameter,
+                    location: ir::CarrierLocation {
+                        path: ir::CarrierPath(path.clone().into()),
+                        channel: ir::CarrierChannel::ParamTail {
+                            parameter: *element,
+                            prefix: 0,
+                        },
+                    },
+                    region: ir::CarrierRegionTerm::Family {
+                        parameter: *element,
+                    },
+                });
+            }
             Type::SelfType => {
                 if let Some(block) = self.implementation {
                     self.walk(&block.self_ty, semantic, parameter, path, prefix, depth + 1)?;
@@ -285,7 +322,7 @@ impl Collector<'_> {
                         }
                     }
                     (Type::Slice(field), ir::Ty::Slice { element })
-                        if matches!(element.as_ref(), ir::Ty::Ref { .. }) =>
+                        if matches!(element.as_ref(), ir::Ty::Ref { .. } | ir::Ty::Param(_)) =>
                     {
                         path.push(ir::CarrierStep::SliceElement);
                         self.walk(field, element, parameter, path, 0, depth + 1)?;

@@ -95,6 +95,34 @@ array graph suite passed 2/2 with CHECK proving no code generation and BUILD
 retaining the exact loan/unsize assertions. Graph integrity passed 14/14 without
 changing ceilings. These are bounded inference repairs, not full-program support.
 
+## Declared generic element families (October 23, 2026)
+
+The generic-substitution restriction above is narrowed for an original declared
+slice element parameter. Its source signature retains a `ParamTail` at the exact
+`Referent/SliceElement` path, tied to the original generic binder. Substitution
+may expand that family to the already supported single shared-reference element
+shape. It cannot reconstruct a missing family from a concrete type. Missing,
+foreign, duplicated or displaced source rows reject; trait headers retain their
+original root reference contract while adding only declared family rows.
+
+A copied generic element returned as a reference keeps its original element
+lifetime, not the lifetime of the array or slice descriptor holding it. The
+existing authenticated result-flow check and complete target/dependency closure
+must succeed before the old descriptor-region fallback is skipped. The selector
+requires an exact root parameter family, canonical component mapping and unchanged
+ordered source paths. Escape and outstanding-loan mutation still reject.
+
+Two independently borrowed mutable slice results may retain conservative generic
+family candidates only when closed, validated actual types prove those families
+contain no carriers. This does not partition one input or admit reference-bearing
+mutable element families. No lifetime, alias, graph or resource ceiling is relaxed.
+
+Stock/native CHECK, BUILD and execution at workers 1 and 8 cover generic reference
+length/read, a returned element surviving destruction of its containing descriptor,
+and independent mutable inputs. The broader trait-argument inference, associated
+reference equality and unchanged error-handling program remain open acceptance
+work, not supported by these bounded proofs.
+
 ## Native descriptor and memory contract
 
 Keep the existing private two-word data/length descriptor and two-word argument

@@ -407,10 +407,9 @@ fn typed_slice_generic_copy_readers_and_noncopy_len_keep_real_closed_boundaries(
         "fn first<T>(s:&[T])->T{s[0]}fn main(){let data:[i32;1]=[1];let value=first::<i32>(&data);}",
     );
     assert!(!error.is_empty());
-    let error = rejected(
+    accepted(
         "fn size<T>(s:&[T])->usize{s.len()}fn main(){let n=1;let data:[&i32;1]=[&n];let len=size::<&i32>(&data);}",
     );
-    assert!(error.contains("unsupported"), "{error}");
 }
 
 #[test]

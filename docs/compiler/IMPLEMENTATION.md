@@ -6,6 +6,23 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 
 ## Completed foundations, not full compatibility
 
+- [x] Declared generic shared-slice element families retain source lifetime
+      authority through substitution, trait headers and borrowed element returns.
+      Exact input/path/family checks reject forged mappings, escapes and live-loan
+      violations. Independent mutable-slice pairs may additionally discard only
+      families proven empty for their concrete element actuals; this does not
+      authorize splitting one input. All 32 supported typed-slice authority tests,
+      two generic-family tests, seven parameter-equality tests and 17 graph checks
+      pass (`20261023-120923162-2075321`, `20261023-121020069-2078619`,
+      `20261023-121031830-2079535`, `20261023-121040417-2080239`). See
+      `TYPED-SLICES.md`. Nested-reference associated-type equality and unchanged
+      full-program 15 remain open, rather than accepted through relaxed guards.
+      The exact isolated library run passed 1,818 tests with one executable-busy
+      infrastructure failure; that test passed on retry. All 21 slice/corpus
+      integration tests and library/test clippy then passed. Receipts, including
+      the failed launch, are retained in
+      `data/runs/xps14/declared-slice-families-2026-10-23.jsonl`.
+
 - [x] Unknown closure parameters defer body coercions until callable context
       supplies their shape; standalone closures retain body-driven inference at
       genuine graph quiescence. Missing producers never authorize this fallback.
@@ -40,7 +57,7 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
       (`20261023-114158554-1981406`), with pre-existing warnings and unrelated
       global formatting debt left intact. This does not implement `split_at_mut`,
       mutable reference-containing element families or full Rust compatibility.
-      Additional shared element-family transport remains a separate open change.
+      Additional declared shared element-family transport is covered above.
 
 - [x] Node-local authority replay avoids rebuilding parameter-name bindings on
       nominal cache hits, repeating same-module ancestry lookups, and discarding

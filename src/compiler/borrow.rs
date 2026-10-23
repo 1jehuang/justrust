@@ -825,6 +825,72 @@ fn result_flow_problem(
     }
 }
 
+/// A root generic result instantiated to one reference retains the element's
+/// declared family lifetime, not the lifetime of the slice descriptor. This is
+/// shape selection for the existing authenticated result-flow and origin checks.
+fn borrowed_slice_family_result(
+    view: &super::traits::CarrierContractView,
+    location: &CarrierLocation,
+    budget: &mut Budget,
+) -> Result<bool, Exhausted> {
+    let fixed = CarrierChannel::Fixed(ReferencePosition { depth: 0 });
+    if !location.path.0.is_empty() || location.channel != fixed {
+        return Ok(false);
+    }
+    for original in view.original_contract().results.iter() {
+        budget.spend(1)?;
+        let CarrierChannel::ParamTail {
+            parameter,
+            prefix: 0,
+        } = original.location.channel
+        else {
+            continue;
+        };
+        let family = ir::CarrierFamily::Parameter(parameter);
+        if !original.location.path.0.is_empty() || original.sources.is_empty() {
+            continue;
+        }
+        let mut declared = true;
+        for source in original.sources.iter() {
+            budget.spend(view.original_contract().inputs.len() + 1)?;
+            declared &= source.location.channel == original.location.channel
+                && source.location.path.0.as_ref()
+                    == [CarrierStep::Referent, CarrierStep::SliceElement]
+                && view.original_contract().inputs.contains(source);
+        }
+        if !declared {
+            continue;
+        }
+        for mapping in view.component_mappings() {
+            budget.spend(1)?;
+            if mapping.original_family != family
+                || mapping.original != original.location
+                || mapping.substituted != *location
+            {
+                continue;
+            }
+            for result in view.contract().results.iter() {
+                budget.spend(1)?;
+                if result.location != *location || result.sources.len() != original.sources.len() {
+                    continue;
+                }
+                let mut exact = true;
+                for (source, original_source) in result.sources.iter().zip(original.sources.iter())
+                {
+                    budget.spend(1)?;
+                    exact &= source.param == original_source.param
+                        && source.location.path == original_source.location.path
+                        && source.location.channel == fixed;
+                }
+                if exact {
+                    return Ok(true);
+                }
+            }
+        }
+    }
+    Ok(false)
+}
+
 fn body_signature(f: &cfg::Function, budget: &mut Budget) -> Result<ir::Signature, Exhausted> {
     budget.spend(f.params.len() + 1)?;
     budget.reserve_bytes(mul(f.params.len(), size_of::<Ty>())?)?;
@@ -844,6 +910,123 @@ fn body_signature(f: &cfg::Function, budget: &mut Budget) -> Result<ir::Signatur
         result: f.result.clone(),
         ref_contract: f.ref_contract.clone(),
     })
+}
+
+/// Shape evidence only. The caller must additionally prove every retained
+/// family has a closed, carrier-free actual before admitting an affine pair.
+fn independent_slice_pair_rows(
+    contract: &ir::CarrierContract,
+    budget: &mut Budget,
+) -> Result<Option<([usize; 2], [Option<ir::ParamId>; 2])>, Exhausted> {
+    budget.spend(1)?;
+    if !(2..=4).contains(&contract.results.len()) || !contract.writes.is_empty() {
+        return Ok(None);
+    }
+    let fixed = CarrierChannel::Fixed(ReferencePosition { depth: 0 });
+    let mut roots = [None; 2];
+    let mut next_root = 0;
+    for row in contract.results.iter() {
+        budget.spend(1)?;
+        if row.location.channel != fixed {
+            continue;
+        }
+        let [CarrierStep::Field(index)] = row.location.path.0.as_ref() else {
+            return Ok(None);
+        };
+        let mut fixed_source = None;
+        for source in row.sources.iter() {
+            budget.spend(contract.inputs.len() + 1)?;
+            if !contract.inputs.contains(source) {
+                return Ok(None);
+            }
+            if source.location.channel == fixed {
+                if fixed_source.replace(source).is_some() || !source.location.path.0.is_empty() {
+                    return Ok(None);
+                }
+            } else if !matches!(
+                source.location.channel,
+                CarrierChannel::ParamTail { prefix: 0, .. }
+            ) || source.location.path.0.as_ref()
+                != [CarrierStep::Referent, CarrierStep::SliceElement]
+            {
+                return Ok(None);
+            }
+        }
+        let Some(source) = fixed_source else {
+            return Ok(None);
+        };
+        if *index != next_root || *index >= 2 {
+            return Ok(None);
+        }
+        roots[*index] = Some(source.param);
+        next_root += 1;
+    }
+    let [Some(left), Some(right)] = roots else {
+        return Ok(None);
+    };
+    if left == right {
+        return Ok(None);
+    }
+    let roots = [left, right];
+    let mut families = [None; 2];
+    let mut outputs = [None; 2];
+    for row in contract.results.iter() {
+        budget.spend(1)?;
+        if row.location.channel != fixed {
+            let CarrierChannel::ParamTail {
+                parameter,
+                prefix: 0,
+            } = row.location.channel
+            else {
+                return Ok(None);
+            };
+            let [
+                CarrierStep::Field(index),
+                CarrierStep::Referent,
+                CarrierStep::SliceElement,
+            ] = row.location.path.0.as_ref()
+            else {
+                return Ok(None);
+            };
+            if *index >= 2 || outputs[*index].replace(parameter).is_some() || row.sources.is_empty()
+            {
+                return Ok(None);
+            }
+        }
+        for source in row.sources.iter() {
+            budget.spend(contract.inputs.len() + 1)?;
+            if source.location.channel == fixed {
+                if row.location.channel != fixed {
+                    return Ok(None);
+                }
+                continue;
+            }
+            let CarrierChannel::ParamTail {
+                parameter,
+                prefix: 0,
+            } = source.location.channel
+            else {
+                return Ok(None);
+            };
+            let Some(index) = roots.iter().position(|root| *root == source.param) else {
+                return Ok(None);
+            };
+            if source.location.path.0.as_ref() != [CarrierStep::Referent, CarrierStep::SliceElement]
+                || !contract.inputs.contains(source)
+                || families[index].is_some_and(|previous| previous != parameter)
+            {
+                return Ok(None);
+            }
+            families[index] = Some(parameter);
+        }
+    }
+    for index in 0..2 {
+        budget.spend(1)?;
+        if outputs[index].is_some() && outputs[index] != families[index] {
+            return Ok(None);
+        }
+    }
+    Ok(Some((roots, families)))
 }
 
 /// The sole cell-state builder feeds the existing Plan queries, conflict and
@@ -3937,35 +4120,59 @@ impl CarrierBuilder<'_, '_> {
             && write_channels == 0
             && matches!(result, Ty::Tuple(fields) if fields.len() == 2
                 && fields.iter().all(|field| field.mut_slice_element().is_some()));
+        let mut original_roots = None;
         for contract in [view.original_contract(), view.contract()] {
-            self.budget.spend(1)?;
-            if !independent_pair || contract.results.len() != 2 {
+            if !independent_pair {
+                break;
+            }
+            let Some((roots, families)) = independent_slice_pair_rows(contract, self.budget)?
+            else {
+                independent_pair = false;
+                break;
+            };
+            if original_roots.is_some_and(|original| original != roots) {
                 independent_pair = false;
                 break;
             }
-            let mut previous = None;
-            for (index, row) in contract.results.iter().enumerate() {
+            original_roots = Some(roots);
+            for input in roots {
                 self.budget.spend(1)?;
-                let [source] = row.sources.as_ref() else {
-                    independent_pair = false;
-                    break;
-                };
-                if row.location.path.0.as_ref() != [ir::CarrierStep::Field(index)]
-                    || row.location.channel
-                        != CarrierChannel::Fixed(ir::ReferencePosition { depth: 0 })
-                    || !source.location.path.0.is_empty()
-                    || source.location.channel
-                        != CarrierChannel::Fixed(ir::ReferencePosition { depth: 0 })
-                    || params
-                        .get(source.param)
-                        .and_then(Ty::mut_slice_element)
-                        .is_none()
-                    || previous == Some(source.param)
-                {
+                if params.get(input).and_then(Ty::mut_slice_element).is_none() {
                     independent_pair = false;
                     break;
                 }
-                previous = Some(source.param);
+            }
+            for parameter in families.into_iter().flatten() {
+                self.budget.spend(1)?;
+                let Some((_, actual)) = view.parameter_actual(parameter).map_err(|_| Exhausted)?
+                else {
+                    independent_pair = false;
+                    break;
+                };
+                let Some(facts) = self.authority.as_deref().or(authority) else {
+                    independent_pair = false;
+                    break;
+                };
+                if facts.phase() != super::traits::FactsPhase::Closed {
+                    independent_pair = false;
+                    break;
+                }
+                let validation =
+                    FactsCtx::from_validated(facts).validate_ty_with_budget(actual, &self.ledger);
+                if self.metadata_value(validation)?.is_none() {
+                    independent_pair = false;
+                    break;
+                }
+                let Some(locations) =
+                    self.metadata_value(ir::carrier_locations(actual, &self.ledger))?
+                else {
+                    independent_pair = false;
+                    break;
+                };
+                if !locations.is_empty() {
+                    independent_pair = false;
+                    break;
+                }
             }
         }
         Ok((affine_results == 0 && affine_writes == 0)
@@ -5775,12 +5982,16 @@ impl Plan {
                         }
                     }
                 }
-                if body.source_region_env().carriers.iter().any(|source| {
-                    source.parameter.is_none()
-                        && source.location == row.location
-                        && (matches!(source.region, ir::CarrierRegionTerm::Named(_))
-                            || slice_carriers)
-                }) {
+                let mapped_slice_family = authority.is_some()
+                    && borrowed_slice_family_result(body, &row.location, budget)?;
+                if mapped_slice_family
+                    || body.source_region_env().carriers.iter().any(|source| {
+                        source.parameter.is_none()
+                            && source.location == row.location
+                            && (matches!(source.region, ir::CarrierRegionTerm::Named(_))
+                                || slice_carriers)
+                    })
+                {
                     // Source carrier rows authenticate the complete dependency
                     // closure, not merely the immediate returned address.
                     let mut seen = origins.references.0.clone();
@@ -5815,6 +6026,14 @@ impl Plan {
             }
         }
         for result in f.ref_contract.results.iter() {
+            if let Some(body) = &self.body
+                && authority.is_some()
+                && borrowed_slice_family_result(body, &fixed_location(result.position), budget)?
+            {
+                // The exact mapped source family and all lifetime dependencies
+                // were checked above. Do not substitute the descriptor region.
+                continue;
+            }
             if self.body.as_ref().is_some_and(|body| {
                 body.source_region_env().carriers.iter().any(|source| {
                     source.parameter.is_none()
@@ -6258,6 +6477,136 @@ mod parameter_equality_tests {
             panic!("expected genuine source publication")
         };
         cfg::lower_source_template(&publication, &budget).unwrap()
+    }
+
+    #[test]
+    fn independent_slice_pair_rows_reject_forged_families() {
+        let program = frontend::parse("fn pair<T,U>(){}fn main(){}").unwrap();
+        let budget = ir::PlanBudget::default();
+        let plan = frontend::PlanCtx::from_program(&program, &budget).unwrap();
+        let facts = plan.callable_facts(plan.function_decl(0).unwrap()).unwrap();
+        let parameters: Vec<_> = facts.env().ordered_params().collect();
+        let fixed = CarrierChannel::Fixed(ReferencePosition { depth: 0 });
+        let input = |param| InputCarrier {
+            param,
+            location: CarrierLocation {
+                path: CarrierPath(Arc::from([])),
+                channel: fixed.clone(),
+            },
+        };
+        let family = |param| InputCarrier {
+            param,
+            location: CarrierLocation {
+                path: CarrierPath(Arc::from([
+                    CarrierStep::Referent,
+                    CarrierStep::SliceElement,
+                ])),
+                channel: CarrierChannel::ParamTail {
+                    parameter: parameters[0],
+                    prefix: 0,
+                },
+            },
+        };
+        let rows: Vec<_> = (0..2)
+            .flat_map(|index| {
+                [
+                    ir::CarrierReturn {
+                        location: CarrierLocation {
+                            path: CarrierPath(Arc::from([CarrierStep::Field(index)])),
+                            channel: fixed.clone(),
+                        },
+                        sources: Arc::from([input(index)]),
+                    },
+                    ir::CarrierReturn {
+                        location: CarrierLocation {
+                            path: CarrierPath(Arc::from([
+                                CarrierStep::Field(index),
+                                CarrierStep::Referent,
+                                CarrierStep::SliceElement,
+                            ])),
+                            channel: family(index).location.channel,
+                        },
+                        sources: Arc::from([family(index)]),
+                    },
+                ]
+            })
+            .collect();
+        let original = ir::CarrierContract {
+            inputs: Arc::from([input(0), family(0), input(1), family(1)]),
+            results: rows.into(),
+            writes: Arc::from([]),
+        };
+        let check = |contract: &ir::CarrierContract| {
+            independent_slice_pair_rows(contract, &mut Budget::new(1_000_000)).unwrap()
+        };
+        assert_eq!(
+            check(&original),
+            Some(([0, 1], [Some(parameters[0]), Some(parameters[0])]))
+        );
+        let mut union = original.clone();
+        let mut union_rows = union.results.to_vec();
+        for row in &mut union_rows {
+            let mut sources = row.sources.to_vec();
+            for candidate in [family(0), family(1)] {
+                if !sources.contains(&candidate) {
+                    sources.push(candidate);
+                }
+            }
+            row.sources = sources.into();
+        }
+        union.results = union_rows.into();
+        assert_eq!(check(&union), check(&original));
+        for mode in 0..11 {
+            let mut forged = original.clone();
+            let mut rows = forged.results.to_vec();
+            match mode {
+                0 => rows[1].sources = Arc::from([family(1)]),
+                1 => rows[1].sources = Arc::from([]),
+                2 => {
+                    rows[1].location.channel = CarrierChannel::ParamTail {
+                        parameter: parameters[1],
+                        prefix: 0,
+                    }
+                }
+                3 => {
+                    rows[1].location.channel = CarrierChannel::ParamTail {
+                        parameter: parameters[1],
+                        prefix: 0,
+                    };
+                    let mut source = family(0);
+                    source.location.channel = rows[1].location.channel.clone();
+                    rows[1].sources = Arc::from([source]);
+                }
+                4 => {
+                    rows[1].location.path = CarrierPath(Arc::from([
+                        CarrierStep::Field(1),
+                        CarrierStep::Referent,
+                        CarrierStep::SliceElement,
+                    ]))
+                }
+                5 => {
+                    rows[1].location.channel = CarrierChannel::ParamTail {
+                        parameter: parameters[0],
+                        prefix: 1,
+                    }
+                }
+                6 => rows[2].sources = rows[0].sources.clone(),
+                7 => rows.swap(0, 2),
+                8 => rows[0].sources = Arc::from([input(0), input(1), family(0)]),
+                9 => rows[0].sources = Arc::from([input(0), family(2)]),
+                _ => {
+                    let mut unknown = family(0);
+                    unknown.location.channel = CarrierChannel::ParamTail {
+                        parameter: parameters[1],
+                        prefix: 0,
+                    };
+                    rows[0].sources = Arc::from([input(0), unknown]);
+                }
+            }
+            forged.results = rows.into();
+            assert!(check(&forged).is_none(), "forged mode {mode}");
+        }
+        assert!(independent_slice_pair_rows(&original, &mut Budget::new(0)).is_err());
     }
 
     #[test]
