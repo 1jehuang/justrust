@@ -1,12 +1,12 @@
 //! Frozen stock-first closed projection witnesses for ASSOCIATED-TYPES.md.
-//! Native categories are exact-source stock/native measurements, rechecked 2026-10-19.
+//! Native categories are exact-source stock/native measurements, rechecked 2026-10-23.
 //! First18 JSON SHA256 ab503e0282894e9a3c55229f1179225198499225992a4df1b2b247fcebca2293.
 //! Append9 JSON SHA256 bf933985f8a1a93f75a7ecce9489727eeb6dc2d28eb88ab39bdccf734fa90e43.
 //! Literal append12 JSON SHA256 ac05abbe21575c3a1d16d66a9aadd849ad45ec176de4f8015beeee4991bb16a7.
 //! Sources retain original 01..27 bytes/order and append 28..39, including final LF.
-//! Original cases 01,03,04,15..17,19,21..23,26,27 now match stock output.
+//! Original cases 01..04,14..17,19..23,26,27 now match stock output.
 //! Case16 witnesses this closed reference projection, not general reference parity.
-//! Case07 stops at unresolved String, before checking its associated Copy obligation.
+//! Case07 rejects the unproved associated Copy obligation with E0277.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
 use justrust_engine::compiler::{frontend, source};
 use std::fs::{self, OpenOptions};
@@ -20,7 +20,6 @@ const BASELINE_STOCK: &str = "rustc 1.98.1;48a229ceaefd4985c50990b14116b6d856af0
 enum Outcome {
     Runtime,
     Invalid,
-    Unsupported,
 }
 struct Case {
     name: &'static str,
@@ -47,7 +46,7 @@ fn cases() -> Vec<Case> {
 "#,
             stdout: Some("42 true\n"),
             stock_diagnostic: None,
-            outcome: Outcome::Unsupported,
+            outcome: Outcome::Runtime,
         },
         // Source SHA256 a34c29b39d1eec99304af9df7a8e9634cb8d76e4ce35911289ed79a563ea85f6
         Case {
@@ -155,7 +154,7 @@ fn cases() -> Vec<Case> {
 "#,
             stdout: Some("42\n"),
             stock_diagnostic: None,
-            outcome: Outcome::Unsupported,
+            outcome: Outcome::Runtime,
         },
         // Source SHA256 73a148f8dee43259d2e33898685d7570ef47b360a6d094abd68948a3877fc6ab
         Case {
@@ -209,7 +208,7 @@ fn cases() -> Vec<Case> {
 "#,
             stdout: Some("42 42 true\n"),
             stock_diagnostic: None,
-            outcome: Outcome::Unsupported,
+            outcome: Outcome::Runtime,
         },
         // Source SHA256 b3375369a912b50b7709f0b867125b59413e9d6a19b40f0d23dd1fdae07a18ab
         Case {
@@ -335,7 +334,7 @@ fn cases() -> Vec<Case> {
 "#,
             stdout: Some("ok\n"),
             stock_diagnostic: None,
-            outcome: Outcome::Unsupported,
+            outcome: Outcome::Runtime,
         },
         // Source SHA256 f659b344f6565bf0436ad3c079a30027df3e565cc13d706c0db2ec95c5fdf784
         Case {
@@ -513,12 +512,11 @@ fn stock_all() {
         String::from_utf8_lossy(&version.stdout)
     );
     let mut counts = (0, 0);
-    let mut partition = (0, 0, 0, 0);
+    let mut partition = (0, 0);
     for case in cases() {
         match case.outcome {
             Outcome::Runtime => partition.0 += 1,
             Outcome::Invalid => partition.1 += 1,
-            Outcome::Unsupported => partition.2 += 1,
         }
         let scratch = Scratch::new();
         scratch.write("client.rs", case.source.as_bytes());
@@ -557,7 +555,7 @@ fn stock_all() {
         }
     }
     assert_eq!(counts, (28, 12));
-    assert_eq!(partition, (24, 12, 4, 0));
+    assert_eq!(partition, (28, 12));
 }
 #[test]
 fn stock_nested_associated_types_oracle_edition2024_actual_toolchain() {
@@ -565,11 +563,7 @@ fn stock_nested_associated_types_oracle_edition2024_actual_toolchain() {
 }
 #[test]
 fn original_stock_valid_sources_keep_their_measured_phases() {
-    for case in cases()
-        .into_iter()
-        .take(27)
-        .filter(|case| case.stdout.is_some())
-    {
+    for case in cases().into_iter().filter(|case| case.stdout.is_some()) {
         let parsed = source::prepare_text(
             "projection.rs",
             case.source,
@@ -579,26 +573,7 @@ fn original_stock_valid_sources_keep_their_measured_phases() {
         .and_then(|prepared| {
             frontend::parse_prepared(&prepared).map_err(|error| error.to_string())
         });
-        if case.outcome == Outcome::Runtime {
-            parsed.expect(case.name);
-        } else {
-            let error = parsed.expect_err(case.name);
-            assert!(
-                error.contains(unsupported_boundary(&case)),
-                "{}:{error}",
-                case.name
-            );
-        }
-    }
-}
-fn unsupported_boundary(case: &Case) -> &'static str {
-    match case.name {
-        "02_same_self_distinct_argument" => {
-            "only {} and {:?} formatting placeholders are supported"
-        }
-        "14_generic_rigid_forward" => "associated type projections are unsupported",
-        "20_copy_record" | "34_literal_copy_record" => "active attribute `derive` is unsupported",
-        _ => panic!("unclassified Unsupported fixture: {}", case.name),
+        parsed.expect(case.name);
     }
 }
 #[test]
@@ -608,7 +583,7 @@ fn native_associated_types_workers1_8_check_build_no_compiler_fallback() {
     // Neither run asserts a nonexistent optimized native code-generation mode.
     stock_all();
     let mut gates = 0;
-    let mut modes = (0, 0, 0, 0, 0, 0, 0, 0);
+    let mut modes = (0, 0, 0, 0);
     for case in cases() {
         for workers in [1, 8] {
             for check in [true, false] {
@@ -644,25 +619,17 @@ fn native_associated_types_workers1_8_check_build_no_compiler_fallback() {
                 if case.outcome != Outcome::Runtime {
                     assert!(result.stdout.is_empty());
                     assert!(!diagnostic.is_empty());
-                    if case.outcome == Outcome::Unsupported {
+                    assert!(
+                        !diagnostic.contains("unsupported:"),
+                        "{} ordinary invalid must not become Unsupported:{diagnostic}",
+                        case.name
+                    );
+                    if case.name == "07_wrong_assignment" {
                         assert!(
-                            diagnostic.contains(unsupported_boundary(&case)),
-                            "{}:{diagnostic}",
+                            diagnostic.contains("E0277"),
+                            "{} expected the unproved Copy obligation:{diagnostic}",
                             case.name
                         );
-                    } else {
-                        assert!(
-                            !diagnostic.contains("unsupported:"),
-                            "{} ordinary invalid must not become Unsupported:{diagnostic}",
-                            case.name
-                        );
-                        if case.name == "07_wrong_assignment" {
-                            assert!(
-                                diagnostic.contains(": unresolved type\n"),
-                                "{} expected name-resolution failure before Copy validation:{diagnostic}",
-                                case.name
-                            );
-                        }
                     }
                 }
                 if !check && case.outcome == Outcome::Runtime {
@@ -685,16 +652,14 @@ fn native_associated_types_workers1_8_check_build_no_compiler_fallback() {
                     (Outcome::Runtime, false) => modes.1 += 1,
                     (Outcome::Invalid, true) => modes.2 += 1,
                     (Outcome::Invalid, false) => modes.3 += 1,
-                    (Outcome::Unsupported, true) => modes.4 += 1,
-                    (Outcome::Unsupported, false) => modes.5 += 1,
                 }
                 gates += 1;
             }
         }
     }
     assert_eq!(gates, 160);
-    assert_eq!(modes, (48, 48, 24, 24, 8, 8, 0, 0));
+    assert_eq!(modes, (56, 56, 24, 24));
     eprintln!(
-        "NATIVE ASSOCIATED TYPES:160 cells, modes{modes:?};48 nonempty-output main images;16 stock-valid Unsupported cells remain distinct boundaries;case07 is unresolved String, not Copy-obligation parity or full Rust support"
+        "NATIVE ASSOCIATED TYPES:160 cells, modes{modes:?};56 nonempty-output main images;all 28 stock-valid frozen sources require runtime parity;case07 rejects its unproved Copy obligation; not full Rust support"
     );
 }

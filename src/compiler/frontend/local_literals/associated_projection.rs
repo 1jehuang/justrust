@@ -12,6 +12,113 @@ pub(super) struct ProjectionTerm {
 }
 
 impl<'s> Solver<'_, '_, 's> {
+    /// Projection normalization proves a semantic type, not its executable
+    /// storage identity. Resolve any source nominal in that normal form through
+    /// the same prepared graph reads used by ordinary nominal terms.
+    pub(super) fn resolve_projection_representation(
+        &self,
+        ty: &ir::Ty,
+        depth: usize,
+    ) -> Result<Option<ir::Ty>, String> {
+        self.checker.infer_work(depth)?;
+        let Some(inputs) = self.preparation else {
+            return Ok(Some(ty.clone()));
+        };
+        let plan = self.checker.signatures.plan()?;
+        self.checker
+            .facts()
+            .validate_ty_with_budget(ty, &plan.budget)?;
+        if let Some((declaration, arguments)) = nominal_parts(ty) {
+            let capability = match ty {
+                ir::Ty::Struct(value) => value.realization(),
+                ir::Ty::Enum(value) => value.realization(),
+                _ => None,
+            };
+            // A typed read is already an exact representation. Never launder
+            // another engine's identity through declaration/argument lookup.
+            if capability.is_some() {
+                return Ok(Some(ty.clone()));
+            }
+            let demand = self.checker.nominal_input_demand(declaration, arguments)?;
+            let Some(realized) = (inputs.nominal_type)(&demand)? else {
+                self.record_missing_nominal(demand)?;
+                return Ok(None);
+            };
+            self.checker
+                .facts()
+                .validate_ty_with_budget(&realized, &plan.budget)?;
+            if !matches!((ty, &realized),
+                (ir::Ty::Struct(_), ir::Ty::Struct(value)) if value.realization().is_some())
+                && !matches!((ty, &realized),
+                    (ir::Ty::Enum(_), ir::Ty::Enum(value)) if value.realization().is_some())
+            {
+                return Err("invalid metadata: projected nominal lacks its graph read".into());
+            }
+            if !plan
+                .trait_world()?
+                .types_equal(std::slice::from_ref(ty), std::slice::from_ref(&realized))
+                .map_err(|error| error.into_legacy_diagnostic(&plan.budget))?
+            {
+                return Err("invalid metadata: projected nominal realization changed type".into());
+            }
+            return Ok(Some(realized));
+        }
+        Ok(Some(match ty {
+            ir::Ty::Tuple(fields) => {
+                self.checker.infer_storage(fields.len())?;
+                let mut mapped = Vec::new();
+                for field in fields.iter() {
+                    let Some(field) = self.resolve_projection_representation(field, depth + 1)?
+                    else {
+                        return Ok(None);
+                    };
+                    mapped.push(field);
+                }
+                ir::Ty::Tuple(mapped.into())
+            }
+            ir::Ty::Ref { kind, referent } => {
+                let Some(referent) = self.resolve_projection_representation(referent, depth + 1)?
+                else {
+                    return Ok(None);
+                };
+                ir::Ty::Ref {
+                    kind: *kind,
+                    referent: Arc::new(referent),
+                }
+            }
+            ir::Ty::RawPtr { kind, pointee } => {
+                let Some(pointee) = self.resolve_projection_representation(pointee, depth + 1)?
+                else {
+                    return Ok(None);
+                };
+                ir::Ty::RawPtr {
+                    kind: *kind,
+                    pointee: Arc::new(pointee),
+                }
+            }
+            ir::Ty::Array { element, len } => {
+                let Some(element) = self.resolve_projection_representation(element, depth + 1)?
+                else {
+                    return Ok(None);
+                };
+                ir::Ty::Array {
+                    element: Arc::new(element),
+                    len: *len,
+                }
+            }
+            ir::Ty::Slice { element } => {
+                let Some(element) = self.resolve_projection_representation(element, depth + 1)?
+                else {
+                    return Ok(None);
+                };
+                ir::Ty::Slice {
+                    element: Arc::new(element),
+                }
+            }
+            _ => ty.clone(),
+        }))
+    }
+
     pub(super) fn associated_projection(
         &mut self,
         projection: &ir::AssociatedTypeProjection,

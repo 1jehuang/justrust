@@ -680,6 +680,9 @@ impl<'s> Solver<'_, '_, 's> {
                 let Some(ty) = self.resolve_associated_projection(&projection, depth + 1)? else {
                     return Ok(None);
                 };
+                let Some(ty) = self.resolve_projection_representation(&ty, depth + 1)? else {
+                    return Ok(None);
+                };
                 ty
             }
             Domain::Nominal(decl, args) => {

@@ -1,6 +1,80 @@
-//! Internal preparation checks against the real source parser and body solver.
-//! These are not native execution or nominal-realization acceptance claims.
+//! Preparation authority checks and an exact stock/native projected-Copy regression.
 use super::*;
+
+#[test]
+fn projected_copy_record_keeps_graph_identity_at_runtime() {
+    // Exact unchanged tests/associated_types.rs case20_copy_record source.
+    crate::compiler::frontend::parser_tests::stock_native_run(
+        "trait Has{type Out;} #[derive(Clone,Copy)] struct Record{n:i32,b:bool} struct S; impl Has for S{type Out=Record;} fn pass(x:<S as Has>::Out)-><S as Has>::Out{x} fn main(){let x=Record{n:42,b:true}; let y=pass(x); println!(\"{} {} {}\",x.n,y.n,y.b);}\n",
+    );
+    // Exact unchanged case34_literal_copy_record, including its trailing LF.
+    crate::compiler::frontend::parser_tests::stock_native_run(
+        "trait Has{type Out;} #[derive(Clone,Copy)] struct Record{n:i32,b:bool} struct S; impl Has for S{type Out=Record;} fn pass(x:<S as Has>::Out)-><S as Has>::Out{x} fn main(){let x=Record{n:42,b:true}; let y=pass(x); if x.n==42{if x.b{if y.n==42{if y.b{println!(\"ok\");}}}}}\n",
+    );
+    // The normal form is structural: both nested nominal leaves need the
+    // same graph reads as the corresponding constructor and local types.
+    crate::compiler::frontend::parser_tests::stock_native_run(
+        "trait Has{type Out;} #[derive(Clone,Copy)] struct Record{n:i32} struct S; impl Has for S{type Out=(Record,(bool,Record));} fn pass(x:<S as Has>::Out)-><S as Has>::Out{x} fn main(){let x=(Record{n:42},(true,Record{n:7})); let y=pass(x); println!(\"{} {} {}\",x.0.n,y.1.1.n,y.1.0);}\n",
+    );
+}
+
+#[test]
+fn projected_normal_form_requires_graph_read_and_preserves_missing() {
+    let program =
+        parse("struct Ingress{value:i32}fn value()->Ingress{Ingress{value:1}}fn main(){}").unwrap();
+    let signatures = signature_table(&program).unwrap();
+    let plan = signatures.plan().unwrap();
+    let source = plan
+        .function_schema(plan.function_decl(0).unwrap())
+        .unwrap()
+        .signature
+        .result;
+    let function = &program.functions[1];
+    let checker = Checker::new(&signatures, ir::Ty::Unit, function.module);
+    let schema = |_| Ok(None);
+    let missing = |_: &Demand| Ok(None);
+    let inputs = Inputs::new(&schema, &primitive_source, &missing);
+    let solver = solve_body(&checker, &function.body, None, Some(&inputs)).unwrap();
+    assert!(
+        solver
+            .resolve_projection_representation(&source, 0)
+            .unwrap()
+            .is_none()
+    );
+    let requested = solver.missing_nominals.borrow();
+    assert_eq!(requested.len(), 1);
+    assert_eq!(requested[0].declaration, nominal_parts(&source).unwrap().0);
+    assert!(requested[0].arguments.is_empty());
+    drop(requested);
+
+    // Even an authentic source application is not a typed graph read.
+    let raw = |_: &Demand| Ok(Some(source.clone()));
+    let inputs = Inputs::new(&schema, &primitive_source, &raw);
+    let solver = solve_body(&checker, &function.body, None, Some(&inputs)).unwrap();
+    let error = solver
+        .resolve_projection_representation(&source, 0)
+        .unwrap_err();
+    assert!(
+        error.contains("projected nominal lacks its graph read"),
+        "{error}"
+    );
+    assert!(solver.missing_nominals.borrow().is_empty());
+
+    // Equal nominal IDs must not hide forged source payloads.
+    let ir::Ty::Struct(original) = &source else {
+        panic!("struct source")
+    };
+    let mut definition = original.def().clone();
+    let mut fields = definition.fields.to_vec();
+    fields[0].ty = ir::Ty::Bool;
+    definition.fields = fields.into();
+    let forged = ir::Ty::Struct(ir::StructTy::new(definition));
+    assert!(
+        solver
+            .resolve_projection_representation(&forged, 0)
+            .is_err()
+    );
+}
 
 #[test]
 fn nominal_recipe_selectors_reject_non_fields_and_out_of_range_fields() {

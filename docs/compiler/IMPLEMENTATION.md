@@ -6,6 +6,17 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 
 ## Completed foundations, not full compatibility
 
+- [x] Associated-type normal forms retain their canonical executable nominal
+      identity through prepared graph reads, including nested tuples. Missing
+      graph inputs remain pending and forged or unsealed representations reject.
+      All 40 unchanged associated-type sources now pass the 160-cell stock/native
+      matrix: 28 valid programs execute at workers 1/8 and 12 invalid programs
+      reject in CHECK/BUILD (`20261023-113805836-1968809`). The exact isolated
+      change passes 1,816 library tests and 17 graph checks
+      (`20261023-114356101-1988541`, `20261023-114727828-1988540`), plus all eight
+      nominal-manifest tests (`20261023-114312064-1986015`). This closes the
+      projected Copy-record identity gap, not full associated-type or Rust support.
+
 - [x] A flat pair of mutable slices can retain two independently borrowed
       input origins through a function result. The bounded affine proof requires
       two distinct fixed input roots with exact result-field mappings and no

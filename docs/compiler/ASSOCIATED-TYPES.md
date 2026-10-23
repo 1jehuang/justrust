@@ -1,6 +1,6 @@
 # Closed associated-type projections
 
-Status: bounded first vertical implemented and validated on October 17, 2026. Full Rust compatibility and general associated-type support remain open.
+Status: the bounded first vertical was validated on October 17, 2026; graph-backed nominal normal forms were extended on October 23. Full Rust compatibility and general associated-type support remain open.
 
 ## First vertical contract
 
@@ -36,6 +36,25 @@ Candidate matching shares one substitution across Self and all trait arguments, 
 6. Body-local lowering constructs raw types under the state lock, releases it, normalizes with original body facts and applies existing typed/carrier admission.
 
 Every structural type visitor explicitly handles projections. Substitution rebuilds full Self/args and retains the associated item. Executable IR, CFG, closed instances and backend reject residual projections, including dead and nested metadata, rather than guessing word layout or empty carriers. Identity, semantic equality and normalization evidence remain distinct operations.
+
+## October 23 graph-backed normal forms
+
+Local inference resolves a normalized source nominal through the existing prepared
+nominal graph input before choosing its executable representation. It validates
+both source and returned metadata and exact semantic equality. A missing graph
+input remains pending; an unsealed supplied graph result or changed source
+payload is rejected.
+Nested tuple, reference, pointer, array and slice wrappers retain this distinction
+between a semantic normal form and a graph-authenticated representation.
+
+All 40 frozen source strings remain byte-identical. The current oracle requires
+runtime parity for all 28 stock-valid cases and ordinary rejection of the 12
+stock-invalid cases, across 160 workers-1/8 CHECK/BUILD cells and 56 native
+executables (`20261023-113805836-1968809`). This includes the original derived
+Copy records; no Copy permission or CFG equality check is relaxed. Exact Copy
+record and nested-tuple runtime cases, plus missing/forged graph-input checks,
+pass separately (`20261023-114312064-1986015`). The results below remain the
+historical first-vertical measurements, not the current partition.
 
 ## Verified first-vertical results
 
