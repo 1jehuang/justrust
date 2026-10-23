@@ -5,6 +5,59 @@
 mod closure_oracle;
 
 #[test]
+fn iterator_collect_matches_stock() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "iterator-collect",
+        &[
+            Case {
+                name: "character_vector",
+                source: r#"fn main() { let chars: Vec<char> = "aé🦀".chars().collect(); println!("{} {} {} {}", chars.len(), chars[0], chars[1], chars[2]); }"#,
+                expect: Expect::Run("3 a é 🦀\n"),
+            },
+            Case {
+                name: "string_characters",
+                source: r#"fn main() { let text: String = "aé🦀".chars().collect(); println!("{}", text); }"#,
+                expect: Expect::Run("aé🦀\n"),
+            },
+            Case {
+                name: "string_borrowed_characters",
+                source: r#"fn main() { let chars = ['a', 'é', '🦀']; let text: String = chars.iter().collect(); println!("{}", text); }"#,
+                expect: Expect::Run("aé🦀\n"),
+            },
+            Case {
+                name: "empty_collection",
+                source: r#"fn main() { let values: Vec<char> = "".chars().collect(); let text: String = "".chars().collect(); println!("{} {}", values.len(), text.len()); }"#,
+                expect: Expect::Run("0 0\n"),
+            },
+            Case {
+                name: "user_defined_iterator",
+                source: r#"struct Count { n: i32 } impl Iterator for Count { type Item = i32; fn next(&mut self) -> Option<i32> { if self.n == 3 { None } else { let n = self.n; self.n += 1; Some(n) } } } fn main() { let values: Vec<i32> = Count { n: 0 }.collect(); println!("{} {}", values.len(), values[2]); }"#,
+                expect: Expect::Run("3 2\n"),
+            },
+            Case {
+                name: "wrong_element_type",
+                source: r#"fn main() { let values: Vec<bool> = (0i32..3i32).collect(); }"#,
+                expect: Expect::Invalid("E0277"),
+            },
+        ],
+    );
+}
+
+#[test]
+fn iterator_collect_mapped_range_matches_stock() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "iterator-collect-map",
+        &[Case {
+            name: "range_map",
+            source: r#"fn main() { let values: Vec<i32> = (0i32..4i32).map(|x| x * x).collect(); println!("{} {} {}", values.len(), values[1], values[3]); }"#,
+            expect: Expect::Run("4 1 9\n"),
+        }],
+    );
+}
+
+#[test]
 fn generic_method_owner_projections_match_stock() {
     use closure_oracle::{Case, Expect};
     closure_oracle::check(

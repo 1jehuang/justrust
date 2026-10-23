@@ -317,8 +317,10 @@ impl Capabilities {
             .collect();
         let keys = self.missing_keys(&demands, &world, &caller, budget)?;
         if sources.is_empty() && keys.is_empty() {
+            let owner = types.declaration(declaration).map_err(Error::new)?;
             return Err(Error::new(format!(
-                "unsupported: nominal source constraints cannot progress from the exact available graph inputs (source schemas needed: {needs_source_schemas}, unresolved constraints: {unresolved_constraints})",
+                "unsupported: nominal source constraints cannot progress in {} from the exact available graph inputs (source schemas needed: {needs_source_schemas}, unresolved constraints: {unresolved_constraints})",
+                owner.name,
             )));
         }
         // Demand both independent inventories before awaiting either typed read.

@@ -819,6 +819,17 @@ impl<'s> Solver<'_, '_, 's> {
         self.callable_bounds(decl, &params)?;
         self.schema(&signature.result, &params, 0)
     }
+    fn bind_declared_method_result(&mut self, result: Term, delayed: Term) -> Result<(), String> {
+        // Once a declaration has supplied a bare generic result parameter,
+        // that slot must accept the call site's expected type. It is no longer
+        // an unknown producer which might later reveal an array/deref coercion.
+        // Other, still-unresolved producers retain their coercion barriers.
+        if matches!(self.domain(result), Domain::Unknown) {
+            self.delayed_results.retain(|term| *term != delayed);
+        }
+        self.unify(result, delayed)
+    }
+
     fn coerce(&mut self, actual: Term, expected: Term) -> Result<(), String> {
         // A producer may reveal an array or a Deref carrier, so assigning its
         // unknown result the expected shape would erase a genuine coercion.
@@ -1079,7 +1090,7 @@ impl<'s> Solver<'_, '_, 's> {
                         None,
                         &method.actuals,
                     )?;
-                    self.unify(result, method.result)?;
+                    self.bind_declared_method_result(result, method.result)?;
                     progress = true;
                     continue;
                 }
@@ -1098,7 +1109,7 @@ impl<'s> Solver<'_, '_, 's> {
                         &method.args,
                         &method.actuals,
                     )? {
-                        self.unify(result, method.result)?;
+                        self.bind_declared_method_result(result, method.result)?;
                         progress = true;
                         continue;
                     }
@@ -1295,7 +1306,12 @@ impl<'s> Solver<'_, '_, 's> {
             progress |= self.solve_operators()?;
             let coercions = std::mem::take(&mut self.coercions);
             for (actual, expected) in coercions {
-                if matches!(self.domain(actual), Domain::Unknown) {
+                if matches!(self.domain(actual), Domain::Unknown)
+                    && self
+                        .delayed_results
+                        .iter()
+                        .any(|result| self.root(*result) == self.root(actual))
+                {
                     self.coercions.push((actual, expected));
                 } else {
                     self.coerce(actual, expected)?;

@@ -115,8 +115,6 @@ impl ClosedReceipt {
             original: original.clone(),
             mapped: mapped.clone(),
         };
-        validate(&receipt, facts, budget, &mut tr::TraitScratch::default())
-            .map_err(|e| e.into_legacy_diagnostic(budget))?;
         let output = Self {
             receipt,
             selection: selection.clone(),
@@ -127,18 +125,14 @@ impl ClosedReceipt {
         Ok(output)
     }
     fn validate(&self, facts: &tr::ValidatedFacts, budget: &ir::PlanBudget) -> Result<(), String> {
-        validate(
-            &self.receipt,
-            facts,
-            budget,
-            &mut tr::TraitScratch::default(),
-        )
-        .map_err(|e| e.into_legacy_diagnostic(budget))?;
+        let mut scratch = tr::TraitScratch::default();
+        validate(&self.receipt, facts, budget, &mut scratch)
+            .map_err(|e| e.into_legacy_diagnostic(budget))?;
         let selected = match &self.selection {
             ir::Callee::Direct(target) => ir::Callee::Direct(
                 facts
                     .service()
-                    .discharge_direct(target, facts)
+                    .discharge_direct_with(target, facts, &mut scratch)
                     .map_err(|e| e.into_legacy_diagnostic(budget))?
                     .target()
                     .clone(),
@@ -169,13 +163,14 @@ impl ClosedReceipt {
         {
             return Err("closed signature conversion inventory changed".into());
         }
-        super::super::super::nominal_realization::substitution::replay_closed_signature(
+        super::super::super::nominal_realization::substitution::replay_closed_signature_with(
             self.engine,
             &self.receipt.target,
             &self.receipt.original,
             &self.receipt.mapped,
             ir::FactsCtx::from_validated(facts),
             budget,
+            &mut scratch,
         )?;
         Ok(())
     }

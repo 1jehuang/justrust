@@ -2,6 +2,32 @@
 use super::option::Option;
 use super::mem::raw_realloc;
 
+impl super::iter::FromIterator<char> for String {
+    fn from_iter<I: super::iter::IntoIterator<Item = char>>(source: I) -> String {
+        let mut iterator = source.into_iter();
+        let mut text = String::new();
+        loop {
+            match iterator.next() {
+                Option::Some(value) => text.push(value),
+                Option::None => return text,
+            }
+        }
+    }
+}
+
+impl<'a> super::iter::FromIterator<&'a char> for String {
+    fn from_iter<I: super::iter::IntoIterator<Item = &'a char>>(source: I) -> String {
+        let mut iterator = source.into_iter();
+        let mut text = String::new();
+        loop {
+            match iterator.next() {
+                Option::Some(value) => text.push(*value),
+                Option::None => return text,
+            }
+        }
+    }
+}
+
 pub struct String {
     ptr: usize,
     len: usize,

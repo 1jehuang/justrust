@@ -36,6 +36,21 @@ impl ValidatedFacts {
                 if !self.world.raw_associated_ty_is_closed(&raw, 0)? {
                     self.world
                         .validate_universal_projection(projection, self.env())?;
+                    for row in self.predicates.predicates.iter() {
+                        charged(budget, budget.charge_work(1))?;
+                        if let Predicate::ProjectionEq {
+                            projection: declared,
+                            ..
+                        } = row
+                            && declared.item == projection.item
+                            && self.world.eq_predicate(
+                                &Predicate::Implements(declared.trait_ref.clone()),
+                                &Predicate::Implements(projection.trait_ref.clone()),
+                            )?
+                        {
+                            return self.world.normalize_equality_type(&raw, self);
+                        }
+                    }
                     return Ok(raw);
                 }
                 let (normal, dependencies) = self
@@ -162,11 +177,9 @@ impl ValidatedTraitWorld {
             {
                 return Ok(raw);
             }
-            let (normal, dependencies) =
-                self.normalize_closed_projected_type(&raw, context, false)?;
-            for dependency in dependencies.iter() {
-                self.validate_projected_dependency(dependency, context)?;
-            }
+            // normalize_closed_projected_type validates every returned
+            // dependency under this exact context before returning.
+            let (normal, _) = self.normalize_closed_projected_type(&raw, context, false)?;
             Ok(normal)
         };
         for parameter in &mut signature.params {
@@ -195,11 +208,9 @@ impl ValidatedTraitWorld {
             {
                 return Ok(raw);
             }
-            let (normal, dependencies) =
-                self.normalize_closed_projected_type(&raw, context, false)?;
-            for dependency in dependencies.iter() {
-                self.validate_projected_dependency(dependency, context)?;
-            }
+            // normalize_closed_projected_type validates every returned
+            // dependency under this exact context before returning.
+            let (normal, _) = self.normalize_closed_projected_type(&raw, context, false)?;
             Ok(normal)
         };
         let mut rows = Vec::new();

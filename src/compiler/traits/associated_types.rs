@@ -557,16 +557,15 @@ impl ValidatedTraitWorld {
         self.check_context(proof)?;
         let context = NormalizationContext { proof, staged };
         let mut dependencies = Vec::new();
-        let normal = self.normalize_type_in(
-            ty,
-            context,
-            &mut NormalizationStack::default(),
-            &mut dependencies,
-            0,
-        )?;
+        let mut stack = NormalizationStack::default();
+        let normal = self.normalize_type_in(ty, context, &mut stack, &mut dependencies, 0)?;
         let mut retained = Vec::new();
         for dependency in dependencies {
-            self.validate_normalization_evidence(&dependency, context)?;
+            self.validate_normalization_evidence_with(
+                &dependency,
+                context,
+                &mut stack.obligations,
+            )?;
             push(
                 &self.budget,
                 &mut retained,
@@ -1256,7 +1255,7 @@ impl ValidatedTraitWorld {
         };
         if let Some(cached) = cached {
             let evidence = cached?;
-            self.validate_normalization_evidence(&evidence, context)?;
+            self.validate_normalization_evidence_with(&evidence, context, &mut stack.obligations)?;
             return Ok(evidence);
         }
         stack.obligations.charge_obligation(&self.budget)?;
@@ -1324,7 +1323,7 @@ impl ValidatedTraitWorld {
                 normal,
                 dependencies: child_dependencies.into(),
             });
-            self.validate_normalization_evidence(&evidence, context)?;
+            self.validate_normalization_evidence_with(&evidence, context, &mut stack.obligations)?;
             return Ok(evidence);
         }
         if let Some(raw_rhs) = self.opaque_associated_binding(
@@ -1365,7 +1364,7 @@ impl ValidatedTraitWorld {
                 normal,
                 dependencies: child_dependencies.into(),
             });
-            self.validate_normalization_evidence(&evidence, context)?;
+            self.validate_normalization_evidence_with(&evidence, context, &mut stack.obligations)?;
             return Ok(evidence);
         }
         let closed_goal = self.goal_is_closed(&selected_goal, context.proof.env())?;
@@ -1416,7 +1415,7 @@ impl ValidatedTraitWorld {
                 normal,
                 dependencies: child_dependencies.into(),
             });
-            self.validate_normalization_evidence(&evidence, context)?;
+            self.validate_normalization_evidence_with(&evidence, context, &mut stack.obligations)?;
             return Ok(evidence);
         }
         if let Some(ProofOutcome::Proved(membership)) = self.prove_fn_item(
@@ -1441,7 +1440,7 @@ impl ValidatedTraitWorld {
                 normal,
                 dependencies: child_dependencies.into(),
             });
-            self.validate_normalization_evidence(&evidence, context)?;
+            self.validate_normalization_evidence_with(&evidence, context, &mut stack.obligations)?;
             return Ok(evidence);
         }
         let membership = match self.prove_implementation_in(
@@ -1576,7 +1575,7 @@ impl ValidatedTraitWorld {
                 normal,
                 dependencies: dependencies.into(),
             });
-            self.validate_normalization_evidence(&evidence, context)?;
+            self.validate_normalization_evidence_with(&evidence, context, &mut stack.obligations)?;
             Ok(evidence)
         })();
         stack.active.pop();
@@ -1807,6 +1806,15 @@ impl ValidatedTraitWorld {
         evidence: &NormalizationEvidence,
         context: NormalizationContext<'_>,
     ) -> Result<()> {
+        self.validate_normalization_evidence_with(evidence, context, &mut ProofScratch::default())
+    }
+
+    fn validate_normalization_evidence_with(
+        &self,
+        evidence: &NormalizationEvidence,
+        context: NormalizationContext<'_>,
+        proofs: &mut ProofScratch,
+    ) -> Result<()> {
         self.check_normalization_budget()?;
         charged(&self.budget, self.budget.charge_work(1))?;
         let caller_membership = matches!(
@@ -1939,7 +1947,7 @@ impl ValidatedTraitWorld {
                     ));
                 }
                 for dependency in evidence.dependencies.iter() {
-                    self.validate_normalization_evidence(dependency, context)?;
+                    self.validate_normalization_evidence_with(dependency, context, proofs)?;
                 }
                 let mut replay_stack = NormalizationStack::default();
                 push(
@@ -1968,7 +1976,7 @@ impl ValidatedTraitWorld {
                     &evidence.key.projection.trait_ref,
                     &evidence.normal,
                     context.proof,
-                    &mut ProofScratch::default(),
+                    proofs,
                 )?;
                 return Ok(());
             }
@@ -1997,7 +2005,7 @@ impl ValidatedTraitWorld {
                     ));
                 }
                 for dependency in evidence.dependencies.iter() {
-                    self.validate_normalization_evidence(dependency, context)?;
+                    self.validate_normalization_evidence_with(dependency, context, proofs)?;
                 }
                 let mut replay_stack = NormalizationStack::default();
                 push(
@@ -2026,7 +2034,7 @@ impl ValidatedTraitWorld {
                     &evidence.key.projection.trait_ref,
                     &evidence.normal,
                     context.proof,
-                    &mut ProofScratch::default(),
+                    proofs,
                 )?;
                 return Ok(());
             }
@@ -2076,7 +2084,7 @@ impl ValidatedTraitWorld {
                 predicates: &self.empty,
                 phase: FactsPhase::Closed,
             },
-            &mut ProofScratch::default(),
+            proofs,
         )?;
         Ok(())
     }

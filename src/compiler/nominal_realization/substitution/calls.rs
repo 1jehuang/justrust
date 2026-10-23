@@ -5,11 +5,12 @@ pub(super) fn realize(
     context: Option<&frontend::PlanCtx>,
     engine: EngineAuthority,
     target: &ir::Callee,
-    canonical: &ir::Signature,
-    mapped: &ir::Signature,
+    signatures: (&ir::Signature, &ir::Signature),
     caller: ir::FactsCtx<'_>,
     budget: &ir::PlanBudget,
+    scratch: &mut crate::compiler::traits::TraitScratch,
 ) -> Result<ir::Signature, String> {
+    let (canonical, mapped) = signatures;
     let facts = caller
         .validated()
         .ok_or("closed call realization requires caller facts")?;
@@ -18,7 +19,7 @@ pub(super) fn realize(
     }
     for signature in [canonical, mapped] {
         facts
-            .validate_signature(ir::SignatureSubject::Call(target), signature)
+            .validate_signature_with(ir::SignatureSubject::Call(target), signature, scratch)
             .map_err(|e| e.into_legacy_diagnostic(budget))?;
     }
     if canonical.params.len() != mapped.params.len()
@@ -41,7 +42,7 @@ pub(super) fn realize(
     // contract before issuing the strict original/mapped receipt.
     output.ref_contract = canonical.ref_contract.clone();
     facts
-        .validate_signature(ir::SignatureSubject::Call(target), &output)
+        .validate_signature_with(ir::SignatureSubject::Call(target), &output, scratch)
         .map_err(|e| e.into_legacy_diagnostic(budget))?;
     Ok(output)
 }

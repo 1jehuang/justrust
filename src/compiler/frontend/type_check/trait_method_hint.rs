@@ -92,7 +92,8 @@ impl Checker<'_> {
                     &ir::Ty::AssociatedType(Arc::new(projection.clone())),
                     &bindings,
                 );
-                solver.constrain_projection_equality(&projection, ty, true)?;
+                let ty = bind_owner(ty, &bindings);
+                solver.constrain_projection_equality(&projection, &ty, true)?;
             }
         }
         solver.finish(true)

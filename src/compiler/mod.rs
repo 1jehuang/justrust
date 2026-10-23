@@ -2205,6 +2205,7 @@ impl Provider for CompilerProvider {
                         .collect();
                     let constant_handles = cx.request_all(&constant_keys, 0);
                     let associated_handles = cx.request_all(&associated_keys, 1);
+                    let nominal_handles = cx.request_all(&nominal_keys, 0);
                     if key.kind == CHECK {
                         // SOURCE_ADMISSION itself demands UNIVERSAL_EFFECTS_READY
                         // for exactly the universal callables.
@@ -2235,6 +2236,7 @@ impl Provider for CompilerProvider {
                             .chain(constant_handles)
                             .chain(admission_handles)
                             .chain(universal_handles)
+                            .chain(nominal_handles)
                         {
                             cx.read(handle).await?;
                         }
@@ -2247,7 +2249,6 @@ impl Provider for CompilerProvider {
                         }
                         return cx.publish(0, 1);
                     }
-                    let nominal_handles = cx.request_all(&nominal_keys, 0);
                     // Link inventory is the closed direct-demand frontier from
                     // the closed roots: each round requests every new
                     // instance's INSTANCE (and, in early rounds, OBJECT)

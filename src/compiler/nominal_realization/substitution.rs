@@ -5,6 +5,7 @@ use crate::compiler::{frontend, ir};
 use crate::engine::EngineAuthority;
 mod calls;
 
+#[cfg(test)]
 pub(in crate::compiler) fn replay_closed_signature(
     engine: EngineAuthority,
     target: &ir::Callee,
@@ -13,7 +14,36 @@ pub(in crate::compiler) fn replay_closed_signature(
     caller: ir::FactsCtx<'_>,
     budget: &ir::PlanBudget,
 ) -> Result<(), String> {
-    calls::realize(None, engine, target, canonical, mapped, caller, budget).map(|_| ())
+    replay_closed_signature_with(
+        engine,
+        target,
+        canonical,
+        mapped,
+        caller,
+        budget,
+        &mut crate::compiler::traits::TraitScratch::default(),
+    )
+}
+
+pub(in crate::compiler) fn replay_closed_signature_with(
+    engine: EngineAuthority,
+    target: &ir::Callee,
+    canonical: &ir::Signature,
+    mapped: &ir::Signature,
+    caller: ir::FactsCtx<'_>,
+    budget: &ir::PlanBudget,
+    scratch: &mut crate::compiler::traits::TraitScratch,
+) -> Result<(), String> {
+    calls::realize(
+        None,
+        engine,
+        target,
+        (canonical, mapped),
+        caller,
+        budget,
+        scratch,
+    )
+    .map(|_| ())
 }
 
 pub(in crate::compiler) fn instantiate_checked_with_constants(
@@ -97,10 +127,10 @@ impl ir::SubstitutionCx for ReadSubstitution<'_> {
             Some(self.context),
             engine,
             target,
-            canonical,
-            mapped,
+            (canonical, mapped),
             caller,
             budget,
+            &mut crate::compiler::traits::TraitScratch::default(),
         )
         .map(Some)
     }

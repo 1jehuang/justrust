@@ -6,6 +6,15 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 
 ## Completed foundations, not full compatibility
 
+- [x] Native `Iterator::collect` and `FromIterator` source implementations for
+      `Vec<A>` and character/borrowed-character `String` collection, including
+      empty, custom and mapped iterators at workers 1/8. Generic result inference
+      honors contextual types and exact caller projection equalities. Local
+      proof reuse preserves canonical receipt and normalization checks without
+      raising resource limits (`PROJECTED-METHODS.md`). The unchanged corpus
+      remains 9/20: matrix now reaches ownership resource limits, and additional
+      library/iterator operations and recursive layouts remain open.
+
 - [x] Generic trait-method inference substitutes exact owner projections before
       constraining arguments and expected results. Closed projected signatures
       validate raw owner/method substitution before normalization, and required

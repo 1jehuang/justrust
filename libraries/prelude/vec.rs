@@ -2,6 +2,19 @@
 use super::mem::{raw_realloc, size_of};
 use super::option::Option;
 
+impl<A> super::iter::FromIterator<A> for Vec<A> {
+    fn from_iter<I: super::iter::IntoIterator<Item = A>>(source: I) -> Vec<A> {
+        let mut iterator = source.into_iter();
+        let mut values = Vec::new();
+        loop {
+            match iterator.next() {
+                Option::Some(value) => values.push(value),
+                Option::None => return values,
+            }
+        }
+    }
+}
+
 pub struct Vec<T> {
     ptr: *mut T,
     len: usize,

@@ -589,16 +589,26 @@ impl ValidatedTraitWorld {
             return Ok(None);
         }
         self.validate_result_source_transport(view, &raw, facts)?;
-        // Independent canonical signature validation also checks all direct
-        // requirements when a normalized signature no longer has projections.
+        // Source transport above reconstructs the canonical body or direct
+        // signature, including direct requirements, before comparing it.
+        // Keep metadata validation here without discharging the same target
+        // again. Closure bodies and required calls retain their distinct
+        // subject-specific validation below.
         match &view.result_subject {
-            EqualityResultSubject::Body { .. } => {
+            EqualityResultSubject::Body { .. } if facts.closure.is_some() => {
                 facts.validate_signature(SignatureSubject::Body, &view.result_signature)?
             }
-            EqualityResultSubject::Direct(target) => facts.validate_signature(
-                SignatureSubject::Call(&Callee::Direct(target.clone())),
-                &view.result_signature,
-            )?,
+            EqualityResultSubject::Body { .. } => {
+                self.validate_signature_shape(&view.result_signature, facts.env(), None)?;
+            }
+            // Source transport above already discharges this exact direct
+            // target, checks every predicate, and compares its canonical
+            // signature against result_signature. Repeating validate_signature
+            // here rebuilds the same nested projection proofs without adding
+            // an independent check.
+            EqualityResultSubject::Direct(_) => {
+                self.validate_signature_shape(&view.result_signature, facts.env(), None)?;
+            }
             EqualityResultSubject::Required(call) => facts.validate_signature(
                 SignatureSubject::Call(&Callee::TraitItem(call.clone())),
                 &view.result_signature,

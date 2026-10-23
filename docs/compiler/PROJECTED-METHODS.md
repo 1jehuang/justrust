@@ -38,6 +38,37 @@ member-transplant test rejects forged occurrences through this ingress too.
 When projection normalization introduces return-reference layers without source
 lifetime authority, it reports Unsupported rather than inventing an origin.
 
+## Native collection extension (2026-10-23)
+
+`Iterator::collect` and `FromIterator` are ordinary prelude source methods.
+`Vec<A>`, `String` from `char`, and `String` from `&char` use source loops;
+there is no compiler-recognized collection spelling. A source `CollectInput`
+adapter supplies `IntoIterator` without an overlapping blanket implementation.
+Selected generic method results accept their contextual type, owner arguments
+are substituted on both sides of associated equalities, and explicit caller
+equalities retain their exact projection identity.
+
+`tests/iterator_fold.rs` compares Unicode, empty, user-defined and mapped-range
+collection with stock at workers 1/8 in CHECK/BUILD/run, plus incompatible element
+rejection. Mapped collection required eliminating repeated canonical signature
+and normalization proof reconstruction. Proof scratch stays local to one
+validation computation, keyed by its existing world, facts and exact subject.
+Every returned normalization dependency is still authenticated, and receipt
+replay still checks the selected callee, source occurrence, conversion inventory,
+current engine and original/mapped signature. No resource ceiling is increased.
+The graph regression also exposed nominal declaration demands being issued only
+by BUILD. CHECK now requests and awaits the same per-declaration facts, including
+unused nominal membership checks, before publishing success.
+The unchanged full-program corpus remains 9/20, with matrix ownership work,
+additional iterator/library APIs and recursive layouts still open.
+
+Validation: 1,781 library tests pass with one ignored; the combined collection,
+projection, nominal-authority and graph suites pass 67 tests with one ignored.
+All-target checking and lint succeed with existing warnings. Selected redacted
+receipts are in `data/runs/xps14/2026-10-23-native-collection.jsonl`. The broader
+`body_inference` suite still exposes separate underconstrained-generic diagnostics
+and autoref-on-owned-call-temporary limitations; this is not full compatibility.
+
 ## Separate authority paths
 
 A private owning-impl normalization context may be issued only after complete metadata, assignment-map and coherence checks. It binds the current world/stage, implementation DeclId, exact full impl TraitRef, real impl GenericEnv and original assignment pair/RHS. It is not public ValidatedFacts, an Implements proof or closed normalization evidence.

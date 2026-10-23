@@ -77,6 +77,13 @@ pub trait Iterator: Sized {
         }
     }
 
+    fn collect<B: FromIterator<Self::Item>>(self) -> B
+    where
+        CollectInput<Self>: IntoIterator<Item = <Self as Iterator>::Item>,
+    {
+        B::from_iter(CollectInput { iterator: self })
+    }
+
     fn fold<B, F: FnMut(B, Self::Item) -> B>(mut self, init: B, mut f: F) -> B {
         let mut acc = init;
         loop {
@@ -92,6 +99,20 @@ pub trait IntoIterator {
     type Item;
     type IntoIter: Iterator<Item = Self::Item>;
     fn into_iter(self) -> Self::IntoIter;
+}
+
+pub trait FromIterator<A>: Sized {
+    fn from_iter<T: IntoIterator<Item = A>>(iter: T) -> Self;
+}
+
+pub struct CollectInput<I> {
+    iterator: I,
+}
+
+impl<I: Iterator> IntoIterator for CollectInput<I> {
+    type Item = I::Item;
+    type IntoIter = I;
+    fn into_iter(self) -> I { self.iterator }
 }
 
 impl<I: Iterator> IntoIterator for Enumerate<I> {
