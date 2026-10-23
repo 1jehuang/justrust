@@ -5,6 +5,96 @@
 mod closure_oracle;
 
 #[test]
+fn structural_enum_partial_moves_match_stock() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "enum-partial-drop",
+        &[
+            Case {
+                name: "enum_partial_complete_moves_and_reassignment",
+                source: r#"
+struct D { id: i32 }
+impl Drop for D { fn drop(&mut self) { println!("drop {}", self.id); } }
+enum E { Pair(D, D), Single(D), Empty }
+fn partial(b: bool) {
+    let mut e = E::Pair(D { id: 1 }, D { id: 2 });
+    if b {
+        match e { E::Pair(a, _) => println!("moved {}", a.id), _ => () }
+        e = E::Single(D { id: 3 });
+    }
+    println!("end");
+}
+fn main() {
+    partial(true);
+    partial(false);
+    let e = E::Pair(D { id: 4 }, D { id: 5 });
+    match e { E::Pair(a, b) => println!("both {} {}", a.id, b.id), _ => () }
+    let e = E::Single(D { id: 6 });
+    match e { E::Single(a) => println!("single {}", a.id), _ => () }
+    let e = E::Empty;
+    match e { E::Empty => println!("empty"), _ => () }
+}
+"#,
+                expect: Expect::Run(
+                    "moved 1\ndrop 1\ndrop 2\nend\ndrop 3\nend\ndrop 1\ndrop 2\nboth 4 5\ndrop 5\ndrop 4\nsingle 6\ndrop 6\nempty\n",
+                ),
+            },
+            Case {
+                name: "nested_enum_payload_partial_move",
+                source: r#"
+struct D { id: i32 }
+impl Drop for D { fn drop(&mut self) { println!("drop {}", self.id); } }
+enum Inner { Pair(D, D), Empty }
+enum Outer { Wrap(Inner, D), Empty }
+fn main() {
+    let e = Outer::Wrap(Inner::Pair(D { id: 1 }, D { id: 2 }), D { id: 3 });
+    match e {
+        Outer::Wrap(Inner::Pair(a, _), _) => println!("moved {}", a.id),
+        _ => (),
+    }
+    println!("end");
+}
+"#,
+                expect: Expect::Run("moved 1\ndrop 1\nend\ndrop 2\ndrop 3\n"),
+            },
+        ],
+    );
+}
+
+#[test]
+fn frozen_owned_enum_patterns_match_stock() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "frozen-owned-enum",
+        &[
+            Case {
+                name: "owned_match",
+                source: include_str!("fixtures/drop_normal/unsupported/owned_match.rs"),
+                expect: Expect::Run("matched owned value\ndrop matched owner\nafter match\n"),
+            },
+            Case {
+                name: "owned_if_let",
+                source: include_str!("fixtures/drop_normal/unsupported/owned_if_let.rs"),
+                expect: Expect::Run("iflet owned value\ndrop iflet owner\nafter iflet\n"),
+            },
+        ],
+    );
+}
+
+#[test]
+fn enum_own_drop_move_is_invalid() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "enum-own-drop-move",
+        &[Case {
+            name: "enum_own_drop_cannot_move_payload",
+            source: "struct D; impl Drop for D{fn drop(&mut self){}} enum E{One(D)} impl Drop for E{fn drop(&mut self){}} fn main(){let e=E::One(D);match e { E::One(d) => () }}",
+            expect: Expect::Invalid("E0509"),
+        }],
+    );
+}
+
+#[test]
 fn result_map_and_map_err_match_stock() {
     use closure_oracle::{Case, Expect};
     closure_oracle::check(

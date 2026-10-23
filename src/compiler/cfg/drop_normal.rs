@@ -115,11 +115,48 @@ pub(super) fn admit(source: &ir::CheckedFunction, facts: ir::FactsCtx<'_>) -> Re
     // Every demanded closed body is lowered again before its generated shape
     // is sealed. The instance frontier separately demands each concrete cleanup
     // target, so a universal unresolved type is never a no-drop executable proof.
+    // Structural enums can move individual payloads: backend cleanup follows
+    // their active variant and per-payload move flags. An owner's own Drop
+    // still forbids such moves, and other aggregate patterns remain scoped out.
     for expression in &source.exprs {
         authority.budget().charge_work(1)?;
-        if let ir::ExprKind::Match { scrutinee, .. } = &expression.kind
-            && descriptor(&source.exprs[scrutinee.0].ty, facts)?.is_some()
+        if let ir::ExprKind::Match { scrutinee, arms } = &expression.kind
+            && let Some(destructor) = descriptor(&source.exprs[scrutinee.0].ty, facts)?
+            && !(destructor.own_target().is_none()
+                && matches!(
+                    destructor.glue(),
+                    crate::compiler::traits::DropGlue::Variants(_)
+                ))
         {
+            if destructor.own_target().is_some()
+                && matches!(&source.exprs[scrutinee.0].ty, Ty::Enum(_))
+            {
+                for arm in arms {
+                    let bindings = match &arm.pattern {
+                        ir::MatchPattern::EnumVariant { bindings, .. }
+                        | ir::MatchPattern::Decision { bindings, .. } => bindings,
+                        _ => continue,
+                    };
+                    for binding in bindings {
+                        authority.budget().charge_work(1)?;
+                        // A borrow, Copy read, whole-value binding or a move
+                        // through a reference is not E0509 payload extraction.
+                        if binding.borrow.is_none()
+                            && matches!(
+                                binding.projection.first(),
+                                Some(ir::Projection::Downcast(_))
+                            )
+                            && !binding.projection.contains(&ir::Projection::Deref)
+                            && !facts.must_copy(facts.projected_ty(
+                                &source.exprs[scrutinee.0].ty,
+                                &binding.projection,
+                            )?)?
+                        {
+                            return Err("E0509: cannot move out of a type which implements the `Drop` trait".into());
+                        }
+                    }
+                }
+            }
             return Err("unsupported: pattern matching a normal Drop owner".into());
         }
     }

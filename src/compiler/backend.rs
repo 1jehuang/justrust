@@ -1129,7 +1129,7 @@ impl<'a> Emitter<'a> {
         path: &mut Vec<ir::Projection>,
         destructor: &super::traits::ValidatedDestructor,
     ) -> Result<(), String> {
-        if let Some((_, _, at)) = self
+        let skip = if let Some((_, _, at)) = self
             .path_flags
             .iter()
             .find(|(l, p, _)| *l == local && p == path)
@@ -1138,39 +1138,81 @@ impl<'a> Emitter<'a> {
             self.bytes(&[0x80, 0xbd]); // cmp byte [rbp+disp32], 0
             self.i32(at);
             self.bytes(&[0]);
-            let skip = self.jump(&[0x0f, 0x84]);
-            self.drop_glue(destructor)?;
-            let here = self.position();
-            return self.patch(skip, here);
-        }
+            Some(self.jump(&[0x0f, 0x84]))
+        } else {
+            None
+        };
         let below = self
             .path_flags
             .iter()
             .any(|(l, p, _)| *l == local && p.len() > path.len() && p.starts_with(path));
-        let super::traits::DropGlue::Fields(fields) = destructor.glue() else {
-            return self.drop_glue(destructor);
-        };
         if !below {
-            return self.drop_glue(destructor);
-        }
-        if destructor.own_target().is_some() {
-            return Err(
-                "E0509: cannot move out of a type which implements the `Drop` trait".into(),
-            );
-        }
-        let owner = destructor.owner().clone();
-        for (index, field) in fields {
-            let (offset, _) = field_offset(&owner, *index)?;
-            self.bytes(&[0x48, 0x8b, 0x04, 0x24]);
-            if offset != 0 {
-                self.bytes(&[0x48, 0x05]);
-                self.i32(offset);
+            self.drop_glue(destructor)?;
+        } else {
+            if destructor.own_target().is_some() {
+                return Err(
+                    "E0509: cannot move out of a type which implements the `Drop` trait".into(),
+                );
             }
-            self.bytes(&[0x50]);
-            path.push(ir::Projection::Field(*index));
-            self.drop_elaborated(local, path, field)?;
-            path.pop();
-            self.bytes(&[0x48, 0x83, 0xc4, 8]);
+            let owner = destructor.owner().clone();
+            match destructor.glue() {
+                super::traits::DropGlue::Fields(fields) => {
+                    for (index, field) in fields {
+                        let (offset, _) = field_offset(&owner, *index)?;
+                        self.bytes(&[0x48, 0x8b, 0x04, 0x24]);
+                        if offset != 0 {
+                            self.bytes(&[0x48, 0x05]);
+                            self.i32(offset);
+                        }
+                        self.bytes(&[0x50]);
+                        path.push(ir::Projection::Field(*index));
+                        self.drop_elaborated(local, path, field)?;
+                        path.pop();
+                        self.bytes(&[0x48, 0x83, 0xc4, 8]);
+                    }
+                }
+                super::traits::DropGlue::Variants(variants) => {
+                    let ir::Ty::Enum(enum_ty) = &owner else {
+                        return Err("variant drop elaboration requires an enum".into());
+                    };
+                    for (variant, fields) in variants {
+                        self.bytes(&[0x48, 0x8b, 0x04, 0x24, 0x8b, 0x00]); // eax = tag
+                        self.bytes(&[0x3d]);
+                        self.i32(i32::try_from(*variant).map_err(|_| "enum tag overflow")?);
+                        let inactive = self.jump(&[0x0f, 0x85]);
+                        let definition = &enum_ty.def().variants[*variant];
+                        path.push(ir::Projection::Downcast(ir::VariantId {
+                            owner: enum_ty.def().id,
+                            index: *variant,
+                        }));
+                        for (index, field) in fields {
+                            let offset = definition.fields[..*index].iter().try_fold(
+                                8_i32,
+                                |offset, field| {
+                                    offset
+                                        .checked_add(value_size(&field.ty)?)
+                                        .ok_or_else(|| "enum payload too large".to_string())
+                                },
+                            )?;
+                            self.bytes(&[0x48, 0x8b, 0x04, 0x24, 0x48, 0x05]);
+                            self.i32(offset);
+                            self.bytes(&[0x50]);
+                            path.push(ir::Projection::Field(*index));
+                            self.drop_elaborated(local, path, field)?;
+                            path.pop();
+                            self.bytes(&[0x48, 0x83, 0xc4, 8]);
+                        }
+                        path.pop();
+                        let here = self.position();
+                        self.patch(inactive, here)?;
+                    }
+                }
+                _ => return Err("unsupported: partial move drop elaboration for this glue".into()),
+            }
+        }
+        if let Some(skip) = skip {
+            let here = self.position();
+            self.patch(skip, here)?;
         }
         Ok(())
     }
@@ -3436,7 +3478,7 @@ fn emit_native_cfg(
                 && place
                     .projection
                     .iter()
-                    .all(|p| matches!(p, ir::Projection::Field(_)))
+                    .all(|p| matches!(p, ir::Projection::Field(_) | ir::Projection::Downcast(_)))
                 && drop_flags[place.local.0].is_some()
                 && !path_flags
                     .iter()

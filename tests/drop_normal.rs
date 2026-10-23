@@ -304,6 +304,8 @@ fn native_accepted(case: &Case) -> bool {
                 | "unsupported/nested.rs"
                 | "unsupported/tuple.rs"
                 | "unsupported/reference_field.rs"
+                | "unsupported/owned_match.rs"
+                | "unsupported/owned_if_let.rs"
         ))
         && !attribute_blocked(case)
         && !path_blocked(case)
@@ -498,7 +500,7 @@ fn frozen_stock_before_native_normal_drop() {
     );
     assert_eq!(
         cases.iter().filter(|case| native_accepted(case)).count(),
-        38
+        40
     );
     assert_eq!(
         cases.iter().filter(|case| attribute_blocked(case)).count(),

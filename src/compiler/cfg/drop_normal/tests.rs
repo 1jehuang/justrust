@@ -15,6 +15,34 @@ fn publish(text: &str, budget: &ir::PlanBudget) -> Arc<CanonicalSourcePublicatio
 const TWO: &str = "fn f(){let a=D{v:1};let b=D{v:2};} struct D{v:i32} impl Drop for D{fn drop(&mut self){self.v=0;}} fn main(){}";
 
 #[test]
+fn own_drop_enum_borrow_copy_and_wildcard_are_not_e0509() {
+    for body in [
+        "match e{E::One(ref d)=>()}",
+        "match e{E::One(_)=>()}",
+        "match e{_=>()}",
+    ] {
+        let text = format!(
+            "fn f(){{let e=E::One(D{{v:1}});{body};}} struct D{{v:i32}} impl Drop for D{{fn drop(&mut self){{}}}} enum E{{One(D)}} impl Drop for E{{fn drop(&mut self){{}}}} fn main(){{}}"
+        );
+        let budget = ir::PlanBudget::default();
+        let publication = publish(&text, &budget);
+        if let Err(error) = lower_source_closed(&publication, &budget) {
+            assert!(!error.to_string().contains("E0509"), "{body}: {error}");
+            assert!(error.to_string().contains("unsupported"), "{body}: {error}");
+        }
+    }
+    let budget = ir::PlanBudget::default();
+    let publication = publish(
+        "fn f(){let e=E::One(1);match e{E::One(n)=>()};} enum E{One(i32)} impl Drop for E{fn drop(&mut self){}} fn main(){}",
+        &budget,
+    );
+    if let Err(error) = lower_source_closed(&publication, &budget) {
+        assert!(!error.to_string().contains("E0509"), "{error}");
+        assert!(error.to_string().contains("unsupported"), "{error}");
+    }
+}
+
+#[test]
 fn normal_drop_implicit_mutable_access_conflicts_with_a_live_field_loan() {
     let budget = ir::PlanBudget::default();
     let publication = publish(
@@ -98,8 +126,19 @@ fn normal_drop_implicit_mutable_access_conflicts_with_a_live_field_loan() {
 
 #[test]
 fn normal_drop_exact_shape_rejects_omission_transplant_move_and_stale_proof() {
+    reject_cleanup_forgery(TWO);
+}
+
+#[test]
+fn enum_drop_exact_shape_rejects_cleanup_and_move_flag_forgery() {
+    reject_cleanup_forgery(
+        "fn f(){let e=E::Pair(D{v:1},D{v:2});match e{E::Pair(a,_)=>{let b=a;},E::Empty=>()};let other=D{v:3};} enum E{Pair(D,D),Empty} struct D{v:i32} impl Drop for D{fn drop(&mut self){self.v=0;}} fn main(){}",
+    );
+}
+
+fn reject_cleanup_forgery(text: &str) {
     let budget = ir::PlanBudget::default();
-    let publication = publish(TWO, &budget);
+    let publication = publish(text, &budget);
     let function = lower_source_closed(&publication, &budget).unwrap();
     let sites: Vec<_> = function
         .blocks
@@ -117,7 +156,7 @@ fn normal_drop_exact_shape_rejects_omission_transplant_move_and_stale_proof() {
     )
     .unwrap();
     assert!(concrete.analysis().passed());
-    for change in 0..6 {
+    for change in 0..if text == TWO { 6 } else { 7 } {
         let mut forged = function.clone();
         let (block, cleanup, next) = &sites[0];
         match change {
@@ -154,6 +193,35 @@ fn normal_drop_exact_shape_rejects_omission_transplant_move_and_stale_proof() {
                     cleanup: cleanup.clone(),
                     next: other.2,
                 };
+            }
+            6 => {
+                let operand = forged
+                    .blocks
+                    .iter_mut()
+                    .flat_map(|b| &mut b.statements)
+                    .find_map(|s| match &mut s.value {
+                        Statement::Assign {
+                            value: Rvalue::Use(Operand::Move(owner)),
+                            ..
+                        } if owner
+                            .projection
+                            .iter()
+                            .any(|p| matches!(p, ir::Projection::Downcast(_))) =>
+                        {
+                            Some(owner)
+                        }
+                        _ => None,
+                    })
+                    .unwrap();
+                let field = operand
+                    .projection
+                    .iter_mut()
+                    .find_map(|p| match p {
+                        ir::Projection::Field(index) => Some(index),
+                        _ => None,
+                    })
+                    .unwrap();
+                *field = 1;
             }
             _ => {
                 let statement = forged

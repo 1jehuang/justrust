@@ -904,12 +904,25 @@ acceptance.
       proof. 56 stock-frozen sources: 25 native-positive with exact stock output
       in debug and release, 4 semantic rejections, 27 explicit boundaries.
       Aborting panic only; no unwind cleanup, aggregate/generic glue or dropck.
+- [x] Structural enum payload cleanup on normal paths: enums without their own
+      `Drop` target follow the active variant and canonical per-payload move flags,
+      including nested payload moves and replacement after a partial move.
+      `tests/result_map.rs` compares CHECK/BUILD/run with stock at workers 1/8;
+      `tests/drop_normal.rs` now admits the unchanged owned-match and owned-if-let
+      fixtures (40 native-positive cases). Forged cleanup and moved-field evidence
+      reject. Moving a non-Copy payload out of an enum with its own `Drop` rejects
+      with E0509; borrowed, Copy-only and wildcard patterns are not misclassified.
+      This does not add unwind cleanup or general dropck. The isolated owned
+      patch passes 1,809 library tests, 17 graph-integrity tests (one existing
+      ignore in each), and six stock/drop integration tests. Check and clippy
+      succeed with baseline warnings; scoped formatting passes. Receipts:
+      `data/runs/xps14/structural-enum-drop-2026-10-23.jsonl`.
 - [ ] Implement real Drop checking/elaboration, conditional drop flags, partial
       initialization, assignment replacement and exact destruction order across
       returns, branches, loops, breaks, panic/unwind and closure/async captures.
-      The bounded slice above covers only scalar-field nominal owners on normal
-      paths; aggregate/enum/generic/reference-bearing owners, field moves out of
-      Drop owners, owned patterns, unwinding and captures remain open.
+      Delivered slices include the scalar-field owners and structural enum moves
+      above. General aggregate/generic/reference-bearing ownership, field moves
+      out of Drop owners, broader owned patterns and unwinding remain open.
 - [ ] Specify unsafe validity, raw-pointer operations, alias/provenance rules,
       interior mutability and UnsafeCell interactions. Track genuinely unresolved
       language-model questions rather than inventing permissive defaults.
