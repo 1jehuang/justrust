@@ -969,10 +969,10 @@ pub struct Filter<I, P> {
     predicate: P,
 }
 
-impl<A, I: Iterator<Item = A>, P: FnMut(&A) -> bool> Iterator for Filter<I, P> {
-    type Item = A;
+impl<I: Iterator, P: FnMut(&I::Item) -> bool> Iterator for Filter<I, P> {
+    type Item = I::Item;
 
-    fn next(&mut self) -> Option<A> {
+    fn next(&mut self) -> Option<I::Item> {
         loop {
             match self.iterator.next() {
                 Option::Some(item) => {

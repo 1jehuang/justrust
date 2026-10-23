@@ -2050,12 +2050,14 @@ are covered by `closure_generic_owners`. Unused outer-binding lookup slots no
 longer introduce opaque representation dependencies into independent closures.
 Nominal schema authentication now checks one definition at a time within the
 existing recursive type-validation walk, retaining nested-payload rejection
-without revalidating every subtree at every ancestor. The full closure corpus
-advances beyond its module-authority work limit but still rejects the reference
-result of `Filter::next` because its declaration-owned source set is empty
-(`justrust run --bin jr-rust --
-tests/fixtures/full_programs/11_closures_iterators.rs -o .jcode/closure-probe
---workers 8`), so this is not a native-corpus promotion.
+without revalidating every subtree at every ancestor. The source `Filter`
+implementation preserves `I::Item` directly instead of erasing its provenance
+through a separately constrained type parameter. The unchanged
+`11_closures_iterators.rs` now passes differential CHECK, BUILD and execution at
+workers 1 and 8 (`iterator_associated::unchanged_closures_iterators_match_stock`),
+with escaping filtered-reference rejection covered by
+`filtered_reference_items_preserve_their_source_loans`. This promotes that
+single full-program fixture, not full Rust compatibility.
 
 The source-type-alias checkpoint passes all 1,649 hosted tests in 86 binaries
 (`20261017-043356389-4183342`), all-target checking

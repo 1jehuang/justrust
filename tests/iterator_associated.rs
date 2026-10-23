@@ -116,6 +116,24 @@ fn source_iterator_count_and_bound_from_iterator() {
 }
 
 #[test]
+fn unchanged_closures_iterators_match_stock() {
+    oracle::stock_native(include_str!("fixtures/full_programs/11_closures_iterators.rs"));
+}
+
+#[test]
+fn filtered_reference_items_preserve_their_source_loans() {
+    oracle::stock_native(
+        "fn main(){let nums=vec![1i32,2,3,4];let evens:Vec<i32>=nums.iter().filter(|&&x|x%2==0).cloned().collect();println!(\"{:?}\",evens);}",
+    );
+    for source in [
+        "fn main(){let result;{let values=vec![1i32,2];result=values.iter().filter(|&&x|x==2).next().unwrap();}println!(\"{}\",result);}",
+        "fn escape<'a>(values:&'a Vec<i32>)->&'static i32{values.iter().filter(|&&x|x==2).next().unwrap()}fn main(){}",
+    ] {
+        oracle::stock_and_native_reject(source);
+    }
+}
+
+#[test]
 fn source_copied_cloned_and_short_circuit_adapters() {
     // `copied`/`cloned` are ordinary source adapters over `&T` items;
     // `any`/`all`/`position` are provided methods taking source closures.
