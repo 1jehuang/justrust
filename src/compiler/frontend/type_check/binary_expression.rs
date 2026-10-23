@@ -188,8 +188,32 @@ impl Checker<'_> {
             BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge
         );
         if comparison {
-            let (mut l, mut r) = (left, right);
+            // Determine whether forwarding applies before constructing any
+            // typed expressions. A speculative dereference of `&str` would
+            // leave an unsized value in the arena even when discarded below.
+            let (mut a, mut b) = (&self.exprs[left.0].ty, &self.exprs[right.0].ty);
+            let mut depth = 0;
             for _ in 0..MAX_INTRINSIC_AUTODEREF {
+                let (
+                    ir::Ty::Ref {
+                        referent: next_a, ..
+                    },
+                    ir::Ty::Ref {
+                        referent: next_b, ..
+                    },
+                ) = (a, b)
+                else {
+                    break;
+                };
+                a = next_a;
+                b = next_b;
+                depth += 1;
+            }
+            if depth == 0 || !scalar(a) || !scalar(b) {
+                return Ok((left, right));
+            }
+            let (mut l, mut r) = (left, right);
+            for _ in 0..depth {
                 let (ir::Ty::Ref { referent: a, .. }, ir::Ty::Ref { referent: b, .. }) =
                     (&self.exprs[l.0].ty, &self.exprs[r.0].ty)
                 else {
@@ -199,15 +223,9 @@ impl Checker<'_> {
                 l = self.read_through_reference(l, a)?;
                 r = self.read_through_reference(r, b)?;
             }
-            // Only rewrite when the peeled operands are scalars; any other
-            // shape keeps its original operands and existing diagnostics.
-            if (l, r) != (left, right) && scalar(&self.exprs[l.0].ty) && scalar(&self.exprs[r.0].ty)
-            {
-                return Ok((l, r));
-            }
-            return Ok((left, right));
+            return Ok((l, r));
         }
-        let mut peel = |checker: &mut Self, id: ir::ExprId| -> Result<ir::ExprId, String> {
+        let peel = |checker: &mut Self, id: ir::ExprId| -> Result<ir::ExprId, String> {
             if let ir::Ty::Ref {
                 kind: ir::BorrowKind::Shared,
                 referent,

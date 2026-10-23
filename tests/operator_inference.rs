@@ -99,3 +99,23 @@ fn primitive_reference_operands_use_forwarding_impls() {
         oracle::stock_and_native_reject(source);
     }
 }
+
+#[test]
+fn string_comparisons_do_not_construct_unsized_scalar_dereferences() {
+    oracle::stock_native(
+        r#"fn equal(a:&str,b:&str)->bool{a==b}
+fn main(){
+    assert!(equal("same","same"));
+    assert!(!equal("same","other"));
+    assert!("a"!="b");
+    assert!("a"<"aa");
+    assert!("aa"<="aa");
+    assert!("é">"z");
+    assert!("🙂">="🙂");
+    assert!(""<"x");
+    assert!("a\0b"<"a\0c");
+    let a=String::from("owned");
+    assert!(equal(&a,"owned"));
+}"#,
+    );
+}

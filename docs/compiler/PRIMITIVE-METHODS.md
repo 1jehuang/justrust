@@ -44,8 +44,11 @@ checks direct and generic dispatch, owned strings, error Display/Debug,
 Unicode and invalid result types against stock at workers 1/8.
 Contextual results of generic free calls remain connected through nominal
 method receivers such as `parse(s).unwrap()`; the inferred type is still checked
-against canonical method and callable metadata. Some string-reference equality
-lowering remains a separate open compiler gap.
+against canonical method and callable metadata. Scalar-reference forwarding
+checks the final referent shape before constructing dereference expressions,
+so ordinary `&str` comparisons keep their byte-lexicographic lowering.
+`operator_inference::string_comparisons_do_not_construct_unsized_scalar_dereferences`
+covers all comparison operators, Unicode, NUL bytes and owned string borrows.
 
 Supported methods:
 
