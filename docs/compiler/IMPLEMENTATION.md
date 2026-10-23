@@ -6,6 +6,16 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 
 ## Completed foundations, not full compatibility
 
+- [x] Unknown closure parameters defer body coercions until callable context
+      supplies their shape; standalone closures retain body-driven inference at
+      genuine graph quiescence. Missing producers never authorize this fallback.
+      Stock/native CHECK/BUILD/run at workers 1/8 covers contextual shared-reference
+      autoderef, standalone parameters and rejection in unused invalid bodies
+      (`20261023-114842690-2005176`). All 14 neighboring closure/result tests and
+      17 graph checks pass (`20261023-114913941-2006684`,
+      `20261023-115024428-2005173`). This removes one full-program-15 inference
+      blocker, not its remaining projected-reference and lifetime-proof gaps.
+
 - [x] Associated-type normal forms retain their canonical executable nominal
       identity through prepared graph reads, including nested tuples. Missing
       graph inputs remain pending and forged or unsealed representations reject.

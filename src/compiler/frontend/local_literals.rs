@@ -847,15 +847,38 @@ impl<'s> Solver<'_, '_, 's> {
         self.unify(result, delayed)
     }
 
-    fn coerce(&mut self, actual: Term, expected: Term) -> Result<(), String> {
-        // A producer may reveal an array or a Deref carrier, so assigning its
-        // unknown result the expected shape would erase a genuine coercion.
-        if matches!(self.domain(actual), Domain::Unknown)
-            && self
+    fn unknown_closure_parameter(&self, term: Term) -> Result<bool, String> {
+        if !matches!(self.domain(term), Domain::Unknown) {
+            return Ok(false);
+        }
+        for (_, callable) in &self.closure_terms {
+            self.checker.infer_work(0)?;
+            if let Domain::Callable(callable) = self.domain(*callable) {
+                for parameter in callable.params {
+                    self.checker.infer_work(0)?;
+                    if self.root(parameter) == self.root(term) {
+                        return Ok(true);
+                    }
+                }
+            }
+        }
+        Ok(false)
+    }
+
+    fn deferred_coercion(&self, actual: Term) -> Result<bool, String> {
+        Ok(matches!(self.domain(actual), Domain::Unknown)
+            && (self
                 .delayed_results
                 .iter()
                 .any(|result| self.root(*result) == self.root(actual))
-        {
+                || self.unknown_closure_parameter(actual)?))
+    }
+
+    fn coerce(&mut self, actual: Term, expected: Term) -> Result<(), String> {
+        // A producer may reveal an array or a Deref carrier. A closure
+        // parameter must likewise receive its callable context before its
+        // body can constrain a coercion source (e.g. `&&str` to `&str`).
+        if self.deferred_coercion(actual)? {
             self.coercions.push((actual, expected));
             return Ok(());
         }
@@ -1336,12 +1359,7 @@ impl<'s> Solver<'_, '_, 's> {
             progress |= self.solve_operators()?;
             let coercions = std::mem::take(&mut self.coercions);
             for (actual, expected) in coercions {
-                if matches!(self.domain(actual), Domain::Unknown)
-                    && self
-                        .delayed_results
-                        .iter()
-                        .any(|result| self.root(*result) == self.root(actual))
-                {
+                if self.deferred_coercion(actual)? {
                     self.coercions.push((actual, expected));
                 } else {
                     self.coerce(actual, expected)?;
@@ -1391,6 +1409,26 @@ impl<'s> Solver<'_, '_, 's> {
                 }
                 if !self.projection_defaults {
                     self.projection_defaults = true;
+                    continue;
+                }
+                // Only genuine quiescence permits standalone closure body
+                // constraints to infer a still-unknown parameter. Missing
+                // producers above retain their coercion barriers unchanged.
+                let mut inferred_parameter = false;
+                for (actual, expected) in std::mem::take(&mut self.coercions) {
+                    if self.unknown_closure_parameter(actual)?
+                        && !self
+                            .delayed_results
+                            .iter()
+                            .any(|result| self.root(*result) == self.root(actual))
+                    {
+                        self.unify(actual, expected)?;
+                        inferred_parameter = true;
+                    } else {
+                        self.coercions.push((actual, expected));
+                    }
+                }
+                if inferred_parameter {
                     continue;
                 }
                 if let Some(error) = selection_errors.into_iter().find(|e| is_bound_failure(e)) {

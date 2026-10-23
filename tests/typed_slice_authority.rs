@@ -509,6 +509,33 @@ fn reference_containing_generic_argument_reaches_reference_free_slice_boundary()
     );
 }
 #[test]
+fn contextual_closure_coercions_preserve_standalone_inference() {
+    #[path = "support/closure_oracle.rs"]
+    mod closure_oracle;
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "contextual-closure-coercions",
+        &[
+            Case {
+                name: "contextual_shared_deref",
+                source: "fn take(s:&str)->u32{3u32}fn apply<F:FnOnce(&&str)->u32>(f:F)->u32{let s:&str=\"x\";f(&s)}fn main(){let n=apply(|s|take(s));println!(\"{}\",n);}",
+                expect: Expect::Run("3\n"),
+            },
+            Case {
+                name: "standalone_parameter_inferred_from_body",
+                source: "fn take(x:u8)->u8{x}fn main(){let f=|x|take(x);let n=f(7u8);println!(\"{}\",n);}",
+                expect: Expect::Run("7\n"),
+            },
+            Case {
+                name: "unused_wrong_closure_argument",
+                source: "fn take(x:u8)->u8{x}fn unused(){let f=|x|take(x);let n=f(false);}fn main(){}",
+                expect: Expect::Invalid("E0308"),
+            },
+        ],
+    );
+}
+
+#[test]
 fn descriptor_copy_does_not_end_original_backing_array_loan() {
     let source = "fn value()->i32{let mut values=[1i32,2i32];let slice:&[i32]=&values;let copied=slice;values[0usize]=3i32;copied[0usize]}fn main(){}";
     let error = frontend::parse(source)
