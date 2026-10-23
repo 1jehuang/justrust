@@ -151,3 +151,329 @@ impl<Idx: super::cmp::PartialOrd> RangeInclusive<Idx> {
 pub struct RangeToInclusive<Idx> {
     pub end: Idx,
 }
+
+// Inclusive iterators stop at the last item before attempting a successor.
+impl super::iter::Iterator for RangeInclusive<i8> {
+    type Item = i8;
+    fn next(&mut self) -> super::option::Option<i8> {
+        if self.is_empty() { return super::option::Option::None; }
+        let value = self.start;
+        if value == self.end { self.exhausted = true; }
+        else { self.start = value + 1i8; }
+        super::option::Option::Some(value)
+    }
+}
+impl super::iter::DoubleEndedIterator for RangeInclusive<i8> {
+    fn next_back(&mut self) -> super::option::Option<i8> {
+        if self.is_empty() { return super::option::Option::None; }
+        let value = self.end;
+        if value == self.start { self.exhausted = true; }
+        else { self.end = value - 1i8; }
+        super::option::Option::Some(value)
+    }
+}
+impl super::iter::DoubleEndedIterator for Range<i8> {
+    fn next_back(&mut self) -> super::option::Option<i8> {
+        if self.start < self.end {
+            self.end -= 1i8;
+            super::option::Option::Some(self.end)
+        } else { super::option::Option::None }
+    }
+}
+impl super::iter::Iterator for RangeInclusive<i16> {
+    type Item = i16;
+    fn next(&mut self) -> super::option::Option<i16> {
+        if self.is_empty() { return super::option::Option::None; }
+        let value = self.start;
+        if value == self.end { self.exhausted = true; }
+        else { self.start = value + 1i16; }
+        super::option::Option::Some(value)
+    }
+}
+impl super::iter::DoubleEndedIterator for RangeInclusive<i16> {
+    fn next_back(&mut self) -> super::option::Option<i16> {
+        if self.is_empty() { return super::option::Option::None; }
+        let value = self.end;
+        if value == self.start { self.exhausted = true; }
+        else { self.end = value - 1i16; }
+        super::option::Option::Some(value)
+    }
+}
+impl super::iter::DoubleEndedIterator for Range<i16> {
+    fn next_back(&mut self) -> super::option::Option<i16> {
+        if self.start < self.end {
+            self.end -= 1i16;
+            super::option::Option::Some(self.end)
+        } else { super::option::Option::None }
+    }
+}
+impl super::iter::Iterator for RangeInclusive<i32> {
+    type Item = i32;
+    fn next(&mut self) -> super::option::Option<i32> {
+        if self.is_empty() { return super::option::Option::None; }
+        let value = self.start;
+        if value == self.end { self.exhausted = true; }
+        else { self.start = value + 1i32; }
+        super::option::Option::Some(value)
+    }
+}
+impl super::iter::DoubleEndedIterator for RangeInclusive<i32> {
+    fn next_back(&mut self) -> super::option::Option<i32> {
+        if self.is_empty() { return super::option::Option::None; }
+        let value = self.end;
+        if value == self.start { self.exhausted = true; }
+        else { self.end = value - 1i32; }
+        super::option::Option::Some(value)
+    }
+}
+impl super::iter::DoubleEndedIterator for Range<i32> {
+    fn next_back(&mut self) -> super::option::Option<i32> {
+        if self.start < self.end {
+            self.end -= 1i32;
+            super::option::Option::Some(self.end)
+        } else { super::option::Option::None }
+    }
+}
+impl super::iter::Iterator for RangeInclusive<i64> {
+    type Item = i64;
+    fn next(&mut self) -> super::option::Option<i64> {
+        if self.is_empty() { return super::option::Option::None; }
+        let value = self.start;
+        if value == self.end { self.exhausted = true; }
+        else { self.start = value + 1i64; }
+        super::option::Option::Some(value)
+    }
+}
+impl super::iter::DoubleEndedIterator for RangeInclusive<i64> {
+    fn next_back(&mut self) -> super::option::Option<i64> {
+        if self.is_empty() { return super::option::Option::None; }
+        let value = self.end;
+        if value == self.start { self.exhausted = true; }
+        else { self.end = value - 1i64; }
+        super::option::Option::Some(value)
+    }
+}
+impl super::iter::DoubleEndedIterator for Range<i64> {
+    fn next_back(&mut self) -> super::option::Option<i64> {
+        if self.start < self.end {
+            self.end -= 1i64;
+            super::option::Option::Some(self.end)
+        } else { super::option::Option::None }
+    }
+}
+impl super::iter::Iterator for RangeInclusive<i128> {
+    type Item = i128;
+    fn next(&mut self) -> super::option::Option<i128> {
+        if self.is_empty() { return super::option::Option::None; }
+        let value = self.start;
+        if value == self.end { self.exhausted = true; }
+        else { self.start = value + 1i128; }
+        super::option::Option::Some(value)
+    }
+}
+impl super::iter::DoubleEndedIterator for RangeInclusive<i128> {
+    fn next_back(&mut self) -> super::option::Option<i128> {
+        if self.is_empty() { return super::option::Option::None; }
+        let value = self.end;
+        if value == self.start { self.exhausted = true; }
+        else { self.end = value - 1i128; }
+        super::option::Option::Some(value)
+    }
+}
+impl super::iter::DoubleEndedIterator for Range<i128> {
+    fn next_back(&mut self) -> super::option::Option<i128> {
+        if self.start < self.end {
+            self.end -= 1i128;
+            super::option::Option::Some(self.end)
+        } else { super::option::Option::None }
+    }
+}
+impl super::iter::Iterator for RangeInclusive<isize> {
+    type Item = isize;
+    fn next(&mut self) -> super::option::Option<isize> {
+        if self.is_empty() { return super::option::Option::None; }
+        let value = self.start;
+        if value == self.end { self.exhausted = true; }
+        else { self.start = value + 1isize; }
+        super::option::Option::Some(value)
+    }
+}
+impl super::iter::DoubleEndedIterator for RangeInclusive<isize> {
+    fn next_back(&mut self) -> super::option::Option<isize> {
+        if self.is_empty() { return super::option::Option::None; }
+        let value = self.end;
+        if value == self.start { self.exhausted = true; }
+        else { self.end = value - 1isize; }
+        super::option::Option::Some(value)
+    }
+}
+impl super::iter::DoubleEndedIterator for Range<isize> {
+    fn next_back(&mut self) -> super::option::Option<isize> {
+        if self.start < self.end {
+            self.end -= 1isize;
+            super::option::Option::Some(self.end)
+        } else { super::option::Option::None }
+    }
+}
+impl super::iter::Iterator for RangeInclusive<u8> {
+    type Item = u8;
+    fn next(&mut self) -> super::option::Option<u8> {
+        if self.is_empty() { return super::option::Option::None; }
+        let value = self.start;
+        if value == self.end { self.exhausted = true; }
+        else { self.start = value + 1u8; }
+        super::option::Option::Some(value)
+    }
+}
+impl super::iter::DoubleEndedIterator for RangeInclusive<u8> {
+    fn next_back(&mut self) -> super::option::Option<u8> {
+        if self.is_empty() { return super::option::Option::None; }
+        let value = self.end;
+        if value == self.start { self.exhausted = true; }
+        else { self.end = value - 1u8; }
+        super::option::Option::Some(value)
+    }
+}
+impl super::iter::DoubleEndedIterator for Range<u8> {
+    fn next_back(&mut self) -> super::option::Option<u8> {
+        if self.start < self.end {
+            self.end -= 1u8;
+            super::option::Option::Some(self.end)
+        } else { super::option::Option::None }
+    }
+}
+impl super::iter::Iterator for RangeInclusive<u16> {
+    type Item = u16;
+    fn next(&mut self) -> super::option::Option<u16> {
+        if self.is_empty() { return super::option::Option::None; }
+        let value = self.start;
+        if value == self.end { self.exhausted = true; }
+        else { self.start = value + 1u16; }
+        super::option::Option::Some(value)
+    }
+}
+impl super::iter::DoubleEndedIterator for RangeInclusive<u16> {
+    fn next_back(&mut self) -> super::option::Option<u16> {
+        if self.is_empty() { return super::option::Option::None; }
+        let value = self.end;
+        if value == self.start { self.exhausted = true; }
+        else { self.end = value - 1u16; }
+        super::option::Option::Some(value)
+    }
+}
+impl super::iter::DoubleEndedIterator for Range<u16> {
+    fn next_back(&mut self) -> super::option::Option<u16> {
+        if self.start < self.end {
+            self.end -= 1u16;
+            super::option::Option::Some(self.end)
+        } else { super::option::Option::None }
+    }
+}
+impl super::iter::Iterator for RangeInclusive<u32> {
+    type Item = u32;
+    fn next(&mut self) -> super::option::Option<u32> {
+        if self.is_empty() { return super::option::Option::None; }
+        let value = self.start;
+        if value == self.end { self.exhausted = true; }
+        else { self.start = value + 1u32; }
+        super::option::Option::Some(value)
+    }
+}
+impl super::iter::DoubleEndedIterator for RangeInclusive<u32> {
+    fn next_back(&mut self) -> super::option::Option<u32> {
+        if self.is_empty() { return super::option::Option::None; }
+        let value = self.end;
+        if value == self.start { self.exhausted = true; }
+        else { self.end = value - 1u32; }
+        super::option::Option::Some(value)
+    }
+}
+impl super::iter::DoubleEndedIterator for Range<u32> {
+    fn next_back(&mut self) -> super::option::Option<u32> {
+        if self.start < self.end {
+            self.end -= 1u32;
+            super::option::Option::Some(self.end)
+        } else { super::option::Option::None }
+    }
+}
+impl super::iter::Iterator for RangeInclusive<u64> {
+    type Item = u64;
+    fn next(&mut self) -> super::option::Option<u64> {
+        if self.is_empty() { return super::option::Option::None; }
+        let value = self.start;
+        if value == self.end { self.exhausted = true; }
+        else { self.start = value + 1u64; }
+        super::option::Option::Some(value)
+    }
+}
+impl super::iter::DoubleEndedIterator for RangeInclusive<u64> {
+    fn next_back(&mut self) -> super::option::Option<u64> {
+        if self.is_empty() { return super::option::Option::None; }
+        let value = self.end;
+        if value == self.start { self.exhausted = true; }
+        else { self.end = value - 1u64; }
+        super::option::Option::Some(value)
+    }
+}
+impl super::iter::DoubleEndedIterator for Range<u64> {
+    fn next_back(&mut self) -> super::option::Option<u64> {
+        if self.start < self.end {
+            self.end -= 1u64;
+            super::option::Option::Some(self.end)
+        } else { super::option::Option::None }
+    }
+}
+impl super::iter::Iterator for RangeInclusive<u128> {
+    type Item = u128;
+    fn next(&mut self) -> super::option::Option<u128> {
+        if self.is_empty() { return super::option::Option::None; }
+        let value = self.start;
+        if value == self.end { self.exhausted = true; }
+        else { self.start = value + 1u128; }
+        super::option::Option::Some(value)
+    }
+}
+impl super::iter::DoubleEndedIterator for RangeInclusive<u128> {
+    fn next_back(&mut self) -> super::option::Option<u128> {
+        if self.is_empty() { return super::option::Option::None; }
+        let value = self.end;
+        if value == self.start { self.exhausted = true; }
+        else { self.end = value - 1u128; }
+        super::option::Option::Some(value)
+    }
+}
+impl super::iter::DoubleEndedIterator for Range<u128> {
+    fn next_back(&mut self) -> super::option::Option<u128> {
+        if self.start < self.end {
+            self.end -= 1u128;
+            super::option::Option::Some(self.end)
+        } else { super::option::Option::None }
+    }
+}
+impl super::iter::Iterator for RangeInclusive<usize> {
+    type Item = usize;
+    fn next(&mut self) -> super::option::Option<usize> {
+        if self.is_empty() { return super::option::Option::None; }
+        let value = self.start;
+        if value == self.end { self.exhausted = true; }
+        else { self.start = value + 1usize; }
+        super::option::Option::Some(value)
+    }
+}
+impl super::iter::DoubleEndedIterator for RangeInclusive<usize> {
+    fn next_back(&mut self) -> super::option::Option<usize> {
+        if self.is_empty() { return super::option::Option::None; }
+        let value = self.end;
+        if value == self.start { self.exhausted = true; }
+        else { self.end = value - 1usize; }
+        super::option::Option::Some(value)
+    }
+}
+impl super::iter::DoubleEndedIterator for Range<usize> {
+    fn next_back(&mut self) -> super::option::Option<usize> {
+        if self.start < self.end {
+            self.end -= 1usize;
+            super::option::Option::Some(self.end)
+        } else { super::option::Option::None }
+    }
+}

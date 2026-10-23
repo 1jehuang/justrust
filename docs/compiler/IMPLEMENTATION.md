@@ -6,6 +6,13 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 
 ## Completed foundations, not full compatibility
 
+- [x] Source `RangeInclusive` iteration and double-ended integer ranges cover
+      all twelve integer types, including MIN/MAX endpoints, mixed front/back
+      consumption, exhausted and reversed-empty ranges, and collection.
+      Stock-differential CHECK/BUILD/run at workers 1/8 passes
+      (`20261023-033622145-326677`); graph, iterator and full-program regression
+      gates pass (`20261023-033958180-338483`). The corpus remains 11/20.
+
 - [x] The unchanged string-processing program passes native CHECK/BUILD/run
       at workers 1 and 8, raising the full-program manifest to 11/20. Source
       implementations cover character reversal, splitting, containment, Unicode

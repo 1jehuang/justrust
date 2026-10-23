@@ -238,3 +238,80 @@ fn main() {
         ],
     );
 }
+
+#[test]
+fn inclusive_and_reverse_integer_ranges_match_stock() {
+    #[path = "support/closure_oracle.rs"]
+    mod closure_oracle;
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "inclusive-integer-ranges",
+        &[
+            Case {
+                name: "inclusive_i8",
+                source: "fn main(){ let mut top=(i8::MAX-1i8)..=i8::MAX; let a=top.next().unwrap(); let b=top.next_back().unwrap(); println!(\"{} {} {}\",a==i8::MAX-1i8,b==i8::MAX,top.next().is_none()); let mut low=(i8::MIN..=i8::MIN+1i8).rev(); println!(\"{} {} {}\",low.next().unwrap()==i8::MIN+1i8,low.next().unwrap()==i8::MIN,low.next().is_none()); let v:Vec<i8>=(1i8..=3i8).collect(); let w:Vec<i8>=(1i8..4i8).rev().collect(); println!(\"{} {} {} {}\",v.len(),v[2],w[0],(3i8..=2i8).count()); }",
+                expect: Expect::Run("true true true\ntrue true true\n3 3 3 0\n"),
+            },
+            Case {
+                name: "inclusive_i16",
+                source: "fn main(){ let mut top=(i16::MAX-1i16)..=i16::MAX; let a=top.next().unwrap(); let b=top.next_back().unwrap(); println!(\"{} {} {}\",a==i16::MAX-1i16,b==i16::MAX,top.next().is_none()); let mut low=(i16::MIN..=i16::MIN+1i16).rev(); println!(\"{} {} {}\",low.next().unwrap()==i16::MIN+1i16,low.next().unwrap()==i16::MIN,low.next().is_none()); let v:Vec<i16>=(1i16..=3i16).collect(); let w:Vec<i16>=(1i16..4i16).rev().collect(); println!(\"{} {} {} {}\",v.len(),v[2],w[0],(3i16..=2i16).count()); }",
+                expect: Expect::Run("true true true\ntrue true true\n3 3 3 0\n"),
+            },
+            Case {
+                name: "inclusive_i32",
+                source: "fn main(){ let mut top=(i32::MAX-1i32)..=i32::MAX; let a=top.next().unwrap(); let b=top.next_back().unwrap(); println!(\"{} {} {}\",a==i32::MAX-1i32,b==i32::MAX,top.next().is_none()); let mut low=(i32::MIN..=i32::MIN+1i32).rev(); println!(\"{} {} {}\",low.next().unwrap()==i32::MIN+1i32,low.next().unwrap()==i32::MIN,low.next().is_none()); let v:Vec<i32>=(1i32..=3i32).collect(); let w:Vec<i32>=(1i32..4i32).rev().collect(); println!(\"{} {} {} {}\",v.len(),v[2],w[0],(3i32..=2i32).count()); }",
+                expect: Expect::Run("true true true\ntrue true true\n3 3 3 0\n"),
+            },
+            Case {
+                name: "inclusive_i64",
+                source: "fn main(){ let mut top=(i64::MAX-1i64)..=i64::MAX; let a=top.next().unwrap(); let b=top.next_back().unwrap(); println!(\"{} {} {}\",a==i64::MAX-1i64,b==i64::MAX,top.next().is_none()); let mut low=(i64::MIN..=i64::MIN+1i64).rev(); println!(\"{} {} {}\",low.next().unwrap()==i64::MIN+1i64,low.next().unwrap()==i64::MIN,low.next().is_none()); let v:Vec<i64>=(1i64..=3i64).collect(); let w:Vec<i64>=(1i64..4i64).rev().collect(); println!(\"{} {} {} {}\",v.len(),v[2],w[0],(3i64..=2i64).count()); }",
+                expect: Expect::Run("true true true\ntrue true true\n3 3 3 0\n"),
+            },
+            Case {
+                name: "inclusive_i128",
+                source: "fn main(){ let mut top=(i128::MAX-1i128)..=i128::MAX; let a=top.next().unwrap(); let b=top.next_back().unwrap(); println!(\"{} {} {}\",a==i128::MAX-1i128,b==i128::MAX,top.next().is_none()); let mut low=(i128::MIN..=i128::MIN+1i128).rev(); println!(\"{} {} {}\",low.next().unwrap()==i128::MIN+1i128,low.next().unwrap()==i128::MIN,low.next().is_none()); let v:Vec<i128>=(1i128..=3i128).collect(); let w:Vec<i128>=(1i128..4i128).rev().collect(); println!(\"{} {} {} {}\",v.len(),v[2],w[0],(3i128..=2i128).count()); }",
+                expect: Expect::Run("true true true\ntrue true true\n3 3 3 0\n"),
+            },
+            Case {
+                name: "inclusive_isize",
+                source: "fn main(){ let mut top=(isize::MAX-1isize)..=isize::MAX; let a=top.next().unwrap(); let b=top.next_back().unwrap(); println!(\"{} {} {}\",a==isize::MAX-1isize,b==isize::MAX,top.next().is_none()); let mut low=(isize::MIN..=isize::MIN+1isize).rev(); println!(\"{} {} {}\",low.next().unwrap()==isize::MIN+1isize,low.next().unwrap()==isize::MIN,low.next().is_none()); let v:Vec<isize>=(1isize..=3isize).collect(); let w:Vec<isize>=(1isize..4isize).rev().collect(); println!(\"{} {} {} {}\",v.len(),v[2],w[0],(3isize..=2isize).count()); }",
+                expect: Expect::Run("true true true\ntrue true true\n3 3 3 0\n"),
+            },
+            Case {
+                name: "inclusive_u8",
+                source: "fn main(){ let mut top=(u8::MAX-1u8)..=u8::MAX; let a=top.next().unwrap(); let b=top.next_back().unwrap(); println!(\"{} {} {}\",a==u8::MAX-1u8,b==u8::MAX,top.next().is_none()); let mut low=(u8::MIN..=u8::MIN+1u8).rev(); println!(\"{} {} {}\",low.next().unwrap()==u8::MIN+1u8,low.next().unwrap()==u8::MIN,low.next().is_none()); let v:Vec<u8>=(1u8..=3u8).collect(); let w:Vec<u8>=(1u8..4u8).rev().collect(); println!(\"{} {} {} {}\",v.len(),v[2],w[0],(3u8..=2u8).count()); }",
+                expect: Expect::Run("true true true\ntrue true true\n3 3 3 0\n"),
+            },
+            Case {
+                name: "inclusive_u16",
+                source: "fn main(){ let mut top=(u16::MAX-1u16)..=u16::MAX; let a=top.next().unwrap(); let b=top.next_back().unwrap(); println!(\"{} {} {}\",a==u16::MAX-1u16,b==u16::MAX,top.next().is_none()); let mut low=(u16::MIN..=u16::MIN+1u16).rev(); println!(\"{} {} {}\",low.next().unwrap()==u16::MIN+1u16,low.next().unwrap()==u16::MIN,low.next().is_none()); let v:Vec<u16>=(1u16..=3u16).collect(); let w:Vec<u16>=(1u16..4u16).rev().collect(); println!(\"{} {} {} {}\",v.len(),v[2],w[0],(3u16..=2u16).count()); }",
+                expect: Expect::Run("true true true\ntrue true true\n3 3 3 0\n"),
+            },
+            Case {
+                name: "inclusive_u32",
+                source: "fn main(){ let mut top=(u32::MAX-1u32)..=u32::MAX; let a=top.next().unwrap(); let b=top.next_back().unwrap(); println!(\"{} {} {}\",a==u32::MAX-1u32,b==u32::MAX,top.next().is_none()); let mut low=(u32::MIN..=u32::MIN+1u32).rev(); println!(\"{} {} {}\",low.next().unwrap()==u32::MIN+1u32,low.next().unwrap()==u32::MIN,low.next().is_none()); let v:Vec<u32>=(1u32..=3u32).collect(); let w:Vec<u32>=(1u32..4u32).rev().collect(); println!(\"{} {} {} {}\",v.len(),v[2],w[0],(3u32..=2u32).count()); }",
+                expect: Expect::Run("true true true\ntrue true true\n3 3 3 0\n"),
+            },
+            Case {
+                name: "inclusive_u64",
+                source: "fn main(){ let mut top=(u64::MAX-1u64)..=u64::MAX; let a=top.next().unwrap(); let b=top.next_back().unwrap(); println!(\"{} {} {}\",a==u64::MAX-1u64,b==u64::MAX,top.next().is_none()); let mut low=(u64::MIN..=u64::MIN+1u64).rev(); println!(\"{} {} {}\",low.next().unwrap()==u64::MIN+1u64,low.next().unwrap()==u64::MIN,low.next().is_none()); let v:Vec<u64>=(1u64..=3u64).collect(); let w:Vec<u64>=(1u64..4u64).rev().collect(); println!(\"{} {} {} {}\",v.len(),v[2],w[0],(3u64..=2u64).count()); }",
+                expect: Expect::Run("true true true\ntrue true true\n3 3 3 0\n"),
+            },
+            Case {
+                name: "inclusive_u128",
+                source: "fn main(){ let mut top=(u128::MAX-1u128)..=u128::MAX; let a=top.next().unwrap(); let b=top.next_back().unwrap(); println!(\"{} {} {}\",a==u128::MAX-1u128,b==u128::MAX,top.next().is_none()); let mut low=(u128::MIN..=u128::MIN+1u128).rev(); println!(\"{} {} {}\",low.next().unwrap()==u128::MIN+1u128,low.next().unwrap()==u128::MIN,low.next().is_none()); let v:Vec<u128>=(1u128..=3u128).collect(); let w:Vec<u128>=(1u128..4u128).rev().collect(); println!(\"{} {} {} {}\",v.len(),v[2],w[0],(3u128..=2u128).count()); }",
+                expect: Expect::Run("true true true\ntrue true true\n3 3 3 0\n"),
+            },
+            Case {
+                name: "inclusive_usize",
+                source: "fn main(){ let mut top=(usize::MAX-1usize)..=usize::MAX; let a=top.next().unwrap(); let b=top.next_back().unwrap(); println!(\"{} {} {}\",a==usize::MAX-1usize,b==usize::MAX,top.next().is_none()); let mut low=(usize::MIN..=usize::MIN+1usize).rev(); println!(\"{} {} {}\",low.next().unwrap()==usize::MIN+1usize,low.next().unwrap()==usize::MIN,low.next().is_none()); let v:Vec<usize>=(1usize..=3usize).collect(); let w:Vec<usize>=(1usize..4usize).rev().collect(); println!(\"{} {} {} {}\",v.len(),v[2],w[0],(3usize..=2usize).count()); }",
+                expect: Expect::Run("true true true\ntrue true true\n3 3 3 0\n"),
+            },
+            Case {
+                name: "wrong_inclusive_item_unused",
+                source: "fn bad(){let mut r=1u8..=2;let _:Option<i32>=r.next();}fn main(){}",
+                expect: Expect::Invalid("E0308"),
+            },
+        ],
+    );
+}
