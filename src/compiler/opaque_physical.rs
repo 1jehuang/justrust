@@ -263,10 +263,12 @@ impl<'a> PhysicalValidation<'a> {
         for ((site, pack), (expected_site, expected_pack)) in
             self.proof.packs.iter().zip(expected.proof.packs.iter())
         {
-            if site != expected_site || pack.opaque() != expected_pack.opaque() {
+            // normalize authenticated the expected pack against the original
+            // publication. Require exact immutable identities rather than
+            // replaying that source for every carrier use of this CFG.
+            if site != expected_site || !pack.matches_replayed(expected_pack, self.budget)? {
                 return Err("physical pack occurrence mapping changed".into());
             }
-            pack.validate_occurrence(self.publication, Some(*site), self.budget)?;
         }
         for (call, other) in self
             .proof

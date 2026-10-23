@@ -269,6 +269,20 @@ impl PartialEq for OpaquePackProof {
 }
 impl Eq for OpaquePackProof {}
 impl OpaquePackProof {
+    /// Compare with an independently authenticated replay without repeating
+    /// source validation. All metadata and capture rows must retain identity.
+    pub(in crate::compiler) fn matches_replayed(
+        &self,
+        other: &Self,
+        budget: &PlanBudget,
+    ) -> Result<bool, String> {
+        Ok(self.publication == other.publication
+            && self.occurrence == other.occurrence
+            && Arc::ptr_eq(&self.opaque, &other.opaque)
+            && Arc::ptr_eq(&self.sources, &other.sources)
+            && identical_type(&self.hidden, &other.hidden, budget)?)
+    }
+
     pub(in crate::compiler) fn seal(
         publication: Arc<super::super::source_replay::CanonicalSourcePublication>,
         occurrence: ExprId,
@@ -588,6 +602,29 @@ mod captured_pack_tests {
         let proof =
             OpaquePackProof::seal(publication.clone(), ExprId(occurrence), &budget).unwrap();
         assert_eq!(proof.sources.len(), 2);
+        assert!(proof.matches_replayed(&proof.clone(), &budget).unwrap());
+        let mut foreign_rows = proof.clone();
+        foreign_rows.sources = proof.sources.to_vec().into();
+        assert!(!foreign_rows.matches_replayed(&proof, &budget).unwrap());
+        let mut foreign_hidden = proof.clone();
+        foreign_hidden.hidden = Ty::Unit;
+        assert!(!foreign_hidden.matches_replayed(&proof, &budget).unwrap());
+        let mut foreign_opaque = proof.clone();
+        foreign_opaque.opaque = Arc::new(OpaqueTy::new(
+            proof.opaque.owner(),
+            proof.opaque.owner_args().into(),
+            proof.opaque.site(),
+            proof.opaque.bounds().into(),
+            proof.opaque.captured_regions().into(),
+        ));
+        assert!(!foreign_opaque.matches_replayed(&proof, &budget).unwrap());
+        let mut foreign_occurrence = proof.clone();
+        foreign_occurrence.occurrence = ExprId(occurrence + 1);
+        assert!(
+            !foreign_occurrence
+                .matches_replayed(&proof, &budget)
+                .unwrap()
+        );
         proof
             .validate_occurrence(publication, Some(ExprId(occurrence)), &budget)
             .unwrap();
@@ -619,6 +656,7 @@ mod captured_pack_tests {
         );
         let mut changed = proof.clone();
         changed.publication = c::source_replay::OriginalBodyId::new(&budget).unwrap();
+        assert!(!changed.matches_replayed(&proof, &budget).unwrap());
         assert!(
             changed
                 .validate_occurrence(publication, Some(ExprId(occurrence)), &budget)
@@ -686,6 +724,7 @@ mod captured_pack_tests {
         ] {
             let mut changed = proof.clone();
             changed.opaque = Arc::new(opaque);
+            assert!(!changed.matches_replayed(&proof, &budget).unwrap());
             assert!(
                 changed
                     .validate_occurrence(publication, Some(ExprId(occurrence)), &budget)
