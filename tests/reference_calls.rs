@@ -446,13 +446,18 @@ fn main() { if run() == 7 { println!("borrow params oracle ok"); } }
 }
 
 #[test]
-fn rejects_legal_unsupported_reference_aggregate_field() {
-    // Stock accepts and runs this fixture, outside this bounded B2 slice.
-    rejects(
+fn accepts_reference_aggregate_field() {
+    #[path = "support/closure_oracle.rs"]
+    mod oracle;
+    oracle::check(
         "reference_aggregate_field",
-        r#"struct R<'a>{r:&'a i32} fn read(r:&i32)->i32{*r} fn run()->i32{let x=7;let r=R{r:&x};read(r.r)}
+        &[oracle::Case {
+            name: "reference_aggregate_field",
+            source: r#"struct R<'a>{r:&'a i32} fn read(r:&i32)->i32{*r} fn run()->i32{let x=7;let r=R{r:&x};read(r.r)}
 fn main() { if run() == 7 { println!("borrow params oracle ok"); } }
 "#,
+            expect: oracle::Expect::Run("borrow params oracle ok\n"),
+        }],
     );
 }
 

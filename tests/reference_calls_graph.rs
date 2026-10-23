@@ -1,4 +1,4 @@
-use justrust_engine::{Key, compiler};
+use justrust_engine::compiler;
 
 #[test]
 fn reference_calls_share_one_analysis_per_body() {
@@ -14,18 +14,34 @@ fn reference_calls_share_one_analysis_per_body() {
             assert!(compiled.analyses.iter().all(|analysis| analysis.passed()));
             assert!(compiled.control_flow[0].loan_sites.is_empty());
             assert!(compiled.control_flow[1].loan_sites.is_empty());
+            // CHECK validates source templates without demanding physical instances.
+            // Repeated calls must share each user function's canonical template.
             for index in 0..3 {
-                for kind in [102, 108, 109] {
-                    let key = Key::new(kind, vec![index]);
-                    let evaluations: Vec<_> = compiled
-                        .report
-                        .node_evaluations
-                        .iter()
-                        .filter(|(actual, _)| *actual == key)
-                        .collect();
-                    assert_eq!(evaluations.len(), 1);
-                    assert_eq!(evaluations[0].1, 1);
-                }
+                let evaluations: Vec<_> = compiled
+                    .report
+                    .node_evaluations
+                    .iter()
+                    .filter(|(key, _)| key.kind == 110 && key.params.as_ref() == [index])
+                    .collect();
+                assert_eq!(evaluations.len(), 1);
+                assert_eq!(evaluations[0].1, 1);
+            }
+            for kind in [102, 108, 109] {
+                let evaluations: Vec<_> = compiled
+                    .report
+                    .node_evaluations
+                    .iter()
+                    .filter(|(actual, _)| actual.kind == kind)
+                    .collect();
+                assert_eq!(
+                    evaluations.len(),
+                    if check { 0 } else { 3 },
+                    "physical nodes, kind={kind}"
+                );
+                assert!(
+                    evaluations.iter().all(|(_, count)| *count == 1),
+                    "no duplicate evaluation, kind={kind}"
+                );
             }
             assert_eq!(
                 compiled
