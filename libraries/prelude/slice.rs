@@ -93,9 +93,15 @@ impl<T> SliceMethods for [T] {
 pub trait SliceRefMethods<'a, T> {
     fn first(self) -> super::option::Option<&'a T>;
     fn last(self) -> super::option::Option<&'a T>;
+    fn split_at(self, mid: usize) -> (&'a [T], &'a [T]);
 }
 
 impl<'a, T> SliceRefMethods<'a, T> for &'a [T] {
+    fn split_at(self, mid: usize) -> (&'a [T], &'a [T]) {
+        assert!(mid <= self.len());
+        (&self[..mid], &self[mid..])
+    }
+
     fn first(self) -> super::option::Option<&'a T> {
         if self.len() == 0usize {
             super::option::Option::None

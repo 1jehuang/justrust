@@ -20,6 +20,33 @@ fn unsize()->i32 {let values=[1i32,2i32];let slice:&[i32]=&values;slice.len();sl
 fn unsize_bool()->bool {let values=[true,false];let slice:&[bool]=&values;slice[0usize]}
 fn main() {}
 "#;
+
+#[test]
+fn shared_split_matches_stock() {
+    #[path = "support/closure_oracle.rs"]
+    mod closure_oracle;
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "shared-split",
+        &[
+            Case {
+                name: "disjoint_halves",
+                source: "fn halves(v:&[i32]){let (left,right)=v.split_at(2usize);println!(\"{:?} {:?}\",left,right);}fn main(){let a=[1i32,2i32,3i32,4i32];halves(&a);}",
+                expect: Expect::Run("[1, 2] [3, 4]\n"),
+            },
+            Case {
+                name: "owner_still_borrowed",
+                source: "fn main(){let mut a=[1i32,2i32];let (left,right)=a.split_at(1usize);a[0usize]=9;println!(\"{} {}\",left[0usize],right[0usize]);}",
+                expect: Expect::Invalid("E0506"),
+            },
+            Case {
+                name: "endpoints_empty_and_noncopy",
+                source: r#"struct D{value:i32}fn check<T>(s:&[T]){let(a,b)=s.split_at(0usize);println!("{} {}",a.len(),b.len());let(a,b)=s.split_at(s.len());println!("{} {}",a.len(),b.len());}fn main(){let values=[D{value:7},D{value:8}];check(&values);let empty:[i32;0]=[];check(&empty);let zeros=[(),(),()];check(&zeros);let(a,b)=values.split_at(1usize);println!("{} {}",a.len(),b.len());}"#,
+                expect: Expect::Run("0 2\n2 0\n0 0\n0 0\n0 3\n3 0\n1 1\n"),
+            },
+        ],
+    );
+}
 fn index(program: &Program, name: &str) -> usize {
     program
         .functions

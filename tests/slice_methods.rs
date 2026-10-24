@@ -501,6 +501,50 @@ fn swap_out_of_bounds_panics_like_stock() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+#[test]
+fn split_at_out_of_bounds_panics_like_stock() {
+    let dir = scratch("split-panic");
+    let src = dir.join("main.rs");
+    std::fs::write(&src, "fn f(v:&[i32]){let _=v.split_at(4usize);}fn main(){println!(\"before\");f(&[1i32,2i32,3i32]);println!(\"after\");}").unwrap();
+    let stock_image = dir.join("stock");
+    let stock = Command::new(stock_rustc::stock_rustc())
+        .env_remove("RUSTC_BOOTSTRAP")
+        .args(["--edition=2024", "-Cpanic=abort", "-Awarnings"])
+        .arg(&src)
+        .arg("-o")
+        .arg(&stock_image)
+        .output()
+        .unwrap();
+    assert!(
+        stock.status.success(),
+        "{}",
+        String::from_utf8_lossy(&stock.stderr)
+    );
+    let stock = Command::new(stock_image).output().unwrap();
+    assert!(!stock.status.success());
+    for workers in [1, 8] {
+        let image = dir.join(format!("native-{workers}"));
+        let build = Command::new(env!("CARGO_BIN_EXE_jr-rust"))
+            .arg(&src)
+            .arg("--workers")
+            .arg(workers.to_string())
+            .arg("-o")
+            .arg(&image)
+            .output()
+            .unwrap();
+        assert!(
+            build.status.success(),
+            "{}",
+            String::from_utf8_lossy(&build.stderr)
+        );
+        let native = Command::new(image).output().unwrap();
+        assert!(!native.status.success());
+        assert_eq!(native.stdout, stock.stdout);
+        assert_eq!(native.stdout, b"before\n");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// `[T]::iter` over slice-backed `slice::Iter`, array receivers reaching slice
 /// methods through stock's final unsizing probe step, and `Range<int>` as an
 /// `Iterator` (corpus 06/11/15 reductions).
