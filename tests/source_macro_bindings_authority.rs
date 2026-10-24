@@ -3,6 +3,28 @@
 mod oracle;
 
 #[test]
+fn forbid_unsafe_code_inherits_into_files_but_not_dependency_crates() {
+    oracle::Fixture::new(
+        "#![forbid(unsafe_code)] mod child; fn main(){assert_eq!(child::value(),42);}",
+        &[("child.rs", "pub fn value()->i32{42}")],
+        Some("pub unsafe fn unused(){}"),
+    )
+    .assert_positive();
+    oracle::Fixture::new(
+        "#![forbid(unsafe_code)] mod child; fn main(){}",
+        &[("child.rs", "pub unsafe fn unused(){}")],
+        None,
+    )
+    .assert_negative();
+    oracle::Fixture::new(
+        "fn main(){}",
+        &[],
+        Some("#![forbid(unsafe_code)] pub unsafe fn unused(){}"),
+    )
+    .assert_negative();
+}
+
+#[test]
 fn shadowing_preserves_order_scope_selected_rule_and_unused_errors() {
     for source in [
         "fn f()->i32 {value!()} macro_rules! value {()=>{1i32};} fn main(){}",

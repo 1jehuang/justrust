@@ -97,7 +97,9 @@ impl Parser<'_, '_> {
                     return Err(self.error("duplicate repr(C)"));
                 }
                 self.pending_repr_c = true;
-            } else if self.eat("unsafe") {
+            } else if self.is("unsafe") {
+                self.reject_forbidden_unsafe()?;
+                self.cursor.bump();
                 self.expect("(")?;
                 self.expect("no_mangle")?;
                 self.expect(")")?;
@@ -121,6 +123,7 @@ impl Parser<'_, '_> {
         if self.foreign_c || self.item_expansion.is_some() {
             return Err(self.unsupported("nested or generated extern blocks are unsupported"));
         }
+        self.reject_forbidden_unsafe()?;
         self.expect("unsafe")?;
         self.expect("extern")?;
         if self.token().string {

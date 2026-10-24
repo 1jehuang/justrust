@@ -15,6 +15,28 @@ fn rank(token: &TokenView<'_>) -> Option<u8> {
 }
 
 impl Parser<'_, '_> {
+    pub(super) fn reject_forbidden_unsafe(&self) -> Result<(), ParseError> {
+        if self.purpose == ParserPurpose::InactiveSyntax || self.forbid_unsafe_roots.is_empty() {
+            return Ok(());
+        }
+        self.names
+            .budget()
+            .charge(
+                super::super::expansion_budget::Counter::Work,
+                self.forbid_unsafe_roots.len() as u64 + 1,
+            )
+            .map_err(|error| native_adapter::transport_error(error.into()))?;
+        let root = super::super::source_macro_binding::invocation_root(
+            self.names.session(),
+            self.token().span,
+        )
+        .map_err(native_adapter::transport_error)?;
+        if self.forbid_unsafe_roots.contains(&root) {
+            return Err(self.error("unsafe_code is forbidden in this crate"));
+        }
+        Ok(())
+    }
+
     /// A bounded lookahead distinguishes const declarations from qualified fns.
     /// Invalid qualifier orders still reach the grammar checker, not a const name.
     pub(super) fn starts_qualified_function(&self) -> bool {
@@ -56,6 +78,9 @@ impl Parser<'_, '_> {
                 return Err(self.error(
                     "function qualifiers must appear once in const async unsafe extern order",
                 ));
+            }
+            if next == 3 {
+                self.reject_forbidden_unsafe()?;
             }
             previous = next;
             constant |= next == 1;

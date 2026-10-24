@@ -8520,6 +8520,7 @@ enum ConditionPurpose {
 }
 
 struct Parser<'input, 'names> {
+    forbid_unsafe_roots: Arc<[super::token_session::SourceFileHandle]>,
     embedded_issuers: Arc<[super::source::EmbeddedOriginalFile]>,
     no_std_roots: Arc<[super::token_session::SourceFileHandle]>,
     c_abi: c_abi::Declarations,
@@ -8712,6 +8713,7 @@ impl<'input, 'names> Parser<'input, 'names> {
         let mut child = Parser {
             embedded_issuers: self.embedded_issuers.clone(),
             no_std_roots: self.no_std_roots.clone(),
+            forbid_unsafe_roots: self.forbid_unsafe_roots.clone(),
             c_abi: c_abi::Declarations::default(),
             pending_c_abi: false,
             pending_c_export: false,
@@ -8760,6 +8762,9 @@ impl<'input, 'names> Parser<'input, 'names> {
             child.retain_generated_item_metadata()?;
             let metadata_end = child.generated_metadata.len();
             let (visibility, explicit_visibility) = child.visibility(module)?;
+            if child.is("unsafe") {
+                child.reject_forbidden_unsafe()?;
+            }
             let item_start = [
                 "fn", "trait", "impl", "struct", "enum", "type", "const", "static", "pub",
             ]
@@ -10087,6 +10092,7 @@ impl<'input, 'names> Parser<'input, 'names> {
         let mut child = Parser {
             embedded_issuers: self.embedded_issuers.clone(),
             no_std_roots: self.no_std_roots.clone(),
+            forbid_unsafe_roots: self.forbid_unsafe_roots.clone(),
             c_abi: c_abi::Declarations::default(),
             pending_c_abi: false,
             pending_c_export: false,
@@ -10491,6 +10497,7 @@ impl<'input, 'names> Parser<'input, 'names> {
         let lexical = ParserState::owned(state, names.budget())?;
         Ok(Self {
             embedded_issuers: Arc::from([]),
+            forbid_unsafe_roots: Arc::from([]),
             no_std_roots: Arc::from([]),
             debug_assertions: super::source::CfgSet::DEFAULT_DEBUG_ASSERTIONS,
             c_abi: c_abi::Declarations::default(),
@@ -14253,6 +14260,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             && self.is("unsafe")
             && self.cursor.peek(1).is_some_and(|token| token.matches("{"))
         {
+            self.reject_forbidden_unsafe()?;
             self.cursor.bump();
             return Ok(Expr::Unsafe(self.block()?));
         }
@@ -15079,13 +15087,20 @@ fn parse_syntax_tokens_configured(
     tokens: NativeParserInput,
     debug_assertions: bool,
 ) -> Result<ParsedProgram, ParseError> {
-    parse_syntax_tokens_policy(tokens, debug_assertions, Arc::from([]), Arc::from([]))
+    parse_syntax_tokens_policy(
+        tokens,
+        debug_assertions,
+        Arc::from([]),
+        Arc::from([]),
+        Arc::from([]),
+    )
 }
 fn parse_syntax_tokens_policy(
     tokens: NativeParserInput,
     debug_assertions: bool,
     no_std_roots: Arc<[super::token_session::SourceFileHandle]>,
     embedded_issuers: Arc<[super::source::EmbeddedOriginalFile]>,
+    forbid_unsafe_roots: Arc<[super::token_session::SourceFileHandle]>,
 ) -> Result<ParsedProgram, ParseError> {
     let unit = parse_syntax_unit(
         tokens,
@@ -15093,6 +15108,7 @@ fn parse_syntax_tokens_policy(
         debug_assertions,
         no_std_roots,
         embedded_issuers.clone(),
+        forbid_unsafe_roots,
     )?;
     let mut program =
         unit.parsed
@@ -15123,6 +15139,7 @@ fn parse_syntax_unit(
     debug_assertions: bool,
     no_std_roots: Arc<[super::token_session::SourceFileHandle]>,
     embedded_issuers: Arc<[super::source::EmbeddedOriginalFile]>,
+    forbid_unsafe_roots: Arc<[super::token_session::SourceFileHandle]>,
 ) -> Result<ParsedSyntaxUnit, ParseError> {
     let (tokens, session, cap) = tokens.into_parts();
     let mut names = NameStoreBuilder::new(session, cap, super::token::Edition::E2024)
@@ -15134,6 +15151,7 @@ fn parse_syntax_unit(
     };
     parser.embedded_issuers = embedded_issuers;
     parser.no_std_roots = no_std_roots;
+    parser.forbid_unsafe_roots = forbid_unsafe_roots;
     parser.debug_assertions = debug_assertions;
     let mut parsed = ParsedDeclarations {
         program: ProgramDeclarations::default(),
@@ -15277,6 +15295,7 @@ pub(super) fn validate_inactive_syntax(
             input,
             ParserPurpose::InactiveSyntax,
             super::source::CfgSet::DEFAULT_DEBUG_ASSERTIONS,
+            Arc::from([]),
             Arc::from([]),
             Arc::from([]),
         )?,
@@ -16309,7 +16328,16 @@ pub fn parse_prepared_owned(
     };
     let projection = super::source::PreparedLexInput::prepared(source, &budget, snapshot)?;
     let mut no_std_roots = Vec::new();
+    let mut forbid_unsafe_roots = Vec::new();
     for policy in &source.crate_policies {
+        if let Some(root) = policy.forbid_unsafe_root(source)? {
+            forbid_unsafe_roots.push(
+                projection
+                    .snapshot()
+                    .file(root)
+                    .map_err(super::source::SourceError::from_token)?,
+            );
+        }
         if let Some(root) = policy.no_std_root(source)? {
             no_std_roots.push(
                 projection
@@ -16326,6 +16354,7 @@ pub fn parse_prepared_owned(
         source.debug_assertions(),
         no_std_roots.into(),
         issuers.into(),
+        forbid_unsafe_roots.into(),
     )
     .map_err(mapped)
 }

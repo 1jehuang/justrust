@@ -247,8 +247,17 @@ pub(super) struct CratePolicy {
     root: FileId,
     original: Arc<str>,
     no_std: bool,
+    forbid_unsafe_code: bool,
 }
 impl CratePolicy {
+    pub(super) fn forbid_unsafe_root(
+        &self,
+        source: &PreparedSource,
+    ) -> Result<Option<usize>, SourceError> {
+        // Reuse the exact original-source authentication, even when no_std is false.
+        self.no_std_root(source)?;
+        Ok(self.forbid_unsafe_code.then_some(self.root.0 as usize))
+    }
     pub(super) fn no_std_root(
         &self,
         source: &PreparedSource,
@@ -331,6 +340,14 @@ impl FileView {
             .sources
             .add(unit.path.clone(), unit.contents.clone());
         prepared.crate_roots.push(id);
+        if unit.forbid_unsafe_code {
+            prepared.crate_policies.push(CratePolicy {
+                root: id,
+                original: unit.contents.clone(),
+                no_std: unit.no_std,
+                forbid_unsafe_code: true,
+            });
+        }
         prepared.source_bytes = unit.contents.len();
         prepared.files = 1;
         for segment in &unit.origins {
@@ -565,6 +582,7 @@ pub struct ChildModule {
 pub struct FileUnit {
     embedded: Option<source_embedded::EmbeddedUnit>,
     no_std: bool,
+    forbid_unsafe_code: bool,
     pub path: PathBuf,
     pub contents: Arc<str>,
     /// Canonical paths of the open files from the root to this one, for cycle
@@ -841,6 +859,7 @@ fn snapshot_unit<'a>(
     Ok(FileUnit {
         embedded: None,
         no_std: builder.no_std,
+        forbid_unsafe_code: builder.forbid_unsafe_code,
         path,
         contents,
         chain,
@@ -1016,6 +1035,7 @@ impl SourceAssembler {
                 root: id,
                 original: unit.contents.clone(),
                 no_std: unit.no_std,
+                forbid_unsafe_code: unit.forbid_unsafe_code,
             });
         }
         if ordinal.len() == 1
@@ -1060,6 +1080,7 @@ impl SourceAssembler {
                 FileUnit {
                     embedded: unit.embedded.clone(),
                     no_std: unit.no_std,
+                    forbid_unsafe_code: unit.forbid_unsafe_code,
                     path: unit.path.clone(),
                     contents: unit.contents.clone(),
                     chain: unit.chain.clone(),
@@ -1333,6 +1354,7 @@ struct Loader<'a> {
     /// Inline module names enclosing the text being expanded.
     module_stack: Vec<String>,
     no_std: bool,
+    forbid_unsafe_code: bool,
     tests: Vec<source_attrs::TestItem>,
 }
 impl<'a> Loader<'a> {
@@ -1357,6 +1379,7 @@ impl<'a> Loader<'a> {
             derives: Vec::new(),
             module_stack: Vec::new(),
             no_std: false,
+            forbid_unsafe_code: false,
             tests: Vec::new(),
         }
     }
@@ -1411,6 +1434,14 @@ impl<'a> Loader<'a> {
             ));
         }
         self.no_std = !no_std.is_empty();
+        if filtered.forbid_unsafe_code && !self.root {
+            return Err(Self::error(
+                SourceErrorKind::Unsupported,
+                None,
+                "forbid(unsafe_code) is currently supported only at a crate root",
+            ));
+        }
+        self.forbid_unsafe_code = filtered.forbid_unsafe_code;
         for inactive in filtered.inactive_items {
             let syntax = inactive_syntax(&inactive.text).map_err(|message| {
                 Self::error(
@@ -2072,6 +2103,28 @@ fn tokens(text: &str) -> Result<Vec<Token>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unsafe_code_policy_is_source_authenticated_and_retained_in_file_views() {
+        let options = SourceOptions::default();
+        let source = "#![forbid(unsafe_code)] unsafe fn unused(){} fn main(){}";
+        let unit = prepare_text_unit("main.rs", source, &options).unwrap();
+        let view = FileView::of(&unit, 0, &options).unwrap();
+        assert!(super::super::frontend::parse_prepared(&view.prepared).is_err());
+        let mut prepared = prepare_text("main.rs", source, &options).unwrap();
+        assert!(
+            prepared.crate_policies[0]
+                .forbid_unsafe_root(&prepared)
+                .unwrap()
+                .is_some()
+        );
+        prepared.sources.files[0].contents = Arc::from("fn main(){}");
+        assert!(
+            prepared.crate_policies[0]
+                .forbid_unsafe_root(&prepared)
+                .is_err()
+        );
+    }
 
     #[test]
     fn changed_overflow_policy_cannot_reuse_assembly_authority() {

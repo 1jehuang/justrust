@@ -835,7 +835,11 @@ cases. An empty discovery queue or a long checklist is not proof of exhaustivene
       The bounded source-envelope slice supports item/module configuration and
       explicit attribute policy, not arbitrary cfg positions or full Rust syntax
       in disabled items. The latter remains explicitly unsupported when outside
-      the admitted syntax-only grammar.
+      the admitted syntax-only grammar. Crate-root `forbid(unsafe_code)` now
+      has authenticated crate scope and checks original/expanded unsafe syntax;
+      see `crate_forbid_unsafe_code_checks_real_syntax_and_macro_output` and
+      `forbid_unsafe_code_inherits_into_files_but_not_dependency_crates`.
+      General lint levels and `missing_debug_implementations` remain open.
 
 **Next:** extend original provenance into semantic diagnostics and expansion,
 then token trees/hygiene and source-owned library roots without weakening the

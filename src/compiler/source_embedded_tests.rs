@@ -15,7 +15,7 @@ fn embedded_issuer_rejects_child_route_and_unit_transport_mutation() {
     let issuer = unit.embedded.as_ref().unwrap();
     issuer.validate(unit).unwrap();
     // `take` is the assembler's normal shallow authority-preserving copy.
-    for change in 0..9 {
+    for change in 0..10 {
         let mut changed = SourceAssembler::take(shared.clone());
         match change {
             0 => changed.path.push("spoof"),
@@ -31,6 +31,7 @@ fn embedded_issuer_rejects_child_route_and_unit_transport_mutation() {
                 name: "spoof".into(),
                 effective: true,
             }),
+            9 => changed.forbid_unsafe_code = !changed.forbid_unsafe_code,
             _ => unreachable!(),
         }
         assert!(
@@ -98,7 +99,7 @@ fn embedded_issuer_rejects_postassembly_stream_and_attachment_transplants() {
     missing.embedded_transport = None;
     assert!(crate::compiler::frontend::parse_prepared(&missing).is_err());
     let foreign = assembled();
-    for change in 0..7 {
+    for change in 0..8 {
         let mut changed = source.clone();
         match change {
             0 => changed.text.push(' '),
@@ -115,6 +116,10 @@ fn embedded_issuer_rejects_postassembly_stream_and_attachment_transplants() {
                 name: "spoof".into(),
                 effective: true,
             }),
+            7 => {
+                let policy = &mut changed.crate_policies[0];
+                policy.forbid_unsafe_code = !policy.forbid_unsafe_code;
+            }
             _ => unreachable!(),
         }
         assert!(

@@ -264,6 +264,46 @@ fn raw_lifetimes_preserve_normalized_identity() {
     }
 }
 
+#[test]
+fn crate_forbid_unsafe_code_checks_real_syntax_and_macro_output() {
+    stock_native_run("#![forbid(unsafe_code)] fn main(){println!(\"{}\",42);}");
+    stock_native_run(
+        "#![forbid(unsafe_code)] macro_rules! unused {()=>{unsafe {42}};} fn r#unsafe()->i32{42} fn main(){let v=r#unsafe();println!(\"{}\",v);}",
+    );
+    stock_native_run(
+        "#![forbid(unsafe_code)] #[cfg(any())] unsafe fn disabled(){} fn main(){println!(\"{}\",42);}",
+    );
+    for body in [
+        "unsafe fn unused(){} fn main(){}",
+        "fn main(){unsafe {}}",
+        "mod nested {pub unsafe fn unused(){}} fn main(){}",
+        "struct X; impl X {unsafe fn unused(){}} fn main(){}",
+        "unsafe extern \"C\" {fn foreign();} fn main(){}",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn exported(){} fn main(){}",
+        "macro_rules! make {()=>{unsafe {42}};} fn main(){let _x=make!();}",
+        "macro_rules! make {()=>{unsafe fn generated(){}};} make!(); fn main(){}",
+    ] {
+        let source = format!("#![forbid(unsafe_code)] {body}");
+        assert!(
+            !stock_compile(&source, std::path::Path::new("unused"), true)
+                .status
+                .success(),
+            "stock accepted {source}"
+        );
+        for workers in [1, 8] {
+            for check_only in [true, false] {
+                let failure = super::super::compile(source.clone(), workers, check_only)
+                    .err()
+                    .expect("forbidden unsafe source was accepted");
+                assert!(
+                    failure.to_string().contains("unsafe_code"),
+                    "wrong rejection: {failure}: {source}"
+                );
+            }
+        }
+    }
+}
+
 pub(super) fn stock_native_run(source: &str) {
     use std::os::unix::fs::PermissionsExt;
     use std::process::Command;

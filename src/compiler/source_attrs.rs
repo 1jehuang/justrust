@@ -49,6 +49,7 @@ pub struct InactiveItem {
 }
 #[derive(Clone, Debug)]
 pub struct AttributeOutput {
+    pub forbid_unsafe_code: bool,
     pub text: String,
     /// `#[test]` functions found under `cfg(test)`, in source order.
     pub tests: Vec<TestItem>,
@@ -163,9 +164,11 @@ fn prepare_with_context(
         pending: PendingTest::default(),
         tests: Vec::new(),
         test_main: None,
+        forbid_unsafe_code: false,
     };
     filter.scope(0, filter.tokens.len(), 0..text.len(), Owner::Crate, 0)?;
     Ok(AttributeOutput {
+        forbid_unsafe_code: filter.forbid_unsafe_code,
         text: String::from_utf8(filter.bytes).expect("masking preserves UTF-8"),
         attributes: filter.records,
         inactive_items: filter.inactive_items,
@@ -175,6 +178,7 @@ fn prepare_with_context(
     })
 }
 struct Filter<'a> {
+    forbid_unsafe_code: bool,
     text: &'a str,
     cfg: &'a CfgSet,
     identity_metadata: Option<&'a VerifiedIdentityContext>,
@@ -534,7 +538,7 @@ impl Filter<'_> {
             }
             let meta = if matches!(
                 raw.name.as_str(),
-                "doc" | "inline" | "repr" | "unsafe" | "no_std"
+                "doc" | "inline" | "repr" | "unsafe" | "no_std" | "forbid"
             ) {
                 parse_meta(&self.text[raw.range.clone()], raw.range.start).map_err(|e| {
                     if raw.name == "doc" && !e.limit {
@@ -551,6 +555,26 @@ impl Filter<'_> {
                 raw
             };
             match meta.name.as_str() {
+                "forbid" => {
+                    let root_inner = owner == Owner::Crate
+                        && attrs.iter().any(|attr| {
+                            attr.inner
+                                && attr.content.start <= meta.range.start
+                                && meta.range.end <= attr.content.end
+                        });
+                    if !root_inner
+                        || !matches!(&meta.value, MetaValue::List(items)
+                            if items.len() == 1 && items[0].name == "unsafe_code"
+                                && matches!(items[0].value, MetaValue::Word))
+                    {
+                        return Err(error(
+                            AttributeErrorKind::Unsupported,
+                            meta.range,
+                            "only crate-root forbid(unsafe_code) is supported",
+                        ));
+                    }
+                    self.forbid_unsafe_code = true;
+                }
                 "repr" | "unsafe" => {
                     let valid = match (&*meta.name, &meta.value) {
                         ("repr", MetaValue::List(values)) => {
@@ -1654,6 +1678,35 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn only_root_unsafe_code_forbid_is_admitted() {
+        assert!(
+            prep("#![forbid(unsafe_code)] fn main(){}")
+                .unwrap()
+                .forbid_unsafe_code
+        );
+        assert!(
+            prep("#![cfg_attr(all(),forbid(unsafe_code))] fn main(){}")
+                .unwrap()
+                .forbid_unsafe_code
+        );
+        assert!(
+            !prep("#![cfg_attr(any(),forbid(unsafe_code))] fn main(){}")
+                .unwrap()
+                .forbid_unsafe_code
+        );
+        for source in [
+            "#![doc=\"root\"] #[forbid(unsafe_code)] fn main(){}",
+            "#[forbid(unsafe_code)] fn main(){}",
+            "#![forbid(dead_code)] fn main(){}",
+            "#![forbid(unsafe_code,dead_code)] fn main(){}",
+            "#![forbid(unsafe_code)] #[allow(unsafe_code)] fn main(){}",
+            "mod nested {#![forbid(unsafe_code)]}",
+        ] {
+            assert!(prep(source).is_err(), "accepted {source}");
+        }
     }
 
     fn prep(s: &str) -> Result<AttributeOutput, AttributeError> {

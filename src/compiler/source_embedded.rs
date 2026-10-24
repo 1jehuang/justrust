@@ -20,6 +20,7 @@ pub(super) struct EmbeddedUnit {
     attributes: Arc<[PreparedAttribute]>,
     tests: Arc<[source_attrs::TestItem]>,
     no_std: bool,
+    forbid_unsafe_code: bool,
     terminal: bool,
     _admitted: super::super::expansion_budget::RetainedBytes,
 }
@@ -44,6 +45,7 @@ impl EmbeddedUnit {
             attributes: Arc::from(unit.attributes.as_slice()),
             tests: Arc::from(unit.tests.as_slice()),
             no_std: unit.no_std,
+            forbid_unsafe_code: unit.forbid_unsafe_code,
             terminal: unit.terminal.is_some(),
             _admitted: admitted,
         })
@@ -60,6 +62,7 @@ impl EmbeddedUnit {
             || self.attributes.as_ref() != unit.attributes
             || self.tests.as_ref() != unit.tests
             || self.no_std != unit.no_std
+            || self.forbid_unsafe_code != unit.forbid_unsafe_code
             || self.terminal != unit.terminal.is_some()
         {
             return Err(Loader::error(
@@ -126,7 +129,7 @@ pub(super) struct AssemblyTransport {
     origins: Arc<[OriginSegment]>,
     attributes: Arc<[PreparedAttribute]>,
     roots: Arc<[FileId]>,
-    policies: Arc<[(FileId, Arc<str>, bool)]>,
+    policies: Arc<[(FileId, Arc<str>, bool, bool)]>,
     files: Arc<[(PathBuf, Arc<str>)]>,
     issuers: Arc<[(FileId, Arc<()>)]>,
     debug_assertions: bool,
@@ -142,7 +145,7 @@ impl AssemblyTransport {
             + (source.origins.len() * std::mem::size_of::<OriginSegment>()) as u128
             + attribute_bytes(&source.attributes)
             + (source.crate_roots.len() * std::mem::size_of::<FileId>()) as u128
-            + (source.crate_policies.len() * std::mem::size_of::<(FileId, Arc<str>, bool)>())
+            + (source.crate_policies.len() * std::mem::size_of::<(FileId, Arc<str>, bool, bool)>())
                 as u128
             + source
                 .sources
@@ -163,7 +166,14 @@ impl AssemblyTransport {
             policies: source
                 .crate_policies
                 .iter()
-                .map(|policy| (policy.root, policy.original.clone(), policy.no_std))
+                .map(|policy| {
+                    (
+                        policy.root,
+                        policy.original.clone(),
+                        policy.no_std,
+                        policy.forbid_unsafe_code,
+                    )
+                })
                 .collect(),
             files: source
                 .sources
@@ -184,10 +194,11 @@ impl AssemblyTransport {
     pub(super) fn validate(&self, source: &PreparedSource) -> Result<(), SourceError> {
         let policies_match = self.policies.len() == source.crate_policies.len()
             && self.policies.iter().zip(&source.crate_policies).all(
-                |((root, original, no_std), policy)| {
+                |((root, original, no_std, forbid_unsafe_code), policy)| {
                     *root == policy.root
                         && Arc::ptr_eq(original, &policy.original)
                         && *no_std == policy.no_std
+                        && *forbid_unsafe_code == policy.forbid_unsafe_code
                 },
             );
         let files_match = self.files.len() == source.sources.files.len()

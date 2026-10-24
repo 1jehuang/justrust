@@ -63,6 +63,21 @@ checks generated/captured lifetimes, mixed raw/plain spelling and invalid declar
 against stock at workers 1 and 8. Static and inferred lifetime support remains separate.
 These are bounded parser rules, not permission to compile a 2021 package.
 
+## Bounded unsafe-code lint policy
+
+Crate-root `#![forbid(unsafe_code)]`, including enabled `cfg_attr`, is carried
+in the authenticated source policy and checked during parsing. It rejects unsafe
+blocks, unsafe function declarations, unsafe extern blocks and unsafe export
+attributes, including expanded macro occurrences. File modules inherit their
+crate policy; dependency crates retain their own policy. Disabled items and
+unexpanded macro templates are not linted as executable source.
+
+This is not general lint support: item/module lint attributes, lowering a lint
+level, and `warn(missing_debug_implementations)` remain unsupported. Regression
+coverage is `crate_forbid_unsafe_code_checks_real_syntax_and_macro_output`,
+`unsafe_code_policy_is_source_authenticated_and_retained_in_file_views`, and
+`forbid_unsafe_code_inherits_into_files_but_not_dependency_crates`.
+
 Manifest resolution produces immutable profile values. The driver passes the
 resolved cfg and overflow policy into `SourceOptions`; no mutable compiler
 side slot or graph bypass is introduced. The overflow backend implementation
