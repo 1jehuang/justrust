@@ -75,6 +75,35 @@ fn main() {
                 expect: Expect::Invalid("E0599"),
             },
             Case {
+                name: "btreemap_ordered_entry_insert_remove",
+                source: r#"use std::collections::BTreeMap;
+fn main() {
+    let mut m: BTreeMap<usize, Vec<u32>> = BTreeMap::new();
+    m.entry(3).or_default().push(30);
+    m.entry(1).or_default().push(10);
+    m.entry(3).or_default().push(31);
+    for (k, v) in &m { println!("{} {:?}", k, v); }
+    let mut n: BTreeMap<i32, i32> = BTreeMap::new();
+    let a = n.insert(2, 20);
+    let b = n.insert(2, 21);
+    n.insert(-7, 1);
+    for (k, v) in [(9i32, 90i32), (0, 0)] { n.insert(k, v); }
+    let mut keys = Vec::new();
+    for (k, _) in &n { keys.push(*k); }
+    *n.entry(0).or_insert(5) += 1;
+    println!("{:?} {:?} {:?} {:?} {}", a, b, keys, n.get(&0), n.contains_key(&-7));
+    println!("{:?} {:?} {}", n.remove(&-7), n.remove(&100), n.len());
+}"#,
+                expect: Expect::Run(
+                    "1 [10]\n3 [30, 31]\nNone Some(20) [-7, 0, 2, 9] Some(1) true\nSome(1) None 3\n",
+                ),
+            },
+            Case {
+                name: "btreemap_key_without_ord_in_unused_fn",
+                source: "use std::collections::BTreeMap; struct K; fn unused(){ let mut m: BTreeMap<K,u32> = BTreeMap::new(); m.insert(K,1); } fn main(){}",
+                expect: Expect::Invalid("E0277"),
+            },
+            Case {
                 name: "key_without_hash_in_unused_fn",
                 source: "use std::collections::HashMap; struct K; fn unused(){ let mut m: HashMap<K,u32> = HashMap::new(); m.insert(K,1); } fn main(){}",
                 expect: Expect::Invalid("E0599"),
