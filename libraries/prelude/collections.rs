@@ -332,3 +332,30 @@ impl<'a, K: super::cmp::Ord, V> super::iter::IntoIterator for &'a BTreeMap<K, V>
         self.iter()
     }
 }
+
+/// Owning HashMap iteration. Order is unspecified, as in std.
+pub struct IntoIter<K, V> {
+    keys: Vec<K>,
+    values: Vec<V>,
+}
+
+impl<K, V> super::iter::Iterator for IntoIter<K, V> {
+    type Item = (K, V);
+    fn next(&mut self) -> Option<(K, V)> {
+        match self.keys.pop() {
+            Option::Some(k) => match self.values.pop() {
+                Option::Some(v) => Option::Some((k, v)),
+                Option::None => panic!("hash map value slot missing"),
+            },
+            Option::None => Option::None,
+        }
+    }
+}
+
+impl<K, V> super::iter::IntoIterator for HashMap<K, V> {
+    type Item = (K, V);
+    type IntoIter = IntoIter<K, V>;
+    fn into_iter(self) -> IntoIter<K, V> {
+        IntoIter { keys: self.keys, values: self.values }
+    }
+}

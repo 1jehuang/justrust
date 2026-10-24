@@ -119,6 +119,11 @@ fn main() {
                 expect: Expect::Invalid("E0499"),
             },
             Case {
+                name: "owned_for_loop_consumes_map",
+                source: "use std::collections::HashMap; fn main(){ let mut m: HashMap<u32,usize> = HashMap::new(); m.insert(1,1); m.insert(2,2); m.insert(3,3); let mut t = 0usize; let mut n = 0usize; for (k, v) in m { t += k as usize * v; n += 1; } println!(\"{} {}\", t, n); }",
+                expect: Expect::Run("14 3\n"),
+            },
+            Case {
                 name: "insert_through_immutable_in_unused_fn",
                 source: "use std::collections::HashMap; fn unused(){ let m: HashMap<u32,u32> = HashMap::new(); m.insert(1,2); } fn main(){}",
                 expect: Expect::Invalid("E0596"),
