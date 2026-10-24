@@ -40,6 +40,15 @@ fn main(){let first=D{id:1};println!("before");drop(first);println!("after");cor
                 source: "struct D{id:i32}fn main(){let value=D{id:1};let r=&value;drop(value);println!(\"{}\",r.id);}",
                 expect: Expect::Invalid("E0505"),
             },
+            Case {
+                name: "borrowed_destructor_temporaries_drop_at_statement_and_condition_end",
+                source: r#"use std::cell::RefCell;
+struct D(u32);impl Drop for D{fn drop(&mut self){println!("drop {}",self.0);}}impl D{fn v(&self)->u32{self.0}}
+fn mk(n:u32)->D{D(n)}fn show(d:&D)->u32{d.0}fn bx()->Box<u32>{Box::new(9)}
+fn main(){let a=show(&mk(1))+show(&mk(2));println!("a {}",a);if show(&mk(4))>3{println!("in");}else if mk(7).v()>1{println!("no");}
+match show(&mk(5)){5=>println!("five"),_=>{}}let c=RefCell::new(5i32);*c.borrow_mut()+=1;let v=*c.borrow();println!("{} {}",v,*bx());}"#,
+                expect: Expect::Run("drop 2\ndrop 1\na 3\ndrop 4\nin\nfive\ndrop 5\n6 9\n"),
+            },
         ],
     );
 }

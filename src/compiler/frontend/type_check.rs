@@ -5399,14 +5399,18 @@ impl<'a> Checker<'a> {
         if !flow.completes {
             return Ok(value);
         }
-        if !self.trivially_dropped(&flow.ty)? {
+        let extended = self
+            .extending_borrows
+            .contains(&(source as *const Expr as usize));
+        // A non-extended temporary dies at the end of the enclosing statement,
+        // exactly like `$method_receiver`/`$deref_receiver` temporaries, so a
+        // destructor there is fine (`*c.borrow()`, `&guard()` operands).
+        // Lifetime-extended temporaries with destructors remain unsupported.
+        if extended && !self.trivially_dropped(&flow.ty)? {
             return Err("unsupported: borrowing a temporary whose type has a destructor".into());
         }
         let local = self.temporary("$borrow_temporary", flow.ty.clone(), true)?;
         self.charge_node(std::mem::size_of::<ir::LocalId>())?;
-        let extended = self
-            .extending_borrows
-            .contains(&(source as *const Expr as usize));
         self.borrow_temporaries.push((local, extended));
         let borrowed = self.borrow_expression(
             kind,
@@ -5541,6 +5545,28 @@ impl<'a> Checker<'a> {
                 ir::TypedStmt::Expr(id)
             }
         })
+    }
+    /// Close a condition temporary scope: temporaries registered since
+    /// `start` are declared in a block whose Copy tail is the condition, so
+    /// they drop when the condition has been evaluated.
+    fn condition_temporary_scope(
+        &mut self,
+        start: usize,
+        condition: ir::ExprId,
+    ) -> Result<ir::ExprId, String> {
+        if self.borrow_temporaries.len() == start {
+            return Ok(condition);
+        }
+        let drained: Vec<_> = self.borrow_temporaries.drain(start..).collect();
+        self.charge_node(std::mem::size_of::<ir::TypedStmt>() * drained.len())?;
+        let mut declarations = Vec::new();
+        for (local, extended) in drained {
+            if extended {
+                return Err("unsupported: lifetime-extended temporary in a condition".into());
+            }
+            declarations.push(ir::TypedStmt::Declare { local });
+        }
+        self.temporary_block(declarations, Some(condition))
     }
     fn temporary_block(
         &mut self,
@@ -11614,7 +11640,11 @@ impl<'a> Checker<'a> {
                 then_block,
                 else_block,
             } => {
+                // `if` conditions are temporary scopes: their temporaries drop
+                // before either branch runs.
+                let temporaries_start = self.borrow_temporaries.len();
                 let condition = self.expr(condition)?;
+                let condition = self.condition_temporary_scope(temporaries_start, condition)?;
                 let c = self.flow(condition);
                 self.require(&c, &ir::Ty::Bool)?;
                 let reachable = self.reachable && c.completes;
