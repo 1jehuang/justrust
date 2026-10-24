@@ -11707,10 +11707,13 @@ impl<'input, 'names> Parser<'input, 'names> {
         let literal = parse_integer_literal(token.text).map_err(|e| self.error(&e))?;
         let value = resolve_integer(&literal, false, Some(&ir::Ty::Int(ir::IntTy::Usize)))
             .map_err(|e| self.error(&e))?;
-        if value.bits > ir::MAX_ARRAY_LEN as u128 {
+        // The supported length bound is a semantic limit. Inactive items are
+        // validated for syntax only and never lowered.
+        let inactive = self.purpose == ParserPurpose::InactiveSyntax;
+        if value.bits > ir::MAX_ARRAY_LEN as u128 && !inactive {
             return Err(self.limit("array length/index exceeds supported limit"));
         }
-        let number = value.bits as usize;
+        let number = value.bits.min(ir::MAX_ARRAY_LEN as u128) as usize;
         self.cursor.bump();
         if !self.is("]") {
             assert!(
@@ -11727,13 +11730,15 @@ impl<'input, 'names> Parser<'input, 'names> {
             if let Some(end) = array_len::length_end(tokens, start) {
                 let table = array_len::scan(tokens);
                 if let Some(value) = array_len::evaluate(tokens, &table, start..end) {
-                    if value > ir::MAX_ARRAY_LEN as u128 {
+                    if value > ir::MAX_ARRAY_LEN as u128
+                        && self.purpose != ParserPurpose::InactiveSyntax
+                    {
                         return Err(self.limit("array length/index exceeds supported limit"));
                     }
                     while self.cursor.index().is_some_and(|at| at < end) {
                         self.cursor.bump();
                     }
-                    return Ok(value as usize);
+                    return Ok(value.min(ir::MAX_ARRAY_LEN as u128) as usize);
                 }
             }
         }
@@ -13912,6 +13917,23 @@ impl<'input, 'names> Parser<'input, 'names> {
                 continue;
             }
             if self.is("mod") || self.is("use") || self.is("fn") || self.is("pub") {
+                if self.purpose == ParserPurpose::InactiveSyntax && !self.is("mod") {
+                    // Inactive code is validated for syntax only. The item is
+                    // parsed into a discarded declaration set, never published.
+                    let mut scratch = ParsedDeclarations {
+                        program: ProgramDeclarations::default(),
+                        items: HashMap::new(),
+                        empty_use_prefixes: Vec::new(),
+                        glob_imports: Vec::new(),
+                    };
+                    let module = self.module;
+                    let path = AstPath::new(self.names, PathAnchor::Crate, &[])
+                        .map_err(native_adapter::name_error)?;
+                    let start = self.cursor.index();
+                    let (visibility, explicit) = self.visibility(module)?;
+                    self.nonmodule_item(module, &path, &mut scratch, visibility, explicit, start)?;
+                    continue;
+                }
                 return Err(self.unsupported("block-local items are unsupported"));
             }
             if self.try_for_statement(&mut statements)? {
@@ -16422,6 +16444,31 @@ mod inactive_item_syntax_tests {
                 .unwrap_err()
                 .contains("unexpanded macro")
         );
+    }
+
+    #[test]
+    fn inactive_array_lengths_skip_the_semantic_length_limit() {
+        for source in [
+            "fn unused(){ let a = [0u8; 1048576]; }",
+            "fn unused(){ let a = [0xffu8; 1024 * 1024 - 1024]; }",
+        ] {
+            validate_inactive_syntax(source).unwrap();
+            let active = format!("{source} fn main(){{}}");
+            assert!(parse(&active).is_err(), "{active}");
+        }
+        assert!(validate_inactive_syntax("fn unused(){ let a = [0u8; ]; }").is_err());
+    }
+
+    #[test]
+    fn inactive_block_local_items_are_syntax_checked_only() {
+        validate_inactive_syntax(
+            "fn unused(){ use std::io::BufReader; fn inner(x: &[u8]) -> usize { x.len() } inner(&[]); }",
+        )
+        .unwrap();
+        for bad in ["fn unused(){ use ; }", "fn unused(){ fn inner( { } }"] {
+            assert!(validate_inactive_syntax(bad).is_err(), "{bad}");
+        }
+        assert!(parse("fn main(){ use std::io::BufReader; }").is_err());
     }
 
     #[test]
