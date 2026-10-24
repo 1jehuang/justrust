@@ -12,6 +12,32 @@ pub enum Edition {
     E2024,
 }
 
+impl Edition {
+    /// Parse an explicit language input without claiming native support.
+    pub fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "2015" => Ok(Self::E2015),
+            "2018" => Ok(Self::E2018),
+            "2021" => Ok(Self::E2021),
+            "2024" => Ok(Self::E2024),
+            _ => Err(format!("invalid Rust edition `{value}`")),
+        }
+    }
+
+    /// Admission remains narrower than the token transport's edition identity.
+    pub fn validate_native(self) -> Result<(), String> {
+        let edition = match self {
+            Self::E2024 => return Ok(()),
+            Self::E2015 => "2015",
+            Self::E2018 => "2018",
+            Self::E2021 => "2021",
+        };
+        Err(format!(
+            "Rust edition {edition} is unsupported; the native compiler currently supports only edition 2024"
+        ))
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Spacing {
     Alone,

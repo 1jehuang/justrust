@@ -16,6 +16,7 @@ pub mod source_lex;
 pub mod source_map;
 #[path = "source_probe.rs"]
 pub mod source_probe;
+pub use super::token::Edition;
 pub use source_cfg::CfgSet;
 pub use source_lex::{PreparedLexInput, PreparedMode, PreparedViewId, ProjectedSpan};
 pub use source_map::{FileId, OriginSegment, SourceMap, SourceSpan};
@@ -30,39 +31,6 @@ const MAX_MODULE_DEPTH: usize = 128;
 pub(super) const MAX_BYTES: usize = 8 * 1024 * 1024;
 pub(super) const MAX_FILES: usize = 1024;
 const MAX_ORIGINS: usize = 1024 * 1024;
-
-/// A source-language edition, distinct from the compiler's supported subset.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Edition {
-    Rust2015,
-    Rust2018,
-    Rust2021,
-    #[default]
-    Rust2024,
-}
-impl Edition {
-    pub fn parse(value: &str) -> Result<Self, String> {
-        match value {
-            "2015" => Ok(Self::Rust2015),
-            "2018" => Ok(Self::Rust2018),
-            "2021" => Ok(Self::Rust2021),
-            "2024" => Ok(Self::Rust2024),
-            _ => Err(format!("invalid Rust edition `{value}`")),
-        }
-    }
-
-    pub fn validate_native(self) -> Result<(), String> {
-        let edition = match self {
-            Self::Rust2024 => return Ok(()),
-            Self::Rust2015 => "2015",
-            Self::Rust2018 => "2018",
-            Self::Rust2021 => "2021",
-        };
-        Err(format!(
-            "Rust edition {edition} is unsupported; the native compiler currently supports only edition 2024"
-        ))
-    }
-}
 
 #[derive(Clone, Debug)]
 /// Native x86_64 Linux configuration plus bounded user predicates.
@@ -118,7 +86,7 @@ impl TestFilter {
 impl Default for SourceOptions {
     fn default() -> Self {
         Self {
-            edition: Edition::default(),
+            edition: Edition::E2024,
             native_link: super::c_abi::elf::LinkOptions::default(),
             cfg: CfgSet::native_x86_64_linux(),
             prelude: true,
@@ -1492,32 +1460,33 @@ impl<'a> Loader<'a> {
     /// issues token events.
     fn validate_original(&self, text: &str, base: usize) -> Result<(), SourceError> {
         use super::lexer::{LexError, validate_source};
-        use super::token::Edition;
         let id = self.id;
-        validate_source(text, Edition::E2024, &self.lexical_budget).map_err(|error| match error {
-            LexError::Source {
-                kind,
-                prepared,
-                message,
-                ..
-            } => {
-                let valid = text.get(prepared.clone());
-                let start = base.checked_add(prepared.start);
-                let end = base.checked_add(prepared.end);
-                let raw = start
-                    .zip(end)
-                    .filter(|(lo, hi)| valid.is_some() && self.contents.get(*lo..*hi) == valid);
-                match raw {
-                    Some((lo, hi)) => Self::error(kind, Some(Self::span(id, lo..hi)), message),
-                    None => Self::error(
-                        SourceErrorKind::Contract,
-                        None,
-                        "raw lexer returned an invalid original-source range",
-                    ),
+        validate_source(text, self.options.edition, &self.lexical_budget).map_err(|error| {
+            match error {
+                LexError::Source {
+                    kind,
+                    prepared,
+                    message,
+                    ..
+                } => {
+                    let valid = text.get(prepared.clone());
+                    let start = base.checked_add(prepared.start);
+                    let end = base.checked_add(prepared.end);
+                    let raw = start
+                        .zip(end)
+                        .filter(|(lo, hi)| valid.is_some() && self.contents.get(*lo..*hi) == valid);
+                    match raw {
+                        Some((lo, hi)) => Self::error(kind, Some(Self::span(id, lo..hi)), message),
+                        None => Self::error(
+                            SourceErrorKind::Contract,
+                            None,
+                            "raw lexer returned an invalid original-source range",
+                        ),
+                    }
                 }
+                LexError::Transport(error) => SourceError::from_token(error),
+                LexError::Projection(error) => error,
             }
-            LexError::Transport(error) => SourceError::from_token(error),
-            LexError::Projection(error) => error,
         })
     }
     fn append(
@@ -2176,7 +2145,11 @@ mod tests {
 
     #[test]
     fn unsupported_source_editions_reject_before_reading_or_parsing() {
-        assert_eq!(Edition::default(), Edition::Rust2024);
+        assert_eq!(SourceOptions::default().edition, Edition::E2024);
+        assert_eq!(
+            Edition::parse("2021").unwrap(),
+            super::super::token::Edition::E2021
+        );
         assert!(Edition::parse("2099").is_err());
         assert!(Edition::parse(" 2024").is_err());
         for name in ["2015", "2018", "2021"] {
