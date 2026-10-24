@@ -70,6 +70,7 @@ fn textual_modules_shadow_restore_and_function_imports_keep_binding() {
         "macro_rules! panic {()=>{23i32};} mod child {pub fn inherited()->i32{panic!()} macro_rules! panic {()=>{29i32};} pub fn own()->i32{panic!()}} use child::own as imported; fn main(){assert_eq!(child::inherited(),23i32);assert_eq!(imported(),29i32);assert_eq!(panic!(),23i32);}",
         "macro_rules! value {()=>{13i32};} fn f()->i32 {let a=value!();{macro_rules! value {()=>{19i32};} assert_eq!(value!(),19i32);} a+value!()} fn main(){assert_eq!(f(),26i32);}",
         "macro_rules! inner {()=>{41i32};} macro_rules! outer {()=>{inner!()};} mod child {macro_rules! inner {()=>{43i32};} pub fn f()->i32 {outer!()}} fn main(){assert_eq!(outer!(),41i32);assert_eq!(child::f(),43i32);}",
+        "macro_rules! value {()=>{1i32};} mod first {pub fn f()->i32{value!()} macro_rules! value {()=>{2i32};} mod nested {pub fn f()->i32{value!()}} pub fn g()->i32{nested::f()}} macro_rules! value {()=>{3i32};} mod second {pub fn f()->i32{value!()}} fn main(){assert_eq!(first::f(),1i32);assert_eq!(first::g(),2i32);assert_eq!(second::f(),3i32);assert_eq!(value!(),3i32);}",
     ] {
         oracle::stock_native(source);
     }
@@ -80,6 +81,15 @@ fn file_modules_share_crate_textual_scope_but_mounted_crates_do_not() {
     oracle::Fixture::new(
         "macro_rules! value {()=>{47i32};} mod child; use child::f; fn main(){assert_eq!(f(),47i32);}",
         &[("child.rs", "pub fn f()->i32{value!()}")],
+        None,
+    ).assert_positive();
+    oracle::Fixture::new(
+        "macro_rules! value {()=>{47i32};} mod first; macro_rules! value {()=>{53i32};} mod second; fn main(){assert_eq!(first::f(),47i32);assert_eq!(first::g(),59i32);assert_eq!(second::f(),53i32);assert_eq!(value!(),53i32);}",
+        &[
+            ("first.rs", "pub fn f()->i32{value!()} macro_rules! value {()=>{59i32};} mod inner; pub fn g()->i32{inner::f()}"),
+            ("first/inner.rs", "pub fn f()->i32{value!()}"),
+            ("second.rs", "pub fn f()->i32{value!()}"),
+        ],
         None,
     ).assert_positive();
     oracle::Fixture::new(

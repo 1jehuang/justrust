@@ -11592,6 +11592,70 @@ impl<'input, 'names> Parser<'input, 'names> {
         self.expect(")")?;
         Ok((ir::Visibility::Restricted(scope), true))
     }
+    // Construction and destruction of drivers involve large fallible values.
+    // Keep them out of every recursive module frame, and retain only a paid
+    // boxed parent while descending through an ordinary 2 MiB thread stack.
+    #[inline(never)]
+    fn enter_module_macros(
+        &mut self,
+        module: ModuleId,
+        previous_frontier: Option<super::semantic_scope::ModuleFrontierId>,
+    ) -> Result<Option<Box<super::source_item_macro::SourceItemMacroDriver>>, ParseError> {
+        if self.purpose != ParserPurpose::Active || self.input.macro_source().is_none() {
+            return Ok(None);
+        }
+        if self.lexical.scopes.is_none() {
+            self.lexical.scopes = Some(
+                super::semantic_scope::ScopeArenaBuilder::for_builder(self.names)
+                    .map_err(scope_parse_error)?,
+            );
+        }
+        let source = self.input.macro_source().cloned().ok_or_else(|| {
+            native_adapter::transport_error(super::token_session::TokenError::InvalidHandle)
+        })?;
+        let parent = if let Some(mut parent) = self.lexical.item_macros.take() {
+            let checkpoint = parent
+                .checkpoint(self.names)
+                .map_err(|error| self.driver_error(error))?;
+            self.lexical.item_macros = Some(
+                super::source_item_macro::SourceItemMacroDriver::from_checkpoint(
+                    source,
+                    &checkpoint,
+                    self.names,
+                )
+                .map_err(|error| self.driver_error(error))?,
+            );
+            Some(
+                self.names
+                    .try_parser_box(parent)
+                    .map_err(native_adapter::name_error)?,
+            )
+        } else {
+            self.lexical.item_macros = Some(
+                super::source_item_macro::SourceItemMacroDriver::new(source, self.names)
+                    .map_err(|error| self.driver_error(error))?,
+            );
+            None
+        };
+        let scopes = self.lexical.scopes.as_mut().ok_or_else(|| {
+            native_adapter::transport_error(super::token_session::TokenError::InvalidHandle)
+        })?;
+        self.module_frontier = Some(
+            scopes
+                .module_root(self.names, &*self.modules, module, previous_frontier)
+                .map_err(scope_parse_error)?,
+        );
+        Ok(parent)
+    }
+    #[inline(never)]
+    fn leave_module_macros(
+        &mut self,
+        parent: Option<Box<super::source_item_macro::SourceItemMacroDriver>>,
+    ) {
+        if let Some(parent) = parent {
+            self.lexical.item_macros = Some(*parent);
+        }
+    }
     fn items(
         &mut self,
         module: ModuleId,
@@ -11605,31 +11669,7 @@ impl<'input, 'names> Parser<'input, 'names> {
         let previous_module = self.module;
         let previous_frontier = self.module_frontier;
         self.module = module;
-        if self.purpose == ParserPurpose::Active && self.input.macro_source().is_some() {
-            if self.lexical.scopes.is_none() {
-                self.lexical.scopes = Some(
-                    super::semantic_scope::ScopeArenaBuilder::for_builder(self.names)
-                        .map_err(scope_parse_error)?,
-                );
-            }
-            if self.lexical.item_macros.is_none() {
-                let source = self.input.macro_source().cloned().ok_or_else(|| {
-                    native_adapter::transport_error(super::token_session::TokenError::InvalidHandle)
-                })?;
-                self.lexical.item_macros = Some(
-                    super::source_item_macro::SourceItemMacroDriver::new(source, self.names)
-                        .map_err(|error| self.driver_error(error))?,
-                );
-            }
-            let scopes = self.lexical.scopes.as_mut().ok_or_else(|| {
-                native_adapter::transport_error(super::token_session::TokenError::InvalidHandle)
-            })?;
-            self.module_frontier = Some(
-                scopes
-                    .module_root(self.names, &*self.modules, module, previous_frontier)
-                    .map_err(scope_parse_error)?,
-            );
-        }
+        let parent_macros = self.enter_module_macros(module, previous_frontier)?;
         while !self.is("") && !self.is("}") {
             if let Some(before) = self.module_frontier {
                 let scopes = self.lexical.scopes.as_mut().ok_or_else(|| {
@@ -11681,6 +11721,7 @@ impl<'input, 'names> Parser<'input, 'names> {
         }
         self.module = previous_module;
         self.module_frontier = previous_frontier;
+        self.leave_module_macros(parent_macros);
         self.nesting -= 1;
         Ok(())
     }

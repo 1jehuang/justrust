@@ -9,6 +9,7 @@ use super::source_macro::DriverError;
 use super::token_session::{BudgetVec, SessionId, SourceFileHandle, TokenError};
 use super::token_tree::{Node, TokenStream};
 use std::num::NonZeroU64;
+use std::sync::Arc;
 
 pub(super) fn group_body(
     source: &TokenSlice,
@@ -48,8 +49,37 @@ struct Definition {
     site: DefinitionSite,
     source_crate: SourceFileHandle,
 }
+/// A sealed lexical prefix. Child modules share this immutable prefix, never
+/// the parent's mutable driver or definitions introduced by later siblings.
+struct DefinitionPrefix {
+    parent: Option<Arc<DefinitionPrefix>>,
+    first: usize,
+    definitions: BudgetVec<Definition>,
+    _lease: ByteLease,
+}
+impl Drop for DefinitionPrefix {
+    fn drop(&mut self) {
+        // A long sequence of sibling modules must not recursively drop the
+        // entire persistent prefix on the parser's stack.
+        let mut next = self.parent.take();
+        while let Some(prefix) = next {
+            match Arc::try_unwrap(prefix) {
+                Ok(mut owned) => next = owned.parent.take(),
+                Err(_) => break,
+            }
+        }
+    }
+}
+#[derive(Clone)]
+pub(super) struct ModuleMacroCheckpoint {
+    session: SessionId,
+    crate_key: SessionId,
+    prefix: Option<Arc<DefinitionPrefix>>,
+    len: usize,
+}
 #[derive(Clone, Copy)]
 pub(super) struct CheckedDef {
+    session: SessionId,
     driver: NonZeroU64,
     index: u32,
     definition: ModuleFrontierId,
@@ -68,6 +98,8 @@ pub(super) struct SourceItemMacroDriver {
     id: NonZeroU64,
     session: SessionId,
     source: TokenStream,
+    prefix: Option<Arc<DefinitionPrefix>>,
+    first: usize,
     definitions: BudgetVec<Definition>,
     _lease: ByteLease,
 }
@@ -84,9 +116,54 @@ impl SourceItemMacroDriver {
             id: names.issue_driver_id()?,
             session: names.session().id(),
             source,
+            prefix: None,
+            first: 0,
             definitions: BudgetVec::new(names.budget(), Storage::Retained)?,
             _lease: lease,
         })
+    }
+    pub(super) fn checkpoint(
+        &mut self,
+        names: &NameStoreBuilder,
+    ) -> Result<ModuleMacroCheckpoint, DriverError> {
+        self.check(names)?;
+        if self.definitions.len() != 0 {
+            let lease = names.budget().reserve(
+                Storage::Retained,
+                std::mem::size_of::<DefinitionPrefix>() as u64,
+            )?;
+            let empty = BudgetVec::new(names.budget(), Storage::Retained)?;
+            let definitions = std::mem::replace(&mut self.definitions, empty);
+            let len = definitions.len();
+            self.prefix = Some(Arc::new(DefinitionPrefix {
+                parent: self.prefix.take(),
+                first: self.first,
+                definitions,
+                _lease: lease,
+            }));
+            self.first += len;
+        }
+        Ok(ModuleMacroCheckpoint {
+            session: self.session,
+            crate_key: names.session().crate_key(),
+            prefix: self.prefix.clone(),
+            len: self.first,
+        })
+    }
+    pub(super) fn from_checkpoint(
+        source: TokenStream,
+        checkpoint: &ModuleMacroCheckpoint,
+        names: &mut NameStoreBuilder,
+    ) -> Result<Self, DriverError> {
+        if !names.session().serves(checkpoint.session)
+            || names.session().crate_key() != checkpoint.crate_key
+        {
+            return Err(TokenError::ForeignHandle.into());
+        }
+        let mut driver = Self::new(source, names)?;
+        driver.prefix = checkpoint.prefix.clone();
+        driver.first = checkpoint.len;
+        Ok(driver)
     }
     fn check(&self, names: &NameStoreBuilder) -> Result<(), DriverError> {
         names.budget().charge(Counter::Work, 1)?;
@@ -119,7 +196,7 @@ impl SourceItemMacroDriver {
         }
         let name = names.key(name, LookupClass::Item(Namespace::Macro))?;
         let rules = names.compile_local_rules(body.clone(), site)?;
-        u32::try_from(self.definitions.len()).map_err(|_| TokenError::IdExhausted)?;
+        u32::try_from(self.first + self.definitions.len()).map_err(|_| TokenError::IdExhausted)?;
         self.definitions.push(Definition {
             name,
             point,
@@ -139,6 +216,7 @@ impl SourceItemMacroDriver {
     ) -> Result<CheckedDef, DriverError> {
         if let Some((index, definition)) = self.find_visible(name, call, scopes, names)? {
             return Ok(CheckedDef {
+                session: self.session,
                 driver: self.id,
                 index: u32::try_from(index).map_err(|_| TokenError::IdExhausted)?,
                 definition: definition.point,
@@ -181,6 +259,7 @@ impl SourceItemMacroDriver {
                     definition.body.clone(),
                     definition.site,
                     CheckedDef {
+                        session: self.session,
                         driver: self.id,
                         index: u32::try_from(index).map_err(|_| TokenError::IdExhausted)?,
                         definition: definition.point,
@@ -193,7 +272,7 @@ impl SourceItemMacroDriver {
     }
 
     pub(super) fn is_empty(&self) -> bool {
-        self.definitions.len() == 0
+        self.first == 0 && self.definitions.len() == 0
     }
     pub(super) fn known(
         &self,
@@ -219,16 +298,25 @@ impl SourceItemMacroDriver {
         let key = names.key(name, LookupClass::Item(Namespace::Macro))?;
         let source_crate =
             super::source_macro_binding::invocation_root(names.session(), names.span(name)?)?;
-        for (index, definition) in self.definitions.as_slice().iter().enumerate().rev() {
-            names.budget().charge(Counter::Work, 1)?;
-            if definition.name == key
-                && definition.source_crate == source_crate
-                && scopes
-                    .module_visible_from(definition.point, call)
-                    .map_err(DriverError::Scope)?
-            {
-                return Ok(Some((index, definition)));
+        let mut first = self.first;
+        let mut definitions = self.definitions.as_slice();
+        let mut prefix = self.prefix.as_deref();
+        loop {
+            for (index, definition) in definitions.iter().enumerate().rev() {
+                names.budget().charge(Counter::Work, 1)?;
+                if definition.name == key
+                    && definition.source_crate == source_crate
+                    && scopes
+                        .module_visible_from(definition.point, call)
+                        .map_err(DriverError::Scope)?
+                {
+                    return Ok(Some((first + index, definition)));
+                }
             }
+            let Some(parent) = prefix else { break };
+            first = parent.first;
+            definitions = parent.definitions.as_slice();
+            prefix = parent.parent.as_deref();
         }
         Ok(None)
     }
@@ -240,14 +328,26 @@ impl SourceItemMacroDriver {
         names: &mut NameStoreBuilder,
     ) -> Result<ExpandedTokens, DriverError> {
         self.check(names)?;
-        if selected.driver != self.id {
+        if selected.session != self.session || selected.driver != self.id {
             return Err(TokenError::ForeignHandle.into());
         }
-        let definition = self
-            .definitions
-            .as_slice()
-            .get(selected.index as usize)
-            .ok_or(TokenError::InvalidHandle)?;
+        let index = selected.index as usize;
+        let definition = if index >= self.first {
+            self.definitions.as_slice().get(index - self.first)
+        } else {
+            let mut prefix = self.prefix.as_deref();
+            let mut found = None;
+            while let Some(parent) = prefix {
+                names.budget().charge(Counter::Work, 1)?;
+                if index >= parent.first {
+                    found = parent.definitions.as_slice().get(index - parent.first);
+                    break;
+                }
+                prefix = parent.parent.as_deref();
+            }
+            found
+        }
+        .ok_or(TokenError::InvalidHandle)?;
         if definition.point != selected.definition
             || definition.source_crate != selected.source_crate
             || super::source_macro_binding::invocation_root(names.session(), site.span)?
@@ -282,6 +382,33 @@ mod tests {
     use crate::compiler::token::{Edition, TokenKind};
     use crate::compiler::token_tree::{GroupPolicy, group};
     use std::path::Path;
+
+    #[test]
+    fn long_module_prefix_cleanup_uses_bounded_stack() {
+        std::thread::Builder::new()
+            .stack_size(128 * 1024)
+            .spawn(|| {
+                let budget = ExpansionBudget::default();
+                let mut prefix = None;
+                for first in 0..4096 {
+                    prefix = Some(Arc::new(DefinitionPrefix {
+                        parent: prefix,
+                        first,
+                        definitions: BudgetVec::new(&budget, Storage::Retained).unwrap(),
+                        _lease: budget
+                            .reserve(
+                                Storage::Retained,
+                                std::mem::size_of::<DefinitionPrefix>() as u64,
+                            )
+                            .unwrap(),
+                    }));
+                }
+                drop(prefix);
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
 
     #[test]
     fn crate_filter_is_shared_by_probe_import_selection_and_expansion_authority() {
@@ -489,12 +616,24 @@ mod tests {
             .define(name, first.clone(), site, point, &mut names)
             .unwrap();
         let old = driver.select(name, point, &scopes, &names).unwrap();
+        let checkpoint = driver.checkpoint(&names).unwrap();
+        let mut child =
+            SourceItemMacroDriver::from_checkpoint(stream.clone(), &checkpoint, &mut names)
+                .unwrap();
+        assert!(!child.is_empty());
         driver
-            .define(name, second, site, point, &mut names)
+            .define(name, second.clone(), site, point, &mut names)
             .unwrap();
         let latest = driver.select(name, point, &scopes, &names).unwrap();
         assert_eq!(old.index, 0);
         assert_eq!(latest.index, 1);
+        // Sealing a later prefix neither changes old selections nor lets a
+        // previously created child see a later definition.
+        let later = driver.checkpoint(&names).unwrap();
+        assert_eq!(later.len, 2);
+        assert_eq!(checkpoint.len, 1);
+        let inherited = child.select(name, point, &scopes, &names).unwrap();
+        assert_eq!(inherited.index, 0);
         let args = first.subslice(names.session(), 0..0).unwrap();
         let call = CallSite { span, parent: None };
         for (selected, expected) in [(old, "1"), (latest, "2")] {
@@ -511,6 +650,55 @@ mod tests {
             };
             assert_eq!(names.session().symbol(*spelling).unwrap(), expected);
         }
+        assert!(matches!(
+            child.expand(old, args.clone(), call, &mut names),
+            Err(DriverError::Token(TokenError::ForeignHandle))
+        ));
+        let inherited_result = child
+            .expand(inherited, args.clone(), call, &mut names)
+            .unwrap();
+        let inherited_tokens = inherited_result.tokens(names.session()).unwrap();
+        let Node::Leaf(super::super::token::Token {
+            kind: TokenKind::Literal { spelling, .. },
+            ..
+        }) = inherited_tokens.node(names.session(), 0).unwrap()
+        else {
+            panic!("expected inherited literal");
+        };
+        assert_eq!(names.session().symbol(*spelling).unwrap(), "1");
+        child.define(name, second, site, point, &mut names).unwrap();
+        let child_selection = child.select(name, point, &scopes, &names).unwrap();
+        assert_eq!(child_selection.index, latest.index);
+        assert!(matches!(
+            driver.expand(child_selection, args.clone(), call, &mut names),
+            Err(DriverError::Token(TokenError::ForeignHandle))
+        ));
+        let sibling =
+            SourceItemMacroDriver::from_checkpoint(stream.clone(), &checkpoint, &mut names)
+                .unwrap();
+        assert_eq!(
+            sibling.select(name, point, &scopes, &names).unwrap().index,
+            0
+        );
+        let mut foreign_checkpoint = checkpoint.clone();
+        let (mut foreign_session, foreign_cap) =
+            super::super::token_session::TokenSession::standalone(
+                projection.snapshot().clone(),
+                names.budget().clone(),
+            )
+            .unwrap();
+        foreign_checkpoint.session = foreign_session.id();
+        assert!(matches!(
+            SourceItemMacroDriver::from_checkpoint(stream.clone(), &foreign_checkpoint, &mut names),
+            Err(DriverError::Token(TokenError::ForeignHandle))
+        ));
+        // A served origin cannot authorize a checkpoint from a different crate.
+        foreign_checkpoint.session = checkpoint.session;
+        foreign_checkpoint.crate_key = foreign_session.crate_key();
+        assert!(matches!(
+            SourceItemMacroDriver::from_checkpoint(stream.clone(), &foreign_checkpoint, &mut names),
+            Err(DriverError::Token(TokenError::ForeignHandle))
+        ));
         let other = SourceItemMacroDriver::new(stream, &mut names).unwrap();
         let nonmatching = first.subslice(names.session(), 0..1).unwrap();
         let error = driver
@@ -536,5 +724,65 @@ mod tests {
             ),
             Err(DriverError::Token(TokenError::InvalidHandle))
         ));
+
+        // Linked file drivers can have the same builder-local ordinal. The
+        // issuing session is still part of each selection's authority.
+        let lexed =
+            super::super::lexer::lex_prepared(&projection, Edition::E2024, &mut foreign_session)
+                .unwrap();
+        let events: Vec<_> = lexed.events().iter().map(|event| event.token).collect();
+        let foreign_span = events[0].span();
+        let foreign_stream =
+            group(&mut foreign_session, &events, GroupPolicy::OriginalSource).unwrap();
+        let foreign_args = TokenSlice::roots(&foreign_session, foreign_stream.clone())
+            .unwrap()
+            .subslice(&foreign_session, 0..0)
+            .unwrap();
+        let root_names = names.freeze().unwrap();
+        let root_scopes = scopes.freeze().unwrap();
+        let mut foreign_names =
+            NameStoreBuilder::new(foreign_session, foreign_cap, Edition::E2024).unwrap();
+        foreign_names
+            .link_crate_files(vec![root_names.clone()])
+            .unwrap();
+        assert!(
+            SourceItemMacroDriver::from_checkpoint(
+                foreign_stream.clone(),
+                &checkpoint,
+                &mut foreign_names
+            )
+            .is_err()
+        );
+        foreign_names.join_crate(&root_names).unwrap();
+        let name = foreign_names.intern_root("make", foreign_span).unwrap();
+        let mut foreign_scopes = ScopeArenaBuilder::for_names(
+            &foreign_names,
+            crate::compiler::owner_path::standalone_issued(
+                foreign_names.budget(),
+                crate::compiler::owner_path::OwnerDomain::ScopeArena,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        foreign_scopes.link_crate_files(vec![root_scopes]).unwrap();
+        let linked =
+            SourceItemMacroDriver::from_checkpoint(foreign_stream, &checkpoint, &mut foreign_names)
+                .unwrap();
+        let selected = linked
+            .select(name, point, &foreign_scopes, &foreign_names)
+            .unwrap();
+        assert_eq!(selected.driver, old.driver);
+        assert_ne!(selected.session, old.session);
+        let call = CallSite {
+            span: foreign_span,
+            parent: None,
+        };
+        assert!(matches!(
+            linked.expand(old, foreign_args.clone(), call, &mut foreign_names),
+            Err(DriverError::Token(TokenError::ForeignHandle))
+        ));
+        linked
+            .expand(selected, foreign_args, call, &mut foreign_names)
+            .unwrap();
     }
 }

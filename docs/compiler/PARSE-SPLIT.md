@@ -74,6 +74,15 @@ output `1 + i`, the immutable textual macro scope in effect at its i-th
 rest of the parent. Exporting macros upward (`#[macro_use] mod`) stays an
 explicit unsupported diagnostic until it gets its own fact.
 
+Implemented prerequisite: module entry consumes an immutable
+`ModuleMacroCheckpoint`, with a separate child driver. Cross-owner checkpoint
+transfer requires explicit linking and matching crate identity. Parent, child
+and sibling definitions no longer share a mutable
+driver. Checked selections include both file owner and driver ordinal. The
+checkpoint is exercised by `source_item_macro::tests` and
+`source_macro_bindings`, including nested external files. This does **not** yet
+schedule `PARSE_FILE`: the existing `PARSE` node still runs the parser.
+
 ### 3. Program-wide resolver memo tables
 
 Memoized import and alias results become `RESOLVE_IMPORT` facts, so sharing
