@@ -27,6 +27,9 @@ pub enum DropGlue {
         len: usize,
         element: Arc<ValidatedDestructor>,
     },
+    /// An owning `Box<dyn P>`: run the vtable's drop slot on the data
+    /// pointer, then release the allocation by the vtable's size.
+    BoxedObject,
 }
 
 /// Only canonical trait facts may construct this capability. Display names never participate.
@@ -89,6 +92,8 @@ impl ValidatedDestructor {
                 .iter()
                 .for_each(|(_, f)| f.iter().for_each(|(_, d)| d.collect_targets(out))),
             DropGlue::Array { element, .. } => element.collect_targets(out),
+            // Object destructors are demanded at each unsizing site.
+            DropGlue::BoxedObject => {}
         }
     }
     pub fn validate(&self, owner: &Ty, facts: &ValidatedFacts) -> Result<()> {
@@ -166,6 +171,23 @@ impl ValidatedFacts {
         }
         if matches!(ty, Ty::Param(_) | Ty::AssociatedType(_)) {
             return Ok(NormalDropPlan::Unresolved);
+        }
+        if ty.owned_box_object().is_some() {
+            // The prelude `impl<T> Drop for Box<T>` is Sized-only; the boxed
+            // object's concrete destructor and size come from its vtable.
+            charged(
+                self.budget(),
+                self.budget()
+                    .retain_bytes(std::mem::size_of::<ValidatedDestructor>()),
+            )?;
+            return Ok(NormalDropPlan::Destructor(Arc::new(ValidatedDestructor {
+                owner: ty.clone(),
+                target: None,
+                signature: None,
+                glue: DropGlue::BoxedObject,
+                world: self.world.clone(),
+                budget: self.budget().clone(),
+            })));
         }
         let nominal = match ty {
             Ty::Struct(t) => Some(t.def().source_decl),

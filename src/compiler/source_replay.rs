@@ -412,7 +412,7 @@ impl CallInferenceState {
             }
             _ => Err(FactsError::invalid(
                 &self.budget,
-                "conflicting generic inference constraints",
+                &format!("conflicting generic inference constraints: {a:?} versus {b:?}"),
             )),
         }
     }

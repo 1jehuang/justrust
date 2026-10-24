@@ -1,0 +1,23 @@
+{
+  "byte_count": 1269364,
+  "created_at_unix_ms": 1792743700005,
+  "id": "ig_0b280dba94fdc898016adb18fabdd487d0bded2701ebb5f508",
+  "image_path": "/home/jeremy/justrust-clean-room/.jcode/generated-images/1792743700005-ig_0b280dba94fdc898016adb18fabdd487d0bded2701ebb5f508.png",
+  "native_tool": "image_generation",
+  "output_format": "png",
+  "provider": "openai",
+  "response_item": {
+    "action": "edit",
+    "background": "opaque",
+    "id": "ig_0b280dba94fdc898016adb18fabdd487d0bded2701ebb5f508",
+    "output_format": "png",
+    "quality": "low",
+    "revised_prompt": "Create a crisp close-up UI design mockup of a black terminal application's lower-right sidebar, wide landscape 1200x700. Large clearly legible monospaced text. Show two stacked dark terminal info widgets, each with thin muted gray rounded outlines: upper widget titled 'Commits' with three abbreviated commit rows in muted yellow and gray; lower widget titled 'OpenAI limits' with green text '82% left'. Crucial layout: both widget borders end at the same vertical line. To their RIGHT show a distinct continuous narrow vertical scrollbar, gray track with a light gray thumb. Leave a clearly visible black gap between the widgets' right borders and the scrollbar. Do NOT connect the borders to the scrollbar. Use a small annotation above the gap, 'Empty gutter', with a subtle arrow pointing into the gap. Above the scrollbar label 'Scrollbar'. Main heading top left 'Separate the widgets from the scrollbar'. This is an explanatory magnified design mockup, not an actual screenshot. Minimal professional terminal aesthetic, generous readable scale, no extra panels or decorations.",
+    "size": "1643x957",
+    "status": "completed",
+    "type": "image_generation_call"
+  },
+  "revised_prompt": "Create a crisp close-up UI design mockup of a black terminal application's lower-right sidebar, wide landscape 1200x700. Large clearly legible monospaced text. Show two stacked dark terminal info widgets, each with thin muted gray rounded outlines: upper widget titled 'Commits' with three abbreviated commit rows in muted yellow and gray; lower widget titled 'OpenAI limits' with green text '82% left'. Crucial layout: both widget borders end at the same vertical line. To their RIGHT show a distinct continuous narrow vertical scrollbar, gray track with a light gray thumb. Leave a clearly visible black gap between the widgets' right borders and the scrollbar. Do NOT connect the borders to the scrollbar. Use a small annotation above the gap, 'Empty gutter', with a subtle arrow pointing into the gap. Above the scrollbar label 'Scrollbar'. Main heading top left 'Separate the widgets from the scrollbar'. This is an explanatory magnified design mockup, not an actual screenshot. Minimal professional terminal aesthetic, generous readable scale, no extra panels or decorations.",
+  "schema_version": 1,
+  "status": "completed"
+}

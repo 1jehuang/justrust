@@ -2,7 +2,7 @@
 // Layout is exactly one `*mut T` word (unsized Box<dyn T> becomes data+vtable).
 use super::mem::{raw_alloc, raw_free, storage_stride};
 
-pub struct Box<T> {
+pub struct Box<T: ?Sized> {
     ptr: *mut T,
 }
 
@@ -51,14 +51,14 @@ impl<T> Drop for Box<T> {
     }
 }
 
-impl<T> super::ops::Deref for Box<T> {
+impl<T: ?Sized> super::ops::Deref for Box<T> {
     type Target = T;
     fn deref(&self) -> &T {
         unsafe { &*self.ptr }
     }
 }
 
-impl<T> super::ops::DerefMut for Box<T> {
+impl<T: ?Sized> super::ops::DerefMut for Box<T> {
     fn deref_mut(&mut self) -> &mut T {
         unsafe { &mut *self.ptr }
     }

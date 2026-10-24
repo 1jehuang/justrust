@@ -1,0 +1,367 @@
+diff --git a/libraries/prelude/iter.rs b/libraries/prelude/iter.rs
+index aa16a58a7..4ad91a901 100644
+--- a/libraries/prelude/iter.rs
++++ b/libraries/prelude/iter.rs
+@@ -11,0 +52,7 @@ pub trait Iterator: Sized {
++    fn rev(self) -> Rev<Self>
++    where
++        Self: DoubleEndedIterator,
++    {
++        Rev { iterator: self }
++    }
++
+@@ -101,0 +149,29 @@ pub trait Iterator: Sized {
++pub trait DoubleEndedIterator: Iterator {
++    fn next_back(&mut self) -> Option<Self::Item>;
++}
++
++pub struct Rev<I> {
++    iterator: I,
++}
++
++impl<I: DoubleEndedIterator> Iterator for Rev<I> {
++    type Item = I::Item;
++    fn next(&mut self) -> Option<Self::Item> {
++        self.iterator.next_back()
++    }
++}
++
++impl<I: DoubleEndedIterator> DoubleEndedIterator for Rev<I> {
++    fn next_back(&mut self) -> Option<Self::Item> {
++        self.iterator.next()
++    }
++}
++
++impl<I: DoubleEndedIterator> IntoIterator for Rev<I> {
++    type Item = I::Item;
++    type IntoIter = Self;
++    fn into_iter(self) -> Self {
++        self
++    }
++}
++
+diff --git a/libraries/prelude/prelude.rs b/libraries/prelude/prelude.rs
+index ed18155b8..1f8de8f47 100644
+--- a/libraries/prelude/prelude.rs
++++ b/libraries/prelude/prelude.rs
+@@ -4 +4 @@ pub mod core_v1 {
+-    pub use super::super::iter::{Iterator, IntoIterator, FromIterator};
++    pub use super::super::iter::{Iterator, IntoIterator, FromIterator, DoubleEndedIterator};
+@@ -17 +17 @@ pub mod v1 {
+-    pub use super::super::iter::{Iterator, IntoIterator, FromIterator};
++    pub use super::super::iter::{Iterator, IntoIterator, FromIterator, DoubleEndedIterator};
+diff --git a/src/compiler/frontend.rs b/src/compiler/frontend.rs
+index 635b85233..1b4de10cb 100644
+--- a/src/compiler/frontend.rs
++++ b/src/compiler/frontend.rs
+@@ -21052 +21073,2 @@ impl tr::SchemaCx for SchemaAdapter {
+-            memo: &mut HashMap<ir::NominalAppId, usize>,
++            memo: &mut HashMap<(ir::NominalAppId, usize), usize>,
++            state: &mut PlanState,
+@@ -21065,0 +21088,6 @@ impl tr::SchemaCx for SchemaAdapter {
++                // Only an already authenticated immutable definition allocation
++                // can skip replay. Equal IDs on a different payload still replay.
++                if let Some(height) = memo.get(&(id, pointer)) {
++                    b.check_depth(depth + height)?;
++                    return Ok(*height);
++                }
+@@ -21124,2 +21152 @@ impl tr::SchemaCx for SchemaAdapter {
+-                            cx.scratch()
+-                                .intern(&cx.registry, decl, &args, caller, b, 0)?
++                            state.intern(&cx.registry, decl, &args, caller, b, 0)?
+@@ -21143,4 +21169,0 @@ impl tr::SchemaCx for SchemaAdapter {
+-                if let Some(height) = memo.get(&id) {
+-                    b.check_depth(depth + height)?;
+-                    return Ok(*height);
+-                }
+@@ -21150 +21173 @@ impl tr::SchemaCx for SchemaAdapter {
+-                height = height.max(walk(cx, t, env, b, depth + 1, memo)? + 1);
++                height = height.max(walk(cx, t, env, b, depth + 1, memo, state)? + 1);
+@@ -21211 +21234 @@ impl tr::SchemaCx for SchemaAdapter {
+-            if let Some((id, _)) = nominal {
++            if let Some((id, pointer)) = nominal {
+@@ -21213 +21236 @@ impl tr::SchemaCx for SchemaAdapter {
+-                memo.insert(id, height);
++                memo.insert((id, pointer), height);
+@@ -21228,3 +21251,11 @@ impl tr::SchemaCx for SchemaAdapter {
+-        walk(self, inner, env, budget, layers, &mut HashMap::new())
+-            .map(|_| ())
+-            .map_err(|e| self.error(e))
++        walk(
++            self,
++            inner,
++            env,
++            budget,
++            layers,
++            &mut HashMap::new(),
++            &mut self.scratch(),
++        )
++        .map(|_| ())
++        .map_err(|e| self.error(e))
+diff --git a/src/compiler/frontend/type_check.rs b/src/compiler/frontend/type_check.rs
+index e4fb5ba4f..8edd039c3 100644
+--- a/src/compiler/frontend/type_check.rs
++++ b/src/compiler/frontend/type_check.rs
+@@ -4599,2 +4614 @@ impl<'a> Checker<'a> {
+-            let ty = Inference::empty(self)?.resolve(&evidence, true, 0)?;
+-            return Ok(ty.filter(array_len_receiver::receiver_is_array));
++            return Inference::empty(self)?.resolve(&evidence, true, 0);
+diff --git a/src/compiler/ir.rs b/src/compiler/ir.rs
+index fb90bde3d..38d8d973b 100644
+--- a/src/compiler/ir.rs
++++ b/src/compiler/ir.rs
+@@ -6920,0 +6957 @@ fn ref_type_walk(
++                | Ty::Str
+@@ -12297,0 +12347,32 @@ mod tests {
++    #[test]
++    fn unsized_string_returns_preserve_lifetime_qualified_envelopes() {
++        use super::*;
++        let budget = PlanBudget::default();
++        let reference = |ty| Ty::Ref {
++            kind: BorrowKind::Shared,
++            referent: Arc::new(ty),
++        };
++        let contract = RefContract {
++            results: fixture_result_regions(Some(RegionParamId(0)), ReturnContract::NoReference),
++            input_regions: fixture_input_regions(Arc::from([
++                Some(RegionParamId(0)),
++                Some(RegionParamId(1)),
++            ])),
++            region_count: 2,
++            outlives: Arc::from([]),
++        };
++        let results = derive_return_contracts(
++            &[reference(Ty::Int(IntTy::U8)), reference(Ty::Str)],
++            &reference(Ty::Str),
++            &contract,
++            &budget,
++        )
++        .unwrap();
++        assert_eq!(
++            results[0].returns,
++            ReturnContract::SharedInputEnvelopes(Arc::from([InputEnvelope {
++                input: fixture_input(0)
++            }]))
++        );
++    }
++
+diff --git a/src/compiler/traits.rs b/src/compiler/traits.rs
+index f80fbcb53..e421ce242 100644
+--- a/src/compiler/traits.rs
++++ b/src/compiler/traits.rs
+@@ -1386,3 +1386,3 @@ fn same_callee(a: &Callee, b: &Callee) -> bool {
+-/// alone is not authority); other structure compares recursively. Variants
+-/// carrying opaque, closure, object or projection payloads only match the
+-/// same allocation.
++/// alone is not authority); other structure compares recursively. Projections
++/// compare their item, trait and exact child authority. Opaque, closure, object
++/// and function-item payloads only match the same allocation.
+@@ -1453 +1453,7 @@ fn same_type_allocation(a: &Ty, b: &Ty) -> bool {
+-        (Ty::AssociatedType(x), Ty::AssociatedType(y)) => Arc::ptr_eq(x, y),
++        (Ty::AssociatedType(x), Ty::AssociatedType(y)) => {
++            Arc::ptr_eq(x, y)
++                || (x.item == y.item
++                    && x.trait_ref.declaration == y.trait_ref.declaration
++                    && same_type_allocation(&x.trait_ref.self_ty, &y.trait_ref.self_ty)
++                    && same_types(&x.trait_ref.args, &y.trait_ref.args))
++        }
+@@ -6583,0 +6590,19 @@ impl ValidatedTraitWorld {
++        // Non-Self arguments can also carry references (for example
++        // PartialEq<&str>). Derive their positions from every original
++        // parameter tail, just as for generic method instantiation.
++        let mut argument_has_references = false;
++        for argument in goal.args.iter() {
++            if charged(&self.budget, ir::root_reference_layers(argument))? != 0 {
++                argument_has_references = true;
++            }
++        }
++        if argument_has_references && !self.schema_contains_projection(&item.schema)? {
++            let instantiated = self.instantiate_scratch(
++                &item.schema,
++                &arguments,
++                context,
++                Some(item.declaration),
++                &mut ProofScratch::default(),
++            )?;
++            return Ok((instantiated, None));
++        }
+@@ -7018,3 +7043,6 @@ impl ValidatedTraitWorld {
+-            Predicate::ProjectionEq { projection, ty } => {
+-                self.validate_equality_domain(projection, ty, facts.env())?
+-            }
++            Predicate::ProjectionEq { projection, ty } => self.validate_equality_domain_with(
++                projection,
++                ty,
++                facts.env(),
++                &mut active.replays,
++            )?,
+@@ -10525,0 +10556,33 @@ mod tests {
++    #[test]
++    fn local_metadata_memo_preserves_projection_and_nominal_authority() {
++        let c = case();
++        let projection = |self_ty: Ty, item: DeclId| {
++            Ty::AssociatedType(Arc::new(ir::AssociatedTypeProjection {
++                trait_ref: TraitRef {
++                    declaration: c.value_trait,
++                    self_ty,
++                    args: Arc::from([]),
++                },
++                item,
++            }))
++        };
++        let first = projection(c.leaf.clone(), c.item);
++        let equivalent = projection(c.leaf.clone(), c.item);
++        assert!(same_type_allocation(&first, &equivalent));
++        assert!(!same_type_allocation(
++            &first,
++            &projection(c.leaf.clone(), c.body)
++        ));
++        let Ty::Struct(original) = &c.leaf else {
++            panic!("expected nominal")
++        };
++        let mut forged = original.def().clone();
++        forged.fields = Arc::from([]);
++        let forged = projection(Ty::Struct(StructTy::new(forged)), c.item);
++        assert!(!same_type_allocation(&first, &forged));
++        let mut memo = ValidatedTypes::default();
++        memo.check(&first, |_| Ok::<_, ()>(())).unwrap();
++        memo.check(&equivalent, |_| Err::<(), _>(())).unwrap();
++        assert!(memo.check(&forged, |_| Err::<(), _>(())).is_err());
++    }
++
+diff --git a/src/compiler/traits/associated_types.rs b/src/compiler/traits/associated_types.rs
+index 82a68ffc1..4768d4d0a 100644
+--- a/src/compiler/traits/associated_types.rs
++++ b/src/compiler/traits/associated_types.rs
+@@ -599 +599 @@ impl ValidatedTraitWorld {
+-        active: &[GoalKey],
++        active: &mut ProofScratch,
+@@ -601,4 +601,4 @@ impl ValidatedTraitWorld {
+-        let mut stack = NormalizationStack::default();
+-        for goal in active {
+-            push(&self.budget, &mut stack.obligations, goal.clone())?;
+-        }
++        let mut stack = NormalizationStack {
++            active: Vec::new(),
++            obligations: std::mem::take(active),
++        };
+@@ -609,3 +609,7 @@ impl ValidatedTraitWorld {
+-        let evidence = self.normalize_projection_in(projection, context, &mut stack)?;
+-        self.validate_normalization_evidence(&evidence, context)?;
+-        Ok(NormalizedAssociatedType(evidence))
++        let result = (|| {
++            let evidence = self.normalize_projection_in(projection, context, &mut stack)?;
++            self.validate_normalization_evidence_with(&evidence, context, &mut stack.obligations)?;
++            Ok(NormalizedAssociatedType(evidence))
++        })();
++        *active = stack.obligations;
++        result
+@@ -1802,0 +1813,9 @@ impl ValidatedTraitWorld {
++        let relaxed_sized = match item {
++            Some(item) => self.associated_header(item)?.relaxed_sized,
++            None => false,
++        };
++        // A ?Sized associated output may itself be str or a slice, while
++        // ordinary generic actuals and aggregate fields still require sizing.
++        if relaxed_sized && matches!(normal, Ty::Str | Ty::Slice { .. }) {
++            return Ok(());
++        }
+@@ -1804,3 +1823 @@ impl ValidatedTraitWorld {
+-        if let Some(item) = item
+-            && self.associated_header(item)?.relaxed_sized
+-        {
++        if relaxed_sized {
+diff --git a/src/compiler/traits/impl_constraints.rs b/src/compiler/traits/impl_constraints.rs
+index 58f36bbb3..a919f462f 100644
+--- a/src/compiler/traits/impl_constraints.rs
++++ b/src/compiler/traits/impl_constraints.rs
+@@ -100 +100 @@ impl ValidatedTraitWorld {
+-        active: &[GoalKey],
++        active: &mut ProofScratch,
+diff --git a/src/compiler/traits/equality.rs b/src/compiler/traits/equality.rs
+index 81a18e597..9fd51c754 100644
+--- a/src/compiler/traits/equality.rs
++++ b/src/compiler/traits/equality.rs
+@@ -547,0 +548,9 @@ impl ValidatedTraitWorld {
++    ) -> Result<()> {
++        self.validate_equality_domain_with(projection, rhs, env, &mut NominalReplays::default())
++    }
++    pub(super) fn validate_equality_domain_with(
++        &self,
++        projection: &ir::AssociatedTypeProjection,
++        rhs: &Ty,
++        env: &GenericEnv,
++        replays: &mut NominalReplays,
+@@ -550,2 +559,2 @@ impl ValidatedTraitWorld {
+-        self.validate_ty_metadata_in(&self.projection_type(projection)?, env, 0)?;
+-        self.validate_ty_metadata_in(rhs, env, 0)?;
++        self.validate_ty_metadata_with(&self.projection_type(projection)?, env, 0, replays)?;
++        self.validate_ty_metadata_with(rhs, env, 0, replays)?;
+diff --git a/tests/iterator_fold.rs b/tests/iterator_fold.rs
+index 7af1a15a6..03c16db74 100644
+--- a/tests/iterator_fold.rs
++++ b/tests/iterator_fold.rs
+@@ -20,0 +21,63 @@ fn unchanged_matrix_matches_stock_at_both_worker_counts() {
++#[test]
++fn iterator_filter_inferred_char_matches_stock() {
++    closure_oracle::check(
++        "iterator-filter-inferred-char",
++        &[
++            closure_oracle::Case {
++                name: "inferred_char_filter_map",
++                source: r#"fn main(){let cleaned:Vec<char>="Ab 1!".chars().filter(|c|c.is_alphanumeric()).map(|c|c.to_ascii_lowercase()).collect();println!("{} {} {}",cleaned[0],cleaned[1],cleaned[2]);}"#,
++                expect: closure_oracle::Expect::Run("a b 1\n"),
++            },
++            closure_oracle::Case {
++                name: "nested_inferred_filters",
++                source: r#"fn main(){let cleaned:Vec<char>="Ab 1!".chars().filter(|c|c.is_alphanumeric()).filter(|c|*c!='1').map(|c|c.to_ascii_lowercase()).collect();println!("{} {}",cleaned[0],cleaned[1]);}"#,
++                expect: closure_oracle::Expect::Run("a b\n"),
++            },
++            closure_oracle::Case {
++                name: "invalid_filter_result_unused",
++                source: r#"fn bad(){let cleaned:Vec<char>="Ab".chars().filter(|c|1).map(|c|c.to_ascii_lowercase()).collect();}fn main(){}"#,
++                expect: closure_oracle::Expect::Invalid("E0308"),
++            },
++        ],
++    );
++}
++
++#[test]
++fn unchanged_string_processing_matches_stock_at_both_worker_counts() {
++    closure_oracle::check(
++        "unchanged-string-processing",
++        &[closure_oracle::Case {
++            name: "full_string_program",
++            source: include_str!("fixtures/full_programs/10_string_processing.rs"),
++            expect: closure_oracle::Expect::Run(include_str!(
++                "fixtures/full_programs/10_string_processing.stdout"
++            )),
++        }],
++    );
++}
++
++#[test]
++fn reverse_characters_match_stock() {
++    use closure_oracle::{Case, Expect};
++    closure_oracle::check(
++        "reverse-characters",
++        &[
++            Case {
++                name: "unicode_and_empty_reverse",
++                source: r#"fn main(){let text:String="aé🦀".chars().rev().collect();let empty:String="".chars().rev().collect();println!("{} {}",text,empty.len());}"#,
++                expect: Expect::Run("🦀éa 0\n"),
++            },
++            Case {
++                name: "interleaved_character_ends",
++                source: r#"fn main(){let mut c="aé🦀z".chars();println!("{:?} {:?} {:?} {:?} {:?}",c.next(),c.next_back(),c.next_back(),c.next(),c.next_back());}"#,
++                expect: Expect::Run("Some('a') Some('z') Some('🦀') Some('é') None\n"),
++            },
++            Case {
++                name: "reverse_requires_double_ended",
++                source: "struct Forward;impl Iterator for Forward{type Item=i32;fn next(&mut self)->Option<i32>{None}}fn bad(){let x=Forward.rev();}fn main(){}",
++                expect: Expect::Invalid("E0277"),
++            },
++        ],
++    );
++}
++

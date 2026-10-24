@@ -111,6 +111,11 @@ pub fn object(
             if *offset >= o.code.len() {
                 return Err("invalid C export offset".into());
             }
+            if name.starts_with(crate::compiler::backend::DROP_THUNK_PREFIX)
+                && definitions.contains_key(name)
+            {
+                continue;
+            }
             if definitions
                 .insert(name.clone(), (at + offset, o.code.len() - offset))
                 .is_some()

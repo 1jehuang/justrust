@@ -5839,6 +5839,39 @@ impl Ty {
         }
     }
 
+    /// Pointee `T` of the embedded prelude's owning `Box<T>` (one `*mut T`
+    /// field). The prelude module path is reserved, so no user nominal can
+    /// carry this canonical name.
+    pub fn owned_box_pointee(&self) -> Option<&Ty> {
+        let Self::Struct(value) = self else {
+            return None;
+        };
+        let def = value.def();
+        match (def.type_args.as_ref(), def.fields.as_ref()) {
+            ([pointee], [field])
+                if def.name == "crate::__justrust_std::boxed::Box"
+                    && matches!(
+                        &field.ty,
+                        Ty::RawPtr {
+                            kind: BorrowKind::Mut,
+                            ..
+                        }
+                    ) =>
+            {
+                Some(pointee)
+            }
+            _ => None,
+        }
+    }
+
+    /// Object type of an owning `Box<dyn P>`.
+    pub fn owned_box_object(&self) -> Option<&DynTy> {
+        match self.owned_box_pointee()? {
+            Ty::Dyn(object) => Some(object),
+            _ => None,
+        }
+    }
+
     /// Element of exactly a mutable root slice reference `&mut [T]`.
     pub fn mut_slice_element(&self) -> Option<&Ty> {
         match self.slice_ref_element() {
@@ -10252,18 +10285,30 @@ impl CheckedFunction {
                 ExprKind::RefToDyn { reference } => {
                     expr(*reference)?;
                     let source = &self.exprs[reference.0];
-                    let (
-                        Ty::Ref {
-                            kind: from,
-                            referent: concrete,
-                        },
-                        Ty::Ref {
-                            kind: to,
-                            referent: object,
-                        },
-                    ) = (&source.ty, &value.ty)
-                    else {
-                        return Err("trait object unsizing requires references".into());
+                    let (from, concrete, to, object) = match (&source.ty, &value.ty) {
+                        (
+                            Ty::Ref {
+                                kind: from,
+                                referent: concrete,
+                            },
+                            Ty::Ref {
+                                kind: to,
+                                referent: object,
+                            },
+                        ) => (*from, concrete.clone(), *to, object.clone()),
+                        (have, want) => {
+                            match (have.owned_box_pointee(), want.owned_box_pointee()) {
+                                (Some(concrete), Some(object)) => (
+                                    BorrowKind::Mut,
+                                    Arc::new(concrete.clone()),
+                                    BorrowKind::Mut,
+                                    Arc::new(object.clone()),
+                                ),
+                                _ => {
+                                    return Err("trait object unsizing requires references".into());
+                                }
+                            }
+                        }
                     };
                     if from != to || !matches!(object.as_ref(), Ty::Dyn(_)) {
                         return Err("trait object unsizing changed reference shape".into());

@@ -3742,6 +3742,16 @@ fn analyze_with_context(
         Ok(())
     })();
     if result.is_err() || !report.complete {
+        if std::env::var_os("JR_DBG_OWN").is_some() {
+            eprintln!(
+                "DBGOWN err={} blocks={} locals={} stats={:?} plan={:?}",
+                result.is_err(),
+                f.blocks.len(),
+                f.locals.len(),
+                report.stats,
+                plan.map(|p| p.usage_snapshot())
+            );
+        }
         report.complete = false;
         if report.diagnostics.len() >= limits.diagnostics && !report.diagnostics.is_empty() {
             report.diagnostics.pop();

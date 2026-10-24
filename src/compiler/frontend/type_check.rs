@@ -1488,7 +1488,10 @@ impl<'s> Checker<'s> {
             // the argument coercion itself is proven when checking the call.
             if expected.is_some()
                 && matches!(formal, ir::Ty::Param(_))
-                && matches!(evidence.as_ref(), InferKind::Ref(..))
+                && matches!(
+                    evidence.as_ref(),
+                    InferKind::Ref(..) | InferKind::Nominal(_, _)
+                )
             {
                 reference_arguments.push((formal, evidence));
                 continue;
@@ -1535,8 +1538,17 @@ impl<'s> Checker<'s> {
                     Some(term) => solver.resolve(&term, false, 0)?,
                     None => None,
                 };
-                if let Some(ir::Ty::Ref { referent, .. }) = target
+                if let Some(ir::Ty::Ref { referent, .. }) = &target
                     && matches!(referent.as_ref(), ir::Ty::Dyn(_))
+                    && matches!(evidence.as_ref(), InferKind::Ref(..))
+                {
+                    continue;
+                }
+                // `Box<T>` argument into a `Box<dyn P>` target (unsized later).
+                if target
+                    .as_ref()
+                    .is_some_and(|t| t.owned_box_object().is_some())
+                    && matches!(evidence.as_ref(), InferKind::Nominal(..))
                 {
                     continue;
                 }
@@ -2470,8 +2482,7 @@ pub(super) fn array_unsize_carrier(ty: &ir::Ty) -> Option<ir::Ty> {
     })
 }
 
-/// Bare slices are unsized values. References and aggregate descriptors are
-/// validated by recursive carrier admission at the consumption boundary.
+/// A slice carrier is admitted only as an exact shared or mutable root reference.
 fn admit_slice_value_shape(ty: &ir::Ty) -> Result<(), String> {
     if matches!(ty, ir::Ty::Slice { .. }) {
         return Err(BARE_SLICE_UNSUPPORTED.into());
@@ -7238,6 +7249,16 @@ impl<'a> Checker<'a> {
                 return self.coerce_opaque_return(value, &opaque);
             }
         }
+        if let Some(expected) = expectation.coercion()
+            && expected.owned_box_object().is_some()
+            && !matches!(e, Expr::Var(_))
+        {
+            // A `Box<dyn P>` coercion site: the source infers its own sized
+            // pointee (`Box::new(x)`) and then unsizes, as stock does.
+            let expected = expected.clone();
+            let value = self.expr_with_expectation(e, Expectation::None)?;
+            return self.coerce_ref_to_dyn(value, &expected);
+        }
         if let Expr::Var(path) = e {
             let key = self.path_key(path, Namespace::Value)?;
             let signature = self.closure_signature_hints.get(&key).cloned();
@@ -7280,6 +7301,9 @@ impl<'a> Checker<'a> {
             Some(expected) if trait_object_target(expected).is_some() => {
                 self.coerce_ref_to_dyn(result, expected)
             }
+            Some(expected) if expected.owned_box_object().is_some() => {
+                self.coerce_ref_to_dyn(result, expected)
+            }
             Some(expected) => Ok(self.deref_coercion(e, result, expected)?.unwrap_or(result)),
             _ => Ok(result),
         }
@@ -7292,17 +7316,34 @@ impl<'a> Checker<'a> {
         value: ir::ExprId,
         expected: &ir::Ty,
     ) -> Result<ir::ExprId, String> {
-        let (want_kind, object) =
-            trait_object_target(expected).ok_or("trait object coercion target")?;
-        let principal = object.principal;
         let source = &self.exprs[value.0];
-        let ir::Ty::Ref {
-            kind: have_kind,
-            referent,
-        } = &source.ty
-        else {
-            return Ok(value);
+        // `Box<T> -> Box<dyn P>`: the owning carrier unsizes like `&mut T`.
+        let boxed = expected
+            .owned_box_object()
+            .map(|object| Arc::new(object.clone()));
+        let (want_kind, object, have_kind, referent) = if let Some(object) = boxed {
+            let Some(pointee) = source.ty.owned_box_pointee() else {
+                return Ok(value);
+            };
+            (
+                ir::BorrowKind::Mut,
+                object,
+                &ir::BorrowKind::Mut,
+                Arc::new(pointee.clone()),
+            )
+        } else {
+            let (want_kind, object) =
+                trait_object_target(expected).ok_or("trait object coercion target")?;
+            let ir::Ty::Ref {
+                kind: have_kind,
+                referent,
+            } = &source.ty
+            else {
+                return Ok(value);
+            };
+            (want_kind, object, have_kind, referent.clone())
         };
+        let principal = object.principal;
         if matches!(referent.as_ref(), ir::Ty::Dyn(_)) {
             return Ok(value);
         }

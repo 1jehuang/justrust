@@ -327,6 +327,13 @@ impl PlanState {
                     .args
                     .iter()
                     .map(|arg| {
+                        // A trait object as a direct nominal actual (`Box<dyn P>`);
+                        // `?Sized` admission is the parameter's Sized row.
+                        if let Type::Dyn(trait_path) = arg {
+                            return self.source_dynamic_type(
+                                registry, trait_path, bindings, caller, budget,
+                            );
+                        }
                         self.source_ty_with_transport(
                             registry,
                             arg,

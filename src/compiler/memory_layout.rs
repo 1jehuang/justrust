@@ -59,6 +59,8 @@ fn walk_alignment(
         ir::Ty::Unit | ir::Ty::Bool | ir::Ty::Int(_) | ir::Ty::Float(_) => {
             Err("target scalar alignment authority is missing".into())
         }
+        // `*const dyn P` / `*mut dyn P`: two pointer-sized words.
+        ir::Ty::RawPtr { pointee, .. } if matches!(pointee.as_ref(), ir::Ty::Dyn(_)) => Ok(Some(8)),
         ir::Ty::RawPtr { .. } => Err("unsupported: target layout of an unsized raw pointer".into()),
         ir::Ty::Ref { .. } => Ok(Some(8)),
         ir::Ty::Array { element, .. } => walk_alignment(element, budget, depth + 1),

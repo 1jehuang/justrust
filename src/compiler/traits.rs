@@ -7427,8 +7427,10 @@ impl ValidatedTraitWorld {
                 .iter()
                 .zip(implementation.schema_env.ordered_params())
                 .any(|(actual, parameter)| match actual {
-                    Some(Ty::Str) => !implementation.schema_env.relaxed_sized(parameter),
-                    Some(Ty::Slice { .. } | Ty::Dyn(_)) => true,
+                    Some(Ty::Str | Ty::Dyn(_)) => {
+                        !implementation.schema_env.relaxed_sized(parameter)
+                    }
+                    Some(Ty::Slice { .. }) => true,
                     _ => false,
                 })
             {

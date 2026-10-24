@@ -1,0 +1,42 @@
+diff --git a/src/compiler/frontend.rs b/src/compiler/frontend.rs
+index e4ee69108..1b4de10cb 100644
+--- a/src/compiler/frontend.rs
++++ b/src/compiler/frontend.rs
+@@ -21066,0 +21088,6 @@ impl tr::SchemaCx for SchemaAdapter {
++                // Only an already authenticated immutable definition allocation
++                // can skip replay. Equal IDs on a different payload still replay.
++                if let Some(height) = memo.get(&(id, pointer)) {
++                    b.check_depth(depth + height)?;
++                    return Ok(*height);
++                }
+@@ -21088,6 +21114,0 @@ impl tr::SchemaCx for SchemaAdapter {
+-                // Only an already authenticated immutable definition allocation
+-                // can skip replay. Equal IDs on a different payload still replay.
+-                if let Some(height) = memo.get(&(id, pointer)) {
+-                    b.check_depth(depth + height)?;
+-                    return Ok(*height);
+-                }
+diff --git a/src/compiler/traits/associated_types.rs b/src/compiler/traits/associated_types.rs
+index 0e9399bb6..4768d4d0a 100644
+--- a/src/compiler/traits/associated_types.rs
++++ b/src/compiler/traits/associated_types.rs
+@@ -1807,4 +1812,0 @@ impl ValidatedTraitWorld {
+-        charged(&self.budget, ir::reject_references(normal, &self.budget))?;
+-        if relaxed_sized {
+-            return Ok(());
+-        }
+@@ -1819,0 +1822,4 @@ impl ValidatedTraitWorld {
++        charged(&self.budget, ir::reject_references(normal, &self.budget))?;
++        if relaxed_sized {
++            return Ok(());
++        }
+diff --git a/src/compiler/traits.rs b/src/compiler/traits.rs
+index bf9341b45..e421ce242 100644
+--- a/src/compiler/traits.rs
++++ b/src/compiler/traits.rs
+@@ -10554,2 +10555,0 @@ mod tests {
+-    #[test]
+-    fn trait_world_shared_resources_cache_and_local_cycle_boundaries() {
+@@ -10588,0 +10589,2 @@ mod tests {
++    #[test]
++    fn trait_world_shared_resources_cache_and_local_cycle_boundaries() {

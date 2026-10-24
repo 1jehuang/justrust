@@ -543,10 +543,39 @@ fn reference_generic_argument_transports_declared_slice_family() {
     );
 }
 #[test]
+fn trait_impl_reference_generic_slice_family_matches_stock() {
+    #[path = "support/closure_oracle.rs"]
+    mod closure_oracle;
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "trait-slice-family",
+        &[Case {
+            name: "trait_and_impl_slice_family",
+            source: "trait Head<T>{fn head(&self,s:&[T])->T;}struct Reader;impl<T:Copy> Head<T> for Reader{fn head(&self,s:&[T])->T{s[0]}}fn main(){let x=42i32;let a=[&x];let reader=Reader;let r=reader.head(&a);let n=*r;println!(\"{}\",n);}",
+            expect: Expect::Run("42\n"),
+        }],
+    );
+}
+
+#[test]
 fn reference_containing_generic_argument_reaches_reference_free_slice_boundary() {
     observed_generic_argument_unsupported(
         "struct Wrap<T>{value:T}fn length<T>(values:&[T])->usize{values.len()}fn main(){let value=1i32;let values=[Wrap::<&i32>{value:&value}];length::<Wrap<&i32>>(&values);}",
         "slice elements containing references or slices, or nested slice carriers",
+    );
+}
+
+#[test]
+fn reference_iterator_collection_matches_stock() {
+    #[path = "support/closure_oracle.rs"]
+    mod closure_oracle;
+    closure_oracle::check(
+        "reference-iterator-collect",
+        &[closure_oracle::Case {
+            name: "reference_iterator_map_collect",
+            source: "fn parse(s:&str)->Result<u32,u8>{if s.is_empty(){Err(1u8)}else{Ok(5u32)}}fn main(){let input=[\"5\",\"6\"];let result:Result<Vec<u32>,u8>=input.iter().map(|s|parse(s)).collect();println!(\"{:?}\",result);}",
+            expect: closure_oracle::Expect::Run("Ok([5, 5])\n"),
+        }],
     );
 }
 
@@ -591,6 +620,21 @@ fn contextual_closure_coercions_preserve_standalone_inference() {
     );
 }
 
+#[test]
+fn unchanged_error_handling_program_matches_stock() {
+    #[path = "support/closure_oracle.rs"]
+    mod closure_oracle;
+    closure_oracle::check(
+        "unchanged-error-handling",
+        &[closure_oracle::Case {
+            name: "full15_unchanged",
+            source: include_str!("fixtures/full_programs/15_error_handling.rs"),
+            expect: closure_oracle::Expect::Run(include_str!(
+                "fixtures/full_programs/15_error_handling.stdout"
+            )),
+        }],
+    );
+}
 #[test]
 fn descriptor_copy_does_not_end_original_backing_array_loan() {
     let source = "fn value()->i32{let mut values=[1i32,2i32];let slice:&[i32]=&values;let copied=slice;values[0usize]=3i32;copied[0usize]}fn main(){}";

@@ -87,6 +87,9 @@ fn trait_object_ref(ty: &ir::Ty) -> Option<ir::DeclId> {
     }
 }
 
+/// Exported per-type structural drop thunks (identical owners, identical code).
+pub(super) const DROP_THUNK_PREFIX: &str = "__jr_drop_glue_";
+
 /// Words 0..2 of every two-word fat carrier (slice data/len, object data/vtable).
 const FAT_LAYOUT: SliceLayout = SHARED_BYTE_SLICE_LAYOUT;
 
@@ -954,12 +957,7 @@ impl<'a> Emitter<'a> {
                         (Some(target), super::traits::DropGlue::None) => {
                             Some((self.resolve)(target)?)
                         }
-                        _ => {
-                            return Err(
-                                "unsupported: trait object of a type with structural drop glue"
-                                    .into(),
-                            );
-                        }
+                        _ => Some(self.drop_thunk(&destructor)?),
                     }
                 }
                 super::traits::NormalDropPlan::Unresolved => {
@@ -977,6 +975,31 @@ impl<'a> Emitter<'a> {
             align: 8,
             methods,
         })
+    }
+    /// A local `drop_in_place` thunk for a vtable whose concrete type has
+    /// structural drop glue. It is emitted inline (jumped over) and exported
+    /// under a name derived from the exact owner type, so identical owners
+    /// share one canonical glue body across objects.
+    fn drop_thunk(
+        &mut self,
+        destructor: &super::traits::ValidatedDestructor,
+    ) -> Result<String, String> {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        format!("{:?}", destructor.owner()).hash(&mut hasher);
+        let name = format!("{DROP_THUNK_PREFIX}{:016x}", hasher.finish());
+        if self.object.exports.iter().any(|(_, n)| *n == name) {
+            return Ok(name);
+        }
+        let over = self.jump(&[0xe9]);
+        let entry = self.position();
+        self.bytes(&[0xff, 0x74, 0x24, 0x08]); // push qword [rsp+8] (&mut Self)
+        self.drop_glue(destructor)?;
+        self.bytes(&[0x48, 0x83, 0xc4, 8, 0xc3]); // add rsp, 8; ret
+        let here = self.position();
+        self.patch(over, here)?;
+        self.object.exports.push((entry, name.clone()));
+        Ok(name)
     }
     /// rax = address of a two-word `&dyn` carrier local; loads it like a slice.
     fn fat_operand(&mut self, operand: &cfg::Operand) -> Result<(), String> {
@@ -1046,6 +1069,32 @@ impl<'a> Emitter<'a> {
                     let here = self.position();
                     self.patch(skip, here)?;
                 }
+            }
+            DropGlue::BoxedObject => {
+                // [rsp] = address of the owning (data, vtable) carrier.
+                self.bytes(&[0x48, 0x8b, 0x04, 0x24]); // mov rax, [rsp]
+                self.bytes(&[0x48, 0x8b, 0x48, 0x08]); // mov rcx, [rax+8] (vtable)
+                self.bytes(&[0x48, 0x8b, 0x11]); // mov rdx, [rcx] (drop slot)
+                self.bytes(&[0x48, 0x85, 0xd2]); // test rdx, rdx
+                let trivial = self.jump(&[0x0f, 0x84]);
+                self.bytes(&[0xff, 0x30]); // push qword [rax] (&mut Self)
+                self.bytes(&[0xff, 0xd2]); // call rdx
+                self.bytes(&[0x48, 0x83, 0xc4, 8]);
+                let here = self.position();
+                self.patch(trivial, here)?;
+                // Release exactly the allocation `Box::new` made: the private
+                // storage stride of the concrete type (eight when zero).
+                self.bytes(&[0x48, 0x8b, 0x04, 0x24]); // mov rax, [rsp]
+                self.bytes(&[0x48, 0x8b, 0x48, 0x08]); // mov rcx, [rax+8]
+                self.bytes(&[0x48, 0x8b, 0x71, 0x08]); // mov rsi, [rcx+8] (size)
+                self.bytes(&[0x48, 0x8b, 0x38]); // mov rdi, [rax] (data)
+                self.bytes(&[0x48, 0x85, 0xf6]); // test rsi, rsi
+                self.bytes(&[0x75, 0x05]); // jnz +5
+                self.bytes(&[0xbe, 8, 0, 0, 0]); // mov esi, 8
+                self.bytes(&[0x48, 0x85, 0xff]); // test rdi, rdi
+                self.bytes(&[0x74, 0x07]); // jz +7 (null: moved out)
+                self.bytes(&[0xb8, 11, 0, 0, 0]); // mov eax, 11 (munmap)
+                self.bytes(&[0x0f, 0x05]); // syscall
             }
             DropGlue::Array { len, element } => {
                 let stride = value_size(element.owner())?;
@@ -2822,13 +2871,30 @@ impl Emitter<'_> {
             }
             cfg::Rvalue::Str(text) => self.str_literal(text)?,
             cfg::Rvalue::ByteStr(bytes) => self.byte_string_literal(bytes)?,
-            cfg::Rvalue::RefToDyn { reference, object } => {
-                // The operand is a thin `&T`/`&mut T` (rax = data pointer).
-                let ir::Ty::Ref { referent, .. } = self.function().operand_ty(reference)? else {
-                    return Err("trait object unsizing requires a reference operand".into());
+            cfg::Rvalue::RefToDyn {
+                reference,
+                object,
+                boxed,
+            } => {
+                // The operand is a thin `&T`/`&mut T` (rax = data pointer), or
+                // an owning `Box<T>` (rax = address of its one pointer word).
+                let source = self.function().operand_ty(reference)?;
+                let referent = if boxed.is_some() {
+                    source
+                        .owned_box_pointee()
+                        .cloned()
+                        .ok_or("box unsizing requires an owning Box operand")?
+                } else {
+                    let ir::Ty::Ref { referent, .. } = source else {
+                        return Err("trait object unsizing requires a reference operand".into());
+                    };
+                    referent.as_ref().clone()
                 };
                 let vtable = self.vtable(&referent, object)?;
                 self.operand(reference)?;
+                if boxed.is_some() {
+                    self.bytes(&[0x48, 0x8b, 0x00]); // rax = box data pointer
+                }
                 let base = self.aggregate_scratch;
                 self.bytes(&[0x48, 0x89, 0x85]); // mov [rbp+base], rax (data)
                 self.i32(base);
@@ -3741,7 +3807,14 @@ pub fn link(functions: &[(String, Object)]) -> Result<Vec<u8>, String> {
         if symbols.insert(name.as_str(), code.len()).is_some() {
             return Err(format!("duplicate function `{name}`"));
         }
+        let start = code.len();
         code.extend_from_slice(&object.code);
+        for (offset, export) in &object.exports {
+            if !export.starts_with(DROP_THUNK_PREFIX) || *offset >= object.code.len() {
+                return Err("invalid private export".into());
+            }
+            symbols.entry(export.as_str()).or_insert(start + offset);
+        }
     }
     let main = *symbols.get("main").ok_or("missing main function")?;
     let main_displacement =

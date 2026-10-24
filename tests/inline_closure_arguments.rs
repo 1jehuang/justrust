@@ -7,6 +7,21 @@ mod oracle;
 use oracle::{Case, Expect};
 
 #[test]
+fn nested_result_map_uses_canonical_outer_publication() {
+    oracle::check(
+        "nested_result_map",
+        &[Case {
+            name: "unchanged_full15_nested_map",
+            source: r#"#[derive(Debug)]
+enum ParseError { Empty }
+fn parse(s: &str) -> Result<u32, ParseError> { if s.is_empty() { Err(ParseError::Empty) } else { Ok(5u32) } }
+fn main() { let input=["5","6"]; let result:Result<Vec<u32>,ParseError>=input.iter().map(|s|parse(s).map(|n|n*2)).collect(); println!("{:?}",result); }"#,
+            expect: Expect::Run("Ok([10, 10])\n"),
+        }],
+    );
+}
+
+#[test]
 fn nested_opaque_callable_composition_matches_stock() {
     oracle::check(
         "nested_opaque_composition",

@@ -629,6 +629,9 @@ pub enum Rvalue {
     RefToDyn {
         reference: Operand,
         object: std::sync::Arc<ir::DynTy>,
+        /// `Some(Box<dyn P>)` when the operand is an owning `Box<T>`: the
+        /// same (data, vtable) carrier, owned. Checked against `object`.
+        boxed: Option<std::sync::Arc<Ty>>,
     },
     /// Builtin length of exactly shared `&[u8]`, result `usize`. Grants no
     /// storage authority and performs no read through the reference.
@@ -2439,7 +2442,25 @@ impl Function {
                     }),
                 })
             }
-            Rvalue::RefToDyn { reference, object } => {
+            Rvalue::RefToDyn {
+                reference,
+                object,
+                boxed: Some(boxed),
+            } => {
+                let source = self.operand_ty_with_facts(reference, facts, scratch)?;
+                let Some(referent) = source.owned_box_pointee() else {
+                    return Err("CFG box unsizing requires an owning Box operand".into());
+                };
+                if matches!(referent, Ty::Dyn(_) | Ty::Slice { .. } | Ty::Str)
+                    || boxed.owned_box_object() != Some(object.as_ref())
+                {
+                    return Err("CFG box unsizing requires a sized pointee and exact object".into());
+                }
+                Ok(boxed.as_ref().clone())
+            }
+            Rvalue::RefToDyn {
+                reference, object, ..
+            } => {
                 let Ty::Ref { kind, referent } =
                     self.operand_ty_with_facts(reference, facts, scratch)?
                 else {
@@ -4502,17 +4523,26 @@ impl Lowerer<'_> {
                 );
             }
             ir::ExprKind::RefToDyn { reference } => {
-                let Ty::Ref { referent, .. } = &expression.ty else {
-                    return Err("trait object unsizing result must be a reference".into());
+                let (object, boxed) = if let Some(object) = expression.ty.owned_box_object() {
+                    (object, Some(std::sync::Arc::new(expression.ty.clone())))
+                } else {
+                    let Ty::Ref { referent, .. } = &expression.ty else {
+                        return Err("trait object unsizing result must be a reference".into());
+                    };
+                    let Ty::Dyn(object) = referent.as_ref() else {
+                        return Err("trait object unsizing result must be a trait object".into());
+                    };
+                    (object.as_ref(), None)
                 };
-                let Ty::Dyn(object) = referent.as_ref() else {
-                    return Err("trait object unsizing result must be a trait object".into());
-                };
-                let object = object.clone();
+                let object = std::sync::Arc::new(object.clone());
                 let reference = self.expression(*reference)?;
                 self.assign(
                     destination.clone(),
-                    Rvalue::RefToDyn { reference, object },
+                    Rvalue::RefToDyn {
+                        reference,
+                        object,
+                        boxed,
+                    },
                     origin,
                 );
             }

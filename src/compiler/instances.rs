@@ -864,11 +864,16 @@ pub(super) fn direct_demands(
         // --- trait objects (snail): each unsizing site demands every
         // vtable slot implementation for its exact substituted referent.
         if let ir::ExprKind::RefToDyn { reference } = &expression.kind {
-            let ir::Ty::Ref { referent, .. } = &expression.ty else {
-                return Err("trait object unsizing result must be a reference".into());
-            };
-            let ir::Ty::Dyn(object) = referent.as_ref() else {
-                return Err("trait object unsizing result must be a trait object".into());
+            let object = if let Some(object) = expression.ty.owned_box_object() {
+                object
+            } else {
+                let ir::Ty::Ref { referent, .. } = &expression.ty else {
+                    return Err("trait object unsizing result must be a reference".into());
+                };
+                let ir::Ty::Dyn(object) = referent.as_ref() else {
+                    return Err("trait object unsizing result must be a trait object".into());
+                };
+                object
             };
             let operand = source
                 .exprs
@@ -883,8 +888,10 @@ pub(super) fn direct_demands(
                 budget,
                 engine,
             )?;
-            let ir::Ty::Ref { referent, .. } = &concrete else {
-                return Err("trait object unsizing operand must be a reference".into());
+            let referent = match (&concrete, concrete.owned_box_pointee()) {
+                (_, Some(pointee)) => pointee,
+                (ir::Ty::Ref { referent, .. }, None) => referent.as_ref(),
+                _ => return Err("trait object unsizing operand must be a reference".into()),
             };
             for slot in closed_facts
                 .object_vtable_targets(referent, object)
