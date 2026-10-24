@@ -219,7 +219,6 @@ impl NominalCarrierAuthority {
             || original.closure_result.is_some()
             || original.projected.is_some()
             || original.equality_required.is_some()
-            || original.equality_results.is_some()
             || matches!(self.target, Some(ref target) if !matches!(target, Callee::Direct(_)))
         {
             return Err(FactsError::unsupported(
@@ -232,7 +231,7 @@ impl NominalCarrierAuthority {
         let subject = world.equality_result_subject(subject, facts)?;
         let raw = world.normalized_declaration_schema(original.declaration)?;
         let retained = world.declaration_carriers(original.declaration)?;
-        world.transport_carrier_parts(
+        let mut view = world.transport_carrier_parts(
             original.declaration,
             original.arguments.clone(),
             signature_copy(&self.signature, facts.budget())?,
@@ -242,7 +241,12 @@ impl NominalCarrierAuthority {
             original.origin.clone(),
             None,
             subject,
-        )
+        )?;
+        // Restricted equality results are recomputed from the transported
+        // subject, never copied from the canonical view; `validate_for`
+        // rederives and compares them again.
+        world.seal_equality_results(&mut view, facts)?;
+        Ok(view)
     }
 
     pub(super) fn validate(
@@ -272,7 +276,7 @@ impl NominalCarrierAuthority {
             || view.projected.is_some()
             || view.projected_subject.is_some()
             || view.equality_required.is_some()
-            || view.equality_results.is_some()
+            || view.equality_results.is_some() != expected.equality_results.is_some()
         {
             return Err(FactsError::invalid(
                 facts.budget(),

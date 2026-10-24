@@ -5768,6 +5768,14 @@ impl Plan {
             let point = self.outgoing[block].as_ref().unwrap();
             let active = self.active(&point.origins, &ins[next], budget)?;
             for loan in active.members() {
+                // A shared call-result origin reissued each iteration keeps
+                // one static identity whose memberships the fixed point only
+                // unions: every overlapping write and storage end in the loop
+                // still observes it live. Exclusive origins stay rejected,
+                // since two dynamic `&mut` issuances would alias one identity.
+                if call_issuers[loan].is_some() && self.kinds[loan] == BorrowKind::Shared {
+                    continue;
+                }
                 if let Some(birth) = births[loan]
                     && component[birth] == component[block]
                     && !self.killed_before_rebirth(

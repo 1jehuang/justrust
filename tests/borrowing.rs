@@ -330,6 +330,21 @@ fn main() { run(); }
 }
 
 #[test]
+fn rejects_loop_renewed_shared_call_result_conflicts() {
+    // Stock rejects these with E0502 and E0597.
+    rejects(
+        "loop_call_result_then_push",
+        "fn main(){let mut v=vec![1.0f64,3.0];let mut it=v.iter();let mut best=it.next().unwrap();\
+loop{match it.next(){Some(x)=>{if *x>*best{best=x;}v.push(1.0);}None=>break}}println!(\"{}\",best);}\n",
+    );
+    rejects(
+        "loop_call_result_outlives_local",
+        "fn id(x:&String)->&String{x}\nfn main(){let a=String::from(\"a\");let mut best=id(&a);let mut i=0;\
+while i<3{let s=String::from(\"b\");best=id(&s);i+=1;}println!(\"{}\",best);}\n",
+    );
+}
+
+#[test]
 fn rejects_invalid_shared_mutable_conflict() {
     // Stock rejects this fixture with E0502.
     rejects(

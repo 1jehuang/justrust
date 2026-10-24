@@ -1,6 +1,19 @@
 //! Native iterator protocols and ordinary source adapters.
 use super::option::Option;
 
+/// Keeps `best` when `compare(best, item)` is Greater exactly when
+/// `keep_on_greater`, else takes `item`. Owning both values avoids a loan of
+/// `best` living across the caller's loop backedge.
+fn select_by<T, F: FnMut(&T, &T) -> super::cmp::Ordering>(
+    best: T,
+    item: T,
+    keep_on_greater: bool,
+    compare: &mut F,
+) -> T {
+    let greater = compare(&best, &item) == super::cmp::Ordering::Greater;
+    if greater != keep_on_greater { best } else { item }
+}
+
 pub trait Iterator: Sized {
     type Item;
     fn next(&mut self) -> Option<Self::Item>;
@@ -176,11 +189,7 @@ pub trait Iterator: Sized {
         };
         loop {
             match self.next() {
-                Option::Some(item) => {
-                    if compare(&best, &item) != super::cmp::Ordering::Greater {
-                        best = item;
-                    }
-                }
+                Option::Some(item) => best = select_by(best, item, false, &mut compare),
                 Option::None => return Option::Some(best),
             }
         }
@@ -196,11 +205,7 @@ pub trait Iterator: Sized {
         };
         loop {
             match self.next() {
-                Option::Some(item) => {
-                    if compare(&best, &item) == super::cmp::Ordering::Greater {
-                        best = item;
-                    }
-                }
+                Option::Some(item) => best = select_by(best, item, true, &mut compare),
                 Option::None => return Option::Some(best),
             }
         }

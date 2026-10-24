@@ -199,6 +199,17 @@ let y=v.clone().into_iter().min_by(|a,b|a.cmp(b));let e:Vec<i32>=Vec::new();prin
         "Some(9) Some(1) None\n",
         "max-by",
     );
+    compare(
+        "trait S{fn a(&self)->f64;}\nstruct C{r:f64}\nimpl S for C{fn a(&self)->f64{self.r}}\n\
+fn id(x:&String)->&String{x}\n\
+fn main(){let v=vec![1.0f64,3.0,2.0];let b=v.iter().max_by(|a,b|a.partial_cmp(b).unwrap()).unwrap();\
+let m=v.iter().min_by(|a,b|a.partial_cmp(b).unwrap()).unwrap();println!(\"{} {}\",b,m);\
+let w:Vec<Box<dyn S>>=vec![Box::new(C{r:1.0}),Box::new(C{r:3.0})];\
+let x=w.iter().max_by(|a,b|{let x:&Box<dyn S>=a;let y:&Box<dyn S>=b;x.a().partial_cmp(&y.a()).unwrap()}).unwrap();println!(\"{}\",x.a());\
+let mut s=String::from(\"a\");let mut r=id(&s);let mut i=0;while i<2{r=id(&s);i+=1;}println!(\"{}\",r);s.push('x');println!(\"{}\",s);}\n",
+        "3 1\n3\na\nax\n",
+        "max-by-ref",
+    );
 }
 
 #[test]

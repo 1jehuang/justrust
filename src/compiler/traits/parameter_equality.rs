@@ -756,6 +756,10 @@ impl ValidatedTraitWorld {
                 "result transport changed canonical signature",
             ));
         }
+        // `eq_signature` accepts equivalent nominal identities (a source slot
+        // and its graph realization). Replay with the candidate's validated
+        // representation so carrier paths compare by the same identity.
+        let signature = result_signature(&self.budget, &view.result_signature)?;
         let origin = charged(
             &self.budget,
             ir::derive_signature_origin_schema(&canonical.signature, &canonical.env, &self.budget),
