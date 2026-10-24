@@ -299,8 +299,18 @@ fn invalid_and_unsupported_profile_settings_fail_before_compilation() {
     for (name, profile, diagnostic) in [
         (
             "opt",
-            "[profile.dev]\nopt-level = 3",
-            "only integer opt-level=0 is supported",
+            "[profile.dev]\nopt-level = 4",
+            "profile.dev.opt-level: invalid value",
+        ),
+        (
+            "lto",
+            "[profile.release]\nlto = \"wide\"",
+            "profile.release.lto: invalid value",
+        ),
+        (
+            "debug",
+            "[profile.bench]\ndebug = 7",
+            "profile.bench.debug: invalid value",
         ),
         (
             "panic",

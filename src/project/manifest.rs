@@ -526,20 +526,57 @@ pub fn load(manifest: &Path) -> Result<Workspace, ManifestError> {
                 ));
             }
             for key in p.keys() {
-                if !matches!(
-                    key.as_str(),
-                    "inherits" | "debug-assertions" | "overflow-checks" | "opt-level"
-                ) {
-                    return err(format!("{what}.{key}: profile setting is unsupported"));
+                match key.as_str() {
+                    "inherits" | "debug-assertions" | "overflow-checks" | "opt-level" => {}
+                    // Semantics-neutral settings: they affect only code quality,
+                    // debug information or artifact layout, never observable
+                    // program behavior, so the native compiler validates and
+                    // ignores them.
+                    "debug" => match get(p, key) {
+                        Some(Value::Boolean(_)) | Some(Value::Integer(0..=2)) => {}
+                        Some(Value::String(s))
+                            if matches!(
+                                s.as_str(),
+                                "none"
+                                    | "line-directives-only"
+                                    | "line-tables-only"
+                                    | "limited"
+                                    | "full"
+                            ) => {}
+                        _ => return err(format!("{what}.debug: invalid value")),
+                    },
+                    "lto" => match get(p, key) {
+                        Some(Value::Boolean(_)) => {}
+                        Some(Value::String(s)) if matches!(s.as_str(), "off" | "thin" | "fat") => {}
+                        _ => return err(format!("{what}.lto: invalid value")),
+                    },
+                    "codegen-units" => match get(p, key) {
+                        Some(Value::Integer(n)) if *n >= 1 => {}
+                        _ => return err(format!("{what}.codegen-units: invalid value")),
+                    },
+                    "incremental" | "rpath" => {
+                        get_bool(p, key, &what)?;
+                    }
+                    "strip" => match get(p, key) {
+                        Some(Value::Boolean(_)) => {}
+                        Some(Value::String(s))
+                            if matches!(s.as_str(), "none" | "debuginfo" | "symbols") => {}
+                        _ => return err(format!("{what}.strip: invalid value")),
+                    },
+                    "split-debuginfo" => match get(p, key) {
+                        Some(Value::String(s))
+                            if matches!(s.as_str(), "off" | "packed" | "unpacked") => {}
+                        _ => return err(format!("{what}.split-debuginfo: invalid value")),
+                    },
+                    _ => return err(format!("{what}.{key}: profile setting is unsupported")),
                 }
             }
             let opt_level = match get(p, "opt-level") {
                 None => None,
-                Some(Value::Integer(0)) => Some("0".to_string()),
+                Some(Value::Integer(n @ 0..=3)) => Some(n.to_string()),
+                Some(Value::String(s)) if matches!(s.as_str(), "s" | "z") => Some(s.clone()),
                 Some(Value::Integer(_) | Value::String(_)) => {
-                    return err(format!(
-                        "{what}.opt-level: only integer opt-level=0 is supported by the native compiler"
-                    ));
+                    return err(format!("{what}.opt-level: invalid value"));
                 }
                 Some(v) => return err(format!("{what}.opt-level: unexpected {}", v.type_name())),
             };
