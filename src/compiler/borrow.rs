@@ -661,6 +661,13 @@ fn resolve_cells<'a>(
                 let count = match ty {
                     Ty::Array { len, .. } => *len,
                     Ty::Slice { .. } => 1,
+                    _ if *step == Projection::DynamicIndex(LocalId(usize::MAX)) => {
+                        // A declared slice may borrow opaque backing storage
+                        // (for example Vec<T>). Its owner is not an array or
+                        // slice cell domain. Keep the cover unresolved rather
+                        // than inventing element cells or reporting exhaustion.
+                        return Ok((vec![], trace, Some(ResolutionFailure::IncompleteCover)));
+                    }
                     _ => return Err(Exhausted),
                 };
                 if count > ir::MAX_ARRAY_LEN
@@ -6608,6 +6615,31 @@ impl Plan {
 mod parameter_equality_tests {
     use super::*;
     use crate::compiler::{frontend, ownership};
+
+    #[test]
+    fn opaque_backing_summary_stays_incomplete_without_invented_cells() {
+        let locals = [Ty::Int(ir::IntTy::I32)];
+        let resolve = |index| {
+            resolve_cells(
+                &locals,
+                &locals,
+                &[],
+                &HashMap::new(),
+                &[],
+                |_| panic!("no reference cell exists"),
+                &Place {
+                    local: LocalId(0),
+                    projection: vec![Projection::DynamicIndex(index)],
+                },
+                &mut Budget::new(1_000_000),
+            )
+        };
+        let (targets, origins, failure) = resolve(LocalId(usize::MAX)).unwrap();
+        assert!(targets.is_empty());
+        assert!(origins.is_empty());
+        assert_eq!(failure, Some(ResolutionFailure::IncompleteCover));
+        assert!(resolve(LocalId(0)).is_err());
+    }
 
     #[test]
     fn slice_summary_cover_requires_the_issued_cell_and_original_domain() {

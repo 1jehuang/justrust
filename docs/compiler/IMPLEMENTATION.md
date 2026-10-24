@@ -2122,6 +2122,9 @@ summary cells. `typed_slice_authority::reference_iterator_collection_matches_sto
 and `reference_iterator_borrow_rules_match_stock` exercise collection and source
 loan preservation at workers 1 and 8. Mutable-reference slice elements and the
 generic trait-owner slice inference boundary remain unsupported.
+Opaque backing owners retain unresolved summaries rather than acquiring invented
+element cells; generic `Bag<T>` formatting/collection is covered by
+`iterator_associated::generic_iterator_format_collect_reuses_membership_proofs`.
 
 The source-type-alias checkpoint passes all 1,649 hosted tests in 86 binaries
 (`20261017-043356389-4183342`), all-target checking
