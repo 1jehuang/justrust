@@ -21,6 +21,50 @@ milestone, not full Rust support (see RUST-COMPATIBILITY.md).
 - `justrust test --test full_programs -- --nocapture` prints per-program
   `PASS` or the first native diagnostic.
 
+## Unchanged Adler2 repository probe
+
+Run the pinned Adler2 2.0.1 target without adapting its source:
+
+```sh
+python3 experiments/adler2_repo_probe.py \
+  --native ./target/debug/jr-rust \
+  --output-dir "$JCODE_SCRATCH_DIR/adler2-probe-new"
+```
+
+The default input is an already-cached Cargo registry copy of Adler2 2.0.1.
+Alternatively pass `--repo /path/to/adler2`; both upstream Rust files must match
+its reviewed SHA-256 pins (release provenance revision
+`89a031a0f42eeff31c70dc598b398cbf31f1680f`). No download happens. The runner
+copies the package and supplied native binary into the new output directory;
+it never edits the input repository or reuses an old output directory.
+
+The stock oracle builds/checks the unchanged library in `no_std` and default
+`std` configurations, runs upstream unit tests, and runs a separate consumer
+against five checksum vectors, including incremental updates. Native workers
+1 and 8 attempt the real project check/build/test interfaces and the separate
+path-dependent consumer. A direct `--lib --check` attempt also captures an
+independent source diagnostic. That diagnostic is not library-build success.
+
+`report.json` records exact commands, binary/source hashes, per-stage statuses,
+full diagnostics, compatibility blockers and missing-dependency blockers.
+Per-command stdout/stderr files retain the raw output. Exit 0 requires every
+required native stage to pass, exit 1 means compiler compatibility is blocked,
+and exit 2 means an input/environment/oracle problem needs attention. A run
+can expose compatibility blockers even while its overall result is
+`environment_blocked`. Never treat timeouts, missing artifacts, or a successful
+source-only check as a successful target build.
+
+This is a first-blocker probe, not a complete Rust gap inventory. Later errors
+can remain hidden. Doctests, benchmarks and optional internal/docsrs features
+are outside this target, and the stock baseline uses rustc directly rather
+than claiming stock Cargo workflow coverage. The older
+`adler2_adapted_acceptance.py` remains a different, explicitly adapted test.
+Runner regression tests:
+
+```sh
+python3 -m unittest discover -s experiments -p test_adler2_repo_probe.py
+```
+
 ## Status (2026-10-23)
 
 11/20 manifest entries pass, including the unchanged matrix and string-processing
