@@ -2261,9 +2261,10 @@ mod tests {
             Edition::parse("2021").unwrap(),
             super::super::token::Edition::E2021
         );
+        assert!(Edition::E2021.validate_native().is_ok());
         assert!(Edition::parse("2099").is_err());
         assert!(Edition::parse(" 2024").is_err());
-        for name in ["2015", "2018", "2021"] {
+        for name in ["2015", "2018"] {
             let options = SourceOptions {
                 edition: Edition::parse(name).unwrap(),
                 ..SourceOptions::default()

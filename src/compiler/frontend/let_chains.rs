@@ -24,6 +24,9 @@ impl<'input, 'names> Parser<'input, 'names> {
     /// is `first`, binding each pattern for the operands that follow. The
     /// caller owns the lexical frontier and restores it.
     pub(super) fn chain_rest(&mut self, first: ChainCond) -> Result<Vec<ChainCond>, ParseError> {
+        if self.names.edition() != super::super::token::Edition::E2024 {
+            return Err(self.error("let chains are only allowed in Rust 2024 or later"));
+        }
         let mut conds = vec![first];
         if let Some(ChainCond::Let(pattern, _)) = conds.last() {
             let pattern: &Pattern = pattern;

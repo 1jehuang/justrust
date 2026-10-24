@@ -231,6 +231,8 @@ impl TypeEnv {
     }
 }
 pub type Signatures = TypeEnv;
+const PRE_2024_PATTERN: &str = "unsupported: pre-2024 default binding mode reset in patterns; the native compiler implements only the edition 2024 rules";
+const PRE_2024_TEMPORARY: &str = "unsupported: pre-2024 temporary scope with a destructor (block tail or if-let scrutinee); the native compiler implements only the edition 2024 drop order";
 pub fn type_env(program: &Program) -> Result<TypeEnv, String> {
     let budget = ir::PlanBudget::default();
     PlanCtx::from_program(program, &budget)?.environment(None)
@@ -2665,6 +2667,11 @@ pub(super) fn coerces(got: &ir::Ty, want: &ir::Ty) -> bool {
 const MAX_INTRINSIC_AUTODEREF: usize = 8;
 
 impl<'a> Checker<'a> {
+    /// Pre-2024 editions use semantics the native checker does not
+    /// implement for some constructs; those sites reject explicitly.
+    pub(super) fn pre_2024_edition(&self) -> Result<bool, String> {
+        Ok(self.names()?.edition() != super::super::token::Edition::E2024)
+    }
     pub(super) fn names(&self) -> Result<&NameStore, String> {
         let names = &self.signatures.plan()?.program.names;
         names.budget().check().map_err(|error| {
@@ -5226,6 +5233,9 @@ impl<'a> Checker<'a> {
         f: impl FnOnce(&Self, &ir::Ty, &mut Vec<ir::Projection>) -> Result<R, String>,
     ) -> Result<R, String> {
         if self.binding_mode.get().is_some() {
+            if self.pre_2024_edition()? {
+                return Err(PRE_2024_PATTERN.into());
+            }
             return Err(
                 "cannot explicitly dereference within an implicitly-borrowing pattern".into(),
             );
@@ -5751,6 +5761,12 @@ impl<'a> Checker<'a> {
             } => {
                 let mode = self.binding_mode.get();
                 let borrow = match (by_ref, mode) {
+                    (Some(_), Some(_)) if self.pre_2024_edition()? => {
+                        return Err(PRE_2024_PATTERN.into());
+                    }
+                    (None, Some(_)) if *mutable && self.pre_2024_edition()? => {
+                        return Err(PRE_2024_PATTERN.into());
+                    }
                     (Some(_), Some(_)) => {
                         return Err(
                             "cannot explicitly borrow within an implicitly-borrowing pattern"
@@ -7209,7 +7225,15 @@ impl<'a> Checker<'a> {
             .map(|e| self.expr_with_expectation(e, expectation))
             .transpose()?;
         self.reachable = entered_reachable;
-        // Tail temporaries live until the end of this block.
+        // Tail temporaries live until the end of this block (edition 2024).
+        if self.pre_2024_edition()? {
+            for index in temporaries_start..self.borrow_temporaries.len() {
+                let local = self.borrow_temporaries[index].0;
+                if !self.trivially_dropped(&self.locals[local.0].ty.clone())? {
+                    return Err(PRE_2024_TEMPORARY.into());
+                }
+            }
+        }
         for (local, _) in self.borrow_temporaries.drain(temporaries_start..) {
             statements.push(ir::TypedStmt::Declare { local });
         }
@@ -10730,6 +10754,14 @@ impl<'a> Checker<'a> {
                 let temporaries_start = self.borrow_temporaries.len();
                 let scrutinee_id = self.expr(scrutinee)?;
                 let mut declarations = Vec::new();
+                if self.pre_2024_edition()? {
+                    for index in temporaries_start..self.borrow_temporaries.len() {
+                        let local = self.borrow_temporaries[index].0;
+                        if !self.trivially_dropped(&self.locals[local.0].ty.clone())? {
+                            return Err(PRE_2024_TEMPORARY.into());
+                        }
+                    }
+                }
                 for (local, extended) in self.borrow_temporaries.drain(temporaries_start..) {
                     if extended {
                         return Err(

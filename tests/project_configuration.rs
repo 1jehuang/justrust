@@ -66,8 +66,74 @@ fn invalid_editions_are_rejected_by_both_clis() {
 }
 
 #[test]
+fn edition_2021_is_admitted_with_stock_semantics_or_explicit_boundaries() {
+    // Supported 2021 programs match stock; constructs whose 2021 semantics
+    // differ from the implemented 2024 rules reject explicitly.
+    let cases = [
+        (
+            "plain",
+            "fn main() { let v = [1u32, 2]; println!(\"{}\", v.iter().sum::<u32>()); }\n",
+            None,
+        ),
+        (
+            "pattern-reset",
+            "fn main() { let (ref x,) = &(4u32,); println!(\"{}\", x); }\n",
+            Some("pre-2024 default binding mode"),
+        ),
+        (
+            "tail-temporary",
+            "struct D(u32); impl Drop for D { fn drop(&mut self) { println!(\"drop {}\", self.0); } } impl D { fn v(&self) -> u32 { self.0 } } fn g() -> u32 { let _a = D(1); D(2).v() } fn main() { println!(\"{}\", g()); }\n",
+            Some("pre-2024 temporary scope"),
+        ),
+        (
+            "if-let-temporary",
+            "struct D(u32); impl Drop for D { fn drop(&mut self) { println!(\"drop {}\", self.0); } } impl D { fn o(&self) -> Option<u32> { Some(self.0) } } fn main() { if let Some(v) = D(2).o() { println!(\"{}\", v); } else { println!(\"none\"); } println!(\"end\"); }\n",
+            Some("pre-2024 temporary scope"),
+        ),
+        (
+            "opaque-capture",
+            "fn f(x: &u32) -> impl Fn() -> u32 { let y = *x; move || y } fn main() { let v = 3; println!(\"{}\", f(&v)()); }\n",
+            Some("pre-2024 `impl Trait`"),
+        ),
+    ];
+    for (name, source, boundary) in cases {
+        let p = Project::new(&format!("e2021-{name}"), "edition = \"2021\"", "", source);
+        let stock = p.stock(&["run", "--offline", "--quiet"]);
+        assert!(stock.status.success(), "{name}: {}", stderr(&stock));
+        for workers in ["1", "8"] {
+            match boundary {
+                None => {
+                    assert!(p.native(&["check"], workers).status.success(), "{name}");
+                    let native = p.native(&["run"], workers);
+                    assert!(native.status.success(), "{name}: {}", stderr(&native));
+                    assert_eq!(native.stdout, stock.stdout, "{name}");
+                }
+                Some(diagnostic) => {
+                    for command in ["check", "build", "run"] {
+                        rejected(p.native(&[command], workers), diagnostic);
+                    }
+                }
+            }
+        }
+    }
+    let chain = Project::new(
+        "e2021-let-chain",
+        "edition = \"2021\"",
+        "",
+        "fn main() { let a = Some(1); if let Some(x) = a && x > 0 { println!(\"{}\", x); } }\n",
+    );
+    assert!(!chain.stock(&["check", "--offline"]).status.success());
+    for workers in ["1", "8"] {
+        rejected(
+            chain.native(&["check"], workers),
+            "let chains are only allowed in Rust 2024",
+        );
+    }
+}
+
+#[test]
 fn earlier_and_omitted_editions_are_explicitly_unsupported() {
-    for edition in ["2015", "2018", "2021", "omitted"] {
+    for edition in ["2015", "2018", "omitted"] {
         let field = if edition == "omitted" {
             String::new()
         } else {
@@ -76,7 +142,10 @@ fn earlier_and_omitted_editions_are_explicitly_unsupported() {
         let p = Project::new(edition, &field, "", "fn main() {}\n");
         assert!(p.stock(&["check", "--offline"]).status.success());
         for workers in ["1", "8"] {
-            rejected(p.native(&["check"], workers), "supports only edition 2024");
+            rejected(
+                p.native(&["check"], workers),
+                "supports only editions 2021 and 2024",
+            );
         }
     }
 }
@@ -134,7 +203,7 @@ fn direct_source_edition_is_explicit_and_never_reinterpreted() {
             assert!(ran.status.success());
             assert_eq!(ran.stdout, stock.stdout);
         }
-        for edition in ["2015", "2018", "2021", "2099", ""] {
+        for edition in ["2015", "2018", "2099", ""] {
             let binary = p.0.join(format!("rejected-{workers}-{edition}"));
             let output = Command::new(env!("CARGO_BIN_EXE_jr-rust"))
                 .arg(p.0.join("absent.rs"))

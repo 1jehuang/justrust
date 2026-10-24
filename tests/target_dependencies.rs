@@ -237,8 +237,8 @@ fn edition_support_is_required_only_for_compiled_dependencies() {
         (
             "active-old",
             "cfg(unix)",
-            "2021",
-            "supports only edition 2024",
+            "2018",
+            "supports only editions 2021 and 2024",
         ),
         (
             "inactive-invalid",
