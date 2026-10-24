@@ -152,6 +152,17 @@ fn main(){ let w=vec![D{n:1},D{n:2},D{n:3}]; for d in w { if d.n==2 { break; } p
 }
 
 #[test]
+fn refcell_guards_track_borrows() {
+    compare(
+        "use std::cell::RefCell;\n\
+fn main(){let c=RefCell::new(5u32);{let mut w=c.borrow_mut();*w+=1;}let r1=c.borrow();let r2=c.borrow();println!(\"{} {}\",*r1,*r2);\
+let v=RefCell::new(vec![1u32]);let n=v.borrow().len();let mut g=v.borrow_mut();g.push(2u32);println!(\"{} {}\",n,g.len());}\n",
+        "6 6\n1 2\n",
+        "refcell",
+    );
+}
+
+#[test]
 fn rc_shares_ownership_and_drops_once() {
     compare(
         "use std::rc::Rc;\nstruct N{v:u32}\nimpl Drop for N{fn drop(&mut self){println!(\"drop {}\",self.v);}}\n\

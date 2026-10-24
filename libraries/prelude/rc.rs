@@ -65,3 +65,100 @@ impl<T> super::ops::Deref for Rc<T> {
     }
 }
 
+/// Interior mutability with a dynamic borrow flag: 0 free, n>0 shared
+/// readers, usize::MAX one writer. Conflicts panic, as std's do. Guards hold
+/// raw pointers; the `'b` borrow of the cell is carried by `life`.
+pub struct RefCell<T> {
+    flag: usize,
+    value: T,
+}
+
+pub struct Ref<'b, T> {
+    flag: *mut usize,
+    value: *const T,
+    life: *const &'b (),
+}
+
+pub struct RefMut<'b, T> {
+    flag: *mut usize,
+    value: *mut T,
+    life: *const &'b (),
+}
+
+impl<T> RefCell<T> {
+    pub fn new(value: T) -> RefCell<T> {
+        RefCell { flag: 0usize, value }
+    }
+
+    pub fn borrow<'b>(&'b self) -> Ref<'b, T> {
+        let flag = &self.flag as *const usize as *mut usize;
+        unsafe {
+            if *flag == 18446744073709551615usize {
+                panic!("already mutably borrowed: BorrowError");
+            }
+            *flag += 1usize;
+        }
+        let value = &self.value as *const T;
+        Ref {
+            flag,
+            value,
+            life: 0usize as *const &'b (),
+        }
+    }
+
+    pub fn borrow_mut<'b>(&'b self) -> RefMut<'b, T> {
+        let flag = &self.flag as *const usize as *mut usize;
+        unsafe {
+            if *flag != 0usize {
+                panic!("already borrowed: BorrowMutError");
+            }
+            *flag = 18446744073709551615usize;
+        }
+        let value = &self.value as *const T as *mut T;
+        RefMut {
+            flag,
+            value,
+            life: 0usize as *const &'b (),
+        }
+    }
+
+    pub fn into_inner(self) -> T {
+        self.value
+    }
+}
+
+impl<'b, T> super::ops::Deref for Ref<'b, T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        unsafe { &*self.value }
+    }
+}
+
+impl<'b, T> Drop for Ref<'b, T> {
+    fn drop(&mut self) {
+        unsafe {
+            *self.flag -= 1usize;
+        }
+    }
+}
+
+impl<'b, T> super::ops::Deref for RefMut<'b, T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        unsafe { &*self.value }
+    }
+}
+
+impl<'b, T> super::ops::DerefMut for RefMut<'b, T> {
+    fn deref_mut(&mut self) -> &mut T {
+        unsafe { &mut *self.value }
+    }
+}
+
+impl<'b, T> Drop for RefMut<'b, T> {
+    fn drop(&mut self) {
+        unsafe {
+            *self.flag = 0usize;
+        }
+    }
+}

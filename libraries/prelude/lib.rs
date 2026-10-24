@@ -53,6 +53,9 @@ pub mod hash;
 pub mod collections;
 pub mod borrow;
 pub mod rc;
+pub mod cell {
+    pub use super::rc::{Ref, RefCell, RefMut};
+}
 pub mod string;
 mod unicode_uppercase;
 pub mod fmt;
