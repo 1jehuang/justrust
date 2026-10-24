@@ -2,6 +2,9 @@
 // size_of uses the address distance between two adjacent array elements at
 // a fake non-null address; no memory is accessed.
 
+/// Moving a value into this function runs its normal destructor on return.
+pub fn drop<T>(_value: T) {}
+
 pub fn size_of<T>() -> usize {
     let base = 4096usize as *const [T; 2];
     let second = unsafe { &(*base)[1] } as *const T;

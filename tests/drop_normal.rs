@@ -15,6 +15,35 @@ use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+#[path = "support/closure_oracle.rs"]
+mod explicit_drop_oracle;
+
+#[test]
+fn explicit_drop_function_matches_stock() {
+    use explicit_drop_oracle::{Case, Expect};
+    explicit_drop_oracle::check(
+        "explicit-drop",
+        &[
+            Case {
+                name: "prelude_core_std_and_reference_drop",
+                source: r#"struct D{id:i32}impl Drop for D{fn drop(&mut self){println!("drop {}",self.id);}}
+fn main(){let first=D{id:1};println!("before");drop(first);println!("after");core::mem::drop((D{id:2},D{id:3}));std::mem::drop(String::from("owned"));let mut n: i32=4;drop(&mut n);n+=1;println!("{}",n);let captured=D{id:4};let f=move||{let _=&captured;};drop(f);println!("done");}"#,
+                expect: Expect::Run("before\ndrop 1\nafter\ndrop 2\ndrop 3\n5\ndrop 4\ndone\n"),
+            },
+            Case {
+                name: "move_after_explicit_drop",
+                source: "struct D;fn main(){let value=D;drop(value);let again=value;}",
+                expect: Expect::Invalid("E0382"),
+            },
+            Case {
+                name: "drop_cannot_invalidate_live_borrow",
+                source: "struct D{id:i32}fn main(){let value=D{id:1};let r=&value;drop(value);println!(\"{}\",r.id);}",
+                expect: Expect::Invalid("E0505"),
+            },
+        ],
+    );
+}
+
 const INDEX: &str = include_str!("fixtures/drop_normal/receipts-v9/fixture-index.tsv");
 const MANIFEST_HASH: &str = "afc7b27b95496aa84316d9e21485fb7c4f2c18d57701251bcffc152593aee7fe";
 const INDEX_HASH: &str = "213e1c312094ffb078cd49c04e508721188e4b0308b1c990b939ce3af5b585e7";

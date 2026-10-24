@@ -9,7 +9,7 @@ pub mod core_surface {
     pub use super::option;
     pub use super::result;
     pub mod mem {
-        pub use super::super::mem::{size_of, align_of, swap, replace};
+        pub use super::super::mem::{size_of, align_of, swap, replace, drop};
     }
     pub use super::ops;
     pub use super::cmp;
