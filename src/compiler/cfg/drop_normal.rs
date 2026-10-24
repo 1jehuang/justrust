@@ -159,6 +159,17 @@ pub(super) fn admit(source: &ir::CheckedFunction, facts: ir::FactsCtx<'_>) -> Re
                     }
                 }
             }
+            // A whole-value binding or wildcard does not destructure the
+            // owner (the `for` desugar's `match into_iter(x) { mut iter => .. }`):
+            // ownership moves intact, or the temporary drops as a whole.
+            if arms.iter().all(|arm| {
+                matches!(
+                    arm.pattern,
+                    ir::MatchPattern::Binding(_) | ir::MatchPattern::Wildcard
+                )
+            }) {
+                continue;
+            }
             return Err("unsupported: pattern matching a normal Drop owner".into());
         }
     }

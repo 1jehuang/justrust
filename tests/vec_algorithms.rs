@@ -140,3 +140,13 @@ println!(\"{:?} {:?}\",it.next(),it.next_back());let e:Vec<u8>=Vec::new();for _ 
         "into-iter",
     );
 }
+
+#[test]
+fn owned_for_over_user_drop_elements_matches_stock_order() {
+    compare(
+        "struct D{n:u32}\nimpl Drop for D { fn drop(&mut self){ println!(\"drop {}\", self.n); } }\n\
+fn main(){ let w=vec![D{n:1},D{n:2},D{n:3}]; for d in w { if d.n==2 { break; } println!(\"got {}\", d.n); } println!(\"end\"); }\n",
+        "got 1\ndrop 1\ndrop 2\ndrop 3\nend\n",
+        "into-iter-drop",
+    );
+}
