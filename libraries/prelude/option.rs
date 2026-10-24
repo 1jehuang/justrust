@@ -26,6 +26,13 @@ impl<T> Option<T> {
         }
     }
 
+    pub fn unwrap_or_else<F: FnOnce() -> T>(self, f: F) -> T {
+        match self {
+            Option::Some(value) => value,
+            Option::None => f(),
+        }
+    }
+
     pub fn unwrap(self) -> T {
         match self {
             Option::Some(value) => value,
@@ -90,6 +97,27 @@ impl<T> Option<T> {
         match self {
             Option::Some(value) => super::result::Result::Ok(value),
             Option::None => super::result::Result::Err(err),
+        }
+    }
+
+    pub fn and_then<U, F: FnOnce(T) -> Option<U>>(self, f: F) -> Option<U> {
+        match self {
+            Option::Some(value) => f(value),
+            Option::None => Option::None,
+        }
+    }
+
+    pub fn or_else<F: FnOnce() -> Option<T>>(self, f: F) -> Option<T> {
+        match self {
+            Option::Some(value) => Option::Some(value),
+            Option::None => f(),
+        }
+    }
+
+    pub fn ok_or_else<E, F: FnOnce() -> E>(self, f: F) -> super::result::Result<T, E> {
+        match self {
+            Option::Some(value) => super::result::Result::Ok(value),
+            Option::None => super::result::Result::Err(f()),
         }
     }
 

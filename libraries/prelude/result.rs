@@ -44,6 +44,13 @@ impl<T, E> Result<T, E> {
         }
     }
 
+    pub fn unwrap_or_else<F: FnOnce(E) -> T>(self, f: F) -> T {
+        match self {
+            Result::Ok(value) => value,
+            Result::Err(error) => f(error),
+        }
+    }
+
     pub fn ok(self) -> super::option::Option<T> {
         match self {
             Result::Ok(value) => super::option::Option::Some(value),
@@ -79,6 +86,20 @@ impl<T, E> Result<T, E> {
         match self {
             Result::Ok(value) => Result::Ok(value),
             Result::Err(_) => other,
+        }
+    }
+
+    pub fn and_then<U, F: FnOnce(T) -> Result<U, E>>(self, f: F) -> Result<U, E> {
+        match self {
+            Result::Ok(value) => f(value),
+            Result::Err(error) => Result::Err(error),
+        }
+    }
+
+    pub fn or_else<F, O: FnOnce(E) -> Result<T, F>>(self, op: O) -> Result<T, F> {
+        match self {
+            Result::Ok(value) => Result::Ok(value),
+            Result::Err(error) => op(error),
         }
     }
 

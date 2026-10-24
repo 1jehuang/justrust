@@ -5,6 +5,50 @@
 mod closure_oracle;
 
 #[test]
+fn option_lazy_combinators_match_stock() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "option-lazy",
+        &[
+            Case {
+                name: "selected_branches_only",
+                source: r#"fn main() {
+                println!("{}", Some(2).and_then(|n| Some(n * 3)).unwrap());
+                println!("{}", None::<i32>.and_then(|_| { println!("wrong and_then"); Some(9) }).is_none());
+                println!("{}", Some(4).or_else(|| { println!("wrong or_else"); None }).unwrap());
+                println!("{}", None::<i32>.or_else(|| Some(5)).unwrap());
+                println!("{}", Some(6).unwrap_or_else(|| { println!("wrong fallback"); 0 }));
+                println!("{}", None::<i32>.unwrap_or_else(|| { println!("fallback"); 7 }));
+                println!("{}", Some(8).ok_or_else(|| { println!("wrong error"); 0u8 }).unwrap());
+                println!("{}", None::<i32>.ok_or_else(|| 9u8).unwrap_err());
+            }"#,
+                expect: Expect::Run("6\ntrue\n4\n5\n6\nfallback\n7\n8\n9\n"),
+            },
+            Case {
+                name: "once_capture_dropped_on_selected_and_skipped_branches",
+                source: r#"struct Token { id: i32 }
+            impl Drop for Token { fn drop(&mut self) { println!("drop {}", self.id); } }
+            fn main() {
+                { let spare = Token { id: 2 }; let value = Some(Token { id: 1 }).unwrap_or_else(move || spare); println!("value {}", value.id); }
+                { let spare = Token { id: 3 }; let value = None::<Token>.unwrap_or_else(move || spare); println!("value {}", value.id); }
+            }"#,
+                expect: Expect::Run("drop 2\nvalue 1\ndrop 1\nvalue 3\ndrop 3\n"),
+            },
+            Case {
+                name: "wrong_and_then_result",
+                source: "fn unused(){let _=Some(1).and_then(|n|n+1);}fn main(){}",
+                expect: Expect::Invalid("E0308"),
+            },
+            Case {
+                name: "wrong_fallback_result",
+                source: "fn unused(){let _:i32=None::<i32>.unwrap_or_else(||true);}fn main(){}",
+                expect: Expect::Invalid("E0308"),
+            },
+        ],
+    );
+}
+
+#[test]
 fn option_insert_returns_stored_mutable_value() {
     use closure_oracle::{Case, Expect};
     closure_oracle::check(

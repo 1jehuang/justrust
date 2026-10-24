@@ -321,12 +321,20 @@ impl Inference<'_, '_> {
         &mut self,
         projection: &ir::Ty,
         rhs: &ir::Ty,
+        owner_bindings: Option<&HashMap<ir::ParamId, ir::Ty>>,
         fallback: bool,
     ) -> Result<(), String> {
         let Some(normal) = self.projected_schema(projection, 0, fallback)? else {
             return Ok(());
         };
+        // Bind enclosing Self/trait/impl parameters in the inference term,
+        // including nominal arguments. Rebuilding a raw nominal Ty would lose
+        // its canonical identity or leave the owner's rigid parameters behind.
         let rhs = self.schema(rhs, 0)?;
+        let rhs = match owner_bindings {
+            Some(bindings) => self.checker.method_owner_term(&rhs, bindings, 0)?,
+            None => rhs,
+        };
         self.constrain(&rhs, &normal, 0)
     }
 }

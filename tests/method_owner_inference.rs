@@ -5,6 +5,30 @@ mod oracle;
 use oracle::{Case, Expect};
 
 #[test]
+fn nominal_callable_outputs_preserve_enclosing_owner_bindings() {
+    oracle::check(
+        "nominal-callable-owner",
+        &[
+            Case {
+                name: "inherent_owner_inside_option",
+                source: "struct Holder<T>{value:T}impl<T> Holder<T>{fn replacement<F:FnOnce()->Option<T>>(self,f:F)->Option<T>{f()}}fn main(){let n=Holder{value:1i32}.replacement(||Some(7));println!(\"{}\",n.unwrap());}",
+                expect: Expect::Run("7\n"),
+            },
+            Case {
+                name: "trait_owner_inside_option",
+                source: "struct Seed;trait Choose<T>:Sized{fn choose<F:FnOnce()->Option<T>>(self,f:F)->Option<T>{f()}}impl Choose<i32> for Seed{}fn main(){let n=Seed.choose(||Some(8));println!(\"{}\",n.unwrap());}",
+                expect: Expect::Run("8\n"),
+            },
+            Case {
+                name: "wrong_owner_stays_rigid",
+                source: "struct Holder<T>{value:T}impl<T> Holder<T>{fn replacement<F:FnOnce()->Option<T>>(self,f:F)->Option<T>{f()}}fn unused(){let _=Holder{value:1i32}.replacement(||Some(true));}fn main(){}",
+                expect: Expect::Invalid("E0308"),
+            },
+        ],
+    );
+}
+
+#[test]
 fn method_holes_preserve_generic_owner_constraints() {
     oracle::check(
         "method-owner-inference",

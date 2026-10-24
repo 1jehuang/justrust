@@ -132,7 +132,12 @@ impl Checker<'_> {
                     &owner_bindings,
                 );
                 let ty = super::trait_method_hint::bind_owner(ty, &owner_bindings);
-                solver.constrain_projection_equality(&projection, &ty, true)?;
+                solver.constrain_projection_equality(
+                    &projection,
+                    &ty,
+                    Some(&owner_bindings),
+                    true,
+                )?;
             }
         }
         Ok(InherentMethodInference::Applicable(

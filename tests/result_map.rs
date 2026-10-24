@@ -5,6 +5,48 @@
 mod closure_oracle;
 
 #[test]
+fn result_lazy_combinators_match_stock() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "result-lazy",
+        &[
+            Case {
+                name: "selected_branches_only",
+                source: r#"fn main() {
+                println!("{}", Ok::<i32,u8>(2).and_then(|n| Ok(n * 3)).unwrap());
+                println!("{}", Err::<i32,u8>(4).and_then(|_| { println!("wrong and_then"); Ok(9i32) }).unwrap_err());
+                println!("{}", Ok::<i32,u8>(5).or_else(|_| { println!("wrong or_else"); Err::<i32,u16>(0u16) }).unwrap());
+                println!("{}", Err::<i32,u8>(6).or_else(|e| Ok::<i32,u16>(e as i32 + 1)).unwrap());
+                println!("{}", Ok::<i32,u8>(8).unwrap_or_else(|_| { println!("wrong fallback"); 0 }));
+                println!("{}", Err::<i32,u8>(9).unwrap_or_else(|e| { println!("fallback {}", e); 10 }));
+            }"#,
+                expect: Expect::Run("6\n4\n5\n7\n8\nfallback 9\n10\n"),
+            },
+            Case {
+                name: "once_capture_dropped_on_selected_and_skipped_branches",
+                source: r#"struct Token { id: i32 }
+            impl Drop for Token { fn drop(&mut self) { println!("drop {}", self.id); } }
+            fn main() {
+                { let spare = Token { id: 2 }; let value = Ok::<Token,u8>(Token { id: 1 }).unwrap_or_else(move |_| spare); println!("value {}", value.id); }
+                { let spare = Token { id: 3 }; let value = Err::<Token,u8>(9).unwrap_or_else(move |_| spare); println!("value {}", value.id); }
+            }"#,
+                expect: Expect::Run("drop 2\nvalue 1\ndrop 1\nvalue 3\ndrop 3\n"),
+            },
+            Case {
+                name: "wrong_and_then_result",
+                source: "fn unused(){let _=Ok::<i32,u8>(1).and_then(|n|n+1);}fn main(){}",
+                expect: Expect::Invalid("E0308"),
+            },
+            Case {
+                name: "wrong_error_type",
+                source: "fn unused(){let _=Ok::<i32,u8>(1).and_then(|n|Err::<i32,bool>(true));}fn main(){}",
+                expect: Expect::Invalid("E0308"),
+            },
+        ],
+    );
+}
+
+#[test]
 fn structural_enum_partial_moves_match_stock() {
     use closure_oracle::{Case, Expect};
     closure_oracle::check(

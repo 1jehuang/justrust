@@ -109,6 +109,30 @@ fn stored_closures_check_build_and_run_at_both_worker_counts() {
 }
 
 #[test]
+fn owned_closure_captures_drop_exactly_once() {
+    oracle::check(
+        "closure-capture-drop",
+        &[
+            Case {
+                name: "uncalled_generic_argument",
+                source: "struct Token{id:i32}impl Drop for Token{fn drop(&mut self){println!(\"drop {}\",self.id);}}fn consume<F>(f:F){}fn main(){let token=Token{id:1};consume(move||token);println!(\"done\");}",
+                expect: Expect::Run("drop 1\ndone\n"),
+            },
+            Case {
+                name: "called_once_moves_only_returned_capture",
+                source: "struct Token{id:i32}impl Drop for Token{fn drop(&mut self){println!(\"drop {}\",self.id);}}fn main(){let first=Token{id:1};let second=Token{id:2};let f=move||{let _r=&first;second};let value=f();println!(\"value {}\",value.id);}",
+                expect: Expect::Run("drop 1\nvalue 2\ndrop 2\n"),
+            },
+            Case {
+                name: "borrowed_capture_does_not_drop_owner",
+                source: "struct Token{id:i32}impl Drop for Token{fn drop(&mut self){println!(\"drop {}\",self.id);}}fn consume<F>(f:F){}fn main(){let token=Token{id:3};consume(||{let _r=&token;});println!(\"alive {}\",token.id);}",
+                expect: Expect::Run("alive 3\ndrop 3\n"),
+            },
+        ],
+    );
+}
+
+#[test]
 fn noncapturing_values_match_stock() {
     oracle::check(
         "stored_closures",

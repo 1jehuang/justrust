@@ -249,7 +249,12 @@ impl ValidatedFacts {
             }
         };
         let glue = match ty {
-            Ty::Tuple(parts) => {
+            Ty::Tuple(_) | Ty::Closure(_) => {
+                let parts = match ty {
+                    Ty::Tuple(parts) => parts.as_ref(),
+                    Ty::Closure(closure) => closure.captures(),
+                    _ => unreachable!(),
+                };
                 let mut fields = Vec::new();
                 for (i, part) in parts.iter().enumerate() {
                     if let Some(d) = child(part)? {

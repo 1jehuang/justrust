@@ -1637,7 +1637,7 @@ impl<'s> Checker<'s> {
         // Equalities whose projection inputs stay unsolved add no evidence;
         // the obligation itself is still checked against the final actuals.
         for (projection, rhs) in &equalities {
-            solver.constrain_projection_equality(projection, rhs, fallback)?;
+            solver.constrain_projection_equality(projection, rhs, None, fallback)?;
         }
         solver.finish(fallback)
     }

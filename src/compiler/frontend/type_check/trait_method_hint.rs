@@ -98,7 +98,7 @@ impl Checker<'_> {
                     &bindings,
                 );
                 let ty = bind_owner(ty, &bindings);
-                solver.constrain_projection_equality(&projection, &ty, true)?;
+                solver.constrain_projection_equality(&projection, &ty, Some(&bindings), true)?;
             }
         }
         solver.finish(true)

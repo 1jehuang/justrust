@@ -6,6 +6,13 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 
 ## Completed foundations, not full compatibility
 
+- [x] Source `Option` and `Result` lazy combinators preserve branch selection,
+  error types and FnOnce capture cleanup. `option_map` and `result_map` lazy
+  combinator tests compare CHECK/BUILD/run with stock at workers 1 and 8.
+  `method_owner_inference` covers enclosing-owner bindings inside nominal
+  callable outputs. `stored_closures::owned_closure_captures_drop_exactly_once`
+  and the normal-drop forgery test cover capture ownership and glue identity.
+
 - [x] Nested closure templates read their outermost source callable's immutable
   publication while retaining immediate lexical owner/site authentication.
   `inline_closure_arguments::nested_scalar_closures_use_outer_source_publication`,
