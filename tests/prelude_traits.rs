@@ -120,6 +120,21 @@ fn assert_graph_authority(source: &str, compiled: &compiler::Compilation, check:
     };
     for index in 0..plan.callable_count() {
         let declaration = plan.callable_decl(index).unwrap();
+        // Embedded prelude bodies are admitted on demand (471ca7b45), never
+        // eagerly; when demanded they still evaluate at most once.
+        if plan.is_prelude_decl(declaration).unwrap() {
+            for kind in [110, 111, 112, 115] {
+                let key = Key::new(kind, vec![index as u64]);
+                let seen: Vec<_> = report
+                    .node_evaluations
+                    .iter()
+                    .filter(|(k, _)| *k == key)
+                    .collect();
+                assert!(seen.len() <= 1, "duplicated {key:?}");
+                assert!(seen.iter().all(|(_, n)| *n == 1), "repeated {key:?}");
+            }
+            continue;
+        }
         evaluated_once(&Key::new(110, vec![index as u64]));
         let universal = match plan.callable_provider(declaration).unwrap() {
             CallableProvider::Source { .. } => plan.callable_env(declaration).unwrap().is_generic(),
