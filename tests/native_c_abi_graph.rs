@@ -16,17 +16,16 @@ fn check_validates_unused_c_boundaries_without_emission_or_linker() {
                 .iter()
                 .any(|(key, _)| key.kind == 103 || key.kind == 105)
         );
-        for index in 0..3 {
-            assert_eq!(
-                result
-                    .report
-                    .node_evaluations
-                    .iter()
-                    .filter(|(key, _)| *key == Key::new(102, vec![index]))
-                    .count(),
-                1
-            );
-        }
+        assert_eq!(result.analyses.len(), 3);
+        assert!(result.report.published_kind(128));
+        assert!(
+            result
+                .report
+                .node_evaluations
+                .iter()
+                .all(|(key, _)| !matches!(key.kind, 102 | 108 | 109)),
+            "CHECK must validate through SOURCE_ADMISSION, not instance bodies"
+        );
     }
 }
 

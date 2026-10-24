@@ -54,7 +54,12 @@ edition rather than resetting macro definitions to 2024. Edition-sensitive
 and `_` exclusions; `native_parser_retains_lexer_edition_for_macro_definitions`
 and `expr_2021_preserves_pre_2024_capture_boundaries` cover the distinction.
 Mixed-edition assembly still rejects explicitly, and these transport changes do
-not open earlier-edition admission.
+not open earlier-edition admission. The foreign-block parser also uses the
+`extern` token's authenticated edition: legacy implicit-unsafe blocks are
+recognized for pre-2024 tokens, while 2024 requires `unsafe extern`. Imported
+functions remain unsafe to call in both forms. The stock parser matrix is
+`foreign_blocks_follow_their_source_edition`; the public 2024 rejection gate is
+`plain_foreign_blocks_reject_in_2024_graphs`.
 
 Identifier and lifetime parsing treats `async`, `await`, `dyn`, and `try` as
 reserved from edition 2018, and `gen` from edition 2024, according to the

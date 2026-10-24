@@ -108,6 +108,51 @@ mod edition_keyword_tests {
         }
     }
     #[test]
+    fn foreign_blocks_follow_their_source_edition() {
+        use compiler::token::Edition;
+        for (edition, year) in [
+            (Edition::E2015, "2015"),
+            (Edition::E2018, "2018"),
+            (Edition::E2021, "2021"),
+            (Edition::E2024, "2024"),
+        ] {
+            for explicit_unsafe in [false, true] {
+                let prefix = if explicit_unsafe { "unsafe " } else { "" };
+                let source =
+                    format!("{prefix}extern \"C\" {{ fn abs(value: i32) -> i32; }} fn main(){{}}");
+                let accepted = explicit_unsafe || edition != Edition::E2024;
+                let oracle =
+                    stock_compile_edition(&source, std::path::Path::new("unused"), true, year);
+                assert_eq!(oracle.status.success(), accepted, "{year}: {source}");
+                let budget = compiler::expansion_budget::ExpansionBudget::default();
+                let projection = compiler::source::PreparedLexInput::identity(
+                    std::path::Path::new("edition-extern.rs"),
+                    &source,
+                    &budget,
+                    compiler::owner_path::standalone_issued(
+                        &budget,
+                        compiler::owner_path::OwnerDomain::SourceSnapshot,
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+                let owner = compiler::owner_path::standalone_issued(
+                    &budget,
+                    compiler::owner_path::OwnerDomain::TokenSession,
+                )
+                .unwrap();
+                let input = native_input_for_edition(&projection, budget, owner, edition).unwrap();
+                let native = parse_syntax_tokens(input);
+                assert_eq!(native.is_ok(), accepted, "{year}: {source}: {native:?}");
+                if let Ok(parsed) = native {
+                    parsed.program.validate_c_source().unwrap();
+                    assert!(parsed.program.functions[0].unsafety);
+                }
+            }
+        }
+    }
+
+    #[test]
     fn edition_keywords_use_their_token_edition_not_the_receiving_store() {
         use compiler::source::PreparedLexInput;
         use compiler::token::Edition;
@@ -186,6 +231,27 @@ mod edition_keyword_tests {
                 forged.bytes = 1..2;
                 assert!(tokens.name_edition(&forged).is_err());
             }
+        }
+    }
+}
+
+#[test]
+fn plain_foreign_blocks_reject_in_2024_graphs() {
+    let source = "extern \"C\" {fn abs(value:i32)->i32;} fn main(){}";
+    assert!(
+        !stock_compile(source, std::path::Path::new("unused"), true)
+            .status
+            .success()
+    );
+    for workers in [1, 8] {
+        for check_only in [true, false] {
+            let failure = super::super::compile(source.into(), workers, check_only)
+                .err()
+                .expect("Rust 2024 accepted an implicit-unsafe foreign block");
+            assert!(
+                failure.to_string().contains("extern blocks must be unsafe"),
+                "{failure}"
+            );
         }
     }
 }

@@ -11887,8 +11887,8 @@ impl<'input, 'names> Parser<'input, 'names> {
         explicit_visibility: bool,
         function_source_start: Option<usize>,
     ) -> Result<(), ParseError> {
-        if self.is("unsafe")
-            && self.cursor.peek(1).is_some_and(|t| t.matches("extern"))
+        if (self.is("extern")
+            || (self.is("unsafe") && self.cursor.peek(1).is_some_and(|t| t.matches("extern"))))
             && !self.starts_qualified_function()
         {
             if explicit_visibility || self.pending_c_export || self.pending_repr_c {

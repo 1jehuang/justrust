@@ -124,7 +124,11 @@ impl Parser<'_, '_> {
             return Err(self.unsupported("nested or generated extern blocks are unsupported"));
         }
         self.reject_forbidden_unsafe()?;
-        self.expect("unsafe")?;
+        if !self.eat("unsafe")
+            && self.input.name_edition(&self.token())? == super::super::token::Edition::E2024
+        {
+            return Err(self.error("extern blocks must be unsafe in Rust 2024"));
+        }
         self.expect("extern")?;
         if self.token().string {
             if self.token().text != "C" {
