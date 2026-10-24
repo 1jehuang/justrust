@@ -3104,6 +3104,112 @@ mod tests {
         assert_eq!(alone.primary, whole.primary);
     }
 
+    /// Step E1: per-file parses merged into one crate result resolve to the
+    /// same declarations as the whole-crate parse, for nested files that use
+    /// items and textual macros across file boundaries.
+    #[test]
+    fn merged_file_parses_resolve_like_the_whole_crate_parse() {
+        use super::super::frontend::{
+            merge_crate_files, parse_child_view_owned, parse_file_view_owned, parse_prepared,
+            resolve,
+        };
+        use super::super::owner_path::{OwnerDomain, standalone_issued};
+        let tree = Tree::new();
+        tree.put(
+            "main.rs",
+            "macro_rules! make { ($n:ident) => { pub fn $n() -> u32 { 7 } } }\nmod a;\npub struct Top(pub u32);\nfn main(){ let _ = a::d::deep(); let _ = a::made(); }\n",
+        );
+        tree.put(
+            "a.rs",
+            "make!(made);\npub mod d;\npub fn uses_top() -> crate::Top { crate::Top(1) }\n",
+        );
+        tree.put("a/d.rs", "pub fn deep() -> u32 { super::made() + 1 }\n");
+        let path = tree.0.join("main.rs");
+        let options = SourceOptions::default();
+        let budget = super::super::expansion_budget::ExpansionBudget::default();
+        let issue = |domain| standalone_issued(&budget, domain).unwrap();
+        let root = prepare_root_unit(&path, &options, &budget).unwrap();
+        let p0 = parse_file_view_owned(
+            &FileView::of(&root, 0, &options).unwrap(),
+            budget.clone(),
+            issue(OwnerDomain::SourceSnapshot),
+            issue(OwnerDomain::TokenSession),
+        )
+        .unwrap();
+        let a = prepare_child_unit(&root, 0, &options, &budget).unwrap();
+        let p1 = parse_child_view_owned(
+            &FileView::of(&a, 1, &options).unwrap(),
+            &p0,
+            0,
+            budget.clone(),
+            issue(OwnerDomain::SourceSnapshot),
+            issue(OwnerDomain::TokenSession),
+        )
+        .unwrap();
+        let d = prepare_child_unit(&a, 0, &options, &budget).unwrap();
+        let p2 = parse_child_view_owned(
+            &FileView::of(&d, 2, &options).unwrap(),
+            &p1,
+            0,
+            budget.clone(),
+            issue(OwnerDomain::SourceSnapshot),
+            issue(OwnerDomain::TokenSession),
+        )
+        .unwrap();
+        let merged = merge_crate_files(
+            &[p0, p1, p2],
+            budget.clone(),
+            issue(OwnerDomain::TokenSession),
+        )
+        .unwrap();
+        let whole = parse_prepared(&prepare_file(&path, &options).unwrap()).unwrap();
+        let shape = |parsed: &super::super::frontend::ParsedProgram| {
+            let program = resolve(parsed).unwrap();
+            let names = &*program.names;
+            let mut functions: Vec<String> = program
+                .functions
+                .iter()
+                .map(|f| f.name.display(names).unwrap().to_string())
+                .collect();
+            functions.sort();
+            let mut structs: Vec<String> = program
+                .structs
+                .iter()
+                .map(|s| s.name.display(names).unwrap().to_string())
+                .collect();
+            structs.sort();
+            (functions, structs)
+        };
+        let (merged_shape, whole_shape) = (shape(&merged), shape(&whole));
+        assert_eq!(merged_shape, whole_shape);
+        assert!(merged_shape.0.contains(&"crate::a::d::deep".to_string()));
+        assert!(merged_shape.0.contains(&"crate::a::made".to_string()));
+        // A file from an unrelated parse never joins: merging it is rejected.
+        let other = parse_file_view_owned(
+            &FileView::of(&root, 0, &options).unwrap(),
+            budget.clone(),
+            issue(OwnerDomain::SourceSnapshot),
+            issue(OwnerDomain::TokenSession),
+        )
+        .unwrap();
+        let p0b = parse_file_view_owned(
+            &FileView::of(&root, 0, &options).unwrap(),
+            budget.clone(),
+            issue(OwnerDomain::SourceSnapshot),
+            issue(OwnerDomain::TokenSession),
+        )
+        .unwrap();
+        assert!(
+            merge_crate_files(
+                &[p0b, other],
+                budget.clone(),
+                issue(OwnerDomain::TokenSession)
+            )
+            .is_err(),
+            "two crate roots must not merge into one crate"
+        );
+    }
+
     #[test]
     fn independent_units_report_the_sequential_first_error() {
         let tree = Tree::new();

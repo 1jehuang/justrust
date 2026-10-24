@@ -73,7 +73,9 @@ pub(crate) struct ItemExpansionAdmission {
 impl ItemExpansionAdmission {
     pub(crate) fn validate_session(&self, session: &TokenSession) -> Result<(), ScopeError> {
         session.budget().check()?;
-        if session.id() != self.session {
+        // A linked crate sibling's admission stays its owner's (PARSE-SPLIT
+        // step E1): the merged crate view serves, never re-owns, it.
+        if !session.serves(self.session) {
             return Err(ScopeError::ForeignNames);
         }
         session.expansion(self.expansion)?;
@@ -548,6 +550,33 @@ impl ScopeArena {
         &self,
         visited: &[ScopeId],
     ) -> Result<(), ScopeError> {
+        // A merged crate view (PARSE-SPLIT.md step E1) checks every linked
+        // file arena's generated functions against exactly the visited ones
+        // it owns; each arena's own exact-coverage contract is unchanged.
+        if !self.linked.is_empty() {
+            let mut own = Vec::new();
+            for function in visited {
+                self.budget.charge(Counter::Work, 1)?;
+                if function.owner == self.owner {
+                    own.push(*function);
+                } else {
+                    self.linked_arena(function.owner)?;
+                }
+            }
+            for (owner, arena) in self.linked.iter() {
+                let mine: Vec<ScopeId> = visited
+                    .iter()
+                    .copied()
+                    .filter(|f| f.owner == *owner)
+                    .collect();
+                self.budget.charge(Counter::Work, mine.len() as u64 + 1)?;
+                arena.check_own_item_function_coverage(&mine)?;
+            }
+            return self.check_own_item_function_coverage(&own);
+        }
+        self.check_own_item_function_coverage(visited)
+    }
+    fn check_own_item_function_coverage(&self, visited: &[ScopeId]) -> Result<(), ScopeError> {
         self.check_item_completion()?;
         if self.items.products.len() == 0 && visited.is_empty() {
             return Ok(());
@@ -644,6 +673,9 @@ impl ScopeArena {
         Ok(None)
     }
     fn check_item_proof(&self, p: &ItemExpansionAdmission) -> Result<(), ScopeError> {
+        if let Some(arena) = self.linked_arena(p.owner)? {
+            return arena.check_item_proof(p);
+        }
         self.budget.check()?;
         if p.owner != self.owner || p.session != self.names {
             return Err(ScopeError::ForeignOwner);
@@ -661,6 +693,9 @@ impl ScopeArena {
         }
     }
     fn item_product(&self, f: ScopeId) -> Result<Option<ItemProduct>, ScopeError> {
+        if let Some(arena) = self.linked_arena(f.owner)? {
+            return arena.item_product(f);
+        }
         self.check_function(f)?;
         for p in self.items.products.as_slice() {
             self.budget.charge(Counter::Work, 1)?;
@@ -671,6 +706,9 @@ impl ScopeArena {
         Ok(None)
     }
     fn item_is_sealed(&self, f: ScopeId) -> Result<bool, ScopeError> {
+        if let Some(arena) = self.linked_arena(f.owner)? {
+            return arena.item_is_sealed(f);
+        }
         self.budget.check()?;
         for p in self.items.seals.as_slice() {
             self.budget.charge(Counter::Work, 1)?;

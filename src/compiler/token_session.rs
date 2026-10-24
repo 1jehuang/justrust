@@ -555,6 +555,20 @@ impl SourceSnapshot {
             joined_root: Some(root),
         })
     }
+    /// The same sealed files without sibling links or joined root, for
+    /// linking as one sibling of a descendant (links are not transitive).
+    pub fn unlinked(&self) -> Self {
+        Self {
+            inner: Arc::clone(&self.inner),
+            linked: Arc::from([]),
+            base: self.base,
+            joined_root: None,
+        }
+    }
+    /// This snapshot's linked sibling snapshots.
+    pub fn linked_snapshots(&self) -> Vec<SourceSnapshot> {
+        self.linked.to_vec()
+    }
     /// The linked sibling owning `file`, `None` for this snapshot's own files.
     fn linked_owner(&self, file: SourceFileHandle) -> Result<Option<&SourceSnapshot>, TokenError> {
         if file.source == self.inner.id {
@@ -982,6 +996,10 @@ impl TokenSession {
         }
         self.crate_key = root;
         Ok(())
+    }
+    /// This session's linked crate sibling stores, in owner order.
+    pub(super) fn linked_stores(&self) -> Vec<Arc<super::semantic_name::NameStore>> {
+        self.linked.stores.iter().map(|(_, s)| s.clone()).collect()
     }
     /// Whether `owner` is this session or one of its linked crate siblings.
     pub(crate) fn serves(&self, owner: SessionId) -> bool {

@@ -169,7 +169,9 @@ pub(crate) struct ExpansionAdmission {
 impl ExpansionAdmission {
     pub(crate) fn validate_session(&self, session: &TokenSession) -> Result<(), ScopeError> {
         session.budget().check()?;
-        if session.id() != self.session {
+        // A linked crate sibling's admission stays its owner's (PARSE-SPLIT
+        // step E1): the merged crate view serves, never re-owns, it.
+        if !session.serves(self.session) {
             return Err(ScopeError::ForeignNames);
         }
         session.expansion(self.expansion)?;
@@ -671,6 +673,10 @@ impl ScopeArenaBuilder {
     }
 }
 impl ScopeArena {
+    /// This arena's linked crate sibling arenas.
+    pub fn linked_arenas(&self) -> Vec<Arc<ScopeArena>> {
+        self.linked.iter().map(|(_, a)| a.clone()).collect()
+    }
     pub fn budget(&self) -> &ExpansionBudget {
         &self.budget
     }

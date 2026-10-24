@@ -217,6 +217,11 @@ impl ScopeArena {
         derive: SpanId,
         nominal: SpanId,
     ) -> Result<(), ScopeError> {
+        if id.owner == metadata.owner
+            && let Some(arena) = self.linked_arena(id.owner)?
+        {
+            return arena.validate_item_copy(names, id, metadata, derive, nominal);
+        }
         self.check_names(names)?;
         if id.owner != self.owner || metadata.owner != self.owner {
             return Err(ScopeError::ForeignOwner);
@@ -241,6 +246,9 @@ impl ScopeArena {
         location: (ModuleId, SpanId),
         attributes: &[SpanId],
     ) -> Result<(), ScopeError> {
+        if let Some(arena) = self.linked_arena(id.owner)? {
+            return arena.validate_item_metadata(names, modules, id, proof, location, attributes);
+        }
         let (scope, item) = location;
         self.check_names(names)?;
         proof.check_modules(names, modules)?;

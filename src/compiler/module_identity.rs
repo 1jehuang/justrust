@@ -459,6 +459,14 @@ impl ModuleArenaBuilder {
     }
 }
 impl ModuleArena {
+    /// Whether this arena joined another file's crate (false for a root).
+    pub fn is_joined(&self) -> bool {
+        self.joined
+    }
+    /// This arena's linked crate sibling arenas.
+    pub fn linked_arenas(&self) -> Vec<Arc<ModuleArena>> {
+        self.linked.iter().map(|(_, a)| a.clone()).collect()
+    }
     pub fn source_root(&self) -> Result<ModuleId, ModuleError> {
         self.budget.check()?;
         self.source_root.ok_or(ModuleError::SourceUnavailable)

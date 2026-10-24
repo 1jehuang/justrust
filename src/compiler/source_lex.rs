@@ -101,7 +101,11 @@ impl<'a> PreparedLexInput<'a> {
             owner,
         )
         .and_then(|snapshot| snapshot.at_assembly_base(view.base))
-        .and_then(|snapshot| snapshot.linked_with(vec![parent.clone()], budget))
+        .and_then(|snapshot| {
+            let mut siblings = parent.linked_snapshots();
+            siblings.push(parent.unlinked());
+            snapshot.linked_with(siblings, budget)
+        })
         .and_then(|snapshot| snapshot.join_crate_root(root))
         .map_err(SourceError::from_token)?;
         Self::new(&prepared.text, Some(&prepared.origins), snapshot, budget)

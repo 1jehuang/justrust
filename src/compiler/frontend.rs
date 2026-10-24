@@ -15229,9 +15229,14 @@ fn parse_syntax_unit(
     let mut names =
         NameStoreBuilder::new(session, cap, edition).map_err(native_adapter::name_error)?;
     if let Some(mount) = &mount {
+        // The parent and every ancestor it links (the crate root included),
+        // so inherited handles from any ancestor stay admissible.
+        let mut stores = mount.parent.names.session().linked_stores();
+        stores.push(mount.parent.names.clone());
+        let root = crate_root_store(&stores)?;
         names
-            .link_crate_files(vec![mount.parent.names.clone()])
-            .and_then(|()| names.join_crate(&mount.parent.names))
+            .link_crate_files(stores)
+            .and_then(|()| names.join_crate(&root))
             .map_err(native_adapter::name_error)?;
     }
     let symbols = ProgramSymbols::new(&mut names).map_err(native_adapter::name_error)?;
@@ -16469,6 +16474,7 @@ pub fn parse_child_view_owned(
         &budget,
         snapshot,
     )?;
+    debug_assert!(parent.child_entries.len() > index);
     let sites = Arc::from(view.child_sites.as_slice());
     parse_projection(
         &view.prepared,
@@ -16480,10 +16486,150 @@ pub fn parse_child_view_owned(
         owner,
     )
 }
+/// The store among a crate's linked file stores that is its own crate.
+fn crate_root_store(stores: &[Arc<NameStore>]) -> Result<Arc<NameStore>, ParseError> {
+    stores
+        .iter()
+        .find(|s| s.session().crate_key() == s.session().id())
+        .cloned()
+        .ok_or_else(|| {
+            native_adapter::transport_error(super::token_session::TokenError::InvalidInput(
+                "no crate root among linked files",
+            ))
+        })
+}
 /// A child parse's mount point in its parent's frozen parse.
 pub(super) struct ChildMount<'a> {
     parent: &'a Program,
     entry: &'a ChildEntry,
+}
+
+/// Merge a crate's per-file parses, in depth-first assembly order with the
+/// crate root first, into one syntax result (PARSE-SPLIT.md step E1). The
+/// merged program reads every file through fresh crate-level name, module
+/// and scope stores that link all file stores and join the root's crate, so
+/// structural keys from every file compare equal. Declarations append in
+/// file order; nothing is re-parsed.
+pub fn merge_crate_files(
+    files: &[ParsedProgram],
+    budget: super::expansion_budget::ExpansionBudget,
+    owner: super::owner_path::Issued,
+) -> Result<ParsedProgram, String> {
+    use super::semantic_scope::ScopeArenaBuilder;
+    let (root, rest) = files.split_first().ok_or("no crate files to merge")?;
+    let siblings = rest
+        .iter()
+        .map(|f| f.program.names.session().sources().clone())
+        .collect();
+    let sources = root
+        .program
+        .names
+        .session()
+        .sources()
+        .linked_with(siblings, &budget)
+        .map_err(|e| e.to_string())?;
+    let (session, cap) = super::token_session::TokenSession::with_owner(sources, budget, owner)
+        .map_err(|e| e.to_string())?;
+    let mut names = NameStoreBuilder::new(session, cap, root.program.names.edition())
+        .map_err(|e| e.to_string())?;
+    names
+        .link_crate_files(files.iter().map(|f| f.program.names.clone()).collect())
+        .and_then(|()| names.join_crate(&root.program.names))
+        .map_err(|e| e.to_string())?;
+    let mut modules = super::module_identity::ModuleArenaBuilder::for_builder(&mut names)
+        .map_err(|e| e.to_string())?;
+    modules
+        .link_crate_files(files.iter().map(|f| f.program.modules.clone()).collect())
+        .and_then(|()| modules.join_crate(&root.program.modules))
+        .map_err(|e| e.to_string())?;
+    let scopes = match files.iter().any(|f| f.program.scopes.is_some()) {
+        true => {
+            let mut scopes =
+                ScopeArenaBuilder::for_builder(&mut names).map_err(|e| e.to_string())?;
+            scopes
+                .link_crate_files(
+                    files
+                        .iter()
+                        .filter_map(|f| f.program.scopes.clone())
+                        .collect(),
+                )
+                .map_err(|e| e.to_string())?;
+            Some(scopes.freeze().map_err(|e| e.to_string())?)
+        }
+        false => None,
+    };
+    let symbols = ProgramSymbols::new(&mut names).map_err(|e| e.to_string())?;
+    let modules = modules.freeze().map_err(|e| e.to_string())?;
+    let names = names.freeze().map_err(|e| e.to_string())?;
+    let mut program = root.program.clone();
+    let mut items = root.items.clone();
+    let mut empty_use_prefixes = root.empty_use_prefixes.clone();
+    let mut glob_imports = root.glob_imports.clone();
+    let mut closure_sources = (*root.program.closure_sources).clone();
+    let mut c_abi = (*root.program.c_abi).clone();
+    let mut generated_metadata = root.program.generated_metadata.to_vec();
+    let mut generated_owners = root.program.generated_owners.to_vec();
+    for file in rest {
+        let p = &file.program;
+        if p.prelude_module.is_some()
+            || p.prelude_scope.is_some()
+            || !p.extern_mounts.is_empty()
+            || !p.embedded_issuers.is_empty()
+        {
+            return Err("unsupported: crate-root declarations in a child file".into());
+        }
+        program.functions.extend(p.functions.iter().cloned());
+        program.constants.extend(p.constants.iter().cloned());
+        program.structs.extend(p.structs.iter().cloned());
+        program.enums.extend(p.enums.iter().cloned());
+        program.impls.extend(p.impls.iter().cloned());
+        program.traits.extend(p.traits.iter().cloned());
+        program
+            .trait_imports
+            .extend(p.trait_imports.iter().cloned());
+        for (key, list) in &file.items {
+            items
+                .entry(key.clone())
+                .or_default()
+                .extend(list.iter().cloned());
+        }
+        empty_use_prefixes.extend(file.empty_use_prefixes.iter().cloned());
+        glob_imports.extend(file.glob_imports.iter().cloned());
+        for (key, source) in p.closure_sources.iter() {
+            if closure_sources
+                .insert(key.clone(), source.clone())
+                .is_some()
+            {
+                return Err("duplicate anonymous source declaration across files".into());
+            }
+        }
+        c_abi.functions.extend(
+            p.c_abi
+                .functions
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone())),
+        );
+        c_abi.repr_c.extend(p.c_abi.repr_c.iter().cloned());
+        generated_metadata.extend(p.generated_metadata.iter().cloned());
+        generated_owners.extend(p.generated_owners.iter().cloned());
+    }
+    program.struct_sources =
+        name_validation::capture_struct_sources(&names, &program.structs).map_err(|e| e.message)?;
+    program.names = names;
+    program.modules = modules;
+    program.symbols = symbols;
+    program.scopes = scopes;
+    program.closure_sources = Arc::new(closure_sources);
+    program.c_abi = Arc::new(c_abi);
+    program.generated_metadata = generated_metadata.into();
+    program.generated_owners = generated_owners.into();
+    Ok(ParsedProgram {
+        program,
+        items,
+        empty_use_prefixes,
+        glob_imports,
+        child_entries: Vec::new(),
+    })
 }
 
 fn parse_projection(

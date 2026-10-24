@@ -80,18 +80,25 @@ impl Parser<'_, '_> {
     /// textual macro scope resume from the parent's declaration site.
     pub(super) fn mount_child(&mut self, mount: &ChildMount<'_>) -> Result<(), ParseError> {
         let parent = mount.parent;
+        let mut arenas = parent.modules.linked_arenas();
+        arenas.push(parent.modules.clone());
+        let root = arenas
+            .iter()
+            .find(|a| !a.is_joined())
+            .cloned()
+            .ok_or_else(|| self.error("no crate root module arena"))?;
         self.modules
-            .link_crate_files(vec![parent.modules.clone()])
-            .and_then(|()| self.modules.join_crate(&parent.modules))
+            .link_crate_files(arenas)
+            .and_then(|()| self.modules.join_crate(&root))
             .map_err(module_parse_error)?;
         let Some(parent_scopes) = parent.scopes.clone() else {
             return Ok(());
         };
         let mut scopes = super::super::semantic_scope::ScopeArenaBuilder::for_builder(self.names)
             .map_err(scope_parse_error)?;
-        scopes
-            .link_crate_files(vec![parent_scopes])
-            .map_err(scope_parse_error)?;
+        let mut linked = parent_scopes.linked_arenas();
+        linked.push(parent_scopes);
+        scopes.link_crate_files(linked).map_err(scope_parse_error)?;
         self.module_frontier = match mount.entry.frontier {
             Some(at) => Some(
                 scopes
