@@ -69,3 +69,4 @@ pub mod ptr;
 pub mod slice;
 pub mod iter;
 pub mod test;
+pub mod io;

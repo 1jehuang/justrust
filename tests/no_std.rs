@@ -248,3 +248,18 @@ fn builtin_derives_name_core_in_no_std_crates() {
         assert_eq!(run.stdout, b"3\n");
     }
 }
+#[test]
+fn std_io_is_unavailable_in_no_std_crates() {
+    let root = project(
+        "io",
+        "#![no_std]\nuse std::io;\npub fn value() -> i32 { 3i32 }\n",
+    );
+    let out = native(&root, "check", "1");
+    assert_eq!(
+        out.status.code(),
+        Some(101),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(String::from_utf8_lossy(&out.stderr).contains("no_std"));
+}
