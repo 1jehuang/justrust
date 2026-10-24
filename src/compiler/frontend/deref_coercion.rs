@@ -158,6 +158,62 @@ impl type_check::Checker<'_> {
             ir::Ty::Ref { referent, .. } => (referent.as_ref().clone(), true),
             ty => (ty.clone(), false),
         };
+        if kind == ir::BorrowKind::Shared
+            && let ir::Ty::Ref { .. } = &owner
+        {
+            // `&&..&N` receiver: builtin dereferences of the copied shared
+            // carriers reach `&N`, then one overloaded `Deref::deref(&N)`.
+            let mut id = self.expr_expected(receiver, Some(receiver_ty))?;
+            loop {
+                let ir::Ty::Ref { referent, .. } = &self.exprs[id.0].ty else {
+                    return Ok(None);
+                };
+                if !matches!(referent.as_ref(), ir::Ty::Ref { .. }) {
+                    break;
+                }
+                let ty = referent.as_ref().clone();
+                let completion = self.exprs[id.0].completion;
+                self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
+                let next = ir::ExprId(self.exprs.len());
+                self.exprs.push(ir::TypedExpr {
+                    kind: ir::ExprKind::Deref { value: id },
+                    ty,
+                    completion,
+                });
+                id = next;
+            }
+            let ir::Ty::Ref { referent, .. } = &self.exprs[id.0].ty else {
+                return Ok(None);
+            };
+            let nominal = referent.as_ref().clone();
+            if !matches!(nominal, ir::Ty::Struct(_) | ir::Ty::Enum(_))
+                || self.deref_target_hint(&nominal)?.is_none()
+            {
+                return Ok(None);
+            }
+            let (declaration, name) = self.operator_trait("ops", "Deref", "deref")?;
+            let plan = self.signatures.plan()?;
+            let goal = ir::TraitRef {
+                declaration,
+                self_ty: nominal,
+                args: Arc::from([]),
+            };
+            let Some((target, signature, _)) =
+                plan.select_trait(&goal, &name, &[], self.facts(), false, &plan.budget)?
+            else {
+                return Ok(None);
+            };
+            let call = self.finish_checked_call(
+                target,
+                name,
+                signature,
+                &[],
+                Arc::from([]),
+                Some((id, None)),
+            )?;
+            self.record_operator(site(receiver as *const Expr as usize, 1), call)?;
+            return Ok(Some(call));
+        }
         if !matches!(owner, ir::Ty::Struct(_) | ir::Ty::Enum(_))
             || self.deref_target_hint(&owner)?.is_none()
         {

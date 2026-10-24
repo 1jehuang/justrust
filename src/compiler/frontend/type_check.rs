@@ -8680,7 +8680,11 @@ impl<'a> Checker<'a> {
             .method_receiver_hints
             .contains_key(&(receiver as *const Expr as usize));
         if self.names()?.edition().pre_2021()
-            && self.names()?.spelling(*name).map_err(|e| format!("{e:?}"))? == "into_iter"
+            && self
+                .names()?
+                .spelling(*name)
+                .map_err(|e| format!("{e:?}"))?
+                == "into_iter"
             && (matches!(receiver, Expr::Array(_) | Expr::Repeat { .. })
                 || self
                     .method_receiver_hint(receiver)
@@ -8975,10 +8979,24 @@ impl<'a> Checker<'a> {
         expected: Option<&ir::Ty>,
     ) -> Result<ir::ExprId, String> {
         const MISSING: &str = "no applicable method or unresolved method generic arguments";
-        let owner = match ty {
+        let mut owner = match ty {
             ir::Ty::Ref { referent, .. } => referent.as_ref(),
             ty => ty,
         };
+        while let ir::Ty::Ref {
+            kind: ir::BorrowKind::Shared,
+            referent,
+        } = owner
+            && matches!(
+                ty,
+                ir::Ty::Ref {
+                    kind: ir::BorrowKind::Shared,
+                    ..
+                }
+            )
+        {
+            owner = referent.as_ref();
+        }
         let Some(target) = self.deref_target_hint(owner)? else {
             return Err(MISSING.into());
         };

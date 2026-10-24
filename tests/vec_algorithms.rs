@@ -210,6 +210,13 @@ let mut s=String::from(\"a\");let mut r=id(&s);let mut i=0;while i<2{r=id(&s);i+
         "3 1\n3\na\nax\n",
         "max-by-ref",
     );
+    compare(
+        "trait S{fn a(&self)->f64;}\nstruct C{r:f64}\nimpl S for C{fn a(&self)->f64{self.r}}\n\
+fn main(){let v:Vec<Box<dyn S>>=vec![Box::new(C{r:1.0}),Box::new(C{r:3.0})];\
+let b=v.iter().max_by(|a,b|a.a().partial_cmp(&b.a()).unwrap()).unwrap();let r=&b;let rr=&r;println!(\"{} {}\",b.a(),rr.a());}\n",
+        "3 3\n",
+        "max-by-ref-box-receiver",
+    );
 }
 
 #[test]
