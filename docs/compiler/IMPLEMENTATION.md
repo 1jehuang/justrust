@@ -2264,6 +2264,23 @@ reference-containing values, libraries and project integration remain open.
 
 Numbers below are evidence at each checkpoint, not cumulative full-Rust coverage.
 
+### Unchanged Adler2 2.0.1 test suite
+
+Unchanged Adler2 `test --lib` passes 6/6 natively at workers 1 and 8, matching
+the recorded stock run. Delivered for it: `extern crate <dependency>` (crate-root
+aliases join the extern prelude), block-local `fn`/`use` items hoisted under
+hidden names, `&mut R` forwarding readers (identity carrier writes are not
+affine) with `R` inferred from `f(&mut r)`, and stock static promotion of
+`&[byte_literal; N]` of u8 beyond 65535 elements (`ByteRepeat`). Type-level
+array walks use `MAX_ARRAY_TYPE_LEN`; per-element expansion keeps `MAX_ARRAY_LEN`.
+Other large arrays (non-literal, `&mut`, wider elements, owned locals) remain
+explicit unsupported boundaries. Doc-tests are not executed natively. Tests:
+`target_dependencies extern_crate_items_name_dependencies_like_stock`,
+`const_items block_local_fn_and_use_items_match_stock`,
+`std_io buffered_byte_readers_match_stock`,
+`slice_methods promoted_large_byte_repeats_match_stock`,
+`slice_methods unpromoted_large_arrays_remain_explicitly_unsupported`.
+
 ### Edition 2021 admission and unchanged Adler2 2.0.1
 
 Edition 2021 sources compile natively; 2015/2018 stay unsupported. Constructs
@@ -2275,9 +2292,8 @@ Unchanged Adler2 2.0.1 passes native check/build (std and no_std check) and a
 stock-checked consumer runs at workers 1 and 8. Tests:
 `project_configuration edition_2021_is_admitted_with_stock_semantics_or_explicit_boundaries`,
 `inactive_block_local_items_are_syntax_checked_only`,
-`inactive_array_lengths_skip_the_semantic_length_limit`. Open: Adler2's own
-`cfg(test)` suite (active block-local items, `[T; 1 << 20]` arrays, inferring
-`R` in `adler32(&mut BufReader)`), and `extern crate <dependency>`.
+`inactive_array_lengths_skip_the_semantic_length_limit`. Adler2's own test
+suite now also passes (see the checkpoint above).
 
 ### Native i128/u128 scalars
 
