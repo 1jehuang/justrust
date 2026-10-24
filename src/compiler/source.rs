@@ -2938,6 +2938,57 @@ mod tests {
         );
     }
 
+    /// Step B: a child file parsed alone in its own session, mounted at its
+    /// depth-first assembly FileId, reports the same error, path, line and
+    /// rendered FileId as the whole-crate parse.
+    #[test]
+    fn file_view_parse_renders_child_errors_at_assembly_base() {
+        let tree = Tree::new();
+        tree.put("main.rs", "mod a;\nmod b;\nfn main(){}\n");
+        tree.put("a.rs", "pub fn a(){}\n");
+        tree.put("b.rs", "pub fn b(){}\nfn broken() -> {}\n");
+        let path = tree.0.join("main.rs");
+        let options = SourceOptions::default();
+        let budget = super::super::expansion_budget::ExpansionBudget::default();
+        let whole = prepare_file(&path, &options).unwrap();
+        let whole = match super::super::frontend::parse_prepared(&whole) {
+            Err(error) => error,
+            Ok(_) => panic!("whole-crate parse must reject b.rs"),
+        };
+        let root = prepare_root_unit(&path, &options, &budget).unwrap();
+        let b = prepare_child_unit(&root, 1, &options, &budget).unwrap();
+        let view = FileView::of(&b, 2, &options).unwrap();
+        let issue = |domain| super::super::owner_path::standalone_issued(&budget, domain).unwrap();
+        let alone = match super::super::frontend::parse_file_view_owned(
+            &view,
+            budget.clone(),
+            issue(super::super::owner_path::OwnerDomain::SourceSnapshot),
+            issue(super::super::owner_path::OwnerDomain::TokenSession),
+        ) {
+            Err(error) => error,
+            Ok(_) => panic!("file view parse must reject b.rs"),
+        };
+        assert_eq!(alone.message, whole.message);
+        assert_eq!(alone.kind, whole.kind);
+        assert_eq!(alone.primary.map(|s| s.file.0), Some(2));
+        assert_eq!(alone.primary.map(|s| s.file), whole.primary.map(|s| s.file));
+        let (a, w) = (alone.location.unwrap(), whole.location.unwrap());
+        assert!(a.path.ends_with("b.rs"), "{}", a.path.display());
+        assert_eq!((a.path, a.line, a.column), (w.path, w.line, w.column));
+        // Valid sibling parses alone without any parent session.
+        let a_unit = prepare_child_unit(&root, 0, &options, &budget).unwrap();
+        let a_view = FileView::of(&a_unit, 1, &options).unwrap();
+        assert!(
+            super::super::frontend::parse_file_view_owned(
+                &a_view,
+                budget.clone(),
+                issue(super::super::owner_path::OwnerDomain::SourceSnapshot),
+                issue(super::super::owner_path::OwnerDomain::TokenSession),
+            )
+            .is_ok()
+        );
+    }
+
     #[test]
     fn independent_units_report_the_sequential_first_error() {
         let tree = Tree::new();

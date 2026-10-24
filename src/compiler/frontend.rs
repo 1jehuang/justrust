@@ -11887,7 +11887,12 @@ impl<'input, 'names> Parser<'input, 'names> {
         explicit_visibility: bool,
         function_source_start: Option<usize>,
     ) -> Result<(), ParseError> {
-        if (self.is("extern")
+        // `extern crate` is not a foreign block: require `extern {` or `extern "ABI" {`.
+        let legacy_foreign = self.is("extern")
+            && (self.cursor.peek(1).is_some_and(|t| t.matches("{"))
+                || (self.cursor.peek(1).is_some_and(|t| t.string)
+                    && self.cursor.peek(2).is_some_and(|t| t.matches("{"))));
+        if (legacy_foreign
             || (self.is("unsafe") && self.cursor.peek(1).is_some_and(|t| t.matches("extern"))))
             && !self.starts_qualified_function()
         {
@@ -16321,6 +16326,29 @@ pub fn parse_prepared_owned(
     snapshot: super::owner_path::Issued,
     owner: super::owner_path::Issued,
 ) -> Result<ParsedProgram, super::source::SourceError> {
+    let projection = super::source::PreparedLexInput::prepared(source, &budget, snapshot)?;
+    parse_projection(source, projection, 0, budget, owner)
+}
+
+/// Parse one file's shallow view in its own session, rendered at its crate
+/// assembly base (PARSE-SPLIT.md step B). Not yet scheduled as PARSE_FILE.
+pub fn parse_file_view_owned(
+    view: &super::source::FileView,
+    budget: super::expansion_budget::ExpansionBudget,
+    snapshot: super::owner_path::Issued,
+    owner: super::owner_path::Issued,
+) -> Result<ParsedProgram, super::source::SourceError> {
+    let projection = super::source::PreparedLexInput::file_view(view, &budget, snapshot)?;
+    parse_projection(&view.prepared, projection, view.base, budget, owner)
+}
+
+fn parse_projection(
+    source: &super::source::PreparedSource,
+    projection: super::source::PreparedLexInput<'_>,
+    base: u32,
+    budget: super::expansion_budget::ExpansionBudget,
+    owner: super::owner_path::Issued,
+) -> Result<ParsedProgram, super::source::SourceError> {
     let mapped = |error: ParseError| {
         let mut diagnostic = super::source::SourceError::syntax(
             error.primary.or_else(|| {
@@ -16334,9 +16362,16 @@ pub fn parse_prepared_owned(
         );
         diagnostic.kind = error.kind;
         diagnostic._diagnostic_lease = error._diagnostic_lease;
-        diagnostic.with_sources(&source.sources)
+        // Spans render at the crate assembly FileId; the view's own map
+        // holds that file at local index `id - base`.
+        let rendered = diagnostic.primary;
+        if let Some(span) = diagnostic.primary.as_mut() {
+            span.file.0 = span.file.0.wrapping_sub(base);
+        }
+        let mut diagnostic = diagnostic.with_sources(&source.sources);
+        diagnostic.primary = rendered;
+        diagnostic
     };
-    let projection = super::source::PreparedLexInput::prepared(source, &budget, snapshot)?;
     let mut no_std_roots = Vec::new();
     let mut forbid_unsafe_roots = Vec::new();
     for policy in &source.crate_policies {

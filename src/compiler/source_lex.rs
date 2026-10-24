@@ -63,6 +63,24 @@ impl<'a> PreparedLexInput<'a> {
             budget,
         )
     }
+    /// One file's shallow view (PARSE-SPLIT.md step B): its own sealed
+    /// snapshot rendered at the file's crate assembly FileId `base`.
+    pub fn file_view(
+        view: &'a super::FileView,
+        budget: &ExpansionBudget,
+        owner: super::super::owner_path::Issued,
+    ) -> Result<Self, SourceError> {
+        let prepared = &view.prepared;
+        let snapshot = SourceSnapshot::copy_with_crates(
+            &prepared.sources,
+            &prepared.crate_roots,
+            budget,
+            owner,
+        )
+        .and_then(|snapshot| snapshot.at_assembly_base(view.base))
+        .map_err(SourceError::from_token)?;
+        Self::new(&prepared.text, Some(&prepared.origins), snapshot, budget)
+    }
     pub fn identity(
         name: &Path,
         text: &'a str,
