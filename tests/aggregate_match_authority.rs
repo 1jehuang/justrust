@@ -83,6 +83,7 @@ fn fixture() -> CheckedFunction {
                         guard: None,
                         body: ExprId(1),
                     }],
+                    scrutinee_scope: false,
                 },
             },
         ],
