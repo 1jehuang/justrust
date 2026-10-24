@@ -10,6 +10,68 @@ pub(crate) use crate::engine::{
 };
 use crate::engine::{ItemKey, Key};
 
+/// One file's canonical position in the source forest. Roots distinguish the
+/// input crate, embedded prelude, and dependency crates. Descendants retain the
+/// exact child-ordinal path, rather than an arbitrary scalar node parameter.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct SourceFile {
+    root: u64,
+    children: Vec<u64>,
+}
+
+impl SourceFile {
+    pub(crate) fn input() -> Self {
+        Self {
+            root: 0,
+            children: Vec::new(),
+        }
+    }
+
+    pub(crate) fn from_words(words: &[u64]) -> Result<Self, crate::engine::Error> {
+        let Some((&root, children)) = words.split_first() else {
+            return Err(crate::engine::Error::new("source file key has no ordinal"));
+        };
+        Ok(Self {
+            root,
+            children: children.to_vec(),
+        })
+    }
+
+    pub(crate) fn child(&self, index: usize) -> Self {
+        let mut children = self.children.clone();
+        children.push(index as u64);
+        Self {
+            root: self.root,
+            children,
+        }
+    }
+
+    pub(crate) fn parent(&self) -> Option<Self> {
+        let (_, parents) = self.children.split_last()?;
+        Some(Self {
+            root: self.root,
+            children: parents.to_vec(),
+        })
+    }
+
+    pub(crate) fn depth(&self) -> usize {
+        self.children.len()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn key(&self) -> Key {
+        ItemKey::key(self)
+    }
+}
+
+impl ItemKey for SourceFile {
+    const KIND: u32 = super::SOURCE;
+
+    fn params(&self) -> (u64, Vec<u64>) {
+        (self.root, self.children.clone())
+    }
+}
+
 /// A per-item (declaration, instance or file ordinal) key of node kind `K`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct Item<const K: u32>(pub usize);
@@ -100,6 +162,24 @@ mod tests {
     fn empty_words_are_rejected() {
         assert!(words(110, vec![]).is_err());
         assert_eq!(words(110, vec![4, 5]).unwrap(), Key::new(110, vec![4, 5]));
+    }
+
+    #[test]
+    fn source_identity_preserves_root_and_exact_ancestry() {
+        let root = SourceFile::input();
+        assert_eq!(root.key(), Key::new(super::super::SOURCE, vec![0]));
+        assert!(root.parent().is_none());
+        let child = root.child(2).child(5);
+        assert_eq!(child.key(), Key::new(super::super::SOURCE, vec![0, 2, 5]));
+        assert_eq!(child.parent().unwrap(), root.child(2));
+        assert_ne!(root.child(2).child(5), root.child(5).child(2));
+        let library = SourceFile::from_words(&[1, 2, 5]).unwrap();
+        assert_ne!(child, library);
+        assert_eq!(
+            library.parent().unwrap().key(),
+            Key::new(super::super::SOURCE, vec![1, 2])
+        );
+        assert!(SourceFile::from_words(&[]).is_err());
     }
 }
 

@@ -787,6 +787,7 @@ impl Provider for CompilerProvider {
                     // external child module, and so on.
                     let options = &this.0.source_options;
                     let budget = expansion_budget::ExpansionBudget::default();
+                    let file = keys::SourceFile::from_words(&key.params)?;
                     let unit = match key.params.as_slice() {
                         [] => return Err(Error::new("source file key has no ordinal")),
                         [0] => match &this.0.input {
@@ -805,9 +806,15 @@ impl Provider for CompilerProvider {
                             source::prepare_extern_unit(options, *n as usize - 2, &budget)
                         }
                         [_] => return Err(Error::new("unknown source root ordinal")),
-                        [parent @ .., index] => {
-                            let parent: Arc<source::UnitResult> =
-                                facts.get(keys::words(SOURCE, parent.to_vec())?).await?;
+                        [.., index] => {
+                            let parent: Arc<source::UnitResult> = cx
+                                .read_item(
+                                    &file
+                                        .parent()
+                                        .ok_or_else(|| Error::new("child source has no parent"))?,
+                                    0,
+                                )
+                                .await?;
                             let parent = parent.as_ref().as_ref().map_err(|_| {
                                 Error::new("child module requested from a failed source file")
                             })?;
@@ -815,6 +822,26 @@ impl Provider for CompilerProvider {
                             source::prepare_child_unit(parent, *index as usize, &options, &budget)
                         }
                     };
+                    // Discover a bounded independent frontier before the
+                    // assembly consumer asks for its first child. Until source
+                    // admission is fully per-file, unbounded recursive prefetch
+                    // could expand an enormous inclusion tree before assembly
+                    // reports its existing input limit. This is a speculation
+                    // policy, not an admission limit: deeper/later files remain
+                    // demandable normally. Eager expansion follows only the
+                    // first three levels and four children per parent, without
+                    // turning a deeply branching invalid input into unbounded
+                    // speculative work. There is no shared
+                    // budget or scheduler state in compiler facts.
+                    // Errors remain values, selected in assembly source order.
+                    if let Ok(unit) = &unit
+                        && unit.terminal.is_none()
+                        && file.depth() < 3
+                    {
+                        for index in 0..unit.children.len().min(4) {
+                            cx.request_item(&file.child(index));
+                        }
+                    }
                     cx.publish_fact(0, unit)
                 }
                 PARSE => {
@@ -824,14 +851,15 @@ impl Provider for CompilerProvider {
                     }
                     let mut assembler = source::SourceAssembler::new(&this.0.source_options);
                     let root_unit: Arc<source::UnitResult> =
-                        facts.get(keys::params(SOURCE, 0, vec![])).await?;
+                        cx.read_item(&keys::SourceFile::input(), 0).await?;
                     let mut step = assembler.provide(root_unit);
                     let prepared = loop {
                         match step.map_err(|error| Error::new(error.to_string()))? {
                             source::AssemblyStep::Done(prepared) => break *prepared,
                             source::AssemblyStep::Need(need) => {
-                                let unit: Arc<source::UnitResult> =
-                                    facts.get(keys::words(SOURCE, need.ordinal)?).await?;
+                                let unit: Arc<source::UnitResult> = cx
+                                    .read_item(&keys::SourceFile::from_words(&need.ordinal)?, 0)
+                                    .await?;
                                 step = assembler.provide(unit);
                             }
                         }

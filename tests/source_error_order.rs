@@ -78,6 +78,215 @@ fn expect(files: &[(&str, &str)], needles: &[&str], absent: &[&str]) {
     }
 }
 
+/// Discovery must follow per-file ancestry, not the order in which the
+/// assembly consumer happens to await children. These are event-order
+/// assertions, not timing thresholds, so they also hold with one worker.
+fn assert_children_discovered_before_publication(
+    report: &justrust_engine::Report,
+    parent: &[u64],
+    child_count: u64,
+) {
+    assert!(report.capture_complete);
+    let node = |ordinal: &[u64]| {
+        let index = report
+            .node_evaluations
+            .iter()
+            .position(|(key, _)| key.kind == 107 && key.params == ordinal)
+            .unwrap_or_else(|| panic!("missing source node {ordinal:?}"));
+        report.node_ids[index]
+    };
+    let parent_node = node(parent);
+    let published = report
+        .events
+        .iter()
+        .position(|event| event.kind == "publish" && event.node == Some(parent_node))
+        .expect("source parent did not publish");
+    for index in 0..child_count {
+        let mut child = parent.to_vec();
+        child.push(index);
+        let child_node = node(&child);
+        let discovered = report
+            .events
+            .iter()
+            .position(|event| event.kind == "discovered" && event.node == Some(child_node))
+            .expect("source child has no discovery event");
+        assert!(
+            discovered < published,
+            "child {child:?} was left for the assembly consumer to discover"
+        );
+    }
+}
+
+#[test]
+fn source_subtrees_are_discovered_by_their_own_parent() {
+    let tree = Tree::new(&[
+        (
+            "src/input.rs",
+            "mod left; mod right; fn main() { left::f(); right::f(); }",
+        ),
+        ("src/left.rs", "mod leaf; pub fn f() { leaf::f(); }"),
+        ("src/left/leaf.rs", "pub fn f() {}"),
+        ("src/right.rs", "mod leaf; pub fn f() { leaf::f(); }"),
+        ("src/right/leaf.rs", "pub fn f() {}"),
+    ]);
+    for workers in [1, 8] {
+        for check in [true, false] {
+            let compilation = compiler::compile_file_observed_with_options(
+                tree.0.join("src/input.rs"),
+                workers,
+                check,
+                compiler::source::SourceOptions {
+                    prelude: false,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            assert_children_discovered_before_publication(&compilation.report, &[0], 2);
+            assert_children_discovered_before_publication(&compilation.report, &[0, 0], 1);
+            assert_children_discovered_before_publication(&compilation.report, &[0, 1], 1);
+            assert_eq!(compilation.source_files, 5);
+            assert_eq!(compilation.executable.is_none(), check);
+        }
+    }
+}
+
+#[test]
+fn failing_first_child_does_not_hide_its_sibling_from_the_graph() {
+    let tree = Tree::new(&[
+        ("src/input.rs", "mod broken; mod later; fn main() {}"),
+        ("src/broken.rs", "pub fn broken( {}"),
+        ("src/later.rs", "pub fn f() {}"),
+    ]);
+    for workers in [1, 8] {
+        for check in [true, false] {
+            let failure = compiler::compile_file_observed_with_options(
+                tree.0.join("src/input.rs"),
+                workers,
+                check,
+                compiler::source::SourceOptions {
+                    prelude: false,
+                    ..Default::default()
+                },
+            )
+            .err()
+            .expect("invalid child must fail");
+            assert!(failure.error.to_string().contains("broken.rs"));
+            assert_children_discovered_before_publication(&failure.report.unwrap(), &[0], 2);
+        }
+    }
+}
+
+#[test]
+fn source_lookahead_is_bounded_but_later_and_deeper_files_still_compile() {
+    let tree = Tree::new(&[
+        (
+            "src/input.rs",
+            "mod a; mod b; mod c; mod d; mod e; fn main() {}",
+        ),
+        ("src/a.rs", "mod child;"),
+        ("src/a/child.rs", "mod child;"),
+        ("src/a/child/child.rs", "mod child;"),
+        ("src/a/child/child/child.rs", "pub fn f() {}"),
+        ("src/b.rs", "pub fn f() {}"),
+        ("src/c.rs", "pub fn f() {}"),
+        ("src/d.rs", "pub fn f() {}"),
+        ("src/e.rs", "pub fn f() {}"),
+    ]);
+    for workers in [1, 8] {
+        for check in [true, false] {
+            let compilation = compiler::compile_file_observed_with_options(
+                tree.0.join("src/input.rs"),
+                workers,
+                check,
+                compiler::source::SourceOptions {
+                    prelude: false,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            let report = &compilation.report;
+            assert_children_discovered_before_publication(report, &[0], 4);
+            let event = |kind: &str, ordinal: &[u64]| {
+                let index = report
+                    .node_evaluations
+                    .iter()
+                    .position(|(key, _)| key.kind == 107 && key.params == ordinal)
+                    .unwrap();
+                let id = report.node_ids[index];
+                report
+                    .events
+                    .iter()
+                    .position(|event| event.kind == kind && event.node == Some(id))
+                    .unwrap()
+            };
+            assert!(event("publish", &[0]) < event("discovered", &[0, 4]));
+            assert!(event("publish", &[0, 0, 0, 0]) < event("discovered", &[0, 0, 0, 0, 0]));
+            assert_eq!(compilation.source_files, 9);
+            assert_eq!(compilation.executable.is_none(), check);
+        }
+    }
+}
+
+#[test]
+fn source_file_limit_stops_a_branching_inclusion_graph() {
+    use std::os::unix::fs::symlink;
+    let tree = Tree::new(&[("src/input.rs", "mod a; mod b; mod c; mod d; fn main() {}")]);
+    // Seven physical files represent thousands of distinct inclusion paths.
+    // Every level has a different canonical file, so this is not a cycle.
+    // Unbounded eager discovery would enumerate the entire inclusion tree.
+    for level in 0..6 {
+        let directory = tree.0.join(format!("level{level}"));
+        fs::create_dir(&directory).unwrap();
+        let text = if level == 5 {
+            "pub fn f() {}"
+        } else {
+            "pub mod a; pub mod b; pub mod c; pub mod d;"
+        };
+        fs::write(directory.join("mod.rs"), text).unwrap();
+        if level < 5 {
+            for child in ["a", "b", "c", "d"] {
+                symlink(
+                    tree.0.join(format!("level{}", level + 1)),
+                    directory.join(child),
+                )
+                .unwrap();
+            }
+        }
+    }
+    for child in ["a", "b", "c", "d"] {
+        symlink(tree.0.join("level0"), tree.0.join("src").join(child)).unwrap();
+    }
+    for workers in [1, 8] {
+        let failure = compiler::compile_file_observed_with_options(
+            tree.0.join("src/input.rs"),
+            workers,
+            true,
+            compiler::source::SourceOptions {
+                prelude: false,
+                ..Default::default()
+            },
+        )
+        .err()
+        .expect("branching input must hit the source file limit");
+        assert!(
+            failure.error.to_string().contains("module file limit"),
+            "{}",
+            failure.error
+        );
+        let report = failure.report.unwrap();
+        assert!(report.capture_complete);
+        let sources = report
+            .node_evaluations
+            .iter()
+            .filter(|(key, _)| key.kind == 107)
+            .count();
+        assert!(
+            sources < 1200,
+            "source discovery ran ahead of the file limit: {sources} nodes"
+        );
+    }
+}
+
 /// A balanced-delimiter syntax error: reported by the parser, not by
 /// per-file preparation.
 const PARSER_ERROR: &str = "let = ;";

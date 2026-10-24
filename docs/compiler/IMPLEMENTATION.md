@@ -489,6 +489,10 @@ graph-integrity evidence are recorded in the feature contracts. G0-G12 remain op
 - [x] Inline modules, qualified calls, simple imports and namespace/privacy checks.
 - [x] External module source trees with bounded loading and observed source facts.
 - [x] Per-file SOURCE graph nodes (child-ordinal keys), assembled in order by PARSE.
+      Source producers now use typed file-ancestry keys and discover a bounded
+      child frontier independently of the assembly consumer. Ordered diagnostics
+      and later/deeper admission are pinned by `source_error_order` tests.
+      This is discovery scheduling only: it does not remove the PARSE barrier.
 - [ ] Per-file parse, per-module declaration index, per-item resolve and
       signatures (PARSE/RESOLVE/SIGNATURES remain whole-program; parsing shares
       one NameStore/ModuleArena, and resolve memoizes imports/aliases program-wide).
