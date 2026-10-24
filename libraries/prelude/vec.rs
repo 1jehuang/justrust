@@ -298,6 +298,74 @@ impl<'a, T> super::iter::IntoIterator for &'a Vec<T> {
 }
 
 // Elements drop front to back, as stock, then the buffer is released.
+/// Owning iteration: moves elements out front to back. Unyielded elements
+/// drop with the iterator, then the buffer is released, as in std.
+pub struct IntoIter<T> {
+    ptr: *mut T,
+    cap: usize,
+    index: usize,
+    len: usize,
+}
+
+impl<T> super::iter::Iterator for IntoIter<T> {
+    type Item = T;
+    fn next(&mut self) -> Option<T> {
+        if self.index < self.len {
+            let src = slot(self.ptr, self.index);
+            self.index += 1usize;
+            Option::Some(unsafe { *src })
+        } else {
+            Option::None
+        }
+    }
+}
+
+impl<T> super::iter::DoubleEndedIterator for IntoIter<T> {
+    fn next_back(&mut self) -> Option<T> {
+        if self.index < self.len {
+            self.len -= 1usize;
+            Option::Some(unsafe { *slot(self.ptr, self.len) })
+        } else {
+            Option::None
+        }
+    }
+}
+
+impl<T> super::iter::IntoIterator for IntoIter<T> {
+    type Item = T;
+    type IntoIter = IntoIter<T>;
+    fn into_iter(self) -> IntoIter<T> {
+        self
+    }
+}
+
+impl<T> Drop for IntoIter<T> {
+    fn drop(&mut self) {
+        while self.index < self.len {
+            let _dropped = unsafe { *slot(self.ptr, self.index) };
+            self.index += 1usize;
+        }
+        if self.cap != 0usize {
+            let size = size_of::<T>();
+            let bytes = if size == 0usize { 8usize } else { self.cap * size };
+            super::mem::raw_free(self.ptr as usize, bytes);
+        }
+    }
+}
+
+impl<T> super::iter::IntoIterator for Vec<T> {
+    type Item = T;
+    type IntoIter = IntoIter<T>;
+    fn into_iter(mut self) -> IntoIter<T> {
+        let iter = IntoIter { ptr: self.ptr, cap: self.cap, index: 0usize, len: self.len };
+        // Ownership of the buffer and elements moves to the iterator.
+        self.len = 0usize;
+        self.cap = 0usize;
+        iter
+    }
+}
+
+// Elements drop front to back, as stock, then the buffer is released.
 impl<T> Drop for Vec<T> {
     fn drop(&mut self) {
         let mut i = 0usize;

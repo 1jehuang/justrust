@@ -128,3 +128,15 @@ fn main() {
         "sort-by",
     );
 }
+
+#[test]
+fn owned_into_iter_moves_elements_and_frees_remainder() {
+    compare(
+        "fn main(){let v=vec![1u32,2,3];let mut t=0u32;for x in v {t+=x;}println!(\"{}\",t);\
+let s=vec![String::from(\"a\"),String::from(\"b\"),String::from(\"c\")];for x in s {println!(\"{}\",x);}\
+let w=vec![String::from(\"x\"),String::from(\"y\"),String::from(\"z\")];let mut it=w.into_iter();\
+println!(\"{:?} {:?}\",it.next(),it.next_back());let e:Vec<u8>=Vec::new();for _ in e {println!(\"never\");}}\n",
+        "6\na\nb\nc\nSome(\"x\") Some(\"z\")\n",
+        "into-iter",
+    );
+}
