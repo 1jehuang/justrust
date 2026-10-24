@@ -177,8 +177,8 @@ let r=std::rc::Rc::new(vec![4u32,5]);println!(\"{}\",r.len());}\n",
 fn iterator_max_by_matches_stock() {
     compare(
         "fn main(){let v=vec![3i32,9,2,9,1];let x=v.clone().into_iter().max_by(|a,b|a.cmp(b));\
-let e:Vec<i32>=Vec::new();println!(\"{:?} {:?}\",x,e.into_iter().max_by(|a,b|a.cmp(b)));}\n",
-        "Some(9) None\n",
+let y=v.clone().into_iter().min_by(|a,b|a.cmp(b));let e:Vec<i32>=Vec::new();println!(\"{:?} {:?} {:?}\",x,y,e.into_iter().max_by(|a,b|a.cmp(b)));}\n",
+        "Some(9) Some(1) None\n",
         "max-by",
     );
 }

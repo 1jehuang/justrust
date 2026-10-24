@@ -185,6 +185,26 @@ pub trait Iterator: Sized {
             }
         }
     }
+    /// The first minimum under `compare`, as std's `min_by`.
+    fn min_by<F: FnMut(&Self::Item, &Self::Item) -> super::cmp::Ordering>(
+        mut self,
+        mut compare: F,
+    ) -> Option<Self::Item> {
+        let mut best = match self.next() {
+            Option::Some(item) => item,
+            Option::None => return Option::None,
+        };
+        loop {
+            match self.next() {
+                Option::Some(item) => {
+                    if compare(&best, &item) == super::cmp::Ordering::Greater {
+                        best = item;
+                    }
+                }
+                Option::None => return Option::Some(best),
+            }
+        }
+    }
 }
 
 pub trait DoubleEndedIterator: Iterator {
