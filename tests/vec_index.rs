@@ -199,3 +199,31 @@ fn index_assignment_through_shared_vec_reference_is_rejected() {
     let source = "fn main() { let v = vec![String::from(\"a\")]; let s: String = v.join(1); }";
     assert!(compiler::compile(source.into(), 1, true).is_err());
 }
+
+#[path = "support/closure_oracle.rs"]
+mod range_receiver_oracle;
+
+#[test]
+fn vec_range_index_method_receivers_match_stock() {
+    use range_receiver_oracle::{Case, Expect};
+    range_receiver_oracle::check(
+        "vec-range-receiver",
+        &[
+            Case {
+                name: "collect_len_and_runtime_bounds",
+                source: "fn main(){let c=vec!['a','b','c','d'];let s:String=c[1..3].iter().collect();let (a,b)=(0usize,2usize);let t:String=c[a..b].iter().collect();let n=c[..3].len();let m=c[2..].iter().count();let u:String=c[..=1].iter().collect();println!(\"{} {} {} {} {}\",s,t,n,m,u);}",
+                expect: Expect::Run("bc ab 3 2 ab\n"),
+            },
+            Case {
+                name: "out_of_range_receiver_panics_in_unused_fn",
+                source: "fn unused(){let c=vec![1i32];let _=c[0..5].len();}fn main(){println!(\"ok\");}",
+                expect: Expect::Run("ok\n"),
+            },
+            Case {
+                name: "owner_mutation_while_subslice_iterator_live",
+                source: "fn main(){let mut c=vec![1i32,2,3];let mut it=c[0..2].iter();c.push(4);println!(\"{:?}\",it.next());}",
+                expect: Expect::Invalid("E0502"),
+            },
+        ],
+    );
+}

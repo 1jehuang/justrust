@@ -4918,6 +4918,25 @@ impl<'a> Checker<'a> {
                     kind: ir::BorrowKind::Shared,
                     referent: std::sync::Arc::new(ir::Ty::Slice { element }),
                 }),
+                // Lowering routes a Vec base through the prelude `as_slice`
+                // (vec_range_view); the hint names the same `&[T]` result.
+                Some(ir::Ty::Struct(value))
+                    if self.is_prelude_vec_struct(&value)
+                        && matches!(base.as_ref(), Expr::Var(_) | Expr::Field { .. }) =>
+                {
+                    let element = value
+                        .def()
+                        .type_args
+                        .first()
+                        .cloned()
+                        .ok_or("prelude Vec without an element argument")?;
+                    Some(ir::Ty::Ref {
+                        kind: ir::BorrowKind::Shared,
+                        referent: std::sync::Arc::new(ir::Ty::Slice {
+                            element: std::sync::Arc::new(element),
+                        }),
+                    })
+                }
                 Some(ir::Ty::Ref { referent, .. }) => match referent.as_ref() {
                     ir::Ty::Array { element, .. } => Some(ir::Ty::Ref {
                         kind: ir::BorrowKind::Shared,
@@ -8457,7 +8476,19 @@ impl<'a> Checker<'a> {
         let adjusted = match selected.mode {
             ReceiverKind::None => return Err("method has no receiver".into()),
             ReceiverKind::Value { .. } => {
-                let mut id = self.expr_expected(receiver, inferred_receiver.then_some(&ty))?;
+                // `s[a..b].m()`: the hinted receiver is the shared subslice
+                // handle, exactly as `len` and the borrow path build it.
+                let mut id = if let Expr::RangeIndex {
+                    base,
+                    start,
+                    end,
+                    inclusive,
+                } = receiver
+                {
+                    self.subslice(base, start.as_deref(), end.as_deref(), *inclusive)?
+                } else {
+                    self.expr_expected(receiver, inferred_receiver.then_some(&ty))?
+                };
                 for _ in 0..selected.depth {
                     let ir::Ty::Ref { referent, .. } = &self.exprs[id.0].ty else {
                         return Err("invalid receiver dereference".into());

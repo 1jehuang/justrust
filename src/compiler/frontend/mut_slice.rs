@@ -86,8 +86,7 @@ impl type_check::Checker<'_> {
         if !matches!(base, Expr::Var(_) | Expr::Field { .. }) {
             return Ok(None);
         }
-        let std = crate::compiler::source::source_prelude::PRELUDE_MODULE;
-        if value.def().name != format!("crate::{std}::vec::Vec") {
+        if !self.is_prelude_vec_struct(value) {
             return Ok(None);
         }
         let method = match kind {
@@ -108,6 +107,13 @@ impl type_check::Checker<'_> {
         let id = self.expr_with_expectation_inner(&call, type_check::Expectation::None)?;
         self.record_operator(base as *const Expr as usize, id)?;
         Ok(Some(id))
+    }
+
+    /// The prelude's own `Vec<T>` nominal (by canonical name; diagnostics-only
+    /// names are not identity, but the prelude module path is reserved).
+    pub(super) fn is_prelude_vec_struct(&self, value: &ir::StructTy) -> bool {
+        let std = crate::compiler::source::source_prelude::PRELUDE_MODULE;
+        value.def().name == format!("crate::{std}::vec::Vec")
     }
 
     /// Source name of the inherent method `method` declared on `nominal`.
