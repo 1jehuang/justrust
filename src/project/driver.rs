@@ -5,7 +5,7 @@
 
 use super::manifest::{self, ManifestError, Package, TargetKind, Workspace};
 use crate::compiler;
-use crate::compiler::source::{CfgSet, ExternCrate, SourceOptions};
+use crate::compiler::source::{CfgSet, Edition, ExternCrate, SourceOptions};
 use std::collections::BTreeSet;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -159,13 +159,14 @@ pub fn plan(ws: &Workspace, command: Command, sel: &Selection) -> Result<Vec<Uni
 }
 
 fn cfg_for(package: &Package, features: &BTreeSet<String>) -> Result<CfgSet, ManifestError> {
-    if package.edition != "2024" {
-        return Err(err(format!(
-            "`{}`: Rust edition {} is unsupported; the native compiler currently supports only edition 2024",
-            package.root.join("Cargo.toml").display(),
-            package.edition
-        )));
-    }
+    Edition::parse(&package.edition)
+        .and_then(Edition::validate_native)
+        .map_err(|message| {
+            err(format!(
+                "`{}`: {message}",
+                package.root.join("Cargo.toml").display()
+            ))
+        })?;
     let mut cfg = CfgSet::native_x86_64_linux();
     for f in features {
         cfg.insert_user(&format!("feature={f:?}")).map_err(err)?;
@@ -334,6 +335,7 @@ impl Driver {
                 );
             }
             let mut options = SourceOptions {
+                edition: Edition::parse(&package.edition).map_err(err)?,
                 cfg: cfg_for(package, &resolved.enabled[unit.package])?,
                 externs: externs_for(&self.ws, unit, &resolved)?,
                 library: unit.kind == TargetKind::Lib,

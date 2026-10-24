@@ -39,6 +39,14 @@ remain non-authoritative, following Cargo's workspace-root profile ownership.
 
 ## Compiler/graph boundary
 
+Direct source compilation accepts `--edition YEAR` and `--edition=YEAR`, once,
+with 2024 as its default. `SourceOptions::edition` carries a typed edition input
+and rejects earlier editions before source IO or parsing, including in-memory
+source preparation. Project and direct-source admission share the same supported
+edition check. This makes the edition explicit; it does not add 2021 semantics.
+The Adler2 probe passes its pinned 2021 edition to direct-source diagnostics as
+well as retaining that edition in the unchanged project manifest.
+
 Manifest resolution produces immutable profile values. The driver passes the
 resolved cfg and overflow policy into `SourceOptions`; no mutable compiler
 side slot or graph bypass is introduced. The overflow backend implementation

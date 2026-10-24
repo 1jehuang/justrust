@@ -31,10 +31,45 @@ pub(super) const MAX_BYTES: usize = 8 * 1024 * 1024;
 pub(super) const MAX_FILES: usize = 1024;
 const MAX_ORIGINS: usize = 1024 * 1024;
 
+/// A source-language edition, distinct from the compiler's supported subset.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Edition {
+    Rust2015,
+    Rust2018,
+    Rust2021,
+    #[default]
+    Rust2024,
+}
+impl Edition {
+    pub fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "2015" => Ok(Self::Rust2015),
+            "2018" => Ok(Self::Rust2018),
+            "2021" => Ok(Self::Rust2021),
+            "2024" => Ok(Self::Rust2024),
+            _ => Err(format!("invalid Rust edition `{value}`")),
+        }
+    }
+
+    pub fn validate_native(self) -> Result<(), String> {
+        let edition = match self {
+            Self::Rust2024 => return Ok(()),
+            Self::Rust2015 => "2015",
+            Self::Rust2018 => "2018",
+            Self::Rust2021 => "2021",
+        };
+        Err(format!(
+            "Rust edition {edition} is unsupported; the native compiler currently supports only edition 2024"
+        ))
+    }
+}
+
 #[derive(Clone, Debug)]
 /// Native x86_64 Linux configuration plus bounded user predicates.
 /// The default pins abort and enables debug assertions, not complete Rust panic semantics.
 pub struct SourceOptions {
+    /// Explicit language input. Unsupported editions reject before source IO.
+    pub edition: Edition,
     /// Native ELF object emission/link inputs, frozen before graph execution.
     pub native_link: super::c_abi::elf::LinkOptions,
     pub cfg: CfgSet,
@@ -83,6 +118,7 @@ impl TestFilter {
 impl Default for SourceOptions {
     fn default() -> Self {
         Self {
+            edition: Edition::default(),
             native_link: super::c_abi::elf::LinkOptions::default(),
             cfg: CfgSet::native_x86_64_linux(),
             prelude: true,
@@ -609,6 +645,9 @@ fn root_unit_with(
     budget
         .check()
         .map_err(|error| unanchored(SourceError::from_token(error.into())))?;
+    options.edition.validate_native().map_err(|message| {
+        unanchored(Loader::error(SourceErrorKind::Unsupported, None, message))
+    })?;
     options.cfg.validate_native().map_err(|message| {
         unanchored(Loader::error(SourceErrorKind::Unsupported, None, message))
     })?;
@@ -714,6 +753,9 @@ pub fn prepare_text_unit(
         error,
         anchored: false,
     };
+    options.edition.validate_native().map_err(|message| {
+        unanchored(Loader::error(SourceErrorKind::Unsupported, None, message))
+    })?;
     options.cfg.validate_native().map_err(|message| {
         unanchored(Loader::error(SourceErrorKind::Unsupported, None, message))
     })?;
@@ -2130,6 +2172,28 @@ mod tests {
         let mut reader = RecordingReader::default();
         assert!(prepare_with_reader(Path::new("main.rs"), &options, &mut reader).is_err());
         assert!(reader.calls.is_empty());
+    }
+
+    #[test]
+    fn unsupported_source_editions_reject_before_reading_or_parsing() {
+        assert_eq!(Edition::default(), Edition::Rust2024);
+        assert!(Edition::parse("2099").is_err());
+        assert!(Edition::parse(" 2024").is_err());
+        for name in ["2015", "2018", "2021"] {
+            let options = SourceOptions {
+                edition: Edition::parse(name).unwrap(),
+                ..SourceOptions::default()
+            };
+            let mut reader = RecordingReader::default();
+            let file =
+                prepare_with_reader(Path::new("main.rs"), &options, &mut reader).unwrap_err();
+            assert_eq!(file.kind, SourceErrorKind::Unsupported);
+            assert!(file.message.contains(name));
+            assert!(reader.calls.is_empty());
+            let memory = prepare_text("main.rs", "not valid Rust", &options).unwrap_err();
+            assert_eq!(memory.kind, SourceErrorKind::Unsupported);
+            assert!(memory.message.contains(name));
+        }
     }
 
     #[test]

@@ -160,7 +160,7 @@ def exercise(probe, repo, native, rustc):
             env = dict(os.environ, CARGO_TARGET_DIR=str(probe.output / prefix))
             # Use the native library mode, not rustc's unsupported rlib interface.
             probe.run(f"{prefix}-source-check", [native, root, "--workers", workers,
-                                                "--lib", *cfg, "--check"])
+                                                "--edition=2021", "--lib", *cfg, "--check"])
             base = ["--manifest-path", repo / "Cargo.toml", "--lib", "-j", workers,
                     *features]
             for command in ("check", "build"):

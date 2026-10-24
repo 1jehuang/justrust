@@ -12,7 +12,7 @@ mod compiler_profile;
 static ALLOCATION_PROFILE: allocation_profile::ProfilingAllocator<std::alloc::System> =
     allocation_profile::ProfilingAllocator::new(std::alloc::System);
 
-const HELP: &str = "jr-rust SOURCE [-o NEW_EXECUTABLE] [--workers N] [--check] [--debug-assertions yes|no] [--cfg NAME_OR_KEY_VALUE] [--trace NEW_TRACE] [--profile NEW_JSON]\n\nClean-room Rust subset compiler. Direct Linux x86-64 ELF output, no rustc delegation.\nSee COMPILER.md for supported syntax and limitations. Existing files are never overwritten.\nAccounting is always enabled. --check performs semantic checks without code generation.\n--cfg may be repeated for user names or key=\"value\" predicates; native target cfg is fixed.\n--debug-assertions yes|no sets native debug assertions (default: yes); may be supplied once.\n--opt off|adaptive|final selects the graph-native optimizer (default: off, or $JR_OPT).\n--source-lock PATH --source-item NAME adds a verified source declaration probe, not a library crate.\n--profile writes bounded task timings and exact first budget failure without CFG dumps.\nAllocator counters require a binary built with --features allocation-profile.\n";
+const HELP: &str = "jr-rust SOURCE [-o NEW_EXECUTABLE] [--workers N] [--check] [--edition YEAR] [--debug-assertions yes|no] [--cfg NAME_OR_KEY_VALUE] [--trace NEW_TRACE] [--profile NEW_JSON]\n\nClean-room Rust subset compiler. Direct Linux x86-64 ELF output, no rustc delegation.\nSee COMPILER.md for supported syntax and limitations. Existing files are never overwritten.\nAccounting is always enabled. --check performs semantic checks without code generation.\n--edition YEAR selects the source edition (default: 2024); only 2024 is currently supported.\n--cfg may be repeated for user names or key=\"value\" predicates; native target cfg is fixed.\n--debug-assertions yes|no sets native debug assertions (default: yes); may be supplied once.\n--opt off|adaptive|final selects the graph-native optimizer (default: off, or $JR_OPT).\n--source-lock PATH --source-item NAME adds a verified source declaration probe, not a library crate.\n--profile writes bounded task timings and exact first budget failure without CFG dumps.\nAllocator counters require a binary built with --features allocation-profile.\n";
 
 fn allocator_json() -> String {
     #[cfg(feature = "allocation-profile")]
@@ -78,6 +78,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             compiler::ssa::OptMode::parse(value).ok_or("JR_OPT must be off, adaptive or final")?;
     }
     let mut debug_assertions_seen = false;
+    let mut edition_seen = false;
     let mut source_lock: Option<PathBuf> = None;
     let mut source_item: Option<String> = None;
     let mut args = std::env::args_os().skip(1);
@@ -88,6 +89,23 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 return Ok(());
             }
             Some("--check") => check = true,
+            Some("--edition") => {
+                if edition_seen {
+                    return Err("--edition may only be supplied once".into());
+                }
+                let value = args.next().ok_or("missing --edition value")?;
+                source_options.edition = compiler::source::Edition::parse(
+                    value.to_str().ok_or("edition must be UTF-8")?,
+                )?;
+                edition_seen = true;
+            }
+            Some(s) if s.starts_with("--edition=") => {
+                if edition_seen {
+                    return Err("--edition may only be supplied once".into());
+                }
+                source_options.edition = compiler::source::Edition::parse(&s[10..])?;
+                edition_seen = true;
+            }
             Some("--emit-object") => source_options.native_link.emit_object = true,
             Some("--native-object") => {
                 let path = args.next().ok_or("missing native object path")?;

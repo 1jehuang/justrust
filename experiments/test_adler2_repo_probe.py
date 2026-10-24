@@ -108,6 +108,7 @@ class ProbeTests(unittest.TestCase):
         for name, command in calls:
             if name.endswith("source-check"):
                 self.assertIn(Path("upstream/src/lib.rs"), command)
+                self.assertIn("--edition=2021", command)
             elif name.startswith("native-"):
                 self.assertIn("--manifest-path", command)
 

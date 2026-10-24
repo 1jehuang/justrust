@@ -102,6 +102,69 @@ fn unchecked_overflow_is_not_silently_compiled_as_checked() {
 }
 
 #[test]
+fn direct_source_edition_is_explicit_and_never_reinterpreted() {
+    let p = Project::new(
+        "direct-edition",
+        "edition = \"2024\"",
+        "",
+        "fn main() { println!(\"42\"); }\n",
+    );
+    let stock = p.stock(&["run", "--offline", "--quiet"]);
+    assert!(stock.status.success(), "{}", stderr(&stock));
+    for workers in ["1", "8"] {
+        for flags in [vec![], vec!["--edition=2024"], vec!["--edition", "2024"]] {
+            let binary = p.0.join(format!("direct-{workers}-{}", flags.len()));
+            let checked = Command::new(env!("CARGO_BIN_EXE_jr-rust"))
+                .arg(p.0.join("src/main.rs"))
+                .args(&flags)
+                .args(["--workers", workers, "--check"])
+                .output()
+                .unwrap();
+            assert!(checked.status.success(), "{}", stderr(&checked));
+            assert!(!binary.exists());
+            let built = Command::new(env!("CARGO_BIN_EXE_jr-rust"))
+                .arg(p.0.join("src/main.rs"))
+                .args(&flags)
+                .args(["--workers", workers, "-o"])
+                .arg(&binary)
+                .output()
+                .unwrap();
+            assert!(built.status.success(), "{}", stderr(&built));
+            let ran = Command::new(&binary).output().unwrap();
+            assert!(ran.status.success());
+            assert_eq!(ran.stdout, stock.stdout);
+        }
+        for edition in ["2015", "2018", "2021", "2099", ""] {
+            let binary = p.0.join(format!("rejected-{workers}-{edition}"));
+            let output = Command::new(env!("CARGO_BIN_EXE_jr-rust"))
+                .arg(p.0.join("absent.rs"))
+                .arg(format!("--edition={edition}"))
+                .args(["--workers", workers, "-o"])
+                .arg(&binary)
+                .output()
+                .unwrap();
+            assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+            assert!(stderr(&output).contains("edition"), "{}", stderr(&output));
+            assert!(!stderr(&output).contains("No such file"));
+            assert!(!binary.exists());
+        }
+    }
+    for flags in [
+        vec!["--edition"],
+        vec!["--edition=2024", "--edition", "2024"],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_jr-rust"))
+            .arg(p.0.join("src/main.rs"))
+            .arg("--check")
+            .args(flags)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        assert!(stderr(&output).contains("--edition"));
+    }
+}
+
+#[test]
 fn supported_debug_assertions_match_stock_output() {
     for assertions in [true, false] {
         let p = Project::new(
