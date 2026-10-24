@@ -385,6 +385,11 @@ fn iterator_sum_matches_stock() {
                 expect: Expect::Run("3 3 3 3 3 3\n"),
             },
             Case {
+                name: "float_sum_product_and_negative_zero",
+                source: "fn main(){let v=vec![1.5f64,2.25];let s:f64=v.iter().sum();let o:f64=v.iter().map(|x|*x).sum();let p:f64=v.iter().product();let e:Vec<f64>=vec![];let es:f64=e.iter().sum();let ep:f64=e.iter().copied().product();let w=[0.5f32,0.25];let fs:f32=w.iter().sum();let fp:f32=w.iter().copied().product();let nz=[-0.0f64];let n:f64=nz.iter().sum();println!(\"{:?} {:?} {:?} {:?} {:?} {:?} {:?} {:?}\",s,o,p,es,ep,fs,fp,n);}",
+                expect: Expect::Run("3.75 3.75 3.375 -0.0 1.0 0.75 0.125 -0.0\n"),
+            },
+            Case {
                 name: "user_defined_sum",
                 source: "use std::iter::Sum;struct Total{value:i32}impl Sum<i32> for Total{fn sum<I:Iterator<Item=i32>>(mut iter:I)->Self{let mut result=Total{value:10};loop{match iter.next(){Some(n)=>result.value+=n,None=>return result,}}}}fn main(){let result:Total=(0i32..4i32).sum();println!(\"{}\",result.value);}",
                 expect: Expect::Run("16\n"),

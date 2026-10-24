@@ -616,6 +616,55 @@ impl<'a> Sum<&'a usize> for usize {
     }
 }
 
+// Float sums start at -0.0 like stock, so an empty or all -0.0 sum is -0.0.
+impl Sum for f64 {
+    fn sum<I: Iterator<Item = f64>>(mut iter: I) -> f64 {
+        let mut total = -0.0f64;
+        loop {
+            match iter.next() {
+                Option::Some(value) => total += value,
+                Option::None => return total,
+            }
+        }
+    }
+}
+
+impl<'a> Sum<&'a f64> for f64 {
+    fn sum<I: Iterator<Item = &'a f64>>(mut iter: I) -> f64 {
+        let mut total = -0.0f64;
+        loop {
+            match iter.next() {
+                Option::Some(value) => total += *value,
+                Option::None => return total,
+            }
+        }
+    }
+}
+
+impl Sum for f32 {
+    fn sum<I: Iterator<Item = f32>>(mut iter: I) -> f32 {
+        let mut total = -0.0f32;
+        loop {
+            match iter.next() {
+                Option::Some(value) => total += value,
+                Option::None => return total,
+            }
+        }
+    }
+}
+
+impl<'a> Sum<&'a f32> for f32 {
+    fn sum<I: Iterator<Item = &'a f32>>(mut iter: I) -> f32 {
+        let mut total = -0.0f32;
+        loop {
+            match iter.next() {
+                Option::Some(value) => total += *value,
+                Option::None => return total,
+            }
+        }
+    }
+}
+
 pub trait Product<A = Self>: Sized {
     fn product<I: Iterator<Item = A>>(iter: I) -> Self;
 }
@@ -899,6 +948,54 @@ impl Product for usize {
 impl<'a> Product<&'a usize> for usize {
     fn product<I: Iterator<Item = &'a usize>>(mut iter: I) -> usize {
         let mut total = 1usize;
+        loop {
+            match iter.next() {
+                Option::Some(value) => total *= *value,
+                Option::None => return total,
+            }
+        }
+    }
+}
+
+impl Product for f64 {
+    fn product<I: Iterator<Item = f64>>(mut iter: I) -> f64 {
+        let mut total = 1.0f64;
+        loop {
+            match iter.next() {
+                Option::Some(value) => total *= value,
+                Option::None => return total,
+            }
+        }
+    }
+}
+
+impl<'a> Product<&'a f64> for f64 {
+    fn product<I: Iterator<Item = &'a f64>>(mut iter: I) -> f64 {
+        let mut total = 1.0f64;
+        loop {
+            match iter.next() {
+                Option::Some(value) => total *= *value,
+                Option::None => return total,
+            }
+        }
+    }
+}
+
+impl Product for f32 {
+    fn product<I: Iterator<Item = f32>>(mut iter: I) -> f32 {
+        let mut total = 1.0f32;
+        loop {
+            match iter.next() {
+                Option::Some(value) => total *= value,
+                Option::None => return total,
+            }
+        }
+    }
+}
+
+impl<'a> Product<&'a f32> for f32 {
+    fn product<I: Iterator<Item = &'a f32>>(mut iter: I) -> f32 {
+        let mut total = 1.0f32;
         loop {
             match iter.next() {
                 Option::Some(value) => total *= *value,
