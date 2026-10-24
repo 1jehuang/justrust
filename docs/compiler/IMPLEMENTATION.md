@@ -2264,6 +2264,21 @@ reference-containing values, libraries and project integration remain open.
 
 Numbers below are evidence at each checkpoint, not cumulative full-Rust coverage.
 
+### Edition 2021 admission and unchanged Adler2 2.0.1
+
+Edition 2021 sources compile natively; 2015/2018 stay unsupported. Constructs
+whose 2021 meaning differs from the implemented 2024 rules reject explicitly
+(Drop-carrying block-tail and if-let scrutinee temporaries, default binding
+mode resets, `impl Trait` return capture, let chains). Inactive items accept
+block-local `use`/`fn` items and oversized array lengths as syntax only.
+Unchanged Adler2 2.0.1 passes native check/build (std and no_std check) and a
+stock-checked consumer runs at workers 1 and 8. Tests:
+`project_configuration edition_2021_is_admitted_with_stock_semantics_or_explicit_boundaries`,
+`inactive_block_local_items_are_syntax_checked_only`,
+`inactive_array_lengths_skip_the_semantic_length_limit`. Open: Adler2's own
+`cfg(test)` suite (active block-local items, `[T; 1 << 20]` arrays, inferring
+`R` in `adler32(&mut BufReader)`), and `extern crate <dependency>`.
+
 ### Native i128/u128 scalars
 
 INTEGER128.md adds canonical two-limb integer values, checked native arithmetic
