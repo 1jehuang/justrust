@@ -2057,6 +2057,14 @@ and measured integration throughput after each accepted slice.
 
 ## Active work and evidence limits
 
+Known failing suite (2026-10-24): `justrust test --test prelude_traits` fails
+5 of 6 at 786937658, ef3ce0e00 and HEAD with `missing or duplicated Key {
+kind: 110 (TEMPLATE_BODY), params: [1] }` from `assert_graph_authority`: the
+test expects every callable's TEMPLATE_BODY to be evaluated exactly once, and
+one is now never evaluated. It predates this session's prelude library commits
+(reverting them does not change it). Unresolved: either a scheduling regression
+or a stale expectation after per-module ITEM_INVENTORY fan-out.
+
 Handoff (2026-10-21, semantic-core lane): native `for` over a source iterator
 value (`for x in vec.iter()`, `for c in s.chars()`, a user `IntoIterator`)
 is rejected on main 136ffab82 and every commit checked back to 1b43e6a71, with
