@@ -150,17 +150,6 @@ mod edition_keyword_tests {
 #[test]
 fn edition_keywords_keep_2024_check_build_and_run_boundaries() {
     stock_native_run("fn generation() -> i32 { 42 } fn main() { println!(\"{}\", generation()); }");
-    let raw = "fn r#gen() -> i32 { 42 } fn main() { println!(\"{}\", r#gen()); }";
-    assert!(
-        stock_compile(raw, std::path::Path::new("unused"), true)
-            .status
-            .success()
-    );
-    let raw_error = parse_unresolved(raw).unwrap_err();
-    assert!(
-        raw_error.contains("raw, non-ASCII and non-root identifiers are unsupported"),
-        "{raw_error}"
-    );
     for source in [
         "fn async() {} fn main() {}",
         "fn await() {} fn main() {}",
@@ -180,6 +169,38 @@ fn edition_keywords_keep_2024_check_build_and_run_boundaries() {
                 assert!(
                     super::super::compile(source.into(), workers, check_only).is_err(),
                     "reserved identifier accepted: workers={workers}, check={check_only}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn raw_root_identifiers_preserve_normalized_lookup() {
+    stock_native_run(
+        "mod r#mod { pub struct r#type { pub r#match:i32 } pub fn r#fn(r#value:r#type)->i32 {r#value.r#match} } fn main(){let value=r#mod::r#type{r#match:42};println!(\"{}\",r#mod::r#fn(value));}",
+    );
+    stock_native_run(
+        "fn r#async()->i32{10} fn r#await()->i32{10} fn r#dyn()->i32{10} fn r#try()->i32{10} fn r#gen()->i32{2} fn main(){let r#value=r#async()+r#await()+r#dyn()+r#try()+r#gen();println!(\"{}\",value);}",
+    );
+    for source in [
+        "fn r#same(){} fn same(){} fn main(){}",
+        "fn r#self(){} fn main(){}",
+        "fn r#crate(){} fn main(){}",
+        "fn r#super(){} fn main(){}",
+        "fn r#Self(){} fn main(){}",
+        "fn r#_(){} fn main(){}",
+    ] {
+        assert!(
+            !stock_compile(source, std::path::Path::new("unused"), true)
+                .status
+                .success()
+        );
+        for workers in [1, 8] {
+            for check_only in [true, false] {
+                assert!(
+                    super::super::compile(source.into(), workers, check_only).is_err(),
+                    "{source}"
                 );
             }
         }

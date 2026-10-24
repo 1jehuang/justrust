@@ -51,9 +51,12 @@ Identifier and lifetime parsing treats `async`, `await`, `dyn`, and `try` as
 reserved from edition 2018, and `gen` from edition 2024, according to the
 authenticated token occurrence's edition rather than the receiving name
 store's edition. `edition_keywords` compares all five spellings against stock
-in all four editions and checks CHECK/BUILD/run in 2024. Raw identifiers now
-reach their explicit unsupported diagnostic rather than being misparsed as
-attributes. This is a bounded parser rule, not permission to compile a 2021 package.
+in all four editions and checks CHECK/BUILD/run in 2024. Original ASCII raw
+identifiers retain their raw occurrence metadata and share normalized lookup
+identity with ordinary spellings. The raw-root regression checks modules,
+types, fields, calls, duplicate definitions and prohibited raw spellings.
+Expanded raw identifiers and raw lifetimes remain explicitly unsupported.
+These are bounded parser rules, not permission to compile a 2021 package.
 
 Manifest resolution produces immutable profile values. The driver passes the
 resolved cfg and overflow policy into `SourceOptions`; no mutable compiler

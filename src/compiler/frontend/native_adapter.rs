@@ -25,6 +25,7 @@ pub(super) struct NativeParserInput {
 /// passed the bounded root-only ingress gate. This is not a hygiene projection.
 struct AdmittedRootName {
     symbol: crate::compiler::token_session::SymbolId,
+    raw: bool,
     span: SpanId,
     edition: crate::compiler::token::Edition,
     logical: u32,
@@ -439,7 +440,7 @@ impl NativeTokenBuffer {
             kind: TokenKind::Ident(crate::compiler::token::Ident {
                 symbol: admitted.symbol,
                 context: names.session().root_context(),
-                raw: false,
+                raw: admitted.raw,
             }),
             span: admitted.span,
         };
@@ -724,14 +725,11 @@ impl NativeParserInput {
                             .session
                             .symbol(ident.symbol)
                             .map_err(transport_error)?;
-                        if ident.raw
-                            || !text.is_ascii()
-                            || ident.context != input.session.root_context()
-                        {
+                        if !text.is_ascii() || ident.context != input.session.root_context() {
                             return Err(event_error(
                                 event,
                                 SourceErrorKind::Unsupported,
-                                "raw, non-ASCII and non-root identifiers are unsupported",
+                                "non-ASCII and non-root identifiers are unsupported",
                             ));
                         }
                         input.push_range(
@@ -1163,8 +1161,7 @@ impl NativeParserInput {
             )));
         };
         token.validate(&self.session).map_err(transport_error)?;
-        if ident.raw
-            || ident.context != self.session.root_context()
+        if ident.context != self.session.root_context()
             || !self
                 .session
                 .symbol(ident.symbol)
@@ -1189,6 +1186,7 @@ impl NativeParserInput {
         self.names
             .push(AdmittedRootName {
                 symbol: ident.symbol,
+                raw: ident.raw,
                 span: token.span,
                 edition,
                 logical,
@@ -2222,10 +2220,14 @@ mod tests {
         assert!(!view.is_char());
         assert!(!view.matches("b'x'"));
         assert!(view.name.is_none());
+        let raw = super::super::lex("r#name").unwrap();
+        let raw_view = super::super::TokenCursor::new(&raw).current();
+        assert!(raw_view.is_ident());
+        assert_eq!(raw_view.text, "r#name");
+        assert!(raw_view.name.is_some());
         for text in [
             "\u{feff}fn f(){}",
             "#!/bin/native\nfn f(){}",
-            "r#name",
             "水",
             "c\"x\"",
         ] {

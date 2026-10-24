@@ -473,10 +473,11 @@ impl NameStoreBuilder {
             return Err(NameError::ExpectedIdentifier);
         };
         self.check_origin(token.span)?;
-        if ident.raw {
-            return Err(NameError::Unsupported(UnsupportedName::RawIdentifier));
+        let spelling = self.session().symbol(ident.symbol)?;
+        if ident.raw && matches!(spelling, "_" | "crate" | "self" | "super" | "Self") {
+            return Err(NameError::InvalidIdentifier);
         }
-        Self::check_ascii(self.session().symbol(ident.symbol)?, self.budget())?;
+        Self::check_ascii(spelling, self.budget())?;
         self.append(NameData {
             atom: NameAtomId::new(&self.store.session, ident.symbol)?,
             spelling: ident.symbol,
@@ -1227,6 +1228,23 @@ mod tests {
             unreachable!()
         };
         ident.raw = true;
+        let raw = builder
+            .from_token(
+                Token {
+                    kind: TokenKind::Ident(ident),
+                    ..token
+                },
+                Edition::E2024,
+            )
+            .unwrap();
+        let ordinary = builder.from_token(token, Edition::E2024).unwrap();
+        assert!(builder.data(raw).unwrap().raw);
+        assert!(!builder.data(ordinary).unwrap().raw);
+        assert_eq!(
+            builder.key(raw, LookupClass::Local).unwrap(),
+            builder.key(ordinary, LookupClass::Local).unwrap()
+        );
+        ident.symbol = builder.session_mut().intern_symbol("self").unwrap();
         assert!(matches!(
             builder.from_token(
                 Token {
@@ -1235,7 +1253,7 @@ mod tests {
                 },
                 Edition::E2024
             ),
-            Err(NameError::Unsupported(UnsupportedName::RawIdentifier))
+            Err(NameError::InvalidIdentifier)
         ));
         ident.raw = false;
         ident.symbol = unicode;
