@@ -609,6 +609,11 @@ pub enum Rvalue {
     /// Materialize a `&'static str` descriptor over immutable program data.
     Str(std::sync::Arc<str>),
     ByteStr(std::sync::Arc<[u8]>),
+    /// `&'static [u8; len]` over `len` copies of `byte` in program data.
+    ByteRepeat {
+        byte: u8,
+        len: usize,
+    },
     Println(String),
     Format {
         pieces: Vec<String>,
@@ -752,7 +757,8 @@ impl Rvalue {
             | Self::Println(_)
             | Self::Output(_)
             | Self::Str(_)
-            | Self::ByteStr(_) => {}
+            | Self::ByteStr(_)
+            | Self::ByteRepeat { .. } => {}
         }
         Ok(())
     }
@@ -1065,7 +1071,7 @@ fn validate_type(ty: &Ty, depth: usize) -> Result<(), String> {
                 pending.push((inner, depth + layers));
             }
             Ty::Array { element, len } => {
-                if *len > ir::MAX_ARRAY_LEN {
+                if *len > ir::MAX_ARRAY_TYPE_LEN {
                     return Err("CFG array length exceeds limit 4096".into());
                 }
                 if arrays.insert(std::sync::Arc::as_ptr(element)) {
@@ -1229,6 +1235,7 @@ impl Function {
                             Rvalue::Println(text) => add(&mut bytes, text.len(), 1, budget)?,
                             Rvalue::Str(text) => add(&mut bytes, text.len(), 1, budget)?,
                             Rvalue::ByteStr(text) => add(&mut bytes, text.len(), 1, budget)?,
+                            Rvalue::ByteRepeat { .. } => add(&mut bytes, 1, 16, budget)?,
                             Rvalue::IndexCopy { array, .. } | Rvalue::Discriminant(array) => {
                                 path(&mut bytes, array, budget)?
                             }
@@ -1905,7 +1912,8 @@ impl Function {
                             | Rvalue::Println(_)
                             | Rvalue::Output(_)
                             | Rvalue::Str(_)
-                            | Rvalue::ByteStr(_) => {}
+                            | Rvalue::ByteStr(_)
+                            | Rvalue::ByteRepeat { .. } => {}
                         }
                     }
                 }
@@ -2564,6 +2572,7 @@ impl Function {
             }
             Rvalue::Str(_) => Ok(Ty::shared_str_ty()),
             Rvalue::ByteStr(bytes) => Ok(Ty::byte_string_ty(bytes.len())),
+            Rvalue::ByteRepeat { len, .. } => Ok(Ty::byte_string_ty(*len)),
             Rvalue::Unary { op, value } => {
                 let ty = self.operand_ty_with_facts(value, facts, scratch)?;
                 match (op, &ty) {
@@ -4766,7 +4775,7 @@ impl Lowerer<'_> {
                 let Ty::Array { len: count, .. } = &expression.ty else {
                     return Err("checked repeat requires array type".into());
                 };
-                if len != count || *len > ir::MAX_ARRAY_LEN {
+                if len != count || *len > ir::MAX_ARRAY_TYPE_LEN {
                     return Err("checked array repeat length mismatch".into());
                 }
                 // The operand is evaluated and consumed exactly once, even
@@ -4838,6 +4847,14 @@ impl Lowerer<'_> {
             ir::ExprKind::ByteStr(bytes) => self.assign(
                 destination.clone(),
                 Rvalue::ByteStr(std::sync::Arc::from(bytes.as_slice())),
+                origin,
+            ),
+            ir::ExprKind::ByteRepeat { byte, len } => self.assign(
+                destination.clone(),
+                Rvalue::ByteRepeat {
+                    byte: *byte,
+                    len: *len,
+                },
                 origin,
             ),
             ir::ExprKind::Char(value) => self.assign(
@@ -12255,7 +12272,8 @@ mod tests {
                             | Rvalue::Println(_)
                             | Rvalue::Output(_)
                             | Rvalue::Str(_)
-                            | Rvalue::ByteStr(_) => {}
+                            | Rvalue::ByteStr(_)
+                            | Rvalue::ByteRepeat { .. } => {}
                         }
                     }
                 }

@@ -8534,7 +8534,10 @@ pub enum ExprKind {
     ByteStr(Vec<u8>),
     /// Shared `&[u8; len]` over immutable static bytes all equal to `byte`
     /// (stock static promotion of `&[byte; len]`), without a per-element payload.
-    ByteRepeat { byte: u8, len: usize },
+    ByteRepeat {
+        byte: u8,
+        len: usize,
+    },
     /// Count zero bits before the highest set bit within the integer's declared width.
     LeadingZeros {
         value: ExprId,

@@ -213,7 +213,7 @@ impl<'facts> CoverageMatrix<'facts> {
                     }
                 }
                 Ty::Array { element, len } => {
-                    if *len > ir::MAX_ARRAY_LEN {
+                    if *len > ir::MAX_ARRAY_TYPE_LEN {
                         return Err("array length limit exceeded".into());
                     }
                     if *len != 0 {

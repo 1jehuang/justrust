@@ -363,7 +363,7 @@ impl ValidatedTraitWorld {
                 }
             }
             Ty::Array { element, len } => {
-                if *len > ir::MAX_ARRAY_LEN {
+                if *len > ir::MAX_ARRAY_TYPE_LEN {
                     return Err(FactsError::resource(
                         &self.budget,
                         "array metadata length limit exceeded",
@@ -810,7 +810,7 @@ impl ValidatedTraitWorld {
                 }
             }
             Ty::Array { element, len } => {
-                if *len > ir::MAX_ARRAY_LEN {
+                if *len > ir::MAX_ARRAY_TYPE_LEN {
                     return Err(FactsError::resource(
                         &self.budget,
                         "array length limit exceeded",

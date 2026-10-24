@@ -231,13 +231,12 @@ pub(super) fn inventory(
                 }
             }
             Type::Array(t, n) => {
-                add(
-                    ds,
-                    tr::RecipeDescriptor::CloneArray {
-                        len: u16::try_from(*n).map_err(|_| "array recipe length overflow")?,
-                    },
-                    b,
-                )?;
+                // Clone recipes expand per element. Longer arrays get no
+                // seeded recipe: cloning one is an explicit unsupported
+                // boundary at the Clone obligation, not a parse failure.
+                if let Ok(len) = u16::try_from(*n) {
+                    add(ds, tr::RecipeDescriptor::CloneArray { len }, b)?;
+                }
                 ty(t, ds, b, depth + 1)?;
             }
             Type::Ref { referent, .. } => ty(referent, ds, b, depth + 1)?,
@@ -506,25 +505,17 @@ pub(super) fn inventory(
                 }
             }
             Expr::Array(es) => {
-                add(
-                    ds,
-                    tr::RecipeDescriptor::CloneArray {
-                        len: u16::try_from(es.len()).map_err(|_| "array recipe length overflow")?,
-                    },
-                    b,
-                )?;
+                if let Ok(len) = u16::try_from(es.len()) {
+                    add(ds, tr::RecipeDescriptor::CloneArray { len }, b)?;
+                }
                 for e in es {
                     expr(e, ds, b, d + 1)?;
                 }
             }
             Expr::Repeat { value, len } => {
-                add(
-                    ds,
-                    tr::RecipeDescriptor::CloneArray {
-                        len: u16::try_from(*len).map_err(|_| "array recipe length overflow")?,
-                    },
-                    b,
-                )?;
+                if let Ok(len) = u16::try_from(*len) {
+                    add(ds, tr::RecipeDescriptor::CloneArray { len }, b)?;
+                }
                 expr(value, ds, b, d + 1)?;
             }
             Expr::Apply { path, value } => {

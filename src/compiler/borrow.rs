@@ -434,6 +434,12 @@ fn read_cell_cover(
                             }
                         }
                     }
+                    // Plain scalar elements hold no reference cells.
+                    Ty::Array { element, .. }
+                        if matches!(
+                            element.as_ref(),
+                            Ty::Int(_) | Ty::Float(_) | Ty::Char | Ty::Bool
+                        ) => {}
                     Ty::Array { element, len } => {
                         if *len > ir::MAX_ARRAY_LEN {
                             return Err(Exhausted);
@@ -2602,7 +2608,7 @@ impl<'a, 'b> CarrierBuilder<'a, 'b> {
                 matches!(
                     &statement.value,
                     Statement::Assign {
-                        value: Rvalue::ByteStr(_),
+                        value: Rvalue::ByteStr(_) | Rvalue::ByteRepeat { .. },
                         ..
                     }
                 )
@@ -3145,7 +3151,7 @@ impl CarrierBuilder<'_, '_> {
         statement: usize,
     ) -> Result<Vec<(CarrierLocation, CarrierOrigins)>, Exhausted> {
         match value {
-            Rvalue::ByteStr(_) => {
+            Rvalue::ByteStr(_) | Rvalue::ByteRepeat { .. } => {
                 let origin = self.static_origin.ok_or(Exhausted)?;
                 let mut origins = self.empty_origins()?;
                 origins.references.0.insert(origin.0);
@@ -5436,7 +5442,8 @@ fn visit_rvalue(f: &cfg::Function, value: &Rvalue, mut visit: impl FnMut(&Place,
         | Rvalue::Println(_)
         | Rvalue::Output(_)
         | Rvalue::Str(_)
-        | Rvalue::ByteStr(_) => {}
+        | Rvalue::ByteStr(_)
+        | Rvalue::ByteRepeat { .. } => {}
     }
 }
 

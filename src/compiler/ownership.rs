@@ -1679,7 +1679,8 @@ fn preflight_with_plan(
                     Rvalue::Println(_)
                     | Rvalue::Output(_)
                     | Rvalue::Str(_)
-                    | Rvalue::ByteStr(_) => {}
+                    | Rvalue::ByteStr(_)
+                    | Rvalue::ByteRepeat { .. } => {}
                 }
             }
         }
@@ -1768,6 +1769,15 @@ fn preflight_ty(ty: &Ty, depth: usize, budget: &mut Budget) -> Result<(), Exhaus
         preflight_ty(referent, depth + 1, budget)?;
     }
     if let Ty::Array { element, len } = ty {
+        if *len > super::ir::MAX_ARRAY_LEN
+            && matches!(
+                element.as_ref(),
+                Ty::Int(_) | Ty::Float(_) | Ty::Bool | Ty::Char
+            )
+        {
+            // Summarized as one scalar leaf (see MoveShape::of).
+            return Ok(());
+        }
         if *len > super::ir::MAX_ARRAY_LEN {
             return Err(Exhausted);
         }
@@ -1863,6 +1873,19 @@ impl<'a> MoveShape<'a> {
                 ty,
                 fields: definition.def().fields.len(),
             },
+            // Beyond the per-element bound, an array of plain scalars is one
+            // leaf: its elements carry no references, destructors or sub-places,
+            // and stock rejects element-wise initialization of arrays (E0381), so
+            // whole-array initialization tracking is exact.
+            Ty::Array { element, len }
+                if *len > super::ir::MAX_ARRAY_LEN
+                    && matches!(
+                        element.as_ref(),
+                        Ty::Int(_) | Ty::Float(_) | Ty::Bool | Ty::Char
+                    ) =>
+            {
+                Self::Scalar
+            }
             Ty::Array { element, len } => Self::Array { element, len: *len },
             Ty::Enum(definition) => Self::Sum(definition.def()),
             // A checked shared slice is a Copy descriptor, not an element
@@ -2996,7 +3019,8 @@ impl Transfer<'_> {
             | Rvalue::Println(_)
             | Rvalue::Output(_)
             | Rvalue::Str(_)
-            | Rvalue::ByteStr(_) => {}
+            | Rvalue::ByteStr(_)
+            | Rvalue::ByteRepeat { .. } => {}
         }
         Ok(())
     }

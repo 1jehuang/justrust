@@ -897,3 +897,72 @@ fn inclusive_and_reverse_integer_ranges_match_stock() {
         ],
     );
 }
+
+#[test]
+fn promoted_large_byte_repeats_match_stock() {
+    #[path = "support/closure_oracle.rs"]
+    mod closure_oracle;
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "large-byte-repeats",
+        &[
+            Case {
+                name: "promoted_shared_u8_repeats",
+                source: "fn s(x:&[u8])->u64{let mut t=0u64; for b in x {t+=*b as u64;} t} fn main(){ println!(\"{} {} {}\", s(&[0xff; 1<<20]), s(&[7u8; 70000]), s(&[0; 65536])); let r: &[u8; 100000] = &[3; 100000]; println!(\"{} {}\", r.len(), s(r)); assert_eq!(s(&[1; 1024 * 1024 - 1024]), 1047552); }",
+                expect: Expect::Run("267386880 490000 0\n100000 300000\n"),
+            },
+            Case {
+                name: "out_of_range_byte_literal",
+                source: "fn s(x:&[u8])->usize{x.len()} fn main(){ s(&[256; 70000]); }",
+                expect: Expect::Invalid("out of range"),
+            },
+            Case {
+                name: "element_type_mismatch",
+                source: "fn s(x:&[u16])->usize{x.len()} fn main(){ s(&[0u8; 70000]); }",
+                expect: Expect::Invalid("E0308"),
+            },
+        ],
+    );
+}
+
+#[test]
+fn unpromoted_large_arrays_remain_explicitly_unsupported() {
+    for (name, source) in [
+        (
+            "nonliteral",
+            "fn s(x:&[u8])->usize{x.len()} fn main(){ let b = 1u8; println!(\"{}\", s(&[b; 70000])); }",
+        ),
+        (
+            "mutable",
+            "fn s(x:&mut [u8])->usize{x.len()} fn main(){ println!(\"{}\", s(&mut [0u8; 70000])); }",
+        ),
+        (
+            "wide_element",
+            "fn s(x:&[u32])->usize{x.len()} fn main(){ println!(\"{}\", s(&[0u32; 70000])); }",
+        ),
+        (
+            "owned_local",
+            "fn main(){ let a = [0u8; 70000]; println!(\"{}\", a.len()); }",
+        ),
+    ] {
+        let root = scratch(&format!("large-array-{name}"));
+        let path = root.join("input.rs");
+        std::fs::write(&path, source).unwrap();
+        let stock = Command::new(stock_rustc::stock_rustc())
+            .args(["--edition=2024", "-Cpanic=abort"])
+            .arg(&path)
+            .arg("-o")
+            .arg(root.join("stock"))
+            .output()
+            .unwrap();
+        assert!(stock.status.success(), "{name}: {stock:?}");
+        for workers in [1, 8] {
+            let error = justrust_engine::compiler::compile(source.into(), workers, false)
+                .err()
+                .unwrap_or_else(|| panic!("{name}: large array must not build"))
+                .to_string();
+            assert!(error.contains("unsupported"), "{name}: {error}");
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}

@@ -11732,10 +11732,10 @@ impl<'input, 'names> Parser<'input, 'names> {
         // The supported length bound is a semantic limit. Inactive items are
         // validated for syntax only and never lowered.
         let inactive = self.purpose == ParserPurpose::InactiveSyntax;
-        if value.bits > ir::MAX_ARRAY_LEN as u128 && !inactive {
+        if value.bits > ir::MAX_ARRAY_TYPE_LEN as u128 && !inactive {
             return Err(self.limit("array length/index exceeds supported limit"));
         }
-        let number = value.bits.min(ir::MAX_ARRAY_LEN as u128) as usize;
+        let number = value.bits.min(ir::MAX_ARRAY_TYPE_LEN as u128) as usize;
         self.cursor.bump();
         if !self.is("]") {
             assert!(
@@ -11752,7 +11752,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             if let Some(end) = array_len::length_end(tokens, start) {
                 let table = array_len::scan(tokens);
                 if let Some(value) = array_len::evaluate(tokens, &table, start..end) {
-                    if value > ir::MAX_ARRAY_LEN as u128
+                    if value > ir::MAX_ARRAY_TYPE_LEN as u128
                         && self.purpose != ParserPurpose::InactiveSyntax
                     {
                         return Err(self.limit("array length/index exceeds supported limit"));
@@ -11760,7 +11760,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                     while self.cursor.index().is_some_and(|at| at < end) {
                         self.cursor.bump();
                     }
-                    return Ok(value.min(ir::MAX_ARRAY_LEN as u128) as usize);
+                    return Ok(value.min(ir::MAX_ARRAY_TYPE_LEN as u128) as usize);
                 }
             }
         }
@@ -22617,7 +22617,7 @@ impl SchemaAdapter {
                     }
                 }
                 ir::Ty::Array { element, len } => {
-                    if *len > ir::MAX_ARRAY_LEN {
+                    if *len > ir::MAX_ARRAY_TYPE_LEN {
                         return Err("array length limit exceeded".into());
                     }
                     child(element)?;

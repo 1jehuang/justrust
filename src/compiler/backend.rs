@@ -249,7 +249,7 @@ pub(super) fn value_size(ty: &ir::Ty) -> Result<i32, String> {
     }
     if let ir::Ty::Array { element, len } = ty {
         if *len > ir::MAX_ARRAY_LEN {
-            return Err("array length exceeds private backend limit".into());
+            return Err("unsupported: array length exceeds the native frame limit (arrays above 65535 elements are supported only as promoted `&[byte_literal; N]`)".into());
         }
         if *len == 0 {
             // ConcreteCfg's exhaustive metadata walk validated the element,
@@ -264,7 +264,7 @@ pub(super) fn value_size(ty: &ir::Ty) -> Result<i32, String> {
             .checked_mul(len)
             .filter(|size| *size <= MAX_FRAME_BYTES)
             .map(|size| size.max(8))
-            .ok_or_else(|| "array exceeds private frame limit".into());
+            .ok_or_else(|| "unsupported: array exceeds the native 1 MiB frame limit".into());
     }
     if let ir::Ty::Enum(ty) = ty {
         let payload = ty
@@ -1937,6 +1937,36 @@ impl<'a> Emitter<'a> {
         Ok(())
     }
 
+    /// `&'static [u8; len]` of one repeated byte, in the same private element
+    /// layout as byte string literals. Only the backend materializes storage.
+    fn byte_repeat_literal(&mut self, byte: u8, len: usize) -> Result<(), String> {
+        let budget = self.concrete.facts().budget().clone();
+        let stride = usize::try_from(value_size(&ir::Ty::Int(ir::IntTy::U8))?)
+            .map_err(|_| "invalid byte element layout")?;
+        if len > ir::MAX_ARRAY_TYPE_LEN {
+            return Err("byte repeat exceeds static data limit".into());
+        }
+        let size = len
+            .checked_mul(stride)
+            .ok_or("byte repeat layout overflow")?
+            .max(stride);
+        budget.charge_work(size / 64 + 1)?;
+        budget.retain_bytes(size)?;
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(size)
+            .map_err(|_| "byte repeat allocation failed")?;
+        bytes.resize(size, 0);
+        if byte != 0 {
+            for index in 0..len {
+                bytes[index * stride] = byte;
+            }
+        }
+        self.data_relocation(bytes)?;
+        self.bytes(&[0x48, 0x89, 0xf0]); // mov rax, rsi: thin array pointer
+        Ok(())
+    }
+
     /// `&'static str` writes its (data, len) descriptor into aggregate scratch.
     fn str_literal(&mut self, text: &str) -> Result<(), String> {
         let budget = self.concrete.facts().budget().clone();
@@ -2871,6 +2901,7 @@ impl Emitter<'_> {
             }
             cfg::Rvalue::Str(text) => self.str_literal(text)?,
             cfg::Rvalue::ByteStr(bytes) => self.byte_string_literal(bytes)?,
+            cfg::Rvalue::ByteRepeat { byte, len } => self.byte_repeat_literal(*byte, *len)?,
             cfg::Rvalue::RefToDyn {
                 reference,
                 object,

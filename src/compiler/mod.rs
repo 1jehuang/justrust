@@ -2453,6 +2453,9 @@ impl Provider for CompilerProvider {
                     for (handle, symbol) in object_handles.into_iter().zip(pending_symbols) {
                         let object: Arc<backend::Object> = cx.read_fact(handle).await?;
                         let mut bytes = object.code.len();
+                        // Static payloads are copied word-wise by the linker;
+                        // their storage is retained in full below.
+                        let mut copy_work = object.code.len();
                         for (_, name) in &object.calls {
                             bytes = bytes
                                 .checked_add(name.len())
@@ -2460,6 +2463,9 @@ impl Provider for CompilerProvider {
                                 .ok_or_else(|| {
                                     Error::new("generic link input byte limit exceeded")
                                 })?;
+                            copy_work = copy_work
+                                .saturating_add(name.len())
+                                .saturating_add(std::mem::size_of::<(usize, String)>());
                         }
                         for (_, value) in &object.strings {
                             bytes = bytes
@@ -2470,9 +2476,12 @@ impl Provider for CompilerProvider {
                                 .ok_or_else(|| {
                                     Error::new("generic link input byte limit exceeded")
                                 })?;
+                            copy_work = copy_work
+                                .saturating_add(value.len().div_ceil(8))
+                                .saturating_add(std::mem::size_of::<(usize, Vec<u8>)>());
                         }
                         this.0.budget.retain_bytes(bytes).map_err(Error::new)?;
-                        this.0.budget.charge_work(bytes).map_err(Error::new)?;
+                        this.0.budget.charge_work(copy_work).map_err(Error::new)?;
                         objects.push((symbol, object.as_ref().clone()));
                     }
                     // The linked artifact is released only after the explicit

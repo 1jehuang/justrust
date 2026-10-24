@@ -2602,7 +2602,7 @@ pub(super) fn checked_ty_at(ty: &Type, env: &TypeEnv, allow_ref: bool) -> Result
             })
         }
         Type::Array(element, len) => {
-            if *len > ir::MAX_ARRAY_LEN {
+            if *len > ir::MAX_ARRAY_TYPE_LEN {
                 return Err("array length exceeds supported limit".into());
             }
             Ok(ir::Ty::Array {
@@ -5350,6 +5350,49 @@ impl<'a> Checker<'a> {
             }
             _ => None,
         };
+        // Stock promotes `&[c; N]` with a constant operand to static storage.
+        // Above the per-element bound, a shared u8 repeat of an integer
+        // literal becomes immutable program bytes; no array temporary is
+        // built. Other large array temporaries remain an explicit boundary.
+        if let Expr::Repeat {
+            value: operand,
+            len,
+        } = value
+            && *len > ir::MAX_ARRAY_LEN
+        {
+            let byte_hint = ir::Ty::Int(ir::IntTy::U8);
+            let element_ok = match hint.as_ref() {
+                Some(ir::Ty::Array { element, .. }) => element.as_ref() == &byte_hint,
+                None => {
+                    matches!(operand.as_ref(), Expr::Integer(literal) if literal.suffix == Some(ir::IntTy::U8))
+                }
+                _ => false,
+            };
+            let byte = if kind == ir::BorrowKind::Shared
+                && element_ok
+                && matches!(operand.as_ref(), Expr::Integer(_))
+            {
+                let checked = self.expr_expected(operand, Some(&byte_hint))?;
+                self.require(&self.flow(checked), &byte_hint)?;
+                match &self.exprs[checked.0].kind {
+                    ir::ExprKind::Int(literal) => u8::try_from(literal.bits).ok(),
+                    _ => None,
+                }
+            } else {
+                None
+            };
+            let Some(byte) = byte else {
+                return Err("unsupported: arrays longer than 65535 elements are supported only as `&[byte_literal; N]` of u8".into());
+            };
+            self.charge_node(32)?;
+            let id = ir::ExprId(self.exprs.len());
+            self.exprs.push(ir::TypedExpr {
+                ty: ir::Ty::byte_string_ty(*len),
+                completion: ir::Completion::Returns,
+                kind: ir::ExprKind::ByteRepeat { byte, len: *len },
+            });
+            return Ok(id);
+        }
         let value = self.expr_expected(value, hint.as_ref())?;
         let flow = self.flow(value);
         if !flow.completes {
@@ -10529,7 +10572,7 @@ impl<'a> Checker<'a> {
                 )
             }
             Expr::Repeat { value, len } => {
-                if *len > ir::MAX_ARRAY_LEN {
+                if *len > ir::MAX_ARRAY_TYPE_LEN {
                     return Err("array repeat exceeds supported length".into());
                 }
                 let hint = match expected {

@@ -524,7 +524,7 @@ impl PlanState {
                 );
             }
             Type::Array(element, len) => {
-                if *len > ir::MAX_ARRAY_LEN {
+                if *len > ir::MAX_ARRAY_TYPE_LEN {
                     return Err("array length exceeds supported limit".into());
                 }
                 ir::Ty::Array {
