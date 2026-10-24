@@ -11605,7 +11605,6 @@ impl<'input, 'names> Parser<'input, 'names> {
         self.nesting += 1;
         let previous_module = self.module;
         let previous_frontier = self.module_frontier;
-        let mut parent_macros = None;
         self.module = module;
         if self.purpose == ParserPurpose::Active && self.input.macro_source().is_some() {
             if self.lexical.scopes.is_none() {
@@ -11614,23 +11613,10 @@ impl<'input, 'names> Parser<'input, 'names> {
                         .map_err(scope_parse_error)?,
                 );
             }
-            let source = self.input.macro_source().cloned().ok_or_else(|| {
-                native_adapter::transport_error(super::token_session::TokenError::InvalidHandle)
-            })?;
-            if let Some(mut parent) = self.lexical.item_macros.take() {
-                let checkpoint = parent
-                    .checkpoint(self.names)
-                    .map_err(|error| self.driver_error(error))?;
-                self.lexical.item_macros = Some(
-                    super::source_item_macro::SourceItemMacroDriver::from_checkpoint(
-                        source,
-                        &checkpoint,
-                        self.names,
-                    )
-                    .map_err(|error| self.driver_error(error))?,
-                );
-                parent_macros = Some(parent);
-            } else {
+            if self.lexical.item_macros.is_none() {
+                let source = self.input.macro_source().cloned().ok_or_else(|| {
+                    native_adapter::transport_error(super::token_session::TokenError::InvalidHandle)
+                })?;
                 self.lexical.item_macros = Some(
                     super::source_item_macro::SourceItemMacroDriver::new(source, self.names)
                         .map_err(|error| self.driver_error(error))?,
@@ -11696,9 +11682,6 @@ impl<'input, 'names> Parser<'input, 'names> {
         }
         self.module = previous_module;
         self.module_frontier = previous_frontier;
-        if let Some(parent) = parent_macros {
-            self.lexical.item_macros = Some(parent);
-        }
         self.nesting -= 1;
         Ok(())
     }
