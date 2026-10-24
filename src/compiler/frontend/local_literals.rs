@@ -80,6 +80,9 @@ struct Solver<'a: 's, 'b: 's, 's> {
     methods: Vec<Method>,
     projections: Vec<Projection>,
     delayed_results: Vec<Term>,
+    /// A dot call saw several applications of one trait with no expected
+    /// result type yet. At quiescence this is stock's E0283 boundary.
+    trait_application_pending: bool,
     coercions: Vec<(Term, Term)>,
     /// Reference coercions into a still-unknown target. Stock lets a later
     /// expectation (e.g. `let v: Vec<&dyn P> = vec![&a]`) fix the target first;
@@ -200,6 +203,7 @@ fn solve_body_with_seed<'a: 's, 'b: 's, 's>(
         methods: Vec::new(),
         projections: Vec::new(),
         delayed_results: Vec::new(),
+        trait_application_pending: false,
         coercions: Vec::new(),
         lazy_coercions: Vec::new(),
         iterator_items: Vec::new(),
@@ -1054,6 +1058,7 @@ impl<'s> Solver<'_, '_, 's> {
             let mut progress = false;
             let mut pending = Vec::new();
             selection_errors.clear();
+            self.trait_application_pending = false;
             for method in methods {
                 if let Some(result) =
                     self.callable_method_application(method.receiver, method.name, &method.args)?
@@ -1167,6 +1172,7 @@ impl<'s> Solver<'_, '_, 's> {
                         method.name,
                         &method.args,
                         &method.actuals,
+                        method.result,
                     )? {
                         self.bind_declared_method_result(result, method.result)?;
                         progress = true;
@@ -1439,6 +1445,9 @@ impl<'s> Solver<'_, '_, 's> {
                 }
                 if let Some(error) = selection_errors.into_iter().find(|e| is_bound_failure(e)) {
                     return Err(error);
+                }
+                if self.trait_application_pending {
+                    return Err(trait_selection::trait_application_ambiguity());
                 }
                 break;
             }

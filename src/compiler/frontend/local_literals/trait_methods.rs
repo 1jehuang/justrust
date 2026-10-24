@@ -313,6 +313,7 @@ impl Solver<'_, '_, '_> {
         name: AstIdent,
         arguments: &[Term],
         explicit: &[Term],
+        expected: Term,
     ) -> Result<Option<Term>, String> {
         if self.preparation.is_none()
             && !arguments.iter().any(|argument| {
@@ -327,6 +328,7 @@ impl Solver<'_, '_, '_> {
             return Ok(None);
         };
         let mut discovered = None;
+        let mut same_trait: Vec<(ir::TraitRef, ir::DeclId)> = Vec::new();
         // Reuse the ordinary receiver/adjustment and inherent-before-trait order.
         // Returning Deferred stops at the first applicable frontier, rather than
         // silently considering a lower-priority trait while its arguments wait.
@@ -352,6 +354,7 @@ impl Solver<'_, '_, '_> {
                     &plan.budget,
                 )?;
                 let mut applicable = None;
+                let mut collected: Vec<_> = Vec::new();
                 for (application, item) in candidates.as_slice() {
                     checker.infer_work(0)?;
                     if receiver_mode(plan.declaration(*item)?.receiver) != receiver_mode(mode) {
@@ -366,23 +369,34 @@ impl Solver<'_, '_, '_> {
                     ) {
                         continue;
                     }
-                    if let Some((previous, _)) = applicable.replace((application.clone(), *item)) {
-                        if previous.declaration == application.declaration {
-                            return Err(
-                                super::super::trait_selection::trait_application_ambiguity(),
-                            );
-                        }
+                    collected.push((application.clone(), *item));
+                    if let Some((previous, _)) = applicable.replace((application.clone(), *item))
+                        && previous.declaration != application.declaration
+                    {
                         return Err("ambiguous in-scope trait item".into());
                     }
                 }
                 let Some(application) = applicable else {
                     return Ok(MethodArguments::Missing);
                 };
+                if collected.len() > 1 {
+                    // Several applications of one trait: the trait arguments
+                    // are selected below from the expected result type.
+                    same_trait = collected;
+                    return Ok(MethodArguments::Deferred);
+                }
                 discovered = Some(application);
                 Ok(MethodArguments::Deferred)
             },
             |_, _| Ok(None),
         )?;
+        if !same_trait.is_empty() {
+            discovered = self.select_application_by_expected(&same_trait, expected)?;
+            if discovered.is_none() {
+                self.trait_application_pending = true;
+                return Ok(None);
+            }
+        }
         let Some((application, item)) = discovered else {
             return Ok(None);
         };
@@ -427,5 +441,70 @@ impl Solver<'_, '_, '_> {
         }
         self.callable_predicates(&schema.predicates, &params)?;
         self.schema(&schema.signature.result, &params, 0).map(Some)
+    }
+
+    /// Chooses among several proven applications of one trait by the
+    /// expected method result, as stock inference does for `x.into()` with an
+    /// annotated binding. An unknown expected type defers; a known one that
+    /// matches zero or several applications is E0283.
+    fn select_application_by_expected(
+        &mut self,
+        applications: &[(ir::TraitRef, ir::DeclId)],
+        expected: Term,
+    ) -> Result<Option<(ir::TraitRef, ir::DeclId)>, String> {
+        // The delayed method result usually flows into its context through
+        // a pending coercion (`let n: i64 = x.into()`); that target is the
+        // expected type. Reference results would admit coercions, so only an
+        // exact unique pending target is used.
+        let mut target = self.resolve(expected, 0)?;
+        if target.is_none() {
+            let root = self.root(expected);
+            let mut found = None;
+            for (actual, wanted) in self.coercions.clone() {
+                self.checker.infer_work(0)?;
+                if self.root(actual) == root
+                    && let Some(ty) = self.resolve(wanted, 0)?
+                {
+                    if found.as_ref().is_some_and(|f| *f != ty) {
+                        return Ok(None);
+                    }
+                    found = Some(ty);
+                }
+            }
+            target = found;
+        }
+        let Some(expected) = target else {
+            return Ok(None);
+        };
+        let plan = self.checker.signatures.plan()?;
+        let mut chosen = None;
+        for (application, item) in applications {
+            let schema = plan.raw_schema(*item)?;
+            let owner = plan.param_env(application.declaration)?;
+            let mut params = self.parameters(&schema.env)?;
+            for (index, actual) in std::iter::once(&application.self_ty)
+                .chain(application.args.iter())
+                .enumerate()
+            {
+                let term = self.fixed(actual.clone())?;
+                params.insert(
+                    ir::ParamId {
+                        owner: owner.binder(),
+                        index: index as u16,
+                    },
+                    term,
+                );
+            }
+            let result = self.schema(&schema.signature.result, &params, 0)?;
+            let Some(result) = self.resolve(result, 0)? else {
+                return Err(super::super::trait_selection::trait_application_ambiguity());
+            };
+            if result == expected && chosen.replace((application.clone(), *item)).is_some() {
+                return Err(super::super::trait_selection::trait_application_ambiguity());
+            }
+        }
+        chosen
+            .map(Some)
+            .ok_or_else(super::super::trait_selection::trait_application_ambiguity)
     }
 }

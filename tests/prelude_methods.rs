@@ -26,8 +26,34 @@ fn into_selects_lifetime_generic_from_by_expected_type() {
                 source: "struct N;fn unused(){let _n:N=\"x\".into();}fn main(){}",
                 expect: Expect::Invalid("E0277"),
             },
+            Case {
+                name: "i32_into_i64_annotated",
+                source: "fn main(){let n:i64=5i32.into();println!(\"{n}\");}",
+                expect: Expect::Run("5\n"),
+            },
+            Case {
+                name: "u8_into_u32_argument",
+                source: "fn show(n:u32){println!(\"{n}\");}fn main(){let b=200u8;let w:u32=b.into();show(b.into());println!(\"{w}\");}",
+                expect: Expect::Run("200\n200\n"),
+            },
         ],
     );
+    // Stock rejects an unannotated numeric `into()` with E0283. The native
+    // compiler must reject it too (currently at its explicit inference
+    // boundary) and never publish an executable.
+    for workers in [1, 8] {
+        for check_only in [true, false] {
+            let compiled = justrust_engine::compiler::compile(
+                "fn main(){let n=5i32.into();let _=n;}".into(),
+                workers,
+                check_only,
+            );
+            assert!(
+                compiled.is_err(),
+                "unannotated into accepted workers={workers} CHECK={check_only}"
+            );
+        }
+    }
 }
 
 #[test]

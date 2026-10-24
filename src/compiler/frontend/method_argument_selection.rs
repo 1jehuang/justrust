@@ -6,6 +6,10 @@ pub(super) enum MethodArguments<'a> {
     Missing,
     Deferred,
     Ready(Cow<'a, [ir::Ty]>),
+    /// One application of a trait with several in-scope applications
+    /// (`Into<T>`), chosen by the caller from the expected result type.
+    /// Selection proves exactly this application instead of re-enumerating.
+    Applied(ir::TraitRef, Cow<'a, [ir::Ty]>),
 }
 
 impl PlanCtx {
@@ -75,22 +79,38 @@ impl PlanCtx {
                         std::iter::once((ReceiverKind::Value { mutable: false }, &candidate))
                             .chain(borrowed)
                     {
-                        let actuals = match arguments(owner, mode, traits_only)? {
+                        let found = match arguments(owner, mode, traits_only)? {
                             MethodArguments::Missing => continue,
                             MethodArguments::Deferred => return Ok(None),
-                            MethodArguments::Ready(actuals) => actuals,
+                            MethodArguments::Ready(actuals) => self.lookup_associated(
+                                owner,
+                                name,
+                                actuals.as_ref(),
+                                caller,
+                                module,
+                                true,
+                                Some(mode),
+                                traits_only,
+                                budget,
+                            )?,
+                            MethodArguments::Applied(application, actuals) => {
+                                if !traits_only {
+                                    return Err(
+                                        "trait application selected for an inherent probe".into()
+                                    );
+                                }
+                                self.select_trait_filtered(
+                                    &application,
+                                    name,
+                                    actuals.as_ref(),
+                                    caller,
+                                    true,
+                                    Some(mode),
+                                    budget,
+                                )?
+                            }
                         };
-                        if let Some((target, signature, mode)) = self.lookup_associated(
-                            owner,
-                            name,
-                            actuals.as_ref(),
-                            caller,
-                            module,
-                            true,
-                            Some(mode),
-                            traits_only,
-                            budget,
-                        )? {
+                        if let Some((target, signature, mode)) = found {
                             // Selection must inspect the same representation as the
                             // checked receiver. Keep the declaration-owned original
                             // for final call construction and source receipt replay.

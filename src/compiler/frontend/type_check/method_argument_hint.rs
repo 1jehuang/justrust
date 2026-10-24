@@ -89,6 +89,7 @@ impl Checker<'_> {
                     &plan.budget,
                 )?;
                 let mut selected = None;
+                let mut same: Vec<(&ir::TraitRef, ir::DeclId)> = Vec::new();
                 for (application, item) in candidates.as_slice() {
                     plan.budget.charge_work(1)?;
                     if receiver_mode(plan.declaration(*item)?.receiver) != receiver_mode(mode) {
@@ -102,53 +103,67 @@ impl Checker<'_> {
                         tr::ProofOutcome::NotProven => continue,
                         tr::ProofOutcome::Proved(_) => {}
                     }
-                    if let Some(previous) = selected.replace(application) {
-                        if previous.declaration == application.declaration {
-                            // Several applications of one trait (`Into<T>`):
-                            // the expected result type picks the unique one
-                            // whose method result is exactly it.
-                            if let Some(expected) = expected {
-                                let fits = |app: &ir::TraitRef| -> Result<bool, String> {
-                                    let schema = plan.raw_schema(*item)?;
-                                    let owner = plan.param_env(app.declaration)?;
-                                    let mut bindings = HashMap::new();
-                                    for (index, actual) in std::iter::once(&app.self_ty)
-                                        .chain(app.args.iter())
-                                        .enumerate()
-                                    {
-                                        bindings.insert(
-                                            ir::ParamId {
-                                                owner: owner.binder(),
-                                                index: index as u16,
-                                            },
-                                            actual.clone(),
-                                        );
-                                    }
-                                    let result = super::trait_method_hint::bind_owner(
-                                        &schema.signature.result,
-                                        &bindings,
-                                    );
-                                    Ok(&result == expected)
-                                };
-                                match (fits(previous)?, fits(application)?) {
-                                    (true, false) => {
-                                        selected = Some(previous);
-                                        continue;
-                                    }
-                                    (false, true) => continue,
-                                    _ => {}
-                                }
-                            }
+                    if let Some(previous) = selected
+                        && same.is_empty()
+                    {
+                        let previous: &ir::TraitRef = previous;
+                        if previous.declaration != application.declaration {
+                            return Err("ambiguous in-scope trait item".into());
+                        }
+                        same.push((previous, *item));
+                    }
+                    if !same.is_empty() {
+                        if same[0].0.declaration != application.declaration {
+                            return Err("ambiguous in-scope trait item".into());
+                        }
+                        same.push((application, *item));
+                    }
+                    selected = Some(application);
+                }
+                if !same.is_empty() {
+                    // Several applications of one trait (`Into<T>`): the
+                    // expected result type picks the unique one whose method
+                    // result is exactly it.
+                    let Some(expected) = expected else {
+                        return Err(super::super::trait_selection::trait_application_ambiguity());
+                    };
+                    let mut fitting = None;
+                    for (app, item) in &same {
+                        plan.budget.charge_work(1)?;
+                        let schema = plan.raw_schema(*item)?;
+                        let owner = plan.param_env(app.declaration)?;
+                        let mut bindings = HashMap::new();
+                        for (index, actual) in std::iter::once(&app.self_ty)
+                            .chain(app.args.iter())
+                            .enumerate()
+                        {
+                            bindings.insert(
+                                ir::ParamId {
+                                    owner: owner.binder(),
+                                    index: index as u16,
+                                },
+                                actual.clone(),
+                            );
+                        }
+                        let result = super::trait_method_hint::bind_owner(
+                            &schema.signature.result,
+                            &bindings,
+                        );
+                        if &result == expected && fitting.replace(*app).is_some() {
                             return Err(
                                 super::super::trait_selection::trait_application_ambiguity(),
                             );
                         }
-                        return Err("ambiguous in-scope trait item".into());
                     }
+                    let Some(app) = fitting else {
+                        return Err(super::super::trait_selection::trait_application_ambiguity());
+                    };
+                    selected = Some(app);
                 }
                 let Some(application) = selected else {
                     return Ok(MethodArguments::Missing);
                 };
+                let pinned = !same.is_empty();
                 Ok(
                     match self.inferred_trait_method_actuals(
                         application,
@@ -158,6 +173,9 @@ impl Checker<'_> {
                         expected,
                         true,
                     )? {
+                        Some(actuals) if pinned => {
+                            MethodArguments::Applied(application.clone(), Cow::Owned(actuals))
+                        }
                         Some(actuals) => MethodArguments::Ready(Cow::Owned(actuals)),
                         None => {
                             deferred = true;
