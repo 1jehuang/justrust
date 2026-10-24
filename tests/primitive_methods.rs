@@ -992,3 +992,94 @@ fn checked_primitive_overflow_matches_stock() {
         }
     }
 }
+
+#[test]
+fn float_from_str_matches_stock() {
+    use closure_oracle::{Case, Expect};
+    parse_oracle(
+        "parse-float",
+        &[
+            Case {
+                name: "correctly_rounded_edges_and_errors",
+                source: r#"fn main(){
+    for s in ["2.5","1.","0.1",".5","1e5","1E+5","-0","+3","inf","-Infinity","NaN","nan","1e400","1e-400","2.2250738585072014e-308","4.9e-324","2.4703282292062327e-324","2.4703282292062328e-324","0.30000000000000004","123456789012345678901234567890","9007199254740993","", ".", "e5", "1e", "+", " 1", "1 ", "0x10", "1_0", "1e+", "--1", "infinit", "-nan", "+inf", "INFINITY", "1e99999999999999999999", "-1e-99999999999999999999", "00000.000001e6", "1.7976931348623157e308", "1.7976931348623158e308", "1.7976931348623159e308", "2.2250738585072011e-308"] {
+        let r: Result<f64, std::num::ParseFloatError> = s.parse::<f64>();
+        match r {
+            Ok(v) => { let b = v.to_bits(); println!("{:?} -> {}", s, b); }
+            Err(e) => println!("{:?} -> err {} {:?}", s, e, e),
+        }
+    }
+    for s in ["3.4028235e38","3.4028236e38","1e-46","1.4e-45","0.1","16777217","-nan"] {
+        let v: f32 = s.parse().unwrap();
+        let b = v.to_bits();
+        println!("{:?} -> {}", s, b);
+    }
+}
+"#,
+                expect: Expect::Run(
+                    r#""2.5" -> 4612811918334230528
+"1." -> 4607182418800017408
+"0.1" -> 4591870180066957722
+".5" -> 4602678819172646912
+"1e5" -> 4681608360884174848
+"1E+5" -> 4681608360884174848
+"-0" -> 9223372036854775808
+"+3" -> 4613937818241073152
+"inf" -> 9218868437227405312
+"-Infinity" -> 18442240474082181120
+"NaN" -> 9221120237041090560
+"nan" -> 9221120237041090560
+"1e400" -> 9218868437227405312
+"1e-400" -> 0
+"2.2250738585072014e-308" -> 4503599627370496
+"4.9e-324" -> 1
+"2.4703282292062327e-324" -> 0
+"2.4703282292062328e-324" -> 1
+"0.30000000000000004" -> 4599075939470750516
+"123456789012345678901234567890" -> 5042042089369253694
+"9007199254740993" -> 4845873199050653696
+"" -> err cannot parse float from empty string ParseFloatError { kind: Empty }
+"." -> err invalid float literal ParseFloatError { kind: Invalid }
+"e5" -> err invalid float literal ParseFloatError { kind: Invalid }
+"1e" -> err invalid float literal ParseFloatError { kind: Invalid }
+"+" -> err invalid float literal ParseFloatError { kind: Invalid }
+" 1" -> err invalid float literal ParseFloatError { kind: Invalid }
+"1 " -> err invalid float literal ParseFloatError { kind: Invalid }
+"0x10" -> err invalid float literal ParseFloatError { kind: Invalid }
+"1_0" -> err invalid float literal ParseFloatError { kind: Invalid }
+"1e+" -> err invalid float literal ParseFloatError { kind: Invalid }
+"--1" -> err invalid float literal ParseFloatError { kind: Invalid }
+"infinit" -> err invalid float literal ParseFloatError { kind: Invalid }
+"-nan" -> 18444492273895866368
+"+inf" -> 9218868437227405312
+"INFINITY" -> 9218868437227405312
+"1e99999999999999999999" -> 9218868437227405312
+"-1e-99999999999999999999" -> 9223372036854775808
+"00000.000001e6" -> 4607182418800017408
+"1.7976931348623157e308" -> 9218868437227405311
+"1.7976931348623158e308" -> 9218868437227405311
+"1.7976931348623159e308" -> 9218868437227405312
+"2.2250738585072011e-308" -> 4503599627370495
+"3.4028235e38" -> 2139095039
+"3.4028236e38" -> 2139095040
+"1e-46" -> 0
+"1.4e-45" -> 1
+"0.1" -> 1036831949
+"16777217" -> 1266679808
+"-nan" -> 4290772992
+"#,
+                ),
+            },
+            Case {
+                name: "corpus18_parse_with_map_err",
+                source: "fn main(){let s=String::from(\"2.5\");let n:f64=s.parse().map_err(|_|format!(\"bad {}\",s)).unwrap();let b:Result<f64,String>=\"x\".parse::<f64>().map_err(|e|format!(\"{}\",e));println!(\"{} {:?}\",n,b);}",
+                expect: Expect::Run("2.5 Err(\"invalid float literal\")\n"),
+            },
+            Case {
+                name: "float_error_is_not_int_error",
+                source: "fn bad(){let _e:std::num::ParseIntError=\"1.5\".parse::<f64>().unwrap_err();}fn main(){}",
+                expect: Expect::Invalid("E0308"),
+            },
+        ],
+    );
+}

@@ -62,7 +62,7 @@ pub mod char {
     pub use super::primitive::ParseCharError;
 }
 pub mod num {
-    pub use super::primitive::{IntErrorKind, ParseIntError};
+    pub use super::primitive::{IntErrorKind, ParseFloatError, ParseIntError};
 }
 pub mod primitive_constants;
 pub mod ptr;

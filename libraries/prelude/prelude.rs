@@ -11,7 +11,7 @@ pub mod core_v1 {
     pub use super::super::default::Default;
     pub use super::super::mem::drop;
     pub use super::super::convert::From;
-    pub use super::super::primitive::{CharMethods, IntMethods, RadixParse};
+    pub use super::super::primitive::{CharMethods, FloatBits, IntMethods, RadixParse};
     // Allocation-free slice methods are core `[T]` inherent methods.
     pub use super::super::slice::{SliceChunks, SliceContains, SliceIter, SliceMethods, SliceRefMethods};
 }
@@ -32,5 +32,5 @@ pub mod v1 {
     pub use super::super::default::Default;
     pub use super::super::mem::drop;
     pub use super::super::convert::From;
-    pub use super::super::primitive::{CharMethods, IntMethods, RadixParse};
+    pub use super::super::primitive::{CharMethods, FloatBits, IntMethods, RadixParse};
 }
