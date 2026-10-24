@@ -3705,6 +3705,7 @@ pub(in crate::compiler) fn instantiate_checked_with_constants(
             | ExprKind::Char(_)
             | ExprKind::Str(_)
             | ExprKind::ByteStr(_)
+            | ExprKind::ByteRepeat { .. }
             | ExprKind::Float(_)
             | ExprKind::Deref { .. }
             | ExprKind::DynamicIndex { .. }
@@ -4330,9 +4331,11 @@ pub(super) fn reject_references(root: &Ty, budget: &PlanBudget) -> Result<(), St
                 Ty::Str | Ty::Slice { .. } | Ty::Dyn(_) => {}
                 other => walk(other, budget, depth + 1)?,
             },
-            Ty::Slice { .. } | Ty::Str => {
-                return Err("slice generic arguments are unsupported".into());
-            }
+            // Unsized actuals for `?Sized` parameters (`Borrow<str>`,
+            // `Deref<Target = [T]>`) carry no loans of their own. Sized
+            // parameters reject them through their implicit Sized rows.
+            Ty::Str => {}
+            Ty::Slice { element } => walk(element, budget, depth + 1)?,
             Ty::Tuple(fields) => {
                 for field in fields.iter() {
                     walk(field, budget, depth + 1)?;
@@ -4584,7 +4587,14 @@ impl<C: SubstitutionCx> Instantiate<'_, C> {
 
 pub const MAX_ENUM_VARIANTS: usize = 4096;
 pub const MAX_MATCH_ARMS: usize = 4096;
+/// Bound for analyses that expand one node per array element (ownership move
+/// paths, borrow covers, aggregate literals, element patterns, carrier
+/// indices of reference-carrying elements).
 pub const MAX_ARRAY_LEN: usize = 65535;
+/// Bound for type-level validation that visits the element type once and
+/// never materializes per-element structure. Frame storage is limited
+/// separately by the backend.
+pub const MAX_ARRAY_TYPE_LEN: usize = 1 << 24;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum IntTy {
@@ -5744,7 +5754,7 @@ fn type_metadata_walk(
             }
             Ty::Ref { referent, .. } => (1, Arc::as_ptr(referent) as usize),
             Ty::Array { element, len } => {
-                if *len > MAX_ARRAY_LEN {
+                if *len > MAX_ARRAY_TYPE_LEN {
                     return Err("array length limit exceeded".into());
                 }
                 (2, Arc::as_ptr(element) as usize)
@@ -7280,7 +7290,7 @@ fn ref_type_walk(
                 }
             }
             Ty::Array { element, len } => {
-                if *len > MAX_ARRAY_LEN {
+                if *len > MAX_ARRAY_TYPE_LEN {
                     return Err("array length resource limit exceeded".into());
                 }
                 child(element)?;
@@ -8522,6 +8532,9 @@ pub enum ExprKind {
     Str(String),
     /// Exact shared array reference over immutable static program bytes.
     ByteStr(Vec<u8>),
+    /// Shared `&[u8; len]` over immutable static bytes all equal to `byte`
+    /// (stock static promotion of `&[byte; len]`), without a per-element payload.
+    ByteRepeat { byte: u8, len: usize },
     /// Count zero bits before the highest set bit within the integer's declared width.
     LeadingZeros {
         value: ExprId,
@@ -9394,6 +9407,7 @@ impl CheckedFunction {
                 }
                 ExprKind::Str(text) => storage(budget, text.len(), 1)?,
                 ExprKind::ByteStr(bytes) => storage(budget, bytes.len(), 1)?,
+                ExprKind::ByteRepeat { .. } => storage(budget, 1, 16)?,
                 ExprKind::AssociatedConst(operand) => operand.validate_context(facts, budget)?,
                 ExprKind::Println(text) => storage(budget, text.len(), 1)?,
                 ExprKind::Panic(payload) => {
@@ -10518,7 +10532,7 @@ impl CheckedFunction {
                         return Err("array repeat requires array type".into());
                     };
                     if len != count
-                        || *len > MAX_ARRAY_LEN
+                        || *len > MAX_ARRAY_TYPE_LEN
                         || (*len > 1 && !facts.must_copy(element)?)
                     {
                         return Err("invalid array repeat type, length or Copy requirement".into());
@@ -10944,6 +10958,14 @@ impl CheckedFunction {
                     value: Some(value), ..
                 } => expr(*value)?,
                 ExprKind::Break { value: None, .. } | ExprKind::Continue { .. } => {}
+                ExprKind::ByteRepeat { len, .. } => {
+                    if value.ty != Ty::byte_string_ty(*len)
+                        || value.completion != Completion::Returns
+                        || *len > MAX_ARRAY_TYPE_LEN
+                    {
+                        return Err("byte repeat expression type mismatch".into());
+                    }
+                }
                 ExprKind::ByteStr(bytes) => {
                     if value.ty != Ty::byte_string_ty(bytes.len())
                         || value.completion != Completion::Returns
