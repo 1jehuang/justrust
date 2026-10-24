@@ -9,9 +9,7 @@ pub(super) fn definition_root(
     session: &TokenSession,
     span: SpanId,
 ) -> Result<SourceFileHandle, TokenError> {
-    let original = session.original(span, 512)?;
-    session.sources().render_span(original)?;
-    session.sources().source_crate_root(original.file())
+    session.original_source_root(span, 512)
 }
 
 /// Macro-name lookup uses the invocation environment. For generated calls this
@@ -179,6 +177,123 @@ mod tests {
             invocation_root(&session, token).unwrap(),
             snapshot.file(0).unwrap()
         );
+    }
+
+    #[test]
+    fn linked_macro_provenance_uses_issuing_snapshot_and_rejects_other_roots() {
+        use crate::compiler::semantic_name::NameStoreBuilder;
+
+        let make = || {
+            let budget = ExpansionBudget::default();
+            let snapshot = SourceSnapshot::copy_with_crates(
+                &sources(),
+                &[FileId(0), FileId(0), FileId(2)],
+                &budget,
+                crate::compiler::owner_path::standalone_issued(
+                    &budget,
+                    crate::compiler::owner_path::OwnerDomain::SourceSnapshot,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+            let (mut session, cap) = TokenSession::standalone(snapshot.clone(), budget).unwrap();
+            let definition = session
+                .original_span(snapshot.span(snapshot.file(2).unwrap(), 0, 4).unwrap())
+                .unwrap();
+            let call = session
+                .original_span(snapshot.span(snapshot.file(1).unwrap(), 0, 4).unwrap())
+                .unwrap();
+            let defining_crate = session
+                .register_crate_root(snapshot.file(2).unwrap())
+                .unwrap();
+            let expansion = session
+                .add_expansion(ExpansionRecord {
+                    definition,
+                    call,
+                    parent: None,
+                    defining_crate,
+                    edition: Edition::E2024,
+                })
+                .unwrap();
+            let generated = session
+                .with_context(definition, session.root_context(), Some(expansion))
+                .unwrap();
+            let generated = session
+                .synthetic_span(
+                    generated,
+                    crate::compiler::expansion_span::SyntheticReason::ExpansionToken,
+                )
+                .unwrap();
+            let names = NameStoreBuilder::new(session, cap, Edition::E2024).unwrap();
+            (names, snapshot, definition, generated, defining_crate)
+        };
+
+        let (owner, snapshot, definition, generated, defining_crate) = make();
+        let owner = owner.freeze().unwrap();
+        let (mut reader, _, local_definition, _, wrong_crate) = make();
+        assert!(matches!(
+            definition_root(reader.session(), definition),
+            Err(TokenError::ForeignHandle)
+        ));
+        reader.link_crate_files(vec![owner]).unwrap();
+        for limit in [0, 1] {
+            assert!(matches!(
+                reader.session().original_source_root(generated, limit),
+                Err(TokenError::TraceTruncated)
+            ));
+        }
+        assert_eq!(
+            reader.session().original_source_root(generated, 2).unwrap(),
+            snapshot.file(2).unwrap()
+        );
+        assert_eq!(
+            definition_root(reader.session(), generated).unwrap(),
+            snapshot.file(2).unwrap()
+        );
+        assert_eq!(
+            invocation_root(reader.session(), generated).unwrap(),
+            snapshot.file(0).unwrap()
+        );
+        let local_anchor = reader
+            .session_mut()
+            .synthetic_span(
+                generated,
+                crate::compiler::expansion_span::SyntheticReason::ExpansionToken,
+            )
+            .unwrap();
+        assert_eq!(
+            definition_root(reader.session(), local_anchor).unwrap(),
+            snapshot.file(2).unwrap()
+        );
+        assert_eq!(
+            invocation_root(reader.session(), local_anchor).unwrap(),
+            snapshot.file(0).unwrap()
+        );
+        let site = DefinitionSite {
+            span: definition,
+            edition: Edition::E2024,
+            defining_crate,
+        };
+        assert_eq!(
+            validate_definition(reader.session(), site).unwrap(),
+            snapshot.file(2).unwrap()
+        );
+        assert!(matches!(
+            validate_definition(
+                reader.session(),
+                DefinitionSite {
+                    defining_crate: wrong_crate,
+                    ..site
+                }
+            ),
+            Err(TokenError::InvalidHandle)
+        ));
+        let (_, _, unlinked, _, _) = make();
+        assert!(matches!(
+            definition_root(reader.session(), unlinked),
+            Err(TokenError::ForeignHandle)
+        ));
+        assert!(definition_root(reader.session(), local_definition).is_ok());
     }
 
     #[test]

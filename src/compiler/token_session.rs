@@ -1394,6 +1394,29 @@ impl TokenSession {
         self.span(span)?;
         Err(TokenError::TraceTruncated)
     }
+    /// Resolve provenance through the session that issued the original span.
+    /// Linking a frozen name store admits its spans, not their interpretation
+    /// through this session's unrelated source snapshot. Synthetic anchors can
+    /// cross owners, so select and validate the owner at every step.
+    pub(super) fn original_source_root(
+        &self,
+        mut span: SpanId,
+        max_links: u32,
+    ) -> Result<SourceFileHandle, TokenError> {
+        for _ in 0..max_links {
+            self.budget.charge(Counter::Work, 1)?;
+            let owner = self.serving(span.session)?;
+            match owner.span(span)?.origin {
+                SpanOrigin::Original(original) => {
+                    owner.sources.render_span(original)?;
+                    return owner.sources.source_crate_root(original.file());
+                }
+                SpanOrigin::Synthetic { anchor, .. } => span = anchor,
+            }
+        }
+        self.span(span)?;
+        Err(TokenError::TraceTruncated)
+    }
     pub fn trace(
         &self,
         first: Option<ExpansionId>,
