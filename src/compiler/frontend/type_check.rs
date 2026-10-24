@@ -10296,6 +10296,7 @@ impl<'a> Checker<'a> {
             ir::ExprKind::Match {
                 scrutinee,
                 arms: checked,
+                scrutinee_scope: false,
             },
             Flow {
                 ty: result,
@@ -10721,27 +10722,60 @@ impl<'a> Checker<'a> {
                 scrutinee,
                 then_block,
                 else_branch,
-            } => self.lower_match(
-                scrutinee,
-                [
-                    BorrowedMatchArm {
-                        pattern: Some(pattern.as_ref()),
-                        guarded: false,
-                        guard: None,
-                        body: MatchBody::Block(then_block),
-                    },
-                    BorrowedMatchArm {
-                        pattern: None,
-                        guarded: false,
-                        guard: None,
-                        body: else_branch
-                            .as_deref()
-                            .map_or(MatchBody::ImplicitUnit, MatchBody::Expr),
-                    },
-                ]
-                .into_iter(),
-                expectation,
-            )?,
+            } => {
+                // Edition 2024: the scrutinee's own temporaries (autoref
+                // receivers, borrowed rvalues) belong to the if-let, not the
+                // enclosing statement. Declare them in a scrutinee block so
+                // CFG lowering can end them before the else branch.
+                let temporaries_start = self.borrow_temporaries.len();
+                let scrutinee_id = self.expr(scrutinee)?;
+                let mut declarations = Vec::new();
+                for (local, extended) in self.borrow_temporaries.drain(temporaries_start..) {
+                    if extended {
+                        return Err(
+                            "unsupported: lifetime-extended temporary in an if-let scrutinee"
+                                .into(),
+                        );
+                    }
+                    declarations.push(ir::TypedStmt::Declare { local });
+                }
+                let has_temporaries = !declarations.is_empty();
+                let scrutinee_id = if has_temporaries {
+                    self.temporary_block(declarations, Some(scrutinee_id))?
+                } else {
+                    scrutinee_id
+                };
+                let (mut kind, flow) = self.lower_match_value_with_expectation(
+                    scrutinee_id,
+                    [
+                        BorrowedMatchArm {
+                            pattern: Some(pattern.as_ref()),
+                            guarded: false,
+                            guard: None,
+                            body: MatchBody::Block(then_block),
+                        },
+                        BorrowedMatchArm {
+                            pattern: None,
+                            guarded: false,
+                            guard: None,
+                            body: else_branch
+                                .as_deref()
+                                .map_or(MatchBody::ImplicitUnit, MatchBody::Expr),
+                        },
+                    ]
+                    .into_iter(),
+                    expectation,
+                )?;
+                // Edition 2024 `if let` scrutinee temporaries end before the
+                // selected branch runs (stock-confirmed drop order).
+                if let ir::ExprKind::Match {
+                    scrutinee_scope, ..
+                } = &mut kind
+                {
+                    *scrutinee_scope = true;
+                }
+                (kind, flow)
+            }
             Expr::Tuple(fields) => {
                 if fields.is_empty() {
                     return Err("empty tuples must use ()".into());

@@ -610,3 +610,36 @@ fn frozen_stock_before_native_normal_drop() {
         "bounded native CLI and observed CHECK/BUILD corpus child",
     );
 }
+
+/// Edition 2024 `if let` scrutinee temporaries end after the selected branch,
+/// or before `else`; `match` keeps them for the whole expression.
+#[test]
+fn if_let_scrutinee_temporaries_follow_stock_2024_order() {
+    #[path = "support/closure_oracle.rs"]
+    mod closure_oracle;
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "if-let-temporaries",
+        &[Case {
+            name: "then_else_match_and_value",
+            source: r#"struct D(u32);
+impl Drop for D { fn drop(&mut self) { println!("drop {}", self.0); } }
+impl D { fn some(&self) -> Option<u32> { Some(self.0) } fn none(&self) -> Option<u32> { None } }
+fn main() {
+    if let Some(v) = D(1).some() { println!("then {}", v); } else { println!("else"); }
+    println!("a");
+    if let Some(v) = D(2).none() { println!("then {}", v); } else { println!("else"); }
+    println!("b");
+    match D(3).some() { Some(v) => println!("arm {}", v), None => println!("none") }
+    println!("c");
+    let x = if let Some(v) = D(4).some() { v } else { 0 };
+    println!("x {}", x);
+    let y = if let Some(v) = D(5).none() { v } else { 9 };
+    println!("y {}", y);
+}"#,
+            expect: Expect::Run(
+                "then 1\ndrop 1\na\ndrop 2\nelse\nb\narm 3\ndrop 3\nc\ndrop 4\nx 4\ndrop 5\ny 9\n",
+            ),
+        }],
+    );
+}

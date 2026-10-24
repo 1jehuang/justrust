@@ -3547,14 +3547,72 @@ impl Lowerer<'_> {
         id: ExprId,
         scrutinee: ExprId,
         arms: &[ir::TypedMatchArm],
+        scrutinee_scope: bool,
         destination: Place,
     ) -> Result<(), String> {
         self.source
             .validate_match_with_facts(scrutinee, arms, &self.parameters, self.facts)?;
+        // Edition 2024 `if let`: scrutinee temporaries live through the
+        // selected branch (its bindings may borrow them) and end when it
+        // finishes; on the else path they end before the else branch runs.
+        // They form one scope below each arm's own binding scope.
+        let scoped = scrutinee_scope
+            && self.drop_enabled
+            && arms.len() == 2
+            && arms
+                .iter()
+                .all(|arm| !matches!(arm.pattern, ir::MatchPattern::Or { .. }));
+        if scrutinee_scope && self.drop_enabled && !scoped {
+            return Err(
+                "unsupported: if-let with or-patterns and Drop temporaries requires grouped scrutinee scopes"
+                    .into(),
+            );
+        }
+        if scoped {
+            self.push_scope()?;
+        }
+        // The checker wraps a temporary-bearing if-let scrutinee in a block of
+        // `Declare`s plus its value. Declare those temporaries in the if-let
+        // scope (not the block's own scope, which would end them at once) and
+        // evaluate the value as the scrutinee.
+        let scrutinee = match &self.source.exprs[scrutinee.0].kind {
+            ir::ExprKind::Block(ir::TypedBlock {
+                statements,
+                tail: Some(tail),
+            }) if scoped
+                && !statements.is_empty()
+                && statements
+                    .iter()
+                    .all(|s| matches!(s, ir::TypedStmt::Declare { .. })) =>
+            {
+                let tail = *tail;
+                let locals: Vec<LocalId> = statements
+                    .iter()
+                    .filter_map(|s| match s {
+                        ir::TypedStmt::Declare { local } => Some(*local),
+                        _ => None,
+                    })
+                    .collect();
+                for local in locals {
+                    if self.parameters.contains(&local) {
+                        return Err("declaration local aliases parameter".into());
+                    }
+                    self.live(local, Some(id));
+                }
+                tail
+            }
+            _ => scrutinee,
+        };
         let source = self.pattern_source(scrutinee)?;
+        let scrutinee_depth = self.scopes.len();
         let completes = self.source.exprs[scrutinee.0].completion == ir::Completion::Returns;
         let join = self.block();
-        for arm in arms {
+        let last_arm = arms.len().saturating_sub(1);
+        for (arm_index, arm) in arms.iter().enumerate() {
+            if scoped && arm_index == last_arm {
+                // Entering the else arm: the scrutinee temporaries end first.
+                self.cleanup(scrutinee_depth - 1, Some(id));
+            }
             if let ir::MatchPattern::Or { rows, .. } = &arm.pattern {
                 self.grouped_or_arm(
                     id,
@@ -3609,6 +3667,10 @@ impl Lowerer<'_> {
             }
             self.cleanup(self.scopes.len() - 1, Some(id));
             self.scopes.pop();
+            if scoped && arm_index != last_arm {
+                // The selected then-branch finished: scrutinee temporaries end.
+                self.cleanup(scrutinee_depth - 1, Some(id));
+            }
             self.terminate(Terminator::Goto(join), Some(id))?;
             self.current = next;
             for local in test_scope.iter().rev() {
@@ -3620,6 +3682,10 @@ impl Lowerer<'_> {
             }
         }
         self.terminate(Terminator::Unreachable, Some(id))?;
+        if scoped {
+            // Every path already ended these temporaries.
+            self.scopes.pop();
+        }
         self.current = join;
         Ok(())
     }
@@ -4747,8 +4813,12 @@ impl Lowerer<'_> {
                     origin,
                 );
             }
-            ir::ExprKind::Match { scrutinee, arms } => {
-                self.match_expression(id, *scrutinee, arms, destination.clone())?;
+            ir::ExprKind::Match {
+                scrutinee,
+                arms,
+                scrutinee_scope,
+            } => {
+                self.match_expression(id, *scrutinee, arms, *scrutinee_scope, destination.clone())?;
             }
             ir::ExprKind::AssociatedConst(value) => self.assign(
                 destination.clone(),
@@ -9933,6 +10003,7 @@ mod tests {
                         completion: ir::Completion::Never,
                         kind: ir::ExprKind::Match {
                             scrutinee: ExprId(0),
+                            scrutinee_scope: false,
                             arms: vec![ir::TypedMatchArm {
                                 guard: None,
                                 pattern: ir::MatchPattern::Aggregate {
@@ -10981,6 +11052,7 @@ mod tests {
                         child.clone(),
                         ir::ExprKind::Match {
                             scrutinee: ExprId(0),
+                            scrutinee_scope: false,
                             arms: vec![ir::TypedMatchArm {
                                 guard: None,
                                 pattern: ir::MatchPattern::Aggregate {
@@ -11060,6 +11132,7 @@ mod tests {
                     Ty::Bool,
                     ir::ExprKind::Match {
                         scrutinee: ExprId(0),
+                        scrutinee_scope: false,
                         arms: vec![ir::TypedMatchArm {
                             guard: None,
                             pattern: ir::MatchPattern::Aggregate {

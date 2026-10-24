@@ -177,6 +177,7 @@ impl Checker<'_> {
                 ir::Ty::Unit,
                 ir::ExprKind::Match {
                     scrutinee: next,
+                    scrutinee_scope: false,
                     arms: vec![
                         ir::TypedMatchArm {
                             pattern: ir::MatchPattern::EnumVariant {

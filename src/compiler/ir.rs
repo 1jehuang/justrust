@@ -8617,6 +8617,10 @@ pub enum ExprKind {
     Match {
         scrutinee: ExprId,
         arms: Vec<TypedMatchArm>,
+        /// Edition 2024 `if let`: scrutinee temporaries end before the
+        /// selected branch (and before `else`). `match` keeps them alive
+        /// for the whole expression, as do 2021 `if let` scrutinees.
+        scrutinee_scope: bool,
     },
     Int(IntValue),
     Bool(bool),
@@ -10545,7 +10549,9 @@ impl CheckedFunction {
                         expr(value)?;
                     }
                 }
-                ExprKind::Match { scrutinee, arms } => {
+                ExprKind::Match {
+                    scrutinee, arms, ..
+                } => {
                     expr(*scrutinee)?;
                     for arm in arms {
                         match &arm.pattern {
@@ -16227,6 +16233,7 @@ mod tests {
             completion: Completion::Returns,
             kind: ExprKind::Match {
                 scrutinee: ExprId(0),
+                scrutinee_scope: false,
                 arms: vec![TypedMatchArm {
                     guard: None,
                     pattern: MatchPattern::Aggregate {
@@ -16503,6 +16510,7 @@ mod tests {
             !identical_expr_types(
                 &ExprKind::Match {
                     scrutinee: ExprId(0),
+                    scrutinee_scope: false,
                     arms: vec![TypedMatchArm {
                         guard: None,
                         pattern,
@@ -16511,6 +16519,7 @@ mod tests {
                 },
                 &ExprKind::Match {
                     scrutinee: ExprId(0),
+                    scrutinee_scope: false,
                     arms: vec![TypedMatchArm {
                         guard: None,
                         pattern: replaced,
@@ -16539,6 +16548,7 @@ mod tests {
             completion: Completion::Never,
             kind: ExprKind::Match {
                 scrutinee: ExprId(0),
+                scrutinee_scope: false,
                 arms: vec![TypedMatchArm {
                     guard: None,
                     pattern: MatchPattern::Decision {

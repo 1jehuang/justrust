@@ -229,7 +229,10 @@ mod canonical_source_replay_tests {
                 .iter()
                 .position(|value| matches!(value.kind, ir::ExprKind::Match { .. }))
                 .unwrap();
-            let ir::ExprKind::Match { scrutinee, arms } = &mut changed.exprs[index].kind else {
+            let ir::ExprKind::Match {
+                scrutinee, arms, ..
+            } = &mut changed.exprs[index].kind
+            else {
                 unreachable!()
             };
             let ir::MatchPattern::Alternatives { rows, .. } = &mut arms[0].pattern else {

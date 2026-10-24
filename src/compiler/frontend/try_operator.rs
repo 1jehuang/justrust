@@ -171,6 +171,7 @@ impl Checker<'_> {
             ir::ExprKind::Match {
                 scrutinee,
                 arms: vec![success_arm, failure_arm],
+                scrutinee_scope: false,
             },
             Flow {
                 ty: payload,

@@ -64,7 +64,9 @@ mod tests {
             .exprs
             .iter()
             .find_map(|expr| match &expr.kind {
-                ExprKind::Match { scrutinee, arms } => Some((*scrutinee, arms.clone())),
+                ExprKind::Match {
+                    scrutinee, arms, ..
+                } => Some((*scrutinee, arms.clone())),
                 _ => None,
             })
             .unwrap();

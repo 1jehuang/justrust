@@ -202,7 +202,9 @@ pub(super) fn analyze(
                     moved: false,
                 },
             )?,
-            ir::ExprKind::Match { scrutinee, arms } => {
+            ir::ExprKind::Match {
+                scrutinee, arms, ..
+            } => {
                 projected.insert(*scrutinee);
                 if let Some(place) = expression_place(exprs, *scrutinee)? {
                     let mut usage = CaptureUse {

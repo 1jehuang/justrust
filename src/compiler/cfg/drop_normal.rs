@@ -120,7 +120,9 @@ pub(super) fn admit(source: &ir::CheckedFunction, facts: ir::FactsCtx<'_>) -> Re
     // still forbids such moves, and other aggregate patterns remain scoped out.
     for expression in &source.exprs {
         authority.budget().charge_work(1)?;
-        if let ir::ExprKind::Match { scrutinee, arms } = &expression.kind
+        if let ir::ExprKind::Match {
+            scrutinee, arms, ..
+        } = &expression.kind
             && let Some(destructor) = descriptor(&source.exprs[scrutinee.0].ty, facts)?
             && !(destructor.own_target().is_none()
                 && matches!(
