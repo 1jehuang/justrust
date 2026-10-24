@@ -5,6 +5,36 @@
 mod closure_oracle;
 
 #[test]
+fn option_reference_values_match_stock() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "option-reference-values",
+        &[
+            Case {
+                name: "shared_and_mutable_copy",
+                source: r#"fn main(){let n=7i32;println!("{:?} {:?}",Some(&n).copied(),None::<&i32>.copied());let mut m=9i32;println!("{:?}",Some(&mut m).copied());m+=1;println!("{}",m);}"#,
+                expect: Expect::Run("Some(7) None\nSome(9)\n10\n"),
+            },
+            Case {
+                name: "owned_clone_preserves_borrowed_original",
+                source: r#"#[derive(Clone)]struct Value{n:i32}impl Drop for Value{fn drop(&mut self){println!("drop {}",self.n);}}fn main(){let original=Value{n:3};{let copy=Some(&original).cloned().unwrap();println!("{} {}",original.n,copy.n);}let mut other=Value{n:4};{let copy=Some(&mut other).cloned().unwrap();other.n=5;println!("{} {}",other.n,copy.n);}println!("{}",None::<&Value>.cloned().is_none());}"#,
+                expect: Expect::Run("3 3\ndrop 3\n5 4\ndrop 4\ntrue\ndrop 5\ndrop 3\n"),
+            },
+            Case {
+                name: "copied_requires_copy",
+                source: "struct Value;fn unused(x:&Value){let _=Some(x).copied();}fn main(){}",
+                expect: Expect::Invalid("E0277"),
+            },
+            Case {
+                name: "cloned_requires_clone",
+                source: "struct Value;fn unused(x:&Value){let _=Some(x).cloned();}fn main(){}",
+                expect: Expect::Invalid("E0277"),
+            },
+        ],
+    );
+}
+
+#[test]
 fn option_lazy_combinators_match_stock() {
     use closure_oracle::{Case, Expect};
     closure_oracle::check(

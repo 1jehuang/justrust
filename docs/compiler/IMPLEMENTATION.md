@@ -17,6 +17,9 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
   capture destruction, invalid callbacks and use-after-move rejection.
   `option_map::option_filter_matches_stock` covers `Option::filter` shared
   predicate borrowing, retained/rejected payload drops and skipped capture cleanup.
+  `option_map::option_reference_values_match_stock` covers `copied` and `cloned`
+  on shared/mutable reference Options, exact clone/drop behavior, and missing
+  Copy/Clone bound rejection at workers 1 and 8.
 
 - [x] Nested closure templates read their outermost source callable's immutable
   publication while retaining immediate lexical owner/site authentication.

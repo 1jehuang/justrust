@@ -156,6 +156,42 @@ impl<T> Option<T> {
     }
 }
 
+impl<'a, T: Copy> Option<&'a T> {
+    pub fn copied(self) -> Option<T> {
+        match self {
+            Option::Some(value) => Option::Some(*value),
+            Option::None => Option::None,
+        }
+    }
+}
+
+impl<'a, T: Copy> Option<&'a mut T> {
+    pub fn copied(self) -> Option<T> {
+        match self {
+            Option::Some(value) => Option::Some(*value),
+            Option::None => Option::None,
+        }
+    }
+}
+
+impl<'a, T: Clone> Option<&'a T> {
+    pub fn cloned(self) -> Option<T> {
+        match self {
+            Option::Some(value) => Option::Some((*value).clone()),
+            Option::None => Option::None,
+        }
+    }
+}
+
+impl<'a, T: Clone> Option<&'a mut T> {
+    pub fn cloned(self) -> Option<T> {
+        match self {
+            Option::Some(value) => Option::Some((*value).clone()),
+            Option::None => Option::None,
+        }
+    }
+}
+
 // TODO: unwrap_or_default once std::default is enabled.
 
 
