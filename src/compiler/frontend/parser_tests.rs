@@ -65,7 +65,7 @@ mod edition_keyword_tests {
     use super::*;
     use crate::compiler;
     #[test]
-    fn gen_keyword_uses_its_token_edition_not_the_receiving_store() {
+    fn edition_keywords_use_their_token_edition_not_the_receiving_store() {
         use compiler::source::PreparedLexInput;
         use compiler::token::Edition;
         use compiler::token_session::TokenSession;
@@ -76,6 +76,26 @@ mod edition_keyword_tests {
             (Edition::E2024, "2024"),
         ] {
             for (spelling, source) in [
+                ("async", "fn async() {} fn main() {}"),
+                ("await", "fn await() {} fn main() {}"),
+                ("dyn", "fn dyn() {} fn main() {}"),
+                ("try", "fn try() {} fn main() {}"),
+                (
+                    "'async",
+                    "fn f<'async>(x: &'async i32) -> &'async i32 { x } fn main() {}",
+                ),
+                (
+                    "'await",
+                    "fn f<'await>(x: &'await i32) -> &'await i32 { x } fn main() {}",
+                ),
+                (
+                    "'dyn",
+                    "fn f<'dyn>(x: &'dyn i32) -> &'dyn i32 { x } fn main() {}",
+                ),
+                (
+                    "'try",
+                    "fn f<'try>(x: &'try i32) -> &'try i32 { x } fn main() {}",
+                ),
                 ("gen", "fn gen() {} fn main() {}"),
                 (
                     "'gen",
@@ -128,9 +148,28 @@ mod edition_keyword_tests {
 }
 
 #[test]
-fn gen_keyword_keeps_2024_check_build_and_run_boundaries() {
+fn edition_keywords_keep_2024_check_build_and_run_boundaries() {
     stock_native_run("fn generation() -> i32 { 42 } fn main() { println!(\"{}\", generation()); }");
+    let raw = "fn r#gen() -> i32 { 42 } fn main() { println!(\"{}\", r#gen()); }";
+    assert!(
+        stock_compile(raw, std::path::Path::new("unused"), true)
+            .status
+            .success()
+    );
+    let raw_error = parse_unresolved(raw).unwrap_err();
+    assert!(
+        raw_error.contains("raw, non-ASCII and non-root identifiers are unsupported"),
+        "{raw_error}"
+    );
     for source in [
+        "fn async() {} fn main() {}",
+        "fn await() {} fn main() {}",
+        "fn dyn() {} fn main() {}",
+        "fn try() {} fn main() {}",
+        "fn f<'async>(x: &'async i32) -> &'async i32 { x } fn main() {}",
+        "fn f<'await>(x: &'await i32) -> &'await i32 { x } fn main() {}",
+        "fn f<'dyn>(x: &'dyn i32) -> &'dyn i32 { x } fn main() {}",
+        "fn f<'try>(x: &'try i32) -> &'try i32 { x } fn main() {}",
         "fn gen() {} fn main() {}",
         "fn f<'gen>(x: &'gen i32) -> &'gen i32 { x } fn main() {}",
     ] {

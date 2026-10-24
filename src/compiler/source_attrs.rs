@@ -1473,6 +1473,16 @@ fn scan(text: &str) -> Result<Vec<Token>, AttributeError> {
             }
         }
         if !literal {
+            // A raw identifier is one token. Splitting its `#` off would
+            // misclassify ordinary names as the start of an attribute.
+            if b[i..].starts_with(b"r#")
+                && text[i + 2..]
+                    .chars()
+                    .next()
+                    .is_some_and(|c| c == '_' || c.is_alphabetic())
+            {
+                i += 2;
+            }
             let q = if matches!(b[i], b'b' | b'c') && matches!(b.get(i + 1), Some(b'"' | b'\'')) {
                 i + 1
             } else {
@@ -1597,6 +1607,25 @@ use crate::compiler::stock_rustc;
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn raw_identifiers_do_not_become_attribute_markers() {
+        let source = "fn r#gen() {} fn r#async() { let r#await = 1; }";
+        let output = prepare(source, &CfgSet::default()).unwrap();
+        assert_eq!(output.text, source);
+        assert!(output.attributes.is_empty());
+        let tokens = scan(source).unwrap();
+        assert!(tokens.iter().any(|token| token.text(source) == "r#gen"));
+        assert!(!tokens.iter().any(|token| token.text(source) == "#"));
+        assert!(
+            prepare(
+                "fn r#gen() { #[unknown] let value = 1; }",
+                &CfgSet::default()
+            )
+            .is_err()
+        );
+        assert!(prepare("#[unknown] fn r#gen() {}", &CfgSet::default()).is_err());
+    }
+
     fn prep(s: &str) -> Result<AttributeOutput, AttributeError> {
         prepare(s, &CfgSet::default())
     }

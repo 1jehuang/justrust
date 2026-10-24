@@ -10474,10 +10474,9 @@ impl<'input, 'names> Parser<'input, 'names> {
         let reserved = [
             "fn", "let", "mut", "if", "else", "while", "return", "true", "false", "pub", "const",
             "static", "loop", "break", "continue", "for", "in", "match", "struct", "enum", "use",
-            "mod", "impl", "trait", "self", "Self", "as", "async", "await", "move", "unsafe",
-            "where", "type", "ref", "extern", "crate", "super", "dyn", "abstract", "become", "box",
-            "do", "final", "macro", "override", "priv", "typeof", "unsized", "virtual", "yield",
-            "try",
+            "mod", "impl", "trait", "self", "Self", "as", "move", "unsafe", "where", "type", "ref",
+            "extern", "crate", "super", "abstract", "become", "box", "do", "final", "macro",
+            "override", "priv", "typeof", "unsized", "virtual", "yield",
         ];
         t.is_ident()
             && t.text != "_"
@@ -10486,11 +10485,11 @@ impl<'input, 'names> Parser<'input, 'names> {
                 .next()
                 .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
             && !reserved.contains(&t.text)
-            && (t.text != "gen"
+            && (!matches!(t.text, "gen" | "async" | "await" | "dyn" | "try")
                 || self
                     .input
-                    .name_edition(&t)
-                    .is_ok_and(|edition| edition != super::token::Edition::E2024))
+                    .edition_keyword_is_reserved(&t)
+                    .is_ok_and(|reserved| !reserved))
     }
     fn ident(&mut self) -> Result<AstIdent, ParseError> {
         let t = self.token();
@@ -12428,12 +12427,12 @@ impl<'input, 'names> Parser<'input, 'names> {
             "as", "break", "const", "continue", "crate", "else", "enum", "extern", "false", "fn",
             "for", "if", "impl", "in", "let", "loop", "match", "mod", "move", "mut", "pub", "ref",
             "return", "self", "Self", "struct", "super", "trait", "true", "type", "unsafe", "use",
-            "where", "while", "async", "await", "dyn", "abstract", "become", "box", "do", "final",
-            "macro", "override", "priv", "typeof", "unsized", "virtual", "yield", "try",
+            "where", "while", "abstract", "become", "box", "do", "final", "macro", "override",
+            "priv", "typeof", "unsized", "virtual", "yield",
         ]
         .contains(&name)
-            || (name == "gen"
-                && self.input.name_edition(&self.token())? == super::token::Edition::E2024)
+            || (matches!(name, "gen" | "async" | "await" | "dyn" | "try")
+                && self.input.edition_keyword_is_reserved(&self.token())?)
         {
             return Err(self.unsupported("keyword lifetime names are unsupported"));
         }

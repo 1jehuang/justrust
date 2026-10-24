@@ -390,6 +390,20 @@ impl NativeTokenBuffer {
         Ok(edition)
     }
 
+    pub(super) fn edition_keyword_is_reserved(
+        &self,
+        view: &super::TokenView<'_>,
+    ) -> Result<bool, ParseError> {
+        use crate::compiler::token::Edition;
+        let edition = self.name_edition(view)?;
+        let spelling = view.text.strip_prefix('\'').unwrap_or(view.text);
+        Ok(match spelling {
+            "gen" => edition == Edition::E2024,
+            "async" | "await" | "dyn" | "try" => edition != Edition::E2015,
+            _ => false,
+        })
+    }
+
     pub(super) fn mint_name(
         &self,
         token: &super::TokenView<'_>,
