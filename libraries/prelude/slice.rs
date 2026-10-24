@@ -91,12 +91,21 @@ impl<T> SliceMethods for [T] {
 /// Element-returning `[T]` methods. Implemented for `&'a [T]` so the trait
 /// carries the element without a `[T]` trait-argument boundary.
 pub trait SliceRefMethods<'a, T> {
+    fn get(self, index: usize) -> super::option::Option<&'a T>;
     fn first(self) -> super::option::Option<&'a T>;
     fn last(self) -> super::option::Option<&'a T>;
     fn split_at(self, mid: usize) -> (&'a [T], &'a [T]);
 }
 
 impl<'a, T> SliceRefMethods<'a, T> for &'a [T] {
+    fn get(self, index: usize) -> super::option::Option<&'a T> {
+        if index < self.len() {
+            super::option::Option::Some(&self[index])
+        } else {
+            super::option::Option::None
+        }
+    }
+
     fn split_at(self, mid: usize) -> (&'a [T], &'a [T]) {
         assert!(mid <= self.len());
         (&self[..mid], &self[mid..])

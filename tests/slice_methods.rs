@@ -545,6 +545,38 @@ fn split_at_out_of_bounds_panics_like_stock() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+#[test]
+fn shared_slice_get_matches_stock() {
+    #[path = "support/closure_oracle.rs"]
+    mod closure_oracle;
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "slice-get",
+        &[
+            Case {
+                name: "checked_indices_and_empty",
+                source: "fn at<T>(s:&[T],i:usize)->Option<&T>{s.get(i)}fn main(){let a=[10i32,20,30];println!(\"{:?} {:?} {:?}\",at(&a,0usize),at(&a,2usize),at(&a,3usize));let empty:[i32;0]=[];println!(\"{:?} {:?}\",at(&empty,0usize),at(&a,usize::MAX));}",
+                expect: Expect::Run("Some(10) Some(30) None\nNone None\n"),
+            },
+            Case {
+                name: "retains_owner_loan",
+                source: "fn main(){let mut a=[1i32,2i32];let r=a.get(0usize);a[0usize]=3;println!(\"{:?}\",r);}",
+                expect: Expect::Invalid("E0506"),
+            },
+            Case {
+                name: "noncopy_and_zero_sized_elements",
+                source: "struct D{value:i32}fn at<T>(s:&[T],i:usize)->Option<&T>{s.get(i)}fn main(){let a=[D{value:17}];match at(&a,0usize){Some(d)=>println!(\"{}\",d.value),None=>println!(\"missing\")};let z=[();2];println!(\"{} {}\",at(&z,1usize).is_some(),at(&z,2usize).is_none());}",
+                expect: Expect::Run("17\ntrue true\n"),
+            },
+            Case {
+                name: "no_escape",
+                source: "fn main(){let r={let a=[1i32,2i32];a.get(0usize)};println!(\"{:?}\",r);}",
+                expect: Expect::Invalid("E0597"),
+            },
+        ],
+    );
+}
+
 /// `[T]::iter` over slice-backed `slice::Iter`, array receivers reaching slice
 /// methods through stock's final unsizing probe step, and `Range<int>` as an
 /// `Iterator` (corpus 06/11/15 reductions).
