@@ -207,6 +207,30 @@ fn raw_root_identifiers_preserve_normalized_lookup() {
     }
 }
 
+#[test]
+fn raw_macro_identifiers_preserve_spelling_and_capture_identity() {
+    stock_native_run(
+        "macro_rules! make {()=>{fn r#gen()->i32{42}};} make!(); fn main(){println!(\"{}\",r#gen());}",
+    );
+    stock_native_run(
+        "macro_rules! bind {($name:ident)=>{{let $name=42; $name}};} fn main(){println!(\"{}\",bind!(r#type));}",
+    );
+    stock_native_run(
+        "macro_rules! read {($name:ident)=>{$name};} fn main(){let r#value=42;println!(\"{}\",read!(value));}",
+    );
+    let invalid = "macro_rules! make {()=>{fn r#same(){} };} make!(); fn same(){} fn main(){}";
+    assert!(
+        !stock_compile(invalid, std::path::Path::new("unused"), true)
+            .status
+            .success()
+    );
+    for workers in [1, 8] {
+        for check_only in [true, false] {
+            assert!(super::super::compile(invalid.into(), workers, check_only).is_err());
+        }
+    }
+}
+
 pub(super) fn stock_native_run(source: &str) {
     use std::os::unix::fs::PermissionsExt;
     use std::process::Command;

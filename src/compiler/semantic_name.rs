@@ -128,7 +128,6 @@ pub struct NameData {
 pub enum UnsupportedName {
     NonRootContext,
     ExpandedOccurrence,
-    RawIdentifier,
     UnicodeIdentifier,
 }
 
@@ -302,10 +301,11 @@ impl NameStoreBuilder {
         let TokenKind::Ident(ident) = token.kind else {
             return Err(NameError::ExpectedIdentifier);
         };
-        if ident.raw {
-            return Err(NameError::Unsupported(UnsupportedName::RawIdentifier));
+        let spelling = self.session().symbol(ident.symbol)?;
+        if ident.raw && matches!(spelling, "_" | "crate" | "self" | "super" | "Self") {
+            return Err(NameError::InvalidIdentifier);
         }
-        Self::check_ascii(self.session().symbol(ident.symbol)?, self.budget())?;
+        Self::check_ascii(spelling, self.budget())?;
         self.append(NameData {
             atom: NameAtomId::new(&self.store.session, ident.symbol)?,
             spelling: ident.symbol,

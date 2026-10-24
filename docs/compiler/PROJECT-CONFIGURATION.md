@@ -55,7 +55,9 @@ in all four editions and checks CHECK/BUILD/run in 2024. Original ASCII raw
 identifiers retain their raw occurrence metadata and share normalized lookup
 identity with ordinary spellings. The raw-root regression checks modules,
 types, fields, calls, duplicate definitions and prohibited raw spellings.
-Expanded raw identifiers and raw lifetimes remain explicitly unsupported.
+Macro-generated and captured ASCII raw identifiers retain the same spelling
+and normalized identity through authenticated expansion; `raw_macro_identifiers`
+checks CHECK/BUILD/run at workers 1 and 8. Raw lifetimes remain explicitly unsupported.
 These are bounded parser rules, not permission to compile a 2021 package.
 
 Manifest resolution produces immutable profile values. The driver passes the

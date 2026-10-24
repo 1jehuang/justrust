@@ -300,11 +300,11 @@ fn push_logical(
             match token.kind {
                 TokenKind::Ident(ident) => {
                     let text = session.symbol(ident.symbol).map_err(transport_error)?;
-                    if ident.raw || !text.is_ascii() {
+                    if !text.is_ascii() {
                         return Err(failure(
                             session,
                             token.span,
-                            "raw and non-ASCII identifiers are unsupported",
+                            "non-ASCII identifiers are unsupported",
                         ));
                     }
                     output.push_expanded(
@@ -1204,6 +1204,20 @@ mod tests {
             .unwrap();
         assert_eq!(isolated[0].kind, ParserTokenKind::Byte);
         assert_eq!(isolated[0].text, "b'\\xff'");
+    }
+
+    #[test]
+    fn raw_expanded_identifier_preserves_authenticated_occurrence() {
+        let mut source = fixture("r#type");
+        let buffer = run(&mut source).unwrap();
+        let view = super::super::TokenCursor::new(&buffer).current();
+        assert_eq!(view.text, "r#type");
+        assert!(view.is_ident());
+        let name = buffer.mint_name(&view, &mut source.names).unwrap();
+        assert!(source.names.data(name).unwrap().raw);
+        let mut forged = view.clone();
+        forged.text = "type";
+        assert!(buffer.mint_name(&forged, &mut source.names).is_err());
     }
 
     #[test]

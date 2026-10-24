@@ -276,19 +276,30 @@ impl NativeTokenBuffer {
                 .map_err(scope_error)?;
         }
         let budget = session.budget();
+        let raw = kind == ParserTokenKind::Ident
+            && name.is_some_and(
+                |(token, _)| matches!(token.kind, TokenKind::Ident(ident) if ident.raw),
+            );
+        let text_len = text
+            .len()
+            .checked_add(if raw { 2 } else { 0 })
+            .ok_or_else(|| transport_error(TokenError::IdExhausted))?;
         budget
-            .charge(Counter::Work, text.len() as u64 + 1)
+            .charge(Counter::Work, text_len as u64 + 1)
             .map_err(|error| transport_error(error.into()))?;
         let mut lease = budget
-            .reserve(Storage::Retained, text.len() as u64)
+            .reserve(Storage::Retained, text_len as u64)
             .map_err(|error| transport_error(error.into()))?;
         let mut owned = String::new();
         owned
-            .try_reserve_exact(text.len())
+            .try_reserve_exact(text_len)
             .map_err(|_| transport_error(TokenError::Budget(budget.poison_allocation())))?;
         lease
             .resize(owned.capacity() as u64)
             .map_err(|error| transport_error(error.into()))?;
+        if raw {
+            owned.push_str("r#");
+        }
         owned.push_str(text);
         let mut constituents = [None; 3];
         for (slot, part) in constituents.iter_mut().zip(parts) {
