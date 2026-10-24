@@ -8369,6 +8369,11 @@ impl<'a> Checker<'a> {
         }
         let id = ir::ExprId(self.exprs.len());
         for (borrow, argument, reason) in pending {
+            // An autoderef receiver through DerefMut::deref_mut is already a
+            // call-produced reference: no source borrow to make two-phase.
+            if matches!(self.exprs[borrow.0].kind, ir::ExprKind::Call { .. }) {
+                continue;
+            }
             let ir::ExprKind::Borrow { timing, .. } = &mut self.exprs[borrow.0].kind else {
                 return Err("invalid implicit borrow argument".into());
             };

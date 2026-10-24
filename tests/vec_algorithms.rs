@@ -162,3 +162,13 @@ let x=Rc::new(5u32);let y=x.clone();println!(\"{} {} {}\",*x,*y,Rc::ptr_eq(&x,&y
         "rc",
     );
 }
+
+#[test]
+fn mutable_method_autoderef_through_box_matches_stock() {
+    compare(
+        "fn main(){let mut b=Box::new(vec![1u32]);b.push(2);b.push(3);println!(\"{} {:?}\",b.len(),b.pop());\
+let r=std::rc::Rc::new(vec![4u32,5]);println!(\"{}\",r.len());}\n",
+        "3 Some(3)\n2\n",
+        "box-autoderef-mut",
+    );
+}
