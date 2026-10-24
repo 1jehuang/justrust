@@ -32,12 +32,14 @@ fn prepared(text: &str) -> source::PreparedSource {
     }
 }
 #[test]
-fn removing_or_forging_public_attribute_records_does_not_change_policy() {
+fn public_attribute_mutation_cannot_change_authenticated_policy() {
     let mut no_std = prepared("#![no_std]\npub fn unused() -> Vec<i32> { loop {} }\n");
-    no_std.attributes.clear();
     let parsed = frontend::parse_prepared(&no_std).unwrap();
     assert!(frontend::resolve(&parsed).is_err());
+    no_std.attributes.clear();
+    assert!(frontend::parse_prepared(&no_std).is_err());
     let mut ordinary = prepared("pub fn unused() -> Vec<i32> { loop {} }\n");
+    frontend::resolve(&frontend::parse_prepared(&ordinary).unwrap()).unwrap();
     ordinary.attributes.push(source::PreparedAttribute {
         span: source::SourceSpan {
             file: source::FileId(0),
@@ -47,7 +49,7 @@ fn removing_or_forging_public_attribute_records_does_not_change_policy() {
         name: "no_std".into(),
         effective: true,
     });
-    frontend::resolve(&frontend::parse_prepared(&ordinary).unwrap()).unwrap();
+    assert!(frontend::parse_prepared(&ordinary).is_err());
 }
 #[test]
 fn policy_is_bound_to_original_crate_source_contents() {
