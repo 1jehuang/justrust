@@ -17,16 +17,19 @@ pub(super) fn push(
     };
     token.validate(session).map_err(transport_error)?;
     let spelling = session.symbol(ident.symbol).map_err(transport_error)?;
-    if ident.raw || !spelling.is_ascii() {
+    if !spelling.is_ascii() {
         return Err(failure(
             session,
             span,
-            "raw and non-ASCII lifetimes are unsupported",
+            "non-ASCII lifetimes are unsupported",
         ));
+    }
+    if ident.raw && spelling == "static" {
+        return Err(failure(session, span, "static lifetimes are unsupported"));
     }
     let capacity = spelling
         .len()
-        .checked_add(1)
+        .checked_add(if ident.raw { 3 } else { 1 })
         .ok_or_else(|| transport_error(TokenError::IdExhausted))?;
     let _lease = session
         .budget()
@@ -36,6 +39,9 @@ pub(super) fn push(
     text.try_reserve_exact(capacity)
         .map_err(|_| transport_error(TokenError::Budget(session.budget().poison_allocation())))?;
     text.push('\'');
+    if ident.raw {
+        text.push_str("r#");
+    }
     text.push_str(spelling);
     output.push_expanded(
         session,

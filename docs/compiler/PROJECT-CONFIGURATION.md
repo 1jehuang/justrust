@@ -57,7 +57,10 @@ identity with ordinary spellings. The raw-root regression checks modules,
 types, fields, calls, duplicate definitions and prohibited raw spellings.
 Macro-generated and captured ASCII raw identifiers retain the same spelling
 and normalized identity through authenticated expansion; `raw_macro_identifiers`
-checks CHECK/BUILD/run at workers 1 and 8. Raw lifetimes remain explicitly unsupported.
+checks CHECK/BUILD/run at workers 1 and 8. Named ASCII raw lifetimes also preserve
+normalized identity in root and macro-expanded input. `raw_lifetimes_preserve_normalized_identity`
+checks generated/captured lifetimes, mixed raw/plain spelling and invalid declarations
+against stock at workers 1 and 8. Static and inferred lifetime support remains separate.
 These are bounded parser rules, not permission to compile a 2021 package.
 
 Manifest resolution produces immutable profile values. The driver passes the

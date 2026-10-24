@@ -1249,6 +1249,21 @@ mod tests {
     }
 
     #[test]
+    fn raw_expanded_lifetime_preserves_authenticated_occurrence() {
+        let mut source = fixture("'r#type");
+        let buffer = run(&mut source).unwrap();
+        let view = super::super::TokenCursor::new(&buffer).current();
+        assert_eq!(view.text, "'r#type");
+        assert!(view.is_lifetime());
+        let name = buffer.mint_name(&view, &mut source.names).unwrap();
+        assert!(source.names.data(name).unwrap().raw);
+        assert_eq!(buffer[0].constituents.iter().flatten().count(), 2);
+        let mut forged = view.clone();
+        forged.text = "'type";
+        assert!(buffer.mint_name(&forged, &mut source.names).is_err());
+    }
+
+    #[test]
     fn expanded_suffixes_select_actual_constituent_spans_and_restore_exactly() {
         let mut source = fixture(">>= &&");
         let buffer = run(&mut source).unwrap();

@@ -231,6 +231,39 @@ fn raw_macro_identifiers_preserve_spelling_and_capture_identity() {
     }
 }
 
+#[test]
+fn raw_lifetimes_preserve_normalized_identity() {
+    stock_native_run(
+        "fn id<'r#type>(x: &'r#type i32)-> &'r#type i32{x} fn main(){let x=42;let y=*id(&x);println!(\"{}\",y);}",
+    );
+    stock_native_run(
+        "fn id<'r#value>(x: &'value i32)-> &'r#value i32{x} fn main(){let x=42;let y=*id(&x);println!(\"{}\",y);}",
+    );
+    stock_native_run(
+        "macro_rules! make {()=>{fn id<'r#type>(x: &'r#type i32)-> &'r#type i32{x}};} make!(); fn main(){let x=42;let y=*id(&x);println!(\"{}\",y);}",
+    );
+    stock_native_run(
+        "macro_rules! make {($l:lifetime)=>{fn id<$l>(x: &$l i32)-> &$l i32{x}};} make!('r#type); fn main(){let x=42;let y=*id(&x);println!(\"{}\",y);}",
+    );
+    for invalid in [
+        "fn id<'r#static>(x: &'r#static i32){} fn main(){}",
+        "fn id<'r#_>(){} fn main(){}",
+        "fn id<'value,'r#value>(){} fn main(){}",
+        "macro_rules! make {()=>{fn id<'r#static>(){}};} make!(); fn main(){}",
+    ] {
+        assert!(
+            !stock_compile(invalid, std::path::Path::new("unused"), true)
+                .status
+                .success()
+        );
+        for workers in [1, 8] {
+            for check_only in [true, false] {
+                assert!(super::super::compile(invalid.into(), workers, check_only).is_err());
+            }
+        }
+    }
+}
+
 pub(super) fn stock_native_run(source: &str) {
     use std::os::unix::fs::PermissionsExt;
     use std::process::Command;

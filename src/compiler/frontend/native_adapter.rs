@@ -877,7 +877,7 @@ impl NativeParserInput {
                             .session
                             .symbol(ident.symbol)
                             .map_err(transport_error)?;
-                        if inactive && (ident.raw || !name.is_ascii()) {
+                        if inactive && !name.is_ascii() {
                             input.push_range(
                                 projection,
                                 event.prepared.start..next.prepared.end,
@@ -890,14 +890,18 @@ impl NativeParserInput {
                             at += 2;
                             continue;
                         }
-                        if ident.raw
-                            || !name.is_ascii()
-                            || ident.context != input.session.root_context()
-                        {
+                        if !name.is_ascii() || ident.context != input.session.root_context() {
                             return Err(event_error(
                                 next,
                                 SourceErrorKind::Unsupported,
-                                "raw, non-ASCII and non-root lifetimes are unsupported",
+                                "non-ASCII and non-root lifetimes are unsupported",
+                            ));
+                        }
+                        if !inactive && ident.raw && name == "static" {
+                            return Err(event_error(
+                                next,
+                                SourceErrorKind::Unsupported,
+                                "static lifetimes are unsupported",
                             ));
                         }
                         if event.prepared.end != next.prepared.start {

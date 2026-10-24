@@ -1496,6 +1496,14 @@ fn scan(text: &str) -> Result<Vec<Token>, AttributeError> {
                     .is_some_and(|c| c == '_' || c.is_alphabetic())
             {
                 let mut end = q + 1;
+                if b[end..].starts_with(b"r#")
+                    && text[end + 2..]
+                        .chars()
+                        .next()
+                        .is_some_and(|c| c == '_' || c.is_alphabetic())
+                {
+                    end += 2;
+                }
                 while let Some(c) = text[end..].chars().next() {
                     if !(c == '_' || c.is_alphanumeric()) {
                         break;
@@ -1624,6 +1632,28 @@ mod tests {
             .is_err()
         );
         assert!(prepare("#[unknown] fn r#gen() {}", &CfgSet::default()).is_err());
+    }
+
+    #[test]
+    fn raw_lifetimes_do_not_become_attribute_markers() {
+        let source = "fn id<'r#type>(x: &'r#type i32)-> &'r#type i32{x}";
+        assert_eq!(prepare(source, &CfgSet::default()).unwrap().text, source);
+        let tokens = scan(source).unwrap();
+        assert_eq!(
+            tokens
+                .iter()
+                .filter(|token| token.text(source) == "'r#type")
+                .count(),
+            3
+        );
+        assert!(!tokens.iter().any(|token| token.text(source) == "#"));
+        assert!(
+            prepare(
+                "fn id<'r#type>() { #[unknown] let x=1; }",
+                &CfgSet::default()
+            )
+            .is_err()
+        );
     }
 
     fn prep(s: &str) -> Result<AttributeOutput, AttributeError> {
