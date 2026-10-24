@@ -160,6 +160,13 @@ let v=RefCell::new(vec![1u32]);let n=v.borrow().len();let mut g=v.borrow_mut();g
         "6 6\n1 2\n",
         "refcell",
     );
+    compare(
+        "use std::cell::RefCell;\nstruct L{v:RefCell<u32>}\n\
+fn main(){let c=RefCell::new(1u32);*c.borrow_mut()=7;*c.borrow_mut()+=1;let l=L{v:RefCell::new(2)};*l.v.borrow_mut()*=5;\
+let a=c.borrow();let b=l.v.borrow();println!(\"{} {}\",*a,*b);}\n",
+        "8 10\n",
+        "refcell-temp-assign",
+    );
 }
 
 #[test]

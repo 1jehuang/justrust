@@ -2142,6 +2142,15 @@ impl SourceInventory {
                     value,
                     ..
                 } => {
+                    if type_check::genuine_call(carrier) {
+                        // `*guard() (OP)= v` may call DerefMut on the owned
+                        // result; recorded at the carrier's receiver step.
+                        self.operator_site(
+                            deref_coercion::site(carrier as *const Expr as usize, 1),
+                            &here.child(4, 0, budget)?,
+                            budget,
+                        )?;
+                    }
                     self.expr(
                         carrier,
                         &here.child(4, 0, budget)?,
@@ -9679,10 +9688,17 @@ impl<'input, 'names> Parser<'input, 'names> {
         } else {
             return Err(self.error(delimiter));
         };
-        if !self.is(close) && self.panic_has_format() {
+        let legacy = self.legacy_panic_literal(close, 0)?;
+        if legacy.is_none() && !self.is(close) && self.panic_has_format() {
             return self.formatted_panic(close, spelling, default, site);
         }
-        let message = if self.is(close) {
+        let message = if let Some(text) = legacy {
+            if spelling == "panic" {
+                text
+            } else {
+                self.prefixed_panic_message(default, Some(&text))?
+            }
+        } else if self.is(close) {
             self.prefixed_panic_message(default, None)?
         } else {
             let text = self.literal_message(nonliteral, placeholders)?;
@@ -9880,7 +9896,14 @@ impl<'input, 'names> Parser<'input, 'names> {
                 "assert! formatting arguments are unsupported",
             ),
         };
-        let message = if self.eat(",") && !self.is(close) {
+        let legacy = if self.is(",") && comparison.is_none() {
+            self.legacy_panic_literal(close, 1)?
+        } else {
+            None
+        };
+        let message = if let Some(text) = legacy {
+            text
+        } else if self.eat(",") && !self.is(close) {
             if self.panic_has_format() {
                 // Stock prints the formatted message (assert!) or the
                 // comparison header plus message (assert_eq!/assert_ne!).
@@ -11652,6 +11675,22 @@ impl<'input, 'names> Parser<'input, 'names> {
                     path = path.with_anchor(anchor);
                 } else {
                     let name = self.ident()?;
+                    // Edition 2015: a non-anchored `use` path is relative to
+                    // the crate root. `std`/`core`/`alloc` are crate-root
+                    // `extern crate` items there, so they keep resolving
+                    // through the extern prelude identically.
+                    if self.names.edition() == super::token::Edition::E2015
+                        && path.anchor() == PathAnchor::Relative
+                        && path.is_empty()
+                        && !matches!(
+                            self.names
+                                .spelling(name)
+                                .map_err(native_adapter::name_error)?,
+                            "std" | "core" | "alloc"
+                        )
+                    {
+                        path = path.with_anchor(PathAnchor::Crate);
+                    }
                     *bytes += self
                         .names
                         .spelling(name)

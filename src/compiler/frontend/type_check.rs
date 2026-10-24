@@ -231,6 +231,7 @@ impl TypeEnv {
     }
 }
 pub type Signatures = TypeEnv;
+const PRE_2021_ARRAY_INTO_ITER: &str = "unsupported: pre-2021 `array.into_iter()` method call resolves to the by-reference iterator; the native compiler implements only the edition 2021 by-value resolution (use `.iter()`)";
 const PRE_2024_PATTERN: &str = "unsupported: pre-2024 default binding mode reset in patterns; the native compiler implements only the edition 2024 rules";
 const PRE_2024_TEMPORARY: &str = "unsupported: pre-2024 temporary scope with a destructor (block tail or if-let scrutinee); the native compiler implements only the edition 2024 drop order";
 pub fn type_env(program: &Program) -> Result<TypeEnv, String> {
@@ -6173,9 +6174,24 @@ impl<'a> Checker<'a> {
         value: &Expr,
         statements: &mut Vec<ir::TypedStmt>,
     ) -> Result<(ir::TypedStmt, bool), String> {
-        let carrier_ty = self
+        let mut carrier_ty = self
             .scalar_hint(carrier)?
             .ok_or("unresolved reference call assignment carrier")?;
+        // `*guard() (OP)= v` on an owned DerefMut call result (RefMut, Box):
+        // the carrier becomes `DerefMut::deref_mut(&mut temporary)`, the
+        // temporary living to the end of the statement as receivers do.
+        let overloaded = matches!(fields.first(), Some(FieldSelector::Deref))
+            && matches!(carrier_ty, ir::Ty::Struct(_) | ir::Ty::Enum(_))
+            && genuine_call(carrier);
+        if overloaded {
+            let Some(target) = self.deref_target_hint(&carrier_ty)? else {
+                return Err("E0614: call assignment carrier cannot be dereferenced".into());
+            };
+            carrier_ty = ir::Ty::Ref {
+                kind: ir::BorrowKind::Mut,
+                referent: Arc::new(target),
+            };
+        }
         let raw_deref = matches!(carrier_ty, ir::Ty::RawPtr { .. })
             && matches!(fields.first(), Some(FieldSelector::Deref));
         if !matches!(carrier_ty, ir::Ty::Ref { .. }) && !raw_deref {
@@ -6243,8 +6259,19 @@ impl<'a> Checker<'a> {
             local: saved,
             value: rhs,
         });
-        let pointer =
-            self.expr_expected_when(carrier, self.reachable && rhs_flow.completes, None)?;
+        let pointer = if overloaded {
+            let ir::Ty::Ref { referent, .. } = &carrier_ty else {
+                unreachable!("overloaded carrier is a reference")
+            };
+            let owner = self
+                .scalar_hint(carrier)?
+                .ok_or("unresolved overloaded assignment carrier")?;
+            debug_assert!(self.deref_target_hint(&owner)?.as_ref() == Some(referent.as_ref()));
+            self.receiver_overloaded_deref(carrier, &owner, ir::BorrowKind::Mut)?
+                .ok_or("overloaded assignment carrier has no DerefMut implementation")?
+        } else {
+            self.expr_expected_when(carrier, self.reachable && rhs_flow.completes, None)?
+        };
         let pf = self.flow(pointer);
         self.require(&pf, &carrier_ty)?;
         let handle = self.temporary(
@@ -6306,6 +6333,33 @@ impl<'a> Checker<'a> {
             (Some(_), None) => unreachable!("rejected above"),
         };
         self.plan_budget_guard()?;
+        if overloaded {
+            // The DerefMut receiver temporary is declared by the statement's
+            // temporary scope; its handle and write stay inside that scope.
+            let handle_let = statements
+                .pop()
+                .ok_or("missing overloaded carrier handle")?;
+            let (statement, completes) = result;
+            let id = ir::ExprId(self.exprs.len());
+            self.charge_node(std::mem::size_of::<ir::TypedExpr>() + 64)?;
+            self.exprs.push(ir::TypedExpr {
+                ty: if completes {
+                    ir::Ty::Unit
+                } else {
+                    ir::Ty::Never
+                },
+                completion: if completes {
+                    ir::Completion::Returns
+                } else {
+                    ir::Completion::Never
+                },
+                kind: ir::ExprKind::Block(ir::TypedBlock {
+                    statements: vec![handle_let, statement],
+                    tail: None,
+                }),
+            });
+            return Ok((ir::TypedStmt::Expr(id), completes));
+        }
         Ok(result)
     }
     /// `*local... (OP)= value` where `local` is an owned nominal with an
@@ -8625,6 +8679,17 @@ impl<'a> Checker<'a> {
         let inferred_receiver = self
             .method_receiver_hints
             .contains_key(&(receiver as *const Expr as usize));
+        if self.names()?.edition().pre_2021()
+            && self.names()?.spelling(*name).map_err(|e| format!("{e:?}"))? == "into_iter"
+            && (matches!(receiver, Expr::Array(_) | Expr::Repeat { .. })
+                || self
+                    .method_receiver_hint(receiver)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|ty| matches!(ty, ir::Ty::Array { .. })))
+        {
+            return Err(PRE_2021_ARRAY_INTO_ITER.into());
+        }
         let ty = self
             .method_receiver_hint(receiver)?
             .ok_or("unsupported unresolved receiver type")?;
