@@ -172,3 +172,13 @@ let r=std::rc::Rc::new(vec![4u32,5]);println!(\"{}\",r.len());}\n",
         "box-autoderef-mut",
     );
 }
+
+#[test]
+fn iterator_max_by_matches_stock() {
+    compare(
+        "fn main(){let v=vec![3i32,9,2,9,1];let x=v.clone().into_iter().max_by(|a,b|a.cmp(b));\
+let e:Vec<i32>=Vec::new();println!(\"{:?} {:?}\",x,e.into_iter().max_by(|a,b|a.cmp(b)));}\n",
+        "Some(9) None\n",
+        "max-by",
+    );
+}

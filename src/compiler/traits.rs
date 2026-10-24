@@ -2080,6 +2080,8 @@ pub struct ValidatedTraitWorld {
     /// Owner declaration to its callables, in header order. Built once so
     /// per-impl ownership checks are linear, not impls x callables.
     owned_callables: std::collections::HashMap<DeclId, Vec<DeclId>>,
+    /// Source default provider to the trait item positions naming it.
+    default_item_index: std::collections::HashMap<DeclId, Vec<usize>>,
     /// Whole-world impl overlap at build time; the graph defers it to
     /// per-impl coherence nodes.
     eager_coherence: bool,
@@ -2261,6 +2263,7 @@ impl ValidatedTraitWorld {
             declared_callable_index: DeclIndex::default(),
             trait_impl_index: std::collections::HashMap::new(),
             owned_callables: std::collections::HashMap::new(),
+            default_item_index: std::collections::HashMap::new(),
             eager_coherence,
         };
         for (position, h) in world.headers.impls.iter().enumerate() {
@@ -2270,6 +2273,16 @@ impl ValidatedTraitWorld {
                 .entry(h.trait_ref.declaration)
                 .or_default()
                 .push(position);
+        }
+        for (position, item) in world.headers.items.iter().enumerate() {
+            if let Some(default) = item.default {
+                charged(budget, budget.charge_work(1))?;
+                world
+                    .default_item_index
+                    .entry(default)
+                    .or_default()
+                    .push(position);
+            }
         }
         for callable in world.headers.callables.iter() {
             if let Some(owner) = world.info(callable.declaration)?.owner {
@@ -3438,7 +3451,7 @@ impl ValidatedTraitWorld {
         Ok(())
     }
     fn validate_headers(&self) -> Result<()> {
-        let mut seen = Vec::new();
+        let mut seen = std::collections::HashSet::new();
         for id in self
             .headers
             .traits
@@ -3449,14 +3462,13 @@ impl ValidatedTraitWorld {
             .chain(self.headers.impls.iter().map(|h| h.declaration))
             .chain(self.headers.callables.iter().map(|h| h.declaration))
         {
-            charged(&self.budget, self.budget.charge_work(seen.len()))?;
-            if seen.contains(&id) {
+            charged(&self.budget, self.budget.charge_work(1))?;
+            if !seen.insert(id) {
                 return Err(FactsError::invalid(
                     &self.budget,
                     "duplicate trait-world header declaration",
                 ));
             }
-            push(&self.budget, &mut seen, id)?;
         }
         for h in self.headers.traits.iter() {
             let info = self.info(h.declaration)?;
@@ -3767,7 +3779,12 @@ impl ValidatedTraitWorld {
     /// permission attached to the signature-only trait item.
     fn source_default_item(&self, declaration: DeclId) -> Result<Option<&TraitItemHeader>> {
         let mut found = None;
-        for item in self.headers.items.iter() {
+        let positions = self
+            .default_item_index
+            .get(&declaration)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        for item in positions.iter().map(|&p| &self.headers.items[p]) {
             charged(&self.budget, self.budget.charge_work(1))?;
             if item.default == Some(declaration)
                 && self.catalog.declaration(item.declaration).is_none()
@@ -7393,7 +7410,12 @@ impl ValidatedTraitWorld {
             ));
         };
         let mut selected = None;
-        for implementation in self.headers.impls.iter() {
+        let candidates = self
+            .trait_impl_index
+            .get(&goal.declaration)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        for implementation in candidates.iter().map(|&p| &self.headers.impls[p]) {
             charged(&self.budget, self.budget.charge_work(1))?;
             if implementation.trait_ref.declaration != goal.declaration {
                 continue;

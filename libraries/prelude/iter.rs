@@ -165,6 +165,26 @@ pub trait Iterator: Sized {
             }
         }
     }
+    /// The last maximum under `compare`, as std's `max_by`.
+    fn max_by<F: FnMut(&Self::Item, &Self::Item) -> super::cmp::Ordering>(
+        mut self,
+        mut compare: F,
+    ) -> Option<Self::Item> {
+        let mut best = match self.next() {
+            Option::Some(item) => item,
+            Option::None => return Option::None,
+        };
+        loop {
+            match self.next() {
+                Option::Some(item) => {
+                    if compare(&best, &item) != super::cmp::Ordering::Greater {
+                        best = item;
+                    }
+                }
+                Option::None => return Option::Some(best),
+            }
+        }
+    }
 }
 
 pub trait DoubleEndedIterator: Iterator {
