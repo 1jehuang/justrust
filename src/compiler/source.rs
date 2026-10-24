@@ -3035,6 +3035,75 @@ mod tests {
         assert!(whole.child_entries().is_empty());
     }
 
+    /// Step C2: a child file parsed alone, mounted at its parent's entry,
+    /// expands exactly the parent macros defined before `mod child;`, places
+    /// its items under the parent's module, and rejects later macros the
+    /// same way the whole-crate parse does.
+    #[test]
+    fn child_view_parse_mounts_at_parent_entry_with_textual_macros() {
+        use super::super::owner_path::{OwnerDomain, standalone_issued};
+        let tree = Tree::new();
+        tree.put(
+            "main.rs",
+            "macro_rules! make { ($n:ident) => { pub fn $n() {} } }\nmod b;\nmacro_rules! late { () => {} }\nfn main(){}\n",
+        );
+        tree.put("b.rs", "make!(made);\npub fn plain(){}\n");
+        let path = tree.0.join("main.rs");
+        let options = SourceOptions::default();
+        let budget = super::super::expansion_budget::ExpansionBudget::default();
+        let issue = |domain| standalone_issued(&budget, domain).unwrap();
+        let root = prepare_root_unit(&path, &options, &budget).unwrap();
+        let parent = super::super::frontend::parse_file_view_owned(
+            &FileView::of(&root, 0, &options).unwrap(),
+            budget.clone(),
+            issue(OwnerDomain::SourceSnapshot),
+            issue(OwnerDomain::TokenSession),
+        )
+        .unwrap();
+        let b = prepare_child_unit(&root, 0, &options, &budget).unwrap();
+        let child = super::super::frontend::parse_child_view_owned(
+            &FileView::of(&b, 1, &options).unwrap(),
+            &parent,
+            0,
+            budget.clone(),
+            issue(OwnerDomain::SourceSnapshot),
+            issue(OwnerDomain::TokenSession),
+        )
+        .unwrap();
+        let names = &*child.program.names;
+        let mut found: Vec<String> = child
+            .program
+            .functions
+            .iter()
+            .map(|f| f.name.display(names).unwrap().to_string())
+            .collect();
+        found.sort();
+        assert_eq!(found, ["crate::b::made", "crate::b::plain"]);
+        let mount = parent.child_entries()[0].module;
+        assert!(child.program.functions.iter().all(|f| f.module == mount));
+        // A macro defined after `mod b;` is invisible, as in the whole parse.
+        tree.put("b.rs", "late!();\n");
+        let whole = prepare_file(&path, &options).unwrap();
+        let whole = match super::super::frontend::parse_prepared(&whole) {
+            Err(error) => error,
+            Ok(_) => panic!("late macro must be invisible to b.rs"),
+        };
+        let b = prepare_child_unit(&root, 0, &options, &budget).unwrap();
+        let alone = match super::super::frontend::parse_child_view_owned(
+            &FileView::of(&b, 1, &options).unwrap(),
+            &parent,
+            0,
+            budget.clone(),
+            issue(OwnerDomain::SourceSnapshot),
+            issue(OwnerDomain::TokenSession),
+        ) {
+            Err(error) => error,
+            Ok(_) => panic!("late macro must be invisible to b.rs alone"),
+        };
+        assert_eq!(alone.message, whole.message);
+        assert_eq!(alone.primary, whole.primary);
+    }
+
     #[test]
     fn independent_units_report_the_sequential_first_error() {
         let tree = Tree::new();

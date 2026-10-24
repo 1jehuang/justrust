@@ -81,6 +81,31 @@ impl<'a> PreparedLexInput<'a> {
         .map_err(SourceError::from_token)?;
         Self::new(&prepared.text, Some(&prepared.origins), snapshot, budget)
     }
+    /// A child file's view whose snapshot links its parent file's snapshot
+    /// and joins the crate rooted there (PARSE-SPLIT.md step C2).
+    pub fn child_file_view(
+        view: &'a super::FileView,
+        parent: &SourceSnapshot,
+        budget: &ExpansionBudget,
+        owner: super::super::owner_path::Issued,
+    ) -> Result<Self, SourceError> {
+        let prepared = &view.prepared;
+        let root = parent
+            .file(0)
+            .and_then(|file| parent.source_crate_root(file))
+            .map_err(SourceError::from_token)?;
+        let snapshot = SourceSnapshot::copy_with_crates(
+            &prepared.sources,
+            &prepared.crate_roots,
+            budget,
+            owner,
+        )
+        .and_then(|snapshot| snapshot.at_assembly_base(view.base))
+        .and_then(|snapshot| snapshot.linked_with(vec![parent.clone()], budget))
+        .and_then(|snapshot| snapshot.join_crate_root(root))
+        .map_err(SourceError::from_token)?;
+        Self::new(&prepared.text, Some(&prepared.origins), snapshot, budget)
+    }
     pub fn identity(
         name: &Path,
         text: &'a str,

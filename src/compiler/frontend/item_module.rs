@@ -74,6 +74,46 @@ impl Parser<'_, '_> {
         Ok((child, full))
     }
 
+    /// Place this file's parser into its parent's crate at `mount`
+    /// (PARSE-SPLIT.md step C2). The module arena and scope arena link the
+    /// parent's frozen arenas and join its crate; the module frontier and
+    /// textual macro scope resume from the parent's declaration site.
+    pub(super) fn mount_child(&mut self, mount: &ChildMount<'_>) -> Result<(), ParseError> {
+        let parent = mount.parent;
+        self.modules
+            .link_crate_files(vec![parent.modules.clone()])
+            .and_then(|()| self.modules.join_crate(&parent.modules))
+            .map_err(module_parse_error)?;
+        let Some(parent_scopes) = parent.scopes.clone() else {
+            return Ok(());
+        };
+        let mut scopes = super::super::semantic_scope::ScopeArenaBuilder::for_builder(self.names)
+            .map_err(scope_parse_error)?;
+        scopes
+            .link_crate_files(vec![parent_scopes])
+            .map_err(scope_parse_error)?;
+        self.module_frontier = match mount.entry.frontier {
+            Some(at) => Some(
+                scopes
+                    .module_resume(self.names, &*self.modules, at)
+                    .map_err(scope_parse_error)?,
+            ),
+            None => None,
+        };
+        self.lexical.scopes = Some(scopes);
+        if let (Some(checkpoint), Some(source)) =
+            (&mount.entry.macros, self.input.macro_source().cloned())
+        {
+            self.lexical.item_macros = Some(
+                super::super::source_item_macro::SourceItemMacroDriver::from_checkpoint(
+                    source, checkpoint, self.names,
+                )
+                .map_err(|error| self.driver_error(error))?,
+            );
+        }
+        Ok(())
+    }
+
     /// Records the entry of an external `mod child;` group in a single-file
     /// view parse: the source preparer rewrote it to `{\n` with the child's
     /// site just inside (PARSE-SPLIT.md step C1).
@@ -102,6 +142,7 @@ impl Parser<'_, '_> {
             module: child,
             path: full.clone(),
             macros,
+            frontier: self.module_frontier,
         });
         Ok(())
     }

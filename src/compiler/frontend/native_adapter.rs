@@ -565,16 +565,27 @@ impl NativeParserInput {
         owner: crate::compiler::token_session::SessionOwnerCap,
         projection: &PreparedLexInput<'_>,
     ) -> Result<Self, ParseError> {
-        Self::new_with_purpose(lexed, session, owner, projection, false)
+        Self::new_with_purpose(lexed, session, owner, projection, false, false)
     }
 
+    /// A mounted child file may invoke textual macros inherited from its
+    /// parent without defining any itself (PARSE-SPLIT.md step C2), so it
+    /// always retains its macro token source.
+    pub(super) fn new_macro_bearing(
+        lexed: LexedTokens,
+        session: TokenSession,
+        owner: crate::compiler::token_session::SessionOwnerCap,
+        projection: &PreparedLexInput<'_>,
+    ) -> Result<Self, ParseError> {
+        Self::new_with_purpose(lexed, session, owner, projection, false, true)
+    }
     pub(super) fn new_inactive(
         lexed: LexedTokens,
         session: TokenSession,
         owner: crate::compiler::token_session::SessionOwnerCap,
         projection: &PreparedLexInput<'_>,
     ) -> Result<Self, ParseError> {
-        Self::new_with_purpose(lexed, session, owner, projection, true)
+        Self::new_with_purpose(lexed, session, owner, projection, true, false)
     }
 
     fn new_with_purpose(
@@ -583,6 +594,7 @@ impl NativeParserInput {
         owner: crate::compiler::token_session::SessionOwnerCap,
         projection: &PreparedLexInput<'_>,
         inactive: bool,
+        inherits_macros: bool,
     ) -> Result<Self, ParseError> {
         lexed
             .validate_input(&session, projection)
@@ -613,7 +625,7 @@ impl NativeParserInput {
                 lexed.events().len() as u64,
             )
             .map_err(|error| transport_error(error.into()))?;
-        let mut macro_bearing = inactive;
+        let mut macro_bearing = inactive || inherits_macros;
         for pair in lexed.events().windows(2) {
             if let [
                 LexedEvent {

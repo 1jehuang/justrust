@@ -240,6 +240,9 @@ pub struct SourceSnapshot {
     /// Sibling file snapshots of the same crate (PARSE-SPLIT.md step 1d),
     /// sorted by id. Their file handles are served by them; others foreign.
     linked: Arc<[SourceSnapshot]>,
+    /// Crate root file of a joined child file (PARSE-SPLIT.md step C2),
+    /// served by a linked sibling. `None` uses this snapshot's own roots.
+    joined_root: Option<SourceFileHandle>,
 }
 
 impl SourceSnapshot {
@@ -494,6 +497,7 @@ impl SourceSnapshot {
             }),
             linked: Arc::from([]),
             base: 0,
+            joined_root: None,
         })
     }
 
@@ -527,6 +531,28 @@ impl SourceSnapshot {
             inner: Arc::clone(&self.inner),
             linked: linked.into(),
             base: self.base,
+            joined_root: None,
+        })
+    }
+    /// Place this linked file snapshot into the crate whose root file is
+    /// `root`, owned by a linked sibling (PARSE-SPLIT.md step C2). Once.
+    pub fn join_crate_root(&self, root: SourceFileHandle) -> Result<Self, TokenError> {
+        if self.joined_root.is_some() {
+            return Err(TokenError::InvalidInput("source snapshot already joined"));
+        }
+        let Some(owner) = self.linked_owner(root)? else {
+            return Err(TokenError::InvalidInput(
+                "crate root must be a linked sibling",
+            ));
+        };
+        if owner.source_crate_root(root)? != root {
+            return Err(TokenError::InvalidInput("not a crate root file"));
+        }
+        Ok(Self {
+            inner: Arc::clone(&self.inner),
+            linked: Arc::clone(&self.linked),
+            base: self.base,
+            joined_root: Some(root),
         })
     }
     /// The linked sibling owning `file`, `None` for this snapshot's own files.
@@ -565,6 +591,9 @@ impl SourceSnapshot {
             return sibling.source_crate_root(file);
         }
         self.text(file)?;
+        if let Some(root) = self.joined_root {
+            return Ok(root);
+        }
         let root = if self.inner.crate_roots.is_empty() {
             0
         } else {
@@ -603,6 +632,7 @@ impl SourceSnapshot {
             inner: Arc::clone(&self.inner),
             linked: Arc::from([]),
             base,
+            joined_root: None,
         })
     }
     pub fn render_span(&self, span: OriginalSpan) -> Result<SourceSpan, TokenError> {

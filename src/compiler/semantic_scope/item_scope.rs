@@ -275,6 +275,33 @@ impl ScopeArenaBuilder {
             entry_parent: parent,
         })
     }
+    /// Resume a module's textual scope in a child file from the parent
+    /// file's linked frontier `at` (PARSE-SPLIT.md step C2). The new point
+    /// lives in this arena and continues `at`'s module and entry parent.
+    pub(crate) fn module_resume(
+        &mut self,
+        names: &impl NameAccess,
+        modules: &impl ModuleAccess,
+        at: ModuleFrontierId,
+    ) -> Result<ModuleFrontierId, ScopeError> {
+        self.check_names(names)?;
+        self.arena.transition()?;
+        let root = modules.source_root()?;
+        check_modules(names, modules, root)?;
+        if at.owner == self.arena.owner {
+            return Err(ScopeError::InvalidHandle);
+        }
+        let p = *self.arena.module_point(at)?;
+        if modules.root_of(p.module)? != root {
+            return Err(ModuleError::ForeignOwner.into());
+        }
+        self.arena.items.source_root = Some(root);
+        self.arena.push_module_point(ModulePoint {
+            module: p.module,
+            previous: Some(at),
+            entry_parent: p.entry_parent,
+        })
+    }
     pub(crate) fn module_step(
         &mut self,
         names: &impl NameAccess,

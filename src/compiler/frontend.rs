@@ -6236,6 +6236,8 @@ pub(super) struct ChildEntry {
     pub(super) module: ModuleId,
     pub(super) path: AstPath,
     pub(super) macros: Option<super::source_item_macro::ModuleMacroCheckpoint>,
+    /// The parent's textual scope point at the declaration.
+    pub(super) frontier: Option<super::semantic_scope::ModuleFrontierId>,
 }
 impl ParsedProgram {
     /// Child file entries of a single-file view parse, in child-site order.
@@ -8052,6 +8054,15 @@ fn native_input_for_edition(
     owner: super::owner_path::Issued,
     edition: super::token::Edition,
 ) -> Result<NativeParserInput, ParseError> {
+    native_input_with(projection, budget, owner, edition, false)
+}
+fn native_input_with(
+    projection: &super::source::PreparedLexInput<'_>,
+    budget: super::expansion_budget::ExpansionBudget,
+    owner: super::owner_path::Issued,
+    edition: super::token::Edition,
+    inherits_macros: bool,
+) -> Result<NativeParserInput, ParseError> {
     let (mut session, cap) = super::token_session::TokenSession::with_owner(
         projection.snapshot().clone(),
         budget,
@@ -8060,6 +8071,9 @@ fn native_input_for_edition(
     .map_err(native_adapter::transport_error)?;
     let lexed = super::lexer::lex_prepared(projection, edition, &mut session)
         .map_err(native_adapter::lex_error)?;
+    if inherits_macros {
+        return NativeParserInput::new_macro_bearing(lexed, session, cap, projection);
+    }
     NativeParserInput::new(lexed, session, cap, projection)
 }
 fn path_text_len(
@@ -15144,6 +15158,7 @@ fn parse_syntax_tokens_configured(
         Arc::from([]),
         Arc::from([]),
         Arc::from([]),
+        None,
     )
 }
 fn parse_syntax_tokens_policy(
@@ -15153,6 +15168,7 @@ fn parse_syntax_tokens_policy(
     embedded_issuers: Arc<[super::source::EmbeddedOriginalFile]>,
     forbid_unsafe_roots: Arc<[super::token_session::SourceFileHandle]>,
     child_sites: Arc<[usize]>,
+    mount: Option<ChildMount<'_>>,
 ) -> Result<ParsedProgram, ParseError> {
     let unit = parse_syntax_unit(
         tokens,
@@ -15162,6 +15178,7 @@ fn parse_syntax_tokens_policy(
         embedded_issuers.clone(),
         forbid_unsafe_roots,
         child_sites,
+        mount,
     )?;
     let mut program =
         unit.parsed
@@ -15195,11 +15212,18 @@ fn parse_syntax_unit(
     embedded_issuers: Arc<[super::source::EmbeddedOriginalFile]>,
     forbid_unsafe_roots: Arc<[super::token_session::SourceFileHandle]>,
     child_sites: Arc<[usize]>,
+    mount: Option<ChildMount<'_>>,
 ) -> Result<ParsedSyntaxUnit, ParseError> {
     let edition = tokens.edition();
     let (tokens, session, cap) = tokens.into_parts();
     let mut names =
         NameStoreBuilder::new(session, cap, edition).map_err(native_adapter::name_error)?;
+    if let Some(mount) = &mount {
+        names
+            .link_crate_files(vec![mount.parent.names.clone()])
+            .and_then(|()| names.join_crate(&mount.parent.names))
+            .map_err(native_adapter::name_error)?;
+    }
     let symbols = ProgramSymbols::new(&mut names).map_err(native_adapter::name_error)?;
     let mut parser = match purpose {
         ParserPurpose::Active => Parser::new(&tokens, &mut names)?,
@@ -15216,9 +15240,17 @@ fn parse_syntax_unit(
         empty_use_prefixes: Vec::new(),
         glob_imports: Vec::new(),
     };
-    let root = parser.modules.source_root().map_err(module_parse_error)?;
-    let root_path =
-        AstPath::new(parser.names, PathAnchor::Crate, &[]).map_err(native_adapter::name_error)?;
+    let (root, root_path) = match &mount {
+        Some(mount) => {
+            parser.mount_child(mount)?;
+            (mount.entry.module, mount.entry.path.clone())
+        }
+        None => (
+            parser.modules.source_root().map_err(module_parse_error)?,
+            AstPath::new(parser.names, PathAnchor::Crate, &[])
+                .map_err(native_adapter::name_error)?,
+        ),
+    };
     parser.items(root, &root_path, &mut parsed)?;
     parsed.program.no_std_roots = parser.no_std_roots.clone();
     parsed.program.c_abi = std::mem::take(&mut parser.c_abi);
@@ -15361,6 +15393,7 @@ pub(super) fn validate_inactive_syntax(
             Arc::from([]),
             Arc::from([]),
             Arc::from([]),
+            None,
         )?,
     })
 }
@@ -16375,7 +16408,7 @@ pub fn parse_prepared_owned(
     owner: super::owner_path::Issued,
 ) -> Result<ParsedProgram, super::source::SourceError> {
     let projection = super::source::PreparedLexInput::prepared(source, &budget, snapshot)?;
-    parse_projection(source, projection, 0, Arc::from([]), budget, owner)
+    parse_projection(source, projection, 0, Arc::from([]), None, budget, owner)
 }
 
 /// Parse one file's shallow view in its own session, rendered at its crate
@@ -16388,7 +16421,59 @@ pub fn parse_file_view_owned(
 ) -> Result<ParsedProgram, super::source::SourceError> {
     let projection = super::source::PreparedLexInput::file_view(view, &budget, snapshot)?;
     let sites = Arc::from(view.child_sites.as_slice());
-    parse_projection(&view.prepared, projection, view.base, sites, budget, owner)
+    parse_projection(
+        &view.prepared,
+        projection,
+        view.base,
+        sites,
+        None,
+        budget,
+        owner,
+    )
+}
+
+/// Parse a child file's view mounted at its parent's entry (PARSE-SPLIT.md
+/// step C2): the child links the parent's frozen name, module and scope
+/// stores, joins its crate, starts at the parent's module for `mod child;`
+/// and sees exactly the textual macros in effect at that declaration.
+pub fn parse_child_view_owned(
+    view: &super::source::FileView,
+    parent: &ParsedProgram,
+    index: usize,
+    budget: super::expansion_budget::ExpansionBudget,
+    snapshot: super::owner_path::Issued,
+    owner: super::owner_path::Issued,
+) -> Result<ParsedProgram, super::source::SourceError> {
+    let entry = parent.child_entries.get(index).ok_or_else(|| {
+        super::source::SourceError::from_token(super::token_session::TokenError::InvalidInput(
+            "no such child entry",
+        ))
+    })?;
+    let mount = ChildMount {
+        parent: &parent.program,
+        entry,
+    };
+    let projection = super::source::PreparedLexInput::child_file_view(
+        view,
+        parent.program.names.session().sources(),
+        &budget,
+        snapshot,
+    )?;
+    let sites = Arc::from(view.child_sites.as_slice());
+    parse_projection(
+        &view.prepared,
+        projection,
+        view.base,
+        sites,
+        Some(mount),
+        budget,
+        owner,
+    )
+}
+/// A child parse's mount point in its parent's frozen parse.
+pub(super) struct ChildMount<'a> {
+    parent: &'a Program,
+    entry: &'a ChildEntry,
 }
 
 fn parse_projection(
@@ -16396,6 +16481,7 @@ fn parse_projection(
     projection: super::source::PreparedLexInput<'_>,
     base: u32,
     child_sites: Arc<[usize]>,
+    mount: Option<ChildMount<'_>>,
     budget: super::expansion_budget::ExpansionBudget,
     owner: super::owner_path::Issued,
 ) -> Result<ParsedProgram, super::source::SourceError> {
@@ -16443,8 +16529,9 @@ fn parse_projection(
         }
     }
     let issuers = source.embedded_issuers(projection.snapshot(), &budget)?;
-    let tokens =
-        native_input_for_edition(&projection, budget, owner, source.edition()).map_err(mapped)?;
+    let inherits = mount.as_ref().is_some_and(|m| m.entry.macros.is_some());
+    let tokens = native_input_with(&projection, budget, owner, source.edition(), inherits)
+        .map_err(mapped)?;
     parse_syntax_tokens_policy(
         tokens,
         source.debug_assertions(),
@@ -16452,6 +16539,7 @@ fn parse_projection(
         issuers.into(),
         forbid_unsafe_roots.into(),
         child_sites,
+        mount,
     )
     .map_err(mapped)
 }
