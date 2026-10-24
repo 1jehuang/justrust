@@ -392,3 +392,74 @@ fn main() {
         ],
     );
 }
+
+#[test]
+fn block_local_fn_and_use_items_match_stock() {
+    #[path = "support/closure_oracle.rs"]
+    mod closure_oracle;
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "block-local-items",
+        &[
+            Case {
+                name: "imports_functions_shadowing_and_nesting",
+                source: r#"mod m { pub fn three() -> u32 { 3 } pub struct P(pub u32); pub fn a() -> u32 { 2 } }
+fn helper() -> u32 { 100 }
+fn main() {
+    use m::three;
+    use m::P as Q;
+    fn helper() -> u32 { 7 }
+    fn twice(x: u32) -> u32 { x * 2 + inner() }
+    fn inner() -> u32 { 1 }
+    let q = Q(4);
+    println!("{} {} {} {}", three(), helper(), twice(q.0), crate::helper());
+    {
+        fn helper() -> u32 { 9 }
+        println!("{}", helper());
+    }
+    println!("{}", early());
+    fn early() -> u32 { 5 }
+    use m::a as b;
+    fn c() -> u32 { b() + 1 }
+    println!("{} {}", helper(), c());
+}"#,
+                expect: Expect::Run("3 7 9 100\n9\n5\n7 3\n"),
+            },
+            Case {
+                name: "fn_reads_enclosing_local",
+                source: "fn main(){ let x = 1; fn f() -> i32 { x } println!(\"{}\", f()); }",
+                expect: Expect::Invalid("E0434"),
+            },
+            Case {
+                name: "fn_uses_enclosing_generic",
+                source: "fn g<T: Default>() -> T { fn h() -> T { T::default() } h() } fn main(){}",
+                expect: Expect::Invalid("E0401"),
+            },
+            Case {
+                name: "fn_out_of_scope",
+                source: "fn main(){ { fn f() -> u32 { 1 } } println!(\"{}\", f()); }",
+                expect: Expect::Invalid("E0425"),
+            },
+            Case {
+                name: "duplicate_fn_in_block",
+                source: "fn main(){ fn f() {} fn f() {} }",
+                expect: Expect::Invalid("E0428"),
+            },
+            Case {
+                name: "unused_invalid_fn_body",
+                source: "fn main(){ fn bad() -> u32 { \"s\" } }",
+                expect: Expect::Invalid("E0308"),
+            },
+            Case {
+                name: "unused_unresolved_use",
+                source: "fn main(){ use std::nope::X; }",
+                expect: Expect::Invalid("E0432"),
+            },
+            Case {
+                name: "unused_private_use",
+                source: "mod m { fn private() {} } fn main(){ use m::private; }",
+                expect: Expect::Invalid("E0603"),
+            },
+        ],
+    );
+}

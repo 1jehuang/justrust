@@ -10994,7 +10994,8 @@ impl<'input, 'names> Parser<'input, 'names> {
             self.expect(")")?;
             Ok(Type::Tuple(fields))
         } else {
-            let path = self.generic_path(true)?;
+            let mut path = self.generic_path(true)?;
+            self.rewrite_local_item_generic(&mut path)?;
             if path.segments.iter().any(|s| {
                 !s.region_args.is_empty() || !s.args.is_empty() || !s.associated_types.is_empty()
             }) {
@@ -13893,6 +13894,24 @@ impl<'input, 'names> Parser<'input, 'names> {
         }
         Ok(())
     }
+    /// Inactive code is validated for syntax only. The item is parsed into a
+    /// discarded declaration set, never published. Kept off the recursive
+    /// block frame: the scratch declaration set is large.
+    #[inline(never)]
+    fn inactive_block_item(&mut self) -> Result<(), ParseError> {
+        let mut scratch = Box::new(ParsedDeclarations {
+            program: ProgramDeclarations::default(),
+            items: HashMap::new(),
+            empty_use_prefixes: Vec::new(),
+            glob_imports: Vec::new(),
+        });
+        let module = self.module;
+        let path =
+            AstPath::new(self.names, PathAnchor::Crate, &[]).map_err(native_adapter::name_error)?;
+        let start = self.cursor.index();
+        let (visibility, explicit) = self.visibility(module)?;
+        self.nonmodule_item(module, &path, &mut scratch, visibility, explicit, start)
+    }
     fn block_inner(&mut self) -> Result<Block, ParseError> {
         self.expect("{")?;
         let mut statements = Vec::new();
@@ -13918,20 +13937,15 @@ impl<'input, 'names> Parser<'input, 'names> {
             }
             if self.is("mod") || self.is("use") || self.is("fn") || self.is("pub") {
                 if self.purpose == ParserPurpose::InactiveSyntax && !self.is("mod") {
-                    // Inactive code is validated for syntax only. The item is
-                    // parsed into a discarded declaration set, never published.
-                    let mut scratch = ParsedDeclarations {
-                        program: ProgramDeclarations::default(),
-                        items: HashMap::new(),
-                        empty_use_prefixes: Vec::new(),
-                        glob_imports: Vec::new(),
-                    };
-                    let module = self.module;
-                    let path = AstPath::new(self.names, PathAnchor::Crate, &[])
-                        .map_err(native_adapter::name_error)?;
-                    let start = self.cursor.index();
-                    let (visibility, explicit) = self.visibility(module)?;
-                    self.nonmodule_item(module, &path, &mut scratch, visibility, explicit, start)?;
+                    self.inactive_block_item()?;
+                    continue;
+                }
+                if self.is("fn") && self.cursor.peek(1).is_some_and(|t| t.is_ident()) {
+                    self.local_fn_item()?;
+                    continue;
+                }
+                if self.is("use") {
+                    self.local_use_item()?;
                     continue;
                 }
                 return Err(self.unsupported("block-local items are unsupported"));
@@ -14119,7 +14133,7 @@ impl<'input, 'names> Parser<'input, 'names> {
         if self.is("self") && !self.cursor.peek(1).is_some_and(|token| token.matches("::")) {
             return self.receiver_expression();
         }
-        let generic_path = self.generic_path(false)?;
+        let mut generic_path = self.generic_path(false)?;
         let mut name = generic_path
             .checked_path(self.names)
             .map_err(native_adapter::name_error)?;
@@ -14136,6 +14150,9 @@ impl<'input, 'names> Parser<'input, 'names> {
                 && let Some(hidden) = self.local_const_path(single)?
             {
                 name = hidden;
+            } else if !local && let Some(hidden) = self.local_item_path(&name)? {
+                name = hidden;
+                self.rewrite_local_item_generic(&mut generic_path)?;
             }
         }
         let value = if self.eat("!") {
