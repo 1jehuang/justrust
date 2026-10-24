@@ -15,6 +15,8 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
   `Option::is_some_and` and `is_none_or` use the same source-level FnOnce path;
   `option_map::option_predicates_match_stock` covers skipped calls, payload and
   capture destruction, invalid callbacks and use-after-move rejection.
+  `option_map::option_filter_matches_stock` covers `Option::filter` shared
+  predicate borrowing, retained/rejected payload drops and skipped capture cleanup.
 
 - [x] Nested closure templates read their outermost source callable's immutable
   publication while retaining immediate lexical owner/site authentication.

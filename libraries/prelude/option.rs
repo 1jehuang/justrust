@@ -135,6 +135,19 @@ impl<T> Option<T> {
         }
     }
 
+    pub fn filter<P: FnOnce(&T) -> bool>(self, predicate: P) -> Option<T> {
+        match self {
+            Option::Some(value) => {
+                if predicate(&value) {
+                    Option::Some(value)
+                } else {
+                    Option::None
+                }
+            }
+            Option::None => Option::None,
+        }
+    }
+
     pub fn map<U, F: FnOnce(T) -> U>(self, f: F) -> Option<U> {
         match self {
             Option::Some(value) => Option::Some(f(value)),

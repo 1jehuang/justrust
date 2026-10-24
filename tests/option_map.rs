@@ -146,6 +146,40 @@ fn option_predicates_match_stock() {
 }
 
 #[test]
+fn option_filter_matches_stock() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "option-filter",
+        &[
+            Case {
+                name: "borrows_payload_and_returns_original_owner",
+                source: r#"struct Value { number: i32 }
+                impl Drop for Value { fn drop(&mut self) { println!("drop {}", self.number); } }
+                fn main() {
+                    let kept = Some(Value { number: 3 }).filter(|v| v.number > 2);
+                    { let value = kept.unwrap(); println!("kept {}", value.number); }
+                    println!("{}", Some(Value { number: 1 }).filter(|v| v.number > 2).is_none());
+                    println!("{}", None::<i32>.filter(|_| { println!("wrong predicate"); true }).is_none());
+                    let token = Value { number: 7 };
+                    println!("{}", None::<i32>.filter(move |_| { let owned = token; owned.number > 0 }).is_none());
+                }"#,
+                expect: Expect::Run("kept 3\ndrop 3\ndrop 1\ntrue\ntrue\ndrop 7\ntrue\n"),
+            },
+            Case {
+                name: "cannot_mutate_through_filter_shared_reference",
+                source: "fn main(){let _=Some(1).filter(|v|{*v=2;true});}",
+                expect: Expect::Invalid("E0594"),
+            },
+            Case {
+                name: "cannot_return_predicate_reference",
+                source: "fn main(){let _=Some(1).filter(|v|v);}",
+                expect: Expect::Invalid("E0308"),
+            },
+        ],
+    );
+}
+
+#[test]
 fn option_map_matches_stock() {
     use closure_oracle::{Case, Expect};
     closure_oracle::check(
