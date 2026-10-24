@@ -2077,6 +2077,9 @@ pub struct ValidatedTraitWorld {
     declared_callable_index: DeclIndex,
     /// Trait declaration to impl header positions (TRAIT_IMPLS source).
     trait_impl_index: std::collections::HashMap<DeclId, Vec<usize>>,
+    /// Owner declaration to its callables, in header order. Built once so
+    /// per-impl ownership checks are linear, not impls x callables.
+    owned_callables: std::collections::HashMap<DeclId, Vec<DeclId>>,
     /// Whole-world impl overlap at build time; the graph defers it to
     /// per-impl coherence nodes.
     eager_coherence: bool,
@@ -2257,6 +2260,7 @@ impl ValidatedTraitWorld {
             constant_impl_index: std::collections::HashMap::new(),
             declared_callable_index: DeclIndex::default(),
             trait_impl_index: std::collections::HashMap::new(),
+            owned_callables: std::collections::HashMap::new(),
             eager_coherence,
         };
         for (position, h) in world.headers.impls.iter().enumerate() {
@@ -2266,6 +2270,15 @@ impl ValidatedTraitWorld {
                 .entry(h.trait_ref.declaration)
                 .or_default()
                 .push(position);
+        }
+        for callable in world.headers.callables.iter() {
+            if let Some(owner) = world.info(callable.declaration)?.owner {
+                world
+                    .owned_callables
+                    .entry(owner)
+                    .or_default()
+                    .push(callable.declaration);
+            }
         }
         world.build_constant_index()?;
         world.validate_header_type_metadata()?;
@@ -2359,6 +2372,10 @@ impl ValidatedTraitWorld {
     }
     pub(super) fn types_equal(&self, left: &[Ty], right: &[Ty]) -> Result<bool> {
         self.eq_types(left, right, 0)
+    }
+    /// Callables whose registry owner is `owner`, in header order.
+    pub(super) fn owned_callables(&self, owner: DeclId) -> &[DeclId] {
+        self.owned_callables.get(&owner).map_or(&[], Vec::as_slice)
     }
     fn info(&self, id: DeclId) -> Result<SchemaDecl> {
         charged(&self.budget, self.budget.charge_work(1))?;
@@ -3936,14 +3953,10 @@ impl ValidatedTraitWorld {
                 ));
             }
         }
-        for callable in self.headers.callables.iter() {
-            if self.info(callable.declaration)?.owner == Some(h.declaration) {
+        for owned in self.owned_callables(h.declaration) {
+            {
                 charged(&self.budget, self.budget.charge_work(h.items.len()))?;
-                if !h
-                    .items
-                    .iter()
-                    .any(|(_, target)| *target == callable.declaration)
-                {
+                if !h.items.iter().any(|(_, target)| target == owned) {
                     return Err(FactsError::invalid(
                         &self.budget,
                         "extra unmapped trait implementation callable",

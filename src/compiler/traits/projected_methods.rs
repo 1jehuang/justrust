@@ -350,11 +350,9 @@ impl ValidatedTraitWorld {
                     ));
                 }
             }
-            for callable in self.headers.callables.iter() {
+            for owned in self.owned_callables(implementation.declaration) {
                 charged(&self.budget, self.budget.charge_work(targets.len() + 1))?;
-                if self.info(callable.declaration)?.owner == Some(implementation.declaration)
-                    && !targets.contains(&callable.declaration)
-                {
+                if !targets.contains(owned) {
                     return Err(FactsError::invalid(
                         &self.budget,
                         "projected owner has an unmapped implementation method",
