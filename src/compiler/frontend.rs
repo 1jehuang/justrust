@@ -37,6 +37,7 @@ mod carrier_regions;
 mod char_literal;
 pub(super) mod closures;
 mod extern_crate;
+mod local_consts;
 pub use closures::shape_seal::ClosureShapeSeal;
 #[cfg(test)]
 mod trait_method_source_tests;
@@ -8621,6 +8622,8 @@ struct Parser<'input, 'names> {
     type_params: Vec<AstIdent>,
     use_expansions: usize,
     use_expansion_bytes: usize,
+    /// Block-local `const` items, innermost block last (local_consts.rs).
+    local_consts: local_consts::LocalConsts,
 }
 impl<'input, 'names> Parser<'input, 'names> {
     fn inactive_invocation(
@@ -8807,6 +8810,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             type_params: Vec::new(),
             use_expansions: self.use_expansions,
             use_expansion_bytes: self.use_expansion_bytes,
+            local_consts: local_consts::LocalConsts::default(),
         };
         let mut product = ParsedDeclarations {
             program: ProgramDeclarations::default(),
@@ -10188,6 +10192,9 @@ impl<'input, 'names> Parser<'input, 'names> {
             type_params: std::mem::take(&mut self.type_params),
             use_expansions: self.use_expansions,
             use_expansion_bytes: self.use_expansion_bytes,
+            // Items are unhygienic: expanded expressions see enclosing
+            // block-local consts like any other item.
+            local_consts: std::mem::take(&mut self.local_consts),
         };
         let result = child.expr(0).and_then(|value| {
             if !child.is("") {
@@ -10197,6 +10204,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             }
         });
         self.type_params = std::mem::take(&mut child.type_params);
+        self.local_consts = std::mem::take(&mut child.local_consts);
         result
     }
     fn opaque_literal_expression(&mut self) -> Result<Expr, ParseError> {
@@ -10339,8 +10347,13 @@ impl<'input, 'names> Parser<'input, 'names> {
         Ok(())
     }
     fn reference_lexical(&mut self, ident: AstIdent) -> Result<(), ParseError> {
+        self.reference_lexical_binding(ident).map(|_| ())
+    }
+    /// Records the reference and reports whether it names a local binding.
+    fn reference_lexical_binding(&mut self, ident: AstIdent) -> Result<bool, ParseError> {
         if let Some(frontier) = self.frontier() {
-            self.lexical
+            return Ok(self
+                .lexical
                 .scopes
                 .as_mut()
                 .ok_or_else(|| {
@@ -10349,9 +10362,10 @@ impl<'input, 'names> Parser<'input, 'names> {
                     ))
                 })?
                 .resolve_reference(self.names, frontier, ident)
-                .map_err(scope_parse_error)?;
+                .map_err(scope_parse_error)?
+                .is_some());
         }
-        Ok(())
+        Ok(false)
     }
     fn bind_pattern_lexical(&mut self, pattern: &Pattern) -> Result<(), ParseError> {
         if self.frontier().is_none() {
@@ -10596,6 +10610,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             type_params: Vec::new(),
             use_expansions: 0,
             use_expansion_bytes: 0,
+            local_consts: local_consts::LocalConsts::default(),
         })
     }
     fn token(&self) -> TokenView<'input> {
@@ -11924,6 +11939,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                 explicit_visibility,
                 function_source_start,
             )?;
+            self.publish_local_consts(parsed)?;
         }
         self.module = previous_module;
         self.module_frontier = previous_frontier;
@@ -13137,7 +13153,11 @@ impl<'input, 'names> Parser<'input, 'names> {
         self.allow_struct = true;
         self.condition_purpose = ConditionPurpose::Ordinary;
         let frontier = self.enter_lexical()?;
-        let result = self.block_inner();
+        let result = self.enter_local_const_scope().and_then(|()| {
+            let result = self.block_inner();
+            self.leave_local_const_scope();
+            result
+        });
         self.restore_frontier(frontier);
         self.allow_struct = previous;
         self.condition_purpose = previous_purpose;
@@ -13881,6 +13901,13 @@ impl<'input, 'names> Parser<'input, 'names> {
                 self.local_macro_definition()?;
                 continue;
             }
+            if self.is("const")
+                && self.cursor.peek(1).is_some_and(|t| t.is_ident())
+                && self.cursor.peek(2).is_some_and(|t| t.matches(":"))
+            {
+                self.local_const_item()?;
+                continue;
+            }
             if self.is("mod") || self.is("use") || self.is("fn") || self.is("pub") {
                 return Err(self.unsupported("block-local items are unsupported"));
             }
@@ -14068,11 +14095,23 @@ impl<'input, 'names> Parser<'input, 'names> {
             return self.receiver_expression();
         }
         let generic_path = self.generic_path(false)?;
-        let name = generic_path
+        let mut name = generic_path
             .checked_path(self.names)
             .map_err(native_adapter::name_error)?;
         if let Some(head) = name.segments().first() {
-            self.reference_lexical(*head)?;
+            let local = self.reference_lexical_binding(*head)?;
+            // A local binding shadows items; otherwise an enclosing
+            // block-local const shadows module items of the same name.
+            if !local
+                && let Some(single) = name.single()
+                && name.anchor() == PathAnchor::Relative
+                && !self.cursor.current().matches("(")
+                && !self.cursor.current().matches("!")
+                && !self.cursor.current().matches("{")
+                && let Some(hidden) = self.local_const_path(single)?
+            {
+                name = hidden;
+            }
         }
         let value = if self.eat("!") {
             if !println_syntax || name.single().is_none() {

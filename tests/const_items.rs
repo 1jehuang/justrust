@@ -336,3 +336,54 @@ fn valid_const_calls_and_literal_panic_keep_stock_behavior() {
     }
     fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn block_local_const_items_match_stock() {
+    #[path = "support/closure_oracle.rs"]
+    mod closure_oracle;
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "block-local-consts",
+        &[
+            Case {
+                name: "scoping_shadowing_order_and_array_len",
+                source: r#"const C: u32 = 1;
+fn adler(a: u32, n: usize) -> u32 { const MOD: u32 = 65521; const CHUNK_SIZE: usize = 5552 * 4; let b = (n % CHUNK_SIZE) as u32; (a + b) % MOD }
+fn sibling() -> u32 { const A: u32 = B * 2; const B: u32 = 4; A }
+fn a() -> u32 { const K: u32 = 10; K }
+fn b() -> u32 { const K: u32 = 20; K }
+struct S;
+impl S { fn g(&self) -> u32 { const K: u32 = 6; K } }
+fn main() {
+    let early = L;
+    const L: u32 = 4;
+    const N: usize = 3;
+    let arr = [7u8; N];
+    let outer = { const C: u32 = 2; C };
+    println!("{} {} {} {} {} {} {} {} {}", C, outer, early, adler(70000, 22210), sibling(), a(), b(), S.g(), arr.len());
+}"#,
+                expect: Expect::Run("1 2 4 4481 8 10 20 6 3\n"),
+            },
+            Case {
+                name: "out_of_scope",
+                source: "fn main(){ { const C: u32 = 3; } println!(\"{}\", C); }",
+                expect: Expect::Invalid("E0425"),
+            },
+            Case {
+                name: "initializer_reads_local",
+                source: "fn main(){ let x = 7u32; const C: u32 = x; }",
+                expect: Expect::Invalid("E04"),
+            },
+            Case {
+                name: "duplicate_in_block",
+                source: "fn main(){ const C: u32 = 1; const C: u32 = 2; println!(\"{}\", C); }",
+                expect: Expect::Invalid("E0428"),
+            },
+            Case {
+                name: "let_binding_names_const",
+                source: "fn main(){ const C: u32 = 5; { let C = 9u32; println!(\"{}\", C); } }",
+                expect: Expect::Invalid("E0005"),
+            },
+        ],
+    );
+}

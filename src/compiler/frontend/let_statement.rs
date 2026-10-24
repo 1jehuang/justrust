@@ -5,6 +5,15 @@ impl<'input> Parser<'input, '_> {
     #[inline(never)]
     pub(super) fn let_statement(&mut self) -> Result<Stmt, ParseError> {
         let pattern = self.pattern_no_alternatives()?;
+        // A binding name that matches an in-scope const is a constant
+        // pattern in stock Rust, so `let C = 9;` is refutable (E0005).
+        if let Pattern::Binding { name, .. } = &pattern
+            && self.local_const_path(*name)?.is_some()
+        {
+            return Err(self.error(
+                "E0005: refutable pattern in local binding: binding name matches a block-local const",
+            ));
+        }
         if self.is("|") {
             return Err(self.error("top-level or-patterns are not allowed in let bindings; wrap the pattern in parentheses"));
         }
