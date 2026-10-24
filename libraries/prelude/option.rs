@@ -61,8 +61,12 @@ impl<T> Option<T> {
         }
     }
 
-    pub fn insert(&mut self, value: T) {
+    pub fn insert(&mut self, value: T) -> &mut T {
         *self = Option::Some(value);
+        match self {
+            Option::Some(stored) => stored,
+            Option::None => panic!("Option::insert did not store its value"),
+        }
     }
 
     pub fn or(self, other: Option<T>) -> Option<T> {

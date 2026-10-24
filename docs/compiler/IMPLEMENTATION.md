@@ -6,6 +6,11 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 
 ## Completed foundations, not full compatibility
 
+- [x] `Option::insert` returns the stored mutable reference and drops the old
+  value exactly once. `option_map::option_insert_returns_stored_mutable_value`
+  checks stock/native execution at workers 1 and 8, mutation through the result,
+  replacement drop order, alias exclusion and local-reference escape rejection.
+
 - [x] Ordinary one-parameter generic functions can consume inferred scalar
   references with reference-free results, using original root-binding evidence
   and replayed input constraints. `callable_reference_inputs` covers stock
