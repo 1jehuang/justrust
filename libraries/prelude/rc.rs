@@ -162,3 +162,27 @@ impl<'b, T> Drop for RefMut<'b, T> {
         }
     }
 }
+
+impl<'b, T: super::fmt::Debug> super::fmt::Debug for Ref<'b, T> {
+    fn fmt(&self, f: &mut super::fmt::Formatter) -> super::fmt::Result {
+        unsafe { super::fmt::Debug::fmt(&*self.value, f) }
+    }
+}
+
+impl<'b, T: super::fmt::Display> super::fmt::Display for Ref<'b, T> {
+    fn fmt(&self, f: &mut super::fmt::Formatter) -> super::fmt::Result {
+        unsafe { super::fmt::Display::fmt(&*self.value, f) }
+    }
+}
+
+impl<'b, T: super::fmt::Debug> super::fmt::Debug for RefMut<'b, T> {
+    fn fmt(&self, f: &mut super::fmt::Formatter) -> super::fmt::Result {
+        unsafe { super::fmt::Debug::fmt(&*self.value, f) }
+    }
+}
+
+impl<'b, T: super::fmt::Display> super::fmt::Display for RefMut<'b, T> {
+    fn fmt(&self, f: &mut super::fmt::Formatter) -> super::fmt::Result {
+        unsafe { super::fmt::Display::fmt(&*self.value, f) }
+    }
+}

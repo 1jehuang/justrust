@@ -67,6 +67,8 @@ pub(super) enum First<'e> {
     Value(&'e Expr),
     Borrow(ir::BorrowKind, &'e Expr),
     Place(ir::BorrowKind, &'e Place),
+    /// An already-checked `&Owner` carrier (index autoderef through `Deref`).
+    Lowered(ir::ExprId),
 }
 
 impl type_check::Checker<'_> {
@@ -496,6 +498,7 @@ impl type_check::Checker<'_> {
                         let (place, _, _) = self.checked_place(place)?;
                         self.borrow_expression(kind, place)?
                     }
+                    First::Lowered(id) => id,
                 };
                 let receiver = Some((first, None));
                 return self.finish_checked_call_mode(
@@ -637,10 +640,14 @@ impl type_check::Checker<'_> {
                 if !overloadable(&ty) {
                     return Ok(None);
                 }
+                let mut first = First::Borrow(ir::BorrowKind::Shared, base);
+                if let Some((target, carrier)) = self.index_autoderef(&ty, base, index)? {
+                    first = First::Lowered(carrier);
+                    ty = target;
+                }
                 let idx = self
                     .method_receiver_hint(index)?
                     .unwrap_or(ir::Ty::Int(ir::IntTy::Usize));
-                let first = First::Borrow(ir::BorrowKind::Shared, base);
                 let rest = std::slice::from_ref(index.as_ref());
                 let call =
                     self.operator_call(("ops", "Index", "index"), ty, Some(idx), first, rest)?;
@@ -648,7 +655,7 @@ impl type_check::Checker<'_> {
                 self.deref_overloaded_result(call).map(Some)
             }
             Expr::Index { base, index, .. } => {
-                let Some(ty) = self.method_receiver_hint(base)? else {
+                let Some(mut ty) = self.method_receiver_hint(base)? else {
                     return Ok(None);
                 };
                 if !overloadable(&ty) || matches!(ty, ir::Ty::Tuple(_)) {
@@ -658,7 +665,11 @@ impl type_check::Checker<'_> {
                     magnitude: *index as u128,
                     suffix: None,
                 });
-                let first = First::Borrow(ir::BorrowKind::Shared, base);
+                let mut first = First::Borrow(ir::BorrowKind::Shared, base);
+                if let Some((target, carrier)) = self.index_autoderef(&ty, base, &literal)? {
+                    first = First::Lowered(carrier);
+                    ty = target;
+                }
                 let call = self.operator_call(
                     ("ops", "Index", "index"),
                     ty,
@@ -671,6 +682,34 @@ impl type_check::Checker<'_> {
             }
             _ => Ok(None),
         }
+    }
+
+    /// Stock index autoderef through `Deref`: `guard[i]`/`boxed[i]` index the
+    /// first nominal target that has an `Index` impl. Returns the target type
+    /// and the explicit `*...` base, or `None` when the owner indexes directly.
+    fn index_autoderef(
+        &mut self,
+        owner: &ir::Ty,
+        base: &Expr,
+        index: &Expr,
+    ) -> Result<Option<(ir::Ty, ir::ExprId)>, String> {
+        if self.index_reference_hint(owner, index)?.is_some() {
+            return Ok(None);
+        }
+        let Some(target) = self.deref_target_hint(owner)? else {
+            return Ok(None);
+        };
+        if !overloadable(&target)
+            || matches!(target, ir::Ty::Tuple(_))
+            || self.index_reference_hint(&target, index)?.is_none()
+        {
+            return Ok(None);
+        }
+        let Some(carrier) = self.receiver_overloaded_deref(base, owner, ir::BorrowKind::Shared)?
+        else {
+            return Ok(None);
+        };
+        Ok(Some((target, carrier)))
     }
 
     /// `*call` for an overloaded place operator returning `&Target`.

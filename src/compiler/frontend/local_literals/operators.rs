@@ -253,20 +253,75 @@ impl Solver<'_, '_, '_> {
             }
             _ => return Ok(false),
         };
-        let trait_ref = ir::TraitRef {
-            declaration,
-            self_ty: receiver,
-            args: arguments.into(),
-        };
-        let Some((_, signature, _)) = plan.select_trait(
-            &trait_ref,
-            &method,
-            &[],
-            self.checker.facts(),
-            false,
-            &plan.budget,
-        )?
-        else {
+        let arguments: std::sync::Arc<[ir::Ty]> = arguments.into();
+        let mut receiver = receiver;
+        let mut selected = None;
+        // `guard[i]`/`boxed[i]`: stock autoderefs the indexed operand through
+        // `Deref` until an `Index` impl applies. Bounded by the receiver depth.
+        for _ in 0..8 {
+            let trait_ref = ir::TraitRef {
+                declaration,
+                self_ty: receiver.clone(),
+                args: arguments.clone(),
+            };
+            selected = plan.select_trait(
+                &trait_ref,
+                &method,
+                &[],
+                self.checker.facts(),
+                false,
+                &plan.budget,
+            )?;
+            if selected.is_some() || !matches!(kind, Kind::Index(_)) {
+                break;
+            }
+            let builtin = match &receiver {
+                ir::Ty::Ref { referent, .. } => Some(referent.as_ref().clone()),
+                _ => None,
+            };
+            let next = match builtin {
+                Some(next) => next,
+                None => {
+                    let (deref, deref_method) =
+                        self.checker.operator_trait("ops", "Deref", "deref")?;
+                    let deref_ref = ir::TraitRef {
+                        declaration: deref,
+                        self_ty: receiver.clone(),
+                        args: Vec::new().into(),
+                    };
+                    let Some((_, signature, _)) = plan.select_trait(
+                        &deref_ref,
+                        &deref_method,
+                        &[],
+                        self.checker.facts(),
+                        false,
+                        &plan.budget,
+                    )?
+                    else {
+                        break;
+                    };
+                    match signature.result {
+                        ir::Ty::Ref { referent, .. } => referent.as_ref().clone(),
+                        _ => break,
+                    }
+                }
+            };
+            if matches!(next, ir::Ty::Array { .. } | ir::Ty::Slice { .. }) {
+                let element = match &next {
+                    ir::Ty::Array { element, .. } | ir::Ty::Slice { element, .. } => {
+                        element.as_ref().clone()
+                    }
+                    _ => unreachable!(),
+                };
+                let usize = self.fixed(ir::Ty::Int(ir::IntTy::Usize))?;
+                self.unify(right.ok_or("index constraint omitted operand")?, usize)?;
+                let element = self.fixed(element)?;
+                self.unify(result, element)?;
+                return Ok(true);
+            }
+            receiver = next;
+        }
+        let Some((_, signature, _)) = selected else {
             return Err(self.user_error(
                 "E0369: no implementation of the canonical operator trait for these operand types",
             ));

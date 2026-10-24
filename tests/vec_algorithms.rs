@@ -177,6 +177,18 @@ println!(\"{} {:?}\",c.borrow().len(),c.borrow().last());}\n",
 }
 
 #[test]
+fn index_autoderefs_through_guards_and_boxes() {
+    compare(
+        "use std::cell::RefCell;\nfn mk()->Box<Vec<u32>>{Box::new(vec![5,6])}\n\
+fn main(){let c=RefCell::new(vec![3u32,4]);let x=c.borrow()[1];c.borrow_mut().push(x);let i=2;\
+let y=c.borrow()[i]+c.borrow()[0];c.borrow_mut().push(9);println!(\"{} {} {:?} {:?}\",x,y,c.borrow(),c.borrow());\
+let b:Box<Vec<u32>>=Box::new(vec![7,8]);println!(\"{} {}\",b[1],mk()[0]);}\n",
+        "4 7 [3, 4, 4, 9] [3, 4, 4, 9]\n8 5\n",
+        "index-autoderef",
+    );
+}
+
+#[test]
 fn rc_shares_ownership_and_drops_once() {
     compare(
         "use std::rc::Rc;\nstruct N{v:u32}\nimpl Drop for N{fn drop(&mut self){println!(\"drop {}\",self.v);}}\n\

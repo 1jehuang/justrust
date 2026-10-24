@@ -17,13 +17,22 @@ impl SourceInventory {
         loop {
             sr::depth(budget, depth)?;
             sr::work(budget, 1)?;
-            if let Expr::MethodCall { receiver, .. } = expr
+            let call_receiver = match expr {
+                Expr::MethodCall { receiver, .. } => Some((receiver.as_ref(), 10)),
+                // `guard()[i]`: index autoderef may call `Deref` on the owned
+                // call result, recorded at the base's receiver step.
+                Expr::Index { base, .. } | Expr::DynamicIndex { base, .. } => {
+                    Some((base.as_ref(), 12))
+                }
+                _ => None,
+            };
+            if let Some((receiver, tag)) = call_receiver
                 && type_check::genuine_call(receiver)
             {
-                let receiver_node = node.child(10, 0, budget)?;
+                let receiver_node = node.child(tag, 0, budget)?;
                 for step in 1..=deref_coercion::MAX_DEREF_STEPS {
                     self.operator_site(
-                        deref_coercion::site(receiver.as_ref() as *const Expr as usize, step),
+                        deref_coercion::site(receiver as *const Expr as usize, step),
                         &receiver_node,
                         budget,
                     )?;
