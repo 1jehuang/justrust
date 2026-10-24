@@ -87,7 +87,11 @@ crate policy; dependency crates retain their own policy. Disabled items and
 unexpanded macro templates are not linted as executable source.
 
 This is not general lint support: item/module lint attributes, lowering a lint
-level, and `warn(missing_debug_implementations)` remain unsupported. Regression
+level, and lints other than those below remain unsupported. Crate-root
+`warn`/`allow` of warning-only lints (currently
+`missing_debug_implementations`) is admitted because it cannot change stock
+acceptance; the native compiler does not emit the warning, and `deny`/`forbid`
+of such lints stay unsupported (`warning_only_crate_lints_keep_stock_acceptance`). Regression
 coverage is `crate_forbid_unsafe_code_checks_real_syntax_and_macro_output`,
 `unsafe_code_policy_is_source_authenticated_and_retained_in_file_views`, and
 `forbid_unsafe_code_inherits_into_files_but_not_dependency_crates`.

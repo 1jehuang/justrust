@@ -538,7 +538,7 @@ impl Filter<'_> {
             }
             let meta = if matches!(
                 raw.name.as_str(),
-                "doc" | "inline" | "repr" | "unsafe" | "no_std" | "forbid"
+                "doc" | "inline" | "repr" | "unsafe" | "no_std" | "forbid" | "warn" | "allow"
             ) {
                 parse_meta(&self.text[raw.range.clone()], raw.range.start).map_err(|e| {
                     if raw.name == "doc" && !e.limit {
@@ -629,6 +629,22 @@ impl Filter<'_> {
                     }
                 }
                 "no_std" if owner == Owner::Crate && matches!(meta.value, MetaValue::Word) => {}
+                // `warn`/`allow` of a lint whose only effect is a warning never
+                // change acceptance. Only crate-root levels of lints listed in
+                // WARNING_ONLY_LINTS are admitted; the native compiler does
+                // not emit warnings yet. `deny`/`forbid` of them would change
+                // acceptance and stay unsupported.
+                "warn" | "allow"
+                    if owner == Owner::Crate
+                        && attrs.iter().any(|attr| {
+                            attr.inner
+                                && attr.content.start <= meta.range.start
+                                && meta.range.end <= attr.content.end
+                        })
+                        && matches!(&meta.value, MetaValue::List(items)
+                            if !items.is_empty() && items.iter().all(|item|
+                                matches!(item.value, MetaValue::Word)
+                                    && WARNING_ONLY_LINTS.contains(&item.name.as_str()))) => {}
                 "test" | "ignore" | "should_panic" if owner == Owner::Function => {
                     self.test_attribute(&meta)?;
                     // Outside `cfg(test)` a test function is configured out.
@@ -1152,6 +1168,11 @@ fn valid_identity_metadata(meta: &Meta) -> bool {
         _ => false,
     }
 }
+
+/// Lints admitted at `warn`/`allow` level on the crate root. Each is
+/// allow-by-default or warn-by-default in stock rustc, has no deny-by-default
+/// group membership, and only ever produces warnings at these levels.
+const WARNING_ONLY_LINTS: &[&str] = &["missing_debug_implementations"];
 
 fn known_semantic_attribute(name: &str) -> bool {
     name.starts_with("rustc_")
