@@ -332,27 +332,49 @@ impl<V> PaidDeclTable<V> {
         {
             return Err("foreign source schema snapshot".into());
         }
-        match table_position(&self.values, id) {
-            Ok(position) => {
+        // Appends stay O(1). Out-of-order inserts are ordered once in
+        // `finish`, which keeps the last value for a repeated declaration.
+        match self.values.last_mut() {
+            Some(Some((key, slot))) if *key == id => {
                 budget.charge_work(1)?;
-                self.values[position] = Some((id, value));
+                *slot = value;
             }
-            Err(position) => {
+            _ => {
                 let needed = self
                     .values
                     .len()
                     .checked_add(1)
                     .ok_or("schema index overflow")?;
-                budget.charge_work(
-                    (self.values.len() - position)
-                        .checked_add(1)
-                        .ok_or("schema work overflow")?,
-                )?;
+                budget.charge_work(1)?;
                 grow(&mut self.values, &mut self.receipt, needed, budget)?;
-                self.values.insert(position, Some((id, value)));
+                self.values.push(Some((id, value)));
             }
         }
         self.snapshot = Some(id.snapshot);
+        Ok(())
+    }
+    fn finish(&mut self, budget: &ir::PlanBudget) -> Result<(), String> {
+        check_budget(budget)?;
+        let key = |slot: &Option<(ir::DeclId, V)>| slot.as_ref().map(|(id, _)| *id);
+        budget.charge_work(self.values.len())?;
+        if self.values.windows(2).all(|w| key(&w[0]) < key(&w[1])) {
+            return Ok(());
+        }
+        let n = self.values.len();
+        budget.charge_work(
+            n.checked_mul(usize::BITS as usize - n.leading_zeros() as usize)
+                .ok_or("schema work overflow")?,
+        )?;
+        self.values.sort_by_key(key);
+        let mut write = 0;
+        for read in 0..n {
+            if read + 1 < n && key(&self.values[read]) == key(&self.values[read + 1]) {
+                continue;
+            }
+            self.values.swap(write, read);
+            write += 1;
+        }
+        self.values.truncate(write);
         Ok(())
     }
 }
@@ -411,11 +433,12 @@ impl SourceSchemasBuilder {
             .insert(DeclSlot { id }, SourceDeclaration { info }, budget)
     }
     pub(super) fn seal_from_registry(
-        self,
+        mut self,
         registry: &super::DeclRegistry,
         budget: &ir::PlanBudget,
     ) -> Result<Arc<SourceSchemas>, String> {
         check_budget(budget)?;
+        self.finish_tables(budget)?;
         let snapshot = registry
             .declarations
             .first()
@@ -520,12 +543,21 @@ impl SourceSchemasBuilder {
         });
         Ok(())
     }
+    pub(super) fn finish_tables(&mut self, budget: &ir::PlanBudget) -> Result<(), String> {
+        check_receipt(self.functions.receipt.as_ref(), budget)?;
+        check_receipt(self.region_modes.receipt.as_ref(), budget)?;
+        check_receipt(self.source_regions.receipt.as_ref(), budget)?;
+        self.functions.finish(budget)?;
+        self.region_modes.finish(budget)?;
+        self.source_regions.finish(budget)
+    }
     fn seal(
-        self,
+        mut self,
         snapshot: ir::SnapshotId,
         budget: &ir::PlanBudget,
     ) -> Result<Arc<SourceSchemas>, String> {
         check_budget(budget)?;
+        self.finish_tables(budget)?;
         for receipt in [
             &self.functions.receipt,
             &self.region_modes.receipt,

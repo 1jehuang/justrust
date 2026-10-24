@@ -12,6 +12,7 @@ impl SourceSchemasBuilder {
         registry: &super::super::DeclRegistry,
         budget: &ir::PlanBudget,
     ) -> Result<(), String> {
+        self.finish_tables(budget)?;
         let mut replacements = Vec::new();
         for (id, _) in self.functions.values.iter().flatten() {
             budget.charge_work(1)?;
