@@ -8607,6 +8607,15 @@ impl<'a> Checker<'a> {
             if matches!(self.exprs[borrow.0].kind, ir::ExprKind::Call { .. }) {
                 continue;
             }
+            // A temporary guard receiver (`c.borrow_mut().push(..)`) is a block
+            // holding the guard whose tail is the DerefMut call.
+            if let ir::ExprKind::Block(block) = &self.exprs[borrow.0].kind
+                && block.tail.is_some_and(|tail| {
+                    matches!(self.exprs[tail.0].kind, ir::ExprKind::Call { .. })
+                })
+            {
+                continue;
+            }
             let ir::ExprKind::Borrow { timing, .. } = &mut self.exprs[borrow.0].kind else {
                 return Err("invalid implicit borrow argument".into());
             };

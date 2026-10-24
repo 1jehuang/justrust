@@ -167,6 +167,13 @@ let a=c.borrow();let b=l.v.borrow();println!(\"{} {}\",*a,*b);}\n",
         "8 10\n",
         "refcell-temp-assign",
     );
+    compare(
+        "use std::cell::RefCell;\n\
+fn main(){let c:RefCell<Vec<u32>>=RefCell::new(Vec::new());c.borrow_mut().push(3u32);c.borrow_mut().push(4);\
+println!(\"{} {:?}\",c.borrow().len(),c.borrow().last());}\n",
+        "2 Some(4)\n",
+        "refcell-temp-receiver",
+    );
 }
 
 #[test]
