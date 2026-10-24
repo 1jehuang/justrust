@@ -1,0 +1,146 @@
+[
+  {
+    "functions": 6,
+    "tool": "native",
+    "workers": 1,
+    "mode": "check",
+    "median_ms": 387.945753,
+    "min_ms": 364.44437,
+    "max_ms": 500.9702
+  },
+  {
+    "functions": 6,
+    "tool": "native",
+    "workers": 1,
+    "mode": "build",
+    "median_ms": 391.216614,
+    "min_ms": 364.086148,
+    "max_ms": 506.086906
+  },
+  {
+    "functions": 6,
+    "tool": "native",
+    "workers": 8,
+    "mode": "check",
+    "median_ms": 394.264774,
+    "min_ms": 363.953107,
+    "max_ms": 496.618896
+  },
+  {
+    "functions": 6,
+    "tool": "native",
+    "workers": 8,
+    "mode": "build",
+    "median_ms": 389.048617,
+    "min_ms": 357.050285,
+    "max_ms": 503.846859
+  },
+  {
+    "functions": 6,
+    "tool": "native",
+    "workers": 96,
+    "mode": "check",
+    "median_ms": 406.369161,
+    "min_ms": 359.923588,
+    "max_ms": 509.355356
+  },
+  {
+    "functions": 6,
+    "tool": "native",
+    "workers": 96,
+    "mode": "build",
+    "median_ms": 403.934344,
+    "min_ms": 369.551712,
+    "max_ms": 514.583302
+  },
+  {
+    "functions": 6,
+    "tool": "stock",
+    "workers": null,
+    "mode": "check",
+    "median_ms": 16.754956,
+    "min_ms": 15.655941,
+    "max_ms": 20.760866
+  },
+  {
+    "functions": 6,
+    "tool": "stock",
+    "workers": null,
+    "mode": "build",
+    "median_ms": 42.418834,
+    "min_ms": 34.879138,
+    "max_ms": 51.485623
+  },
+  {
+    "functions": 258,
+    "tool": "native",
+    "workers": 1,
+    "mode": "check",
+    "median_ms": 494.219336,
+    "min_ms": 490.69411,
+    "max_ms": 498.092561
+  },
+  {
+    "functions": 258,
+    "tool": "native",
+    "workers": 1,
+    "mode": "build",
+    "median_ms": 579.707893,
+    "min_ms": 569.274439,
+    "max_ms": 581.192068
+  },
+  {
+    "functions": 258,
+    "tool": "native",
+    "workers": 8,
+    "mode": "check",
+    "median_ms": 482.461787,
+    "min_ms": 477.366085,
+    "max_ms": 487.209233
+  },
+  {
+    "functions": 258,
+    "tool": "native",
+    "workers": 8,
+    "mode": "build",
+    "median_ms": 497.286716,
+    "min_ms": 490.441294,
+    "max_ms": 502.271658
+  },
+  {
+    "functions": 258,
+    "tool": "native",
+    "workers": 96,
+    "mode": "check",
+    "median_ms": 478.046038,
+    "min_ms": 472.278255,
+    "max_ms": 485.203177
+  },
+  {
+    "functions": 258,
+    "tool": "native",
+    "workers": 96,
+    "mode": "build",
+    "median_ms": 507.628082,
+    "min_ms": 501.763682,
+    "max_ms": 510.826534
+  },
+  {
+    "functions": 258,
+    "tool": "stock",
+    "workers": null,
+    "mode": "check",
+    "median_ms": 29.074964,
+    "min_ms": 26.215138,
+    "max_ms": 30.588238
+  },
+  {
+    "functions": 258,
+    "tool": "stock",
+    "workers": null,
+    "mode": "build",
+    "median_ms": 63.998918,
+    "min_ms": 60.808,
+    "max_ms": 66.215892
+  }
+]
