@@ -4938,6 +4938,24 @@ impl<'a> Checker<'a> {
                     })
                 }
                 Some(ir::Ty::Ref { referent, .. }) => match referent.as_ref() {
+                    // `v: &Vec<T>`: vec_range_view peels the reference first.
+                    ir::Ty::Struct(value)
+                        if self.is_prelude_vec_struct(value)
+                            && matches!(base.as_ref(), Expr::Var(_) | Expr::Field { .. }) =>
+                    {
+                        let element = value
+                            .def()
+                            .type_args
+                            .first()
+                            .cloned()
+                            .ok_or("prelude Vec without an element argument")?;
+                        Some(ir::Ty::Ref {
+                            kind: ir::BorrowKind::Shared,
+                            referent: std::sync::Arc::new(ir::Ty::Slice {
+                                element: std::sync::Arc::new(element),
+                            }),
+                        })
+                    }
                     ir::Ty::Array { element, .. } => Some(ir::Ty::Ref {
                         kind: ir::BorrowKind::Shared,
                         referent: std::sync::Arc::new(ir::Ty::Slice {
@@ -10147,7 +10165,10 @@ impl<'a> Checker<'a> {
                 };
                 Ok::<_, String>((pattern, coverage, body, useful, guard))
             })();
-            if arm.guard.is_some()
+            // Every expanded row of one source or-arm reuses the first row's
+            // checked guard/body: a body checked once per row would record its
+            // original calls more than once.
+            if group_rows[group] > 1
                 && shared[group].is_none()
                 && let Ok((_, _, body, _, guard)) = &arm_result
             {

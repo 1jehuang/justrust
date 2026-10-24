@@ -1083,3 +1083,49 @@ fn float_from_str_matches_stock() {
         ],
     );
 }
+
+/// A closure parameter typed by a projection (`<T as FromStr>::Err`) whose
+/// normal form is a source struct, with `T` known only from the annotation.
+#[test]
+fn closure_parameter_projection_to_struct_matches_stock() {
+    use closure_oracle::{Case, Expect};
+    parse_oracle(
+        "closure-projection-struct",
+        &[
+            Case {
+                name: "parse_map_err_question_mark",
+                source: r#"fn f(s: String) -> Result<f64, String> {
+    let n: f64 = s.parse().map_err(|_| format!("bad {}", s))?;
+    Ok(n)
+}
+fn g(s: &str) -> Result<bool, u8> { let b: bool = s.parse().map_err(|_| 7u8)?; Ok(b) }
+fn main() {
+    println!("{:?} {:?}", f("2.5".to_string()), f("x".to_string()));
+    println!("{:?} {:?}", g("true"), g("nope"));
+    let r: Result<i32, u8> = "12".parse().map_err(|_| 0u8);
+    println!("{:?}", r);
+}"#,
+                expect: Expect::Run("Ok(2.5) Err(\"bad x\")\nOk(true) Err(7)\nOk(12)\n"),
+            },
+            Case {
+                name: "user_trait_struct_projection",
+                source: r#"#[derive(Debug)]
+struct MyErr;
+trait Q: Sized { type Err; fn q(s: &str) -> Result<Self, Self::Err>; }
+impl Q for i32 { type Err = MyErr; fn q(s: &str) -> Result<i32, MyErr> { if s.is_empty() { Err(MyErr) } else { Ok(7) } } }
+fn get<T: Q>(s: &str) -> Result<T, T::Err> { T::q(s) }
+fn main() {
+    let a: Result<i32, u8> = get("x").map_err(|_| 0u8);
+    let b: Result<i32, u8> = get("").map_err(|_e| 9u8);
+    println!("{:?} {:?}", a, b);
+}"#,
+                expect: Expect::Run("Ok(7) Err(9)\n"),
+            },
+            Case {
+                name: "closure_param_used_as_wrong_type",
+                source: r#"fn bad(s: &str) -> Result<i32, u8> { let n: i32 = s.parse().map_err(|e: u8| e)?; Ok(n) } fn main() {}"#,
+                expect: Expect::Invalid("E0271"),
+            },
+        ],
+    );
+}

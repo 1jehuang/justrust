@@ -90,3 +90,40 @@ fn main() { println!("live"); }"#,
         ],
     );
 }
+
+/// An or-arm split into rows (range | literal, binding rows) checks its body
+/// once: each source call is recorded a single time and runs once.
+#[test]
+fn split_or_arm_bodies_with_calls_match_stock() {
+    oracle::check(
+        "or-arm-calls",
+        &[
+            Case {
+                name: "range_and_literal_rows_with_calls",
+                source: r#"fn f(c: char, v: &mut Vec<char>) -> usize {
+    match c {
+        '0'..='9' | '.' => { v.push(c); let s: String = v.iter().collect(); s.len() }
+        'a' | 'b' => { v.clear(); v.len() }
+        _ => 99,
+    }
+}
+fn main() {
+    let mut v = Vec::new();
+    let a = f('1', &mut v);
+    let b = f('.', &mut v);
+    let c = f('a', &mut v);
+    let d = f('z', &mut v);
+    println!("{} {} {} {} {}", a, b, c, d, v.len());
+}"#,
+                expect: Expect::Run("1 2 0 99 0\n"),
+            },
+            Case {
+                name: "binding_rows_with_format_calls",
+                source: r#"enum T { A(i32), B(i32), C }
+fn f(t: T) -> String { match t { T::A(x) | T::B(x) => format!("v{}", x + 1), T::C => String::from("c") } }
+fn main() { println!("{} {} {}", f(T::A(3)), f(T::B(4)), f(T::C)); }"#,
+                expect: Expect::Run("v4 v5 c\n"),
+            },
+        ],
+    );
+}

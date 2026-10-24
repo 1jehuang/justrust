@@ -48,7 +48,7 @@ impl Checker<'_> {
         let mut output = Vec::with_capacity(arms.len());
         let mut pending = arms.into_iter().zip(groups.iter().copied()).peekable();
         while let Some((first, group)) = pending.next() {
-            if first.guard.is_none() || pending.peek().is_none_or(|(_, next)| *next != group) {
+            if pending.peek().is_none_or(|(_, next)| *next != group) {
                 output.push(first);
                 continue;
             }

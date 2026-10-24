@@ -232,6 +232,8 @@ pub(in crate::compiler::frontend::type_check) fn finalize_callable<'a: 's, 'b: '
             let signature = solver.realized_source_signature(declaration, receiver)?;
             // Signature terms may expose a further exact nominal demand. They
             // cannot be turned into executable parameters until it is read.
+            // Closure parameter projections likewise (see `finalize`).
+            solver.probe_closure_parameters()?;
             match preparation_status(&solver, inputs)? {
                 blocked @ Preparation::Blocked { .. } => Ok(PreparedHints::Blocked(blocked)),
                 Preparation::Solved(_) => {
@@ -351,7 +353,17 @@ pub(super) fn finalize<'a: 's, 'b: 's, 's>(
     let solver = solve_body(checker, block, expected, Some(inputs))?;
     match preparation_status(&solver, inputs)? {
         blocked @ Preparation::Blocked { .. } => Ok(PreparedHints::Blocked(blocked)),
-        Preparation::Solved(_) => finalized_hints(solver).map(PreparedHints::Ready),
+        Preparation::Solved(_) => {
+            // A closure parameter may be a projection (`<T as FromStr>::Err`)
+            // whose normal form is a source nominal first seen here. Reading
+            // its representation records that exact graph demand; block on it
+            // instead of reporting the parameter as uninferable.
+            solver.probe_closure_parameters()?;
+            match preparation_status(&solver, inputs)? {
+                blocked @ Preparation::Blocked { .. } => Ok(PreparedHints::Blocked(blocked)),
+                Preparation::Solved(_) => finalized_hints(solver).map(PreparedHints::Ready),
+            }
+        }
     }
 }
 
@@ -452,6 +464,25 @@ fn preparation_status(
 }
 
 impl<'s> Solver<'_, '_, 's> {
+    /// Resolve every finalized closure parameter once, discarding the result.
+    /// Resolution through a projection's representation records any source
+    /// nominal it needs as a missing graph input (`record_missing_nominal`),
+    /// so the following `preparation_status` blocks on that exact demand.
+    /// Unknown parameters stay unknown; `closure_hints` diagnoses them.
+    fn probe_closure_parameters(&self) -> Result<(), String> {
+        for (_, term) in &self.closure_terms {
+            self.checker.infer_work(0)?;
+            let Domain::Callable(callable) = self.domain(*term) else {
+                continue;
+            };
+            for parameter in callable.params {
+                let _ = self.resolve(parameter, 0)?;
+            }
+            let _ = self.resolve(callable.result, 0)?;
+        }
+        Ok(())
+    }
+
     fn pending_nominals(&self) -> Result<Arc<[Demand]>, String> {
         let missing = self.missing_nominals.borrow();
         self.checker.infer_storage(missing.len())?;
