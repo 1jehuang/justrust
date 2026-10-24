@@ -2082,6 +2082,12 @@ pub struct ValidatedTraitWorld {
     owned_callables: std::collections::HashMap<DeclId, Vec<DeclId>>,
     /// Source default provider to the trait item positions naming it.
     default_item_index: std::collections::HashMap<DeclId, Vec<usize>>,
+    /// First header position of each trait, item, impl and callable
+    /// declaration, so header lookups are not linear scans.
+    trait_header_index: DeclIndex,
+    item_header_index: DeclIndex,
+    impl_header_index: DeclIndex,
+    callable_header_index: DeclIndex,
     /// Whole-world impl overlap at build time; the graph defers it to
     /// per-impl coherence nodes.
     eager_coherence: bool,
@@ -2264,8 +2270,32 @@ impl ValidatedTraitWorld {
             trait_impl_index: std::collections::HashMap::new(),
             owned_callables: std::collections::HashMap::new(),
             default_item_index: std::collections::HashMap::new(),
+            trait_header_index: DeclIndex::default(),
+            item_header_index: DeclIndex::default(),
+            impl_header_index: DeclIndex::default(),
+            callable_header_index: DeclIndex::default(),
             eager_coherence,
         };
+        for (position, h) in world.headers.traits.iter().enumerate() {
+            world
+                .trait_header_index
+                .note(budget, h.declaration, position)?;
+        }
+        for (position, h) in world.headers.items.iter().enumerate() {
+            world
+                .item_header_index
+                .note(budget, h.declaration, position)?;
+        }
+        for (position, h) in world.headers.impls.iter().enumerate() {
+            world
+                .impl_header_index
+                .note(budget, h.declaration, position)?;
+        }
+        for (position, h) in world.headers.callables.iter().enumerate() {
+            world
+                .callable_header_index
+                .note(budget, h.declaration, position)?;
+        }
         for (position, h) in world.headers.impls.iter().enumerate() {
             charged(budget, budget.charge_work(1))?;
             world
@@ -2476,11 +2506,8 @@ impl ValidatedTraitWorld {
         Ok(left.ordered_params().eq(right.ordered_params()))
     }
     fn trait_header(&self, id: DeclId) -> Result<&TraitHeader> {
-        for h in self.headers.traits.iter() {
-            charged(&self.budget, self.budget.charge_work(1))?;
-            if h.declaration == id {
-                return Ok(h);
-            }
+        if let Some(position) = self.trait_header_index.get(&self.budget, id)? {
+            return Ok(&self.headers.traits[position]);
         }
         Err(FactsError::invalid(
             &self.budget,
@@ -2488,11 +2515,8 @@ impl ValidatedTraitWorld {
         ))
     }
     fn item_header(&self, id: DeclId) -> Result<&TraitItemHeader> {
-        for h in self.headers.items.iter() {
-            charged(&self.budget, self.budget.charge_work(1))?;
-            if h.declaration == id {
-                return Ok(h);
-            }
+        if let Some(position) = self.item_header_index.get(&self.budget, id)? {
+            return Ok(&self.headers.items[position]);
         }
         Err(FactsError::invalid(
             &self.budget,
@@ -2509,11 +2533,8 @@ impl ValidatedTraitWorld {
         {
             return Ok(&self.normalized_callables[*position]);
         }
-        for h in self.headers.callables.iter() {
-            charged(&self.budget, self.budget.charge_work(1))?;
-            if h.declaration == id {
-                return Ok(h);
-            }
+        if let Some(position) = self.callable_header_index.get(&self.budget, id)? {
+            return Ok(&self.headers.callables[position]);
         }
         Err(FactsError::invalid(
             &self.budget,
@@ -5931,12 +5952,10 @@ impl ValidatedTraitWorld {
             }
             let owner = self.info(callable.declaration)?.owner;
             let mut implementation = None;
-            for h in self.headers.impls.iter() {
-                charged(&self.budget, self.budget.charge_work(1))?;
-                if Some(h.declaration) == owner {
-                    implementation = Some(h);
-                    break;
-                }
+            if let Some(owner) = owner
+                && let Some(position) = self.impl_header_index.get(&self.budget, owner)?
+            {
+                implementation = Some(&self.headers.impls[position]);
             }
             if let Some(h) = implementation {
                 for p in h.predicates.iter() {
@@ -8345,8 +8364,8 @@ impl TraitCx for ValidatedTraitWorld {
             arguments,
         } = &evidence.0.origin
         {
-            for h in self.headers.impls.iter() {
-                charged(&self.budget, self.budget.charge_work(1))?;
+            let positions = self.impl_header_index.get(&self.budget, *declaration)?;
+            for h in positions.iter().map(|&p| &self.headers.impls[p]) {
                 if h.declaration == *declaration {
                     for (item, body) in h.items.iter() {
                         charged(&self.budget, self.budget.charge_work(1))?;
