@@ -1978,8 +1978,8 @@ impl BodySubstitutionProof {
         self.generated.validate(source, facts, budget)?;
         Ok(())
     }
-    /// Recover only tuple/reference families whose original parameter and
-    /// actual are bound by this exact verified template substitution. This
+    /// Recover shared scalar and aggregate families whose original parameter
+    /// and actual are bound by this exact verified template substitution. This
     /// describes cell shape, never a loan origin or a lifetime relation.
     pub(in crate::compiler) fn original_family_cover_local(
         &self,
@@ -2019,6 +2019,51 @@ impl BodySubstitutionProof {
         } else {
             return Ok(None);
         };
+        fn shared_shape(ty: &Ty, budget: &PlanBudget, depth: usize) -> Result<bool, String> {
+            budget.check_depth(depth)?;
+            budget.charge_work(1)?;
+            match ty {
+                Ty::Unit
+                | Ty::Never
+                | Ty::Bool
+                | Ty::Char
+                | Ty::Int(_)
+                | Ty::Float(_)
+                | Ty::Str => Ok(true),
+                Ty::Ref {
+                    kind: BorrowKind::Shared,
+                    referent,
+                } => shared_shape(referent, budget, depth + 1),
+                Ty::Slice { element } | Ty::Array { element, .. } => {
+                    shared_shape(element, budget, depth + 1)
+                }
+                Ty::Tuple(fields) => {
+                    for field in fields.iter() {
+                        if !shared_shape(field, budget, depth + 1)? {
+                            return Ok(false);
+                        }
+                    }
+                    Ok(true)
+                }
+                Ty::Struct(value) => {
+                    for field in value.def().fields.iter() {
+                        if !shared_shape(&field.ty, budget, depth + 1)? {
+                            return Ok(false);
+                        }
+                    }
+                    Ok(true)
+                }
+                Ty::Closure(value) => {
+                    for field in value.captures() {
+                        if !shared_shape(field, budget, depth + 1)? {
+                            return Ok(false);
+                        }
+                    }
+                    Ok(true)
+                }
+                _ => Ok(false),
+            }
+        }
         fn expand(
             original: &Ty,
             actual: &Ty,
@@ -2050,6 +2095,11 @@ impl BodySubstitutionProof {
                     {
                         return Err("original family cover changed its canonical actual".into());
                     }
+                    if matches!(actual, Ty::Struct(_) | Ty::Closure(_) | Ty::Tuple(_))
+                        && shared_shape(actual, budget, depth + 1)?
+                    {
+                        return Ok(Some(actual.clone()));
+                    }
                     let mut leaf = actual;
                     let mut references = 0;
                     while let Ty::Ref {
@@ -2071,6 +2121,34 @@ impl BodySubstitutionProof {
                         return Ok(None);
                     }
                     Ok(Some(actual.clone()))
+                }
+                (Ty::Struct(before), Ty::Struct(after))
+                    if before.def().source_decl == after.def().source_decl
+                        && before.def().fields.len() == after.def().fields.len() =>
+                {
+                    let mut changed = false;
+                    for (before, after) in before.def().fields.iter().zip(after.def().fields.iter())
+                    {
+                        if before.name != after.name {
+                            return Err(
+                                "original family cover changed nominal field identity".into()
+                            );
+                        }
+                        changed |= expand(&before.ty, &after.ty, proof, facts, budget, depth + 1)?
+                            .is_some();
+                    }
+                    Ok((changed && shared_shape(actual, budget, depth + 1)?)
+                        .then(|| actual.clone()))
+                }
+                (Ty::Slice { element: before }, Ty::Slice { element: after }) => {
+                    let Some(element) = expand(before, after, proof, facts, budget, depth + 1)?
+                    else {
+                        return Ok(None);
+                    };
+                    budget.retain_bytes(std::mem::size_of::<Ty>())?;
+                    Ok(Some(Ty::Slice {
+                        element: Arc::new(element),
+                    }))
                 }
                 (Ty::Tuple(before), Ty::Tuple(after)) if before.len() == after.len() => {
                     let mut changed = false;
@@ -2104,7 +2182,7 @@ impl BodySubstitutionProof {
                         kind: after_kind,
                         referent: after,
                     },
-                ) if *before_kind == BorrowKind::Shared && *after_kind == BorrowKind::Shared => {
+                ) if before_kind == after_kind => {
                     let Some(referent) = expand(before, after, proof, facts, budget, depth + 1)?
                     else {
                         return Ok(None);

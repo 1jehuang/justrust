@@ -580,6 +580,33 @@ fn reference_iterator_collection_matches_stock() {
 }
 
 #[test]
+fn reference_iterator_borrow_rules_match_stock() {
+    #[path = "support/closure_oracle.rs"]
+    mod closure_oracle;
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "reference-iterator-borrows",
+        &[
+            Case {
+                name: "nonstatic_references",
+                source: "fn main(){let a=3i32;let b=8i32;let input=[&a,&b];let values:Vec<i32>=input.iter().map(|x|**x+1).collect();println!(\"{:?}\",values);}",
+                expect: Expect::Run("[4, 9]\n"),
+            },
+            Case {
+                name: "live_iterator_blocks_backing_mutation",
+                source: "fn main(){let a=3i32;let b=8i32;let mut input=[&a,&b];let iter=input.iter();input[0]=&b;let values:Vec<i32>=iter.map(|x|**x).collect();println!(\"{:?}\",values);}",
+                expect: Expect::Invalid("E0506"),
+            },
+            Case {
+                name: "iterator_cannot_outlive_elements",
+                source: "fn main(){let iter={let a=3i32;let input=[&a];input.iter()};let values:Vec<i32>=iter.map(|x|**x).collect();println!(\"{:?}\",values);}",
+                expect: Expect::Invalid("E0597"),
+            },
+        ],
+    );
+}
+
+#[test]
 fn generic_reference_slice_length_matches_stock() {
     #[path = "support/closure_oracle.rs"]
     mod closure_oracle;

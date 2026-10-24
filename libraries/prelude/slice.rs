@@ -4,24 +4,17 @@
 
 /// Shared iteration retains the owner's borrow, not an unchecked pointer loan.
 pub struct Iter<'a, T> {
-    pointer: *const T,
-    loan: &'a (),
+    values: &'a [T],
     len: usize,
     index: usize,
 }
 
 impl<'a, T> Iter<'a, T> {
-    /// A zero-sized loan retains the owner lifetime without inventing an
-    /// initialized T for an empty iterator. The data pointer stays separate.
+    /// Retain the typed slice so element references keep their original
+    /// carrier provenance, including when T itself contains a reference.
     pub(super) fn new(values: &'a [T]) -> Iter<'a, T> {
         let len = values.len();
-        let pointer = if len == 0usize {
-            super::mem::align_of::<T>() as *const T
-        } else {
-            &values[0usize] as *const T
-        };
-        let loan_pointer = pointer as *const ();
-        Iter { pointer, loan: unsafe { &*loan_pointer }, len, index: 0usize }
+        Iter { values, len, index: 0usize }
     }
 }
 
@@ -39,9 +32,7 @@ impl<'a, T> super::iter::Iterator for Iter<'a, T> {
         if self.index < self.len {
             let index = self.index;
             self.index += 1usize;
-            let base = self.pointer;
-            let p = (base as usize + index * super::mem::size_of::<T>()) as *const T;
-            super::option::Option::Some(unsafe { &*p })
+            super::option::Option::Some(&self.values[index])
         } else {
             super::option::Option::None
         }
@@ -52,9 +43,7 @@ impl<'a, T> super::iter::DoubleEndedIterator for Iter<'a, T> {
     fn next_back(&mut self) -> super::option::Option<&'a T> {
         if self.index < self.len {
             self.len -= 1usize;
-            let base = self.pointer;
-            let p = (base as usize + self.len * super::mem::size_of::<T>()) as *const T;
-            super::option::Option::Some(unsafe { &*p })
+            super::option::Option::Some(&self.values[self.len])
         } else {
             super::option::Option::None
         }

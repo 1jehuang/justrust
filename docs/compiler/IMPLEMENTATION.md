@@ -2115,6 +2115,14 @@ with escaping filtered-reference rejection covered by
 `filtered_reference_items_preserve_their_source_loans`. This promotes that
 single full-program fixture, not full Rust compatibility.
 
+Shared slice iterators retain their typed backing slice rather than erasing
+element-reference provenance through a raw pointer. Exact template substitution
+can supply shared aggregate covers, and slice roots use only their issued
+summary cells. `typed_slice_authority::reference_iterator_collection_matches_stock`
+and `reference_iterator_borrow_rules_match_stock` exercise collection and source
+loan preservation at workers 1 and 8. Mutable-reference slice elements and the
+generic trait-owner slice inference boundary remain unsupported.
+
 The source-type-alias checkpoint passes all 1,649 hosted tests in 86 binaries
 (`20261017-043356389-4183342`), all-target checking
 (`20261017-043354163-4183206`), strict all-target lint

@@ -444,6 +444,11 @@ fn read_cell_cover(
                             }
                         }
                     }
+                    Ty::Slice { element } => {
+                        if !child(&[Projection::DynamicIndex(LocalId(usize::MAX))], element)? {
+                            return Ok(false);
+                        }
+                    }
                     Ty::Struct(value) => {
                         for (index, field) in value.def().fields.iter().enumerate() {
                             if !child(&[Projection::Field(index)], &field.ty)? {
@@ -480,13 +485,12 @@ fn read_cell_cover(
             storage: target.place.clone(),
             channel: channel.clone(),
         };
-        let Some(&index) = cell_index.get(&key) else {
-            return Ok(None);
-        };
-        let mut output = Vec::new();
-        checked_vec_growth(&mut output, budget)?;
-        output.push(index);
-        return Ok(Some(output));
+        if let Some(&index) = cell_index.get(&key) {
+            let mut output = Vec::new();
+            checked_vec_growth(&mut output, budget)?;
+            output.push(index);
+            return Ok(Some(output));
+        }
     }
     if *channel != CellChannel::ReferenceValue {
         return Ok(None);
@@ -521,10 +525,18 @@ fn read_cell_cover(
     let Ok(ty) = ir::projected_ty(ty, &target.place.projection) else {
         return Ok(None);
     };
+    // A slice root can conservatively designate any of its elements. Only
+    // its issued summary cell supplies a cover, never a matching layout or
+    // a fabricated element origin. Other exact targets remain exact.
+    if target.precision == TargetPrecision::Exact && !matches!(ty, Ty::Slice { .. }) {
+        return Ok(None);
+    }
     budget.reserve_bytes(mul(target.place.projection.len(), size_of::<Projection>())?)?;
     let mut storage = target.place.clone();
     let mut output = Vec::new();
-    if !walk(ty, &mut storage, cell_index, &mut output, 0, budget)? {
+    if !walk(ty, &mut storage, cell_index, &mut output, 0, budget)?
+        || (target.precision == TargetPrecision::Exact && output.is_empty())
+    {
         return Ok(None);
     }
     Ok(Some(output))
@@ -608,7 +620,16 @@ fn resolve_cells<'a>(
                     CanonicalRoot::Owned(local) => (*local, None),
                     CanonicalRoot::ParameterReferent(local, location) => (*local, Some(location)),
                 };
-                let Some(mut ty) = original_locals.get(local.0) else {
+                // Only the compiler-issued slice summary may use the exact
+                // template substitution's additional aggregate cover. Runtime
+                // indices still require the original source shape and cannot
+                // gain disjointness from a concrete instantiation.
+                let locals = if *step == Projection::DynamicIndex(LocalId(usize::MAX)) {
+                    cover_locals
+                } else {
+                    original_locals
+                };
+                let Some(mut ty) = locals.get(local.0) else {
                     return Err(Exhausted);
                 };
                 if let Some(location) = location {
@@ -2409,7 +2430,8 @@ impl<'a, 'b> CarrierBuilder<'a, 'b> {
         );
         // Additional cover structure is issued only by the exact original
         // template substitution. Keep original_locals unchanged for pointer
-        // provenance, dynamic indexing and all other source-shape checks.
+        // provenance, runtime dynamic indexing and other source-shape checks.
+        // Only issued summary projections may use an authenticated cover.
         let family_cover_locals = if let Some(proof) = &f.body_substitution {
             let authority = facts.validated().ok_or(Exhausted)?;
             proof
@@ -6586,6 +6608,79 @@ impl Plan {
 mod parameter_equality_tests {
     use super::*;
     use crate::compiler::{frontend, ownership};
+
+    #[test]
+    fn slice_summary_cover_requires_the_issued_cell_and_original_domain() {
+        let element = Ty::Ref {
+            kind: BorrowKind::Shared,
+            referent: Arc::new(Ty::Int(ir::IntTy::I32)),
+        };
+        let locals = vec![Ty::Ref {
+            kind: BorrowKind::Shared,
+            referent: Arc::new(Ty::Slice {
+                element: Arc::new(element.clone()),
+            }),
+        }];
+        let root = CanonicalRoot::ParameterReferent(
+            LocalId(0),
+            fixed_location(ReferencePosition { depth: 0 }),
+        );
+        let target = Target {
+            place: CanonicalPlace {
+                root: root.clone(),
+                projection: vec![],
+            },
+            precision: TargetPrecision::Exact,
+            authority: vec![],
+        };
+        let key = CellKey {
+            storage: CanonicalPlace {
+                root,
+                projection: vec![Projection::DynamicIndex(LocalId(usize::MAX))],
+            },
+            channel: CellChannel::ReferenceValue,
+        };
+        let mut cells = HashMap::from([(key.clone(), 17)]);
+        let read = |locals: &[Ty], cells: &HashMap<CellKey, usize>, target: &Target| {
+            read_cell_cover(
+                locals,
+                cells,
+                target,
+                &CellChannel::ReferenceValue,
+                &mut Budget::new(1_000_000),
+            )
+            .unwrap()
+        };
+        assert_eq!(read(&locals, &cells, &target), Some(vec![17]));
+        cells.clear();
+        assert_eq!(read(&locals, &cells, &target), None);
+        let mut forged = key.clone();
+        forged.storage.projection = vec![Projection::ConstantIndex(0)];
+        cells.insert(forged, 17);
+        assert_eq!(read(&locals, &cells, &target), None);
+        cells.insert(key, 17);
+        let arrays = vec![Ty::Ref {
+            kind: BorrowKind::Shared,
+            referent: Arc::new(Ty::Array {
+                element: Arc::new(element),
+                len: 1,
+            }),
+        }];
+        assert_eq!(read(&arrays, &cells, &target), None);
+        let scalars = vec![Ty::Ref {
+            kind: BorrowKind::Shared,
+            referent: Arc::new(Ty::Slice {
+                element: Arc::new(Ty::Int(ir::IntTy::I32)),
+            }),
+        }];
+        assert_eq!(read(&scalars, &cells, &target), None);
+        let mut foreign = target.clone();
+        foreign.place.root = CanonicalRoot::ParameterReferent(
+            LocalId(1),
+            fixed_location(ReferencePosition { depth: 0 }),
+        );
+        assert_eq!(read(&locals, &cells, &foreign), None);
+    }
 
     pub(super) fn source_template(source: &str, index: usize) -> cfg::TemplateCfg {
         let program = frontend::parse(source).unwrap();
