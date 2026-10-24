@@ -24,8 +24,15 @@ impl Checker<'_> {
         } else {
             checked_local_ty(owner, self.signatures)?
         };
-        let actuals = self.resolved_method_actuals(&owner, name, type_args, arguments, None)?;
         let plan = self.signatures.plan()?;
+        if let Some(application) =
+            self.argument_selected_trait_application(&owner, name, type_args, arguments)?
+        {
+            return Ok(plan
+                .select_trait(&application, name, &[], self.facts(), false, &plan.budget)?
+                .map(|(_, signature, _)| signature.result));
+        }
+        let actuals = self.resolved_method_actuals(&owner, name, type_args, arguments, None)?;
         let (target, signature, _) = plan.select_associated(
             &owner,
             name,

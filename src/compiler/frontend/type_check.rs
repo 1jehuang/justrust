@@ -1,6 +1,8 @@
 //! Source checking, local inference and checked body construction.
 use super::*;
 
+#[path = "type_check/argument_trait_selection.rs"]
+mod argument_trait_selection;
 #[path = "type_check/associated_hint.rs"]
 mod associated_hint;
 #[path = "type_check/binary_expression.rs"]
@@ -8759,7 +8761,14 @@ impl<'a> Checker<'a> {
             _ => return Err("not an associated call".into()),
         };
         self.infer_storage(type_args.len() + args.len() + 1)?;
-        let actuals = if matches!(expression, Expr::AssociatedCall { .. }) {
+        let argument_application = if matches!(expression, Expr::AssociatedCall { .. }) {
+            self.argument_selected_trait_application(&owner, name, type_args, args)?
+        } else {
+            None
+        };
+        let actuals = if argument_application.is_some() {
+            Vec::new()
+        } else if matches!(expression, Expr::AssociatedCall { .. }) {
             self.resolved_method_actuals(&owner, name, type_args, args, expected)?
         } else if let Expr::TraitCall { trait_path, .. } = expression {
             let trait_ref = plan.resolve_trait_use(
@@ -8777,7 +8786,17 @@ impl<'a> Checker<'a> {
                 .map(|t| self.checked_type_actual(t))
                 .collect::<Result<Vec<_>, _>>()?
         };
-        let (target, signature, mode) = if let Expr::TraitCall { trait_path, .. } = expression {
+        let (target, signature, mode) = if let Some(application) = &argument_application {
+            plan.select_trait(
+                application,
+                name,
+                &actuals,
+                self.facts(),
+                false,
+                &plan.budget,
+            )?
+            .ok_or("E0277: trait obligation not proven")?
+        } else if let Expr::TraitCall { trait_path, .. } = expression {
             let trait_ref = plan.resolve_trait_use(
                 &owner,
                 trait_path,

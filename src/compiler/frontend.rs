@@ -36,6 +36,7 @@ mod c_abi;
 mod carrier_regions;
 mod char_literal;
 pub(super) mod closures;
+mod extern_crate;
 pub use closures::shape_seal::ClosureShapeSeal;
 #[cfg(test)]
 mod trait_method_source_tests;
@@ -6202,6 +6203,9 @@ pub struct Program {
     /// (`__justrust_extern_<name>`). `<name>::` paths resolve into them and
     /// `crate` inside one names its mount.
     pub extern_mounts: Vec<ModuleId>,
+    /// Crate-root `extern crate core|std as alias;` items: (crate root, alias
+    /// path). They join that crate's extern prelude.
+    extern_crate_aliases: Arc<[(ModuleId, AstPath)]>,
     // Resolver-issued source authority. Shared unchanged by public AST clones.
     associated_bound_sources: Arc<[AssociatedBoundSource]>,
     /// Immutable parser/resolver output, never a mutable callable side slot.
@@ -6279,6 +6283,7 @@ struct ProgramDeclarations {
     prelude_module: Option<ModuleId>,
     prelude_scope: Option<ModuleId>,
     extern_mounts: Vec<ModuleId>,
+    extern_crate_aliases: Vec<(ModuleId, AstPath)>,
     closure_sources: HashMap<PathKey, closures::ClosureSource>,
 }
 struct ParsedDeclarations {
@@ -6319,6 +6324,7 @@ impl ProgramDeclarations {
             prelude_module: self.prelude_module,
             prelude_scope: self.prelude_scope,
             extern_mounts: self.extern_mounts,
+            extern_crate_aliases: self.extern_crate_aliases.into(),
             associated_bound_sources: Arc::from([]),
             closure_sources: Arc::new(self.closure_sources),
             closure_owners: Arc::new(HashMap::new()),
@@ -6480,6 +6486,7 @@ impl ProgramBuilder {
             core_prelude_scope: None,
             core_library_module: None,
             extern_mounts: Vec::new(),
+            extern_crate_aliases: Vec::new(),
             closure_sources: HashMap::new(),
             generated_metadata: Vec::new(),
         }
@@ -11957,6 +11964,9 @@ impl<'input, 'names> Parser<'input, 'names> {
         }
         if self.pending_c_export && !self.starts_qualified_function() {
             return Err(self.unsupported("no_mangle requires a free extern C function"));
+        }
+        if self.is("extern") && self.cursor.peek(1).is_some_and(|t| t.matches("crate")) {
+            return self.extern_crate_item(module, module_path, parsed, visibility);
         }
         if (!self.token().string
             && matches!(

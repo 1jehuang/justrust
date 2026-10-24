@@ -151,3 +151,72 @@ fn no_std_attribute_boundaries_are_explicit() {
         assert!(!out.stderr.is_empty());
     }
 }
+#[test]
+fn extern_crate_core_alias_names_core_in_no_std_and_std_crates() {
+    // Adler2's crate-root pattern: `std::` names core when std is disabled.
+    for (name, attribute) in [("no-std", "#![no_std]\n"), ("std", "")] {
+        let library = format!(
+            "{attribute}extern crate core as std;\nmod inner {{ pub fn pick() -> u32 {{ std::cmp::max(3u32, 4u32) }} }}\nuse std::hash::Hasher;\npub struct H(u64);\nimpl Hasher for H {{ fn finish(&self) -> u64 {{ self.0 }} fn write(&mut self, b: &[u8]) {{ self.0 += b.len() as u64; }} }}\npub fn value() -> i32 {{ let mut h = H(u64::from(inner::pick())); h.write(&[1u8, 2u8]); h.finish() as i32 }}\n"
+        );
+        let root = project(&format!("alias-{name}"), &library);
+        let stock = Command::new("cargo")
+            .args(["run", "--offline", "--quiet"])
+            .current_dir(&root)
+            .env("CARGO_TARGET_DIR", root.join("stock-target"))
+            .output()
+            .unwrap();
+        assert!(
+            stock.status.success(),
+            "{name}: {}",
+            String::from_utf8_lossy(&stock.stderr)
+        );
+        assert_eq!(stock.stdout, b"6\n");
+        for workers in ["1", "8"] {
+            let checked = native(&root, "check", workers);
+            assert!(
+                checked.status.success(),
+                "{name}: {}",
+                String::from_utf8_lossy(&checked.stderr)
+            );
+            let run = native(&root, "run", workers);
+            assert!(
+                run.status.success(),
+                "{name}: {}",
+                String::from_utf8_lossy(&run.stderr)
+            );
+            assert_eq!(run.stdout, b"6\n", "{name}");
+        }
+    }
+}
+#[test]
+fn extern_crate_items_outside_the_native_libraries_are_explicit() {
+    for (name, item, accepted_by_stock) in [
+        ("alloc", "extern crate alloc;", true),
+        ("missing", "extern crate not_a_crate;", false),
+        (
+            "alias-collision",
+            "extern crate core as c;\npub struct c;",
+            false,
+        ),
+    ] {
+        let root = project(name, &format!("{item}\npub fn value() -> i32 {{ 3i32 }}\n"));
+        let stock = Command::new("cargo")
+            .args(["check", "--offline", "--quiet"])
+            .current_dir(&root)
+            .env("CARGO_TARGET_DIR", root.join("stock-target"))
+            .output()
+            .unwrap();
+        assert_eq!(stock.status.success(), accepted_by_stock, "{name}");
+        let out = native(&root, "check", "1");
+        assert_eq!(
+            out.status.code(),
+            Some(101),
+            "{name}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        if accepted_by_stock {
+            assert!(stderr.contains("unsupported"), "{name}: {stderr}");
+        }
+    }
+}

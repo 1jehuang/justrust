@@ -2196,15 +2196,47 @@ impl<'s> Solver<'_, '_, 's> {
                         .collect::<Result<Option<Vec<_>>, _>>()?;
                     if let Some(actuals) = resolved {
                         let plan = self.checker.signatures.plan()?;
-                        if let Ok((_, signature, _)) = plan.select_associated(
-                            &owner,
-                            name,
-                            &actuals,
-                            self.checker.facts(),
-                            &self.checker.module,
-                            false,
-                            &plan.budget,
-                        ) {
+                        let mut selected = plan
+                            .select_associated(
+                                &owner,
+                                name,
+                                &actuals,
+                                self.checker.facts(),
+                                &self.checker.module,
+                                false,
+                                &plan.budget,
+                            )
+                            .ok();
+                        // Several applications of one trait (`u64: From<u8>`,
+                        // `u64: From<u16>`): choose only from exactly known
+                        // argument types, then select as an explicit trait call.
+                        if selected.is_none() && actuals.is_empty() {
+                            let argument_types = args
+                                .iter()
+                                .map(|argument| self.resolve(*argument, 0))
+                                .collect::<Result<Option<Vec<_>>, _>>()?;
+                            if let Some(argument_types) = argument_types
+                                && let Some(application) =
+                                    self.checker.trait_application_for_argument_types(
+                                        &owner,
+                                        name,
+                                        &argument_types,
+                                    )?
+                            {
+                                selected = plan
+                                    .select_trait(
+                                        &application,
+                                        name,
+                                        &[],
+                                        self.checker.facts(),
+                                        false,
+                                        &plan.budget,
+                                    )
+                                    .ok()
+                                    .flatten();
+                            }
+                        }
+                        if let Some((_, signature, _)) = selected {
                             if signature.params.len() == args.len() {
                                 for (argument, parameter) in args.iter().zip(&signature.params) {
                                     let parameter = self.fixed(parameter.clone())?;

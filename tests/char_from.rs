@@ -171,3 +171,57 @@ fn invalid_conversions_and_unused_errors_are_rejected() {
         differential(name, source, false);
     }
 }
+
+#[test]
+fn lossless_integer_from_selects_the_argument_application() {
+    differential(
+        "integer-widening",
+        r#"
+        struct Pair { a: u16, b: u16 }
+        impl Pair {
+            fn checksum(&self) -> u32 { (u32::from(self.b) << 16) | u32::from(self.a) }
+        }
+        fn main() {
+            let bytes: [u8; 3] = [255u8, 7u8, 128u8];
+            let mut sum = 0u32;
+            let mut index = 0usize;
+            while index < 3usize { sum += u32::from(bytes[index]); index += 1usize; }
+            assert_eq!(sum, 390u32);
+            assert_eq!(u64::from(u32::from(65535u16)), 65535u64);
+            assert_eq!(u64::from(7u16) + u64::from(9u8) + u64::from(true), 17u64);
+            let (a, b, c): (i8, i16, i32) = (-5, -300, -70000);
+            assert_eq!(i64::from(a) + i64::from(b) + i64::from(c), -70305i64);
+            assert_eq!(u128::from(u64::MAX), 18446744073709551615u128);
+            assert_eq!(usize::from(65535u16), 65535usize);
+            assert_eq!(isize::from(b), -300isize);
+            assert_eq!(i32::from(255u8), 255i32);
+            assert_eq!(u8::from(false), 0u8);
+            assert_eq!(<u32 as From<u16>>::from(3u16), 3u32);
+            let pair = Pair { a: 1u16, b: 2u16 };
+            assert_eq!(pair.checksum(), 131073u32);
+            println!("{}", u32::from(pair.a) + u32::from(255u8));
+        }
+    "#,
+        true,
+    );
+}
+
+#[test]
+fn lossy_or_missing_integer_from_is_rejected() {
+    for (name, source) in [
+        ("narrowing", "fn main(){ let _ = u16::from(70000u32); }"),
+        ("u32-usize", "fn main(){ let _ = usize::from(1u32); }"),
+        ("signed-unsigned", "fn main(){ let _ = u16::from(-1i8); }"),
+        (
+            "unsigned-same-signed",
+            "fn main(){ let _ = i32::from(1u32); }",
+        ),
+        ("float", "fn main(){ let _ = u32::from(1.0f32); }"),
+        (
+            "unused-narrowing",
+            "fn bad()->u8 { u8::from(1u16) } fn main(){}",
+        ),
+    ] {
+        differential(name, source, false);
+    }
+}

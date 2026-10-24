@@ -237,6 +237,10 @@ mod edition_keyword_tests {
 
 #[test]
 fn plain_foreign_blocks_reject_in_2024_graphs() {
+    // `extern crate` and `extern "C" fn` remain distinct from foreign blocks.
+    stock_native_run(
+        "#[cfg(any())] extern crate core as std; extern \"C\" fn f()->i32{7} fn main(){println!(\"{}\",f());}",
+    );
     let source = "extern \"C\" {fn abs(value:i32)->i32;} fn main(){}";
     assert!(
         !stock_compile(source, std::path::Path::new("unused"), true)

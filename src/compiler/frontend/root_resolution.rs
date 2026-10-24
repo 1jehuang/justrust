@@ -1799,6 +1799,55 @@ impl Resolver<'_> {
         self.user_crate_anchor = previous;
         Ok(Some(found?))
     }
+    /// An `extern crate core|std as <first>;` item declared at the crate root
+    /// of `from` (the user crate or a mounted dependency). Only those items
+    /// enter the extern prelude; module-level aliases stay ordinary imports.
+    fn extern_crate_alias(
+        &mut self,
+        path: &AstPath,
+        from: ModuleId,
+        namespace: bool,
+    ) -> Result<Option<Option<ResolvedItem>>, String> {
+        let parts = path.segments();
+        let Some(first) = parts.first().copied() else {
+            return Ok(None);
+        };
+        if self.prelude_root_of(from)?.is_some() {
+            return Ok(None);
+        }
+        let root = match self.extern_root_of(from)? {
+            Some(mount) => mount,
+            None => self
+                .program
+                .modules
+                .source_root()
+                .map_err(module_diagnostic)?,
+        };
+        if root == from {
+            // The crate root's own items were already tried by the caller.
+            return Ok(None);
+        }
+        let full = self.semantic_append(&self.module_path(root)?, first)?;
+        let wanted = self.key(&full)?;
+        let mut extern_crate = false;
+        for (module, alias) in self.program.extern_crate_aliases.iter() {
+            self.alias_budget.charge_work(1)?;
+            if *module == root && self.key(alias)? == wanted {
+                extern_crate = true;
+            }
+        }
+        if !extern_crate {
+            return Ok(None);
+        }
+        let mut segments = self.module_path(root)?.segments().to_vec();
+        segments.extend_from_slice(parts);
+        let rooted = AstPath::new(self.names(), PathAnchor::Crate, &segments)
+            .map_err(native_adapter::name_diagnostic)?;
+        let previous = std::mem::replace(&mut self.user_crate_anchor, true);
+        let found = self.path(&rooted, root, namespace, false);
+        self.user_crate_anchor = previous;
+        Ok(Some(found?))
+    }
     /// The native prelude library root containing `module`, if any.
     fn prelude_root_of(&self, module: ModuleId) -> Result<Option<ModuleId>, String> {
         let Some(prelude) = self.program.prelude_module else {
@@ -1831,6 +1880,12 @@ impl Resolver<'_> {
             return Ok(None);
         };
         let rest = &parts[1..];
+        // `extern crate core as std;` at a crate root adds `std` to that
+        // crate's extern prelude, so every module of the crate sees it before
+        // the implicit library names (and before the no_std `std` boundary).
+        if let Some(found) = self.extern_crate_alias(path, from, namespace)? {
+            return Ok(Some(found));
+        }
         let no_std = self.program.no_std_module(from)?;
         if no_std && self.atom_is(first, BuiltinAtom::Std, Namespace::Type)? {
             return Err("unresolved std crate in no_std source; explicit extern crate std opt-in is unsupported".into());
@@ -1839,6 +1894,28 @@ impl Resolver<'_> {
             && !rest.is_empty()
             && (self.atom_is(first, BuiltinAtom::Core, Namespace::Type)?
                 || self.atom_is(first, BuiltinAtom::Std, Namespace::Type)?);
+        // A bare crate name (`use core as c;`, `extern crate core as std;`)
+        // denotes the library root module itself, so aliases keep resolving
+        // through the real library rather than the closed catalog root.
+        if type_namespace
+            && rest.is_empty()
+            && (self.atom_is(first, BuiltinAtom::Core, Namespace::Type)?
+                || self.atom_is(first, BuiltinAtom::Std, Namespace::Type)?)
+        {
+            let base = if no_std {
+                self.program.core_library_module
+            } else {
+                Some(prelude)
+            };
+            if let Some(base) = base {
+                let canonical = self.module_path(base)?;
+                if let Some(item) = self.item(&canonical, from, true, false)?
+                    && item.kind == ResolvedKind::Module
+                {
+                    return Ok(Some(Some(item)));
+                }
+            }
+        }
         let (base, suffix) = if library {
             let base = if no_std {
                 self.program
