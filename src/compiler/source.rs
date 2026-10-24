@@ -618,14 +618,6 @@ pub struct UnitFailure {
 }
 pub type UnitResult = Result<FileUnit, UnitFailure>;
 
-/// Root unit of a file input, including option validation.
-pub fn prepare_root_unit(
-    path: &Path,
-    options: &SourceOptions,
-    budget: &super::expansion_budget::ExpansionBudget,
-) -> UnitResult {
-    root_unit_with(path, options, Some(&mut FsReader), budget)
-}
 /// Read-only handle to an admitted file fact, retaining its original allocation.
 #[derive(Clone, Debug)]
 pub struct SharedFileUnit(Arc<UnitResult>);
@@ -641,6 +633,14 @@ impl std::ops::Deref for SharedFileUnit {
     }
 }
 
+/// Root unit of a file input, including option validation.
+pub fn prepare_root_unit(
+    path: &Path,
+    options: &SourceOptions,
+    budget: &super::expansion_budget::ExpansionBudget,
+) -> UnitResult {
+    root_unit_with(path, options, Some(&mut FsReader), budget)
+}
 fn root_unit_with(
     path: &Path,
     options: &SourceOptions,
@@ -2874,6 +2874,15 @@ mod tests {
             match step {
                 AssemblyStep::Done(prepared) => return Ok(*prepared),
                 AssemblyStep::Need(need) => {
+                    let mut parent_ordinal = need.ordinal.clone();
+                    parent_ordinal.pop();
+                    if let Some(parent) = need.parent.as_deref() {
+                        let original = units[&parent_ordinal].as_ref().as_ref().unwrap();
+                        assert!(
+                            std::ptr::eq(parent, original),
+                            "assembly must borrow the original immutable file fact, not clone it"
+                        );
+                    }
                     step = assembler.provide(units[&need.ordinal].clone())?;
                 }
             }
@@ -2916,15 +2925,6 @@ mod tests {
         tree.put("inline/c.rs", "#[inline(always)] pub fn c(){} mod e;");
         tree.put("inline/c/e.rs", "pub fn e(){}");
         let path = tree.0.join("main.rs");
-                    let mut parent_ordinal = need.ordinal.clone();
-                    parent_ordinal.pop();
-                    if let Some(parent) = need.parent.as_deref() {
-                        let original = units[&parent_ordinal].as_ref().as_ref().unwrap();
-                        assert!(
-                            std::ptr::eq(parent, original),
-                            "assembly must borrow the original immutable file fact, not clone it"
-                        );
-                    }
         let sequential = prepare_file(&path, &SourceOptions::default()).unwrap();
         let graph = assemble_independent(&path).unwrap();
         same_prepared(&sequential, &graph);
