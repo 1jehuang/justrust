@@ -354,15 +354,20 @@ fn a() -> u32 { const K: u32 = 10; K }
 fn b() -> u32 { const K: u32 = 20; K }
 struct S;
 impl S { fn g(&self) -> u32 { const K: u32 = 6; K } }
+mod algo {
+    pub struct U(pub u32);
+    impl U { pub fn m(&self) -> u32 { const MOD: u32 = 65521; self.0 % MOD } }
+    pub fn n() -> u32 { const C: u32 = 3; C }
+}
 fn main() {
     let early = L;
     const L: u32 = 4;
     const N: usize = 3;
     let arr = [7u8; N];
     let outer = { const C: u32 = 2; C };
-    println!("{} {} {} {} {} {} {} {} {}", C, outer, early, adler(70000, 22210), sibling(), a(), b(), S.g(), arr.len());
+    println!("{} {} {} {} {} {} {} {} {} {} {}", C, outer, early, adler(70000, 22210), sibling(), a(), b(), S.g(), arr.len(), algo::U(70000).m(), algo::n());
 }"#,
-                expect: Expect::Run("1 2 4 4481 8 10 20 6 3\n"),
+                expect: Expect::Run("1 2 4 4481 8 10 20 6 3 4479 3\n"),
             },
             Case {
                 name: "out_of_scope",

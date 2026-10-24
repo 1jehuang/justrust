@@ -4,7 +4,7 @@
 //! including before its declaration; it shadows outer items of the same name;
 //! its initializer is an item context, so it cannot read local variables
 //! (E0435) but may name sibling items. Each local const is therefore hoisted to
-//! an ordinary module-level `ConstDecl` with a unique hidden name, so constant
+//! an ordinary `ConstDecl` in the function's module with a unique hidden name, so constant
 //! evaluation, privacy and the "no locals" rule are the existing item rules.
 //! Single-segment value paths that do not name a local binding are rewritten to
 //! the hidden path of the innermost enclosing block const of that name.
@@ -123,11 +123,12 @@ impl Parser<'_, '_> {
         }
         let initializer = initializer?;
         self.expect(";")?;
-        let root = self.modules.source_root().map_err(module_parse_error)?;
-        let name = AstPath::new(self.names, PathAnchor::Crate, &[hidden])
+        // Defined in the enclosing function's module with that module's
+        // private visibility; publish_local_consts gives it the full path.
+        let name = AstPath::new(self.names, PathAnchor::Relative, &[hidden])
             .map_err(native_adapter::name_error)?;
         self.local_consts.pending.push(ConstDecl {
-            module: root,
+            module: self.module,
             visibility: ir::Visibility::Restricted(self.module),
             name,
             ty,
@@ -144,7 +145,9 @@ impl Parser<'_, '_> {
         let key = self.name_key(ident, LookupClass::Item(Namespace::Value))?;
         for scope in self.local_consts.scopes.iter().rev() {
             if let Some((_, hidden)) = scope.iter().find(|(k, _)| *k == key) {
-                return AstPath::new(self.names, PathAnchor::Crate, &[*hidden])
+                // A same-module relative item path: the hidden const lives in
+                // the module of the function whose block declares it.
+                return AstPath::new(self.names, PathAnchor::Relative, &[*hidden])
                     .map(Some)
                     .map_err(native_adapter::name_error);
             }
@@ -155,16 +158,27 @@ impl Parser<'_, '_> {
     /// Publish hoisted local consts as ordinary crate-root items.
     pub(super) fn publish_local_consts(
         &mut self,
+        module: ModuleId,
+        module_path: &AstPath,
         parsed: &mut ParsedDeclarations,
     ) -> Result<(), ParseError> {
         let pending = std::mem::take(&mut self.local_consts.pending);
-        let root = self.modules.source_root().map_err(module_parse_error)?;
-        for declaration in pending {
-            let path = declaration.name.clone();
+        for mut declaration in pending {
+            if declaration.module != module {
+                return Err(self.error("block-local const escaped its defining module"));
+            }
+            let hidden = declaration
+                .name
+                .single()
+                .ok_or_else(|| self.error("block-local const has no hidden name"))?;
+            let path = module_path
+                .push(self.names, hidden)
+                .map_err(native_adapter::name_error)?;
+            declaration.name = path.clone();
             let visibility = declaration.visibility.clone();
             self.reserve_parser_items(&mut parsed.program.constants, 1)?;
             parsed.program.constants.push(declaration);
-            self.insert_item(parsed, root, &path, visibility, ItemKind::Const)?;
+            self.insert_item(parsed, module, &path, visibility, ItemKind::Const)?;
         }
         Ok(())
     }

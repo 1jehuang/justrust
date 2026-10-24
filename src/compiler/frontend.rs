@@ -11939,7 +11939,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                 explicit_visibility,
                 function_source_start,
             )?;
-            self.publish_local_consts(parsed)?;
+            self.publish_local_consts(module, module_path, parsed)?;
         }
         self.module = previous_module;
         self.module_frontier = previous_frontier;
