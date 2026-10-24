@@ -532,13 +532,12 @@ fn main(){if run()==7{println!("generic references oracle ok");}}
 }
 
 #[test]
-fn rejects_legal_unsupported_dynamic_index_borrow_or_autoderef_chain() {
-    rejects(
-        "dynamic_index_borrow_or_autoderef_chain",
+fn accepts_dynamic_index_borrow_autoderef_chain() {
+    runs(
         r###"struct S{x:i32}impl S{fn get(&self)->i32{self.x}}fn run()->i32{let a=[S{x:7}];let i=0usize;let r=&a[i];let rr=&r;rr.get()}
 fn main(){if run()==7{println!("generic references oracle ok");}}
 "###,
-        false,
+        "generic references oracle ok\n",
     );
 }
 
@@ -569,4 +568,22 @@ fn main(){if run(7)==7{println!("generic references oracle ok");}}
     ] {
         rejects("statement_temporary_escape", source, true);
     }
+}
+
+#[test]
+fn generic_field_getter_instantiated_with_reference_matches_stock() {
+    runs(
+        "struct W<T> { t: T }\nimpl<T> W<T> { fn get(&self) -> &T { &self.t } }\nfn main() { let w = W { t: \"hi\" }; println!(\"{}\", w.get()); }\n",
+        "hi\n",
+    );
+    rejects(
+        "nested carrier promoted to static",
+        "struct W<'b> { s: &'b str }\nfn f<'a, 'b>(w: &'a W<'b>) -> &'static str { w.s }\nfn main() { let x = String::from(\"a\"); let w = W { s: &x }; println!(\"{}\", f(&w)); }\n",
+        true,
+    );
+    rejects(
+        "generic nested carrier promoted to static",
+        "struct W<T> { t: T }\nfn g<'a, T>(w: &'a W<&'a T>) -> &'static T { w.t }\nfn main() { let x = 1; let w = W { t: &x }; println!(\"{}\", g(&w)); }\n",
+        true,
+    );
 }

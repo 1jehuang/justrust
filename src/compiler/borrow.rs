@@ -6463,6 +6463,16 @@ impl Plan {
                     )));
                 };
                 if closure[region.0 as usize] & (1u64 << result.region.0) == 0 {
+                    // A sourceless result tail is the rigid parameter's own
+                    // carrier region (`fn get(&self) -> &T`, `T = &U`). A
+                    // carrier nested inside the borrowed aggregate holds a
+                    // value of that parameter, whose region outlives the outer
+                    // borrow by well-formedness, so the result row covers it.
+                    if !position.path.0.is_empty()
+                        && return_inputs(&result.returns).next().is_none()
+                    {
+                        continue;
+                    }
                     return Ok(Some(Problem::Invalid(
                         "reference return requires an undeclared universal outlives bound".into(),
                     )));

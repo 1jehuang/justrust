@@ -612,11 +612,11 @@ mod canonical_source_replay_tests {
             ),
             (
                 "fn renamed<T>(x:T)->T{x}fn runtime()->i32{1}fn main(){let value=runtime();let r=renamed(&value);}",
-                "fresh borrow root requires an annotation or suffixed integer/Bool/char literal",
+                "unsupported: fresh borrow root requires an annotation or suffixed integer/Bool/char literal",
             ),
             (
                 "fn renamed<T>(x:T)->T{x}fn main(){let value=1i32;let nested=&value;let r=renamed(&nested);}",
-                "fresh borrow root requires an annotation or suffixed integer/Bool/char literal",
+                "unsupported: fresh borrow root requires an annotation or suffixed integer/Bool/char literal",
             ),
         ] {
             let stock =
@@ -4239,7 +4239,7 @@ fn root_borrow_origin(
                 _ => {
                     return Err(FactsError::unsupported(
                         budget,
-                        "fresh borrow root requires an annotation or suffixed integer/Bool/char literal",
+                        "unsupported: fresh borrow root requires an annotation or suffixed integer/Bool/char literal",
                     ));
                 }
             }

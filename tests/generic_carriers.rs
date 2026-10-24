@@ -533,7 +533,7 @@ fn main(){if run()==31{println!("generic carriers oracle ok");}}
     Fixture {
         id: "X32",
         name: "derived_internal_nominal_reference_actual_call",
-        group: "legal-excluded",
+        group: "positive",
         source_sha256: "09e40d1c8632afb2dcc97e16c95332fe154d57327eb5822069fe3971afe40ae1",
         full_source: r###"struct Wrap<T>{value:T}fn id<T>(x:T)->T{x}fn outer<T>(x:T)->T{let wrapped=Wrap{value:x};let out=id::<Wrap<T>>(wrapped);out.value}fn run()->i32{let v=32;let r=outer::<&i32>(&v);*r}
 fn main(){if run()==32{println!("generic carriers oracle ok");}}
@@ -563,8 +563,8 @@ fn group(group: &str, expected_count: usize) -> Vec<&'static Fixture> {
 }
 
 #[test]
-fn frozen_generic_carriers_positive16() {
-    for fixture in group("positive", 16) {
+fn frozen_generic_carriers_positive17() {
+    for fixture in group("positive", 17) {
         runs(fixture.full_source, fixture.expected_stdout);
     }
 }
@@ -577,8 +577,8 @@ fn frozen_generic_carriers_invalid12() {
 }
 
 #[test]
-fn frozen_generic_carriers_legal_excluded4() {
-    for fixture in group("legal-excluded", 4) {
+fn frozen_generic_carriers_legal_excluded3() {
+    for fixture in group("legal-excluded", 3) {
         rejects(fixture.name, fixture.full_source, false);
     }
 }
