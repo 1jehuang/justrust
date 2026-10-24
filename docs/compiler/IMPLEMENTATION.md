@@ -2065,6 +2065,12 @@ one is now never evaluated. It predates this session's prelude library commits
 (reverting them does not change it). Unresolved: either a scheduling regression
 or a stale expectation after per-module ITEM_INVENTORY fan-out.
 
+Also failing at 98807706e (before 2fc0cf11b): `subslice_authority`
+(`mutable_subslice` `&mut a[1..]` now compiles where the test expects an
+explicit unsupported diagnostic; `non_usize_bound` reports E0308 without the
+word `usize`) and `mutable_slices_authority` (1 test). Both look like stale
+expectations after mutable subslice support landed; not yet reconciled.
+
 Handoff (2026-10-21, semantic-core lane): native `for` over a source iterator
 value (`for x in vec.iter()`, `for c in s.chars()`, a user `IntoIterator`)
 is rejected on main 136ffab82 and every commit checked back to 1b43e6a71, with
