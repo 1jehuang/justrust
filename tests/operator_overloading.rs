@@ -55,3 +55,36 @@ fn missing_operator_impl_is_rejected() {
         .expect("accepted");
     assert!(error.to_string().contains("E0369"), "{error}");
 }
+
+#[test]
+fn self_in_impl_trait_arguments_names_the_impl_self_type() {
+    // Adler2's U32X4 pattern: `impl AddAssign<Self> for U32X4`.
+    run(
+        "use std::ops::{AddAssign, MulAssign, RemAssign};
+        #[derive(Copy, Clone)] struct U([u32; 4]);
+        impl AddAssign<Self> for U { fn add_assign(&mut self, other: Self) { self.0[0] += other.0[0]; self.0[3] += other.0[3]; } }
+        impl MulAssign<u32> for U { fn mul_assign(&mut self, rhs: u32) { self.0[0] *= rhs; } }
+        impl RemAssign<u32> for U { fn rem_assign(&mut self, q: u32) { self.0[3] %= q; } }
+        struct W<T>(T);
+        trait Pair<A> { fn pair(&self, other: &A) -> u32; }
+        impl Pair<(Self, u8)> for W<u32> { fn pair(&self, other: &(Self, u8)) -> u32 { self.0 + (other.0).0 + other.1 as u32 } }
+        fn main() { let mut a = U([1, 2, 3, 9]); a += U([4, 0, 0, 8]); a *= 3; a %= 5; let w = W(10u32); println!(\"{} {} {}\", a.0[0], a.0[3], w.pair(&(W(5u32), 2u8))); }",
+        "15 2 17\n",
+    );
+}
+
+#[test]
+fn self_in_impl_trait_arguments_is_not_another_type() {
+    for source in [
+        "use std::ops::AddAssign; struct A(u32); struct B(u32); impl AddAssign<Self> for A { fn add_assign(&mut self, o: Self) { self.0 += o.0; } } fn main() { let mut a = A(1); a += B(2); }",
+        "trait T<X> { fn f(x: X); } struct A; impl T<Self> for A { fn f(x: u8) {} } fn main() {}",
+        "trait T<X> {} struct A; fn g() -> Self { loop {} } impl T<Self> for A {} fn main() {}",
+    ] {
+        for check in [true, false] {
+            assert!(
+                compiler::compile(source.into(), 1, check).is_err(),
+                "accepted: {source}"
+            );
+        }
+    }
+}

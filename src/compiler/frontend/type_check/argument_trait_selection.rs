@@ -34,6 +34,62 @@ impl Checker<'_> {
         self.trait_application_for_argument_types(owner, name, &actual)
     }
 
+    /// When `owner` has several applications of one trait whose `name` item
+    /// all return the same concrete type, that result. This is only an
+    /// inference hint; selection of the exact application happens later.
+    pub(in crate::compiler::frontend) fn shared_trait_application_result(
+        &self,
+        owner: &ir::Ty,
+        name: &AstIdent,
+        arity: usize,
+    ) -> Result<Option<ir::Ty>, String> {
+        let plan = self.signatures.plan()?;
+        let candidates =
+            plan.method_trait_candidates(owner, name, self.facts(), &self.module, &plan.budget)?;
+        let candidates = candidates.as_slice();
+        let Some((first, _)) = candidates.first() else {
+            return Ok(None);
+        };
+        if candidates.len() < 2
+            || candidates
+                .iter()
+                .any(|(application, _)| application.declaration != first.declaration)
+        {
+            return Ok(None);
+        }
+        let ir::FactsCtx::Validated(facts) = self.facts() else {
+            return Ok(None);
+        };
+        let mut result: Option<ir::Ty> = None;
+        for (application, item) in candidates {
+            plan.budget.charge_work(1)?;
+            if plan.param_env(*item)?.arity() != 0 {
+                return Ok(None);
+            }
+            let call = ir::TraitCall {
+                trait_ref: application.clone(),
+                item: *item,
+                method_args: Arc::from([]),
+            };
+            let signature = facts
+                .service()
+                .instantiate_trait_signature(&call, facts)
+                .map_err(|error| error.into_legacy_diagnostic(&plan.budget))?;
+            if signature.params.len() != arity {
+                return Ok(None);
+            }
+            match &result {
+                None => result = Some(signature.result),
+                Some(previous) => {
+                    if !metered_type_equal(previous, &signature.result, &plan.budget, 0)? {
+                        return Ok(None);
+                    }
+                }
+            }
+        }
+        Ok(result)
+    }
+
     /// As above, from exactly known argument types.
     pub(in crate::compiler::frontend) fn trait_application_for_argument_types(
         &self,

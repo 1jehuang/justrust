@@ -732,6 +732,16 @@ fn slice_chunks_match_stock() {
                 source: r#"fn main(){let c;{let v=vec![1i32,2];c=v.chunks(1).next().unwrap();}println!("{:?}",c);}"#,
                 expect: Expect::Invalid("E0597"),
             },
+            Case {
+                name: "chunks_exact_remainder_and_nested_loops",
+                source: r#"fn sum(bytes:&[u8])->(u32,usize,usize){let (bytes,rest)=bytes.split_at(bytes.len()-bytes.len()%4);let it=bytes.chunks_exact(8);let tail=it.remainder();let mut t=0u32;let mut n=0usize;for chunk in it{for word in chunk.chunks_exact(4){t+=u32::from(word[0])+u32::from(word[3]);}n+=1;}for word in tail.chunks_exact(4){t+=u32::from(word[1]);}for &b in rest.iter(){t+=u32::from(b);}(t,n,tail.len())}fn main(){let d:[u8;23]=[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23];let (t,c,r)=sum(&d);let mut back=d.chunks_exact(5);let last=back.next_back().unwrap();let mut nested=0usize;for a in d.chunks(8){for x in a.iter(){nested+=*x as usize;}}println!("{} {} {} {} {} {} {}",t,c,r,last[0],back.remainder().len(),back.count(),nested);}"#,
+                expect: Expect::Run("152 2 4 16 3 3 276\n"),
+            },
+            Case {
+                name: "loop_call_result_kept_across_iterations",
+                source: r#"fn main(){let mut w=vec![1i32];let mut n=0usize;for _ in 0..2{let s=w.chunks(1).next().unwrap();n+=s.len();w.push(2);n+=s.len();}println!("{}",n);}"#,
+                expect: Expect::Invalid("E0502"),
+            },
         ],
     );
 }

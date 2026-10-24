@@ -210,10 +210,58 @@ impl<'a, T> super::iter::IntoIterator for Chunks<'a, T> {
 
 pub trait SliceChunks<'a, T> {
     fn chunks(self, size: usize) -> Chunks<'a, T>;
+    fn chunks_exact(self, size: usize) -> ChunksExact<'a, T>;
 }
 
 impl<'a, T> SliceChunks<'a, T> for &'a [T] {
     fn chunks(self, size: usize) -> Chunks<'a, T> { Chunks::new(self, size) }
+    fn chunks_exact(self, size: usize) -> ChunksExact<'a, T> { ChunksExact::new(self, size) }
+}
+
+/// Non-overlapping chunks of exactly `size` elements. The final
+/// `len % size` elements are never yielded; `remainder` returns them.
+pub struct ChunksExact<'a, T> {
+    values: &'a [T],
+    size: usize,
+    front: usize,
+    back: usize,
+}
+
+impl<'a, T> ChunksExact<'a, T> {
+    pub(super) fn new(values: &'a [T], size: usize) -> ChunksExact<'a, T> {
+        assert!(size != 0usize);
+        let exact = values.len() - values.len() % size;
+        ChunksExact { values, size, front: 0usize, back: exact }
+    }
+    pub fn remainder(&self) -> &'a [T] {
+        let exact = self.values.len() - self.values.len() % self.size;
+        &self.values[exact..]
+    }
+}
+
+impl<'a, T> super::iter::Iterator for ChunksExact<'a, T> {
+    type Item = &'a [T];
+    fn next(&mut self) -> super::option::Option<&'a [T]> {
+        if self.back - self.front < self.size { return super::option::Option::None; }
+        let start = self.front;
+        self.front += self.size;
+        super::option::Option::Some(&self.values[start..self.front])
+    }
+}
+
+impl<'a, T> super::iter::DoubleEndedIterator for ChunksExact<'a, T> {
+    fn next_back(&mut self) -> super::option::Option<&'a [T]> {
+        if self.back - self.front < self.size { return super::option::Option::None; }
+        let end = self.back;
+        self.back -= self.size;
+        super::option::Option::Some(&self.values[self.back..end])
+    }
+}
+
+impl<'a, T> super::iter::IntoIterator for ChunksExact<'a, T> {
+    type Item = &'a [T];
+    type IntoIter = Self;
+    fn into_iter(self) -> Self { self }
 }
 
 /// `[T]::iter`: a shared element iterator over the borrowed slice.

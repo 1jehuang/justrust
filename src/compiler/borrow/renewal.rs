@@ -12,11 +12,13 @@ impl Plan {
         f: &cfg::Function,
         start: BlockId,
         loan: usize,
+        call_issuer: Option<BlockId>,
         budget: &mut Budget,
     ) -> Result<bool, Exhausted> {
-        // Returned carrier origins have no single explicit Borrow statement.
-        // Keep their existing boundary until issuance itself has a proof here.
-        if loan >= f.loan_sites.len() {
+        // A returned carrier origin has no Borrow statement: its single
+        // issuance point is the call terminator of `call_issuer`. Any other
+        // origin without an explicit Borrow site keeps the existing boundary.
+        if loan >= f.loan_sites.len() && call_issuer.is_none() {
             return Ok(false);
         }
         budget.reserve_bytes(mul(f.blocks.len(), size_of::<usize>() + size_of::<bool>())?)?;
@@ -45,6 +47,11 @@ impl Plan {
                         value: Rvalue::Borrow(LoanId(id)), ..
                     } if id == loan)
                 {
+                    return Ok(false);
+                }
+                // The terminator point of the issuing block reissues a
+                // returned carrier origin while the old one is still live.
+                if index == body.statements.len() && call_issuer == Some(block) {
                     return Ok(false);
                 }
             }

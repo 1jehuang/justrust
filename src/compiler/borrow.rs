@@ -4882,6 +4882,8 @@ impl CarrierBuilder<'_, '_> {
             None
         };
         let mut births = vec![None; references];
+        // Call-result origins are issued by the call terminator of their block.
+        let mut call_issuers = vec![None; references];
         for (block, body) in f.blocks.iter().enumerate() {
             for statement in &body.statements {
                 if let Statement::Assign {
@@ -4894,6 +4896,7 @@ impl CarrierBuilder<'_, '_> {
             }
             for (_, origin) in &self.call_rows[block] {
                 births[origin.0] = Some(block);
+                call_issuers[origin.0] = Some(block);
             }
         }
         let authority = if let Some(authority) = self.authority {
@@ -4938,7 +4941,7 @@ impl CarrierBuilder<'_, '_> {
                 .ok_or(Exhausted)?,
         };
         plan.compute_activation(f, &mut self.memberships, self.budget)?;
-        plan.check_backedges(f, &reachable, &ins, &births, self.budget)?;
+        plan.check_backedges(f, &reachable, &ins, (&births, &call_issuers), self.budget)?;
         plan.bytes = self
             .budget
             .reserved_bytes()
@@ -5691,7 +5694,7 @@ impl Plan {
         f: &cfg::Function,
         reachable: &[bool],
         ins: &[Set],
-        births: &[Option<usize>],
+        (births, call_issuers): (&[Option<usize>], &[Option<usize>]),
         budget: &mut Budget,
     ) -> Result<(), Exhausted> {
         let b = f.blocks.len();
@@ -5754,7 +5757,13 @@ impl Plan {
             for loan in active.members() {
                 if let Some(birth) = births[loan]
                     && component[birth] == component[block]
-                    && !self.killed_before_rebirth(f, BlockId(next), loan, budget)?
+                    && !self.killed_before_rebirth(
+                        f,
+                        BlockId(next),
+                        loan,
+                        call_issuers[loan].map(BlockId),
+                        budget,
+                    )?
                 {
                     self.problems.push((
                         BlockId(block),

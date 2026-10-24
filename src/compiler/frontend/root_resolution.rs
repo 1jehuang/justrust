@@ -4463,6 +4463,20 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
         resolver.with_source_owner(owner, |resolver| {
             resolver.type_params = block.type_params.clone();
             resolver.bounds(&mut block.bounds, block.module)?;
+            // `impl Trait<Self> for T` means `impl Trait<T> for T`: `Self` in
+            // the header's trait arguments denotes the written self type.
+            if let Some(TraitPath::Source(path)) = &mut block.trait_path {
+                for segment in &mut path.segments {
+                    for argument in segment.args.iter_mut().chain(
+                        segment
+                            .associated_types
+                            .iter_mut()
+                            .map(|binding| &mut binding.value),
+                    ) {
+                        replace_self_type(argument, &block.self_ty, &resolver.alias_budget, 0)?;
+                    }
+                }
+            }
             if let Some(path) = &mut block.trait_path {
                 resolver.trait_path(path, block.module)?;
             }
@@ -5833,4 +5847,41 @@ impl Resolver<'_> {
         }
         Err("unsupported: calling a local value requires the prelude Fn trait".into())
     }
+}
+
+/// Replace written `Self` with the impl's written self type inside a trait
+/// header argument. Only structural positions are rewritten; projections,
+/// opaque types and trait objects keep `Self` and stay with ordinary checks.
+fn replace_self_type(
+    ty: &mut Type,
+    self_ty: &Type,
+    budget: &ir::PlanBudget,
+    depth: usize,
+) -> Result<(), String> {
+    if depth > 128 {
+        return Err("impl header Self substitution depth limit exceeded".into());
+    }
+    budget.charge_work(1)?;
+    match ty {
+        Type::SelfType => *ty = self_ty.clone(),
+        Type::Ref { referent, .. } => replace_self_type(referent, self_ty, budget, depth + 1)?,
+        Type::Array(element, _) | Type::Slice(element) => {
+            replace_self_type(element, self_ty, budget, depth + 1)?
+        }
+        Type::RawPtr { pointee, .. } => replace_self_type(pointee, self_ty, budget, depth + 1)?,
+        Type::Tuple(fields) => {
+            for field in fields {
+                replace_self_type(field, self_ty, budget, depth + 1)?;
+            }
+        }
+        Type::Apply(path) => {
+            for segment in &mut path.segments {
+                for argument in &mut segment.args {
+                    replace_self_type(argument, self_ty, budget, depth + 1)?;
+                }
+            }
+        }
+        _ => {}
+    }
+    Ok(())
 }

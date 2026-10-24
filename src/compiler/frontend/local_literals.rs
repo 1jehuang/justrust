@@ -2245,6 +2245,19 @@ impl<'s> Solver<'_, '_, 's> {
                                 return self.fixed(signature.result);
                             }
                         }
+                        // Several applications whose results agree (every
+                        // `u32: From<_>` returns u32): the result is known
+                        // before the argument. Checked selection still picks
+                        // and discharges the exact application later.
+                        if actuals.is_empty()
+                            && let Some(result) = self.checker.shared_trait_application_result(
+                                &owner,
+                                name,
+                                args.len(),
+                            )?
+                        {
+                            return self.fixed(result);
+                        }
                     }
                 }
                 self.fresh()
