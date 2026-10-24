@@ -77,6 +77,12 @@ pub(super) struct ModuleMacroCheckpoint {
     prefix: Option<Arc<DefinitionPrefix>>,
     len: usize,
 }
+impl ModuleMacroCheckpoint {
+    /// Textual definitions visible at this checkpoint.
+    pub(super) fn definitions(&self) -> usize {
+        self.len
+    }
+}
 #[derive(Clone, Copy)]
 pub(super) struct CheckedDef {
     session: SessionId,

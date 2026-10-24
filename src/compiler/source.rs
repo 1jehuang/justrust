@@ -2989,6 +2989,52 @@ mod tests {
         );
     }
 
+    /// Step C1: a parent file view records one entry per external child,
+    /// mounted at that child's module, carrying the textual macro scope in
+    /// effect at its declaration (later definitions stay invisible).
+    #[test]
+    fn file_view_parse_records_child_entries_with_macro_scope() {
+        let tree = Tree::new();
+        tree.put(
+            "main.rs",
+            "mod a;\nmacro_rules! m { () => {} }\nmod b;\nmacro_rules! n { () => {} }\nfn main(){}\n",
+        );
+        tree.put("a.rs", "pub fn a(){}\n");
+        tree.put("b.rs", "pub fn b(){}\n");
+        let path = tree.0.join("main.rs");
+        let options = SourceOptions::default();
+        let budget = super::super::expansion_budget::ExpansionBudget::default();
+        let root = prepare_root_unit(&path, &options, &budget).unwrap();
+        let view = FileView::of(&root, 0, &options).unwrap();
+        assert_eq!(view.child_sites.len(), 2);
+        let issue = |domain| super::super::owner_path::standalone_issued(&budget, domain).unwrap();
+        let parsed = super::super::frontend::parse_file_view_owned(
+            &view,
+            budget.clone(),
+            issue(super::super::owner_path::OwnerDomain::SourceSnapshot),
+            issue(super::super::owner_path::OwnerDomain::TokenSession),
+        )
+        .unwrap();
+        let entries = parsed.child_entries();
+        assert_eq!(entries.len(), 2);
+        assert_ne!(entries[0].module, entries[1].module);
+        let names = &parsed.program.names;
+        let modules = &parsed.program.modules;
+        let spell = |module| {
+            let ident = modules.name(module).unwrap().unwrap();
+            names.spelling(ident).unwrap().to_string()
+        };
+        assert_eq!(spell(entries[0].module), "a");
+        assert_eq!(spell(entries[1].module), "b");
+        let visible = |i: usize| entries[i].macros.as_ref().map_or(0, |c| c.definitions());
+        assert_eq!(visible(0), 0, "m is defined after mod a;");
+        assert_eq!(visible(1), 1, "only m precedes mod b;");
+        // Whole-crate parses splice children and record no entries.
+        let whole = prepare_file(&path, &options).unwrap();
+        let whole = super::super::frontend::parse_prepared(&whole).unwrap();
+        assert!(whole.child_entries().is_empty());
+    }
+
     #[test]
     fn independent_units_report_the_sequential_first_error() {
         let tree = Tree::new();

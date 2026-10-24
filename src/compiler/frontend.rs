@@ -6226,6 +6226,30 @@ pub struct ParsedProgram {
     /// `use prefix::*;` declarations: importing module, its canonical path,
     /// the glob target path and the import's visibility.
     glob_imports: Vec<GlobImport>,
+    /// Child file entries of a single-file view parse, in child-site order.
+    child_entries: Vec<ChildEntry>,
+}
+/// Where a child file's items mount (PARSE-SPLIT.md step C1): its module in
+/// the parent file's arena and the textual macro scope at the declaration.
+#[derive(Clone)]
+pub(super) struct ChildEntry {
+    pub(super) module: ModuleId,
+    pub(super) path: AstPath,
+    pub(super) macros: Option<super::source_item_macro::ModuleMacroCheckpoint>,
+}
+impl ParsedProgram {
+    /// Child file entries of a single-file view parse, in child-site order.
+    pub(super) fn child_entries(&self) -> &[ChildEntry] {
+        &self.child_entries
+    }
+}
+impl std::fmt::Debug for ChildEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ChildEntry")
+            .field("module", &self.module)
+            .field("macros", &self.macros.is_some())
+            .finish()
+    }
 }
 #[derive(Clone, Debug)]
 struct GlobImport {
@@ -8529,6 +8553,11 @@ enum ConditionPurpose {
 }
 
 struct Parser<'input, 'names> {
+    /// Prepared offsets just inside each external `mod child;` group, in
+    /// file order (PARSE-SPLIT.md step C1). Empty for whole-crate parses.
+    child_sites: Arc<[usize]>,
+    /// Entry for each child site reached so far, recorded in file order.
+    child_entries: Vec<ChildEntry>,
     forbid_unsafe_roots: Arc<[super::token_session::SourceFileHandle]>,
     embedded_issuers: Arc<[super::source::EmbeddedOriginalFile]>,
     no_std_roots: Arc<[super::token_session::SourceFileHandle]>,
@@ -8720,6 +8749,8 @@ impl<'input, 'names> Parser<'input, 'names> {
             &proof,
         )?;
         let mut child = Parser {
+            child_sites: Arc::from([]),
+            child_entries: Vec::new(),
             embedded_issuers: self.embedded_issuers.clone(),
             no_std_roots: self.no_std_roots.clone(),
             forbid_unsafe_roots: self.forbid_unsafe_roots.clone(),
@@ -10099,6 +10130,8 @@ impl<'input, 'names> Parser<'input, 'names> {
         expansion_depth: u32,
     ) -> Result<Expr, ParseError> {
         let mut child = Parser {
+            child_sites: Arc::from([]),
+            child_entries: Vec::new(),
             embedded_issuers: self.embedded_issuers.clone(),
             no_std_roots: self.no_std_roots.clone(),
             forbid_unsafe_roots: self.forbid_unsafe_roots.clone(),
@@ -10505,6 +10538,8 @@ impl<'input, 'names> Parser<'input, 'names> {
         }
         let lexical = ParserState::owned(state, names.budget())?;
         Ok(Self {
+            child_sites: Arc::from([]),
+            child_entries: Vec::new(),
             embedded_issuers: Arc::from([]),
             forbid_unsafe_roots: Arc::from([]),
             no_std_roots: Arc::from([]),
@@ -15075,6 +15110,7 @@ fn module_diagnostic(error: super::module_identity::ModuleError) -> String {
 }
 struct ParsedSyntaxUnit {
     parsed: ParsedDeclarations,
+    child_entries: Vec<ChildEntry>,
     names: Arc<NameStore>,
     modules: Arc<super::module_identity::ModuleArena>,
     symbols: Arc<ProgramSymbols>,
@@ -15107,6 +15143,7 @@ fn parse_syntax_tokens_configured(
         Arc::from([]),
         Arc::from([]),
         Arc::from([]),
+        Arc::from([]),
     )
 }
 fn parse_syntax_tokens_policy(
@@ -15115,6 +15152,7 @@ fn parse_syntax_tokens_policy(
     no_std_roots: Arc<[super::token_session::SourceFileHandle]>,
     embedded_issuers: Arc<[super::source::EmbeddedOriginalFile]>,
     forbid_unsafe_roots: Arc<[super::token_session::SourceFileHandle]>,
+    child_sites: Arc<[usize]>,
 ) -> Result<ParsedProgram, ParseError> {
     let unit = parse_syntax_unit(
         tokens,
@@ -15123,6 +15161,7 @@ fn parse_syntax_tokens_policy(
         no_std_roots,
         embedded_issuers.clone(),
         forbid_unsafe_roots,
+        child_sites,
     )?;
     let mut program =
         unit.parsed
@@ -15145,6 +15184,7 @@ fn parse_syntax_tokens_policy(
         items: unit.parsed.items,
         empty_use_prefixes: unit.parsed.empty_use_prefixes,
         glob_imports: unit.parsed.glob_imports,
+        child_entries: unit.child_entries,
     })
 }
 fn parse_syntax_unit(
@@ -15154,6 +15194,7 @@ fn parse_syntax_unit(
     no_std_roots: Arc<[super::token_session::SourceFileHandle]>,
     embedded_issuers: Arc<[super::source::EmbeddedOriginalFile]>,
     forbid_unsafe_roots: Arc<[super::token_session::SourceFileHandle]>,
+    child_sites: Arc<[usize]>,
 ) -> Result<ParsedSyntaxUnit, ParseError> {
     let edition = tokens.edition();
     let (tokens, session, cap) = tokens.into_parts();
@@ -15167,6 +15208,7 @@ fn parse_syntax_unit(
     parser.embedded_issuers = embedded_issuers;
     parser.no_std_roots = no_std_roots;
     parser.forbid_unsafe_roots = forbid_unsafe_roots;
+    parser.child_sites = child_sites;
     parser.debug_assertions = debug_assertions;
     let mut parsed = ParsedDeclarations {
         program: ProgramDeclarations::default(),
@@ -15251,6 +15293,10 @@ fn parse_syntax_unit(
             }
         }
     }
+    if parser.child_entries.len() != parser.child_sites.len() {
+        return Err(parser.error("external module site was not reached by the parser"));
+    }
+    let child_entries = std::mem::take(&mut parser.child_entries);
     let lexical = parser.lexical.into_owned()?;
     let scopes = lexical
         .scopes
@@ -15265,6 +15311,7 @@ fn parse_syntax_unit(
     let names = names.freeze().map_err(native_adapter::name_error)?;
     Ok(ParsedSyntaxUnit {
         parsed,
+        child_entries,
         names,
         modules,
         symbols,
@@ -15310,6 +15357,7 @@ pub(super) fn validate_inactive_syntax(
             input,
             ParserPurpose::InactiveSyntax,
             super::source::CfgSet::DEFAULT_DEBUG_ASSERTIONS,
+            Arc::from([]),
             Arc::from([]),
             Arc::from([]),
             Arc::from([]),
@@ -16327,7 +16375,7 @@ pub fn parse_prepared_owned(
     owner: super::owner_path::Issued,
 ) -> Result<ParsedProgram, super::source::SourceError> {
     let projection = super::source::PreparedLexInput::prepared(source, &budget, snapshot)?;
-    parse_projection(source, projection, 0, budget, owner)
+    parse_projection(source, projection, 0, Arc::from([]), budget, owner)
 }
 
 /// Parse one file's shallow view in its own session, rendered at its crate
@@ -16339,13 +16387,15 @@ pub fn parse_file_view_owned(
     owner: super::owner_path::Issued,
 ) -> Result<ParsedProgram, super::source::SourceError> {
     let projection = super::source::PreparedLexInput::file_view(view, &budget, snapshot)?;
-    parse_projection(&view.prepared, projection, view.base, budget, owner)
+    let sites = Arc::from(view.child_sites.as_slice());
+    parse_projection(&view.prepared, projection, view.base, sites, budget, owner)
 }
 
 fn parse_projection(
     source: &super::source::PreparedSource,
     projection: super::source::PreparedLexInput<'_>,
     base: u32,
+    child_sites: Arc<[usize]>,
     budget: super::expansion_budget::ExpansionBudget,
     owner: super::owner_path::Issued,
 ) -> Result<ParsedProgram, super::source::SourceError> {
@@ -16401,6 +16451,7 @@ fn parse_projection(
         no_std_roots.into(),
         issuers.into(),
         forbid_unsafe_roots.into(),
+        child_sites,
     )
     .map_err(mapped)
 }

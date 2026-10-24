@@ -67,8 +67,42 @@ impl Parser<'_, '_> {
         if self.eat(";") {
             return Err(self.unsupported("external module files are unsupported; use inline mod"));
         }
+        let open = self.token().bytes;
         self.expect("{")?;
         self.insert_item(parsed, module, &full, visibility, ItemKind::Module(child))?;
+        self.record_child_entry(open, child, &full)?;
         Ok((child, full))
+    }
+
+    /// Records the entry of an external `mod child;` group in a single-file
+    /// view parse: the source preparer rewrote it to `{\n` with the child's
+    /// site just inside (PARSE-SPLIT.md step C1).
+    fn record_child_entry(
+        &mut self,
+        open: std::ops::Range<usize>,
+        child: ModuleId,
+        full: &AstPath,
+    ) -> Result<(), ParseError> {
+        let next = self.child_entries.len();
+        let Some(&site) = self.child_sites.get(next) else {
+            return Ok(());
+        };
+        if open.is_empty() || open.start + 2 != site {
+            return Ok(());
+        }
+        let macros = match self.lexical.item_macros.as_mut() {
+            Some(driver) => Some(
+                driver
+                    .checkpoint(self.names)
+                    .map_err(|error| self.driver_error(error))?,
+            ),
+            None => None,
+        };
+        self.child_entries.push(ChildEntry {
+            module: child,
+            path: full.clone(),
+            macros,
+        });
+        Ok(())
     }
 }
