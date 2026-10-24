@@ -325,8 +325,17 @@ fn raw_fn_membership_rejects_forged_final_shape() {
 
 #[test]
 fn finalized_parent_correspondence_rejects_republication_and_changed_payloads() {
+    assert_parent_correspondence("fn main(){let n=7i32;let f=move |x:i32|x+n+1;}", false);
+}
+
+#[test]
+fn nested_parent_correspondence_rejects_republication_and_changed_payloads() {
+    assert_parent_correspondence("fn main(){let f=|x:i32|{let g=|y:i32|y+1;x+1};}", true);
+}
+
+fn assert_parent_correspondence(source: &str, nested: bool) {
     use crate::compiler::frontend::PublishedCallableBody;
-    let program = parse("fn main(){let n=7i32;let f=move |x:i32|x+n+1;}").unwrap();
+    let program = parse(source).unwrap();
     let budget = ir::PlanBudget::default();
     let plan = PlanCtx::from_program(&program, &budget).unwrap();
     let owner = (0..plan.callable_count())
@@ -335,7 +344,7 @@ fn finalized_parent_correspondence_rejects_republication_and_changed_payloads() 
             plan.stored_closure_owner(provider)
                 .ok()
                 .flatten()
-                .map(|pair| pair.0)
+                .and_then(|_| plan.closure_publication_owner(provider, &budget).ok())
         })
         .unwrap();
     let publish = || {
@@ -360,7 +369,20 @@ fn finalized_parent_correspondence_rejects_republication_and_changed_payloads() 
         &budget,
     )
     .unwrap();
-    let checked = closures.first().unwrap();
+    let checked = closures
+        .iter()
+        .find(|checked| {
+            plan.stored_closure_owner(checked.ty.owner())
+                .unwrap()
+                .is_some()
+                == nested
+        })
+        .expect("closure with requested lexical nesting");
+    assert_eq!(
+        plan.closure_publication_owner(checked.ty.provider(), &budget)
+            .unwrap(),
+        owner
+    );
     proof
         .validate(&plan, &publication, checked, &budget)
         .unwrap();

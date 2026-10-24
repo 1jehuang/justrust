@@ -10,6 +10,7 @@ fn stored_closures_check_build_and_run_at_both_worker_counts() {
     let cases = [
         "fn main(){let f=|x:i32|x+1;println!(\"{}\",f(2));}",
         "fn apply<F:Fn(i32)->i32>(f:F,x:i32)->i32{f(x)}fn main(){let f=|x:i32|x+1;println!(\"{}\",apply(f,2));}",
+        "fn main(){let f=|x:i32|{let g=|y:i32|y+1;g(x)};println!(\"{}\",f(2));}",
     ];
     for workers in [1, 8] {
         for (index, source) in cases.iter().enumerate() {
@@ -43,6 +44,33 @@ fn stored_closures_check_build_and_run_at_both_worker_counts() {
                         .any(|(_, producer, slot)| { *slot == 1 && templates.contains(producer) }),
                     "closure child did not read its canonical parent capture/body output"
                 );
+                if index == 2 {
+                    let report = &compiled.report;
+                    assert!(report.capture_complete);
+                    let task_nodes: std::collections::BTreeMap<_, _> = report
+                        .events
+                        .iter()
+                        .filter_map(|event| Some((event.task?, event.node?)))
+                        .collect();
+                    let publication_edges: Vec<_> = report
+                        .dependency_edges
+                        .iter()
+                        .filter_map(|(task, producer, slot)| {
+                            let consumer = *task_nodes.get(task)?;
+                            (*slot == 1
+                                && templates.contains(&consumer)
+                                && templates.contains(producer))
+                            .then_some((consumer, *producer))
+                        })
+                        .collect();
+                    assert!(publication_edges.len() >= 2);
+                    for (_, producer) in &publication_edges {
+                        assert!(
+                            publication_edges.iter().all(|(child, _)| child != producer),
+                            "nested closure read an intermediate closure's empty publication"
+                        );
+                    }
+                }
                 if check {
                     assert!(
                         compiled

@@ -6,6 +6,13 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 
 ## Completed foundations, not full compatibility
 
+- [x] Nested closure templates read their outermost source callable's immutable
+  publication while retaining immediate lexical owner/site authentication.
+  `inline_closure_arguments::nested_scalar_closures_use_outer_source_publication`,
+  the nested publication forgery test and `stored_closures` graph-edge checks
+  cover execution at workers 1 and 8 and source-authority rejection. Nested
+  `Result` collection still hits the original typed-cell-cover boundary.
+
 - [x] `Iterator::nth`, `last`, and `find` preserve iterator position and
   non-fused stopping behavior. `iterator_fold::iterator_consumers_match_stock`
   checks stock/native execution at workers 1 and 8 and invalid predicates.

@@ -1045,12 +1045,20 @@ impl Provider for CompilerProvider {
                         .stored_closure_owner(types.callable_decl(index).map_err(Error::new)?)
                         .map_err(Error::new)?
                     {
-                        let owner_index = types.callable_index(owner).map_err(Error::new)?;
+                        let declaration = types.callable_decl(index).map_err(Error::new)?;
+                        // All nested closures are finalized by the outermost
+                        // source callable. Their immediate lexical owner and
+                        // site still authenticate selection below.
+                        let publication_owner = types
+                            .closure_publication_owner(declaration, &this.0.budget)
+                            .map_err(Error::new)?;
+                        let owner_index = types
+                            .callable_index(publication_owner)
+                            .map_err(Error::new)?;
                         let parent = cx.request(function(TEMPLATE_BODY, owner_index));
                         let bodies: Arc<ClosureBodiesFact> = cx.read_fact(parent.get(1)).await?;
                         let parent_body: Arc<TemplateBodyFact> =
                             cx.read_fact(parent.get(0)).await?;
-                        let declaration = types.callable_decl(index).map_err(Error::new)?;
                         let closure = bodies
                             .bodies
                             .iter()

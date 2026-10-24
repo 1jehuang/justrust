@@ -7,6 +7,18 @@ mod oracle;
 use oracle::{Case, Expect};
 
 #[test]
+fn nested_scalar_closures_use_outer_source_publication() {
+    oracle::check(
+        "nested_scalar_publication",
+        &[Case {
+            name: "nested_captured_argument",
+            source: "fn main(){let f=|x:i32|{let g=|y:i32|y+1;g(x)};println!(\"{}\",f(7));}",
+            expect: Expect::Run("8\n"),
+        }],
+    );
+}
+
+#[test]
 fn nested_result_map_uses_canonical_outer_publication() {
     oracle::check(
         "nested_result_map",
