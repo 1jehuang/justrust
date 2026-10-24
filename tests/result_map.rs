@@ -5,6 +5,20 @@
 mod closure_oracle;
 
 #[test]
+fn unchanged_error_handling_program_matches_stock() {
+    closure_oracle::check(
+        "full-error-handling",
+        &[closure_oracle::Case {
+            name: "unchanged_error_handling",
+            source: include_str!("fixtures/full_programs/15_error_handling.rs"),
+            expect: closure_oracle::Expect::Run(include_str!(
+                "fixtures/full_programs/15_error_handling.stdout"
+            )),
+        }],
+    );
+}
+
+#[test]
 fn result_lazy_combinators_match_stock() {
     use closure_oracle::{Case, Expect};
     closure_oracle::check(

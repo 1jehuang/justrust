@@ -34,6 +34,9 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 - [x] `Result<Vec<T>, E>` collection stops at the first error and preserves
   payload, iterator and partial-vector drop order. The `result_map::result_vec_*`
   tests cover success, empty input, errors, non-Copy values and invalid types.
+  Unchanged full-program 15 is now a passing corpus requirement;
+  `result_map::unchanged_error_handling_program_matches_stock` verifies its
+  CHECK/BUILD/run behavior against stock at workers 1 and 8.
 
 - [x] `Option::insert` returns the stored mutable reference and drops the old
   value exactly once. `option_map::option_insert_returns_stored_mutable_value`
