@@ -42,13 +42,20 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
   and replayed input constraints. `callable_reference_inputs` covers stock
   CHECK/BUILD/run at workers 1 and 8 and borrow rejection controls; the private
   scalar-input replay test rejects source, place, type and capability mutations.
-  Nested-reference nominal inputs remain a separate source-inference boundary.
+  Closed string/bool/char literals, nested named structs and shared borrowed
+  temporaries now replay source-only constructor constraints for one-input
+  generic calls with reference-free results. Literal values, field order and
+  original temporary storage identities are checked independently of checked IR.
+  `callable_reference_inputs::{closed_literal_generic_inputs_match_stock,unchanged_generic_container_matches_stock}`
+  cover stock CHECK/BUILD/run at workers 1 and 8; the literal forgery test covers
+  changed payloads, fields, borrow kinds, projections and redirected storage.
+  Other nested-reference nominal expressions remain a source-inference boundary.
 
 - [x] Source `String` implements `PartialOrd` and `Ord` with bytewise lexical
       ordering. `operator_inference::owned_string_ordering_matches_stock`
       covers empty/equal/prefix strings, embedded NULs, and multibyte UTF-8
-      through operators and ordering methods. Full-program 14 advances to the
-      inferred-reference source replay boundary and is not yet supported.
+      through operators and ordering methods. Unchanged full-program 14 now
+      passes and is ratcheted in the corpus manifest after literal-call replay.
 - [x] Open nominal iterator input projections normalize through the selected
       implementation under the caller's bounds, including closure argument
       tuple checks. Rigid parameter projections remain symbolic. Coverage:

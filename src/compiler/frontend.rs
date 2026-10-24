@@ -52,6 +52,7 @@ mod invocation;
 #[cfg(test)]
 mod invocation_authority;
 mod let_chains;
+mod literal_call_inputs;
 mod method_argument_selection;
 mod name_scope;
 mod name_validation;
@@ -127,6 +128,91 @@ pub(super) enum NominalCallablePublication {
 #[cfg(test)]
 mod canonical_source_replay_tests {
     use super::*;
+    #[test]
+    fn closed_literal_inputs_reject_forged_values_and_storage() {
+        let (_, _, budget, publication) = published(
+            "struct Pair<T>{a:T,b:T}fn consume<T>(x:T)->bool{true}fn main(){consume(&Pair{a:\"x\",b:\"y\"});}",
+            1,
+        );
+        let source = publication.source();
+        let original = publication.original().source_for_test();
+        publication
+            .validate_source(source, publication.facts(), &budget)
+            .unwrap();
+        assert_eq!(original.literal_temporaries.len(), 1);
+        for mode in 0..5 {
+            let mut changed = source.as_ref().clone();
+            match mode {
+                0 => {
+                    let expr = changed
+                        .exprs
+                        .iter_mut()
+                        .find(|e| matches!(e.kind, ir::ExprKind::Str(_)))
+                        .unwrap();
+                    expr.kind = ir::ExprKind::Str("forged".into());
+                }
+                1 => {
+                    let expr = changed
+                        .exprs
+                        .iter_mut()
+                        .find(|e| matches!(e.kind, ir::ExprKind::Struct { .. }))
+                        .unwrap();
+                    let ir::ExprKind::Struct { fields, .. } = &mut expr.kind else {
+                        unreachable!()
+                    };
+                    fields.swap(0, 1);
+                }
+                2 | 3 => {
+                    let expr = changed
+                        .exprs
+                        .iter_mut()
+                        .find(|e| matches!(e.kind, ir::ExprKind::Borrow { .. }))
+                        .unwrap();
+                    let ir::ExprKind::Borrow { kind, place, .. } = &mut expr.kind else {
+                        unreachable!()
+                    };
+                    if mode == 2 {
+                        *kind = ir::BorrowKind::Mut;
+                    } else {
+                        place.projection.push(ir::Projection::Deref);
+                    }
+                }
+                _ => {
+                    let (_, local) = original.literal_temporaries.iter().next().unwrap();
+                    let replacement = ir::LocalId(changed.locals.len());
+                    changed.locals.push(changed.locals[local.0].clone());
+                    for expr in &mut changed.exprs {
+                        match &mut expr.kind {
+                            ir::ExprKind::Borrow { place, .. } if place.local == *local => {
+                                place.local = replacement
+                            }
+                            ir::ExprKind::Block(block) => {
+                                for statement in &mut block.statements {
+                                    if let ir::TypedStmt::Assign { local: slot, .. } = statement
+                                        && *slot == *local
+                                    {
+                                        *slot = replacement;
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            assert_eq!(
+                kind_error(replay_source_body(
+                    &original,
+                    &Arc::new(changed),
+                    publication.facts(),
+                    &budget
+                )),
+                tr::FactsErrorKind::InvalidMetadata,
+                "literal forgery {mode}"
+            );
+        }
+    }
+
     #[test]
     fn root_or_seal_binds_order_tests_projections_body_and_scrutinee() {
         let text = "fn pick(p:(bool,u8))->u8{match p{(true,0)|(false,1)=>7,_=>0}}fn main(){}";
@@ -1093,6 +1179,8 @@ struct SourceInventory {
     function_scope: Option<super::semantic_scope::ScopeId>,
     owner: sr::OriginalBodyId,
     calls: Vec<SourceCallSite>,
+    // Reconstructed from immutable source on each inventory walk, never published.
+    literal_arguments: HashMap<usize, Expr>,
     constants: Vec<(sr::SourceNode, PathKey)>,
     associated_constants: Vec<(sr::SourceNode, AssociatedConstUse)>,
     associated_constant_pointers: HashMap<usize, usize>,
@@ -1678,6 +1766,7 @@ impl SourceInventory {
             function_scope: function.lexical_scope,
             owner: owner.clone(),
             calls: Vec::new(),
+            literal_arguments: HashMap::new(),
             constants: Vec::new(),
             associated_constants: Vec::new(),
             associated_constant_pointers: HashMap::new(),
@@ -2462,6 +2551,12 @@ impl SourceInventory {
                     },
                     budget,
                 )?;
+                if let [argument] = args.as_slice()
+                    && let Some(literal) = literal_call_inputs::copy_literal(argument, budget, 0)?
+                {
+                    reserve_source_map(&mut self.literal_arguments, budget)?;
+                    self.literal_arguments.insert(index, literal);
+                }
                 insert_source_pointer(
                     &mut self.call_pointers,
                     expr as *const Expr as usize,
@@ -3064,6 +3159,7 @@ pub(super) struct OriginalSource {
     symbolic_constant_emissions: Vec<(usize, ir::ExprId)>,
     calls: Vec<SourceCallSite>,
     bindings: Vec<SourceBindingSite>,
+    literal_temporaries: HashMap<ir::ExprId, ir::LocalId>,
     call_mapping: Vec<(usize, ir::ExprId, ir::Callee)>,
     nominal_call_realizations: Option<Vec<nominal_call_receipts::Receipt>>,
     builtin_leading_zeros_mapping: Vec<BuiltinLeadingZerosOccurrence>,
@@ -5480,6 +5576,24 @@ pub(super) fn replay_source_body(
             .map_err(|e| source_error(budget, &e))?;
             continue;
         }
+        if let Some(literal) = fresh.literal_arguments.get(&index)
+            && let [argument] = args.as_slice()
+        {
+            literal_call_inputs::validate(
+                literal,
+                checked,
+                *argument,
+                target,
+                signature,
+                &view,
+                &signatures,
+                caller_context.module,
+                facts,
+                &original.literal_temporaries,
+                budget,
+            )?;
+            continue;
+        }
         let parent = site.direct_let.as_ref().ok_or_else(|| {
             FactsError::unsupported(
                 budget,
@@ -5961,6 +6075,25 @@ impl PlanCtx {
                     }
                 };
                 let root_positions = canonical_root_positions(&cap, budget)?;
+                let mut literal_temporaries = HashMap::new();
+                for (index, id, _) in cap.calls.borrow().iter() {
+                    sr::work(budget, 1)?;
+                    if cap.inventory.literal_arguments.contains_key(index)
+                        && let Some(ir::TypedExpr {
+                            kind: ir::ExprKind::Call { args, .. },
+                            ..
+                        }) = checked.exprs.get(id.0)
+                        && let [argument] = args.as_slice()
+                    {
+                        literal_call_inputs::capture_temporaries(
+                            &checked,
+                            *argument,
+                            &mut literal_temporaries,
+                            budget,
+                            0,
+                        )?;
+                    }
+                }
                 // Move precharged source-only records. Never clone the AST or output arena.
                 let mut calls = std::mem::take(&mut cap.inventory.calls);
                 for call in &mut calls {
@@ -5977,6 +6110,7 @@ impl PlanCtx {
                     constant_emissions: cap.constant_emissions.take(),
                     calls,
                     bindings: std::mem::take(&mut cap.inventory.bindings),
+                    literal_temporaries,
                     call_mapping: cap.calls.take(),
                     nominal_call_realizations: cap.nominal_call_realizations.borrow().clone(),
                     builtin_leading_zeros_mapping: cap.builtin_leading_zeros.take(),

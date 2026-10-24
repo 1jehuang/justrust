@@ -4,6 +4,37 @@
 mod oracle;
 
 #[test]
+fn unchanged_generic_container_matches_stock() {
+    oracle::stock_native(include_str!(
+        "fixtures/full_programs/14_generic_container.rs"
+    ));
+}
+
+#[test]
+fn closed_literal_generic_inputs_match_stock() {
+    oracle::stock_native(
+        r#"use std::fmt::Display;
+struct Pair<T> { a:T, b:T }
+trait Summary { fn summarize(&self)->String; }
+impl<T:Display> Summary for Pair<T> {
+    fn summarize(&self)->String { format!("({}, {})",self.a,self.b) }
+}
+fn print_summary(item:&impl Summary) { println!("summary: {}",item.summarize()); }
+fn consume<T>(item:T)->bool { let _=item; true }
+fn main() {
+    print_summary(&Pair { a:"x", b:"y" });
+    println!("{} {}",consume(Pair { a:"left", b:"right" }),consume(&Pair { a:'a', b:'b' }));
+}"#,
+    );
+    for source in [
+        "struct Pair<T>{a:T,b:T}trait Missing{}fn consume<T:Missing>(x:T){}fn unused(){consume(&Pair{a:\"x\",b:\"y\"});}fn main(){}",
+        "struct Pair<T>{a:T,b:T}fn escape<'a,T>(x:&T)->&'a T{x}fn main(){let x=escape(&Pair{a:\"x\",b:\"y\"});}",
+    ] {
+        oracle::stock_and_native_reject(source);
+    }
+}
+
+#[test]
 fn ordinary_generic_scalar_reference_inputs_match_stock() {
     oracle::stock_native(
         r#"fn consume<T>(value: T) -> i32 { let _ = value; 7 }
