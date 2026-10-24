@@ -13,6 +13,7 @@ use std::sync::Arc;
 mod associated_bounds;
 mod associated_constants;
 mod associated_types;
+mod body_validation;
 mod callable_inputs;
 mod carrier_regions;
 mod catalog;
@@ -44,6 +45,7 @@ mod parameter_equality;
 mod physical_carriers;
 mod predicate_subjects;
 mod projected_methods;
+mod schema_instantiation;
 mod symbolic_equalities;
 mod universal_carriers;
 mod universal_methods;
@@ -447,6 +449,25 @@ pub struct AssociatedTypeValue {
     pub implementation: DeclId,
     pub associated: DeclId,
     pub rhs: Ty,
+    pub source: Arc<AssociatedTypeSource>,
+}
+/// Original assignment metadata, not a loan or an executable carrier proof.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AssociatedSourceRegion {
+    Named(ir::SourceRegionId),
+    Static,
+    Elided,
+}
+#[derive(Clone, Debug)]
+pub struct AssociatedTypeSource {
+    pub implementation: DeclId,
+    pub associated: DeclId,
+    pub env: Arc<GenericEnv>,
+    pub region_count: u16,
+    pub outlives: Arc<[(AssociatedSourceRegion, AssociatedSourceRegion)]>,
+    /// Exact root reference layers. No nested nominal origins are inferred.
+    pub references: Arc<[(ir::BorrowKind, AssociatedSourceRegion)]>,
+    pub parameter_tail: Option<ParamId>,
 }
 #[derive(Clone, Debug)]
 pub struct CallableHeader {
@@ -588,6 +609,17 @@ pub trait SchemaCx {
         Err(FactsError::invalid(
             self.budget(),
             "associated type assignment has no authoritative RHS",
+        ))
+    }
+    fn associated_type_source(
+        &self,
+        implementation: DeclId,
+        associated: DeclId,
+    ) -> Result<Arc<AssociatedTypeSource>> {
+        let _ = (implementation, associated);
+        Err(FactsError::invalid(
+            self.budget(),
+            "associated assignment has no original source metadata",
         ))
     }
     fn source_region_env(&self, id: DeclId) -> Result<Arc<ir::SourceRegionEnv>>;
@@ -1121,7 +1153,7 @@ impl ValidatedFacts {
     /// `validate_ty` memoized in a node-local scratch.
     pub fn validate_ty_scratch(&self, ty: &Ty, scratch: &mut TraitScratch) -> Result<()> {
         scratch.for_facts(self);
-        scratch.valid.check(ty, |ty| self.validate_ty(ty))
+        scratch.valid.check(self, ty)
     }
     /// `must_copy` memoized in a node-local scratch, sharing its proof memo.
     pub fn must_copy_scratch(&self, ty: &Ty, scratch: &mut TraitScratch) -> Result<bool> {
@@ -1309,6 +1341,9 @@ struct ProofScratch {
     projections: Vec<associated_types::NormalizationMemo>,
     normalization_validations: Vec<associated_types::NormalizationValidation>,
     closedness: Vec<ClosednessValidation>,
+    /// Successful raw substitutions only; all normalization and proof work
+    /// remains outside this node-local retained-input cache.
+    instantiations: schema_instantiation::Substitutions,
 }
 
 #[derive(Clone, Copy)]
@@ -1642,7 +1677,7 @@ pub struct TraitScratch {
     proofs: ProofScratch,
     /// Executable type validation (`validate_ty`) successes and Copy
     /// answers for identical type allocations under one facts subject.
-    valid: ValidatedTypes,
+    valid: body_validation::Validated,
     copy: Vec<(Ty, bool)>,
     copy_index: std::collections::HashMap<usize, Vec<usize>>,
     /// Successful call-signature validations (subject callee, signature).
@@ -1669,7 +1704,7 @@ impl TraitScratch {
         let key = (facts.predicates.index, facts.phase(), facts.declaration());
         if self.facts_key != Some(key) {
             self.facts_key = Some(key);
-            self.valid = ValidatedTypes::default();
+            self.valid = body_validation::Validated::default();
             self.copy.clear();
             self.copy_index.clear();
             self.signatures.clear();
@@ -6318,9 +6353,13 @@ impl ValidatedTraitWorld {
         for arg in args {
             self.validate_executable_actual(arg, facts.env())?;
         }
-        let mut result = self
-            .schema
-            .instantiate_schema(schema, args, facts.env(), &self.budget)?;
+        let mut result = self.instantiate_raw_cached(
+            schema,
+            args,
+            facts,
+            declaration,
+            &mut active.instantiations,
+        )?;
         if !self.eq_contract(
             &schema.signature.ref_contract,
             &result.signature.ref_contract,

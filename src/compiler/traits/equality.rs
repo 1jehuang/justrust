@@ -584,7 +584,9 @@ impl ValidatedTraitWorld {
             self.validate_equality_reference_domain(rhs, 0)?;
             return Ok(());
         }
-        self.validate_equality_reference_domain(rhs, 0)?;
+        if !self.shared_assignment_metadata(projection, rhs, env)? {
+            self.validate_equality_reference_domain(rhs, 0)?;
+        }
         if matches!(rhs, Ty::AssociatedType(_)) {
             // A closed projection RHS (the `Item = <IntoIter as Iterator>::Item`
             // bound of a concrete `IntoIterator` impl) is metadata here, like a
@@ -651,6 +653,221 @@ impl ValidatedTraitWorld {
                 Ok(())
             }
         }
+    }
+
+    fn checked_assignment_source(
+        &self,
+        value: &AssociatedTypeValue,
+    ) -> Result<Arc<AssociatedTypeSource>> {
+        let source = self
+            .schema
+            .associated_type_source(value.implementation, value.associated)?;
+        let retained = &value.source;
+        if source.implementation != value.implementation
+            || source.associated != value.associated
+            || !self.same_env(&source.env, &self.info(value.implementation)?.env)?
+            || source.region_count as usize > ir::MAX_REGION_PARAMS
+            || source.implementation != retained.implementation
+            || source.associated != retained.associated
+            || !self.same_env(&source.env, &retained.env)?
+            || source.region_count != retained.region_count
+            || source.outlives != retained.outlives
+            || source.references != retained.references
+            || source.parameter_tail != retained.parameter_tail
+        {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "associated assignment source authority changed",
+            ));
+        }
+        let check_region = |region: &AssociatedSourceRegion| -> Result<()> {
+            charged(&self.budget, self.budget.charge_work(1))?;
+            if let AssociatedSourceRegion::Named(id) = region
+                && (id.declaration != value.implementation || id.index >= source.region_count)
+            {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "associated assignment has foreign source lifetime",
+                ));
+            }
+            Ok(())
+        };
+        let mut tail = &value.rhs;
+        for (kind, region) in source.references.iter() {
+            check_region(region)?;
+            let Ty::Ref {
+                kind: actual,
+                referent,
+            } = tail
+            else {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "associated source reference shape changed",
+                ));
+            };
+            if actual != kind {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "associated source reference kind changed",
+                ));
+            }
+            tail = referent;
+        }
+        for (longer, shorter) in source.outlives.iter() {
+            check_region(longer)?;
+            check_region(shorter)?;
+        }
+        if let Some(parameter) = source.parameter_tail
+            && (tail != &Ty::Param(parameter)
+                || !source.env.ordered_params().any(|p| p == parameter))
+        {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "associated source generic binder changed",
+            ));
+        }
+        Ok(source)
+    }
+
+    /// Domain admission is not membership: candidate predicates are still
+    /// discharged by the enclosing selection, and equality is rechecked from
+    /// that selection's witness. This stage must not recursively select itself.
+    fn shared_assignment_metadata(
+        &self,
+        projection: &ir::AssociatedTypeProjection,
+        rhs: &Ty,
+        env: &GenericEnv,
+    ) -> Result<bool> {
+        let Ty::Ref {
+            kind: ir::BorrowKind::Shared,
+            referent: inner,
+        } = rhs
+        else {
+            return Ok(false);
+        };
+        let Ty::Ref {
+            kind: ir::BorrowKind::Shared,
+            referent: leaf,
+        } = inner.as_ref()
+        else {
+            return Ok(false);
+        };
+        // Exactly one substituted shared layer, with no nested slice or
+        // reference hidden in its payload. The generic guard remains intact.
+        match self.reject_projected_references(leaf, 0) {
+            Ok(()) => {}
+            Err(error) if error.kind() == FactsErrorKind::Unsupported => return Ok(false),
+            Err(error) => return Err(error),
+        }
+        let mut selected = false;
+        let Some(candidates) = self.trait_impl_index.get(&projection.trait_ref.declaration) else {
+            return Ok(false);
+        };
+        for &index in candidates {
+            charged(&self.budget, self.budget.charge_work(1))?;
+            let header = self.headers.impls.get(index).ok_or_else(|| {
+                FactsError::invalid(
+                    &self.budget,
+                    "associated metadata implementation index changed",
+                )
+            })?;
+            let mut slots = Vec::new();
+            for _ in header.schema_env.ordered_params() {
+                push(&self.budget, &mut slots, None)?;
+            }
+            if !self.match_head(
+                &header.trait_ref.self_ty,
+                &projection.trait_ref.self_ty,
+                &header.schema_env,
+                &mut slots,
+                0,
+            )? || header.trait_ref.args.len() != projection.trait_ref.args.len()
+            {
+                continue;
+            }
+            let mut matches = true;
+            for (raw, actual) in header
+                .trait_ref
+                .args
+                .iter()
+                .zip(projection.trait_ref.args.iter())
+            {
+                if !self.match_head(raw, actual, &header.schema_env, &mut slots, 0)? {
+                    matches = false;
+                    break;
+                }
+            }
+            if !matches || slots.iter().any(Option::is_none) {
+                continue;
+            }
+            if selected {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "associated metadata has ambiguous implementation heads",
+                ));
+            }
+            let value = self.associated_value(header.declaration, projection.item)?;
+            let source = self.checked_assignment_source(value)?;
+            let Some(parameter) = source.parameter_tail else {
+                return Ok(false);
+            };
+            if source.references.len() != 1
+                || !matches!(
+                    source.references[0],
+                    (ir::BorrowKind::Shared, AssociatedSourceRegion::Named(_))
+                )
+                || !matches!(&value.rhs, Ty::Ref { kind: ir::BorrowKind::Shared, referent } if referent.as_ref() == &Ty::Param(parameter))
+            {
+                return Ok(false);
+            }
+            let mut args = Vec::new();
+            for slot in slots {
+                push(
+                    &self.budget,
+                    &mut args,
+                    slot.ok_or_else(|| {
+                        FactsError::invalid(
+                            &self.budget,
+                            "associated metadata lost a matched argument",
+                        )
+                    })?,
+                )?;
+            }
+            let raw = self
+                .schema
+                .associated_type_rhs(header.declaration, projection.item)?;
+            if !self.eq_ty(&raw, &value.rhs, 0)? {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "associated metadata RHS source changed",
+                ));
+            }
+            retain::<ir::RefContract>(&self.budget, 1)?;
+            let schema = GenericSchema {
+                env: header.schema_env.clone(),
+                signature: Signature {
+                    params: Vec::new(),
+                    result: raw.clone(),
+                    ref_contract: Arc::new(ir::RefContract::default()),
+                },
+                predicates: Arc::from([]),
+            };
+            let instance = self
+                .schema
+                .instantiate_schema(&schema, &args, env, &self.budget)?;
+            self.validate_rhs_substitution(
+                &raw,
+                &instance.signature.result,
+                &schema.env,
+                &args,
+                0,
+            )?;
+            if !self.eq_ty(&instance.signature.result, rhs, 0)? {
+                return Ok(false);
+            }
+            selected = true;
+        }
+        Ok(selected)
     }
 
     pub(super) fn validate_equality_domain_in(
@@ -965,6 +1182,7 @@ impl ValidatedTraitWorld {
             ));
         }
         let value = self.associated_value(*declaration, projection.item)?;
+        self.checked_assignment_source(value)?;
         let raw_rhs = self
             .schema
             .associated_type_rhs(*declaration, projection.item)?;
@@ -1343,6 +1561,113 @@ impl ValidatedTraitWorld {
 mod tests {
     use super::*;
     use crate::compiler::frontend::{self, PlanCtx};
+
+    #[test]
+    fn associated_assignment_source_rejects_missing_foreign_and_rebound_rows() {
+        let source = frontend::parse(
+            "trait Has{type Out;}struct Hold<'a,T>{r:&'a T}impl<'a,T> Has for Hold<'a,T>{type Out=&'a T;}fn probe(x:Hold<&i32>){}fn main(){}",
+        ).unwrap();
+        let budget = PlanBudget::default();
+        let plan = PlanCtx::from_program(&source, &budget).unwrap();
+        let world = plan.trait_world().unwrap();
+        let owner = world
+            .headers
+            .impls
+            .iter()
+            .find(|owner| !owner.associated_types.is_empty())
+            .unwrap();
+        let value = &owner.associated_types[0];
+        let original = world.checked_assignment_source(value).unwrap();
+        assert_eq!(original.region_count, 1);
+        assert_eq!(original.references.len(), 1);
+        assert!(original.parameter_tail.is_some());
+        for mode in 0..8 {
+            let mut forged = value.clone();
+            let row = Arc::make_mut(&mut forged.source);
+            match mode {
+                0 => row.references = Arc::from([]),
+                1 => row.implementation = value.associated,
+                2 => row.associated = value.implementation,
+                3 => row.region_count = 0,
+                4 => row.parameter_tail = None,
+                5 => row.env = Arc::new(GenericEnv::new(&[], &budget).unwrap()),
+                6 => {
+                    row.references = Arc::from([(
+                        ir::BorrowKind::Shared,
+                        AssociatedSourceRegion::Named(ir::SourceRegionId {
+                            declaration: value.associated,
+                            index: 0,
+                        }),
+                    )])
+                }
+                _ => {
+                    row.references = Arc::from([(
+                        ir::BorrowKind::Shared,
+                        AssociatedSourceRegion::Named(ir::SourceRegionId {
+                            declaration: value.implementation,
+                            index: 1,
+                        }),
+                    )])
+                }
+            }
+            assert!(
+                world.checked_assignment_source(&forged).is_err(),
+                "forgery {mode}"
+            );
+        }
+        let probe = world
+            .schema
+            .declaration_schema(plan.function_decl(0).unwrap())
+            .unwrap();
+        let projection = ir::AssociatedTypeProjection {
+            trait_ref: TraitRef {
+                declaration: owner.trait_ref.declaration,
+                self_ty: probe.signature.params[0].clone(),
+                args: Arc::from([]),
+            },
+            item: value.associated,
+        };
+        let shared = |ty| Ty::Ref {
+            kind: ir::BorrowKind::Shared,
+            referent: Arc::new(ty),
+        };
+        let rhs = shared(shared(Ty::Int(ir::IntTy::I32)));
+        assert!(
+            world
+                .shared_assignment_metadata(&projection, &rhs, &probe.env)
+                .unwrap()
+        );
+        let deeper = shared(rhs.clone());
+        assert!(
+            !world
+                .shared_assignment_metadata(&projection, &deeper, &probe.env)
+                .unwrap()
+        );
+        let mutable = shared(Ty::Ref {
+            kind: ir::BorrowKind::Mut,
+            referent: Arc::new(Ty::Int(ir::IntTy::I32)),
+        });
+        assert!(
+            !world
+                .shared_assignment_metadata(&projection, &mutable, &probe.env)
+                .unwrap()
+        );
+        assert!(world.reject_projected_references(&rhs, 0).is_err());
+    }
+
+    #[test]
+    fn associated_assignment_rejects_undeclared_source_lifetime() {
+        let source = frontend::parse("trait Has{type Out;}struct Hold<'a,T>{r:&'a T}impl<'a,T> Has for Hold<'a,T>{type Out=&'missing T;}fn main(){}").unwrap();
+        let budget = PlanBudget::default();
+        let error = match PlanCtx::from_program(&source, &budget) {
+            Ok(_) => panic!("undeclared lifetime accepted"),
+            Err(error) => error,
+        };
+        assert!(
+            error.contains("undeclared associated assignment lifetime"),
+            "{error}"
+        );
+    }
 
     #[test]
     fn inherited_equality_and_exact_owner_projection_coexist_in_signature_and_body() {

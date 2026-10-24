@@ -74,6 +74,95 @@ fn fixture() -> Fixture {
 }
 
 #[test]
+fn checked_body_type_scratch_reuses_only_exact_authorized_closure() {
+    let f = fixture();
+    let closure = f
+        .facts
+        .instantiate_closure_owner(&f.template, &[Ty::Int(ir::IntTy::U64)])
+        .unwrap();
+    let ty = Ty::Closure(closure.clone());
+    let mut scratch = TraitScratch::default();
+    f.facts.validate_ty_scratch(&ty, &mut scratch).unwrap();
+    let nodes = f.budget.usage_snapshot().nodes;
+    f.facts.validate_ty_scratch(&ty, &mut scratch).unwrap();
+    assert_eq!(f.budget.usage_snapshot().nodes, nodes + 1);
+
+    let forged = Ty::Closure(Arc::new(
+        ir::ClosureTy::new(
+            closure.owner(),
+            closure.owner_args().into(),
+            closure.site(),
+            closure.provider(),
+            closure.params().into(),
+            Ty::Bool,
+            closure.captures().into(),
+            closure.kind(),
+        )
+        .with_sources(closure.sources().into())
+        .with_shape_seal(closure.shape_seal().cloned()),
+    ));
+    assert!(f.facts.validate_ty_scratch(&forged, &mut scratch).is_err());
+    f.facts.validate_ty_scratch(&ty, &mut scratch).unwrap();
+
+    let mut forged_facts = f.facts.as_ref().clone();
+    forged_facts.predicates = Arc::new(PredicateEnv {
+        world: f.facts.predicates.world,
+        index: f.facts.predicates.index,
+        declaration: f.facts.predicates.declaration,
+        env: f.facts.predicates.env.clone(),
+        predicates: f.facts.predicates.predicates.clone(),
+    });
+    assert!(forged_facts.validate_ty_scratch(&ty, &mut scratch).is_err());
+    f.facts.validate_ty_scratch(&ty, &mut scratch).unwrap();
+    let foreign = fixture();
+    assert!(
+        foreign
+            .facts
+            .validate_ty_scratch(&ty, &mut scratch)
+            .is_err()
+    );
+    f.facts.validate_ty_scratch(&ty, &mut scratch).unwrap();
+
+    let universal = f.facts.world.callable_facts(f.facts.declaration()).unwrap();
+    let nodes = f.budget.usage_snapshot().nodes;
+    universal.validate_ty_scratch(&ty, &mut scratch).unwrap();
+    assert!(
+        f.budget.usage_snapshot().nodes > nodes + 1,
+        "another phase must revalidate"
+    );
+    f.facts.validate_ty_scratch(&ty, &mut scratch).unwrap();
+    let other_limits = PlanBudget::new(ir::PlanLimits {
+        depth: 0,
+        ..ir::PlanLimits::default()
+    });
+    assert!(
+        ir::FactsCtx::from_validated(&f.facts)
+            .validate_ty_with_budget_scratch(&ty, &other_limits, &mut scratch)
+            .is_err()
+    );
+    f.facts.validate_ty_scratch(&ty, &mut scratch).unwrap();
+
+    let mut too_deep = Ty::Bool;
+    for _ in 0..=f.budget.limits().depth {
+        too_deep = Ty::Tuple(Arc::from([too_deep]));
+    }
+    assert_eq!(
+        f.facts
+            .validate_ty_scratch(&too_deep, &mut scratch)
+            .unwrap_err()
+            .kind(),
+        FactsErrorKind::Resource
+    );
+    assert_eq!(
+        f.facts
+            .validate_ty_scratch(&ty, &mut scratch)
+            .unwrap_err()
+            .kind(),
+        FactsErrorKind::Resource
+    );
+}
+
+#[test]
 fn closure_type_walk_reuses_only_the_same_checked_allocation() {
     let f = fixture();
     let closure = f

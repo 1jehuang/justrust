@@ -2,6 +2,29 @@
 //! default trait bodies. A method spelling is never a declaration identity.
 use super::*;
 
+impl PlanCtx {
+    /// Stored nested bodies are published with their outermost source callable.
+    /// Keep the immediate owner/site separate: they still authenticate selection
+    /// from the ancestor's immutable closure publication.
+    pub(in crate::compiler) fn closure_publication_owner(
+        &self,
+        declaration: ir::DeclId,
+        budget: &ir::PlanBudget,
+    ) -> Result<ir::DeclId, String> {
+        self.check_budget(budget)?;
+        let mut owner = declaration;
+        for depth in 0..=ir::MAX_PATTERN_PROJECTION_DEPTH {
+            budget.check_depth(depth)?;
+            budget.charge_work(1)?;
+            match self.stored_closure_owner(owner)? {
+                Some((parent, _)) => owner = parent,
+                None => return Ok(owner),
+            }
+        }
+        Err("closure publication owner chain exceeds depth limit".into())
+    }
+}
+
 impl DeclRegistry {
     pub(in crate::compiler::frontend) fn closure_source_owner(
         &self,
@@ -96,6 +119,58 @@ impl DeclRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nested_closure_publication_owner_preserves_exact_lexical_chain() {
+        let program =
+            parse("fn main(){let f=||{let g=||1i32;1i32};}fn other(){let h=||2i32;}").unwrap();
+        let budget = ir::PlanBudget::default();
+        let plan = PlanCtx::from_program(&program, &budget).unwrap();
+        let mut nested = None;
+        for source in plan.registry.program.closure_sources.values() {
+            let key = name_scope::path_key(program.names.as_ref(), &source.name, Namespace::Value)
+                .unwrap();
+            let provider = *plan.registry.functions.get(&key).unwrap();
+            let Some((parent, _)) = plan.stored_closure_owner(provider).unwrap() else {
+                continue;
+            };
+            if let Some((root, _)) = plan.stored_closure_owner(parent).unwrap() {
+                assert_eq!(
+                    plan.closure_publication_owner(provider, &budget).unwrap(),
+                    root
+                );
+                assert_ne!(parent, root);
+                nested = Some(source.name.clone());
+            }
+        }
+        let nested = nested.expect("real nested closure source");
+        let key = name_scope::path_key(program.names.as_ref(), &nested, Namespace::Type).unwrap();
+        let mut forged = program.clone();
+        let other = forged
+            .functions
+            .iter()
+            .find(|f| forged.names.spelling(f.name.segments()[0]).unwrap() == "other")
+            .unwrap()
+            .name
+            .clone();
+        Arc::make_mut(&mut forged.closure_sources)
+            .get_mut(&key)
+            .unwrap()
+            .parent
+            .as_mut()
+            .unwrap()
+            .name = other;
+        if let Ok(forged_plan) = PlanCtx::from_program(&forged, &budget) {
+            let provider_key =
+                name_scope::path_key(forged.names.as_ref(), &nested, Namespace::Value).unwrap();
+            let provider = *forged_plan.registry.functions.get(&provider_key).unwrap();
+            assert!(
+                forged_plan
+                    .closure_publication_owner(provider, &budget)
+                    .is_err()
+            );
+        }
+    }
 
     #[test]
     fn generic_method_and_trait_default_keep_source_owner_ordinals() {

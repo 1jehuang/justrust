@@ -5,11 +5,55 @@ pub trait Iterator: Sized {
     type Item;
     fn next(&mut self) -> Option<Self::Item>;
 
-    fn enumerate(self) -> Enumerate<Self> {
-        Enumerate {
-            iterator: self,
-            count: 0usize,
+    fn nth(&mut self, mut n: usize) -> Option<Self::Item> {
+        loop {
+            match self.next() {
+                Option::Some(item) => {
+                    if n == 0usize {
+                        return Option::Some(item);
+                    }
+                    n -= 1usize;
+                }
+                Option::None => return Option::None,
+            }
         }
+    }
+
+    fn last(mut self) -> Option<Self::Item> {
+        let mut last = match self.next() {
+            Option::Some(item) => item,
+            Option::None => return Option::None,
+        };
+        loop {
+            match self.next() {
+                Option::Some(item) => last = item,
+                Option::None => return Option::Some(last),
+            }
+        }
+    }
+
+    fn find<P: FnMut(&Self::Item) -> bool>(&mut self, mut predicate: P) -> Option<Self::Item> {
+        loop {
+            match self.next() {
+                Option::Some(item) => {
+                    if predicate(&item) {
+                        return Option::Some(item);
+                    }
+                }
+                Option::None => return Option::None,
+            }
+        }
+    }
+
+    fn enumerate(self) -> Enumerate<Self> {
+        Enumerate { iterator: self, count: 0usize }
+    }
+
+    fn rev(self) -> Rev<Self>
+    where
+        Self: DoubleEndedIterator,
+    {
+        Rev { iterator: self }
     }
 
     fn zip<U: IntoIterator>(self, other: U) -> Zip<Self, U::IntoIter> {
@@ -42,10 +86,7 @@ pub trait Iterator: Sized {
     }
 
     fn filter<P: FnMut(&Self::Item) -> bool>(self, predicate: P) -> Filter<Self, P> {
-        Filter {
-            iterator: self,
-            predicate,
-        }
+        Filter { iterator: self, predicate }
     }
 
     fn any<F: FnMut(Self::Item) -> bool>(&mut self, mut f: F) -> bool {
@@ -72,13 +113,6 @@ pub trait Iterator: Sized {
                 Option::None => return true,
             }
         }
-    }
-
-    fn rev(self) -> Rev<Self>
-    where
-        Self: DoubleEndedIterator,
-    {
-        Rev { iterator: self }
     }
 
     fn position<P: FnMut(Self::Item) -> bool>(&mut self, mut predicate: P) -> Option<usize> {
@@ -130,6 +164,27 @@ pub trait Iterator: Sized {
                 Option::None => return acc,
             }
         }
+    }
+}
+
+pub trait DoubleEndedIterator: Iterator {
+    fn next_back(&mut self) -> Option<Self::Item>;
+}
+
+pub struct Rev<I> {
+    iterator: I,
+}
+
+impl<I: DoubleEndedIterator> Iterator for Rev<I> {
+    type Item = I::Item;
+    fn next(&mut self) -> Option<Self::Item> {
+        self.iterator.next_back()
+    }
+}
+
+impl<I: DoubleEndedIterator> DoubleEndedIterator for Rev<I> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        self.iterator.next()
     }
 }
 
@@ -186,9 +241,7 @@ impl<I: Iterator> IntoIterator for StepBy<I> {
 impl<I: Iterator> IntoIterator for Enumerate<I> {
     type Item = (usize, I::Item);
     type IntoIter = Enumerate<I>;
-    fn into_iter(self) -> Enumerate<I> {
-        self
-    }
+    fn into_iter(self) -> Enumerate<I> { self }
 }
 
 pub struct Zip<A, B> {
@@ -308,27 +361,6 @@ impl Sum for i16 {
                 Option::None => return total,
             }
         }
-    }
-}
-
-pub trait DoubleEndedIterator: Iterator {
-    fn next_back(&mut self) -> Option<Self::Item>;
-}
-
-pub struct Rev<I> {
-    iterator: I,
-}
-
-impl<I: DoubleEndedIterator> Iterator for Rev<I> {
-    type Item = I::Item;
-    fn next(&mut self) -> Option<Self::Item> {
-        self.iterator.next_back()
-    }
-}
-
-impl<I: DoubleEndedIterator> DoubleEndedIterator for Rev<I> {
-    fn next_back(&mut self) -> Option<Self::Item> {
-        self.iterator.next()
     }
 }
 
@@ -893,9 +925,7 @@ pub struct CollectInput<I> {
 impl<I: Iterator> IntoIterator for CollectInput<I> {
     type Item = I::Item;
     type IntoIter = I;
-    fn into_iter(self) -> I {
-        self.iterator
-    }
+    fn into_iter(self) -> I { self.iterator }
 }
 
 pub struct Enumerate<I> {

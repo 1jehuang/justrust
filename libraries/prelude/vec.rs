@@ -297,8 +297,22 @@ impl<'a, T> super::iter::IntoIterator for &'a Vec<T> {
     }
 }
 
-// TODO(drop): enable `impl<T> Drop for Vec<T>` (truncate + raw_free) once
-// aggregates containing Drop owners get drop glue. Until then Vec leaks.
+// Elements drop front to back, as stock, then the buffer is released.
+impl<T> Drop for Vec<T> {
+    fn drop(&mut self) {
+        let mut i = 0usize;
+        while i < self.len {
+            let _dropped = unsafe { *slot(self.ptr, i) };
+            i += 1usize;
+        }
+        self.len = 0usize;
+        if self.cap != 0usize {
+            let size = size_of::<T>();
+            let bytes = if size == 0usize { 8usize } else { self.cap * size };
+            super::mem::raw_free(self.ptr as usize, bytes);
+        }
+    }
+}
 
 /// `vec![elem; n]` expansion target.
 pub fn from_elem<T: Clone>(elem: T, n: usize) -> Vec<T> {

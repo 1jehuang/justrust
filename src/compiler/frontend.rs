@@ -6551,6 +6551,7 @@ pub enum ReceiverKind {
 }
 #[derive(Clone, Debug)]
 pub struct ImplDecl {
+    pub regions: RegionDecls,
     pub(super) original_source: Option<super::token_session::OriginalSpan>,
     primitive_source: Option<Arc<primitive_constants::SourceImpl>>,
     pub trait_path: Option<TraitPath>,
@@ -12212,6 +12213,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             let original_source = primitive_constants::original_impl_range(self, original_start);
             self.expect("}")?;
             let mut block = ImplDecl {
+                regions: self.impl_regions.clone(),
                 original_source,
                 primitive_source: None,
                 trait_path,
@@ -19396,7 +19398,14 @@ impl PlanCtx {
                 let associated =
                     registry.associated_type_item(trait_decl, assignment.name, budget)?;
                 budget.retain_bytes(std::mem::size_of::<tr::AssociatedTypeValue>() + 256)?;
-                source_schemas.assignment(impl_id, associated, rhs, budget)?;
+                let source = source_schemas::assignment_source(
+                    (impl_id, associated),
+                    (&assignment.value, &rhs),
+                    (&block.regions, program.names.as_ref()),
+                    info.env.clone(),
+                    budget,
+                )?;
+                source_schemas.assignment(impl_id, associated, rhs, source, budget)?;
             }
             state.source_context = None;
             let ids = registry.associated_ids[implementation].clone();
@@ -21511,6 +21520,16 @@ impl tr::SchemaCx for SchemaAdapter {
             .associated_rhs(implementation, associated, &self.budget)
             .map_err(|e| self.error(e))
     }
+    fn associated_type_source(
+        &self,
+        implementation: ir::DeclId,
+        associated: ir::DeclId,
+    ) -> Result<Arc<tr::AssociatedTypeSource>, tr::FactsError> {
+        self.associated_type_rhs(implementation, associated)?;
+        self.source_schemas
+            .associated_source(implementation, associated, &self.budget)
+            .map_err(|e| self.error(e))
+    }
     fn instantiate_constant_metadata(
         &self,
         declaration: ir::DeclId,
@@ -22375,15 +22394,20 @@ impl PlanCtx {
         }
         Ok(())
     }
-    /// Coherence of one implementation against its trait's other impls.
-    pub fn validate_impl_coherence(&self, implementation: ir::DeclId) -> Result<(), String> {
+    /// Trait implemented by a source impl header, if any.
+    pub fn impl_trait(&self, implementation: ir::DeclId) -> Result<Option<ir::DeclId>, String> {
+        Ok(self.trait_world()?.impl_trait(implementation))
+    }
+    /// Coherence of one implementation against its trait's other impls
+    /// (`peers`, the trait's TRAIT_IMPLS completeness fact).
+    pub fn validate_impl_coherence(
+        &self,
+        implementation: ir::DeclId,
+        peers: &[ir::DeclId],
+    ) -> Result<(), String> {
         let world = self.trait_world()?;
-        let Some(trait_decl) = world.impl_trait(implementation) else {
-            return Ok(());
-        };
-        let peers = world.trait_impls(trait_decl);
         world
-            .check_impl_coherence(implementation, &peers)
+            .check_impl_coherence(implementation, peers)
             .map_err(|e| e.into_legacy_diagnostic(&self.budget))
     }
     fn validate_inherent_overlaps(&self, budget: &ir::PlanBudget) -> Result<(), String> {

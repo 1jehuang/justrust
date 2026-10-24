@@ -96,6 +96,27 @@ impl ValidatedTraitWorld {
         owner: &TraitRef,
         caller: &GenericEnv,
     ) -> Result<Arc<[Predicate]>> {
+        self.associated_bounds_for_inner(associated, owner, caller, None)
+    }
+
+    fn associated_bounds_for_with(
+        &self,
+        associated: DeclId,
+        owner: &TraitRef,
+        context: ProofContext<'_>,
+        active: &mut ProofScratch,
+    ) -> Result<Arc<[Predicate]>> {
+        self.check_context(context)?;
+        self.associated_bounds_for_inner(associated, owner, context.env(), Some((context, active)))
+    }
+
+    fn associated_bounds_for_inner(
+        &self,
+        associated: DeclId,
+        owner: &TraitRef,
+        caller: &GenericEnv,
+        proof: Option<(ProofContext<'_>, &mut ProofScratch)>,
+    ) -> Result<Arc<[Predicate]>> {
         let header = self.associated_header(associated)?;
         if header.trait_decl != owner.declaration {
             return Err(FactsError::invalid(
@@ -117,9 +138,13 @@ impl ValidatedTraitWorld {
             predicates,
         };
         let arguments = self.trait_arguments(owner)?;
-        Ok(self
-            .substitute_projected_schema(&schema, &arguments, caller)?
-            .predicates)
+        let value = match proof {
+            Some((context, active)) => {
+                self.substitute_projected_schema_with(&schema, &arguments, context, active)?
+            }
+            None => self.substitute_projected_schema(&schema, &arguments, caller)?,
+        };
+        Ok(value.predicates)
     }
 
     pub(super) fn discharge_associated_bound_predicates(
@@ -131,7 +156,7 @@ impl ValidatedTraitWorld {
         active: &mut ProofScratch,
         implementation: Option<&projected_methods::OwnerNormalizationContext<'_>>,
     ) -> Result<()> {
-        let predicates = self.associated_bounds_for(associated, owner, context.env())?;
+        let predicates = self.associated_bounds_for_with(associated, owner, context, active)?;
         for predicate in predicates.iter() {
             let mut reduce = |projection: &ir::AssociatedTypeProjection| -> Result<Ty> {
                 if projection.item == associated

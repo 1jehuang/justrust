@@ -255,6 +255,24 @@ where
     })
 }
 
+/// Run `f` with empty detached ledgers, restoring the previous ones after.
+/// Direct (non-graph) callers use this to give each independent task its
+/// own per-task budget instead of one ledger shared across a whole loop.
+/// Inside graph polling, charges already land in the node's own ledgers.
+pub fn with_fresh_detached_ledgers<R>(f: impl FnOnce() -> R) -> R {
+    let saved = DETACHED.with(|ledgers| std::mem::take(&mut *lock(&ledgers.0)));
+    struct Restore(Option<Vec<(u64, Box<dyn Any + Send>)>>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            if let Some(saved) = self.0.take() {
+                let _ = DETACHED.try_with(|ledgers| *lock(&ledgers.0) = saved);
+            }
+        }
+    }
+    let _restore = Restore(Some(saved));
+    f()
+}
+
 /// Drop ledger `id` from this thread's detached scope (a budget token's
 /// identity ended). Node ledgers stay for post-run reporting.
 pub fn forget_detached_ledger(id: u64) {

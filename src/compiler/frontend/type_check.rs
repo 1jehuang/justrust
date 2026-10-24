@@ -11983,8 +11983,12 @@ pub fn check(program: &Program) -> Result<(), String> {
         .plan
         .as_ref()
         .map_or(program.functions.len(), PlanCtx::callable_count);
+    // Each callable is an independent task with its own per-task budget, as
+    // its graph node would have; one detached ledger must not span the loop.
     for i in 0..count {
-        check_function_with_signatures(program, i, &signatures)?;
+        crate::engine::with_fresh_detached_ledgers(|| {
+            check_function_with_signatures(program, i, &signatures)
+        })?;
     }
     Ok(())
 }

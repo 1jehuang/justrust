@@ -634,6 +634,7 @@ fn kind_name(kind: u32) -> String {
         144 => "trait_impls",
         145 => "impl_coherence",
         146 => "item_coherence",
+        147 => "module_decls",
         _ => return format!("kind{kind}"),
     }
     .to_string()

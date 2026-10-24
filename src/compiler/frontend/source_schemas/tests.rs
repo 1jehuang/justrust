@@ -7,6 +7,21 @@ fn id(snapshot: ir::SnapshotId, index: u64) -> ir::DeclId {
 fn slot(id: ir::DeclId) -> DeclSlot {
     DeclSlot { id }
 }
+fn assignment_source_fixture(
+    implementation: ir::DeclId,
+    associated: ir::DeclId,
+    budget: &ir::PlanBudget,
+) -> Arc<tr::AssociatedTypeSource> {
+    Arc::new(tr::AssociatedTypeSource {
+        implementation,
+        associated,
+        env: Arc::new(ir::GenericEnv::new(&[], budget).unwrap()),
+        region_count: 0,
+        outlives: Arc::from([]),
+        references: Arc::from([]),
+        parameter_tail: None,
+    })
+}
 fn schema(b: &ir::PlanBudget) -> StoredSchema {
     let value = tr::GenericSchema {
         env: Arc::new(ir::GenericEnv::new(&[], b).unwrap()),
@@ -28,7 +43,13 @@ fn fixture(b: &ir::PlanBudget) -> (Arc<SourceSchemas>, ir::DeclId) {
         .insert(slot(declaration), schema(b), b)
         .unwrap();
     builder
-        .assignment(declaration, id(snapshot, 1), ir::Ty::Bool, b)
+        .assignment(
+            declaration,
+            id(snapshot, 1),
+            ir::Ty::Bool,
+            assignment_source_fixture(declaration, id(snapshot, 1), b),
+            b,
+        )
         .unwrap();
     (builder.seal(snapshot, b).unwrap(), declaration)
 }
@@ -170,11 +191,23 @@ fn source_schemas_growth_is_prepaid_and_foreign_builder_payer_cannot_mutate() {
     assert_eq!(table.values[0].as_ref().unwrap().1, 1);
     let mut builder = SourceSchemasBuilder::default();
     builder
-        .assignment(declaration, declaration, ir::Ty::Bool, &b)
+        .assignment(
+            declaration,
+            declaration,
+            ir::Ty::Bool,
+            assignment_source_fixture(declaration, declaration, &b),
+            &b,
+        )
         .unwrap();
     assert!(
         builder
-            .assignment(declaration, declaration, ir::Ty::Unit, &other)
+            .assignment(
+                declaration,
+                declaration,
+                ir::Ty::Unit,
+                assignment_source_fixture(declaration, declaration, &other),
+                &other
+            )
             .is_err()
     );
     assert_eq!(builder.associated_type_rows.len(), 1);
@@ -188,10 +221,22 @@ fn source_schemas_assignment_duplicates_remain_visible_and_first_rhs_authoritati
     let associated = id(snapshot, 1);
     let mut builder = SourceSchemasBuilder::default();
     builder
-        .assignment(implementation, associated, ir::Ty::Bool, &b)
+        .assignment(
+            implementation,
+            associated,
+            ir::Ty::Bool,
+            assignment_source_fixture(implementation, associated, &b),
+            &b,
+        )
         .unwrap();
     builder
-        .assignment(implementation, associated, ir::Ty::Unit, &b)
+        .assignment(
+            implementation,
+            associated,
+            ir::Ty::Unit,
+            assignment_source_fixture(implementation, associated, &b),
+            &b,
+        )
         .unwrap();
     let frozen = builder.seal(snapshot, &b).unwrap();
     let rows = frozen.assignment_rows(&b).unwrap();
@@ -318,11 +363,23 @@ fn source_schemas_mixed_snapshot_rows_regions_and_region_keys_are_rejected() {
     let foreign = ir::SnapshotId::standalone().unwrap();
     let mut builder = SourceSchemasBuilder::default();
     builder
-        .assignment(id(snapshot, 0), id(snapshot, 1), ir::Ty::Bool, &b)
+        .assignment(
+            id(snapshot, 0),
+            id(snapshot, 1),
+            ir::Ty::Bool,
+            assignment_source_fixture(id(snapshot, 0), id(snapshot, 1), &b),
+            &b,
+        )
         .unwrap();
     assert!(
         builder
-            .assignment(id(snapshot, 0), id(foreign, 1), ir::Ty::Unit, &b)
+            .assignment(
+                id(snapshot, 0),
+                id(foreign, 1),
+                ir::Ty::Unit,
+                assignment_source_fixture(id(snapshot, 0), id(foreign, 1), &b),
+                &b
+            )
             .is_err()
     );
     builder.associated_type_rows[0].associated = id(foreign, 1);

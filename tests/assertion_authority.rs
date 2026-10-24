@@ -216,7 +216,10 @@ fn formatting_and_nonliteral_messages_remain_explicit_parse_boundaries() {
     // parse boundary here.
     let error = frontend::parse("fn main(){assert!(true, 1i32)}")
         .expect_err("unsupported messages must fail during parsing");
-    assert!(error.to_ascii_lowercase().contains("unsupported"), "{error}");
+    assert!(
+        error.to_ascii_lowercase().contains("unsupported"),
+        "{error}"
+    );
     // Stock accepts formatted messages; they are native now.
     let program = frontend::parse("fn main(){assert!(true, \"{}\", 1i32)}").unwrap();
     frontend::check(&program).unwrap();

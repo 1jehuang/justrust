@@ -554,6 +554,7 @@ type CellResolution = (
 
 fn resolve_cells<'a>(
     original_locals: &[Ty],
+    cover_locals: &[Ty],
     cells: &[CellSlot],
     cell_index: &HashMap<CellKey, usize>,
     origins_targets: &[Vec<Target>],
@@ -681,7 +682,7 @@ fn resolve_cells<'a>(
         let mut next = Vec::new();
         for candidate in candidates {
             let Some(cover) = read_cell_cover(
-                original_locals,
+                cover_locals,
                 cell_index,
                 &candidate,
                 &CellChannel::ReferenceValue,
@@ -1085,6 +1086,7 @@ struct CarrierBuilder<'a, 'b> {
     cells: Vec<CellSlot>,
     cell_index: HashMap<CellKey, usize>,
     original_locals: Vec<Ty>,
+    family_cover_locals: Option<Vec<Ty>>,
     initial: FlowState,
     reference_inputs: Vec<(InputCarrier, ReferenceOriginId)>,
     /// Issued only for literal data, never inferred from a reference type.
@@ -2207,6 +2209,9 @@ impl CarrierBuilder<'_, '_> {
     fn lens(&mut self, state: &FlowState, place: &Place) -> Result<CellResolution, Exhausted> {
         resolve_cells(
             &self.original_locals,
+            self.family_cover_locals
+                .as_deref()
+                .unwrap_or(&self.original_locals),
             &self.cells,
             &self.cell_index,
             &self.targets,
@@ -2251,7 +2256,9 @@ impl CarrierBuilder<'_, '_> {
             let mut matched_cell = false;
             for target in targets {
                 if let Some(cover) = read_cell_cover(
-                    &self.original_locals,
+                    self.family_cover_locals
+                        .as_deref()
+                        .unwrap_or(&self.original_locals),
                     &self.cell_index,
                     &target,
                     &channel,
@@ -2400,6 +2407,36 @@ impl<'a, 'b> CarrierBuilder<'a, 'b> {
                 .take(original_count)
                 .map(|local| local.ty.clone()),
         );
+        // Additional cover structure is issued only by the exact original
+        // template substitution. Keep original_locals unchanged for pointer
+        // provenance, dynamic indexing and all other source-shape checks.
+        let family_cover_locals = if let Some(proof) = &f.body_substitution {
+            let authority = facts.validated().ok_or(Exhausted)?;
+            proof
+                .validate_cfg(f, authority, &ledger)
+                .map_err(|_| Exhausted)?;
+            budget.reserve_bytes(original_bytes)?;
+            budget.spend(original_count)?;
+            let mut covers = Vec::new();
+            covers
+                .try_reserve_exact(original_count)
+                .map_err(|_| Exhausted)?;
+            let mut changed = false;
+            for (index, original) in original_locals.iter().enumerate() {
+                if let Some(cover) = proof
+                    .original_family_cover_local(index, authority, &ledger)
+                    .map_err(|_| Exhausted)?
+                {
+                    changed = true;
+                    covers.push(cover);
+                } else {
+                    covers.push(original.clone());
+                }
+            }
+            changed.then_some(covers)
+        } else {
+            None
+        };
         budget.spend(f.locals.len() + f.params.len() + f.blocks.len())?;
         budget.reserve_bytes(
             mul(f.locals.len(), size_of::<Arc<[CarrierLocation]>>())?
@@ -2579,6 +2616,7 @@ impl<'a, 'b> CarrierBuilder<'a, 'b> {
             cells: vec![],
             cell_index: HashMap::new(),
             original_locals,
+            family_cover_locals,
             initial: FlowState {
                 cells: vec![],
                 overwritten: Set::default(),
@@ -2887,7 +2925,9 @@ impl CarrierBuilder<'_, '_> {
         let mut matched_cell = false;
         for target in targets {
             if let Some(cover) = read_cell_cover(
-                &self.original_locals,
+                self.family_cover_locals
+                    .as_deref()
+                    .unwrap_or(&self.original_locals),
                 &self.cell_index,
                 &target,
                 &channel,
@@ -4854,6 +4894,7 @@ impl CarrierBuilder<'_, '_> {
             cells: self.cells,
             cell_index: self.cell_index,
             original_locals: self.original_locals,
+            family_cover_locals: self.family_cover_locals,
             family_inputs: self.family_inputs,
             body: self.body,
             physical_body: self.physical_body,
@@ -5168,6 +5209,7 @@ pub(super) struct Plan {
     cells: Vec<CellSlot>,
     cell_index: HashMap<CellKey, usize>,
     original_locals: Vec<Ty>,
+    family_cover_locals: Option<Vec<Ty>>,
     family_inputs: Vec<FamilyOrigin>,
     body: Option<Arc<super::traits::CarrierContractView>>,
     physical_body: Option<super::opaque_physical::PhysicalCarrierFlow>,
@@ -5877,6 +5919,9 @@ impl Plan {
         let (origins, _) = self.point(block, statement, phase);
         let (targets, _, failure) = resolve_cells(
             &self.original_locals,
+            self.family_cover_locals
+                .as_deref()
+                .unwrap_or(&self.original_locals),
             &self.cells,
             &self.cell_index,
             &self.targets,
@@ -6134,6 +6179,9 @@ impl Plan {
         let point = self.point_data(block, statement, phase);
         let (targets, _, failure) = resolve_cells(
             &self.original_locals,
+            self.family_cover_locals
+                .as_deref()
+                .unwrap_or(&self.original_locals),
             &self.cells,
             &self.cell_index,
             &self.targets,
@@ -6161,7 +6209,9 @@ impl Plan {
                 }
             } else {
                 let Some(cover) = read_cell_cover(
-                    &self.original_locals,
+                    self.family_cover_locals
+                        .as_deref()
+                        .unwrap_or(&self.original_locals),
                     &self.cell_index,
                     &target,
                     &CellChannel::ReferenceValue,

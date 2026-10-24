@@ -21,7 +21,99 @@ fn table_position<V>(values: &DeclTable<V>, id: ir::DeclId) -> Result<usize, usi
         None => std::cmp::Ordering::Less,
     })
 }
-type AssignmentTable = Vec<((ir::DeclId, ir::DeclId), ir::Ty)>;
+type AssignmentTable = Vec<(
+    (ir::DeclId, ir::DeclId),
+    (ir::Ty, Arc<tr::AssociatedTypeSource>),
+)>;
+
+pub(super) fn assignment_source(
+    identity: (ir::DeclId, ir::DeclId),
+    types: (&super::Type, &ir::Ty),
+    source: (&super::RegionDecls, &super::NameStore),
+    env: Arc<ir::GenericEnv>,
+    budget: &ir::PlanBudget,
+) -> Result<Arc<tr::AssociatedTypeSource>, String> {
+    let (implementation, associated) = identity;
+    let (regions, names) = source;
+    if regions.params.len() > ir::MAX_REGION_PARAMS {
+        return Err("associated source lifetime limit exceeded".into());
+    }
+    let region = |value: Option<&super::RegionName>| -> Result<tr::AssociatedSourceRegion, String> {
+        match value {
+            None | Some(super::RegionName::Infer) => Ok(tr::AssociatedSourceRegion::Elided),
+            Some(super::RegionName::Static) => Ok(tr::AssociatedSourceRegion::Static),
+            Some(super::RegionName::Named(name)) => {
+                let key = names
+                    .key(*name, super::LookupClass::LifetimeParameter)
+                    .map_err(super::native_adapter::name_diagnostic)?;
+                for (index, declared) in regions.params.iter().enumerate() {
+                    budget.charge_work(1)?;
+                    if names
+                        .key(*declared, super::LookupClass::LifetimeParameter)
+                        .map_err(super::native_adapter::name_diagnostic)?
+                        == key
+                    {
+                        return Ok(tr::AssociatedSourceRegion::Named(ir::SourceRegionId {
+                            declaration: implementation,
+                            index: index as u16,
+                        }));
+                    }
+                }
+                Err("undeclared associated assignment lifetime".into())
+            }
+        }
+    };
+    let mut references = Vec::new();
+    let (mut written, mut semantic) = types;
+    while let super::Type::Ref {
+        kind,
+        region: lifetime,
+        referent,
+    } = written
+    {
+        budget.check_depth(references.len())?;
+        budget.charge_work(1)?;
+        let ir::Ty::Ref {
+            kind: actual,
+            referent: actual_referent,
+        } = semantic
+        else {
+            return Err("associated assignment source reference shape changed".into());
+        };
+        if kind != actual {
+            return Err("associated assignment source reference kind changed".into());
+        }
+        budget.retain_bytes(size_of::<(ir::BorrowKind, tr::AssociatedSourceRegion)>())?;
+        references.push((*kind, region(lifetime.as_ref())?));
+        written = referent;
+        semantic = actual_referent;
+    }
+    let parameter_tail = match (written, semantic) {
+        (super::Type::Param(_) | super::Type::Named(_), ir::Ty::Param(parameter)) => {
+            Some(*parameter)
+        }
+        _ => None,
+    };
+    let mut outlives = Vec::new();
+    for (longer, shorter) in &regions.outlives {
+        budget.charge_work(1)?;
+        budget.retain_bytes(size_of::<(
+            tr::AssociatedSourceRegion,
+            tr::AssociatedSourceRegion,
+        )>())?;
+        outlives.push((region(Some(longer))?, region(Some(shorter))?));
+    }
+    budget.retain_bytes(size_of::<tr::AssociatedTypeSource>())?;
+    Ok(Arc::new(tr::AssociatedTypeSource {
+        implementation,
+        associated,
+        env,
+        region_count: regions.params.len() as u16,
+        outlives: outlives.into(),
+        references: references.into(),
+        parameter_tail,
+    }))
+}
 
 /// Params is the sole owned vector. Other schema/signature children and
 /// every non-inline Ty alternative clone immutable Arcs, not their payloads.
@@ -368,11 +460,15 @@ impl SourceSchemasBuilder {
         implementation: ir::DeclId,
         associated: ir::DeclId,
         rhs: ir::Ty,
+        source: Arc<tr::AssociatedTypeSource>,
         budget: &ir::PlanBudget,
     ) -> Result<(), String> {
         check_budget(budget)?;
         check_receipt(self.rows_receipt.as_ref(), budget)?;
         check_receipt(self.rhs_receipt.as_ref(), budget)?;
+        if source.implementation != implementation || source.associated != associated {
+            return Err("associated source record owner mismatch".into());
+        }
         if implementation.snapshot != associated.snapshot
             || self
                 .associated_type_rows
@@ -410,14 +506,17 @@ impl SourceSchemasBuilder {
                 needed,
                 budget,
             )?;
-            self.associated_type_rhs
-                .insert(position, ((implementation, associated), rhs.clone()));
+            self.associated_type_rhs.insert(
+                position,
+                ((implementation, associated), (rhs.clone(), source.clone())),
+            );
         }
         // Preserve duplicates for header rejection, and first-row raw authority.
         self.associated_type_rows.push(tr::AssociatedTypeValue {
             implementation,
             associated,
             rhs,
+            source,
         });
         Ok(())
     }
@@ -623,7 +722,23 @@ impl SourceSchemas {
             (implementation, associated),
             budget,
         )?
-        .map(|index| self.associated_type_rhs[index].1.clone())
+        .map(|index| self.associated_type_rhs[index].1.0.clone())
         .map_err(|_| "missing authoritative associated assignment".into())
+    }
+    pub(super) fn associated_source(
+        &self,
+        implementation: ir::DeclId,
+        associated: ir::DeclId,
+        budget: &ir::PlanBudget,
+    ) -> Result<Arc<tr::AssociatedTypeSource>, String> {
+        self.check(implementation, budget)?;
+        self.check(associated, budget)?;
+        assignment_position(
+            &self.associated_type_rhs,
+            (implementation, associated),
+            budget,
+        )?
+        .map(|index| self.associated_type_rhs[index].1.1.clone())
+        .map_err(|_| "missing authoritative associated assignment source".into())
     }
 }

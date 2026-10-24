@@ -541,6 +541,87 @@ fn main() {}
 }
 
 #[test]
+fn iterator_consumers_match_stock() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "iterator-consumers",
+        &[
+            Case {
+                name: "nth",
+                source: r#"
+fn main() {
+    let v = vec![1i32, 2, 3, 4, 5];
+    let mut it = v.iter().copied();
+    println!("{:?} {:?} {:?}", it.nth(1), it.next(), it.nth(1));
+    println!("{:?} {:?}", it.next(), it.nth(usize::MAX));
+    let empty: Vec<i32> = Vec::new();
+    println!("{:?}", empty.iter().nth(0));
+}
+"#,
+                expect: Expect::Run("Some(2) Some(3) Some(5)\nNone None\nNone\n"),
+            },
+            Case {
+                name: "last",
+                source: r#"
+fn main() {
+    let v = vec![1i32, 2, 3, 4, 5];
+    println!("{:?}", v.iter().copied().last());
+    let empty: Vec<i32> = Vec::new();
+    println!("{:?}", empty.iter().copied().last());
+}
+"#,
+                expect: Expect::Run("Some(5)\nNone\n"),
+            },
+            Case {
+                name: "find",
+                source: r#"
+fn main() {
+    let v = vec![1i32, 2, 3, 4, 5];
+    let mut it = v.iter().copied();
+    let mut calls = 0i32;
+    let found = it.find(|x: &i32| { calls += 1; *x == 3 });
+    println!("{:?} {} {:?}", found, calls, it.next());
+}
+"#,
+                expect: Expect::Run("Some(3) 3 Some(4)\n"),
+            },
+            Case {
+                name: "non_fused_stopping",
+                source: r#"
+struct Steps { n: i32 }
+impl Iterator for Steps {
+    type Item = i32;
+    fn next(&mut self) -> Option<i32> {
+        let n = self.n;
+        self.n += 1;
+        println!("pull {}", n);
+        if n == 1 || n >= 4 { None } else { Some(n) }
+    }
+}
+fn main() {
+    let mut a = Steps { n: 0 };
+    println!("{:?}", a.nth(3));
+    println!("{:?}", a.next());
+    println!("{:?}", Steps { n: 0 }.last());
+    let mut c = Steps { n: 0 };
+    println!("{:?}", c.find(|x: &i32| *x > 5));
+    println!("{:?}", c.next());
+}
+"#,
+                expect: Expect::Run(
+                    "pull 0\npull 1\nNone\npull 2\nSome(2)\npull 0\npull 1\nSome(0)\npull 0\npull 1\nNone\npull 2\nSome(2)\n",
+                ),
+            },
+            Case {
+                name: "find_wrong_predicate_type_unused",
+                source: "fn bad() { let v = vec![1i32]; let _ = v.iter().copied().find(|x: &i32| *x); } fn main() {}",
+                expect: Expect::Invalid("E0308"),
+            },
+        ],
+    );
+}
+
+#[test]
 fn iterator_fold_matches_stock() {
     use closure_oracle::{Case, Expect};
     closure_oracle::check(

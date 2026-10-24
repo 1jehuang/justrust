@@ -15,9 +15,12 @@ use super::*;
 pub struct ModuleDeclarations {
     pub module_key: u64,
     pub declarations: Vec<(ir::DeclKind, u64)>,
+    /// `(trait impl index, implemented trait index)` for every trait impl of
+    /// this module. Builtin traits use their core catalog index.
+    pub impl_traits: Vec<(u64, u64)>,
 }
 
-#[allow(dead_code)] // TRAIT_IMPLS/MODULE_DECLARATIONS consumers land next
+#[allow(dead_code)] // traits() consumers land with per-trait facts
 impl ModuleDeclarations {
     /// Trait declarations of this module (inputs of per-trait completeness).
     pub fn traits(&self) -> impl Iterator<Item = u64> + '_ {
@@ -35,6 +38,15 @@ impl ModuleDeclarations {
     }
 }
 
+/// Bits of the module-path key carried inside a source `DeclId`.
+pub const MODULE_KEY_MASK: u64 = (1 << 43) - 1;
+
+/// Module-path key bits of a source declaration index, or `None` for
+/// catalog and other non-source declarations.
+pub fn owning_module(index: u64) -> Option<u64> {
+    (index & ir::DeclId::SOURCE_BIT != 0).then_some((index >> 20) & MODULE_KEY_MASK)
+}
+
 /// Canonical module-path key of `module`.
 pub fn module_key(program: &Program, module: ModuleId) -> Result<u64, String> {
     canonical_module_key(&program.modules, &program.names, module)
@@ -49,8 +61,9 @@ pub fn module_declarations(
     budget: &ir::PlanBudget,
 ) -> Result<ModuleDeclarations, String> {
     let mut out = ModuleDeclarations {
-        module_key: key,
+        module_key: key & MODULE_KEY_MASK,
         declarations: Vec::new(),
+        impl_traits: Vec::new(),
     };
     let mut ordinals: HashMap<u8, u64> = HashMap::new();
     let mut push = |kind: ir::DeclKind, out: &mut ModuleDeclarations| -> Result<(), String> {
@@ -62,7 +75,7 @@ pub fn module_declarations(
     };
     let owned = |module: ModuleId| -> Result<bool, String> {
         budget.charge_work(1)?;
-        Ok(module_key(program, module)? == key)
+        Ok(module_key(program, module)? & MODULE_KEY_MASK == key & MODULE_KEY_MASK)
     };
     for d in &program.structs {
         if owned(d.module)? {
@@ -107,6 +120,11 @@ pub fn module_declarations(
             ir::DeclKind::Impl
         };
         push(kind, &mut out)?;
+        if let Some(path) = &b.trait_path {
+            let (_, implementation) = *out.declarations.last().ok_or("missing impl id")?;
+            out.impl_traits
+                .push((implementation, implemented_trait(program, path, budget)?));
+        }
         for _ in &b.items {
             push(ir::DeclKind::AssociatedFunction, &mut out)?;
         }
@@ -122,6 +140,71 @@ pub fn module_declarations(
     Ok(out)
 }
 
+/// Canonical index of the trait `path` names, resolved exactly as the
+/// registry does (by checked path key), without the registry.
+fn implemented_trait(
+    program: &Program,
+    path: &TraitPath,
+    budget: &ir::PlanBudget,
+) -> Result<u64, String> {
+    let path = match path {
+        TraitPath::Builtin(kind) => {
+            return Ok(match kind {
+                BuiltinTrait::Sized => 0,
+                BuiltinTrait::Clone => 1,
+                BuiltinTrait::Copy => 5,
+                BuiltinTrait::Drop => 6,
+            });
+        }
+        TraitPath::Source(path) => path,
+    };
+    let names = program.names.as_ref();
+    let want = name_scope::path_key(names, &path.path(names)?, Namespace::Type)?;
+    let mut ordinals: HashMap<u64, u64> = HashMap::new();
+    let mut found = None;
+    for t in &program.traits {
+        budget.charge_work(1)?;
+        let key = module_key(program, t.module)? & MODULE_KEY_MASK;
+        let ordinal = ordinals.entry(key).or_insert(0);
+        if name_scope::path_key(names, &t.name, Namespace::Type)? == want {
+            if found.is_some() {
+                return Err("duplicate trait declaration".into());
+            }
+            found = Some(ir::DeclId::source_index(
+                key,
+                ir::DeclKind::Trait,
+                *ordinal,
+            )?);
+        }
+        *ordinal += 1;
+    }
+    found.ok_or_else(|| "unknown trait".into())
+}
+
+/// Canonical keys of every module owning at least one declaration, in first
+/// declaration order. Input of explicit per-trait completeness facts.
+pub fn declaring_modules(program: &Program, budget: &ir::PlanBudget) -> Result<Vec<u64>, String> {
+    let mut keys = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let modules = program
+        .structs
+        .iter()
+        .map(|d| d.module)
+        .chain(program.enums.iter().map(|d| d.module))
+        .chain(program.functions.iter().map(|d| d.module))
+        .chain(program.traits.iter().map(|d| d.module))
+        .chain(program.impls.iter().map(|d| d.module))
+        .chain(program.constants.iter().map(|d| d.module));
+    for module in modules {
+        budget.charge_work(1)?;
+        let key = module_key(program, module)? & MODULE_KEY_MASK;
+        if seen.insert(key) {
+            keys.push(key);
+        }
+    }
+    Ok(keys)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -130,7 +213,8 @@ mod tests {
     fn registry_ids_match_module_enumeration() {
         let source = "mod a { pub struct S; pub trait T { fn f(&self); fn g(&self) {} type X; } \
                       impl T for S { fn f(&self) {} type X = i32; } impl S { fn h() {} } \
-                      pub const C: i32 = 1; } struct R; enum E { V } fn main() {}";
+                      pub const C: i32 = 1; } struct R; impl a::T for R { fn f(&self) {} type X = u8; } \
+                      #[derive(Clone)] struct Q; enum E { V } fn main() {}";
         let program = resolve(&parse_unresolved(source).unwrap()).unwrap();
         let budget = ir::PlanBudget::default();
         let plan = PlanCtx::from_program(&program, &budget).unwrap();
@@ -158,6 +242,36 @@ mod tests {
             got.sort_by_key(|(_, i)| *i);
             want.sort_by_key(|(_, i)| *i);
             assert_eq!(got, want, "module {key:#x}");
+        }
+        // Per-module impl->trait edges reassemble exactly the world's
+        // per-trait completeness.
+        let world = plan.trait_world().unwrap();
+        let mut by_trait: HashMap<u64, Vec<u64>> = HashMap::new();
+        for key in declaring_modules(&program, &budget).unwrap() {
+            for (implementation, implemented) in module_declarations(&program, key, &budget)
+                .unwrap()
+                .impl_traits
+            {
+                by_trait
+                    .entry(implemented)
+                    .or_default()
+                    .push(implementation);
+            }
+        }
+        assert!(!by_trait.is_empty());
+        for (implemented, mut got) in by_trait {
+            let trait_decl = ir::DeclId {
+                snapshot: plan.registry.trait_ids[0].snapshot,
+                index: implemented,
+            };
+            let mut want: Vec<u64> = world
+                .trait_impls(trait_decl)
+                .into_iter()
+                .map(|d| d.index)
+                .collect();
+            got.sort();
+            want.sort();
+            assert_eq!(got, want, "trait {implemented:#x}");
         }
     }
 }

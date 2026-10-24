@@ -425,8 +425,42 @@ impl ValidatedTraitWorld {
         arguments: &[Ty],
         caller: &GenericEnv,
     ) -> Result<InstantiatedSchema> {
+        self.substitute_projected_schema_inner(
+            schema,
+            arguments,
+            caller,
+            None,
+            &mut ProofScratch::default(),
+        )
+    }
+
+    pub(super) fn substitute_projected_schema_with(
+        &self,
+        schema: &GenericSchema,
+        arguments: &[Ty],
+        context: ProofContext<'_>,
+        active: &mut ProofScratch,
+    ) -> Result<InstantiatedSchema> {
+        self.check_context(context)?;
+        self.substitute_projected_schema_inner(
+            schema,
+            arguments,
+            context.env(),
+            Some(context),
+            active,
+        )
+    }
+
+    fn substitute_projected_schema_inner(
+        &self,
+        schema: &GenericSchema,
+        arguments: &[Ty],
+        caller: &GenericEnv,
+        context: Option<ProofContext<'_>>,
+        active: &mut ProofScratch,
+    ) -> Result<InstantiatedSchema> {
         for argument in arguments {
-            self.validate_ty_metadata_in(argument, caller, 0)?;
+            self.validate_ty_metadata_with(argument, caller, 0, &mut active.replays)?;
         }
         if arguments.len() != schema.env.total_arity() {
             return Err(FactsError::invalid(
@@ -434,9 +468,18 @@ impl ValidatedTraitWorld {
                 "projected schema argument arity changed",
             ));
         }
-        let value = self
-            .schema
-            .instantiate_schema(schema, arguments, caller, &self.budget)?;
+        let value = match context {
+            Some(context) => self.instantiate_raw_cached(
+                schema,
+                arguments,
+                context,
+                None,
+                &mut active.instantiations,
+            )?,
+            None => self
+                .schema
+                .instantiate_schema(schema, arguments, caller, &self.budget)?,
+        };
         if value.signature.params.len() != schema.signature.params.len()
             || value.predicates.len() != schema.predicates.len()
             || !self.eq_contract(
@@ -460,7 +503,7 @@ impl ValidatedTraitWorld {
             )))
         {
             self.validate_rhs_substitution(raw, actual, &schema.env, arguments, 0)?;
-            self.validate_ty_metadata_in(actual, caller, 0)?;
+            self.validate_ty_metadata_with(actual, caller, 0, &mut active.replays)?;
         }
         for (raw, actual) in schema.predicates.iter().zip(value.predicates.iter()) {
             self.validate_predicate_substitution(raw, actual, &schema.env, arguments)?;

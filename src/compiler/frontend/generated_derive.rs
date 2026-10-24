@@ -181,6 +181,7 @@ pub(super) fn unit_copy(declaration: &StructDecl) -> Result<ImplDecl, &'static s
         return Err("generated Copy currently requires a nongeneric unit struct");
     }
     Ok(ImplDecl {
+        regions: RegionDecls::default(),
         original_source: None,
         primitive_source: None,
         trait_path: Some(TraitPath::Builtin(BuiltinTrait::Copy)),

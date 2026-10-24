@@ -1978,6 +1978,149 @@ impl BodySubstitutionProof {
         self.generated.validate(source, facts, budget)?;
         Ok(())
     }
+    /// Recover only tuple/reference families whose original parameter and
+    /// actual are bound by this exact verified template substitution. This
+    /// describes cell shape, never a loan origin or a lifetime relation.
+    pub(in crate::compiler) fn original_family_cover_local(
+        &self,
+        index: usize,
+        facts: &super::traits::ValidatedFacts,
+        budget: &PlanBudget,
+    ) -> Result<Option<Ty>, String> {
+        if !self.template.budget().same_authority(budget)
+            || !facts.budget().same_authority(budget)
+            || !Arc::ptr_eq(facts.world(), self.template.facts().world())
+            || facts.target().map(|target| target.declaration) != Some(self.target.declaration)
+        {
+            return Err("original family cover has foreign substitution authority".into());
+        }
+        if !facts
+            .world()
+            .types_equal(
+                &facts
+                    .target()
+                    .ok_or("original family cover has no target")?
+                    .type_args,
+                &self.target.type_args,
+            )
+            .map_err(|error| error.into_legacy_diagnostic(budget))?
+        {
+            return Err("original family cover changed its target arguments".into());
+        }
+        let Some(original) = self.template.function().locals.get(index) else {
+            return Ok(None);
+        };
+        let actual = if index < self.local_types.len() {
+            &self.local_types[index]
+        } else if index - self.local_types.len() < self.expression_types.len() {
+            &self.expression_types[index - self.local_types.len()]
+        } else if index == self.local_types.len() + self.expression_types.len() {
+            &self.result
+        } else {
+            return Ok(None);
+        };
+        fn expand(
+            original: &Ty,
+            actual: &Ty,
+            proof: &BodySubstitutionProof,
+            facts: &super::traits::ValidatedFacts,
+            budget: &PlanBudget,
+            depth: usize,
+        ) -> Result<Option<Ty>, String> {
+            budget.check_depth(depth)?;
+            budget.charge_work(1)?;
+            match (original, actual) {
+                (Ty::Param(parameter), _) => {
+                    let Some(position) = proof
+                        .template
+                        .facts()
+                        .env()
+                        .ordered_params()
+                        .position(|candidate| candidate == *parameter)
+                    else {
+                        return Ok(None);
+                    };
+                    let Some(argument) = proof.target.type_args.get(position) else {
+                        return Err("original family cover is missing its canonical actual".into());
+                    };
+                    if !facts
+                        .world()
+                        .types_equal(std::slice::from_ref(argument), std::slice::from_ref(actual))
+                        .map_err(|error| error.into_legacy_diagnostic(budget))?
+                    {
+                        return Err("original family cover changed its canonical actual".into());
+                    }
+                    let mut leaf = actual;
+                    let mut references = 0;
+                    while let Ty::Ref {
+                        kind: BorrowKind::Shared,
+                        referent,
+                    } = leaf
+                    {
+                        budget.charge_work(1)?;
+                        references += 1;
+                        leaf = referent;
+                    }
+                    if references == 0 || references > 2 {
+                        return Ok(None);
+                    }
+                    if !matches!(
+                        leaf,
+                        Ty::Str | Ty::Int(_) | Ty::Bool | Ty::Char | Ty::Float(_) | Ty::Unit
+                    ) {
+                        return Ok(None);
+                    }
+                    Ok(Some(actual.clone()))
+                }
+                (Ty::Tuple(before), Ty::Tuple(after)) if before.len() == after.len() => {
+                    let mut changed = false;
+                    budget.retain_bytes(
+                        before
+                            .len()
+                            .checked_mul(std::mem::size_of::<Ty>())
+                            .ok_or("original family cover storage overflow")?,
+                    )?;
+                    let mut fields = Vec::new();
+                    fields
+                        .try_reserve_exact(before.len())
+                        .map_err(|_| "original family cover allocation failed")?;
+                    for (before, after) in before.iter().zip(after.iter()) {
+                        match expand(before, after, proof, facts, budget, depth + 1)? {
+                            Some(field) => {
+                                changed = true;
+                                fields.push(field);
+                            }
+                            None => fields.push(before.clone()),
+                        }
+                    }
+                    Ok(changed.then(|| Ty::Tuple(fields.into())))
+                }
+                (
+                    Ty::Ref {
+                        kind: before_kind,
+                        referent: before,
+                    },
+                    Ty::Ref {
+                        kind: after_kind,
+                        referent: after,
+                    },
+                ) if *before_kind == BorrowKind::Shared && *after_kind == BorrowKind::Shared => {
+                    let Some(referent) = expand(before, after, proof, facts, budget, depth + 1)?
+                    else {
+                        return Ok(None);
+                    };
+                    budget.retain_bytes(std::mem::size_of::<Ty>())?;
+                    Ok(Some(Ty::Ref {
+                        kind: *before_kind,
+                        referent: Arc::new(referent),
+                    }))
+                }
+                _ => Ok(None),
+            }
+        }
+        expand(&original.ty, actual, self, facts, budget, 0)
+    }
+
     pub fn validate_cfg(
         &self,
         function: &super::cfg::Function,
@@ -9658,14 +9801,21 @@ impl CheckedFunction {
                 validate_call_evidence_with_policy(self, authority, authority.budget(), policy)?;
             }
         }
-        facts.validate_value_ty(&self.result)?;
+        let validate_value = |ty: &Ty, scratch: &mut super::traits::TraitScratch| {
+            if let Some(authority) = facts.validated() {
+                facts.validate_value_ty_with_budget_scratch(ty, authority.budget(), scratch)
+            } else {
+                facts.validate_value_ty(ty)
+            }
+        };
+        validate_value(&self.result, scratch)?;
         validate_slice_carrier_with_facts(&self.result, facts)?;
         for local in &self.locals {
-            facts.validate_value_ty(&local.ty)?;
+            validate_value(&local.ty, scratch)?;
             validate_slice_carrier_with_facts(&local.ty, facts)?;
         }
         for expression in &self.exprs {
-            facts.validate_value_ty(&expression.ty)?;
+            validate_value(&expression.ty, scratch)?;
             validate_slice_carrier_with_facts(&expression.ty, facts)?;
         }
         let local = |id: LocalId| {
@@ -10129,7 +10279,7 @@ impl CheckedFunction {
                     };
                     if let Some(authority) = facts.validated() {
                         authority
-                            .prove_dynamic_unsize(concrete, object)
+                            .prove_dynamic_unsize(&concrete, object)
                             .map_err(|error| error.into_legacy_diagnostic(authority.budget()))?;
                     } else if !object.args.is_empty() || !object.associated_types.is_empty() {
                         return Err(
@@ -11501,38 +11651,6 @@ mod original_replay_transport_tests {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn unsized_string_returns_preserve_lifetime_qualified_envelopes() {
-        use super::*;
-        let budget = PlanBudget::default();
-        let reference = |ty| Ty::Ref {
-            kind: BorrowKind::Shared,
-            referent: Arc::new(ty),
-        };
-        let contract = RefContract {
-            results: fixture_result_regions(Some(RegionParamId(0)), ReturnContract::NoReference),
-            input_regions: fixture_input_regions(Arc::from([
-                Some(RegionParamId(0)),
-                Some(RegionParamId(1)),
-            ])),
-            region_count: 2,
-            outlives: Arc::from([]),
-        };
-        let results = derive_return_contracts(
-            &[reference(Ty::Int(IntTy::U8)), reference(Ty::Str)],
-            &reference(Ty::Str),
-            &contract,
-            &budget,
-        )
-        .unwrap();
-        assert_eq!(
-            results[0].returns,
-            ReturnContract::SharedInputEnvelopes(Arc::from([InputEnvelope {
-                input: fixture_input(0)
-            }]))
-        );
-    }
-
     fn fixture_modules() -> std::sync::Arc<super::super::module_identity::ModuleArena> {
         super::super::module_identity::ModuleArenaBuilder::for_catalog(
             super::super::expansion_budget::ExpansionBudget::default(),
@@ -12562,6 +12680,38 @@ mod tests {
         assert_eq!(
             fixture_derive_return_contract(&[shared], &Ty::Unit, &erased, &budget).unwrap(),
             ReturnContract::NoReference
+        );
+    }
+
+    #[test]
+    fn unsized_string_returns_preserve_lifetime_qualified_envelopes() {
+        use super::*;
+        let budget = PlanBudget::default();
+        let reference = |ty| Ty::Ref {
+            kind: BorrowKind::Shared,
+            referent: Arc::new(ty),
+        };
+        let contract = RefContract {
+            results: fixture_result_regions(Some(RegionParamId(0)), ReturnContract::NoReference),
+            input_regions: fixture_input_regions(Arc::from([
+                Some(RegionParamId(0)),
+                Some(RegionParamId(1)),
+            ])),
+            region_count: 2,
+            outlives: Arc::from([]),
+        };
+        let results = derive_return_contracts(
+            &[reference(Ty::Int(IntTy::U8)), reference(Ty::Str)],
+            &reference(Ty::Str),
+            &contract,
+            &budget,
+        )
+        .unwrap();
+        assert_eq!(
+            results[0].returns,
+            ReturnContract::SharedInputEnvelopes(Arc::from([InputEnvelope {
+                input: fixture_input(0)
+            }]))
         );
     }
 

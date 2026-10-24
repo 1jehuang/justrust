@@ -251,6 +251,8 @@ const ITEM_COHERENCE: u32 = 146;
 /// Per-module item inventory (keyed by inventory ordinal): the callables,
 /// constants, nominals and associated constants that module owns.
 const ITEM_INVENTORY: u32 = 141;
+/// Per-module canonical source declarations (keyed by module-path key bits).
+const MODULE_DECLS: u32 = 147;
 
 enum Input {
     Text(String),
@@ -919,18 +921,66 @@ impl Provider for CompilerProvider {
                         },
                     )
                 }
+                MODULE_DECLS => {
+                    let [module] = key.params.as_slice() else {
+                        return Err(Error::new("module declarations key requires a module"));
+                    };
+                    let program: Arc<Arc<frontend::Program>> =
+                        facts.get(keys::ResolveDebtRoot.key()).await?;
+                    let declarations = frontend::module_declarations::module_declarations(
+                        &program,
+                        *module,
+                        &this.0.budget,
+                    )
+                    .map_err(Error::new)?;
+                    cx.publish_fact(0, ModuleDeclsFact { declarations })
+                }
                 TRAIT_IMPLS => {
+                    // Explicit per-trait completeness: every module's
+                    // impl->trait edges, requested together, then filtered.
                     let declaration = decl_param(&key, "trait impls key")?;
-                    let types = facts.types().await?;
-                    let world = types.trait_world().map_err(Error::new)?;
-                    let impls = world.trait_impls(declaration);
+                    let program: Arc<Arc<frontend::Program>> =
+                        facts.get(keys::ResolveDebtRoot.key()).await?;
+                    let modules =
+                        frontend::module_declarations::declaring_modules(&program, &this.0.budget)
+                            .map_err(Error::new)?;
+                    let module_keys: Vec<keys::Params<MODULE_DECLS>> = modules
+                        .into_iter()
+                        .map(|module| keys::Params(module, Vec::new()))
+                        .collect();
+                    let handles = cx.request_all(&module_keys, 0);
+                    let mut impls = Vec::new();
+                    for handle in handles {
+                        let module: Arc<ModuleDeclsFact> = cx.read_fact(handle).await?;
+                        for &(implementation, implemented) in &module.declarations.impl_traits {
+                            if implemented == declaration.index {
+                                impls.push(ir::DeclId {
+                                    snapshot: declaration.snapshot,
+                                    index: implementation,
+                                });
+                            }
+                        }
+                    }
                     cx.publish_fact(0, TraitImplsFact { impls })
                 }
                 IMPL_COHERENCE => {
                     let declaration = decl_param(&key, "impl coherence key")?;
                     let types = facts.types().await?;
+                    let Some(trait_decl) = types.impl_trait(declaration).map_err(Error::new)?
+                    else {
+                        return cx.publish(0, 1);
+                    };
+                    let peers: Arc<TraitImplsFact> = facts
+                        .get(
+                            keys::Params::<TRAIT_IMPLS>(
+                                trait_decl.snapshot.graph_word(),
+                                vec![trait_decl.index],
+                            )
+                            .key(),
+                        )
+                        .await?;
                     types
-                        .validate_impl_coherence(declaration)
+                        .validate_impl_coherence(declaration, &peers.impls)
                         .map_err(Error::new)?;
                     cx.publish(0, 1)
                 }
@@ -2480,6 +2530,11 @@ pub(crate) struct TraitImplsFact {
     pub impls: Vec<ir::DeclId>,
 }
 impl crate::engine::Fact for TraitImplsFact {}
+/// `MODULE_DECLS` output: one module's canonical source declarations.
+pub(crate) struct ModuleDeclsFact {
+    pub declarations: frontend::module_declarations::ModuleDeclarations,
+}
+impl crate::engine::Fact for ModuleDeclsFact {}
 fn decl_param(key: &Key, what: &str) -> Result<ir::DeclId, Error> {
     let [snapshot, index] = key.params.as_slice() else {
         return Err(Error::new(format!(

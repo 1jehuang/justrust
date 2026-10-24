@@ -4,6 +4,24 @@ pub enum Result<T, E> {
     Err(E),
 }
 
+// Scoped to Vec rather than claiming support for arbitrary FromIterator targets.
+impl<A, E> super::iter::FromIterator<Result<A, E>> for Result<super::vec::Vec<A>, E> {
+    fn from_iter<I: super::iter::IntoIterator<Item = Result<A, E>>>(
+        source: I,
+    ) -> Result<super::vec::Vec<A>, E> {
+        // Drop the input iterator before the partial Vec on an error, as stock does.
+        let mut values = super::vec::Vec::new();
+        let mut iterator = source.into_iter();
+        loop {
+            match iterator.next() {
+                super::option::Option::Some(Result::Ok(value)) => values.push(value),
+                super::option::Option::Some(Result::Err(error)) => return Result::Err(error),
+                super::option::Option::None => return Result::Ok(values),
+            }
+        }
+    }
+}
+
 impl<T, E> Result<T, E> {
     pub fn is_ok(&self) -> bool {
         match self {

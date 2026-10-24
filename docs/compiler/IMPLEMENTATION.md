@@ -6,6 +6,13 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 
 ## Completed foundations, not full compatibility
 
+- [x] `Iterator::nth`, `last`, and `find` preserve iterator position and
+  non-fused stopping behavior. `iterator_fold::iterator_consumers_match_stock`
+  checks stock/native execution at workers 1 and 8 and invalid predicates.
+- [x] `Result<Vec<T>, E>` collection stops at the first error and preserves
+  payload, iterator and partial-vector drop order. The `result_map::result_vec_*`
+  tests cover success, empty input, errors, non-Copy values and invalid types.
+
 - [x] `Option::insert` returns the stored mutable reference and drops the old
   value exactly once. `option_map::option_insert_returns_stored_mutable_value`
   checks stock/native execution at workers 1 and 8, mutation through the result,

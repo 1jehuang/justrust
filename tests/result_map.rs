@@ -1,4 +1,4 @@
-//! Stock differential coverage for `Result::map` and `Result::map_err`.
+//! Stock differential coverage for Result mapping and fallible Vec collection.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
 
 #[path = "support/closure_oracle.rs"]
@@ -92,6 +92,117 @@ fn enum_own_drop_move_is_invalid() {
             expect: Expect::Invalid("E0509"),
         }],
     );
+}
+
+fn result_collection_cases() -> [closure_oracle::Case; 7] {
+    use closure_oracle::{Case, Expect};
+    [
+        Case {
+            name: "all_ok_and_empty",
+            source: r#"
+fn main() {
+    let values: Result<Vec<i32>, u8> = (0i32..3i32).map(|x| Ok::<i32, u8>(x * 2)).collect();
+    let values = values.unwrap();
+    println!("{} {} {} {}", values.len(), values[0], values[1], values[2]);
+    let empty: Result<Vec<i32>, u8> = (0i32..0i32).map(|x| Ok::<i32, u8>(x)).collect();
+    println!("{}", empty.unwrap().len());
+}
+"#,
+            expect: Expect::Run("3 0 2 4\n0\n"),
+        },
+        Case {
+            name: "first_and_middle_error_stop_polling",
+            source: r#"
+struct Probe { n: i32, fail: i32 }
+impl Iterator for Probe {
+    type Item = Result<i32, i32>;
+    fn next(&mut self) -> Option<Result<i32, i32>> {
+        println!("poll {}", self.n);
+        let n = self.n;
+        self.n += 1;
+        if n == self.fail { Some(Err(n)) } else { Some(Ok(n)) }
+    }
+}
+fn main() {
+    let first: Result<Vec<i32>, i32> = Probe { n: 0, fail: 0 }.collect();
+    println!("error {}", first.unwrap_err());
+    let middle: Result<Vec<i32>, i32> = Probe { n: 0, fail: 2 }.collect();
+    println!("error {}", middle.unwrap_err());
+}
+"#,
+            expect: Expect::Run("poll 0\nerror 0\npoll 0\npoll 1\npoll 2\nerror 2\n"),
+        },
+        Case {
+            name: "non_copy_payload_error_and_drop_order",
+            source: r#"
+#[derive(Debug)]
+struct Token { id: i32 }
+impl Drop for Token { fn drop(&mut self) { println!("drop {}", self.id); } }
+struct Probe { n: i32, fail: bool }
+impl Iterator for Probe {
+    type Item = Result<Token, Token>;
+    fn next(&mut self) -> Option<Result<Token, Token>> {
+        let n = self.n;
+        self.n += 1;
+        println!("poll {}", n);
+        if n == 2 {
+            if self.fail { Some(Err(Token { id: 9 })) } else { None }
+        } else { Some(Ok(Token { id: n })) }
+    }
+}
+impl Drop for Probe { fn drop(&mut self) { println!("drop iterator"); } }
+fn main() {
+    let result: Result<Vec<Token>, Token> = Probe { n: 0, fail: true }.collect();
+    match result { Ok(_) => println!("unexpected"), Err(error) => println!("error {}", error.id) }
+    let result: Result<Vec<Token>, Token> = Probe { n: 0, fail: false }.collect();
+    match result { Ok(values) => println!("len {}", values.len()), Err(_) => println!("unexpected") }
+}
+"#,
+            expect: Expect::Run(
+                "poll 0\npoll 1\npoll 2\ndrop iterator\ndrop 0\ndrop 1\nerror 9\ndrop 9\npoll 0\npoll 1\npoll 2\ndrop iterator\nlen 2\ndrop 0\ndrop 1\n",
+            ),
+        },
+        Case {
+            name: "wrong_item",
+            source: "fn main(){let _:Result<Vec<i32>,u8>=(0i32..2i32).collect();}",
+            expect: Expect::Invalid("E0277"),
+        },
+        Case {
+            name: "wrong_payload",
+            source: "fn main(){let _:Result<Vec<bool>,u8>=(0i32..2i32).map(|x|Ok::<i32,u8>(x)).collect();}",
+            expect: Expect::Invalid("E0277"),
+        },
+        Case {
+            name: "wrong_error",
+            source: "fn main(){let _:Result<Vec<i32>,bool>=(0i32..2i32).map(|x|Ok::<i32,u8>(x)).collect();}",
+            expect: Expect::Invalid("E0277"),
+        },
+        Case {
+            name: "invalid_unused",
+            source: "fn bad(){let _:Result<Vec<i32>,u8>=(0i32..2i32).collect();}fn main(){}",
+            expect: Expect::Invalid("E0277"),
+        },
+    ]
+}
+
+#[test]
+fn result_vec_all_ok_and_empty() {
+    closure_oracle::check("result-collect-ok", &result_collection_cases()[0..1]);
+}
+
+#[test]
+fn result_vec_short_circuit() {
+    closure_oracle::check("result-collect-err", &result_collection_cases()[1..2]);
+}
+
+#[test]
+fn result_vec_non_copy_drops() {
+    closure_oracle::check("result-collect-drop", &result_collection_cases()[2..3]);
+}
+
+#[test]
+fn result_vec_invalid_types() {
+    closure_oracle::check("result-collect-invalid", &result_collection_cases()[3..]);
 }
 
 #[test]
