@@ -14,7 +14,11 @@ fn required_signatures_have_no_native_slots_and_conditional_calls_close_before_o
             // Source callable declarations exclude required trait items. The
             // generic W::value body contributes two distinct native instances.
             assert_eq!(compiled.functions, 5);
-            assert_eq!(compiled.control_flow.len(), 6);
+            // BUILD lowers the six native instances. CHECK (606e7aed7) reports
+            // one SOURCE_ADMISSION CFG per source callable and never demands
+            // per-instance LOWER/ANALYZE/proof nodes (471ca7b45).
+            let instances = if check { 0 } else { 6 };
+            assert_eq!(compiled.control_flow.len(), if check { 5 } else { 6 });
             assert!(compiled.analyses.iter().all(|analysis| analysis.passed()));
             for kind in [102, 108, 109] {
                 let facts: Vec<_> = compiled
@@ -23,7 +27,7 @@ fn required_signatures_have_no_native_slots_and_conditional_calls_close_before_o
                     .iter()
                     .filter(|(key, _)| key.kind == kind)
                     .collect();
-                assert_eq!(facts.len(), 6);
+                assert_eq!(facts.len(), instances);
                 assert!(facts.iter().all(|(_, count)| *count == 1));
             }
             assert_eq!(
