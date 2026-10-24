@@ -1,9 +1,8 @@
-//! `extern crate` items. Only the native library crates `core` and `std` are
-//! admitted: the item is an ordinary type-namespace import of the library
-//! root, so `extern crate core as std;` makes `std::...` name core paths and
-//! the import resolver keeps deciding privacy, shadowing and collisions.
-//! Any other crate name is explicitly unsupported (dependency crates already
-//! enter through the extern prelude, not through this item).
+//! `extern crate` items. The item is an ordinary type-namespace import of the
+//! crate root (native `core`/`std` or a mounted dependency, which already
+//! enters through the extern prelude), so `extern crate core as std;` makes
+//! `std::...` name core paths and the import resolver keeps deciding privacy,
+//! shadowing and collisions. An unknown dependency name fails resolution.
 use super::*;
 
 impl Parser<'_, '_> {
@@ -18,11 +17,10 @@ impl Parser<'_, '_> {
         self.expect("extern")?;
         self.expect("crate")?;
         let crate_token = self.token();
-        if !matches!(crate_token.text, "core" | "std") || crate_token.string {
-            return Err(
-                self.unsupported("extern crate items other than `core` and `std` are unsupported")
-            );
+        if crate_token.string || crate_token.text == "self" {
+            return Err(self.unsupported("extern crate self is unsupported"));
         }
+        let library = matches!(crate_token.text, "core" | "std");
         let crate_name = self.ident()?;
         let local = if self.eat("as") {
             if self.is("_") {
@@ -47,6 +45,11 @@ impl Parser<'_, '_> {
         }
         let target = AstPath::new(self.names, PathAnchor::Relative, &[crate_name])
             .map_err(native_adapter::name_error)?;
+        // A dependency crate must exist even when the item is otherwise a
+        // no-op: validate it like an empty use group naming its root.
+        if !library {
+            parsed.empty_use_prefixes.push((module, target.clone()));
+        }
         // An unaliased `extern crate std;` names itself; the extern prelude
         // already provides that name, so recording a self-import would only
         // create a resolver cycle.

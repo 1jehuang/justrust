@@ -268,3 +268,70 @@ fn edition_support_is_required_only_for_compiled_dependencies() {
         }
     }
 }
+
+#[test]
+fn extern_crate_items_name_dependencies_like_stock() {
+    let cases = [
+        (
+            "plain",
+            "extern crate dep;\nfn main(){println!(\"{}\",dep::value());}\n",
+            true,
+        ),
+        (
+            "alias",
+            "extern crate dep as renamed;\nfn main(){println!(\"{}\",renamed::value());}\n",
+            true,
+        ),
+        (
+            "unused",
+            "extern crate dep;\nfn main(){println!(\"1\");}\n",
+            true,
+        ),
+        ("unknown", "extern crate missing_dep;\nfn main(){}\n", false),
+        (
+            "alias-not-prelude",
+            "mod m { extern crate dep as d; }\nfn main(){println!(\"{}\",d::value());}\n",
+            false,
+        ),
+    ];
+    for (tag, source, accepted) in cases {
+        let scratch = Scratch::new(&format!("extern-crate-{tag}"));
+        scratch.app("[dependencies]\ndep={path=\"../dep\"}\n", source);
+        scratch.write(
+            "dep/Cargo.toml",
+            "[package]\nname=\"dep\"\nversion=\"0.1.0\"\nedition=\"2021\"\n",
+        );
+        scratch.write("dep/src/lib.rs", "pub fn value()->i32 {7}\n");
+        let stock = Command::new("cargo")
+            .args(["run", "--offline", "--quiet", "--manifest-path"])
+            .arg(scratch.manifest())
+            .env("CARGO_TARGET_DIR", scratch.0.join("stock-target"))
+            .output()
+            .unwrap();
+        assert_eq!(
+            stock.status.success(),
+            accepted,
+            "{tag}: {}",
+            String::from_utf8_lossy(&stock.stderr)
+        );
+        for workers in [1, 8] {
+            let check = native(&scratch.manifest(), &["check"], workers);
+            assert_eq!(
+                check.status.success(),
+                accepted,
+                "{tag}: {}",
+                String::from_utf8_lossy(&check.stderr)
+            );
+            let run = native(&scratch.manifest(), &["run"], workers);
+            assert_eq!(
+                run.status.success(),
+                accepted,
+                "{tag}: {}",
+                String::from_utf8_lossy(&run.stderr)
+            );
+            if accepted {
+                assert_eq!(run.stdout, stock.stdout, "{tag}");
+            }
+        }
+    }
+}
