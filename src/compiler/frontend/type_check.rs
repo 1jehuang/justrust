@@ -6308,6 +6308,119 @@ impl<'a> Checker<'a> {
         self.plan_budget_guard()?;
         Ok(result)
     }
+    /// `*local... (OP)= value` where `local` is an owned nominal with an
+    /// overloaded Deref (Box, guards). Stock order: the value first, then
+    /// `DerefMut::deref_mut(&mut local)`, then the write through the result.
+    fn deref_mut_place_assignment(
+        &mut self,
+        statement: &Stmt,
+        place: &Place,
+        op: Option<BinaryOp>,
+        value: &Expr,
+        statements: &mut Vec<ir::TypedStmt>,
+    ) -> Result<Option<(ir::TypedStmt, bool)>, String> {
+        if !matches!(place.fields.first(), Some(FieldSelector::Deref)) {
+            return Ok(None);
+        }
+        let local = self.lookup(place.local)?;
+        let owner = self.locals[local.0].ty.clone();
+        if !matches!(owner, ir::Ty::Struct(_) | ir::Ty::Enum(_)) {
+            return Ok(None);
+        }
+        let Some(target) = self.deref_target_hint(&owner)? else {
+            return Ok(None);
+        };
+        let carrier_ty = ir::Ty::Ref {
+            kind: ir::BorrowKind::Mut,
+            referent: Arc::new(target),
+        };
+        let (projection, destination, _) =
+            self.call_place_projection(&carrier_ty, &place.fields)?;
+        if op.is_some()
+            && matches!(
+                destination,
+                ir::Ty::Struct(_) | ir::Ty::Enum(_) | ir::Ty::Tuple(_) | ir::Ty::Param(_)
+            )
+        {
+            return Err(
+                "unsupported: overloaded compound assignment through an overloaded DerefMut".into(),
+            );
+        }
+        let (rhs, rhs_flow) = match op {
+            Some(op) => self.compound_value(op, &destination, value)?,
+            None => {
+                let rhs = self.expr_expected(value, Some(&destination))?;
+                let flow = self.flow(rhs);
+                self.require(&flow, &destination)?;
+                (rhs, flow)
+            }
+        };
+        let saved_ty = if rhs_flow.ty == ir::Ty::Never {
+            destination.clone()
+        } else {
+            rhs_flow.ty.clone()
+        };
+        let saved = self.temporary(
+            &format!("$rhs{}", self.locals.len()),
+            saved_ty.clone(),
+            false,
+        )?;
+        self.charge_node(std::mem::size_of::<ir::TypedStmt>() * 3)?;
+        statements.push(ir::TypedStmt::Let {
+            local: saved,
+            value: rhs,
+        });
+        let root = Place {
+            local: place.local,
+            fields: Vec::new(),
+        };
+        let call = self.operator_call(
+            ("ops", "DerefMut", "deref_mut"),
+            owner,
+            None,
+            super::operators::First::Place(ir::BorrowKind::Mut, &root),
+            &[],
+        )?;
+        self.record_operator(statement as *const Stmt as usize | 1, call)?;
+        let call_flow = self.flow(call);
+        self.require(&call_flow, &carrier_ty)?;
+        let handle =
+            self.temporary(&format!("$carrier{}", self.locals.len()), carrier_ty, false)?;
+        self.plan_budget_guard()?;
+        statements.push(ir::TypedStmt::Let {
+            local: handle,
+            value: call,
+        });
+        let place = ir::Place {
+            local: handle,
+            projection,
+        };
+        let loaded = ir::ExprId(self.exprs.len());
+        self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
+        self.exprs.push(ir::TypedExpr {
+            ty: saved_ty,
+            completion: ir::Completion::Returns,
+            kind: ir::ExprKind::Local(saved),
+        });
+        let completes = rhs_flow.completes && call_flow.completes;
+        Ok(Some(match op {
+            Some(op) => (
+                ir::TypedStmt::AssignOp {
+                    place,
+                    op,
+                    value: loaded,
+                },
+                completes,
+            ),
+            None => (
+                ir::TypedStmt::AssignPlace {
+                    place,
+                    value: loaded,
+                },
+                completes,
+            ),
+        }))
+    }
     /// `m[i1]..[ik] OP= value` with runtime rows (NESTED-INDEX.md). Stock order:
     /// value, then each runtime index outermost first with its bounds check
     /// before the next index is evaluated, then the final index and write.
@@ -7076,6 +7189,18 @@ impl<'a> Checker<'a> {
                 }
                 Stmt::AssignOp {
                     place, op, value, ..
+                } if let Some(done) = self.deref_mut_place_assignment(
+                    s,
+                    place,
+                    Some(*op),
+                    value,
+                    &mut statements,
+                )? =>
+                {
+                    done
+                }
+                Stmt::AssignOp {
+                    place, op, value, ..
                 } if let Some(id) = self.overloaded_assign(s, place, *op, value)? => {
                     (ir::TypedStmt::Expr(id), self.flow(id).completes)
                 }
@@ -7152,6 +7277,17 @@ impl<'a> Checker<'a> {
                 Stmt::AssignPlace { place, value, .. }
                     if let Some(done) =
                         self.mut_slice_constant_assignment(place, None, value)? =>
+                {
+                    done
+                }
+                Stmt::AssignPlace { place, value, .. }
+                    if let Some(done) = self.deref_mut_place_assignment(
+                        s,
+                        place,
+                        None,
+                        value,
+                        &mut statements,
+                    )? =>
                 {
                     done
                 }

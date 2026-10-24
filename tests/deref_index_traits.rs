@@ -59,6 +59,16 @@ fn missing_deref_is_rejected() {
 }
 
 #[test]
+fn box_deref_mut_assignment() {
+    run(
+        "struct P { x: i32 } fn main() { let mut b = Box::new(5); *b += 1; *b = *b * 2; let mut p = Box::new(P { x: 1 }); (*p).x += 4; println!(\"{} {}\", *b, p.x); }",
+        "12 5\n",
+    );
+    let immutable = "fn main() { let b = Box::new(5); *b += 1; println!(\"{}\", *b); }";
+    assert!(compiler::compile(immutable.into(), 1, true).is_err());
+}
+
+#[test]
 fn box_deref() {
     run(
         "fn main() { let b = Box::new(5); let x = *b + 1; println!(\"{}\", x); }",
