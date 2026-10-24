@@ -10477,7 +10477,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             "mod", "impl", "trait", "self", "Self", "as", "async", "await", "move", "unsafe",
             "where", "type", "ref", "extern", "crate", "super", "dyn", "abstract", "become", "box",
             "do", "final", "macro", "override", "priv", "typeof", "unsized", "virtual", "yield",
-            "try", "gen",
+            "try",
         ];
         t.is_ident()
             && t.text != "_"
@@ -10486,6 +10486,11 @@ impl<'input, 'names> Parser<'input, 'names> {
                 .next()
                 .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
             && !reserved.contains(&t.text)
+            && (t.text != "gen"
+                || self
+                    .input
+                    .name_edition(&t)
+                    .is_ok_and(|edition| edition != super::token::Edition::E2024))
     }
     fn ident(&mut self) -> Result<AstIdent, ParseError> {
         let t = self.token();
@@ -11600,6 +11605,7 @@ impl<'input, 'names> Parser<'input, 'names> {
         self.nesting += 1;
         let previous_module = self.module;
         let previous_frontier = self.module_frontier;
+        let mut parent_macros = None;
         self.module = module;
         if self.purpose == ParserPurpose::Active && self.input.macro_source().is_some() {
             if self.lexical.scopes.is_none() {
@@ -11608,10 +11614,23 @@ impl<'input, 'names> Parser<'input, 'names> {
                         .map_err(scope_parse_error)?,
                 );
             }
-            if self.lexical.item_macros.is_none() {
-                let source = self.input.macro_source().cloned().ok_or_else(|| {
-                    native_adapter::transport_error(super::token_session::TokenError::InvalidHandle)
-                })?;
+            let source = self.input.macro_source().cloned().ok_or_else(|| {
+                native_adapter::transport_error(super::token_session::TokenError::InvalidHandle)
+            })?;
+            if let Some(mut parent) = self.lexical.item_macros.take() {
+                let checkpoint = parent
+                    .checkpoint(self.names)
+                    .map_err(|error| self.driver_error(error))?;
+                self.lexical.item_macros = Some(
+                    super::source_item_macro::SourceItemMacroDriver::from_checkpoint(
+                        source,
+                        &checkpoint,
+                        self.names,
+                    )
+                    .map_err(|error| self.driver_error(error))?,
+                );
+                parent_macros = Some(parent);
+            } else {
                 self.lexical.item_macros = Some(
                     super::source_item_macro::SourceItemMacroDriver::new(source, self.names)
                         .map_err(|error| self.driver_error(error))?,
@@ -11677,6 +11696,9 @@ impl<'input, 'names> Parser<'input, 'names> {
         }
         self.module = previous_module;
         self.module_frontier = previous_frontier;
+        if let Some(parent) = parent_macros {
+            self.lexical.item_macros = Some(parent);
+        }
         self.nesting -= 1;
         Ok(())
     }
@@ -12424,9 +12446,11 @@ impl<'input, 'names> Parser<'input, 'names> {
             "for", "if", "impl", "in", "let", "loop", "match", "mod", "move", "mut", "pub", "ref",
             "return", "self", "Self", "struct", "super", "trait", "true", "type", "unsafe", "use",
             "where", "while", "async", "await", "dyn", "abstract", "become", "box", "do", "final",
-            "macro", "override", "priv", "typeof", "unsized", "virtual", "yield", "try", "gen",
+            "macro", "override", "priv", "typeof", "unsized", "virtual", "yield", "try",
         ]
         .contains(&name)
+            || (name == "gen"
+                && self.input.name_edition(&self.token())? == super::token::Edition::E2024)
         {
             return Err(self.unsupported("keyword lifetime names are unsupported"));
         }

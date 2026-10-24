@@ -349,6 +349,47 @@ impl NativeTokenBuffer {
             .map_err(transport_error)
     }
 
+    /// Read the edition of this exact admitted occurrence, not the receiving
+    /// crate. Macro tokens can originate in a different edition.
+    pub(super) fn name_edition(
+        &self,
+        view: &super::TokenView<'_>,
+    ) -> Result<crate::compiler::token::Edition, ParseError> {
+        let index = view
+            .name
+            .ok_or_else(|| transport_error(TokenError::InvalidHandle))?;
+        let (edition, logical) = match &self.names {
+            AdmittedNames::Root(names) => {
+                let record = names
+                    .as_slice()
+                    .get(index.get() as usize - 1)
+                    .ok_or_else(|| transport_error(TokenError::InvalidHandle))?;
+                (record.edition, record.logical)
+            }
+            AdmittedNames::Expanded { names, .. } => {
+                let record = names
+                    .as_slice()
+                    .get(index.get() as usize - 1)
+                    .ok_or_else(|| transport_error(TokenError::InvalidHandle))?;
+                (record.edition, record.logical)
+            }
+        };
+        let logical = self
+            .tokens
+            .as_slice()
+            .get(logical as usize)
+            .ok_or_else(|| transport_error(TokenError::InvalidHandle))?;
+        if !std::ptr::eq(logical.text.as_str(), view.text)
+            || logical.name != Some(index)
+            || view.span != logical.whole.span
+            || view.bytes != logical.whole.bytes()
+            || view.provenance != logical.whole.provenance()
+        {
+            return Err(transport_error(TokenError::ForeignHandle));
+        }
+        Ok(edition)
+    }
+
     pub(super) fn mint_name(
         &self,
         token: &super::TokenView<'_>,

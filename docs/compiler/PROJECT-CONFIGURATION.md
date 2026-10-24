@@ -47,6 +47,12 @@ edition check. This makes the edition explicit; it does not add 2021 semantics.
 The Adler2 probe passes its pinned 2021 edition to direct-source diagnostics as
 well as retaining that edition in the unchanged project manifest.
 
+Identifier and lifetime parsing treats `gen` as reserved according to the
+authenticated token occurrence's edition, not the receiving name store's
+edition. The parser-level stock differential covers all four token editions;
+the 2024 CHECK/BUILD/run regression covers the supported public entry point.
+This is a bounded parser rule, not permission to compile a 2021 package.
+
 Manifest resolution produces immutable profile values. The driver passes the
 resolved cfg and overflow policy into `SourceOptions`; no mutable compiler
 side slot or graph bypass is introduced. The overflow backend implementation

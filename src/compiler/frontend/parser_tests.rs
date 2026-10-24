@@ -5,11 +5,21 @@ pub(super) fn stock_compile(
     output: &std::path::Path,
     metadata: bool,
 ) -> std::process::Output {
+    stock_compile_edition(source, output, metadata, "2024")
+}
+
+fn stock_compile_edition(
+    source: &str,
+    output: &std::path::Path,
+    metadata: bool,
+    edition: &str,
+) -> std::process::Output {
     use std::io::Write;
     use std::process::{Command, Stdio};
     let mut command = Command::new(super::super::stock_rustc::stock_rustc());
     command.env_remove("RUSTC_BOOTSTRAP").args([
-        "--edition=2024",
+        "--edition",
+        edition,
         "--crate-name=source_contract",
         "-Cpanic=abort",
     ]);
@@ -48,6 +58,93 @@ pub(super) fn stock_compile(
         std::fs::remove_file(path).unwrap();
     }
     result
+}
+
+#[cfg(test)]
+mod edition_keyword_tests {
+    use super::*;
+    use crate::compiler;
+    #[test]
+    fn gen_keyword_uses_its_token_edition_not_the_receiving_store() {
+        use compiler::source::PreparedLexInput;
+        use compiler::token::Edition;
+        use compiler::token_session::TokenSession;
+        for (edition, year) in [
+            (Edition::E2015, "2015"),
+            (Edition::E2018, "2018"),
+            (Edition::E2021, "2021"),
+            (Edition::E2024, "2024"),
+        ] {
+            for (spelling, source) in [
+                ("gen", "fn gen() {} fn main() {}"),
+                (
+                    "'gen",
+                    "fn f<'gen>(x: &'gen i32) -> &'gen i32 { x } fn main() {}",
+                ),
+            ] {
+                let stock =
+                    stock_compile_edition(source, std::path::Path::new("unused"), true, year);
+                let budget = compiler::expansion_budget::ExpansionBudget::default();
+                let projection = PreparedLexInput::identity(
+                    std::path::Path::new("keyword.rs"),
+                    spelling,
+                    &budget,
+                    compiler::owner_path::standalone_issued(
+                        &budget,
+                        compiler::owner_path::OwnerDomain::SourceSnapshot,
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+                let (mut session, cap) =
+                    TokenSession::standalone(projection.snapshot().clone(), budget).unwrap();
+                let lexed =
+                    compiler::lexer::lex_prepared(&projection, edition, &mut session).unwrap();
+                let input = NativeParserInput::new(lexed, session, cap, &projection).unwrap();
+                let (tokens, session, cap) = input.into_parts();
+                // Deliberately disagree with the token's edition. Macro ingress must
+                // not reinterpret an older spelling using its receiving crate.
+                let mut names = NameStoreBuilder::new(session, cap, Edition::E2024).unwrap();
+                let mut parser = Parser::new(&tokens, &mut names).unwrap();
+                let accepted = if spelling.starts_with('\'') {
+                    parser.lifetime().is_ok()
+                } else {
+                    parser.ident().is_ok()
+                };
+                assert_eq!(
+                    accepted,
+                    stock.status.success(),
+                    "{year} {spelling}: {}",
+                    String::from_utf8_lossy(&stock.stderr)
+                );
+
+                let cursor = TokenCursor::new(&tokens);
+                let mut forged = cursor.current();
+                forged.bytes = 1..2;
+                assert!(tokens.name_edition(&forged).is_err());
+            }
+        }
+    }
+}
+
+#[test]
+fn gen_keyword_keeps_2024_check_build_and_run_boundaries() {
+    stock_native_run("fn generation() -> i32 { 42 } fn main() { println!(\"{}\", generation()); }");
+    for source in [
+        "fn gen() {} fn main() {}",
+        "fn f<'gen>(x: &'gen i32) -> &'gen i32 { x } fn main() {}",
+    ] {
+        let stock = stock_compile(source, std::path::Path::new("unused"), true);
+        assert!(!stock.status.success());
+        for workers in [1, 8] {
+            for check_only in [true, false] {
+                assert!(
+                    super::super::compile(source.into(), workers, check_only).is_err(),
+                    "reserved identifier accepted: workers={workers}, check={check_only}"
+                );
+            }
+        }
+    }
 }
 
 pub(super) fn stock_native_run(source: &str) {
