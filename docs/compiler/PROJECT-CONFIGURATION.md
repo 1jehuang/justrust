@@ -47,6 +47,15 @@ edition check. This makes the edition explicit; it does not add 2021 semantics.
 The Adler2 probe passes its pinned 2021 edition to direct-source diagnostics as
 well as retaining that edition in the unchanged project manifest.
 
+Prepared source and file-unit transport retain the selected edition, including
+inside the immutable embedded-source seals. The native parser retains its lexer
+edition rather than resetting macro definitions to 2024. Edition-sensitive
+`expr` matching and explicit `expr_2021` preserve the pre-2024 top-level `const`
+and `_` exclusions; `native_parser_retains_lexer_edition_for_macro_definitions`
+and `expr_2021_preserves_pre_2024_capture_boundaries` cover the distinction.
+Mixed-edition assembly still rejects explicitly, and these transport changes do
+not open earlier-edition admission.
+
 Identifier and lifetime parsing treats `async`, `await`, `dyn`, and `try` as
 reserved from edition 2018, and `gen` from edition 2024, according to the
 authenticated token occurrence's edition rather than the receiving name

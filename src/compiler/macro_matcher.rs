@@ -485,6 +485,7 @@ fn probe(
     }
     match kind {
         FragmentKind::Expr
+        | FragmentKind::Expr2021
         | FragmentKind::Ty
         | FragmentKind::Pat
         | FragmentKind::PatParam
@@ -596,6 +597,9 @@ fn syntactic(
         return Ok(None);
     };
     if matches!(first.kind, EventKind::Close(_)) {
+        return Ok(None);
+    }
+    if kind == FragmentKind::Expr2021 && matches!(ident_of(first, session)?, Some("const" | "_")) {
         return Ok(None);
     }
     let next_tree = |at: usize| -> usize {
@@ -740,7 +744,7 @@ fn syntactic(
         first.physical.start..last.physical.end
     };
     let tokens = first.container.subslice(session, range)?;
-    let value = if trees > 1 && kind == FragmentKind::Expr {
+    let value = if trees > 1 && matches!(kind, FragmentKind::Expr | FragmentKind::Expr2021) {
         CaptureValue::Grouped(tokens)
     } else {
         CaptureValue::Tokens(tokens)

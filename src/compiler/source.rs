@@ -281,6 +281,7 @@ impl CratePolicy {
 }
 #[derive(Clone, Debug)]
 pub struct PreparedSource {
+    edition: Edition,
     embedded_files: Vec<source_embedded::EmbeddedFile>,
     embedded_transport: Option<source_embedded::AssemblyTransport>,
     debug_assertions: bool,
@@ -301,6 +302,7 @@ pub struct PreparedSource {
 impl Default for PreparedSource {
     fn default() -> Self {
         Self {
+            edition: Edition::E2024,
             embedded_files: Vec::new(),
             embedded_transport: None,
             debug_assertions: CfgSet::DEFAULT_DEBUG_ASSERTIONS,
@@ -332,6 +334,7 @@ impl FileView {
     /// The shallow view of `unit`, mounted at assembly FileId `base`.
     pub fn of(unit: &FileUnit, base: u32, options: &SourceOptions) -> Result<Self, SourceError> {
         let mut prepared = PreparedSource {
+            edition: unit.edition,
             debug_assertions: options.cfg.debug_assertions(),
             overflow_checks: options.overflow_checks,
             ..PreparedSource::default()
@@ -373,6 +376,10 @@ impl FileView {
 }
 
 impl PreparedSource {
+    /// Language edition captured from the source preparation input.
+    pub fn edition(&self) -> Edition {
+        self.edition
+    }
     pub(super) fn embedded_issuers(
         &self,
         snapshot: &super::token_session::SourceSnapshot,
@@ -580,6 +587,7 @@ pub struct ChildModule {
 /// Spans use [`LOCAL_FILE`] for this file.
 #[derive(Debug)]
 pub struct FileUnit {
+    edition: Edition,
     embedded: Option<source_embedded::EmbeddedUnit>,
     no_std: bool,
     forbid_unsafe_code: bool,
@@ -872,6 +880,7 @@ fn snapshot_unit<'a>(
     builder.lexical_budget = budget.clone();
     let terminal = builder.snapshot(directory, depth).err();
     Ok(FileUnit {
+        edition: options.edition,
         embedded: None,
         no_std: builder.no_std,
         forbid_unsafe_code: builder.forbid_unsafe_code,
@@ -953,6 +962,7 @@ impl SourceAssembler {
     pub fn new(options: &SourceOptions) -> Self {
         Self {
             prepared: PreparedSource {
+                edition: options.edition,
                 debug_assertions: options.cfg.debug_assertions(),
                 overflow_checks: options.overflow_checks,
                 ..PreparedSource::default()
@@ -1007,6 +1017,13 @@ impl SourceAssembler {
             }
             Ok(_) => SharedFileUnit(unit),
         };
+        if unit.edition != self.prepared.edition {
+            return Err(self.fail(Loader::error(
+                SourceErrorKind::Unsupported,
+                None,
+                "mixed source editions require per-crate lexical transport",
+            )));
+        }
         if ordinal == [0] && unit.no_std && (!self.library || self.harness.is_some()) {
             return Err(self.fail(Loader::error(
                 SourceErrorKind::Unsupported,
@@ -1094,6 +1111,7 @@ impl SourceAssembler {
                     unreachable!("failures are handled before take")
                 };
                 FileUnit {
+                    edition: unit.edition,
                     embedded: unit.embedded.clone(),
                     no_std: unit.no_std,
                     forbid_unsafe_code: unit.forbid_unsafe_code,
@@ -2210,6 +2228,30 @@ mod tests {
         let mut reader = RecordingReader::default();
         assert!(prepare_with_reader(Path::new("main.rs"), &options, &mut reader).is_err());
         assert!(reader.calls.is_empty());
+    }
+
+    #[test]
+    fn source_edition_survives_file_views_and_mismatched_units_reject() {
+        let options = SourceOptions::default();
+        let mut unit = prepare_text_unit("edition.rs", "fn main(){}", &options).unwrap();
+        assert_eq!(unit.edition, Edition::E2024);
+        assert_eq!(
+            FileView::of(&unit, 0, &options).unwrap().prepared.edition(),
+            Edition::E2024
+        );
+        assert_eq!(
+            prepare_text("edition.rs", "fn main(){}", &options)
+                .unwrap()
+                .edition(),
+            Edition::E2024
+        );
+        unit.edition = Edition::E2021;
+        let failure = SourceAssembler::new(&options)
+            .provide(Arc::new(Ok(unit)))
+            .err()
+            .unwrap();
+        assert_eq!(failure.kind, SourceErrorKind::Unsupported);
+        assert!(failure.message.contains("mixed source editions"));
     }
 
     #[test]

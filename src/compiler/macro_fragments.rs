@@ -11,6 +11,7 @@ pub enum FragmentKind {
     Ident,
     Literal,
     Expr,
+    Expr2021,
     Ty,
     Pat,
     PatParam,

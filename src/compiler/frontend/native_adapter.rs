@@ -12,6 +12,7 @@ use crate::compiler::token_session::{BudgetVec, TokenError, TokenSession};
 use std::ops::{Deref, Range};
 
 pub(super) struct NativeParserInput {
+    edition: crate::compiler::token::Edition,
     tokens: BudgetVec<Token>,
     session: TokenSession,
     /// Local parser admission only: consumed by `NameStoreBuilder::new`,
@@ -537,6 +538,9 @@ impl Deref for NativeParserInput {
     }
 }
 impl NativeParserInput {
+    pub(super) fn edition(&self) -> crate::compiler::token::Edition {
+        self.edition
+    }
     pub(super) fn into_parts(
         self,
     ) -> (
@@ -662,6 +666,7 @@ impl NativeParserInput {
             None
         };
         let mut input = Self {
+            edition,
             tokens: BudgetVec::new(&budget, Storage::Retained).map_err(transport_error)?,
             text_leases: BudgetVec::new(&budget, Storage::Retained).map_err(transport_error)?,
             session,

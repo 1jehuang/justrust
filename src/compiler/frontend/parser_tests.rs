@@ -64,6 +64,49 @@ fn stock_compile_edition(
 mod edition_keyword_tests {
     use super::*;
     use crate::compiler;
+
+    #[test]
+    fn native_parser_retains_lexer_edition_for_macro_definitions() {
+        use compiler::token::Edition;
+        let source = "macro_rules! choose {($e:expr)=>{1}; (const $e:block)=>{2};} fn value()->i32{choose!(const {0})} fn main(){}";
+        for (edition, year, expected) in [(Edition::E2021, "2021", 2), (Edition::E2024, "2024", 1)]
+        {
+            let oracle = format!(
+                "{source} const RESULT:i32=choose!(const {{0}}); const _: () = assert!(RESULT == {expected});"
+            );
+            assert!(
+                stock_compile_edition(&oracle, std::path::Path::new("unused"), true, year)
+                    .status
+                    .success()
+            );
+            let budget = compiler::expansion_budget::ExpansionBudget::default();
+            let projection = compiler::source::PreparedLexInput::identity(
+                std::path::Path::new("edition-macro.rs"),
+                source,
+                &budget,
+                compiler::owner_path::standalone_issued(
+                    &budget,
+                    compiler::owner_path::OwnerDomain::SourceSnapshot,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+            let owner = compiler::owner_path::standalone_issued(
+                &budget,
+                compiler::owner_path::OwnerDomain::TokenSession,
+            )
+            .unwrap();
+            let input = native_input_for_edition(&projection, budget, owner, edition).unwrap();
+            assert_eq!(input.edition(), edition);
+            let parsed = parse_syntax_tokens(input).unwrap();
+            assert_eq!(parsed.program.names.edition(), edition);
+            assert!(
+                matches!(parsed.program.functions[0].body.tail.as_deref(), Some(Expr::Integer(value)) if value.magnitude == expected),
+                "{edition:?}: {:?}",
+                parsed.program.functions[0].body.tail
+            );
+        }
+    }
     #[test]
     fn edition_keywords_use_their_token_edition_not_the_receiving_store() {
         use compiler::source::PreparedLexInput;
@@ -145,6 +188,16 @@ mod edition_keyword_tests {
             }
         }
     }
+}
+
+#[test]
+fn expr_2021_preserves_pre_2024_capture_boundaries() {
+    stock_native_run(
+        "macro_rules! choose {($v:expr_2021)=>{1}; (const $b:block)=>{2}; (_)=>{3};} fn main(){assert_eq!(choose!(const {0}),2);assert_eq!(choose!(_),3);assert_eq!(choose!((const {0})),1);println!(\"ok\");}",
+    );
+    stock_native_run(
+        "macro_rules! inner {($v:expr_2021)=>{$v * 2};} macro_rules! outer {($v:expr_2021)=>{inner!($v)};} fn main(){assert_eq!(outer!(1+2),6);println!(\"ok\");}",
+    );
 }
 
 #[test]

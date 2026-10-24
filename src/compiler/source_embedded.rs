@@ -9,6 +9,7 @@ mod tests;
 
 #[derive(Clone, Debug)]
 pub(super) struct EmbeddedUnit {
+    edition: Edition,
     identity: Arc<()>,
     path: PathBuf,
     original: Arc<str>,
@@ -34,6 +35,7 @@ impl EmbeddedUnit {
         let bytes = unit_transport_bytes(unit)?;
         let admitted = admit(budget, bytes)?;
         Ok(Self {
+            edition: unit.edition,
             identity: Arc::new(()),
             path: unit.path.clone(),
             original: unit.contents.clone(),
@@ -52,7 +54,8 @@ impl EmbeddedUnit {
     }
 
     pub(super) fn validate(&self, unit: &FileUnit) -> Result<(), SourceError> {
-        if self.path != unit.path
+        if self.edition != unit.edition
+            || self.path != unit.path
             || !Arc::ptr_eq(&self.original, &unit.contents)
             || self.prepared.as_ref() != unit.text
             || self.origins.as_ref() != unit.origins
@@ -125,6 +128,7 @@ impl EmbeddedFile {
 /// after this private immutable receipt replays the complete assembled stream.
 #[derive(Clone, Debug)]
 pub(super) struct AssemblyTransport {
+    edition: Edition,
     text: Arc<str>,
     origins: Arc<[OriginSegment]>,
     attributes: Arc<[PreparedAttribute]>,
@@ -159,6 +163,7 @@ impl AssemblyTransport {
             + (source.embedded_files.len() * std::mem::size_of::<(FileId, Arc<()>)>()) as u128;
         let admitted = admit(&budget, bounded_bytes(bytes)?)?;
         Ok(Self {
+            edition: source.edition,
             text: Arc::from(source.text.as_str()),
             origins: Arc::from(source.origins.as_slice()),
             attributes: Arc::from(source.attributes.as_slice()),
@@ -217,7 +222,8 @@ impl AssemblyTransport {
                 .all(|((id, issuer), file)| {
                     *id == file.file && Arc::ptr_eq(issuer, &file.unit.identity)
                 });
-        if self.text.as_ref() != source.text
+        if self.edition != source.edition
+            || self.text.as_ref() != source.text
             || self.origins.as_ref() != source.origins
             || self.attributes.as_ref() != source.attributes
             || self.roots.as_ref() != source.crate_roots

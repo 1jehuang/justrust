@@ -280,7 +280,12 @@ fn repetition_tail(
     }
     Ok((Some(separator), op, end + 1))
 }
-fn parse(input: TokenSlice, matcher: bool, session: &TokenSession) -> Result<Syntax, MacroError> {
+fn parse(
+    input: TokenSlice,
+    matcher: bool,
+    edition: Edition,
+    session: &TokenSession,
+) -> Result<Syntax, MacroError> {
     let mut syntax_arena = Syntax::new(session)?;
     let mut frames = BudgetVec::new(session.budget(), Storage::Temporary)?;
     let mut pending = BudgetVec::new(session.budget(), Storage::Temporary)?;
@@ -414,7 +419,8 @@ fn parse(input: TokenSlice, matcher: bool, session: &TokenSession) -> Result<Syn
                                 "tt" => FragmentKind::Tt,
                                 "ident" => FragmentKind::Ident,
                                 "literal" => FragmentKind::Literal,
-                                "expr" | "expr_2021" => FragmentKind::Expr,
+                                "expr" if edition == Edition::E2024 => FragmentKind::Expr,
+                                "expr" | "expr_2021" => FragmentKind::Expr2021,
                                 "ty" => FragmentKind::Ty,
                                 "pat" => FragmentKind::Pat,
                                 "pat_param" => FragmentKind::PatParam,
@@ -522,8 +528,8 @@ pub fn compile_rules(
             .children(session, at)?
             .ok_or_else(|| syntax("expected delimited transcriber"))?;
         at += 1;
-        let matcher = parse(matcher_body, true, session)?;
-        let transcriber = parse(transcriber_body, false, session)?;
+        let matcher = parse(matcher_body, true, site.edition, session)?;
+        let transcriber = parse(transcriber_body, false, site.edition, session)?;
         let program = super::macro_matcher::compile(&matcher, session)?;
         arms.push(Arm {
             matcher,

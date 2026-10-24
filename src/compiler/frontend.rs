@@ -8014,10 +8014,19 @@ fn lex(source: &str) -> Result<NativeParserInput, ParseError> {
             .map_err(native_adapter::transport_error)?;
     native_input(&projection, budget, owner)
 }
+#[cfg(test)]
 fn native_input(
     projection: &super::source::PreparedLexInput<'_>,
     budget: super::expansion_budget::ExpansionBudget,
     owner: super::owner_path::Issued,
+) -> Result<NativeParserInput, ParseError> {
+    native_input_for_edition(projection, budget, owner, super::token::Edition::E2024)
+}
+fn native_input_for_edition(
+    projection: &super::source::PreparedLexInput<'_>,
+    budget: super::expansion_budget::ExpansionBudget,
+    owner: super::owner_path::Issued,
+    edition: super::token::Edition,
 ) -> Result<NativeParserInput, ParseError> {
     let (mut session, cap) = super::token_session::TokenSession::with_owner(
         projection.snapshot().clone(),
@@ -8025,7 +8034,7 @@ fn native_input(
         owner,
     )
     .map_err(native_adapter::transport_error)?;
-    let lexed = super::lexer::lex_prepared(projection, super::token::Edition::E2024, &mut session)
+    let lexed = super::lexer::lex_prepared(projection, edition, &mut session)
         .map_err(native_adapter::lex_error)?;
     NativeParserInput::new(lexed, session, cap, projection)
 }
@@ -15141,9 +15150,10 @@ fn parse_syntax_unit(
     embedded_issuers: Arc<[super::source::EmbeddedOriginalFile]>,
     forbid_unsafe_roots: Arc<[super::token_session::SourceFileHandle]>,
 ) -> Result<ParsedSyntaxUnit, ParseError> {
+    let edition = tokens.edition();
     let (tokens, session, cap) = tokens.into_parts();
-    let mut names = NameStoreBuilder::new(session, cap, super::token::Edition::E2024)
-        .map_err(native_adapter::name_error)?;
+    let mut names =
+        NameStoreBuilder::new(session, cap, edition).map_err(native_adapter::name_error)?;
     let symbols = ProgramSymbols::new(&mut names).map_err(native_adapter::name_error)?;
     let mut parser = match purpose {
         ParserPurpose::Active => Parser::new(&tokens, &mut names)?,
@@ -16348,7 +16358,8 @@ pub fn parse_prepared_owned(
         }
     }
     let issuers = source.embedded_issuers(projection.snapshot(), &budget)?;
-    let tokens = native_input(&projection, budget, owner).map_err(mapped)?;
+    let tokens =
+        native_input_for_edition(&projection, budget, owner, source.edition()).map_err(mapped)?;
     parse_syntax_tokens_policy(
         tokens,
         source.debug_assertions(),
