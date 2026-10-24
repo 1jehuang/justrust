@@ -47,26 +47,18 @@ fn debug_streams_integer_widths_and_explicit_boundaries_match_stock() {
     }
     source.push_str(r#"print!("{:?}",((),[true,false]));println!("{:?}",[1,2]);eprint!("{:?}",(3,));eprintln!("{:?}",[(),()]);}"#);
     let mut cases = vec![("live", source, None)];
-    for (name, expr, mode, boundary) in [
-        ("char_debug", "'λ'", ":?", "native Debug requires"),
-        (
-            "str_debug",
-            "\"quote\\\"\\n\"",
-            ":?",
-            "native Debug requires",
-        ),
-        ("float_debug", "1.25f64", ":?", "native Debug requires"),
-        (
-            "float_display",
-            "-0.0f64",
-            "",
-            "requires integer, bool, char or &str Display",
-        ),
+    // char/str/float Debug and float Display are now library-formatted and
+    // must match stock output exactly.
+    for (name, expr, mode) in [
+        ("char_debug", "'λ'", ":?"),
+        ("str_debug", "\"quote\\\"\\n\"", ":?"),
+        ("float_debug", "1.25f64", ":?"),
+        ("float_display", "-0.0f64", ""),
     ] {
         cases.push((
             name,
             format!("fn main(){{println!(\"{{{mode}}}\",{expr});}}"),
-            Some(boundary),
+            None::<&str>,
         ));
     }
     for (name, source, boundary) in cases {

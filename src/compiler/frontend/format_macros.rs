@@ -258,7 +258,12 @@ impl Checker<'_> {
         for (index, argument) in source.arguments.iter().enumerate() {
             let place = static_source_place(argument)
                 .ok()
-                .filter(|_| place_expression(argument));
+                .filter(|_| place_expression(argument))
+                // `*owner` through a user Deref is not a static place: type
+                // it as a value (`*Deref::deref(&owner)`) and borrow that.
+                .filter(|place| {
+                    !matches!(argument, Expr::Deref { .. }) || self.checked_place(place).is_ok()
+                });
             let indexed_reference = self.overloaded_index_reference(
                 ir::BorrowKind::Shared,
                 argument,

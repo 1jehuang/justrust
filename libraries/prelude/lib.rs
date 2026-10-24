@@ -51,6 +51,7 @@ pub mod default;
 pub mod convert;
 pub mod hash;
 pub mod collections;
+pub mod rc;
 pub mod string;
 mod unicode_uppercase;
 pub mod fmt;

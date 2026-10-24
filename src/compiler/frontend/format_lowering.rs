@@ -216,6 +216,11 @@ impl Checker<'_> {
                 ir::ExprKind::Field { base, .. }
                     if matches!(&self.exprs[base.0].kind, ir::ExprKind::Deref { value }
                         if matches!(self.exprs[value.0].kind, ir::ExprKind::Call { .. }))
+            ) || matches!(
+                // `*owner` through Deref::deref: a value, not a static place.
+                &self.exprs[id.0].kind,
+                ir::ExprKind::Deref { value }
+                    if matches!(self.exprs[value.0].kind, ir::ExprKind::Call { .. })
             );
             let place = static_source_place(argument)
                 .ok()
@@ -224,6 +229,16 @@ impl Checker<'_> {
                 if matches!(argument, Expr::Index { .. } | Expr::DynamicIndex { .. }) {
                     match self.exprs[id.0].kind {
                         ir::ExprKind::Deref { value } => Some(value),
+                        _ => None,
+                    }
+                } else if matches!(argument, Expr::Deref { .. }) {
+                    // `*owner`: format the reference Deref::deref returned.
+                    match self.exprs[id.0].kind {
+                        ir::ExprKind::Deref { value }
+                            if matches!(self.exprs[value.0].kind, ir::ExprKind::Call { .. }) =>
+                        {
+                            Some(value)
+                        }
                         _ => None,
                     }
                 } else {
@@ -236,6 +251,7 @@ impl Checker<'_> {
                 let (place, _, _) = self.checked_place(place)?;
                 self.borrow_expression(ir::BorrowKind::Shared, place)?
             } else if native
+                && !through_deref
                 && matches!(
                     argument,
                     Expr::DynamicIndex { .. }

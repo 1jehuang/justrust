@@ -1116,7 +1116,21 @@ impl<'s> Checker<'s> {
                     let inner = self.infer_type_term(&referent, None, depth + 1)?;
                     return self.infer_node(InferKind::Ref(*kind, inner));
                 }
-                let (_, referent, _) = self.checked_place(place)?;
+                let (_, referent, _) = match self.checked_place(place) {
+                    Ok(checked) => checked,
+                    // `&*owner` through a user Deref: the referent is the
+                    // Deref target, resolved later by active checking.
+                    Err(_)
+                        if place
+                            .fields
+                            .iter()
+                            .any(|f| matches!(f, FieldSelector::Deref)) =>
+                    {
+                        let inner = self.infer_node(InferKind::Unknown(false))?;
+                        return self.infer_node(InferKind::Ref(*kind, inner));
+                    }
+                    Err(error) => return Err(error),
+                };
                 self.validate_borrow_referent(*kind, &referent)?;
                 let inner = self.infer_type_term(&referent, None, depth + 1)?;
                 self.infer_node(InferKind::Ref(*kind, inner))?
@@ -10392,63 +10406,82 @@ impl<'a> Checker<'a> {
                 return Err("unsupported: unborrowed range index (an unsized [T] value)".into());
             }
             Expr::Deref { value } => {
-                let mut root = value.as_ref();
-                let mut depth = 1;
-                while let Expr::Deref { value } = root {
-                    if depth >= 128 {
-                        return Err("reference dereference depth exceeds limit128".into());
-                    }
-                    if let Some(plan) = &self.signatures.plan {
-                        plan.budget.charge_work(1)?;
-                    }
-                    depth += 1;
-                    root = value;
-                }
-                let value = self.expr(value)?;
-                let mut carrier = value;
-                for _ in 0..depth {
-                    match self.exprs[carrier.0].kind {
-                        ir::ExprKind::Deref { value } => carrier = value,
-                        _ => break,
-                    }
-                }
-                let slice_carrier =
-                    matches!(self.exprs[carrier.0].kind, ir::ExprKind::SliceIndex { .. })
-                        && matches!(
-                            self.exprs[value.0].ty,
-                            ir::Ty::Ref {
-                                kind: ir::BorrowKind::Shared,
-                                ..
-                            }
-                        );
-                if !matches!(root, Expr::Var(_)) && !genuine_call(root) && !slice_carrier {
-                    // Static component carriers use the same checked projection
-                    // authority as field receivers. SliceIndex already yields
-                    // a checked value carrying the selected element's origins,
-                    // so it must not be reinterpreted as a static array place.
-                    let source = static_source_place(e)?;
-                    self.checked_place(&source)?;
-                }
-                let flow = self.flow(value);
-                let referent = match &flow.ty {
-                    ir::Ty::Ref { referent, .. } => referent,
-                    ir::Ty::RawPtr { pointee, .. } => {
-                        if self.unsafe_depth == 0 {
-                            return Err("E0133: dereference of raw pointer is unsafe and requires unsafe block".into());
+                // `*owner` on a Deref implementor (Box, Rc, user types) reads
+                // `*Deref::deref(&owner)`, as stock does for non-reference
+                // operands.
+                if let Expr::Var(_) = value.as_ref()
+                    && let Ok(place) = static_source_place(value)
+                    && let Ok((_, owner_ty, _)) = self.checked_place(&place)
+                    && matches!(owner_ty, ir::Ty::Struct(_) | ir::Ty::Enum(_))
+                    && let Some(deref) =
+                        self.receiver_overloaded_deref(value, &owner_ty, ir::BorrowKind::Shared)?
+                {
+                    let ir::Ty::Ref { referent, .. } = self.exprs[deref.0].ty.clone() else {
+                        return Err("overloaded deref must return a reference".into());
+                    };
+                    let completes = self.exprs[deref.0].completion == ir::Completion::Returns;
+                    let ty = referent.as_ref().clone();
+                    self.accessible(&ty)?;
+                    (ir::ExprKind::Deref { value: deref }, Flow { ty, completes })
+                } else {
+                    let mut root = value.as_ref();
+                    let mut depth = 1;
+                    while let Expr::Deref { value } = root {
+                        if depth >= 128 {
+                            return Err("reference dereference depth exceeds limit128".into());
                         }
-                        pointee
+                        if let Some(plan) = &self.signatures.plan {
+                            plan.budget.charge_work(1)?;
+                        }
+                        depth += 1;
+                        root = value;
                     }
-                    _ => return Err("dereference requires a reference".into()),
-                };
-                let ty = referent.as_ref().clone();
-                self.accessible(&ty)?;
-                (
-                    ir::ExprKind::Deref { value },
-                    Flow {
-                        ty,
-                        completes: flow.completes,
-                    },
-                )
+                    let value = self.expr(value)?;
+                    let mut carrier = value;
+                    for _ in 0..depth {
+                        match self.exprs[carrier.0].kind {
+                            ir::ExprKind::Deref { value } => carrier = value,
+                            _ => break,
+                        }
+                    }
+                    let slice_carrier =
+                        matches!(self.exprs[carrier.0].kind, ir::ExprKind::SliceIndex { .. })
+                            && matches!(
+                                self.exprs[value.0].ty,
+                                ir::Ty::Ref {
+                                    kind: ir::BorrowKind::Shared,
+                                    ..
+                                }
+                            );
+                    if !matches!(root, Expr::Var(_)) && !genuine_call(root) && !slice_carrier {
+                        // Static component carriers use the same checked projection
+                        // authority as field receivers. SliceIndex already yields
+                        // a checked value carrying the selected element's origins,
+                        // so it must not be reinterpreted as a static array place.
+                        let source = static_source_place(e)?;
+                        self.checked_place(&source)?;
+                    }
+                    let flow = self.flow(value);
+                    let referent = match &flow.ty {
+                        ir::Ty::Ref { referent, .. } => referent,
+                        ir::Ty::RawPtr { pointee, .. } => {
+                            if self.unsafe_depth == 0 {
+                                return Err("E0133: dereference of raw pointer is unsafe and requires unsafe block".into());
+                            }
+                            pointee
+                        }
+                        _ => return Err("dereference requires a reference".into()),
+                    };
+                    let ty = referent.as_ref().clone();
+                    self.accessible(&ty)?;
+                    (
+                        ir::ExprKind::Deref { value },
+                        Flow {
+                            ty,
+                            completes: flow.completes,
+                        },
+                    )
+                }
             }
             Expr::Array(elements) => {
                 if elements.len() > ir::MAX_ARRAY_LEN {

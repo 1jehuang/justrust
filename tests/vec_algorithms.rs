@@ -150,3 +150,15 @@ fn main(){ let w=vec![D{n:1},D{n:2},D{n:3}]; for d in w { if d.n==2 { break; } p
         "into-iter-drop",
     );
 }
+
+#[test]
+fn rc_shares_ownership_and_drops_once() {
+    compare(
+        "use std::rc::Rc;\nstruct N{v:u32}\nimpl Drop for N{fn drop(&mut self){println!(\"drop {}\",self.v);}}\n\
+fn main(){let a=Rc::new(N{v:7});println!(\"{}\",Rc::strong_count(&a));{let b=a.clone();let c=b.clone();println!(\"{} {}\",Rc::strong_count(&a),c.v);}\
+println!(\"{} {}\",Rc::strong_count(&a),a.v);let s=Rc::new(String::from(\"hi\"));println!(\"{}\",s.len());\
+let x=Rc::new(5u32);let y=x.clone();println!(\"{} {} {}\",*x,*y,Rc::ptr_eq(&x,&y));let bx=Box::new(9u32);println!(\"{}\",*bx);}\n",
+        "1\n3 7\n1 7\n2\n5 5 true\n9\ndrop 7\n",
+        "rc",
+    );
+}
