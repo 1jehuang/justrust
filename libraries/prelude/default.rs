@@ -115,3 +115,33 @@ impl<A: Default, B: Default, C: Default, D: Default> Default for (A, B, C, D) {
         (<A as Default>::default(), <B as Default>::default(), <C as Default>::default(), <D as Default>::default())
     }
 }
+
+impl Default for f32 {
+    fn default() -> f32 {
+        0.0f32
+    }
+}
+
+impl Default for f64 {
+    fn default() -> f64 {
+        0.0f64
+    }
+}
+
+impl<T> Default for super::option::Option<T> {
+    fn default() -> super::option::Option<T> {
+        super::option::Option::None
+    }
+}
+
+impl<T> Default for super::vec::Vec<T> {
+    fn default() -> super::vec::Vec<T> {
+        super::vec::Vec::new()
+    }
+}
+
+impl Default for super::string::String {
+    fn default() -> super::string::String {
+        super::string::String::new()
+    }
+}

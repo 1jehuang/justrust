@@ -132,6 +132,12 @@ impl<'a, K: Hash + Eq, V> Entry<'a, K, V> {
     }
 }
 
+impl<'a, K: Hash + Eq, V: super::default::Default> Entry<'a, K, V> {
+    pub fn or_default(self) -> &'a mut V {
+        self.or_insert(V::default())
+    }
+}
+
 pub struct Iter<'a, K, V> {
     map: &'a HashMap<K, V>,
     index: usize,

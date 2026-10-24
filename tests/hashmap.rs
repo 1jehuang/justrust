@@ -46,6 +46,35 @@ fn main() {
                 expect: Expect::Run("Some(50) false\nSome(3) Some(7) 2\n"),
             },
             Case {
+                name: "entry_or_default",
+                source: r#"use std::collections::HashMap;
+fn main() {
+    let mut m: HashMap<u32, Vec<u32>> = HashMap::new();
+    m.entry(1).or_default().push(10);
+    m.entry(1).or_default().push(11);
+    let e = m.entry(2).or_default();
+    let n = e.len();
+    let mut c: HashMap<u8, u64> = HashMap::new();
+    *c.entry(5).or_default() += 4;
+    *c.entry(5).or_default() += 4;
+    let mut s: HashMap<u8, String> = HashMap::new();
+    s.entry(1).or_default().push_str("ab");
+    let mut f: HashMap<u8, f64> = HashMap::new();
+    *f.entry(1).or_default() += 1.5;
+    let mut o: HashMap<u8, Option<u8>> = HashMap::new();
+    let slot = o.entry(1).or_default();
+    let none = slot.is_none();
+    println!("{:?} {} {:?} {}", m.get(&1), n, c.get(&5), m.len());
+    println!("{:?} {:?} {} {:?}", s.get(&1), f.get(&1), none, <Vec<u8> as Default>::default());
+}"#,
+                expect: Expect::Run("Some([10, 11]) 0 Some(8) 2\nSome(\"ab\") Some(1.5) true []\n"),
+            },
+            Case {
+                name: "or_default_requires_default_in_unused_fn",
+                source: "use std::collections::HashMap; struct N; fn unused(){ let mut m: HashMap<u32,N> = HashMap::new(); let _ = m.entry(1).or_default(); } fn main(){}",
+                expect: Expect::Invalid("E0599"),
+            },
+            Case {
                 name: "key_without_hash_in_unused_fn",
                 source: "use std::collections::HashMap; struct K; fn unused(){ let mut m: HashMap<K,u32> = HashMap::new(); m.insert(K,1); } fn main(){}",
                 expect: Expect::Invalid("E0599"),
