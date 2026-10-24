@@ -1127,6 +1127,73 @@ impl SharedIdentityTrace {
         Ok(())
     }
 }
+/// Reconstruct the one input-owned generic actual from original source type
+/// evidence. There is no result context or numeric fallback in this transition.
+pub(super) fn infer_single_input_trace(
+    view: &tr::OriginalCallableView,
+    input: &ir::Ty,
+    budget: &ir::PlanBudget,
+) -> Result<Arc<SharedIdentityTrace>, FactsError> {
+    if !matches!(input, ir::Ty::Ref { referent, .. }
+        if matches!(referent.as_ref(), ir::Ty::Int(_) | ir::Ty::Bool | ir::Ty::Char))
+    {
+        return Err(FactsError::unsupported(
+            budget,
+            "input inference requires a scalar reference",
+        ));
+    }
+    let scopes = view.generic_env().scopes();
+    if scopes.len() != 1 || scopes[0].arity() != 1 {
+        return Err(FactsError::unsupported(
+            budget,
+            "input inference requires one own slot",
+        ));
+    }
+    let parameter = ir::Ty::Param(ir::ParamId {
+        owner: scopes[0].binder(),
+        index: 0,
+    });
+    if view.signature().params.first() != Some(&parameter) {
+        return Err(FactsError::unsupported(
+            budget,
+            "input inference requires original first parameter T",
+        ));
+    }
+    let mut state = CallInferenceState::new(Some(scopes[0].clone()), budget)?;
+    let schema = state.schema(&parameter, 0)?;
+    let evidence = state.type_term(input, None, 0)?;
+    state.constrain(&schema, &evidence, 0)?;
+    let after = state.slots()[0]
+        .as_ref()
+        .ok_or_else(|| FactsError::invalid(budget, "input inference lost its slot"))?
+        .clone();
+    let mut actuals = state
+        .finish(false, &mut |_, _| {
+            Err(FactsError::invalid(
+                budget,
+                "scalar input unexpectedly materialized a nominal",
+            ))
+        })?
+        .ok_or_else(|| FactsError::invalid(budget, "input inference remained unresolved"))?;
+    if actuals.len() != 1 {
+        return Err(FactsError::invalid(
+            budget,
+            "input inference changed actual count",
+        ));
+    }
+    budget
+        .charge_nodes(1)
+        .map_err(|e| FactsError::resource(budget, &e))?;
+    retain(budget, std::mem::size_of::<SharedIdentityTrace>() + 32)?;
+    Ok(Arc::new(SharedIdentityTrace {
+        binder: scopes[0].binder(),
+        before: schema,
+        evidence,
+        after,
+        actual: actuals.pop().unwrap(),
+    }))
+}
+
 /// One transition program is called during source checking and immutable replay.
 /// Nominal materialization remains in the authoritative caller, never in the term solver.
 pub(super) fn infer_shared_identity(

@@ -6,6 +6,13 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 
 ## Completed foundations, not full compatibility
 
+- [x] Ordinary one-parameter generic functions can consume inferred scalar
+  references with reference-free results, using original root-binding evidence
+  and replayed input constraints. `callable_reference_inputs` covers stock
+  CHECK/BUILD/run at workers 1 and 8 and borrow rejection controls; the private
+  scalar-input replay test rejects source, place, type and capability mutations.
+  Nested-reference nominal inputs remain a separate source-inference boundary.
+
 - [x] Source `String` implements `PartialOrd` and `Ord` with bytewise lexical
       ordering. `operator_inference::owned_string_ordering_matches_stock`
       covers empty/equal/prefix strings, embedded NULs, and multibyte UTF-8

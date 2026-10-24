@@ -32,6 +32,28 @@ items, or complete Iterator support.
 
 ## Acceptance gates
 
+### Ordinary generic scalar consumers
+
+An ordinary source function whose sole parameter is its sole own type
+parameter can also consume an inferred shared or mutable scalar reference when
+its instantiated result has no reference carriers.
+The source replay independently reconstructs integer, bool and char root types
+from original parameters, annotations or typed literals, checks the exact borrow
+place and kind, and replays the one-slot
+input constraint without result-context inference or numeric fallback. Existing
+annotated reference bindings retain their original source type. An inferred
+mutable-reference argument is moved, not implicitly reborrowed. Explicit type
+arguments retain the normal mutable reborrow behavior. Nested reference
+and nominal inputs are not admitted by this rule. All normal callee, lifetime,
+effect and ownership checks remain required.
+
+`callable_reference_inputs::ordinary_generic_scalar_reference_inputs_match_stock`
+checks shared/mutable inputs and scalar results against stock at workers 1 and 8.
+The sibling rejection test covers immutable mutation, live shared aliases, a
+missing Copy obligation and a local reference escape. The source replay mutation
+test rejects changed borrow kind, place, mutable capability, initializer value
+and type, and source annotations.
+
 `tests/callable_reference_inputs.rs` compares stock Rust with native CHECK, BUILD,
 and executable results at workers 1 and 8 for real shared and mutable callable
 inputs. Invalid controls cover an unused wrong-argument body, shared-to-mutable

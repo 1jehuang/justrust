@@ -4,6 +4,47 @@
 mod oracle;
 
 #[test]
+fn ordinary_generic_scalar_reference_inputs_match_stock() {
+    oracle::stock_native(
+        r#"fn consume<T>(value: T) -> i32 { let _ = value; 7 }
+fn main() {
+    let number = 4i32;
+    let flag = true;
+    let character = 'x';
+    let mut mutable = 9i32;
+    println!("{} {} {} {}", consume(&number), consume(&flag), consume(&character), consume(&mut mutable));
+    let reference: &i32 = &number;
+    println!("{} {}", consume(reference), mutable);
+}"#,
+    );
+    oracle::stock_native(
+        r#"fn consume<T>(value:T)->i32 { let _=value;7 }
+        fn main() {
+            let mut number=4i32;
+            let moved:&mut i32=&mut number;
+            println!("{}",consume(moved));
+            let reborrowed:&mut i32=&mut number;
+            println!("{}",consume::<&mut i32>(reborrowed));
+            *reborrowed+=1;
+            println!("{}",number);
+        }"#,
+    );
+}
+
+#[test]
+fn ordinary_generic_scalar_reference_inputs_preserve_borrow_rules() {
+    for source in [
+        "fn consume<T>(x:T){let _=x;}fn main(){let x=1i32;consume(&mut x);}",
+        "fn consume<T>(x:T){let _=x;}fn main(){let mut x=1i32;let r=&x;consume(&mut x);println!(\"{}\",r);}",
+        "fn consume<T:Copy>(x:T){let _=x;}fn main(){let mut x=1i32;consume(&mut x);}",
+        "fn consume<T>(x:T){let _=x;}fn main(){let mut x=1i32;let r:&mut i32=&mut x;consume(r);*r=2;}",
+        "fn bad<'a,T>(x:T)->&'a i32{let _=x;let y=1;&y}fn main(){}",
+    ] {
+        oracle::stock_and_native_reject(source);
+    }
+}
+
+#[test]
 fn shared_reference_callable_input_matches_stock() {
     oracle::stock_native(
         "fn apply<F: Fn(&i32) -> i32>(f: F, x: &i32) -> i32 { f(x) } fn main() { let f = |x: &i32| *x + 1; let n = 3; println!(\"{}\", apply(f, &n)); }",

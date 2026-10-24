@@ -574,10 +574,70 @@ mod canonical_source_replay_tests {
 
     #[test]
     fn root_borrow_replay_rejects_kind_place_capability_and_initializer_mutations() {
-        let (_, _, budget, publication) = published(
+        assert_root_borrow_replay_rejects_mutations(
             "fn renamed<T>(x:T)->T{x}fn main(){let mut left=1i32;let mut right=2i32;let r=renamed(&mut left);*r=3;}",
+        );
+    }
+
+    #[test]
+    fn scalar_input_replay_rejects_kind_place_capability_and_initializer_mutations() {
+        assert_root_borrow_replay_rejects_mutations(
+            "fn consume<T>(x:T)->i32{let _=x;7}fn main(){let mut left=1i32;let mut right=2i32;let r=consume(&mut left);let out=r;}",
+        );
+    }
+
+    #[test]
+    fn scalar_input_replay_preserves_move_expectation() {
+        let (_, _, budget, publication) = published(
+            "fn consume<T>(x:T)->i32{let _=x;7}fn main(){let mut n=1i32;let moved:&mut i32=&mut n;let result=consume(moved);}",
             1,
         );
+        let original = publication.original().source_for_test();
+        let source = publication.source();
+        let (call, argument) = source
+            .exprs
+            .iter()
+            .enumerate()
+            .find_map(|(index, expr)| match &expr.kind {
+                ir::ExprKind::Call { args, .. } => Some((ir::ExprId(index), args[0])),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(
+            publication.replay().expected(call, 0, &budget).unwrap(),
+            Some(ir::CallExpectation::NoFirmReference)
+        );
+        let ir::ExprKind::Local(local) = source.exprs[argument.0].kind else {
+            panic!("inferred generic argument must move the reference");
+        };
+        let mut changed = source.as_ref().clone();
+        let carrier = ir::ExprId(changed.exprs.len());
+        changed.exprs.push(changed.exprs[argument.0].clone());
+        changed.exprs[argument.0].kind = ir::ExprKind::Borrow {
+            kind: ir::BorrowKind::Mut,
+            place: ir::Place {
+                local,
+                projection: vec![ir::Projection::Deref],
+            },
+            timing: ir::BorrowTiming::TwoPhase {
+                activation: call,
+                argument: 0,
+                reason: ir::ImplicitBorrowKind::MutableArgumentReborrow { carrier },
+            },
+        };
+        assert_eq!(
+            kind_error(replay_source_body(
+                &original,
+                &Arc::new(changed),
+                publication.facts(),
+                &budget
+            )),
+            tr::FactsErrorKind::InvalidMetadata
+        );
+    }
+
+    fn assert_root_borrow_replay_rejects_mutations(text: &str) {
+        let (_, _, budget, publication) = published(text, 1);
         let original = publication.original().source_for_test();
         let source = publication.source();
         replay_source_body(&original, source, publication.facts(), &budget).unwrap();
@@ -3507,6 +3567,51 @@ impl CanonicalSourceCapability {
             .iter()
             .any(|row| row.source_index == index))
     }
+
+    fn inferred_scalar_input(
+        &self,
+        args: &[Expr],
+        target: &ir::Callee,
+        signature: &ir::Signature,
+    ) -> Result<bool, String> {
+        let budget = &self.plan.budget;
+        let ir::Callee::Direct(target) = target else {
+            return Ok(false);
+        };
+        if args.len() != 1 || target.type_args.len() != 1 {
+            return Ok(false);
+        }
+        if !matches!(&target.type_args[0], ir::Ty::Ref { referent, .. }
+            if matches!(referent.as_ref(), ir::Ty::Int(_) | ir::Ty::Bool | ir::Ty::Char))
+            || !ir::carrier_locations(&signature.result, budget)?.is_empty()
+        {
+            return Ok(false);
+        }
+        sr::work(budget, self.inventory.calls.len()).map_err(|e| self.render(e))?;
+        let Some(site) = self
+            .inventory
+            .calls
+            .iter()
+            .find(|site| site.args_pointer == args.as_ptr() as usize)
+        else {
+            return Ok(false);
+        };
+        if site.ordinary.is_none() || site.application.is_some() {
+            return Ok(false);
+        }
+        let view = self
+            .facts
+            .original_callable_schema(tr::OriginalCallableSubject::Direct(target.declaration))
+            .map_err(|e| self.render(e))?;
+        let scopes = view.generic_env().scopes();
+        Ok(scopes.len() == 1
+            && scopes[0].arity() == 1
+            && view.signature().params.first()
+                == Some(&ir::Ty::Param(ir::ParamId {
+                    owner: scopes[0].binder(),
+                    index: 0,
+                })))
+    }
 }
 
 pub(super) fn replay_type_equal(
@@ -4918,6 +5023,7 @@ pub(super) fn replay_source_body(
     validate_binding_coverage(original, checked, budget)?;
     nominal_call_receipts::replay(original, checked, facts, budget)?;
     let mut decisions = Vec::new();
+    let mut identity_decisions = 0usize;
     let mut signatures = original
         .plan
         .environment(Some(original.declaration))
@@ -5235,12 +5341,19 @@ pub(super) fn replay_source_body(
             continue;
         }
         require_ordinary_free(&original.plan, expected_decl, budget)?;
-        // A borrowed value consumed by a call with a reference-free result has
-        // no returned loan to infer. Authenticate its source place and exact
-        // instantiated signature instead of applying the identity-return rule.
+        // Borrowed callable values and scalar roots consumed by a call with a
+        // reference-free result have no returned loan to infer. Authenticate
+        // the source place and exact instantiated signature instead of applying
+        // the identity-return rule. Scalar actuals additionally replay the
+        // original one-slot input constraint, without a result context.
         if target.type_args.len() == 1
             && let ir::Ty::Ref { kind, referent } = &target.type_args[0]
-            && borrowed_callable_leaf(referent, budget, 0)?
+            && (borrowed_callable_leaf(referent, budget, 0)?
+                || (signature.params.len() == 1
+                    && matches!(
+                        referent.as_ref(),
+                        ir::Ty::Int(_) | ir::Ty::Bool | ir::Ty::Char
+                    )))
             && signature
                 .params
                 .first()
@@ -5254,15 +5367,27 @@ pub(super) fn replay_source_body(
             })?;
             let binding_index = source_binding_index(&original.bindings, binding, budget)?
                 .ok_or_else(|| FactsError::invalid(budget, "borrowed callable source missing"))?;
-            let (local, source_ty) = borrowed_callable_source_binding(
-                original,
-                &fresh,
-                binding_index,
-                checked,
-                &signatures,
-                budget,
-                0,
-            )?;
+            let scalar = matches!(
+                referent.as_ref(),
+                ir::Ty::Int(_) | ir::Ty::Bool | ir::Ty::Char
+            );
+            let (local, source_ty) = if scalar {
+                if site.argument_borrow.is_some() {
+                    source_root_borrow_type(original, binding_index, checked, &signatures, budget)?
+                } else {
+                    source_binding_type(original, binding_index, checked, &signatures, budget)?
+                }
+            } else {
+                borrowed_callable_source_binding(
+                    original,
+                    &fresh,
+                    binding_index,
+                    checked,
+                    &signatures,
+                    budget,
+                    0,
+                )?
+            };
             let first = args
                 .first()
                 .and_then(|arg| checked.exprs.get(arg.0))
@@ -5284,7 +5409,8 @@ pub(super) fn replay_source_body(
                                 argument: 0,
                                 reason: ir::ImplicitBorrowKind::MutableArgumentReborrow { carrier },
                             },
-                    } if *kind == ir::BorrowKind::Mut
+                    } if !scalar
+                        && *kind == ir::BorrowKind::Mut
                         && *activation == id
                         && place.local == local
                         && place.projection.as_slice() == [ir::Projection::Deref] =>
@@ -5307,6 +5433,33 @@ pub(super) fn replay_source_body(
                     budget,
                     "borrowed callable changed source place or type",
                 ));
+            }
+            if scalar {
+                let input = if let Some(kind) = site.argument_borrow {
+                    sr::retain(budget, std::mem::size_of::<ir::Ty>() + 32)?;
+                    ir::Ty::Ref {
+                        kind,
+                        referent: Arc::new(source_ty.clone()),
+                    }
+                } else {
+                    source_ty.clone()
+                };
+                let trace = sr::infer_single_input_trace(&view, &input, budget)?;
+                if !replay_type_equal(trace.actual(), &target.type_args[0], budget)? {
+                    return Err(FactsError::invalid(
+                        budget,
+                        "scalar input changed inferred actual",
+                    ));
+                }
+                sr::push(
+                    &mut decisions,
+                    sr::NarrowValidatedCall {
+                        call: id,
+                        source: site.node.clone(),
+                        trace,
+                    },
+                    budget,
+                )?;
             }
             for parameter in signature.params.iter().skip(1) {
                 if !ir::carrier_locations(parameter, budget)
@@ -5481,6 +5634,7 @@ pub(super) fn replay_source_body(
             .map_err(|e| source_error(budget, &e))?;
         validate_argument(&referent, ir::FactsCtx::Validated(facts), budget, 0)
             .map_err(|e| source_error(budget, &e))?;
+        identity_decisions += 1;
         sr::push(
             &mut decisions,
             sr::NarrowValidatedCall {
@@ -5491,7 +5645,7 @@ pub(super) fn replay_source_body(
             budget,
         )?;
     }
-    if original.narrow.len() != decisions.len() {
+    if original.narrow.len() != identity_decisions {
         return Err(FactsError::invalid(
             budget,
             "unused or missing original shared frontier",

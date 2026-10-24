@@ -8177,7 +8177,10 @@ impl<'a> Checker<'a> {
         // not introduce new structural reference actuals, so a later argument
         // cannot retroactively make an opaque parameter a firm Ref expectation.
         let identity = match self.canonical {
-            Some(cap) => cap.identity_arguments(source_args)?,
+            Some(cap) => {
+                cap.identity_arguments(source_args)?
+                    || cap.inferred_scalar_input(source_args, &target, &signature)?
+            }
             None => false,
         };
         if identity && (receiver.is_some() || source_args.len() != 1) {
