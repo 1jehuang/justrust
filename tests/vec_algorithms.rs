@@ -194,3 +194,14 @@ let w=vec![4u32,5];let x=vec![String::from(\"a\")];println!(\"{} {}\",first(&w),
         "vec-deref-slice",
     );
 }
+
+#[test]
+fn str_equality_and_borrow_match_stock() {
+    compare(
+        "use std::borrow::Borrow;\nfn eqk<K: Borrow<Q>, Q: ?Sized + PartialEq>(k: &K, q: &Q) -> bool { <K as Borrow<Q>>::borrow(k) == q }\n\
+fn main(){let s=String::from(\"blue\");let a=\"x\";let b=String::from(\"x\");\
+println!(\"{} {} {} {} {}\",eqk::<String,str>(&s,\"blue\"),eqk::<String,str>(&s,\"red\"),a==b,b==a,\"x\"==\"y\");}\n",
+        "true false true true false\n",
+        "str-borrow",
+    );
+}

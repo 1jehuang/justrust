@@ -735,3 +735,30 @@ impl<S: JoinElement> SliceJoin for super::vec::Vec<S> {
         out
     }
 }
+
+impl super::cmp::PartialEq for str {
+    fn eq(&self, other: &str) -> bool {
+        str_eq(self, other)
+    }
+}
+
+impl super::cmp::Eq for str {}
+
+// std's str hashing: the bytes, then a 0xff terminator (same as String).
+impl super::hash::Hash for str {
+    fn hash<H: super::hash::Hasher>(&self, state: &mut H) {
+        let (pointer, length) = str_parts(self);
+        let mut i = 0usize;
+        while i < length {
+            state.write_u8(read_u8(pointer + i));
+            i += 1usize;
+        }
+        state.write_u8(255u8);
+    }
+}
+
+impl super::borrow::Borrow<str> for String {
+    fn borrow(&self) -> &str {
+        self.as_str()
+    }
+}

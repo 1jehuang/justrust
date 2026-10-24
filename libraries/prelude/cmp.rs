@@ -58,7 +58,7 @@ impl Clone for Ordering {
 }
 impl Copy for Ordering {}
 
-pub trait PartialEq<Rhs = Self> {
+pub trait PartialEq<Rhs: ?Sized = Self> {
     fn eq(&self, other: &Rhs) -> bool;
     fn ne(&self, other: &Rhs) -> bool {
         !self.eq(other)
@@ -67,7 +67,7 @@ pub trait PartialEq<Rhs = Self> {
 
 pub trait Eq: PartialEq {}
 
-impl<T: PartialEq> PartialEq for &T {
+impl<T: PartialEq + ?Sized> PartialEq for &T {
     fn eq(&self, other: &&T) -> bool {
         <T as PartialEq>::eq(*self, *other)
     }
