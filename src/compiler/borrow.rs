@@ -4241,8 +4241,14 @@ impl CarrierBuilder<'_, '_> {
         let mut affine_writes = 0usize;
         let mut write_channels = 0usize;
         for write in view.original_contract().writes.iter() {
+            // An identity row (the carrier's only source is itself) leaves the
+            // carrier unchanged: it moves and duplicates no affine authority.
+            let identity = write.sources.len() == 1 && write.sources[0] == write.destination;
             for (destination, _) in self.transport_effect_input(&write.destination, view, true)? {
                 write_channels = add(write_channels, 1)?;
+                if identity {
+                    continue;
+                }
                 let Some(parameter) = params.get(destination.param) else {
                     self.problem(
                         self.f.entry,

@@ -5447,6 +5447,9 @@ pub(super) fn replay_source_body(
         // the source place and exact instantiated signature instead of applying
         // the identity-return rule. Scalar actuals additionally replay the
         // original one-slot input constraint, without a result context.
+        // A freshly borrowed source root (`f(&mut r)`) passed as the only
+        // argument of a callable whose result carries no reference likewise
+        // has no returned loan; the ordinary borrow analysis checks the loan.
         if target.type_args.len() == 1
             && let ir::Ty::Ref { kind, referent } = &target.type_args[0]
             && (borrowed_callable_leaf(referent, budget, 0)?
@@ -5454,7 +5457,8 @@ pub(super) fn replay_source_body(
                     && matches!(
                         referent.as_ref(),
                         ir::Ty::Int(_) | ir::Ty::Bool | ir::Ty::Char
-                    )))
+                    ))
+                || (signature.params.len() == 1 && site.argument_borrow == Some(*kind)))
             && signature
                 .params
                 .first()
@@ -5472,7 +5476,24 @@ pub(super) fn replay_source_body(
                 referent.as_ref(),
                 ir::Ty::Int(_) | ir::Ty::Bool | ir::Ty::Char
             );
-            let (local, source_ty) = if scalar {
+            let plain_borrow = !scalar
+                && !borrowed_callable_leaf(referent, budget, 0)?
+                && site.argument_borrow == Some(*kind);
+            let (local, source_ty) = if plain_borrow {
+                // The root's checked type is authoritative here: the exact
+                // borrow below must name this local with this referent type.
+                let local = mapped_source_binding(original, binding_index, budget)?;
+                let actual = checked.locals.get(local.0).ok_or_else(|| {
+                    FactsError::invalid(budget, "borrow root outside checked locals")
+                })?;
+                if *kind == ir::BorrowKind::Mut && !actual.mutable {
+                    return Err(FactsError::invalid(
+                        budget,
+                        "mutable borrow of an immutable source root",
+                    ));
+                }
+                (local, actual.ty.clone())
+            } else if scalar {
                 if site.argument_borrow.is_some() {
                     source_root_borrow_type(original, binding_index, checked, &signatures, budget)?
                 } else {
