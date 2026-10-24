@@ -98,3 +98,33 @@ fn main() {
         "noncopy",
     );
 }
+
+#[test]
+fn vec_sort_by_and_sort_by_key_are_stable() {
+    compare(
+        r#"
+struct Item { key: i32, order: i32 }
+fn main() {
+    let mut v: Vec<Item> = Vec::new();
+    v.push(Item { key: 2, order: 0 });
+    v.push(Item { key: 1, order: 1 });
+    v.push(Item { key: 2, order: 2 });
+    v.push(Item { key: 1, order: 3 });
+    v.sort_by(|a, b| b.key.cmp(&a.key));
+    let (a, b, c, d) = (v[0].order, v[1].order, v[2].order, v[3].order);
+    println!("{} {} {} {}", a, b, c, d);
+    v.sort_by_key(|x| x.key);
+    let (a, b, c, d) = (v[0].order, v[1].order, v[2].order, v[3].order);
+    println!("{} {} {} {}", a, b, c, d);
+    let mut n = vec![5i64, -3, 4, -1];
+    n.sort_by_key(|x| x.abs());
+    println!("{:?}", n);
+    let mut e: Vec<i32> = Vec::new();
+    e.sort_by(|a, b| a.cmp(b));
+    println!("{}", e.len());
+}
+"#,
+        "0 2 1 3\n1 3 0 2\n[-1, -3, 4, 5]\n0\n",
+        "sort-by",
+    );
+}

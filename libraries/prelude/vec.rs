@@ -388,6 +388,42 @@ impl<T: super::cmp::PartialEq> Vec<T> {
     }
 }
 
+impl<T> Vec<T> {
+    /// Stable insertion sort by comparator, like stock's stable `sort_by`.
+    pub fn sort_by<F: FnMut(&T, &T) -> super::cmp::Ordering>(&mut self, mut compare: F) {
+        let mut i = 1usize;
+        while i < self.len {
+            let mut j = i;
+            while j > 0usize {
+                if !compare(self.get_ref(j - 1usize), self.get_ref(j)).is_gt() {
+                    break;
+                }
+                self.swap(j - 1usize, j);
+                j -= 1usize;
+            }
+            i += 1usize;
+        }
+    }
+
+    /// Stable sort by extracted key. The key is recomputed per comparison.
+    pub fn sort_by_key<K: super::cmp::Ord, F: FnMut(&T) -> K>(&mut self, mut key: F) {
+        let mut i = 1usize;
+        while i < self.len {
+            let mut j = i;
+            while j > 0usize {
+                let left = key(self.get_ref(j - 1usize));
+                let right = key(self.get_ref(j));
+                if !left.cmp(&right).is_gt() {
+                    break;
+                }
+                self.swap(j - 1usize, j);
+                j -= 1usize;
+            }
+            i += 1usize;
+        }
+    }
+}
+
 impl<T: super::cmp::Ord> Vec<T> {
     pub fn sort(&mut self) {
         // Stable insertion sort. Keep equal elements in their original order.
