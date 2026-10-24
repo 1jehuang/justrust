@@ -280,6 +280,22 @@ impl PlanCtx {
                     }
                 }
                 let Some(value) = value else {
+                    // A parameter not fixed by the self type (`U` in
+                    // `impl<T, U: From<T>> Into<U> for T`) is enumerated from
+                    // the impls satisfying its own where-clause. Each match is
+                    // an exact application; final selection proves it again.
+                    if let Some(expanded) = self.expand_unbound_parameter(
+                        implementation,
+                        parameter,
+                        &bindings,
+                        facts,
+                        budget,
+                    )? {
+                        for application in expanded {
+                            self.push_trait_application(&mut applications, application, budget)?;
+                        }
+                        continue 'implementations;
+                    }
                     if let Some(deferred) = deferred.as_deref_mut() {
                         *deferred = true;
                         continue 'implementations;
@@ -312,6 +328,113 @@ impl PlanCtx {
             )?;
         }
         Ok(applications)
+    }
+
+    /// Candidate applications for a blanket impl whose trait argument is an
+    /// impl parameter `U` constrained only by a where-clause `U: Bound<Args>`
+    /// with `Args` fixed by the self match. Each concrete (parameter-free)
+    /// `impl Bound<Args> for X` yields the application with `U = X`. Returns
+    /// `None` when the shape does not apply, leaving the ordinary boundary.
+    fn expand_unbound_parameter(
+        &self,
+        implementation: &tr::ImplHeader,
+        parameter: ir::ParamId,
+        bindings: &super::super::token_session::BudgetVec<(ir::ParamId, &ir::Ty)>,
+        facts: &tr::ValidatedFacts,
+        budget: &ir::PlanBudget,
+    ) -> Result<Option<Vec<ir::TraitRef>>, String> {
+        // Only the exact `Trait<U> for T` shape: U is the sole trait argument
+        // and every other impl parameter is fixed by the self type.
+        if implementation.trait_ref.args.len() != 1
+            || !matches!(&implementation.trait_ref.args[0], ir::Ty::Param(p) if *p == parameter)
+            || implementation.schema_env.total_arity() != bindings.as_slice().len() + 1
+        {
+            return Ok(None);
+        }
+        let bound_value = |ty: &ir::Ty| -> Option<ir::Ty> {
+            match ty {
+                ir::Ty::Param(p) => bindings
+                    .as_slice()
+                    .iter()
+                    .find(|(b, _)| b == p)
+                    .map(|(_, v)| (*v).clone()),
+                ty if !mentions_param(ty) => Some(ty.clone()),
+                _ => None,
+            }
+        };
+        let mut found: Option<Vec<ir::TraitRef>> = None;
+        for predicate in implementation.predicates.iter() {
+            budget.charge_work(1)?;
+            let ir::Predicate::Implements(bound) = predicate else {
+                continue;
+            };
+            if !matches!(&bound.self_ty, ir::Ty::Param(p) if *p == parameter)
+                || bound.declaration == self.catalog.id(tr::CatalogItem::Sized)
+            {
+                continue;
+            }
+            let Some(args) = bound
+                .args
+                .iter()
+                .map(bound_value)
+                .collect::<Option<Vec<_>>>()
+            else {
+                return Ok(None);
+            };
+            if found.is_some() {
+                // Several where-clauses on U: not this simple shape.
+                return Ok(None);
+            }
+            let mut matches = Vec::new();
+            let mut complete = true;
+            for candidate in facts.world().impl_headers() {
+                budget.charge_work(1)?;
+                if candidate.trait_ref.declaration != bound.declaration
+                    || candidate.trait_ref.args.len() != args.len()
+                {
+                    continue;
+                }
+                if mentions_param(&candidate.trait_ref.self_ty) {
+                    complete = false;
+                    continue;
+                }
+                let mut equal = true;
+                let mut candidate_bindings = super::super::token_session::BudgetVec::new(
+                    self.program.names.budget(),
+                    super::super::expansion_budget::Storage::Temporary,
+                )
+                .map_err(selection_token_error)?;
+                for (a, b) in candidate.trait_ref.args.iter().zip(&args) {
+                    // A concrete self type makes a structural argument match
+                    // an exact application even for generic impl arguments.
+                    if !match_trait_self(
+                        a,
+                        b,
+                        &candidate.schema_env,
+                        &mut candidate_bindings,
+                        budget,
+                        0,
+                    )? {
+                        equal = false;
+                        break;
+                    }
+                }
+                if equal {
+                    matches.push(ir::TraitRef {
+                        declaration: implementation.trait_ref.declaration,
+                        self_ty: bound_value(&implementation.trait_ref.self_ty)
+                            .ok_or("unbound blanket impl self type")?,
+                        args: Arc::from([candidate.trait_ref.self_ty.clone()]),
+                    });
+                }
+            }
+            if !complete && matches.is_empty() {
+                return Ok(None);
+            }
+            found = Some(matches);
+        }
+        // A complete empty enumeration proves no application exists here.
+        Ok(found)
     }
 }
 
@@ -764,5 +887,27 @@ mod tests {
             let result = parse(source).and_then(|program| check(&program));
             assert!(result.is_err(), "accepted {source}");
         }
+    }
+}
+
+/// Whether a type mentions any generic parameter (conservatively: anything
+/// not a closed primitive or closed composite counts as open).
+fn mentions_param(ty: &ir::Ty) -> bool {
+    match ty {
+        ir::Ty::Param(_) | ir::Ty::AssociatedType(_) => true,
+        ir::Ty::Ref { referent, .. } => mentions_param(referent),
+        ir::Ty::RawPtr { pointee, .. } => mentions_param(pointee),
+        ir::Ty::Slice { element } | ir::Ty::Array { element, .. } => mentions_param(element),
+        ir::Ty::Tuple(parts) => parts.iter().any(mentions_param),
+        ir::Ty::Int(_)
+        | ir::Ty::Float(_)
+        | ir::Ty::Bool
+        | ir::Ty::Char
+        | ir::Ty::Str
+        | ir::Ty::Unit
+        | ir::Ty::Never => false,
+        ir::Ty::Struct(s) => s.def().type_args.iter().any(mentions_param),
+        ir::Ty::Enum(e) => e.def().type_args.iter().any(mentions_param),
+        _ => true,
     }
 }

@@ -11,6 +11,26 @@ use std::sync::atomic::{AtomicU64, Ordering};
 mod closure_oracle;
 
 #[test]
+fn into_selects_lifetime_generic_from_by_expected_type() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "into-from",
+        &[
+            Case {
+                name: "str_into_string_annotated_and_argument",
+                source: "fn show(s:String){println!(\"{s}\");}fn main(){let s:String=\"x\".into();println!(\"{s}\");show(\"tri\".into());}",
+                expect: Expect::Run("x\ntri\n"),
+            },
+            Case {
+                name: "unused_bad_into_target_is_e0277",
+                source: "struct N;fn unused(){let _n:N=\"x\".into();}fn main(){}",
+                expect: Expect::Invalid("E0277"),
+            },
+        ],
+    );
+}
+
+#[test]
 fn vec_clone_is_elementwise_in_order() {
     use closure_oracle::{Case, Expect};
     closure_oracle::check(

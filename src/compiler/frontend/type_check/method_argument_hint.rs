@@ -104,6 +104,41 @@ impl Checker<'_> {
                     }
                     if let Some(previous) = selected.replace(application) {
                         if previous.declaration == application.declaration {
+                            // Several applications of one trait (`Into<T>`):
+                            // the expected result type picks the unique one
+                            // whose method result is exactly it.
+                            if let Some(expected) = expected {
+                                let fits = |app: &ir::TraitRef| -> Result<bool, String> {
+                                    let schema = plan.raw_schema(*item)?;
+                                    let owner = plan.param_env(app.declaration)?;
+                                    let mut bindings = HashMap::new();
+                                    for (index, actual) in std::iter::once(&app.self_ty)
+                                        .chain(app.args.iter())
+                                        .enumerate()
+                                    {
+                                        bindings.insert(
+                                            ir::ParamId {
+                                                owner: owner.binder(),
+                                                index: index as u16,
+                                            },
+                                            actual.clone(),
+                                        );
+                                    }
+                                    let result = super::trait_method_hint::bind_owner(
+                                        &schema.signature.result,
+                                        &bindings,
+                                    );
+                                    Ok(&result == expected)
+                                };
+                                match (fits(previous)?, fits(application)?) {
+                                    (true, false) => {
+                                        selected = Some(previous);
+                                        continue;
+                                    }
+                                    (false, true) => continue,
+                                    _ => {}
+                                }
+                            }
                             return Err(
                                 super::super::trait_selection::trait_application_ambiguity(),
                             );

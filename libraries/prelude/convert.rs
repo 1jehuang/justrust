@@ -55,3 +55,20 @@ lossless_from! {
     i32 => i64, i128;
     i64 => i128;
 }
+
+/// The reciprocal of `From`, provided by the standard blanket impl.
+pub trait Into<T>: Sized {
+    fn into(self) -> T;
+}
+
+impl<T, U: From<T>> Into<U> for T {
+    fn into(self) -> U {
+        U::from(self)
+    }
+}
+
+impl<'a> From<&'a str> for super::string::String {
+    fn from(value: &'a str) -> super::string::String {
+        super::string::String::from(value)
+    }
+}
