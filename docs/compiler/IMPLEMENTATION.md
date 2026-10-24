@@ -2158,6 +2158,12 @@ summary cells. `typed_slice_authority::reference_iterator_collection_matches_sto
 and `reference_iterator_borrow_rules_match_stock` exercise collection and source
 loan preservation at workers 1 and 8. Mutable-reference slice elements and the
 generic trait-owner slice inference boundary remain unsupported.
+- [ ] **Soundness blocker:** `Vec<&T>`/`Vec<&mut T>` erase element loans because
+  `carrier_locations` gives `*mut T` no channel. `v.push(&a); a.push('x');`
+  and `let r=&mut a; v.push(r); let r2=&mut a; v.push(r2);` are accepted (stock
+  E0502/E0499). Naively walking raw pointer pointees breaks the prelude's own Vec
+  bodies (ResourceLimit, affine copy-cell cover). Needs a typed element-provenance
+  channel for raw-pointer owners (like the typed slice backing above).
 Opaque backing owners retain unresolved summaries rather than acquiring invented
 element cells; generic `Bag<T>` formatting/collection is covered by
 `iterator_associated::generic_iterator_format_collect_reuses_membership_proofs`.
