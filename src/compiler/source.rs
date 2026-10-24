@@ -618,6 +618,21 @@ pub fn prepare_root_unit(
 ) -> UnitResult {
     root_unit_with(path, options, Some(&mut FsReader), budget)
 }
+/// Read-only handle to an admitted file fact, retaining its original allocation.
+#[derive(Clone, Debug)]
+pub struct SharedFileUnit(Arc<UnitResult>);
+
+impl std::ops::Deref for SharedFileUnit {
+    type Target = FileUnit;
+
+    fn deref(&self) -> &Self::Target {
+        match self.0.as_ref() {
+            Ok(unit) => unit,
+            Err(_) => unreachable!("shared file handles are issued only for admitted units"),
+        }
+    }
+}
+
 fn root_unit_with(
     path: &Path,
     options: &SourceOptions,
@@ -879,7 +894,7 @@ pub struct NeedUnit {
     pub ordinal: Vec<u64>,
     /// `None` for crate attachment units: the prelude (ordinal `[1]`) and
     /// dependency crates (`[2 + index]`).
-    pub parent: Option<Arc<FileUnit>>,
+    pub parent: Option<SharedFileUnit>,
     pub index: usize,
 }
 pub enum AssemblyStep {
@@ -909,7 +924,7 @@ pub struct SourceAssembler {
     in_extern: bool,
 }
 struct Frame {
-    unit: Arc<FileUnit>,
+    unit: SharedFileUnit,
     id: FileId,
     ordinal: Vec<u64>,
     next_child: usize,
@@ -990,7 +1005,7 @@ impl SourceAssembler {
                 };
                 return Err(self.fail(copy_error(&failure.error, primary)));
             }
-            Ok(_) => Arc::new(Self::take(unit)),
+            Ok(_) => SharedFileUnit(unit),
         };
         if ordinal == [0] && unit.no_std && (!self.library || self.harness.is_some()) {
             return Err(self.fail(Loader::error(
@@ -1068,7 +1083,8 @@ impl SourceAssembler {
         });
         self.run()
     }
-    /// Units are immutable shared facts. Assembly reads them through an `Arc`.
+    /// Copy a unit only for tests that deliberately forge source facts.
+    #[cfg(test)]
     fn take(unit: Arc<UnitResult>) -> FileUnit {
         match Arc::try_unwrap(unit) {
             Ok(Ok(unit)) => unit,
@@ -2858,6 +2874,15 @@ mod tests {
         tree.put("inline/c.rs", "#[inline(always)] pub fn c(){} mod e;");
         tree.put("inline/c/e.rs", "pub fn e(){}");
         let path = tree.0.join("main.rs");
+                    let mut parent_ordinal = need.ordinal.clone();
+                    parent_ordinal.pop();
+                    if let Some(parent) = need.parent.as_deref() {
+                        let original = units[&parent_ordinal].as_ref().as_ref().unwrap();
+                        assert!(
+                            std::ptr::eq(parent, original),
+                            "assembly must borrow the original immutable file fact, not clone it"
+                        );
+                    }
         let sequential = prepare_file(&path, &SourceOptions::default()).unwrap();
         let graph = assemble_independent(&path).unwrap();
         same_prepared(&sequential, &graph);
