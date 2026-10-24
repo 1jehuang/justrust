@@ -418,6 +418,85 @@ fn locked_registry_dependency_reports_missing_cache_explicitly() {
 }
 
 #[test]
+fn inactive_optional_registry_source_is_not_required_but_activation_checks_it() {
+    for damaged in [false, true] {
+        let scratch = target_dir(if damaged {
+            "optional-damaged"
+        } else {
+            "optional-absent"
+        });
+        let project = scratch.join("project");
+        std::fs::create_dir_all(project.join("src")).unwrap();
+        let manifest = std::fs::read_to_string(fixture("registry").join("Cargo.toml"))
+            .unwrap()
+            .replace(
+                "utf8-width = \"0.1.8\"",
+                "utf8-width = { version = \"0.1.8\", optional = true }",
+            );
+        std::fs::write(project.join("Cargo.toml"), manifest).unwrap();
+        std::fs::copy(
+            fixture("registry").join("Cargo.lock"),
+            project.join("Cargo.lock"),
+        )
+        .unwrap();
+        std::fs::write(
+            project.join("src/main.rs"),
+            "fn main() { println!(\"optional absent\"); }\n",
+        )
+        .unwrap();
+        let cargo_home = if damaged {
+            let home = seed_registry_cache("utf8-width-0.1.8");
+            std::fs::write(
+                home.join("registry/src")
+                    .join(CRATES_IO_CACHE_ID)
+                    .join("utf8-width-0.1.8/src/lib.rs"),
+                "pub fn forged() {}\n",
+            )
+            .unwrap();
+            home
+        } else {
+            let home = scratch.join("empty-cargo-home");
+            std::fs::create_dir_all(home.join("registry/src")).unwrap();
+            std::fs::create_dir_all(home.join("registry/cache")).unwrap();
+            home
+        };
+        for workers in ["1", "8"] {
+            for command in ["check", "build", "run"] {
+                let invoke = |activate| {
+                    let mut cmd = Command::new(env!("CARGO_BIN_EXE_jr-rust"));
+                    cmd.args([command, "-j", workers]);
+                    if activate {
+                        cmd.args(["--features", "utf8-width"]);
+                    }
+                    cmd.current_dir(&project)
+                        .env("CARGO_HOME", &cargo_home)
+                        .env("CARGO_TARGET_DIR", scratch.join("target"))
+                        .output()
+                        .unwrap()
+                };
+                let inactive = invoke(false);
+                assert!(
+                    inactive.status.success(),
+                    "{}",
+                    String::from_utf8_lossy(&inactive.stderr)
+                );
+                if command == "run" {
+                    assert_eq!(inactive.stdout, b"optional absent\n");
+                }
+                let active = invoke(true);
+                assert_eq!(active.status.code(), Some(101));
+                let diagnostic = String::from_utf8_lossy(&active.stderr);
+                assert!(
+                    diagnostic.contains("local Cargo cache") || diagnostic.contains("checksum"),
+                    "{diagnostic}"
+                );
+                assert!(!diagnostic.contains("Finished"), "{diagnostic}");
+            }
+        }
+    }
+}
+
+#[test]
 fn locked_registry_dependency_reports_checksum_mismatch_explicitly() {
     let scratch = target_dir("registry-checksum-mismatch");
     let project = scratch.join("project");

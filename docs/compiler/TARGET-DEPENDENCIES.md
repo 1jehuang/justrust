@@ -9,6 +9,7 @@ Status: implemented for the pinned native Linux x86-64 target; acceptance result
 - Crate/profile-dependent `feature`, `debug_assertions`, `test`, `proc_macro`, and `panic` predicates are explicitly unsupported for dependency selection.
 - Inactive edges remain declarations for feature-name lookup but do not activate, compile, or acquire registry/git packages. Inactive path declarations still require a real package with the declared identity, matching Cargo's manifest validation.
 - Repeated same-name declarations are considered together when applying `dep:`, strong dependency-feature, and implicit optional-dependency feature requests. An inactive declaration must not mask an active one.
+- Optional locked registry dependencies whose source is unavailable or fails authentication do not block an unselected feature. Their locked identity remains in the manifest. Selecting the feature still requires authenticated source and fails explicitly when it is missing or corrupted. `tests/projects.rs::inactive_optional_registry_source_is_not_required_but_activation_checks_it` covers CHECK/BUILD/run at workers 1 and 8, including corrupted-source rejection after activation. This removes the cached-optional-package blocker exposed by the unchanged Adler2 probe, not its edition or source-language blockers.
 - Active build dependencies remain explicitly unsupported. Inactive build dependencies do not demand their source packages.
 
 ## Representation and graph boundary

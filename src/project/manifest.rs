@@ -462,6 +462,13 @@ pub fn load(manifest: &Path) -> Result<Workspace, ManifestError> {
                     }
                 }
                 DependencySource::Registry(registry) => {
+                    // An optional source is not required until its feature is
+                    // activated. Keep the locked identity in the manifest;
+                    // visible_dependencies still authenticates an active edge
+                    // and rejects missing or corrupted source before compiling.
+                    if dep.optional && registry_source_root(registry).is_err() {
+                        continue;
+                    }
                     let index = loader.registry_package(registry)?;
                     if loader.packages[index].name != dep.package {
                         return err(format!(
