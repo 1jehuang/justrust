@@ -59,6 +59,10 @@ enum SourceOwnerContext {
     TraitImpl { source_index: usize },
 }
 
+/// Implicit-prelude lookup memo key: path, requester, value/type namespace,
+/// type-namespace first segment, and user-crate anchoring.
+type PreludeMemoKey = (PathKey, ModuleId, bool, bool, bool);
+
 struct Resolver<'a> {
     program: &'a Program,
     type_depth: usize,
@@ -71,6 +75,9 @@ struct Resolver<'a> {
     source_owner: SourceOwnerContext,
     items: &'a HashMap<PathKey, Vec<Item>>,
     imports: HashMap<(PathKey, usize, bool), Option<ResolvedItem>>,
+    /// Memo of implicit-prelude fallback lookups, recorded only outside
+    /// active import/glob cycles so cycle-cut `None` results never persist.
+    prelude_memo: HashMap<PreludeMemoKey, Option<Option<ResolvedItem>>>,
     active: std::collections::HashSet<(PathKey, usize, bool)>,
     type_params: Vec<AstIdent>,
     lexical_function: Option<ScopeId>,
@@ -1866,6 +1873,37 @@ impl Resolver<'_> {
     /// so they shadow both. `Ok(None)` means not found (the caller continues
     /// with closed catalog paths such as `core::marker::Copy`).
     fn prelude_path(
+        &mut self,
+        path: &AstPath,
+        from: ModuleId,
+        namespace: bool,
+        type_namespace: bool,
+    ) -> Result<Option<Option<ResolvedItem>>, String> {
+        if self.program.prelude_module.is_none() {
+            return Ok(None);
+        }
+        let memoizable = self.active.is_empty() && self.active_globs.is_empty();
+        let memo_key = (
+            self.key(path)?,
+            from,
+            namespace,
+            type_namespace,
+            self.user_crate_anchor,
+        );
+        if memoizable && let Some(found) = self.prelude_memo.get(&memo_key) {
+            return Ok(found.clone());
+        }
+        let found = self.prelude_path_uncached(path, from, namespace, type_namespace)?;
+        if memoizable {
+            self.charge_entries::<(PathKey, ModuleId, Option<ResolvedItem>)>(1)?;
+            self.prelude_memo
+                .try_reserve(1)
+                .map_err(|_| "prelude memo allocation failed")?;
+            self.prelude_memo.insert(memo_key, found.clone());
+        }
+        Ok(found)
+    }
+    fn prelude_path_uncached(
         &mut self,
         path: &AstPath,
         from: ModuleId,
@@ -4024,6 +4062,7 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
         source_owner: SourceOwnerContext::None,
         items: &parsed.items,
         imports: HashMap::new(),
+        prelude_memo: HashMap::new(),
         active: std::collections::HashSet::new(),
         type_params: Vec::new(),
         lexical_function: None,
@@ -4693,6 +4732,7 @@ mod associated_projection_tests {
             source_owner: SourceOwnerContext::Trait { source_index: 0 },
             items: &items,
             imports: HashMap::new(),
+            prelude_memo: HashMap::new(),
             active: Default::default(),
             type_params: Vec::new(),
             lexical_function: None,
