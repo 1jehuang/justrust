@@ -97,6 +97,55 @@ fn option_insert_returns_stored_mutable_value() {
 }
 
 #[test]
+fn option_predicates_match_stock() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "option-predicates",
+        &[
+            Case {
+                name: "predicates_are_lazy_and_consume_payload",
+                source: r#"struct Value { number: i32 }
+                impl Drop for Value { fn drop(&mut self) { println!("drop {}", self.number); } }
+                fn main() {
+                    println!("{}", Some(Value { number: 3 }).is_some_and(|v| v.number == 3));
+                    println!("{}", None::<i32>.is_some_and(|_| { println!("wrong some"); true }));
+                    println!("{}", Some(2).is_none_or(|v| v > 3));
+                    println!("{}", None::<i32>.is_none_or(|_| { println!("wrong none"); false }));
+                }"#,
+                expect: Expect::Run("drop 3\ntrue\nfalse\nfalse\ntrue\n"),
+            },
+            Case {
+                name: "skipped_predicate_drops_capture",
+                source: r#"struct Token { number: i32 }
+                impl Drop for Token { fn drop(&mut self) { println!("drop {}", self.number); } }
+                fn main() {
+                    let token = Token { number: 7 };
+                    println!("{}", None::<i32>.is_some_and(move |_| { let owned = token; owned.number == 7 }));
+                    let token = Token { number: 8 };
+                    println!("{}", Some(8).is_none_or(move |v| { let owned = token; v == owned.number }));
+                }"#,
+                expect: Expect::Run("drop 7\nfalse\ndrop 8\ntrue\n"),
+            },
+            Case {
+                name: "predicate_must_return_bool_even_when_unused",
+                source: "fn unused(){let _=None::<i32>.is_some_and(|v|v);}fn main(){}",
+                expect: Expect::Invalid("E0308"),
+            },
+            Case {
+                name: "none_or_predicate_must_return_bool",
+                source: "fn unused(){let _=None::<i32>.is_none_or(|v|v);}fn main(){}",
+                expect: Expect::Invalid("E0308"),
+            },
+            Case {
+                name: "predicate_consumes_noncopy_option",
+                source: "fn main(){let value=Some(String::from(\"owned\")); let _=value.is_some_and(|s|s.len()>0); let _=value.unwrap();}",
+                expect: Expect::Invalid("E0382"),
+            },
+        ],
+    );
+}
+
+#[test]
 fn option_map_matches_stock() {
     use closure_oracle::{Case, Expect};
     closure_oracle::check(

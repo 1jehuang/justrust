@@ -19,6 +19,20 @@ impl<T> Option<T> {
         }
     }
 
+    pub fn is_some_and<F: FnOnce(T) -> bool>(self, f: F) -> bool {
+        match self {
+            Option::Some(value) => f(value),
+            Option::None => false,
+        }
+    }
+
+    pub fn is_none_or<F: FnOnce(T) -> bool>(self, f: F) -> bool {
+        match self {
+            Option::Some(value) => f(value),
+            Option::None => true,
+        }
+    }
+
     pub fn unwrap_or(self, default: T) -> T {
         match self {
             Option::Some(value) => value,

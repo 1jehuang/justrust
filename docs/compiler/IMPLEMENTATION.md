@@ -12,6 +12,9 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
   `method_owner_inference` covers enclosing-owner bindings inside nominal
   callable outputs. `stored_closures::owned_closure_captures_drop_exactly_once`
   and the normal-drop forgery test cover capture ownership and glue identity.
+  `Option::is_some_and` and `is_none_or` use the same source-level FnOnce path;
+  `option_map::option_predicates_match_stock` covers skipped calls, payload and
+  capture destruction, invalid callbacks and use-after-move rejection.
 
 - [x] Nested closure templates read their outermost source callable's immutable
   publication while retaining immediate lexical owner/site authentication.
