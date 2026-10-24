@@ -488,12 +488,14 @@ fn main(){if run()==7{println!("traits oracle ok");}}
 }
 
 #[test]
-fn rejects_legal_unsupported_generic_trait_method() {
-    rejects(
-        "legalunsupported: generic_trait_method",
-        r###"struct S{x:i32}trait Choose{fn choose<T>(self,x:T)->T;}impl Choose for S{fn choose<T>(self,x:T)->T{x}}fn run()->i32{S{x:0}.choose::<i32>(7)}
+fn runs_generic_trait_method() {
+    // Formerly a legal-unsupported boundary; stock rustc 2024 prints
+    // "traits oracle ok" for this exact source (checked 2026-10-24).
+    runs(
+        r###"struct S{x:i32}trait Choose{fn choose<T>(self,x:T)->T;}impl Choose for S{fn choose<T>(self,x:T)->T{x}}fn run()->i32{let b=S{x:1}.choose(true);if b{S{x:0}.choose::<i32>(7)}else{0}}
 fn main(){if run()==7{println!("traits oracle ok");}}
 "###,
+        "traits oracle ok\n",
     );
 }
 
