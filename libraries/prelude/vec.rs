@@ -536,3 +536,17 @@ impl<T: Clone> Vec<T> {
         }
     }
 }
+
+/// `&Vec<T>` coerces to `&[T]` at expected-type sites, as in std.
+impl<T> super::ops::Deref for Vec<T> {
+    type Target = [T];
+    fn deref(&self) -> &[T] {
+        self.as_slice()
+    }
+}
+
+impl<T> super::ops::DerefMut for Vec<T> {
+    fn deref_mut(&mut self) -> &mut [T] {
+        self.as_mut_slice()
+    }
+}

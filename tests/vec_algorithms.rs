@@ -182,3 +182,15 @@ let e:Vec<i32>=Vec::new();println!(\"{:?} {:?}\",x,e.into_iter().max_by(|a,b|a.c
         "max-by",
     );
 }
+
+#[test]
+fn vec_reference_coerces_to_slice_parameter() {
+    compare(
+        "trait S{fn a(&self)->f64;}\nstruct C{r:f64}\nimpl S for C{fn a(&self)->f64{self.r}}\n\
+fn t(s:&[Box<dyn S>])->f64{s.iter().map(|x|x.a()).sum()}\nfn first(s:&[u32])->u32{s[0]}\nfn n(s:&[String])->usize{s.len()}\n\
+fn main(){let v:Vec<Box<dyn S>>=vec![Box::new(C{r:1.5}),Box::new(C{r:2.0})];println!(\"{}\",t(&v));\
+let w=vec![4u32,5];let x=vec![String::from(\"a\")];println!(\"{} {}\",first(&w),n(&x));}\n",
+        "3.5\n4 1\n",
+        "vec-deref-slice",
+    );
+}

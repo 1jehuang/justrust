@@ -2805,7 +2805,7 @@ impl ValidatedTraitWorld {
                 }
             }
             Ty::Array { element, len } => {
-                if *len > ir::MAX_ARRAY_LEN {
+                if *len > ir::MAX_ARRAY_TYPE_LEN {
                     return Err(FactsError::resource(
                         &self.budget,
                         "array length limit exceeded",
@@ -2821,9 +2821,14 @@ impl ValidatedTraitWorld {
                 )?;
             }
             Ty::Slice { element } => {
-                // Unsized: only meaningful directly behind a reference, or
-                // as a root trait Self type (`impl Tr for [T]`), like `str`.
-                if !matches!(usage, TypeUse::Referent { .. } | TypeUse::Root) {
+                // Unsized: only meaningful directly behind a reference, as a
+                // root trait Self type (`impl Tr for [T]`), or as an actual for
+                // a `?Sized` parameter (`Deref<Target = [T]>`). A parameter
+                // without `?Sized` still rejects it through its implicit Sized row.
+                if !matches!(
+                    usage,
+                    TypeUse::Referent { .. } | TypeUse::Root | TypeUse::Actual
+                ) {
                     return Err(FactsError::unsupported(
                         &self.budget,
                         "unsupported: slice type outside a reference",
@@ -2914,7 +2919,7 @@ impl ValidatedTraitWorld {
                 // Unsized: only meaningful directly behind a shared reference.
                 if !matches!(
                     usage,
-                    TypeUse::Referent { shared: true, .. } | TypeUse::Root
+                    TypeUse::Referent { shared: true, .. } | TypeUse::Root | TypeUse::Actual
                 ) {
                     return Err(FactsError::unsupported(
                         &self.budget,

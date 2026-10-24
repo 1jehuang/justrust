@@ -271,11 +271,11 @@ fn closure_type_walk_reuses_only_the_same_checked_allocation() {
     world
         .closedness_of_root(&Ty::Str, f.facts.env(), TypeUse::Root, 0, &mut proofs)
         .unwrap();
-    assert!(
-        world
-            .closedness_of_root(&Ty::Str, f.facts.env(), TypeUse::Actual, 0, &mut proofs)
-            .is_err()
-    );
+    // `str` is a well-formed actual for a `?Sized` parameter; an implicitly
+    // Sized parameter rejects it through its own Sized row instead.
+    world
+        .closedness_of_root(&Ty::Str, f.facts.env(), TypeUse::Actual, 0, &mut proofs)
+        .unwrap();
     // A hit still checks the complete subtree's depth at its new position.
     assert!(
         world
