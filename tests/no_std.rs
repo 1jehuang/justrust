@@ -220,3 +220,31 @@ fn extern_crate_items_outside_the_native_libraries_are_explicit() {
         }
     }
 }
+#[test]
+fn builtin_derives_name_core_in_no_std_crates() {
+    let root = project(
+        "derives",
+        "#![no_std]\nextern crate core as std;\n#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]\npub struct Pair { a: u16, b: u16 }\npub fn value() -> i32 { let p = Pair { a: 1, b: 2 }; let q = p; if p == q && Pair::default() < p { (p.a + q.b) as i32 } else { 0i32 } }\n",
+    );
+    let stock = Command::new("cargo")
+        .args(["run", "--offline", "--quiet"])
+        .current_dir(&root)
+        .env("CARGO_TARGET_DIR", root.join("stock-target"))
+        .output()
+        .unwrap();
+    assert!(
+        stock.status.success(),
+        "{}",
+        String::from_utf8_lossy(&stock.stderr)
+    );
+    assert_eq!(stock.stdout, b"3\n");
+    for workers in ["1", "8"] {
+        let run = native(&root, "run", workers);
+        assert!(
+            run.status.success(),
+            "{}",
+            String::from_utf8_lossy(&run.stderr)
+        );
+        assert_eq!(run.stdout, b"3\n");
+    }
+}

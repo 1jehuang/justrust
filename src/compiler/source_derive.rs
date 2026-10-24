@@ -504,7 +504,7 @@ fn variants(input: &Input) -> Vec<(String, &Fields)> {
     }
 }
 
-const ORDERING: &str = "std::cmp::Ordering";
+const ORDERING: &str = "core::cmp::Ordering";
 
 fn gen_clone(input: &Input, copy: bool) -> String {
     let header = input.header("Clone", Some("Clone"));
@@ -542,7 +542,7 @@ fn gen_eq_chain(binds_a: &[(String, String)], binds_b: &[(String, String)]) -> S
 fn gen_eq(input: &Input) -> String {
     let mut out = format!(
         "{} {{}}\n",
-        input.header("std::cmp::Eq", Some("std::cmp::Eq"))
+        input.header("core::cmp::Eq", Some("core::cmp::Eq"))
     );
     let mut calls = String::new();
     let require = format!(
@@ -562,7 +562,7 @@ fn gen_eq(input: &Input) -> String {
     if calls.is_empty() {
         return out;
     }
-    let (g, _) = input.generics(Some("std::cmp::Eq"));
+    let (g, _) = input.generics(Some("core::cmp::Eq"));
     let where_clause = if input.where_clause.is_empty() {
         String::new()
     } else {
@@ -570,14 +570,14 @@ fn gen_eq(input: &Input) -> String {
     };
     let _ = write!(
         out,
-        "fn {require}<X: std::cmp::Eq>() {{}}\nfn __justrust_derive_eq_assert_{}{g}(){where_clause} {{ {calls}}}\n",
+        "fn {require}<X: core::cmp::Eq>() {{}}\nfn __justrust_derive_eq_assert_{}{g}(){where_clause} {{ {calls}}}\n",
         input.name.trim_start_matches("r#")
     );
     out
 }
 
 fn gen_partial_eq(input: &Input) -> String {
-    let header = input.header("std::cmp::PartialEq", Some("std::cmp::PartialEq"));
+    let header = input.header("core::cmp::PartialEq", Some("core::cmp::PartialEq"));
     let ty = input.self_ty();
     let vs = variants(input);
     let mut arms = String::new();
@@ -615,23 +615,23 @@ fn variant_index(input: &Input, var: &str) -> String {
 fn gen_ord(input: &Input, partial: bool) -> String {
     let (trait_path, method, ret) = if partial {
         (
-            "std::cmp::PartialOrd",
+            "core::cmp::PartialOrd",
             "partial_cmp",
-            format!("std::option::Option<{ORDERING}>"),
+            format!("core::option::Option<{ORDERING}>"),
         )
     } else {
-        ("std::cmp::Ord", "cmp", ORDERING.to_string())
+        ("core::cmp::Ord", "cmp", ORDERING.to_string())
     };
     let header = input.header(trait_path, Some(trait_path));
     let ty = input.self_ty();
     let equal = if partial {
-        format!("std::option::Option::Some({ORDERING}::Equal)")
+        format!("core::option::Option::Some({ORDERING}::Equal)")
     } else {
         format!("{ORDERING}::Equal")
     };
     let wrap = |o: &str| {
         if partial {
-            format!("std::option::Option::Some({o})")
+            format!("core::option::Option::Some({o})")
         } else {
             o.to_string()
         }
@@ -673,7 +673,7 @@ fn gen_ord(input: &Input, partial: bool) -> String {
 }
 
 fn gen_hash(input: &Input) -> String {
-    let header = input.header("std::hash::Hash", Some("std::hash::Hash"));
+    let header = input.header("core::hash::Hash", Some("core::hash::Hash"));
     // Fresh method binder for the hasher: never equal to any type, lifetime
     // or const parameter of the input, so a user `H` cannot collide.
     let mut hasher = String::from("__JrHasher");
@@ -685,7 +685,7 @@ fn gen_hash(input: &Input) -> String {
     if vs.len() > 1 {
         let _ = write!(
             body,
-            "let d: isize = {}; <{hasher} as std::hash::Hasher>::write_isize(&mut *state, d); ",
+            "let d: isize = {}; <{hasher} as core::hash::Hasher>::write_isize(&mut *state, d); ",
             variant_index(input, "self")
         );
     }
@@ -694,7 +694,7 @@ fn gen_hash(input: &Input) -> String {
         let (pa, ba) = pattern(path, fields, "a");
         let mut chain = String::new();
         for (a, t) in &ba {
-            let _ = write!(chain, "<{t} as std::hash::Hash>::hash({a}, &mut *state); ");
+            let _ = write!(chain, "<{t} as core::hash::Hash>::hash({a}, &mut *state); ");
         }
         let _ = write!(arms, "&{pa} => {{ {chain} }}, ");
     }
@@ -704,12 +704,12 @@ fn gen_hash(input: &Input) -> String {
         let _ = write!(body, "match self {{ {arms} }}");
     }
     format!(
-        "{header} {{ fn hash<{hasher}: std::hash::Hasher>(&self, state: &mut {hasher}) {{ {body} }} }}\n"
+        "{header} {{ fn hash<{hasher}: core::hash::Hasher>(&self, state: &mut {hasher}) {{ {body} }} }}\n"
     )
 }
 
 fn gen_default(input: &Input) -> Result<String, String> {
-    let header = input.header("std::default::Default", Some("std::default::Default"));
+    let header = input.header("core::default::Default", Some("core::default::Default"));
     let ty = input.self_ty();
     let (path, fields) =
         match &input.body {
@@ -741,7 +741,7 @@ fn gen_default(input: &Input) -> Result<String, String> {
     };
     let values: Vec<_> = types
         .iter()
-        .map(|t| format!("<{t} as std::default::Default>::default()"))
+        .map(|t| format!("<{t} as core::default::Default>::default()"))
         .collect();
     Ok(format!(
         "{header} {{ fn default() -> {ty} {{ {} }} }}\n",
@@ -750,7 +750,7 @@ fn gen_default(input: &Input) -> Result<String, String> {
 }
 
 fn gen_debug(input: &Input) -> String {
-    let header = input.header("std::fmt::Debug", Some("std::fmt::Debug"));
+    let header = input.header("core::fmt::Debug", Some("core::fmt::Debug"));
     let mut arms = String::new();
     for (path, fields) in variants(input) {
         let short = path.rsplit("::").next().unwrap_or(&path).to_string();
@@ -781,7 +781,7 @@ fn gen_debug(input: &Input) -> String {
         format!("match self {{ {arms} }}")
     };
     format!(
-        "{header} {{ fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {{ {body} }} }}\n"
+        "{header} {{ fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {{ {body} }} }}\n"
     )
 }
 
@@ -850,17 +850,17 @@ mod tests {
         .unwrap();
         assert!(e.contains("li < ri"), "{e}");
         assert!(
-            e.contains("fn hash<__JrHasher: std::hash::Hasher>(&self, state: &mut __JrHasher)"),
+            e.contains("fn hash<__JrHasher: core::hash::Hasher>(&self, state: &mut __JrHasher)"),
             "{e}"
         );
         assert!(
-            e.contains("<__JrHasher as std::hash::Hasher>::write_isize(&mut *state, d)"),
+            e.contains("<__JrHasher as core::hash::Hasher>::write_isize(&mut *state, d)"),
             "{e}"
         );
         assert!(!e.contains("DefaultHasher"), "{e}");
         let clash = expand("struct Q<__JrHasher> { x: __JrHasher }", &["Hash".into()]).unwrap();
         assert!(
-            clash.contains("fn hash<__JrHasher_: std::hash::Hasher>"),
+            clash.contains("fn hash<__JrHasher_: core::hash::Hasher>"),
             "{clash}"
         );
         assert!(

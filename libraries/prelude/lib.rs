@@ -26,6 +26,12 @@ pub mod core_surface {
     }
     pub use super::slice;
     pub use super::iter;
+    // core::fmt's traits and Formatter. This native Formatter buffers into
+    // a heap String internally; that is an implementation detail of the
+    // library, not a no_std-visible allocation API.
+    pub mod fmt {
+        pub use super::super::fmt::{Debug, Display, Error, Formatter, Result, Write};
+    }
     pub mod prelude {
         pub use super::super::prelude::core_v1 as v1;
     }
