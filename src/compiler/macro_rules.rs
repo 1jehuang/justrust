@@ -422,6 +422,8 @@ fn parse(
                                 "expr" if edition == Edition::E2024 => FragmentKind::Expr,
                                 "expr" | "expr_2021" => FragmentKind::Expr2021,
                                 "ty" => FragmentKind::Ty,
+                                // Before 2021 `pat` excludes top-level or-patterns.
+                                "pat" if edition.pre_2021() => FragmentKind::PatParam,
                                 "pat" => FragmentKind::Pat,
                                 "pat_param" => FragmentKind::PatParam,
                                 "path" => FragmentKind::Path,

@@ -65,6 +65,10 @@ struct Method {
     result: Term,
     /// Overloaded `Deref` steps already taken from the written receiver.
     depth: usize,
+    /// An earlier autoderef step found the method with unmet bounds
+    /// (`Vec<N>::clone` for `N: !Clone`); reported at quiescence if no
+    /// later step selects anything.
+    unmet: Option<String>,
 }
 struct Projection {
     base: Term,
@@ -1059,7 +1063,7 @@ impl<'s> Solver<'_, '_, 's> {
             let mut pending = Vec::new();
             selection_errors.clear();
             self.trait_application_pending = false;
-            for method in methods {
+            for mut method in methods {
                 if let Some(result) =
                     self.callable_method_application(method.receiver, method.name, &method.args)?
                 {
@@ -1301,9 +1305,13 @@ impl<'s> Solver<'_, '_, 's> {
                                         .names()?
                                         .spelling(method.name)
                                         .map_err(native_adapter::name_diagnostic)?;
-                                    selection_errors.push(format!(
+                                    let error = format!(
                                         "E0599: the method `{name}` exists but its trait bounds were not satisfied"
-                                    ));
+                                    );
+                                    if method.unmet.is_none() {
+                                        method.unmet = Some(error.clone());
+                                    }
+                                    selection_errors.push(error);
                                 }
                             }
                         }
@@ -1344,6 +1352,9 @@ impl<'s> Solver<'_, '_, 's> {
                             diagnostic_ty(&shown, plan)
                         ));
                     }
+                }
+                if let Some(error) = &method.unmet {
+                    selection_errors.push(error.clone());
                 }
                 pending.push(method);
             }
@@ -2311,6 +2322,7 @@ impl<'s> Solver<'_, '_, 's> {
                     args,
                     result,
                     depth: 0,
+                    unmet: None,
                 });
                 Ok(result)
             }

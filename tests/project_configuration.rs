@@ -131,21 +131,165 @@ fn edition_2021_is_admitted_with_stock_semantics_or_explicit_boundaries() {
     }
 }
 
+enum Pre2021 {
+    /// Stock and native both run; stdout and exit status match.
+    Run,
+    /// Stock rejects; native rejects with this diagnostic.
+    Rejects(&'static str),
+    /// Stock accepts; native reports this explicit unsupported boundary.
+    Boundary(&'static str),
+}
+
 #[test]
-fn earlier_and_omitted_editions_are_explicitly_unsupported() {
-    for edition in ["2015", "2018", "omitted"] {
-        let field = if edition == "omitted" {
-            String::new()
-        } else {
-            format!("edition = \"{edition}\"")
-        };
-        let p = Project::new(edition, &field, "", "fn main() {}\n");
-        assert!(p.stock(&["check", "--offline"]).status.success());
-        for workers in ["1", "8"] {
-            rejected(
-                p.native(&["check"], workers),
-                "supports only editions 2021 and 2024",
-            );
+fn editions_2015_and_2018_match_stock_or_reject_explicitly() {
+    use Pre2021::*;
+    let both: &[&str] = &["2015", "2018", "omitted"];
+    let cases: &[(&str, &[&str], &str, Pre2021)] = &[
+        (
+            "plain",
+            both,
+            "fn main() { let v = vec![1u32, 2, 3]; println!(\"{}\", v.iter().map(|x| x * 2).sum::<u32>()); }\n",
+            Run,
+        ),
+        // The 2015/2018 prelude lacks FromIterator (and TryFrom/TryInto).
+        (
+            "prelude",
+            both,
+            "fn main() { let v: Vec<u8> = FromIterator::from_iter(vec![1u8, 2]); println!(\"{:?}\", v); }\n",
+            Rejects("FromIterator"),
+        ),
+        // Whole-variable closure capture: borrowing `p.b` conflicts.
+        (
+            "capture-conflict",
+            both,
+            "struct P { a: String, b: String } fn main() { let mut p = P { a: \"x\".into(), b: \"y\".into() }; let mut c = || p.a.push_str(\"1\"); let r = &p.b; c(); println!(\"{} {}\", p.a, r); }\n",
+            Rejects("conflicts"),
+        ),
+        // A move closure moves all of `p`, so `b` drops with the closure.
+        (
+            "capture-drop",
+            both,
+            "struct D(&'static str); impl Drop for D { fn drop(&mut self) { println!(\"drop {}\", self.0); } } struct P { a: D, b: D } fn main() { let p = P { a: D(\"a\"), b: D(\"b\") }; { let c = move || { let _x = &p.a; }; c(); println!(\"closure done\"); } println!(\"end\"); }\n",
+            Run,
+        ),
+        // `:pat` excludes top-level or-patterns before 2021.
+        (
+            "pat-fragment",
+            both,
+            "macro_rules! m { ($p:pat) => { match 2u8 { $p => println!(\"hit\"), _ => println!(\"miss\") } } } fn main() { m!(1 | 2); }\n",
+            Rejects("no macro rule matched"),
+        ),
+        // Single-literal panic-family messages are not format strings.
+        (
+            "panic-literal",
+            both,
+            "fn main() { panic!(\"a {{ b {}\"); }\n",
+            Run,
+        ),
+        (
+            "unreachable-literal",
+            both,
+            "fn main() { unreachable!(\"x {}\"); }\n",
+            Run,
+        ),
+        (
+            "assert-literal",
+            both,
+            "fn main() { assert!(1 == 2, \"x {}\"); }\n",
+            Run,
+        ),
+        (
+            "keywords-2015",
+            &["2015", "omitted"],
+            "fn main() { let async = 1; let try = 2; let dyn = 3; println!(\"{}\", async + try + dyn); }\n",
+            Run,
+        ),
+        (
+            "keywords-2018",
+            &["2018"],
+            "fn main() { let async = 1; println!(\"{}\", async); }\n",
+            Rejects("async"),
+        ),
+        // 2015 `use` paths are crate-relative; 2018 requires `crate::`.
+        (
+            "use-2015",
+            &["2015", "omitted"],
+            "mod a { pub fn f() -> u8 { 1 } } mod b { use a::f; pub fn g() -> u8 { f() } } fn main() { println!(\"{}\", b::g()); }\n",
+            Run,
+        ),
+        (
+            "use-2018",
+            &["2018"],
+            "mod a { pub fn f() -> u8 { 1 } } mod b { use a::f; pub fn g() -> u8 { f() } } fn main() { println!(\"{}\", b::g()); }\n",
+            Rejects("unresolved"),
+        ),
+        (
+            "bare-trait",
+            both,
+            "trait T { fn f(&self) -> u8; } impl T for u8 { fn f(&self) -> u8 { *self } } fn g(x: &T) -> u8 { x.f() } fn main() { println!(\"{}\", g(&3u8)); }\n",
+            Boundary("without `dyn`"),
+        ),
+        (
+            "anonymous-param",
+            &["2015"],
+            "trait T { fn f(&self, u8) -> u8; } impl T for u8 { fn f(&self, x: u8) -> u8 { x } } fn main() { println!(\"{}\", 3u8.f(4)); }\n",
+            Boundary("anonymous trait method parameters"),
+        ),
+        (
+            "array-into-iter",
+            both,
+            "fn main() { for x in [1u32, 2].into_iter() { let y: &u32 = x; println!(\"{}\", y); } }\n",
+            // Array by-value iteration is an unsupported constraint in every edition today;
+            // the pre-2021 autoref boundary in type_check sits behind it.
+            Boundary("unsupported"),
+        ),
+    ];
+    for (name, editions, source, outcome) in cases {
+        for edition in *editions {
+            let field = if *edition == "omitted" {
+                String::new()
+            } else {
+                format!("edition = \"{edition}\"")
+            };
+            let label = format!("{name}-{edition}");
+            let p = Project::new(&format!("pre2021-{label}"), &field, "", source);
+            let stock = p.stock(&["run", "--offline", "--quiet"]);
+            for workers in ["1", "8"] {
+                match outcome {
+                    Run => {
+                        let native = p.native(&["run"], workers);
+                        assert_eq!(native.stdout, stock.stdout, "{label}");
+                        if stock.status.success() {
+                            assert!(native.status.success(), "{label}: {}", stderr(&native));
+                            assert!(p.native(&["check"], workers).status.success(), "{label}");
+                        } else {
+                            // Panics (native aborts, stock unwinds): same payload line.
+                            assert!(!native.status.success(), "{label}");
+                            let message = |o: &Output| {
+                                let text = stderr(o);
+                                let at = text.find("panicked at").expect("panic header");
+                                text[at..].lines().nth(1).unwrap_or_default().to_owned()
+                            };
+                            assert_eq!(message(&native), message(&stock), "{label}");
+                        }
+                    }
+                    Rejects(diagnostic) => {
+                        assert!(
+                            !p.stock(&["check", "--offline"]).status.success(),
+                            "{label}"
+                        );
+                        for command in ["check", "build"] {
+                            rejected(p.native(&[command], workers), diagnostic);
+                        }
+                    }
+                    Boundary(diagnostic) => {
+                        assert!(stock.status.success(), "{label}: {}", stderr(&stock));
+                        for command in ["check", "build", "run"] {
+                            rejected(p.native(&[command], workers), diagnostic);
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -203,7 +347,7 @@ fn direct_source_edition_is_explicit_and_never_reinterpreted() {
             assert!(ran.status.success());
             assert_eq!(ran.stdout, stock.stdout);
         }
-        for edition in ["2015", "2018", "2099", ""] {
+        for edition in ["2099", "2017", ""] {
             let binary = p.0.join(format!("rejected-{workers}-{edition}"));
             let output = Command::new(env!("CARGO_BIN_EXE_jr-rust"))
                 .arg(p.0.join("absent.rs"))

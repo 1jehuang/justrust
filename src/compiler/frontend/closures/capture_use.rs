@@ -149,6 +149,29 @@ fn binding_use(
     Ok(())
 }
 
+/// Editions 2015/2018 capture whole variables (no RFC 2229 disjoint field
+/// capture): collapse every candidate's captures to its root place.
+pub(super) fn whole_variable(uses: &mut [Vec<Capture>]) {
+    for captures in uses.iter_mut() {
+        let Some(first) = captures.first() else {
+            continue;
+        };
+        let local = first.place.local;
+        let mut usage = CaptureUse::default();
+        for capture in captures.iter() {
+            usage.merge(capture.usage);
+        }
+        captures.clear();
+        captures.push(Capture {
+            place: ir::Place {
+                local,
+                projection: Vec::new(),
+            },
+            usage,
+        });
+    }
+}
+
 pub(super) fn analyze(
     exprs: &[ir::TypedExpr],
     body: &ir::TypedBlock,

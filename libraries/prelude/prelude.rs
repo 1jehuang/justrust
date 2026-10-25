@@ -34,3 +34,40 @@ pub mod v1 {
     pub use super::super::convert::{From, Into};
     pub use super::super::primitive::{CharMethods, FloatBits, IntMethods, RadixParse};
 }
+
+// Editions 2015/2018: the 2021 additions (FromIterator) are absent.
+pub mod core_v1_2018 {
+    pub use super::super::iter::{Iterator, IntoIterator, DoubleEndedIterator};
+    pub use super::super::option::Option;
+    pub use super::super::option::Option::{None, Some};
+    pub use super::super::result::Result;
+    pub use super::super::result::Result::{Err, Ok};
+    pub use super::super::ops::{Fn, FnMut, FnOnce};
+    pub use super::super::cmp::{Eq, Ord, PartialEq, PartialOrd};
+    pub use super::super::default::Default;
+    pub use super::super::mem::drop;
+    pub use super::super::convert::{From, Into};
+    pub use super::super::primitive::{CharMethods, FloatBits, IntMethods, RadixParse};
+    // Allocation-free slice methods are core `[T]` inherent methods.
+    pub use super::super::slice::{SliceChunks, SliceContains, SliceIter, SliceMethods, SliceRefMethods};
+}
+
+// Editions 2015/2018: the 2021 additions (FromIterator) are absent.
+pub mod v1_2018 {
+    pub use super::super::iter::{Iterator, IntoIterator, DoubleEndedIterator};
+    pub use super::super::option::Option;
+    pub use super::super::option::Option::{None, Some};
+    pub use super::super::result::Result;
+    pub use super::super::result::Result::{Err, Ok};
+    pub use super::super::vec::Vec;
+    pub use super::super::boxed::Box;
+    pub use super::super::string::{SliceJoin, StrChars, StrMethods, StrToString, String, ToString};
+    pub use super::super::slice::{SliceChunks, SliceContains, SliceIter, SliceMethods, SliceRefMethods, SliceToVec};
+    pub use super::super::ptr::{ConstPtr, MutPtr};
+    pub use super::super::ops::{Fn, FnMut, FnOnce};
+    pub use super::super::cmp::{Eq, Ord, PartialEq, PartialOrd};
+    pub use super::super::default::Default;
+    pub use super::super::mem::drop;
+    pub use super::super::convert::{From, Into};
+    pub use super::super::primitive::{CharMethods, FloatBits, IntMethods, RadixParse};
+}

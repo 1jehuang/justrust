@@ -26,14 +26,14 @@ impl Edition {
 
     /// Admission remains narrower than the token transport's edition identity.
     pub fn validate_native(self) -> Result<(), String> {
-        let edition = match self {
-            Self::E2024 | Self::E2021 => return Ok(()),
-            Self::E2015 => "2015",
-            Self::E2018 => "2018",
-        };
-        Err(format!(
-            "Rust edition {edition} is unsupported; the native compiler currently supports only editions 2021 and 2024"
-        ))
+        // Every edition is admitted. Edition-specific semantics the native
+        // compiler does not implement reject at the construct that needs them.
+        let _ = self;
+        Ok(())
+    }
+    /// Editions before 2021 (2015 and 2018).
+    pub fn pre_2021(self) -> bool {
+        matches!(self, Self::E2015 | Self::E2018)
     }
 }
 

@@ -13136,6 +13136,14 @@ impl<'input, 'names> Parser<'input, 'names> {
                     return Err(self.unsupported("`mut` parameter patterns are unsupported"));
                 }
                 let n = self.binding()?;
+                if self.names.edition() == super::token::Edition::E2015
+                    && !self.is(":")
+                    && (self.is(",") || self.is(")") || self.is("<") || self.is("::"))
+                {
+                    return Err(self.unsupported(
+                        "anonymous trait method parameters (edition 2015) are unsupported; name the parameter (`_: T`)",
+                    ));
+                }
                 if self.is("(") || self.is("{") || self.is("::") {
                     return Err(self.unsupported("constructor parameter patterns are unsupported"));
                 }

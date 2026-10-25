@@ -2326,6 +2326,13 @@ impl Resolver<'_> {
                     *ty = self.expand_alias(item.source()?, &[], name)?;
                     return Ok(());
                 }
+                if item.kind == ResolvedKind::Trait {
+                    return Err(format!(
+                        "unsupported: trait object type `{}` without `dyn` (accepted before edition 2021) is not implemented; write `dyn {}`",
+                        self.display(name)?,
+                        self.display(name)?
+                    ));
+                }
                 if !matches!(item.kind, ResolvedKind::Struct | ResolvedKind::Enum) {
                     return Err(format!(
                         "{} is a module, not a nominal type",

@@ -173,13 +173,16 @@ impl Checker<'_> {
         child.require(&flow, &result)?;
         prefix.append(&mut body.statements);
         body.statements = prefix;
-        let uses = capture_use::analyze(
+        let mut uses = capture_use::analyze(
             &child.exprs,
             &body,
             &child.locals,
             &candidate_indices,
             child.facts(),
         )?;
+        if self.names()?.edition().pre_2021() {
+            capture_use::whole_variable(&mut uses);
+        }
         let mut sources = Vec::new();
         let mut capture_types = Vec::new();
         let mut projections = Vec::new();

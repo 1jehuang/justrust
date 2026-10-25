@@ -7,6 +7,41 @@ use super::*;
 impl Parser<'_, '_> {
     /// True when the macro's first argument is a string literal carrying
     /// placeholders or followed by format arguments.
+    /// Editions 2015/2018: a panic-family macro given exactly one string
+    /// literal uses it verbatim as the payload (no format parsing).
+    /// `skip` is 1 when a leading separator comma precedes the literal.
+    pub(super) fn legacy_panic_literal(
+        &mut self,
+        close: &str,
+        skip: usize,
+    ) -> Result<Option<String>, ParseError> {
+        if !self.names.edition().pre_2021() {
+            return Ok(None);
+        }
+        let Some(token) = self.cursor.peek(skip) else {
+            return Ok(None);
+        };
+        if !token.string || token.is_opaque_literal() {
+            return Ok(None);
+        }
+        let single = match self.cursor.peek(skip + 1) {
+            Some(t) if t.text == close => true,
+            Some(t) if t.text == "," => self.cursor.peek(skip + 2).is_some_and(|t| t.text == close),
+            _ => false,
+        };
+        if !single {
+            return Ok(None);
+        }
+        for _ in 0..skip {
+            self.cursor.bump();
+        }
+        let token = self.token();
+        let text = self.string_literal_value(token.text)?;
+        self.cursor.bump();
+        self.eat(",");
+        Ok(Some(text))
+    }
+
     pub(super) fn panic_has_format(&mut self) -> bool {
         let token = self.token();
         if !token.string {

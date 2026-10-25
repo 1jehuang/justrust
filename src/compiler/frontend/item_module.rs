@@ -37,7 +37,14 @@ impl Parser<'_, '_> {
                 parsed.program.core_library_module = Some(child);
             }
             let parent = self.modules.parent(module).map_err(module_parse_error)?;
-            if spelling == "v1"
+            // The crate's edition selects its implicit prelude module.
+            let legacy = self.names.edition().pre_2021();
+            let (v1, core_v1) = if legacy {
+                ("v1_2018", "core_v1_2018")
+            } else {
+                ("v1", "core_v1")
+            };
+            if spelling == v1
                 && parent == Some(prelude)
                 && self
                     .modules
@@ -50,7 +57,7 @@ impl Parser<'_, '_> {
             {
                 parsed.program.prelude_scope = Some(child);
             }
-            if spelling == "core_v1"
+            if spelling == core_v1
                 && parent == Some(prelude)
                 && self
                     .modules
