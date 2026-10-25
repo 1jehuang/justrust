@@ -174,6 +174,14 @@ println!(\"{} {:?}\",c.borrow().len(),c.borrow().last());}\n",
         "2 Some(4)\n",
         "refcell-temp-receiver",
     );
+    compare(
+        "use std::cell::RefCell;use std::rc::Rc;\nstruct L{n:u32,s:RefCell<Vec<String>>}\n\
+fn main(){let l=Rc::new(L{n:3,s:RefCell::new(Vec::new())});l.s.borrow_mut().push(\"a\".to_string());\
+l.s.borrow_mut().push(\"b\".to_string());for x in l.s.borrow().iter(){println!(\"{x}\");}\
+let c=RefCell::new(vec![1u32,2]);let g=c.borrow();for x in g.iter(){println!(\"{x}\");}println!(\"{}\",l.n);}\n",
+        "a\nb\n1\n2\n3\n",
+        "deref-field-receiver",
+    );
 }
 
 #[test]

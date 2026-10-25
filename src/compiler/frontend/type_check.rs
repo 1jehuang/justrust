@@ -1380,7 +1380,15 @@ impl<'s> Checker<'s> {
                     } else {
                         &ty
                     };
-                    let (_, ty) = self.field_type(receiver, field)?;
+                    let receiver = if let ir::Ty::Struct(nominal) = receiver
+                        && !self.has_member(nominal.def().source_decl, field)?
+                        && let Some(target) = self.deref_target_hint(receiver)?
+                    {
+                        std::borrow::Cow::Owned(target)
+                    } else {
+                        std::borrow::Cow::Borrowed(receiver)
+                    };
+                    let (_, ty) = self.field_type(&receiver, field)?;
                     self.infer_type_term(&ty, None, depth + 1)?
                 } else {
                     self.infer_node(InferKind::Unknown(false))?
@@ -8993,23 +9001,30 @@ impl<'a> Checker<'a> {
                             "unsupported: autoref of a reference-return call temporary".into()
                         );
                     }
-                    let source = static_source_place(receiver)?;
-                    let (mut place, _, _) = self.checked_place(&source)?;
-                    let derefs = selected.depth
-                        + usize::from(matches!(selected.adjustment, ReceiverAdjustment::Identity));
-                    self.charge_node(derefs * std::mem::size_of::<ir::Projection>() + 64)?;
-                    place
-                        .projection
-                        .extend(std::iter::repeat_n(ir::Projection::Deref, derefs));
-                    let id = self.borrow_expression(kind, place)?;
-                    (
-                        id,
-                        if kind == ir::BorrowKind::Mut {
-                            Some(ir::ImplicitBorrowKind::MutableReceiver)
-                        } else {
-                            None
-                        },
-                    )
+                    if let Some(adjusted) = self.deref_field_receiver(receiver, kind, &selected)? {
+                        adjusted
+                    } else {
+                        let source = static_source_place(receiver)?;
+                        let (mut place, _, _) = self.checked_place(&source)?;
+                        let derefs = selected.depth
+                            + usize::from(matches!(
+                                selected.adjustment,
+                                ReceiverAdjustment::Identity
+                            ));
+                        self.charge_node(derefs * std::mem::size_of::<ir::Projection>() + 64)?;
+                        place
+                            .projection
+                            .extend(std::iter::repeat_n(ir::Projection::Deref, derefs));
+                        let id = self.borrow_expression(kind, place)?;
+                        (
+                            id,
+                            if kind == ir::BorrowKind::Mut {
+                                Some(ir::ImplicitBorrowKind::MutableReceiver)
+                            } else {
+                                None
+                            },
+                        )
+                    }
                 }
             }
         };

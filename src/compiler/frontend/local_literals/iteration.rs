@@ -114,11 +114,51 @@ impl<'s> Solver<'_, '_, 's> {
                     name,
                     result,
                 } => {
-                    let Some(ty) = self.resolve(*receiver, 0)? else {
+                    let Some(mut ty) = self.resolve(*receiver, 0)? else {
                         self.iterator_items.push(pending);
                         continue;
                     };
                     let plan = self.checker.signatures.plan()?;
+                    // Method autoderef through overloaded Deref (`guard.iter()`
+                    // on `Ref<Vec<T>>`): step to the Deref target while the
+                    // receiver nominal itself has no such method.
+                    for _ in 0..8 {
+                        let owner = match &ty {
+                            ir::Ty::Ref { referent, .. } => referent.as_ref().clone(),
+                            other => other.clone(),
+                        };
+                        if !matches!(owner, ir::Ty::Struct(_) | ir::Ty::Enum(_))
+                            || owner.owned_box_pointee().is_some()
+                        {
+                            break;
+                        }
+                        if plan
+                            .select_method_with_arguments(
+                                &owner,
+                                name,
+                                self.checker.facts(),
+                                (&self.checker.module, &plan.budget),
+                                |_, _, _| {
+                                    Ok(super::super::method_argument_selection::MethodArguments::Ready(
+                                        std::borrow::Cow::Borrowed(&[]),
+                                    ))
+                                },
+                                |_, _| Ok(None),
+                            )
+                            .ok()
+                            .flatten()
+                            .is_some()
+                        {
+                            break;
+                        }
+                        let Some(target) = self.checker.deref_target_hint(&owner)? else {
+                            break;
+                        };
+                        ty = ir::Ty::Ref {
+                            kind: ir::BorrowKind::Shared,
+                            referent: Arc::new(target),
+                        };
+                    }
                     let selected = match plan.select_method_with_arguments(
                         &ty,
                         name,

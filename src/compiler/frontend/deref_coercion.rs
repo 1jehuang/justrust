@@ -301,3 +301,66 @@ impl type_check::Checker<'_> {
         Ok(Some(call))
     }
 }
+
+impl type_check::Checker<'_> {
+    /// Autoref of a field receiver read through an overloaded Deref
+    /// (`rc.field.m()` where the field belongs to `Rc`'s target): the
+    /// carrier `Deref::deref(&rc)` is saved once in a reference temporary and
+    /// the receiver borrows `(*tmp).field`, as stock's autoderef place does.
+    pub(super) fn deref_field_receiver(
+        &mut self,
+        receiver: &Expr,
+        kind: ir::BorrowKind,
+        selected: &MethodSelection,
+    ) -> Result<Option<(ir::ExprId, Option<ir::ImplicitBorrowKind>)>, String> {
+        let Expr::Field { base, field } = receiver else {
+            return Ok(None);
+        };
+        let Some(hint) = self.method_receiver_hint(base)? else {
+            return Ok(None);
+        };
+        let ir::Ty::Struct(nominal) = (match &hint {
+            ir::Ty::Ref { referent, .. } => referent.as_ref(),
+            ty => ty,
+        }) else {
+            return Ok(None);
+        };
+        if self.has_member(nominal.def().source_decl, field)? {
+            return Ok(None);
+        }
+        let Some(carrier) = self.receiver_overloaded_deref(base, &hint, kind)? else {
+            return Ok(None);
+        };
+        let carrier_ty = self.exprs[carrier.0].ty.clone();
+        let ir::Ty::Ref { referent, .. } = &carrier_ty else {
+            return Err("overloaded deref must return a reference".into());
+        };
+        let (index, _) = self.field_type(referent, field)?;
+        let local = self.temporary("$deref_field", carrier_ty.clone(), false)?;
+        self.borrow_temporaries.push((local, false));
+        let derefs = selected.depth
+            + usize::from(matches!(selected.adjustment, ReceiverAdjustment::Identity));
+        self.charge_node((derefs + 2) * std::mem::size_of::<ir::Projection>() + 128)?;
+        let mut projection = vec![ir::Projection::Deref, ir::Projection::Field(index)];
+        projection.extend(std::iter::repeat_n(ir::Projection::Deref, derefs));
+        let borrowed = self.borrow_expression(kind, ir::Place { local, projection })?;
+        let ty = self.exprs[borrowed.0].ty.clone();
+        let completion = self.exprs[carrier.0].completion;
+        let id = ir::ExprId(self.exprs.len());
+        self.exprs.push(ir::TypedExpr {
+            ty,
+            completion,
+            kind: ir::ExprKind::Block(ir::TypedBlock {
+                statements: vec![ir::TypedStmt::Assign {
+                    local,
+                    value: carrier,
+                }],
+                tail: Some(borrowed),
+            }),
+        });
+        Ok(Some((
+            id,
+            (kind == ir::BorrowKind::Mut).then_some(ir::ImplicitBorrowKind::MutableReceiver),
+        )))
+    }
+}
