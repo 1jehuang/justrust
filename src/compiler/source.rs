@@ -1024,7 +1024,9 @@ impl SourceAssembler {
                 "mixed source editions require per-crate lexical transport",
             )));
         }
-        if ordinal == [0] && unit.no_std && (!self.library || self.harness.is_some()) {
+        // Like libtest, the synthesized harness supplies a hosted entry point.
+        // The user crate still retains its no_std policy and core-only prelude.
+        if ordinal == [0] && unit.no_std && !self.library && self.harness.is_none() {
             return Err(self.fail(Loader::error(
                 SourceErrorKind::Unsupported,
                 None,
@@ -1255,8 +1257,11 @@ fn test_harness(mut tests: Vec<source_attrs::TestItem>, filter: &TestFilter) -> 
     tests.sort_by(|a, b| a.path.cmp(&b.path));
     let total = tests.len();
     tests.retain(|test| filter.selects(&test.path.join("::")) && (!filter.ignored || test.ignore));
+    // Generated calls name the compiler-owned library directly. User `std`
+    // can be absent (no_std), aliased to core, or shadowed by an ordinary item.
+    let runtime = source_prelude::PRELUDE_MODULE;
     let mut out = format!(
-        "\nfn main() {{\n    let mut __h = std::test::Harness::start({}usize);\n    __h.filtered_out({}usize);\n",
+        "\nfn main() {{\n    let mut __h = crate::{runtime}::test::Harness::start({}usize);\n    __h.filtered_out({}usize);\n",
         tests.len(),
         total - tests.len()
     );
@@ -1274,7 +1279,7 @@ fn test_harness(mut tests: Vec<source_attrs::TestItem>, filter: &TestFilter) -> 
         };
         let quote = |s: &str| format!("{s:?}");
         out.push_str(&format!(
-            "    if __h.begin({name:?}, {}) {{ crate::{name}(); std::process::exit(0); }}\n",
+            "    if __h.begin({name:?}, {}) {{ crate::{name}(); crate::{runtime}::process::exit(0); }}\n",
             test.ignore
         ));
         if !test.ignore {

@@ -5,9 +5,12 @@ Status: implementation in progress, not an acceptance receipt (2026-10-19).
 ## Frozen contract
 
 Original effective `#![no_std]` belongs only to an assembly-issued crate root.
-Admission is library targets and dependencies only. A root executable or test
-harness rejects as Unsupported until startup and panic-handler semantics exist,
-using retained root ordinal and target-kind facts, not path or spelling guesses.
+Admission includes library targets, dependencies and hosted test harnesses.
+A bare root executable still rejects as Unsupported until no_std startup and
+panic-handler semantics exist, using retained root ordinal and target-kind facts,
+not path or spelling guesses. The generated test entry uses compiler-owned
+runtime paths, independent of user `std` aliases or shadowing, without giving
+source tests a std prelude or admitting std-only names and macros.
 It changes that crate's namespace and prelude, not its importer's policy.
 Nested inline and external modules inherit their own defining crate policy.
 A mixed ordinary executable and no_std dependency remains mixed after mounting.
@@ -43,6 +46,9 @@ whitelist tuple is deleted. No ceiling or other baseline is raised.
 - Ordinary and no_std mixed crates, nested modules, explicit supported core paths.
 - Missing std/heap prelude and I/O macros reject, including unused declarations.
 - Malformed/duplicate/misplaced/generated attributes and forged policy identities.
+- Hosted no_std test CHECK/BUILD/run, panic/ignore/filter behavior, and unchanged
+  Adler2 2.0.1 upstream tests at workers 1/8 (`no_std`, `no_std_graph`, and
+  `experiments/adler2_repo_probe.py`). Bare no_std executables remain rejected.
 - Graph integrity unchanged or tighter, no ratchet increase.
 
 No gate is claimed passed until measured on the exact private tree.

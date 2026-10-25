@@ -5,13 +5,16 @@ use justrust_engine::compiler;
 mod native_prelude;
 #[test]
 fn no_std_check_uses_per_file_source_and_never_demands_codegen() {
-    for workers in [1, 8] {
-        let options = compiler::source::SourceOptions {
+    for (workers, test) in [(1, false), (8, false), (1, true), (8, true)] {
+        let mut options = compiler::source::SourceOptions {
             library: true,
             ..Default::default()
         };
+        if test {
+            options.cfg.names.insert("test".into());
+        }
         let compilation = compiler::compile_observed_with_options(
-            "#![no_std]\npub fn value() -> core::option::Option<i32> { Some(3i32) }".into(),
+            "#![no_std]\npub fn value() -> core::option::Option<i32> { Some(3i32) }\n#[test] fn smoke() { let x = match value() { Some(x) => x, None => 0i32 }; assert_eq!(x, 3i32); }".into(),
             workers,
             true,
             options,

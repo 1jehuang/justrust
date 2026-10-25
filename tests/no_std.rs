@@ -128,6 +128,130 @@ fn no_std_root_executables_are_explicitly_unsupported() {
         }
     }
 }
+
+#[test]
+fn no_std_tests_use_hosted_harness_without_importing_std_into_user_code() {
+    let root = project("hosted-harness", "pub fn value() -> i32 { 3i32 }\n");
+    let source = "#![no_std]\nextern crate core as std;\npub fn value() -> i32 { std::cmp::max(2i32, 3i32) }\n#[cfg(test)] mod tests { #[test] fn passes() { assert_eq!(super::value(), 3i32); } #[test] #[should_panic] fn panics() { panic!(\"expected\"); } #[test] #[ignore] fn ignored() { assert!(false); } }\n";
+    let library = root.join("src/lib.rs");
+    std::fs::write(&library, source).unwrap();
+    let check_tests = |workers| {
+        let mut options = justrust_engine::compiler::source::SourceOptions {
+            library: true,
+            ..Default::default()
+        };
+        options.cfg.names.insert("test".into());
+        justrust_engine::compiler::compile_file_observed_with_options(
+            library.clone(),
+            workers,
+            true,
+            options,
+        )
+    };
+    let invoke = |native: bool, workers: &str, args: &[&str]| {
+        let mut command = Command::new(if native {
+            env!("CARGO_BIN_EXE_jr-rust")
+        } else {
+            "cargo"
+        });
+        command
+            .args(args)
+            .args(["-j", workers])
+            .current_dir(&root)
+            .env(
+                "CARGO_TARGET_DIR",
+                root.join(if native {
+                    "harness-native"
+                } else {
+                    "harness-stock"
+                }),
+            )
+            .output()
+            .unwrap()
+    };
+    for args in [
+        &["check", "--lib"][..],
+        &["test", "--lib", "--no-run"][..],
+        &["test", "--lib"][..],
+        &["test", "--lib", "passes"][..],
+    ] {
+        let stock = invoke(false, "1", args);
+        assert!(
+            stock.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&stock.stderr)
+        );
+        for workers in ["1", "8"] {
+            let out = invoke(true, workers, args);
+            assert!(
+                out.status.success(),
+                "{args:?}/{workers}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            if args == ["test", "--lib"] {
+                assert!(
+                    String::from_utf8_lossy(&out.stdout).contains("2 passed; 0 failed; 1 ignored")
+                );
+            } else if args == ["test", "--lib", "passes"] {
+                assert!(
+                    String::from_utf8_lossy(&out.stdout)
+                        .contains("1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out")
+                );
+            }
+        }
+    }
+    for workers in [1, 8] {
+        let checked = check_tests(workers).unwrap_or_else(|error| panic!("{error}"));
+        assert!(checked.executable.is_none());
+    }
+    for declaration in ["", "struct std;"] {
+        let unaliased = source
+            .replace("extern crate core as std;", declaration)
+            .replace("std::cmp::max", "core::cmp::max");
+        std::fs::write(&library, unaliased).unwrap();
+        let stock = invoke(false, "1", &["test", "--lib"]);
+        assert!(
+            stock.status.success(),
+            "{}",
+            String::from_utf8_lossy(&stock.stderr)
+        );
+        for workers in ["1", "8"] {
+            let out = invoke(true, workers, &["test", "--lib"]);
+            assert!(
+                out.status.success(),
+                "{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            assert!(String::from_utf8_lossy(&out.stdout).contains("2 passed; 0 failed; 1 ignored"));
+        }
+    }
+    // A harness must not confer its std access or std prelude on source tests,
+    // including unused functions that the generated entry never calls.
+    for body in [
+        "fn unused() { let x = Vec::<i32>::new(); }",
+        "#[test] fn invalid() { println!(\"unavailable\"); }",
+        "fn unused() { let x = std::process::id(); }",
+    ] {
+        std::fs::write(&library, format!("{source}\n{body}\n")).unwrap();
+        let stock = invoke(false, "1", &["test", "--lib", "--no-run"]);
+        assert!(!stock.status.success(), "stock admitted {body}");
+        for workers in [1, 8] {
+            assert!(
+                check_tests(workers).is_err(),
+                "CHECK admitted {body}/{workers}"
+            );
+        }
+        for workers in ["1", "8"] {
+            let out = invoke(true, workers, &["test", "--lib", "--no-run"]);
+            assert_eq!(
+                out.status.code(),
+                Some(101),
+                "{body}/{workers}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+    }
+}
 #[test]
 fn no_std_attribute_boundaries_are_explicit() {
     for (name, attribute) in [

@@ -2272,6 +2272,15 @@ Numbers below are evidence at each checkpoint, not cumulative full-Rust coverage
 
 ### Unchanged Adler2 2.0.1 test suite
 
+Hosted `no_std` test harnesses are now admitted without relaxing the source
+crate's core-only policy. Generated runtime calls bypass user `std` aliases
+and shadowing. The unchanged Adler2 probe passes check/build/consumer run and
+upstream tests in both configurations at workers 1/8 (5 no_std tests, 6 std
+tests). Gates: `experiments/adler2_repo_probe.py`,
+`no_std_tests_use_hosted_harness_without_importing_std_into_user_code`,
+`no_std_graph`, `no_std_authority`, and `graph_integrity`. Bare no_std
+executables and explicit std opt-in remain unsupported.
+
 Unchanged Adler2 `test --lib` passes 6/6 natively at workers 1 and 8, matching
 the recorded stock run. Delivered for it: `extern crate <dependency>` (crate-root
 aliases join the extern prelude), block-local `fn`/`use` items hoisted under
