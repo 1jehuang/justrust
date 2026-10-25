@@ -112,9 +112,34 @@ fn phase(kind: u32) -> &'static str {
         110 => "template_body",
         111 => "universal_lower",
         112 => "universal_analyze",
-        142 => "instance",
         114 => "concrete_proofs",
         115 => "effects_ready",
+        116 => "body_lexical",
+        117 => "capture_env",
+        118 => "const_decl",
+        119 => "const_body",
+        120 => "const_value",
+        125 => "root_cleanup_demand",
+        126 => "canonical_body",
+        127 => "opaque_representation",
+        128 => "source_admission",
+        130 => "ssa",
+        131 => "local_opt",
+        132 => "summary",
+        133 => "ipo_opt",
+        134 => "associated_const_header",
+        135 => "associated_const_select",
+        136 => "associated_const_value",
+        138 => "nominal_decl_well_formed",
+        139 => "nominal_realization",
+        140 => "opaque_call_dispatch",
+        141 => "item_inventory",
+        142 => "instance",
+        143 => "signature",
+        144 => "trait_impls",
+        145 => "impl_coherence",
+        146 => "item_coherence",
+        147 => "module_decls",
         _ => "other",
     }
 }
@@ -206,6 +231,24 @@ fn write_graph(out: &mut impl Write, report: &Report) -> io::Result<()> {
 mod tests {
     use super::*;
     use justrust_engine::{Event, Key};
+    #[test]
+    fn frontend_and_backend_costs_have_distinct_phase_labels() {
+        for (kind, name) in [
+            (128, "source_admission"),
+            (126, "canonical_body"),
+            (138, "nominal_decl_well_formed"),
+            (139, "nominal_realization"),
+            (141, "item_inventory"),
+            (143, "signature"),
+            (147, "module_decls"),
+            (103, "object"),
+            (105, "build"),
+        ] {
+            assert_eq!(phase(kind), name);
+        }
+        assert_eq!(phase(u32::MAX), "other");
+    }
+
     #[test]
     #[allow(clippy::field_reassign_with_default)] // The cycle witness is private engine authority.
     fn profile_intervals_keep_task_identity_and_escape_errors() {
