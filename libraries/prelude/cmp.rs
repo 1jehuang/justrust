@@ -73,6 +73,8 @@ impl<T: PartialEq + ?Sized> PartialEq for &T {
     }
 }
 
+impl<T: Eq + ?Sized> Eq for &T {}
+
 pub trait PartialOrd: PartialEq {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering>;
     fn lt(&self, other: &Self) -> bool {

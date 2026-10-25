@@ -89,6 +89,12 @@ pub trait Hash {
     fn hash<H: Hasher>(&self, state: &mut H);
 }
 
+impl<T: Hash + ?Sized> Hash for &T {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        <T as Hash>::hash(*self, state)
+    }
+}
+
 impl Hash for i8 {
     fn hash<H: Hasher>(&self, state: &mut H) {
         state.write_i8(*self);
