@@ -168,3 +168,11 @@ println!(\"{:?}\",c.borrow());}",
         "8\n[6, 9]\n",
     );
 }
+
+#[test]
+fn boxed_array_index_reads_through_deref() {
+    run(
+        "fn main(){let b=Box::new([1u32,2,3]);let i=2;let x=b[i]+b[0];let y=b[1];println!(\"{} {}\",x,y);}",
+        "4 2\n",
+    );
+}

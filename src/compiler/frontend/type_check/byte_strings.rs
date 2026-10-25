@@ -3,7 +3,7 @@
 use super::*;
 
 impl Checker<'_> {
-    pub(super) fn array_reference_as_slice(
+    pub(in crate::compiler::frontend) fn array_reference_as_slice(
         &mut self,
         value: ir::ExprId,
     ) -> Result<ir::ExprId, String> {

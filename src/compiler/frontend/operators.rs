@@ -666,6 +666,9 @@ impl type_check::Checker<'_> {
                 if !overloadable(&ty) {
                     return Ok(None);
                 }
+                if let Some(id) = self.builtin_index_through_deref(&ty, base, index)? {
+                    return Ok(Some(id));
+                }
                 let mut first = First::Borrow(ir::BorrowKind::Shared, base);
                 if let Some((target, carrier)) = self.index_autoderef(&ty, base, index)? {
                     first = First::Lowered(carrier);
@@ -691,6 +694,9 @@ impl type_check::Checker<'_> {
                     magnitude: *index as u128,
                     suffix: None,
                 });
+                if let Some(id) = self.builtin_index_through_deref(&ty, base, &literal)? {
+                    return Ok(Some(id));
+                }
                 let mut first = First::Borrow(ir::BorrowKind::Shared, base);
                 if let Some((target, carrier)) = self.index_autoderef(&ty, base, &literal)? {
                     first = First::Lowered(carrier);
@@ -720,6 +726,35 @@ impl type_check::Checker<'_> {
         index: &Expr,
     ) -> Result<Option<(ir::Ty, ir::ExprId)>, String> {
         self.index_autoderef_kind(owner, base, index, ir::BorrowKind::Shared)
+    }
+
+    /// `boxed[i]` with `boxed: Box<[T; N]>` (or any `Deref<Target = [T; N]>`
+    /// / `[T]`): stock autoderefs to the builtin array or slice and indexes
+    /// it with the builtin bounds-checked read.
+    fn builtin_index_through_deref(
+        &mut self,
+        owner: &ir::Ty,
+        base: &Expr,
+        index: &Expr,
+    ) -> Result<Option<ir::ExprId>, String> {
+        if self.index_reference_hint(owner, index)?.is_some() {
+            return Ok(None);
+        }
+        let Some(target) = self.deref_target_hint(owner)? else {
+            return Ok(None);
+        };
+        if !matches!(target, ir::Ty::Array { .. } | ir::Ty::Slice { .. }) {
+            return Ok(None);
+        }
+        let Some(carrier) = self.receiver_overloaded_deref(base, owner, ir::BorrowKind::Shared)?
+        else {
+            return Ok(None);
+        };
+        let carrier = self.array_reference_as_slice(carrier)?;
+        if self.exprs[carrier.0].ty.shared_slice_element().is_none() {
+            return Ok(None);
+        }
+        self.slice_index(carrier, index).map(Some)
     }
 
     fn index_autoderef_kind(
