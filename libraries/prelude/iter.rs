@@ -210,6 +210,52 @@ pub trait Iterator: Sized {
             }
         }
     }
+    /// The last maximum by `key`, evaluating `key` once per item as std does.
+    fn max_by_key<B: super::cmp::Ord, F: FnMut(&Self::Item) -> B>(
+        mut self,
+        mut key: F,
+    ) -> Option<Self::Item> {
+        let mut best = match self.next() {
+            Option::Some(item) => item,
+            Option::None => return Option::None,
+        };
+        let mut best_key = key(&best);
+        loop {
+            match self.next() {
+                Option::Some(item) => {
+                    let k = key(&item);
+                    if k.cmp(&best_key) != super::cmp::Ordering::Less {
+                        best = item;
+                        best_key = k;
+                    }
+                }
+                Option::None => return Option::Some(best),
+            }
+        }
+    }
+    /// The first minimum by `key`, evaluating `key` once per item as std does.
+    fn min_by_key<B: super::cmp::Ord, F: FnMut(&Self::Item) -> B>(
+        mut self,
+        mut key: F,
+    ) -> Option<Self::Item> {
+        let mut best = match self.next() {
+            Option::Some(item) => item,
+            Option::None => return Option::None,
+        };
+        let mut best_key = key(&best);
+        loop {
+            match self.next() {
+                Option::Some(item) => {
+                    let k = key(&item);
+                    if k.cmp(&best_key) == super::cmp::Ordering::Less {
+                        best = item;
+                        best_key = k;
+                    }
+                }
+                Option::None => return Option::Some(best),
+            }
+        }
+    }
 }
 
 pub trait DoubleEndedIterator: Iterator {

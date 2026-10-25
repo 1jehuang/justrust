@@ -236,6 +236,14 @@ let b=v.iter().max_by(|a,b|a.a().partial_cmp(&b.a()).unwrap()).unwrap();let r=&b
         "3 3\n",
         "max-by-ref-box-receiver",
     );
+    compare(
+        "fn main(){let v=vec![3u32,9,2,9,1];let m=v.iter().max_by_key(|x|**x%5).unwrap();\
+let n=v.iter().min_by_key(|x|**x).unwrap();let e:Vec<u32>=Vec::new();println!(\"{} {} {:?}\",m,n,e.iter().max_by_key(|x|**x));\
+let s=vec![String::from(\"ab\"),String::from(\"abcd\"),String::from(\"xy\")];\
+println!(\"{} {}\",s.iter().max_by_key(|s|s.len()).unwrap(),s.iter().min_by_key(|s|s.len()).unwrap());}\n",
+        "9 1 None\nabcd ab\n",
+        "max-by-key",
+    );
 }
 
 #[test]
