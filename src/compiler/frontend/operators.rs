@@ -338,6 +338,80 @@ impl type_check::Checker<'_> {
             self.record_operator(statement as *const Stmt as usize | 3, call)?;
             deref_carrier = Some(call);
             owner = target;
+        } else if self.index_reference_hint(&owner, index)?.is_none()
+            && let Some(target) = self.deref_target_hint(&owner)?
+            && let ir::Ty::Array { element, .. } = &target
+        {
+            // `boxed[i] (op)= x` with `boxed: Box<[T; N]>`: builtin indexed
+            // assignment through `*DerefMut::deref_mut(&mut boxed)`.
+            let element = element.as_ref().clone();
+            let (rhs, rhs_flow) = if let Some(op) = op {
+                self.compound_value(op, &element, value)?
+            } else {
+                let rhs = self.expr_expected(value, Some(&element))?;
+                let flow = self.flow(rhs);
+                self.require(&flow, &element)?;
+                (rhs, flow)
+            };
+            let rhs_ty = self.exprs[rhs.0].ty.clone();
+            let saved = self.temporary(
+                "$index_rhs",
+                if rhs_ty == ir::Ty::Never {
+                    element.clone()
+                } else {
+                    rhs_ty.clone()
+                },
+                false,
+            )?;
+            self.charge_node(
+                std::mem::size_of::<ir::TypedStmt>() * 3 + std::mem::size_of::<ir::TypedExpr>(),
+            )?;
+            statements.push(ir::TypedStmt::Let {
+                local: saved,
+                value: rhs,
+            });
+            let call = self.operator_call(
+                ("ops", "DerefMut", "deref_mut"),
+                owner.clone(),
+                None,
+                First::Place(ir::BorrowKind::Mut, &base),
+                &[],
+            )?;
+            self.record_operator(statement as *const Stmt as usize | 3, call)?;
+            let carrier = self.temporary("$index_carrier", self.exprs[call.0].ty.clone(), false)?;
+            statements.push(ir::TypedStmt::Let {
+                local: carrier,
+                value: call,
+            });
+            let index = self.expr_expected(index, Some(&ir::Ty::Int(ir::IntTy::Usize)))?;
+            let index_flow = self.flow(index);
+            self.require_index(&index_flow)?;
+            let completes = rhs_flow.completes && self.flow(call).completes && index_flow.completes;
+            let loaded = ir::ExprId(self.exprs.len());
+            self.exprs.push(ir::TypedExpr {
+                ty: rhs_ty,
+                completion: ir::Completion::Returns,
+                kind: ir::ExprKind::Local(saved),
+            });
+            let array = ir::Place {
+                local: carrier,
+                projection: vec![ir::Projection::Deref],
+            };
+            let result = if let Some(op) = op {
+                ir::TypedStmt::AssignIndexOp {
+                    array,
+                    index,
+                    op,
+                    value: loaded,
+                }
+            } else {
+                ir::TypedStmt::AssignIndex {
+                    array,
+                    index,
+                    value: loaded,
+                }
+            };
+            return Ok(Some((result, completes)));
         }
         let reference = self
             .index_reference_hint(&owner, index)?

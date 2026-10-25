@@ -176,3 +176,11 @@ fn boxed_array_index_reads_through_deref() {
         "4 2\n3 2\n",
     );
 }
+
+#[test]
+fn boxed_array_index_assignment_through_deref_mut() {
+    run(
+        "fn main(){let mut b=Box::new([1u32,2,3]);let i=2;b[0]=5;b[i]+=10;b[1]*=4;println!(\"{} {} {}\",b[0],b[1],b[2]);}",
+        "5 8 13\n",
+    );
+}
