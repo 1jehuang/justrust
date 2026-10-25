@@ -513,3 +513,18 @@ fn vec_of_enums_iterated_by_reference_has_private_alignment() {
         }],
     );
 }
+
+#[test]
+fn str_slice_methods_match_stock() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "str-slice-methods",
+        &[Case {
+            name: "trim_prefix_find_case_repeat_replace",
+            source: "fn main(){let t=\"  Hello, World  \".trim();println!(\"[{}]\",t);println!(\"{} {}\",t.starts_with(\"Hell\"),t.ends_with(\"x\"));println!(\"{:?} {:?}\",t.find(\"World\"),t.find(\"zz\"));println!(\"{}\",t.to_lowercase());println!(\"{}\",\"ab\".repeat(3));println!(\"{}\",t.replace(\"l\",\"L\"));println!(\"{}\",\"abc\".replace(\"\",\"-\"));println!(\"{}\",String::from(\"a-b-c\").replace(\"-\",\"+\"));}",
+            expect: Expect::Run(
+                "[Hello, World]\ntrue false\nSome(7) None\nhello, world\nababab\nHeLLo, WorLd\n-a-b-c-\na+b+c\n",
+            ),
+        }],
+    );
+}

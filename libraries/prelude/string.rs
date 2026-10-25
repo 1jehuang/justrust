@@ -231,6 +231,10 @@ impl String {
         str_find(self.as_str(), pattern)
     }
 
+    pub fn replace(&self, from: &str, to: &str) -> String {
+        str_replace(self.as_str(), from, to)
+    }
+
     pub fn trim(&self) -> &str {
         str_trim(self.as_str())
     }
@@ -579,6 +583,13 @@ pub trait StrMethods {
     fn contains<P: StrPattern>(&self, pattern: P) -> bool;
     fn split_whitespace<'a>(&'a self) -> SplitWhitespace<&'a str>;
     fn split<'a>(&'a self, separator: char) -> Split<&'a str>;
+    fn starts_with(&self, pattern: &str) -> bool;
+    fn ends_with(&self, pattern: &str) -> bool;
+    fn find(&self, pattern: &str) -> Option<usize>;
+    fn trim(&self) -> &str;
+    fn to_lowercase(&self) -> String;
+    fn repeat(&self, count: usize) -> String;
+    fn replace(&self, from: &str, to: &str) -> String;
 }
 
 impl StrMethods for str {
@@ -607,6 +618,70 @@ impl StrMethods for str {
         let (ptr, len) = str_parts(self);
         SplitWhitespace { ptr, len, at: 0usize, marker: self }
     }
+
+    fn starts_with(&self, pattern: &str) -> bool {
+        str_starts_with(self, pattern)
+    }
+
+    fn ends_with(&self, pattern: &str) -> bool {
+        str_ends_with(self, pattern)
+    }
+
+    fn find(&self, pattern: &str) -> Option<usize> {
+        str_find(self, pattern)
+    }
+
+    fn trim(&self) -> &str {
+        str_trim(self)
+    }
+
+    fn to_lowercase(&self) -> String {
+        String::from(self).to_lowercase()
+    }
+
+    fn repeat(&self, count: usize) -> String {
+        String::from(self).repeat(count)
+    }
+
+    fn replace(&self, from: &str, to: &str) -> String {
+        str_replace(self, from, to)
+    }
+}
+
+/// Stock `str::replace` for a `&str` pattern. An empty pattern matches at
+/// every char boundary, including both ends.
+fn str_replace(text: &str, from: &str, to: &str) -> String {
+    let (ptr, len) = str_parts(text);
+    let (needle, count) = str_parts(from);
+    let mut out = String::with_capacity(len);
+    let mut start = 0usize;
+    let mut at = 0usize;
+    if count == 0usize {
+        out.push_str(to);
+        while at < len {
+            let width = utf8_width(read_u8(ptr + at));
+            out.push_str(str_from_raw_parts(ptr + at, width));
+            out.push_str(to);
+            at += width;
+        }
+        return out;
+    }
+    while at + count <= len {
+        let mut j = 0usize;
+        while j < count && read_u8(ptr + at + j) == read_u8(needle + j) {
+            j += 1usize;
+        }
+        if j == count {
+            out.push_str(str_from_raw_parts(ptr + start, at - start));
+            out.push_str(to);
+            at += count;
+            start = at;
+        } else {
+            at += 1usize;
+        }
+    }
+    out.push_str(str_from_raw_parts(ptr + start, len - start));
+    out
 }
 
 /// Iterator over the non-empty, ASCII-whitespace-separated words of a `str`.
