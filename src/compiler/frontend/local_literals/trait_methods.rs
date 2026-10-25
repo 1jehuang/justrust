@@ -14,12 +14,19 @@ impl Solver<'_, '_, '_> {
             self.checker.infer_work(0)?;
             let mut unresolved = false;
             for argument in &arguments {
-                unresolved |= self.resolve(*argument, 0)?.is_none();
+                // An unsuffixed literal is still open: defaulting must not
+                // preempt an impl that fixes the argument (`u32: Borrow<?Q>`).
+                unresolved |= self.resolve(*argument, 0)?.is_none()
+                    || matches!(self.domain(*argument), Domain::Integer | Domain::Float);
             }
             if !unresolved {
                 continue;
             }
             let Some(header) = self.structural_impl(receiver, trait_id)? else {
+                if self.unique_concrete_impl_arguments(receiver, trait_id, &arguments)? {
+                    progress = true;
+                    continue;
+                }
                 self.trait_arguments.push((trait_id, receiver, arguments));
                 continue;
             };
@@ -34,6 +41,76 @@ impl Solver<'_, '_, '_> {
             progress = true;
         }
         Ok(progress)
+    }
+
+    /// rustc infers trait arguments when exactly one impl can apply to a known
+    /// receiver (`u32: Borrow<?Q>` only via `impl<T> Borrow<T> for T`, so
+    /// `?Q = u32` before integer-literal defaulting). Candidates are impls
+    /// whose self type is exactly the receiver or a bare impl parameter; any
+    /// other shape, or more than one candidate, leaves the arguments open.
+    /// These are equations only: final selection still proves the application.
+    fn unique_concrete_impl_arguments(
+        &mut self,
+        receiver: Term,
+        trait_id: ir::DeclId,
+        arguments: &[Term],
+    ) -> Result<bool, String> {
+        if matches!(self.domain(receiver), Domain::Integer | Domain::Float) {
+            return Ok(false);
+        }
+        let Some(actual) = self.resolve(receiver, 0)? else {
+            return Ok(false);
+        };
+        let plan = self.checker.signatures.plan()?;
+        let world = plan.trait_world()?;
+        let mut selected: Option<tr::ImplHeader> = None;
+        for header in world.impl_headers() {
+            self.checker.infer_work(0)?;
+            if header.trait_ref.declaration != trait_id {
+                continue;
+            }
+            let self_ty = &header.trait_ref.self_ty;
+            let applies = match self_ty {
+                ir::Ty::Param(p) if header.schema_env.contains(*p) => true,
+                _ if *self_ty == actual => true,
+                _ => {
+                    // A generic or differently-shaped head may still apply;
+                    // refuse to guess rather than miss a candidate.
+                    if !matches!(
+                        self_ty,
+                        ir::Ty::Int(_)
+                            | ir::Ty::Float(_)
+                            | ir::Ty::Bool
+                            | ir::Ty::Unit
+                            | ir::Ty::Char
+                            | ir::Ty::Str
+                    ) && std::mem::discriminant(self_ty) == std::mem::discriminant(&actual)
+                    {
+                        return Ok(false);
+                    }
+                    false
+                }
+            };
+            if !applies {
+                continue;
+            }
+            if header.trait_ref.args.len() != arguments.len()
+                || selected.replace(header.clone()).is_some()
+            {
+                return Ok(false);
+            }
+        }
+        let Some(header) = selected else {
+            return Ok(false);
+        };
+        let params = self.parameters(&header.schema_env)?;
+        let pattern = self.schema(&header.trait_ref.self_ty, &params, 1)?;
+        self.unify(receiver, pattern)?;
+        for (pattern, actual) in header.trait_ref.args.iter().zip(arguments) {
+            let pattern = self.schema(pattern, &params, 1)?;
+            self.unify(pattern, *actual)?;
+        }
+        Ok(true)
     }
 
     /// A closure-bearing nominal cannot yet be interned. A unique source impl

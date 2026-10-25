@@ -1006,6 +1006,52 @@ impl<'c, 's> Inference<'c, 's> {
     }
 }
 impl<'s> Checker<'s> {
+    /// True when the only impl of `trait_id` that can apply to the concrete
+    /// `actual` is a reflexive blanket `impl<T> Trait<T> for T`. Any other
+    /// possibly-applicable head (same outer shape, or another blanket)
+    /// makes this false, so no candidate is ever silently excluded.
+    pub(super) fn unique_reflexive_impl(
+        &self,
+        trait_id: ir::DeclId,
+        actual: &ir::Ty,
+    ) -> Result<bool, String> {
+        let plan = self.signatures.plan()?;
+        let world = plan.trait_world()?;
+        let mut reflexive = false;
+        for header in world.impl_headers() {
+            self.infer_work(0)?;
+            if header.trait_ref.declaration != trait_id {
+                continue;
+            }
+            let head = &header.trait_ref.self_ty;
+            match head {
+                ir::Ty::Param(p) if header.schema_env.contains(*p) => {
+                    let is_reflexive =
+                        header.trait_ref.args.len() == 1 && header.trait_ref.args[0] == *head;
+                    if !is_reflexive || reflexive {
+                        return Ok(false);
+                    }
+                    reflexive = true;
+                }
+                _ if head == actual => return Ok(false),
+                _ if std::mem::discriminant(head) == std::mem::discriminant(actual)
+                    && !matches!(
+                        head,
+                        ir::Ty::Int(_)
+                            | ir::Ty::Float(_)
+                            | ir::Ty::Bool
+                            | ir::Ty::Unit
+                            | ir::Ty::Char
+                            | ir::Ty::Str
+                    ) =>
+                {
+                    return Ok(false);
+                }
+                _ => {}
+            }
+        }
+        Ok(reflexive)
+    }
     pub(super) fn inference_core(&self) -> Result<CallInferenceState, String> {
         let budget = &self
             .signatures
@@ -1598,6 +1644,35 @@ impl<'s> Checker<'s> {
             let Some(resolved) = solver.resolve(&term, false, 0)? else {
                 continue;
             };
+            if !application.args.is_empty()
+                && !matches!(resolved, ir::Ty::Closure(_) | ir::Ty::Opaque(_))
+                && self.unique_reflexive_impl(application.declaration, &resolved)?
+            {
+                // rustc: `u32: Borrow<?Q>` has one candidate, the reflexive
+                // `impl<T> Borrow<T> for T`, so ?Q = u32 before integer
+                // literal defaulting. Evidence only; the obligation is proven.
+                let self_term = self.infer_type_term(&resolved, None, 0)?;
+                for formal in application.args.iter() {
+                    let ir::Ty::Param(slot) = formal else {
+                        continue;
+                    };
+                    let open = match solver
+                        .core
+                        .slots()
+                        .get(slot.index as usize)
+                        .cloned()
+                        .flatten()
+                    {
+                        Some(bound) => solver.resolve(&bound, false, 0)?.is_none(),
+                        None => true,
+                    };
+                    if open {
+                        let formal = solver.schema(formal, 0)?;
+                        solver.constrain(&formal, &self_term, 0)?;
+                    }
+                }
+                continue;
+            }
             if let ir::Ty::Closure(closure) = &resolved {
                 let world = plan.trait_world()?;
                 let Some(kind) = world

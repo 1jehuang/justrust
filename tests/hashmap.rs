@@ -124,6 +124,33 @@ fn main() {
                 expect: Expect::Run("14 3\n"),
             },
             Case {
+                name: "borrowed_str_lookups_on_string_keys",
+                source: r#"use std::collections::HashMap;
+use std::borrow::Borrow;
+fn eqb<K: Borrow<Q>, Q: ?Sized + Eq>(k: &K, q: &Q) -> bool { k.borrow() == q }
+fn main() {
+    let mut scores = HashMap::new();
+    scores.insert(String::from("blue"), 10);
+    scores.insert(String::from("red"), 50);
+    if let Some(s) = scores.get("blue") { println!("blue = {}", s); }
+    if let Some(s) = scores.get_mut("red") { *s += 1; }
+    println!("{:?} {:?}", scores.remove("blue"), scores.remove("blue"));
+    println!("{} {} {:?}", scores.contains_key("blue"), scores.len(), scores.get(&String::from("red")));
+    println!("{} {}", eqb(&String::from("a"), "a"), eqb(&3, &4));
+}"#,
+                expect: Expect::Run("blue = 10\nSome(10) None\nfalse 1 Some(51)\ntrue false\n"),
+            },
+            Case {
+                name: "integer_literal_borrowed_keys_follow_key_type",
+                source: "use std::collections::HashMap; use std::borrow::Borrow; fn g<K: Borrow<Q>, Q: ?Sized + Eq>(_k: &K, _q: &Q) -> u8 { 1 } fn main(){ let mut m: HashMap<u32, u64> = HashMap::new(); m.insert(0,1); println!(\"{:?} {}\", m.get(&0), m.contains_key(&0)); println!(\"{:?}\", m.remove(&7)); if let Some(v) = m.get_mut(&0) { *v += 1; } println!(\"{:?} {}\", m.get(&0), g(&5u32, &0)); }",
+                expect: Expect::Run("Some(1) true\nNone\nSome(2) 1\n"),
+            },
+            Case {
+                name: "unrelated_borrowed_key_in_unused_fn",
+                source: "use std::collections::HashMap; fn unused(){ let m: HashMap<String,u32> = HashMap::new(); let _ = m.get(&5u8); } fn main(){}",
+                expect: Expect::Invalid("E0277"),
+            },
+            Case {
                 name: "insert_through_immutable_in_unused_fn",
                 source: "use std::collections::HashMap; fn unused(){ let m: HashMap<u32,u32> = HashMap::new(); m.insert(1,2); } fn main(){}",
                 expect: Expect::Invalid("E0596"),

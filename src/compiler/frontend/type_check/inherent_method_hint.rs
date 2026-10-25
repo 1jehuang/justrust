@@ -123,6 +123,33 @@ impl Checker<'_> {
         // the complete instantiated signature and its obligations.
         for predicate in schema.predicates.predicates() {
             plan.budget.charge_work(1)?;
+            // `K: Borrow<Q>` with K bound by the receiver (u32) and only the
+            // reflexive impl applicable: Q = u32 before literal defaulting.
+            if let ir::Predicate::Implements(application) = predicate
+                && application.args.len() == 1
+                && let ir::Ty::Param(slot) = &application.args[0]
+            {
+                let self_ty =
+                    super::trait_method_hint::bind_owner(&application.self_ty, &owner_bindings);
+                let open = match solver
+                    .core
+                    .slots()
+                    .get(slot.index as usize)
+                    .cloned()
+                    .flatten()
+                {
+                    Some(bound) => solver.resolve(&bound, false, 0)?.is_none(),
+                    None => true,
+                };
+                if open
+                    && !inferred_owner::mentions_param(&self_ty)
+                    && self.unique_reflexive_impl(application.declaration, &self_ty)?
+                {
+                    let formal = solver.schema(&application.args[0], 0)?;
+                    let actual = self.infer_type_term(&self_ty, None, 0)?;
+                    solver.constrain(&formal, &actual, 0)?;
+                }
+            }
             if let ir::Predicate::ProjectionEq { projection, ty } = predicate
                 && !matches!(ty, ir::Ty::AssociatedType(_))
                 && inferred_owner::mentions_param(ty)

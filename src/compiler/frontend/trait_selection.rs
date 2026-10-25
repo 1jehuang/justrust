@@ -251,6 +251,11 @@ impl PlanCtx {
         if self.param_env(trait_id)?.arity() == 1 {
             return Ok(applications);
         }
+        // Like rustc, a where-clause candidate on a type parameter shadows
+        // impl candidates (`K: Borrow<Q>` wins over blanket `Borrow<K>`).
+        if matches!(owner, ir::Ty::Param(_)) && !applications.as_slice().is_empty() {
+            return Ok(applications);
+        }
         'implementations: for implementation in facts.world().impl_headers() {
             budget.charge_work(1)?;
             if implementation.trait_ref.declaration != trait_id {

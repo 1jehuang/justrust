@@ -4,7 +4,7 @@ use super::hash::{DefaultHasher, Hash, Hasher};
 use super::option::Option;
 use super::vec::Vec;
 
-fn hash_of<K: Hash>(key: &K) -> u64 {
+fn hash_of<K: ?Sized + Hash>(key: &K) -> u64 {
     let mut state = DefaultHasher::new();
     key.hash(&mut state);
     state.finish()
@@ -21,11 +21,27 @@ impl<K: Hash + Eq, V> HashMap<K, V> {
         HashMap { hashes: Vec::new(), keys: Vec::new(), values: Vec::new() }
     }
 
-    fn find(&self, key: &K) -> Option<usize> {
+    fn find_key(&self, key: &K) -> Option<usize> {
         let h = hash_of(key);
         let mut i = 0usize;
         while i < self.keys.len() {
             if self.hashes[i] == h && self.keys.get_ref(i).eq(key) {
+                return Option::Some(i);
+            }
+            i += 1usize;
+        }
+        Option::None
+    }
+
+    fn find<Q: ?Sized + Hash + Eq>(&self, key: &Q) -> Option<usize>
+    where
+        K: super::borrow::Borrow<Q>,
+    {
+        let h = hash_of(key);
+        let mut i = 0usize;
+        while i < self.keys.len() {
+            let stored: &Q = self.keys.get_ref(i).borrow();
+            if self.hashes[i] == h && stored.eq(key) {
                 return Option::Some(i);
             }
             i += 1usize;
@@ -41,21 +57,30 @@ impl<K: Hash + Eq, V> HashMap<K, V> {
         self.keys.len() == 0usize
     }
 
-    pub fn contains_key(&self, key: &K) -> bool {
+    pub fn contains_key<Q: ?Sized + Hash + Eq>(&self, key: &Q) -> bool
+    where
+        K: super::borrow::Borrow<Q>,
+    {
         match self.find(key) {
             Option::Some(_) => true,
             Option::None => false,
         }
     }
 
-    pub fn get(&self, key: &K) -> Option<&V> {
+    pub fn get<Q: ?Sized + Hash + Eq>(&self, key: &Q) -> Option<&V>
+    where
+        K: super::borrow::Borrow<Q>,
+    {
         match self.find(key) {
             Option::Some(i) => Option::Some(self.values.get_ref(i)),
             Option::None => Option::None,
         }
     }
 
-    pub fn get_mut(&mut self, key: &K) -> Option<&mut V> {
+    pub fn get_mut<Q: ?Sized + Hash + Eq>(&mut self, key: &Q) -> Option<&mut V>
+    where
+        K: super::borrow::Borrow<Q>,
+    {
         match self.find(key) {
             Option::Some(i) => self.values.get_mut(i),
             Option::None => Option::None,
@@ -63,7 +88,7 @@ impl<K: Hash + Eq, V> HashMap<K, V> {
     }
 
     pub fn insert(&mut self, key: K, value: V) -> Option<V> {
-        match self.find(&key) {
+        match self.find_key(&key) {
             Option::Some(i) => {
                 let old = self.values.swap_remove(i);
                 self.values.push(value);
@@ -80,7 +105,10 @@ impl<K: Hash + Eq, V> HashMap<K, V> {
         }
     }
 
-    pub fn remove(&mut self, key: &K) -> Option<V> {
+    pub fn remove<Q: ?Sized + Hash + Eq>(&mut self, key: &Q) -> Option<V>
+    where
+        K: super::borrow::Borrow<Q>,
+    {
         match self.find(key) {
             Option::Some(i) => {
                 let _h = self.hashes.swap_remove(i);
@@ -116,7 +144,7 @@ pub struct Entry<'a, K, V> {
 impl<'a, K: Hash + Eq, V> Entry<'a, K, V> {
     pub fn or_insert(self, default: V) -> &'a mut V {
         let map = self.map;
-        let index = match map.find(&self.key) {
+        let index = match map.find_key(&self.key) {
             Option::Some(i) => i,
             Option::None => {
                 map.hashes.push(hash_of(&self.key));
