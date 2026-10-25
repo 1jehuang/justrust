@@ -76,7 +76,22 @@ fn walk_alignment(
         ir::Ty::Str | ir::Ty::Slice { .. } | ir::Ty::Dyn(_) => {
             Err("unsupported: target alignment requires a Sized type".into())
         }
-        ir::Ty::Enum(_) | ir::Ty::Closure(_) | ir::Ty::FnItem(_) | ir::Ty::Never => {
+        // PRIVATE enum layout (backend::value_size): an eight-byte tag word
+        // followed by the largest variant payload.
+        ir::Ty::Enum(enumeration) => {
+            let mut alignment = Some(8);
+            for variant in enumeration.def().variants.iter() {
+                match field_alignment(variant.fields.iter().map(|f| &f.ty), budget, depth + 1)? {
+                    Some(value) => alignment = alignment.map(|a: usize| a.max(value)),
+                    None => alignment = None,
+                }
+            }
+            Ok(alignment)
+        }
+        // Zero-sized fn items and capture-free closures own one dummy word.
+        ir::Ty::FnItem(_) => Ok(Some(8)),
+        ir::Ty::Closure(closure) if closure.captures().is_empty() => Ok(Some(8)),
+        ir::Ty::Closure(_) | ir::Ty::Never => {
             Err("unsupported: target alignment for this type is not implemented".into())
         }
     }

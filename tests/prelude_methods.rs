@@ -500,3 +500,16 @@ fn arrays_of_library_debug_elements_format_as_slices() {
         ],
     );
 }
+
+#[test]
+fn vec_of_enums_iterated_by_reference_has_private_alignment() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "enum-alignment",
+        &[Case {
+            name: "vec_enum_ref_iteration",
+            source: "enum S{C(f64),R{w:f64,h:f64}}\nimpl S{fn a(&self)->f64{match self{S::C(r)=>3.0*r*r,S::R{w,h}=>w*h}}}\nfn main(){let v=vec![S::C(1.0),S::R{w:2.0,h:3.0}];for s in &v{println!(\"{}\",s.a());}}",
+            expect: Expect::Run("3\n6\n"),
+        }],
+    );
+}
