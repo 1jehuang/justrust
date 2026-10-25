@@ -185,6 +185,16 @@ let c=RefCell::new(vec![1u32,2]);let g=c.borrow();for x in g.iter(){println!(\"{
 }
 
 #[test]
+fn collect_into_partially_annotated_vec() {
+    compare(
+        "fn main(){let w=vec![(1u32,2u64)];let x:Vec<_>=w.into_iter().collect();println!(\"{:?}\",x);\
+let v=vec![1u32,5];let y:Vec<_>=v.iter().map(|a|a+1).collect();println!(\"{:?}\",y);}\n",
+        "[(1, 2)]\n[2, 6]\n",
+        "collect-vec-infer",
+    );
+}
+
+#[test]
 fn index_autoderefs_through_guards_and_boxes() {
     compare(
         "use std::cell::RefCell;\nfn mk()->Box<Vec<u32>>{Box::new(vec![5,6])}\n\

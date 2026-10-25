@@ -19,7 +19,27 @@ impl Solver<'_, '_, '_> {
                 unresolved |= self.resolve(*argument, 0)?.is_none()
                     || matches!(self.domain(*argument), Domain::Integer | Domain::Float);
             }
-            if !unresolved {
+            // An open receiver (`Vec<_>: FromIterator<u32>`) can also be
+            // completed from a unique structural impl's argument equations.
+            let open_receiver = matches!(self.domain(receiver), Domain::Nominal(..))
+                && self.resolve(receiver, 0)?.is_none();
+            if !unresolved && !open_receiver {
+                continue;
+            }
+            if !unresolved && !self.contains_callable(receiver, 0)? {
+                // Only structural impls apply for an open receiver.
+                if let Some(header) = self.structural_impl(receiver, trait_id)?
+                    && header.trait_ref.args.len() == arguments.len()
+                {
+                    let params = self.structural_impl_parameters(receiver, &header, 0)?;
+                    for (pattern, actual) in header.trait_ref.args.iter().zip(arguments) {
+                        let pattern = self.schema(pattern, &params, 0)?;
+                        self.unify(pattern, actual)?;
+                    }
+                    progress = true;
+                } else {
+                    self.trait_arguments.push((trait_id, receiver, arguments));
+                }
                 continue;
             }
             let Some(header) = self.structural_impl(receiver, trait_id)? else {
