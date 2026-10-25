@@ -4701,7 +4701,8 @@ impl<'a> Checker<'a> {
                     projection.push(ir::Projection::ConstantIndex(*index));
                 }
                 _ => {
-                    if let ir::Ty::Ref { kind, referent } = &ty {
+                    let mut layer = 0;
+                    while let ir::Ty::Ref { kind, referent } = &ty {
                         if derefs >= 128 {
                             return Err(
                                 "multiple dereferences in one field place are unsupported".into()
@@ -4713,7 +4714,9 @@ impl<'a> Checker<'a> {
                             );
                         }
                         derefs += 1;
-                        writable = *kind == ir::BorrowKind::Mut;
+                        let mutable = *kind == ir::BorrowKind::Mut;
+                        writable = (layer == 0 || writable) && mutable;
+                        layer += 1;
                         ty = referent.as_ref().clone();
                         projection.push(ir::Projection::Deref);
                     }
@@ -6941,7 +6944,8 @@ impl<'a> Checker<'a> {
                     emit(ir::Projection::ConstantIndex(*index))?;
                 }
                 _ => {
-                    if let ir::Ty::Ref { kind, referent } = &ty {
+                    let mut layer = 0;
+                    while let ir::Ty::Ref { kind, referent } = &ty {
                         if derefs >= 128 {
                             return Err(
                                 "multiple dereferences in one field place are unsupported".into()
@@ -6953,7 +6957,9 @@ impl<'a> Checker<'a> {
                             );
                         }
                         derefs += 1;
-                        writable = *kind == ir::BorrowKind::Mut;
+                        let mutable = *kind == ir::BorrowKind::Mut;
+                        writable = (layer == 0 || writable) && mutable;
+                        layer += 1;
                         ty = referent.as_ref().clone();
                         emit(ir::Projection::Deref)?;
                     }
