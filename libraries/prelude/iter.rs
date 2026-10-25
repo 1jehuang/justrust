@@ -210,6 +210,46 @@ pub trait Iterator: Sized {
             }
         }
     }
+    /// The last maximum, as std's `max`.
+    fn max(mut self) -> Option<Self::Item>
+    where
+        Self::Item: super::cmp::Ord,
+    {
+        let mut best = match self.next() {
+            Option::Some(item) => item,
+            Option::None => return Option::None,
+        };
+        loop {
+            match self.next() {
+                Option::Some(item) => {
+                    if item.cmp(&best) != super::cmp::Ordering::Less {
+                        best = item;
+                    }
+                }
+                Option::None => return Option::Some(best),
+            }
+        }
+    }
+    /// The first minimum, as std's `min`.
+    fn min(mut self) -> Option<Self::Item>
+    where
+        Self::Item: super::cmp::Ord,
+    {
+        let mut best = match self.next() {
+            Option::Some(item) => item,
+            Option::None => return Option::None,
+        };
+        loop {
+            match self.next() {
+                Option::Some(item) => {
+                    if item.cmp(&best) == super::cmp::Ordering::Less {
+                        best = item;
+                    }
+                }
+                Option::None => return Option::Some(best),
+            }
+        }
+    }
     /// The last maximum by `key`, evaluating `key` once per item as std does.
     fn max_by_key<B: super::cmp::Ord, F: FnMut(&Self::Item) -> B>(
         mut self,

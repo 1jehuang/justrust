@@ -444,3 +444,26 @@ fn main() {
 "#,
     );
 }
+
+#[test]
+fn iterator_max_is_last_and_min_is_first_among_ties() {
+    differential(
+        r#"
+#[derive(Debug)]
+struct K(u8, u8);
+impl PartialEq for K { fn eq(&self, o: &K) -> bool { self.0 == o.0 } }
+impl Eq for K {}
+impl PartialOrd for K { fn partial_cmp(&self, o: &K) -> Option<std::cmp::Ordering> { Some(self.cmp(o)) } }
+impl Ord for K { fn cmp(&self, o: &K) -> std::cmp::Ordering { self.0.cmp(&o.0) } }
+fn main() {
+    let v = vec![3i64, -1, 7, 7, -1];
+    println!("{:?} {:?}", v.iter().copied().max(), v.iter().copied().min());
+    println!("{:?} {}", vec![K(1, 0), K(2, 1), K(0, 2), K(2, 3), K(0, 4)].into_iter().max(), 0);
+    println!("{:?} {}", vec![K(1, 0), K(2, 1), K(0, 2), K(2, 3), K(0, 4)].into_iter().min(), 0);
+    let e: Vec<u8> = Vec::new();
+    println!("{:?} {:?}", e.clone().into_iter().max(), e.into_iter().min());
+    println!("{:?}", (1u32..5).min());
+}
+"#,
+    );
+}
