@@ -120,8 +120,9 @@ impl fmt::Debug for Ledgers {
     }
 }
 impl Ledgers {
-    // A node charges very few budget identities, so a short vector scanned
-    // linearly (no hashing) beats a map on this per-charge hot path.
+    // File transport can introduce many immutable budget identities into one
+    // node, but consecutive charges usually revisit the same one or two.
+    // Keep recently accessed entries first without adding shared cache state.
     fn with<T: Default + Send + 'static, R>(&self, id: u64, f: impl FnOnce(&mut T) -> R) -> R {
         let mut slots = lock(&self.0);
         f(Self::slot(&mut slots, id))
@@ -142,10 +143,10 @@ impl Ledgers {
                 slots.len() - 1
             }
         };
-        slots[index]
-            .1
-            .downcast_mut::<T>()
-            .expect("ledger type checked")
+        if index != 0 {
+            slots[..=index].rotate_right(1);
+        }
+        slots[0].1.downcast_mut::<T>().expect("ledger type checked")
     }
     /// Two distinct ledgers of one scope under one lock.
     fn with2<A, B, R>(&self, a: u64, b: u64, f: impl FnOnce(&mut A, &mut B) -> R) -> R
@@ -157,17 +158,15 @@ impl Ledgers {
         let mut slots = lock(&self.0);
         Self::slot::<A>(&mut slots, a);
         Self::slot::<B>(&mut slots, b);
-        let (mut first, mut second) = (None, None);
-        for (id, entry) in slots.iter_mut() {
-            if *id == a {
-                first = entry.downcast_mut::<A>();
-            } else if *id == b {
-                second = entry.downcast_mut::<B>();
-            }
-        }
+        // The second access puts b first and the distinct a immediately
+        // after it. No second scan across unrelated transported budgets.
+        let (second, first) = slots.split_at_mut(1);
         f(
-            first.expect("ledger type checked"),
-            second.expect("ledger type checked"),
+            first[0].1.downcast_mut::<A>().expect("ledger type checked"),
+            second[0]
+                .1
+                .downcast_mut::<B>()
+                .expect("ledger type checked"),
         )
     }
     fn forget(&self, id: u64) {
@@ -2136,6 +2135,63 @@ impl Shared {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ledger_hot_entries_preserve_all_transported_counters() {
+        let ledgers = Ledgers::default();
+        for id in 0..256 {
+            ledgers.with::<u64, _>(id, |value| *value = id + 1);
+        }
+        for _ in 0..100 {
+            ledgers.with::<u64, _>(7, |value| *value += 1);
+            assert_eq!(lock(&ledgers.0)[0].0, 7);
+            ledgers.with2::<u64, u64, _>(7, 211, |first, second| {
+                *first += 1;
+                *second += 2;
+            });
+            let slots = lock(&ledgers.0);
+            assert_eq!((slots[0].0, slots[1].0), (211, 7));
+            assert_eq!(slots.len(), 256);
+        }
+        for id in 0..256 {
+            let extra = if id == 7 || id == 211 { 200 } else { 0 };
+            assert_eq!(
+                ledgers.read::<u64, _>(id, |value| *value),
+                Some(id + 1 + extra)
+            );
+        }
+        ledgers.with::<Vec<u8>, _>(7, |value| {
+            assert!(value.is_empty());
+            value.push(42);
+        });
+        assert_eq!(ledgers.read::<u64, _>(7, |value| *value), None);
+        ledgers.with2::<Vec<u8>, u64, _>(7, 211, |first, second| {
+            assert_eq!(first.as_slice(), &[42]);
+            assert_eq!(*second, 412);
+        });
+        ledgers.forget(7);
+        assert_eq!(ledgers.read::<Vec<u8>, _>(7, Vec::len), None);
+        assert_eq!(ledgers.read::<u64, _>(211, |value| *value), Some(412));
+    }
+
+    #[test]
+    fn ledger_hot_pairs_keep_exact_counts_across_branches() {
+        let ledgers = Ledgers::default();
+        std::thread::scope(|scope| {
+            for _ in 0..8 {
+                scope.spawn(|| {
+                    for _ in 0..1000 {
+                        ledgers.with2::<u64, u64, _>(10, 20, |first, second| {
+                            *first += 1;
+                            *second += 2;
+                        });
+                    }
+                });
+            }
+        });
+        assert_eq!(ledgers.read::<u64, _>(10, |value| *value), Some(8000));
+        assert_eq!(ledgers.read::<u64, _>(20, |value| *value), Some(16000));
+    }
 
     /// Branches of one node share a Meter. An over-limit charge by one
     /// branch must never make a charge that fits alone fail on another.

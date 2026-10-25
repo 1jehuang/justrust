@@ -12003,3 +12003,24 @@ Its native binary is `6839ad61...`. It does not establish an improvement:
 one-worker CHECK/BUILD are 581.098/735.171 ms and 96-worker values are
 465.382/544.350 ms, with stock controls 22.932/28.128 ms. Keep the ordinary
 release profile rather than promoting this slower-to-build configuration.
+
+### Hosted hot-ledger locality (2026-10-25)
+
+`Ledgers` now keeps recently accessed identities first and obtains a distinct
+pair directly after the two typed admissions. Transported counters, type
+replacement, refunds and synchronization retain their existing semantics.
+No compiler fact, shared budget or dispatch identity was added.
+
+Compare `baseline.json` / `hot-ledger.json` and `baseline-repeat.json` /
+`hot-ledger-repeat.json` under `data/runs/frontend-hosted-20261025/` using
+`python3 bench/suite.py compare <before> <after>`. Both pairs use the pinned
+hosted protocol above, including seven randomized samples per cell. The
+repeat executes candidate before baseline. At 96 workers, CHECK changes
+467.270 to 424.749 ms and 458.074 to 422.958 ms (9.10% and 7.67% less time).
+BUILD changes 545.512 to 504.612 ms and 540.394 to 507.893 ms (7.50% and
+6.01% less). One-worker reductions repeat at 5.7% CHECK and 4.2% BUILD.
+Stock controls move less than 2.1%. These are scoped warm Adler2 library
+process-wall observations, not a comprehensive synthetic or corpus speedup.
+Native remains much slower than stock here and the requested 2-10x goal is
+not met. Budget, concurrent-ledger, engine, graph integrity and unchanged
+Adler2 stock/native acceptance at workers 1 and 8 pass.
