@@ -151,6 +151,18 @@ macro_rules! session_handle {
     )+};
 }
 session_handle!(SpanId, ExpansionId, SyntaxContextId, SymbolId, CrateId);
+impl ExpansionId {
+    /// Routing identity only. A matching owner does not admit an expansion.
+    pub(super) fn session_owner(self) -> SessionId {
+        self.session
+    }
+}
+impl SpanId {
+    /// Routing identity only. The receiving session must still check the span.
+    pub(super) fn session_owner(self) -> SessionId {
+        self.session
+    }
+}
 impl SyntaxContextId {
     /// The fixed crate-root context (no session owns it).
     pub const ROOT: Self = Self {
@@ -1002,7 +1014,7 @@ impl TokenSession {
         self.linked.stores.iter().map(|(_, s)| s.clone()).collect()
     }
     /// Whether `owner` is this session or one of its linked crate siblings.
-    pub(crate) fn serves(&self, owner: SessionId) -> bool {
+    pub(super) fn serves(&self, owner: SessionId) -> bool {
         self.admits(owner) || self.linked.get(owner).is_ok()
     }
     /// The session serving `owner`'s handles: this one or a linked sibling.

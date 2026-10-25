@@ -159,6 +159,31 @@ pub(super) fn capture(
     })))
 }
 impl SourceImpl {
+    pub(super) fn relocate_parsed(
+        &self,
+        block: &ImplDecl,
+        index: usize,
+        offset: usize,
+        program: &Program,
+        budget: &crate::compiler::expansion_budget::ExpansionBudget,
+    ) -> Result<Arc<Self>, String> {
+        self.replay_source(block, index, &program.names, &program.embedded_issuers)?;
+        let index = index
+            .checked_add(offset)
+            .ok_or("primitive implementation ordinal overflow")?;
+        let admitted = budget
+            .reserve(
+                crate::compiler::expansion_budget::Storage::Retained,
+                (std::mem::size_of::<Self>() + 2 * std::mem::size_of::<usize>()) as u64,
+            )
+            .and_then(|lease| lease.retain())
+            .map_err(|error| error.to_string())?;
+        let mut relocated = self.clone();
+        relocated.implementation = index;
+        relocated._admitted = admitted;
+        Ok(Arc::new(relocated))
+    }
+
     pub(super) fn replay_source(
         &self,
         block: &ImplDecl,

@@ -72,6 +72,38 @@ fn primitive_min_source_issuer_rejects_raw_and_transplanted_authority() {
         .position(|block| block.primitive_source.is_some())
         .unwrap();
     PlanCtx::from_program(&original, &ir::PlanBudget::default()).unwrap();
+    let block = &original.impls[index];
+    let receipt = block.primitive_source.as_ref().unwrap();
+    let budget = crate::compiler::expansion_budget::ExpansionBudget::default();
+    let relocated = receipt
+        .relocate_parsed(block, index, 17, &original, &budget)
+        .unwrap();
+    assert_eq!(relocated.implementation, index + 17);
+    relocated
+        .replay_source(
+            block,
+            index + 17,
+            &original.names,
+            &original.embedded_issuers,
+        )
+        .unwrap();
+    assert!(
+        receipt
+            .relocate_parsed(block, index + 1, 17, &original, &budget)
+            .is_err()
+    );
+    assert!(
+        receipt
+            .relocate_parsed(block, index, usize::MAX, &original, &budget)
+            .is_err()
+    );
+    let mut forged = block.clone();
+    forged.original_source = None;
+    assert!(
+        receipt
+            .relocate_parsed(&forged, index, 17, &original, &budget)
+            .is_err()
+    );
     for source in [
         "impl i32{pub const MIN:i32=-2147483647i32-1i32;}fn main(){}",
         "mod __justrust_std{pub mod primitive_constants{impl i32{pub const MIN:i32=-2147483647i32-1i32;}}}fn main(){}",

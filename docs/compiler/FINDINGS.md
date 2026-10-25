@@ -11870,3 +11870,39 @@ item-local. Targeted graph suites all pass with the new shape (`graph_integrity`
 `compiler`, `external_modules`, `generic_carriers_graph`, `generics_graph`,
 `modules`, `tuples`, `canonical_copy_graph`, run `20261018-182437837-2935726`),
 and strict clippy stays clean on hosted (`20261018-182437813-2935601`).
+
+### Adler2 frontend splits and exact closed-source proof reuse (2026-10-25)
+
+Pinned native measurements are retained in `data/runs/frontend-split-20261025/`:
+`before.json`, the intermediate `split.json`, and `after.json`. Reproduce the
+comparison with `python3 bench/suite.py compare` and the two result paths.
+These are unchanged Adler2 2.0.1 source/library and source-dependent consumer
+measurements, not a comprehensive synthetic score or a stock-rustc comparison.
+Each cell has five fresh-process samples after one warmup, warm filesystem,
+fresh output directories, edition 2021, `--opt off`, debug assertions enabled,
+and the exact source, dependency, binary and runner identities stored in JSON.
+The laptop runs were contended/uncontrolled. Concurrent user changes present
+at the baseline were preserved, so these results do not establish causality or
+statistical significance and must not support a general compiler speed claim.
+
+| Case | Workers | CHECK before/after ms | BUILD before/after ms |
+| --- | --- | --- | --- |
+| Library | 1 | 637.862 / 626.140 | 869.263 / 657.788 |
+| Library | 8 | 554.988 / 463.669 | 624.296 / 539.154 |
+| Consumer | 1 | 1180.088 / 971.928 | 1866.980 / 1506.099 |
+| Consumer | 8 | 983.626 / 850.149 | 977.283 / 915.928 |
+
+The production path now computes file syntax and ordinary resolution/callable
+schemas in keyed file/module facts. Closed native instances reuse the exact
+canonical CFG and successful source ownership proof instead of repeating both
+operations for executable analysis. Source admission still checks unused items,
+generic substitutions still require separate analysis, and cleanup demands and
+exact publication/target/context/CFG authority checks remain mandatory.
+
+The intermediate split's one-worker library CHECK was 472.723 ms, faster than
+the final 626.140 ms. Activating real prelude/dependency file transport exposed
+additional namespace/signature validation overhead, including repeated linked
+scope-session searches. Do not hide this regression behind the original
+baseline comparison. All-file admission, final merge, complete-parent waits,
+namespace/header preparation and final signature assembly remain optimization
+targets, not completed root-removal work.

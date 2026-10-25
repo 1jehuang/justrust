@@ -308,6 +308,38 @@ fn embedded_function_authority_genuine_called_helper_and_resolved_mutations() {
             &parsed.program.embedded_issuers,
         )
         .unwrap();
+    let function = &parsed.program.functions[index];
+    let budget = crate::compiler::expansion_budget::ExpansionBudget::default();
+    let relocated = receipt
+        .relocate_parsed(function, index, 17, &parsed.program, &budget)
+        .unwrap();
+    assert_eq!(relocated.original().unwrap().function_index, index + 17);
+    relocated
+        .original()
+        .unwrap()
+        .replay_source(
+            function,
+            &parsed.program.names,
+            &parsed.program.embedded_issuers,
+        )
+        .unwrap();
+    assert!(
+        receipt
+            .relocate_parsed(function, index + 1, 17, &parsed.program, &budget)
+            .is_err()
+    );
+    assert!(
+        receipt
+            .relocate_parsed(function, index, usize::MAX, &parsed.program, &budget)
+            .is_err()
+    );
+    let mut forged = function.clone();
+    forged.unsafety = !forged.unsafety;
+    assert!(
+        receipt
+            .relocate_parsed(&forged, index, 17, &parsed.program, &budget)
+            .is_err()
+    );
     let program = resolve(&parsed).unwrap();
     let plan = PlanCtx::from_program(&program, &ir::PlanBudget::default()).unwrap();
     let id = declaration(&plan, index);

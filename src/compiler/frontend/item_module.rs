@@ -157,6 +157,8 @@ impl Parser<'_, '_> {
             path: full.clone(),
             macros,
             frontier: self.module_frontier,
+            no_std_roots: self.no_std_roots.clone(),
+            forbid_unsafe_roots: self.forbid_unsafe_roots.clone(),
         });
         Ok(())
     }

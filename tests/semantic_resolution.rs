@@ -15,6 +15,64 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const BASELINE_STOCK: &str = "rustc 1.98.1;48a229ceaefd4985c50990b14116b6d856af0985;2026-09-01;x86_64-unknown-linux-gnu;LLVM22.1.8";
+
+#[test]
+fn resolver_module_facts_read_only_exact_namespace_snapshot() {
+    // 148 is the production RESOLVE_MODULE kind, not a synthetic fixture.
+    // The prepared source also contains fixed native-prelude modules.
+    let mut expected_modules = None;
+    for functions in [1, 8] {
+        let mut source = String::from("mod a{pub type Number=i32;");
+        for index in 0..functions {
+            source.push_str(&format!("pub fn f{index}()->Number{{2}}"));
+        }
+        source.push_str("}mod b{pub fn run()->i32{crate::a::f0()}}fn main(){b::run();}");
+        for workers in [1, 8] {
+            for check in [true, false] {
+                let result =
+                    justrust_engine::compiler::compile(source.clone(), workers, check).unwrap();
+                let report = &result.report;
+                assert!(report.capture_complete);
+                let modules = report
+                    .node_evaluations
+                    .iter()
+                    .zip(&report.node_ids)
+                    .filter(|((key, _), _)| key.kind == 148)
+                    .collect::<Vec<_>>();
+                let expected = *expected_modules.get_or_insert(modules.len());
+                assert!(expected >= 3);
+                assert_eq!(
+                    modules.len(),
+                    expected,
+                    "function growth added module nodes"
+                );
+                for ((key, evaluations), node) in modules {
+                    assert_eq!(*evaluations, 1);
+                    assert_eq!(key.params.len(), 1);
+                    let tasks = report
+                        .events
+                        .iter()
+                        .filter(|event| event.node == Some(*node))
+                        .filter_map(|event| event.task)
+                        .collect::<std::collections::HashSet<_>>();
+                    let producers = report
+                        .dependency_edges
+                        .iter()
+                        .filter(|(task, _, _)| tasks.contains(task))
+                        .map(|(_, producer, _)| *producer)
+                        .collect::<std::collections::HashSet<_>>();
+                    assert_eq!(
+                        producers.len(),
+                        1,
+                        "module fact acquired unrelated item dependencies"
+                    );
+                }
+                assert_eq!(result.executable.is_none(), check);
+            }
+        }
+    }
+}
+
 struct Case {
     name: &'static str,
     source: &'static str,

@@ -634,6 +634,9 @@ fn kind_name(kind: u32) -> String {
         144 => "trait_impls",
         145 => "impl_coherence",
         146 => "item_coherence",
+        121 => "parse_file",
+        148 => "resolve_module",
+        149 => "signature_module",
         147 => "module_decls",
         _ => return format!("kind{kind}"),
     }

@@ -664,8 +664,11 @@ impl ScopeArena {
         e: ExpansionId,
     ) -> Result<Option<ItemExpansionAdmission>, ScopeError> {
         self.budget.check()?;
-        for p in self.items.anchors.as_slice() {
-            self.budget.charge(Counter::Work, 1)?;
+        let Some(arena) = self.session_arena(e.session_owner())? else {
+            return Ok(None);
+        };
+        for p in arena.items.anchors.as_slice() {
+            arena.budget.charge(Counter::Work, 1)?;
             if p.proof.expansion == e {
                 return Ok(Some(p.proof));
             }

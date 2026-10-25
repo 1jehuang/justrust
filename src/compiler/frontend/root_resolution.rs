@@ -4030,7 +4030,233 @@ fn defer_equality_boundary(
     }
 }
 
+#[derive(Clone, Debug)]
+struct ResolutionState {
+    alias_cache: HashMap<PathKey, Type>,
+    nominal_arity: HashMap<PathKey, usize>,
+    imports: HashMap<(PathKey, usize, bool), Option<ResolvedItem>>,
+    prelude_memo: HashMap<PreludeMemoKey, Option<Option<ResolvedItem>>>,
+    static_muts: std::collections::HashSet<PathKey>,
+    resolved_closures: HashMap<PathKey, closures::ClosureSource>,
+    resolved_closure_owners: HashMap<PathKey, Vec<PathKey>>,
+}
+impl ResolutionState {
+    fn capture(resolver: &Resolver<'_>) -> Self {
+        Self {
+            alias_cache: resolver.alias_cache.clone(),
+            nominal_arity: resolver.nominal_arity.clone(),
+            imports: resolver.imports.clone(),
+            prelude_memo: resolver.prelude_memo.clone(),
+            static_muts: resolver.static_muts.clone(),
+            resolved_closures: resolver.resolved_closures.clone(),
+            resolved_closure_owners: resolver.resolved_closure_owners.clone(),
+        }
+    }
+    fn resolver<'a>(&self, parsed: &'a ParsedProgram) -> Resolver<'a> {
+        Resolver {
+            static_muts: self.static_muts.clone(),
+            globs: &parsed.glob_imports,
+            active_globs: std::collections::HashSet::new(),
+            program: &parsed.program,
+            type_depth: 0,
+            alias_cache: self.alias_cache.clone(),
+            alias_active: std::collections::HashSet::new(),
+            alias_budget: ir::PlanBudget::default(),
+            nominal_arity: self.nominal_arity.clone(),
+            self_nominal: None,
+            self_allowed: false,
+            source_owner: SourceOwnerContext::None,
+            items: &parsed.items,
+            imports: self.imports.clone(),
+            prelude_memo: self.prelude_memo.clone(),
+            active: std::collections::HashSet::new(),
+            type_params: Vec::new(),
+            lexical_function: None,
+            user_crate_anchor: false,
+            anonymous_closure_body: false,
+            active_closure: None,
+            resolved_closures: self.resolved_closures.clone(),
+            resolved_closure_owners: self.resolved_closure_owners.clone(),
+            current_function_name: None,
+            current_callable: None,
+        }
+    }
+}
+
+/// Immutable namespace/header prerequisite. Imports, aliases, nominal/trait
+/// headers, constants, trait-default bodies and anonymous adapters remain global
+/// debt here. Implementation bodies and generated metadata remain finish debt.
+/// Ordinary free-function bounds, types and bodies run in module item facts.
+#[derive(Clone, Debug)]
+pub struct ResolutionNamespace {
+    parsed: Arc<ParsedProgram>,
+    token: Arc<ResolutionToken>,
+    program: Program,
+    state: ResolutionState,
+    modules: Vec<ModuleId>,
+    functions: Vec<Vec<usize>>,
+    associated_boundary: Option<String>,
+    equality_boundary: Option<String>,
+    associated_bound_sources: Vec<AssociatedBoundSource>,
+    derived_debug_source: Option<usize>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ResolvedModuleItems {
+    // Opaque publication capability, not a declaration identity or graph key.
+    // Keeping it alive prevents equal-shaped foreign snapshots from mixing.
+    namespace_token: Arc<ResolutionToken>,
+    // Source errors are values so completion order cannot select diagnostics.
+    error: Option<(usize, String)>,
+    ordinal: usize,
+    functions: Vec<(usize, Function)>,
+    closures: HashMap<PathKey, closures::ClosureSource>,
+    owners: HashMap<PathKey, Vec<PathKey>>,
+}
+
+// Only immutable AST values, canonical identities and lookup cache values are
+// retained. Resolver scratch and its per-task budget never escape into facts.
+impl crate::engine::Fact for ResolutionNamespace {}
+impl crate::engine::Fact for ResolvedModuleItems {}
+
+#[derive(Debug)]
+struct ResolutionToken {}
+
+pub fn resolution_modules(namespace: &ResolutionNamespace) -> &[ModuleId] {
+    &namespace.modules
+}
+pub fn resolution_module_indices(
+    namespace: &ResolutionNamespace,
+    ordinal: usize,
+) -> Result<&[usize], String> {
+    namespace
+        .functions
+        .get(ordinal)
+        .map(Vec::as_slice)
+        .ok_or_else(|| "foreign resolution module ordinal".into())
+}
+
+pub fn resolve_module_items(
+    namespace: &ResolutionNamespace,
+    ordinal: usize,
+) -> Result<ResolvedModuleItems, String> {
+    let parsed = namespace.parsed.as_ref();
+    let indices = resolution_module_indices(namespace, ordinal)?;
+    let mut resolver = namespace.state.resolver(parsed);
+    let mut functions = Vec::with_capacity(indices.len());
+    let mut error = None;
+    for &index in indices {
+        let mut function = namespace.program.functions[index].clone();
+        if let Err(diagnostic) = resolve_free_function(&mut resolver, index, &mut function) {
+            error = Some((index, diagnostic));
+            break;
+        }
+        functions.push((index, function));
+    }
+    resolver
+        .resolved_closures
+        .retain(|key, _| !namespace.state.resolved_closures.contains_key(key));
+    for (key, children) in &namespace.state.resolved_closure_owners {
+        if let Some(output) = resolver.resolved_closure_owners.get_mut(key) {
+            output.drain(..children.len());
+        }
+    }
+    resolver
+        .resolved_closure_owners
+        .retain(|_, children| !children.is_empty());
+    Ok(ResolvedModuleItems {
+        namespace_token: namespace.token.clone(),
+        error,
+        ordinal,
+        functions,
+        closures: resolver.resolved_closures,
+        owners: resolver.resolved_closure_owners,
+    })
+}
+
+fn resolve_free_function(
+    resolver: &mut Resolver<'_>,
+    index: usize,
+    function: &mut Function,
+) -> Result<(), String> {
+    resolver.current_callable = Some(CallableSource::Free(index));
+    let embedded = function.embedded_source.clone();
+    if let Some(receipt) = &embedded {
+        receipt.original()?.replay_source(
+            function,
+            resolver.names(),
+            &resolver.program.embedded_issuers,
+        )?;
+    }
+    // Local/free declarations are collected separately by the frontend.
+    // None may inherit a preceding trait/default/impl Self owner.
+    resolver.with_source_owner(SourceOwnerContext::None, |resolver| {
+        resolver.anonymous_closure_body =
+            closures::anonymous_path(&function.name, resolver.names())?;
+        resolver.begin_closure_function(function)?;
+        let embedded_resolved = if let Some(receipt) = &embedded {
+            let names = resolver.program.names.clone();
+            receipt.resolve_calls(&names, |path| {
+                let Some(target) = resolver.path(path, function.module, false, false)? else {
+                    return Ok(None);
+                };
+                if target.kind != ResolvedKind::Function {
+                    return Ok(None);
+                }
+                resolver.resolved_use(target.source()?, path).map(Some)
+            })?
+        } else {
+            None
+        };
+        resolver.type_params = function.type_params.clone();
+        resolver.bounds(&mut function.bounds, function.module)?;
+        resolver.ty(&mut function.result, function.module)?;
+        for (name, ty) in &mut function.params {
+            resolver.ty(ty, function.module)?;
+            if resolver
+                .binding_constructor(*name, function.module)?
+                .is_some()
+            {
+                return Err("enum variant patterns in function parameters are unsupported".into());
+            }
+        }
+        validate_depth(DepthNode::Block(&function.body))?;
+        let locals = resolver.function_locals(function, ReceiverKind::None)?;
+        if let Err(error) = resolver.block(&mut function.body, function.module, &mut vec![locals]) {
+            return Err(format!(
+                "in function {}: {error}",
+                resolver.display(&function.name)?
+            ));
+        }
+        resolver.finish_closure_function(function)?;
+        function.embedded_source = None;
+        if let Some(receipt) = embedded_resolved
+            && receipt.matches_resolved(function, resolver.names())?
+        {
+            function.embedded_source = Some(receipt);
+        }
+        Ok(())
+    })?;
+    Ok(())
+}
+
 pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
+    let namespace = prepare_resolution(parsed)?;
+    let items = (0..resolution_modules(&namespace).len())
+        .map(|ordinal| resolve_module_items(&namespace, ordinal))
+        .collect::<Result<Vec<_>, _>>()?;
+    finish_resolution(&namespace, items)
+}
+
+pub fn prepare_resolution(parsed: &ParsedProgram) -> Result<ResolutionNamespace, String> {
+    prepare_resolution_owned(Arc::new(parsed.clone()))
+}
+
+/// Retain the graph's exact immutable parse fact, without cloning its Program.
+/// Child work receives only this namespace, never a second caller-supplied AST.
+pub fn prepare_resolution_owned(parsed: Arc<ParsedProgram>) -> Result<ResolutionNamespace, String> {
+    let source = parsed;
+    let parsed = source.as_ref();
     parsed.program.validate_c_source()?;
     parsed.program.validate_name_handles()?;
     parsed
@@ -4427,77 +4653,104 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
             resolver.ty(&mut field.ty, structure.module)?;
         }
     }
-    let mut function_order = Vec::new();
-    for anonymous in [true, false] {
-        for (index, function) in program.functions.iter().enumerate() {
-            if closures::anonymous_path(&function.name, resolver.names())? == anonymous {
-                function_order.push(index);
-            }
+    let mut modules = Vec::new();
+    let mut functions: Vec<Vec<usize>> = Vec::new();
+    // Anonymous adapters establish capture descriptors before parent bodies.
+    for index in 0..program.functions.len() {
+        if closures::anonymous_path(&program.functions[index].name, resolver.names())? {
+            resolve_free_function(&mut resolver, index, &mut program.functions[index])?;
+        } else {
+            let module = program.functions[index].module;
+            let ordinal =
+                if let Some(ordinal) = modules.iter().position(|candidate| *candidate == module) {
+                    ordinal
+                } else {
+                    modules.push(module);
+                    functions.push(Vec::new());
+                    modules.len() - 1
+                };
+            functions[ordinal].push(index);
         }
     }
-    let function_issuers = program.embedded_issuers.clone();
-    for index in function_order {
-        resolver.current_callable = Some(CallableSource::Free(index));
-        let function = &mut program.functions[index];
-        let embedded = function.embedded_source.clone();
-        if let Some(receipt) = &embedded {
-            receipt
-                .original()?
-                .replay_source(function, resolver.names(), &function_issuers)?;
+    let state = ResolutionState::capture(&resolver);
+    Ok(ResolutionNamespace {
+        parsed: source,
+        token: Arc::new(ResolutionToken {}),
+        program,
+        state,
+        modules,
+        functions,
+        associated_boundary,
+        equality_boundary,
+        associated_bound_sources,
+        derived_debug_source,
+    })
+}
+
+pub fn finish_resolution(
+    namespace: &ResolutionNamespace,
+    mut items: Vec<ResolvedModuleItems>,
+) -> Result<Program, String> {
+    let parsed = namespace.parsed.as_ref();
+    for item in &items {
+        if !Arc::ptr_eq(&item.namespace_token, &namespace.token) {
+            return Err("resolved module items belong to a different namespace snapshot".into());
         }
-        // Local/free declarations are collected separately by the frontend.
-        // None may inherit a preceding trait/default/impl Self owner.
-        resolver.with_source_owner(SourceOwnerContext::None, |resolver| {
-            resolver.anonymous_closure_body =
-                closures::anonymous_path(&function.name, resolver.names())?;
-            resolver.begin_closure_function(function)?;
-            let embedded_resolved = if let Some(receipt) = &embedded {
-                let names = resolver.program.names.clone();
-                receipt.resolve_calls(&names, |path| {
-                    let Some(target) = resolver.path(path, function.module, false, false)? else {
-                        return Ok(None);
-                    };
-                    if target.kind != ResolvedKind::Function {
-                        return Ok(None);
-                    }
-                    resolver.resolved_use(target.source()?, path).map(Some)
-                })?
-            } else {
-                None
-            };
-            resolver.type_params = function.type_params.clone();
-            resolver.bounds(&mut function.bounds, function.module)?;
-            resolver.ty(&mut function.result, function.module)?;
-            for (name, ty) in &mut function.params {
-                resolver.ty(ty, function.module)?;
-                if resolver
-                    .binding_constructor(*name, function.module)?
-                    .is_some()
-                {
-                    return Err(
-                        "enum variant patterns in function parameters are unsupported".into(),
-                    );
-                }
+    }
+    items.sort_by_key(|item| item.ordinal);
+    if items.len() != namespace.modules.len() {
+        return Err("incomplete resolved module inventory".into());
+    }
+    for (ordinal, item) in items.iter().enumerate() {
+        if item.ordinal != ordinal {
+            return Err("foreign resolved module inventory".into());
+        }
+        let expected = &namespace.functions[ordinal];
+        let prefix = match &item.error {
+            Some((index, _)) if expected.get(item.functions.len()) == Some(index) => {
+                &expected[..item.functions.len()]
             }
-            validate_depth(DepthNode::Block(&function.body))?;
-            let locals = resolver.function_locals(function, ReceiverKind::None)?;
-            if let Err(error) =
-                resolver.block(&mut function.body, function.module, &mut vec![locals])
-            {
-                return Err(format!(
-                    "in function {}: {error}",
-                    resolver.display(&function.name)?
-                ));
+            Some(_) => return Err("foreign resolved module error inventory".into()),
+            None => expected.as_slice(),
+        };
+        if !item
+            .functions
+            .iter()
+            .map(|(index, _)| *index)
+            .eq(prefix.iter().copied())
+        {
+            return Err("foreign resolved module inventory".into());
+        }
+    }
+    if let Some((_, diagnostic)) = items
+        .iter()
+        .filter_map(|item| item.error.as_ref())
+        .min_by_key(|(index, _)| *index)
+    {
+        return Err(diagnostic.clone());
+    }
+    let mut program = namespace.program.clone();
+    let mut resolver = namespace.state.resolver(parsed);
+    let associated_boundary = namespace.associated_boundary.clone();
+    let equality_boundary = namespace.equality_boundary.clone();
+    let associated_bound_sources = namespace.associated_bound_sources.clone();
+    let derived_debug_source = namespace.derived_debug_source;
+    for item in items {
+        for (index, function) in item.functions {
+            program.functions[index] = function;
+        }
+        for (key, source) in item.closures {
+            if resolver.resolved_closures.insert(key, source).is_some() {
+                return Err("duplicate resolved closure source".into());
             }
-            resolver.finish_closure_function(function)?;
-            function.embedded_source = None;
-            if let Some(receipt) = embedded_resolved
-                && receipt.matches_resolved(function, resolver.names())?
-            {
-                function.embedded_source = Some(receipt);
-            }
-            Ok(())
-        })?;
+        }
+        for (key, children) in item.owners {
+            resolver
+                .resolved_closure_owners
+                .entry(key)
+                .or_default()
+                .extend(children);
+        }
     }
     let primitive_issuers = program.embedded_issuers.clone();
     for (source_index, block) in program.impls.iter_mut().enumerate() {
@@ -4648,6 +4901,135 @@ fn assert_noncallable_local_shadow(source: &str) {
                 "noncallable shadow accepted at workers={workers}, check={check}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod item_resolution_tests {
+    use super::*;
+
+    #[test]
+    fn module_items_resolve_bodies_without_mutating_namespace() {
+        let parsed = parse_unresolved("mod a{pub type Number=i32;pub fn run()->Number{let f=|x:i32|x+1;3}}mod b{pub fn run()->i32{crate::a::run()}}fn main(){b::run();}").unwrap();
+        let namespace = prepare_resolution(&parsed).unwrap();
+        let before = format!("{:?}", namespace.program);
+        assert_eq!(resolution_modules(&namespace).len(), 3);
+        let mut items = (0..resolution_modules(&namespace).len())
+            .map(|ordinal| resolve_module_items(&namespace, ordinal).unwrap())
+            .collect::<Vec<_>>();
+        assert!(items.iter().all(|item| item.error.is_none()));
+        assert!(items.iter().any(|item| !item.closures.is_empty()));
+        items.reverse();
+        let program = finish_resolution(&namespace, items).unwrap();
+        assert!(!program.closure_sources.is_empty());
+        assert_eq!(before, format!("{:?}", namespace.program));
+        assert_eq!(namespace.program.functions.len(), program.functions.len());
+    }
+
+    #[test]
+    fn module_diagnostics_follow_function_order_not_module_completion_order() {
+        let parsed = parse_unresolved("mod a{pub fn good(){}}mod b{pub fn first_bad(){missing_b();}}mod a_tail{pub fn later_bad(){missing_a();}}fn main(){}").unwrap();
+        let namespace = prepare_resolution(&parsed).unwrap();
+        let mut items = (0..resolution_modules(&namespace).len())
+            .map(|ordinal| resolve_module_items(&namespace, ordinal).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(items.iter().filter(|item| item.error.is_some()).count(), 2);
+        let expected = items
+            .iter()
+            .filter_map(|item| item.error.as_ref())
+            .min_by_key(|(index, _)| *index)
+            .unwrap()
+            .1
+            .clone();
+        assert!(expected.contains("first_bad"), "{expected}");
+        items.reverse();
+        assert_eq!(finish_resolution(&namespace, items).unwrap_err(), expected);
+    }
+
+    #[test]
+    fn module_inventory_rejects_missing_duplicate_and_foreign_outputs() {
+        let parsed = parse_unresolved("mod a{pub fn f(){}}fn main(){}").unwrap();
+        let namespace = prepare_resolution(&parsed).unwrap();
+        assert!(resolve_module_items(&namespace, usize::MAX).is_err());
+        assert!(finish_resolution(&namespace, Vec::new()).is_err());
+        let item = resolve_module_items(&namespace, 0).unwrap();
+        assert!(finish_resolution(&namespace, vec![item.clone(), item]).is_err());
+        let complete = (0..namespace.modules.len())
+            .map(|ordinal| resolve_module_items(&namespace, ordinal).unwrap())
+            .collect::<Vec<_>>();
+        let mut forged = complete.clone();
+        forged[0].error = Some((usize::MAX, "forged source diagnostic".into()));
+        assert!(
+            finish_resolution(&namespace, forged)
+                .unwrap_err()
+                .contains("inventory")
+        );
+        let mut missing = complete.clone();
+        missing[0].functions.clear();
+        missing[0].error = Some((namespace.functions[0][0], "forged source diagnostic".into()));
+        missing.pop();
+        assert!(
+            finish_resolution(&namespace, missing)
+                .unwrap_err()
+                .contains("inventory")
+        );
+        let mut duplicate = complete;
+        duplicate[0].functions.clear();
+        duplicate[0].error = Some((namespace.functions[0][0], "forged source diagnostic".into()));
+        duplicate[1] = duplicate[0].clone();
+        assert!(
+            finish_resolution(&namespace, duplicate)
+                .unwrap_err()
+                .contains("inventory")
+        );
+    }
+
+    #[test]
+    fn namespace_prerequisite_still_rejects_unused_alias_cycles() {
+        let parsed = parse_unresolved("type A=B;type B=A;fn main(){}").unwrap();
+        assert!(prepare_resolution(&parsed).unwrap_err().contains("E0391"));
+    }
+
+    #[test]
+    fn equal_shaped_foreign_parsed_and_module_facts_are_rejected() {
+        let source = "mod a{pub fn f()->bool{false}}fn main(){}";
+        let parsed = Arc::new(parse_unresolved(source).unwrap());
+        let namespace = prepare_resolution_owned(parsed.clone()).unwrap();
+        assert!(Arc::ptr_eq(&namespace.parsed, &parsed));
+        // A caller cannot mutate the snapshot retained by the namespace.
+        assert!(Arc::get_mut(&mut parsed.clone()).is_none());
+        let mut changed = parsed.as_ref().clone();
+        changed.program.functions[0].body.tail = Some(Box::new(Expr::Bool(true)));
+        assert_eq!(
+            changed.program.names.owner_path(),
+            parsed.program.names.owner_path()
+        );
+        let independent = parse_unresolved(source).unwrap();
+        for foreign in [independent, changed] {
+            let foreign_namespace = prepare_resolution_owned(Arc::new(foreign)).unwrap();
+            assert_eq!(namespace.functions, foreign_namespace.functions);
+            let mut items = (0..namespace.modules.len())
+                .map(|ordinal| resolve_module_items(&namespace, ordinal).unwrap())
+                .collect::<Vec<_>>();
+            items[0] = resolve_module_items(&foreign_namespace, 0).unwrap();
+            assert!(
+                finish_resolution(&namespace, items)
+                    .unwrap_err()
+                    .contains("different namespace snapshot")
+            );
+            // Foreign diagnostics must not mask the immutable snapshot check.
+            let mut item = resolve_module_items(&foreign_namespace, 0).unwrap();
+            item.error = Some((0, "foreign diagnostic".into()));
+            assert!(
+                finish_resolution(&namespace, vec![item])
+                    .unwrap_err()
+                    .contains("different namespace snapshot")
+            );
+        }
+        assert!(matches!(
+            namespace.parsed.program.functions[0].body.tail.as_deref(),
+            Some(Expr::Bool(false))
+        ));
     }
 }
 

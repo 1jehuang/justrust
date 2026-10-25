@@ -287,6 +287,107 @@ fn split_parse_keeps_child_error_before_late_parent_error() {
 }
 
 #[test]
+fn default_split_parses_no_std_library_and_dependency_files() {
+    use std::os::unix::fs::PermissionsExt;
+    use std::process::Command;
+    let tree = Tree::new(&[
+        ("main.rs", "fn main(){ assert_eq!(dep::value(), 9i32); }"),
+        (
+            "dep/lib.rs",
+            "#![no_std]\nmod leaf; pub fn value()->i32 { leaf::value() }",
+        ),
+        (
+            "dep/leaf.rs",
+            "pub fn value()->i32 { let value = Some(9i32); value.unwrap() }",
+        ),
+    ]);
+    let library = tree.0.join("libdep.rlib");
+    assert!(
+        Command::new("rustc")
+            .args(["--edition=2024", "--crate-name=dep", "--crate-type=rlib"])
+            .arg(tree.0.join("dep/lib.rs"))
+            .arg("-o")
+            .arg(&library)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let stock = tree.0.join("stock");
+    assert!(
+        Command::new("rustc")
+            .args(["--edition=2024", "--extern"])
+            .arg(format!("dep={}", library.display()))
+            .arg(tree.0.join("main.rs"))
+            .arg("-o")
+            .arg(&stock)
+            .status()
+            .unwrap()
+            .success()
+    );
+    assert!(Command::new(&stock).status().unwrap().success());
+    for workers in [1, 8] {
+        for check in [true, false] {
+            for as_library in [true, false] {
+                let mut options = compiler::source::SourceOptions {
+                    library: as_library,
+                    ..Default::default()
+                };
+                if !as_library {
+                    options.externs.push(compiler::source::ExternCrate {
+                        name: "dep".into(),
+                        root: tree.0.join("dep/lib.rs"),
+                        cfg: options.cfg.clone(),
+                        cap_lints_allow: false,
+                    });
+                }
+                let compilation = compiler::compile_file_observed_with_options(
+                    tree.0
+                        .join(if as_library { "dep/lib.rs" } else { "main.rs" }),
+                    workers,
+                    check,
+                    options,
+                )
+                .unwrap();
+                let mut sources = compilation
+                    .report
+                    .node_evaluations
+                    .iter()
+                    .filter(|(key, _)| key.kind == 107)
+                    .map(|(key, _)| key.params.clone())
+                    .collect::<Vec<_>>();
+                let mut parsed = compilation
+                    .report
+                    .node_evaluations
+                    .iter()
+                    .filter(|(key, _)| key.kind == 121)
+                    .map(|(key, count)| {
+                        assert_eq!(*count, 1);
+                        key.params.clone()
+                    })
+                    .collect::<Vec<_>>();
+                sources.sort();
+                parsed.sort();
+                assert_eq!(
+                    sources, parsed,
+                    "every source including attachments must have one syntax producer"
+                );
+                assert!(parsed.iter().any(|ordinal| ordinal == &[1]));
+                if !as_library {
+                    assert!(parsed.iter().any(|ordinal| ordinal == &[2, 0]));
+                }
+                assert_eq!(compilation.executable.is_none(), check);
+                if let Some(bytes) = compilation.executable {
+                    let executable = tree.0.join(format!("native-{workers}-{as_library}"));
+                    fs::write(&executable, bytes).unwrap();
+                    fs::set_permissions(&executable, fs::Permissions::from_mode(0o755)).unwrap();
+                    assert!(Command::new(&executable).status().unwrap().success());
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn failing_first_child_does_not_hide_its_sibling_from_the_graph() {
     let tree = Tree::new(&[
         ("src/input.rs", "mod broken; mod later; fn main() {}"),

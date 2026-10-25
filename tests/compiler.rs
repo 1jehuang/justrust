@@ -778,6 +778,35 @@ fn compiler_graph_shares_check_and_build_and_check_only_never_demands_codegen() 
                             "kind {kind} root {index} check_only={check_only}"
                         );
                     }
+                    if !check_only {
+                        let node_id = |kind| {
+                            report
+                                .node_evaluations
+                                .iter()
+                                .zip(&report.node_ids)
+                                .find(|((key, _), _)| key.kind == kind && key.params == [index])
+                                .map(|(_, id)| *id)
+                                .unwrap()
+                        };
+                        let admission = node_id(128);
+                        for (kind, output) in [(108, 2), (109, 3)] {
+                            let consumer = node_id(kind);
+                            assert!(
+                                report
+                                    .dependency_edges
+                                    .iter()
+                                    .any(|(task, producer, slot)| {
+                                        *producer == admission
+                                            && *slot == output
+                                            && report.events.iter().any(|event| {
+                                                event.task == Some(*task)
+                                                    && event.node == Some(consumer)
+                                            })
+                                    }),
+                                "kind {kind} must reuse exact source output {output}"
+                            );
+                        }
+                    }
                 }
                 // These operation IDs are the compiler graph schema, not fixtures.
                 let mut expected = vec![
@@ -828,13 +857,47 @@ fn compiler_graph_shares_check_and_build_and_check_only_never_demands_codegen() 
                         }
                     }
                 }
+                // CHECK also admits every source constant, including constants
+                // supplied by the native prelude. Derive identities from the
+                // same source inventory rather than allowing arbitrary nodes.
+                for ordinal in 0..plan.module_inventory_count() {
+                    for declaration in &plan.module_inventory(ordinal).unwrap().constants {
+                        for kind in [118, 119, 120] {
+                            expected.push(Key::new(kind, vec![declaration.index]));
+                        }
+                    }
+                }
                 // Embedded native library files are independent SOURCE facts.
                 expected.extend(native_prelude::library_source_keys());
                 // Per-module inventories, associated-constant headers,
                 // nominal well-formedness, per-instance, per-signature and
                 // per-trait/impl/item coherence nodes are keyed
                 // infrastructure: each evaluates exactly once.
-                let infrastructure = [126, 134, 138, 141, 142, 143, 144, 145, 146];
+                let infrastructure = [121, 126, 134, 138, 141, 142, 143, 144, 145, 146, 148, 149];
+                for kind in [148, 149] {
+                    let producers = report
+                        .node_evaluations
+                        .iter()
+                        .filter(|(key, _)| key.kind == kind)
+                        .collect::<Vec<_>>();
+                    assert!(!producers.is_empty(), "missing module producer {kind}");
+                    assert!(producers.iter().all(|(key, _)| key.params.len() == 1));
+                    let parent_kind = if kind == 148 { 106 } else { 101 };
+                    let parent = report
+                        .node_evaluations
+                        .iter()
+                        .zip(&report.node_ids)
+                        .find(|((key, _), _)| key.kind == parent_kind)
+                        .map(|(_, id)| *id)
+                        .unwrap();
+                    assert!(
+                        report
+                            .dependency_edges
+                            .iter()
+                            .any(|(_, producer, output)| { *producer == parent && *output == 1 }),
+                        "module producers must read finalized prerequisite output {kind}"
+                    );
+                }
                 assert!(
                     report
                         .node_evaluations

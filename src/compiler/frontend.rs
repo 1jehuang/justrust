@@ -60,6 +60,7 @@ mod name_scope;
 mod name_validation;
 mod pattern_usefulness;
 mod program_symbols;
+pub(crate) mod signature_graph;
 mod source_inventory_walk;
 mod source_schemas;
 #[cfg(test)]
@@ -6294,6 +6295,8 @@ pub(super) struct ChildEntry {
     pub(super) macros: Option<super::source_item_macro::ModuleMacroCheckpoint>,
     /// The parent's textual scope point at the declaration.
     pub(super) frontier: Option<super::semantic_scope::ModuleFrontierId>,
+    no_std_roots: Arc<[super::token_session::SourceFileHandle]>,
+    forbid_unsafe_roots: Arc<[super::token_session::SourceFileHandle]>,
 }
 impl ParsedProgram {
     /// Child file entries of a single-file view parse, in child-site order.
@@ -6609,7 +6612,7 @@ impl Program {
             .filter(|e| !self.in_prelude(e.module))
             .count()
     }
-    fn validate_name_handles(&self) -> Result<(), String> {
+    pub(super) fn validate_name_handles(&self) -> Result<(), String> {
         name_validation::validate_program_names(self)
     }
     fn validate_associated_bound_source(
@@ -15422,6 +15425,15 @@ fn parse_syntax_unit(
         empty_use_prefixes: Vec::new(),
         glob_imports: Vec::new(),
     };
+    if let Some(mount) = &mount {
+        // Only immutable namespace context crosses a file boundary. Never
+        // clone the parent's declarations or mutable parser state.
+        parsed.program.prelude_module = mount.parent.prelude_module;
+        parsed.program.prelude_scope = mount.parent.prelude_scope;
+        parsed.program.core_prelude_scope = mount.parent.core_prelude_scope;
+        parsed.program.core_library_module = mount.parent.core_library_module;
+        parsed.program.extern_mounts = mount.parent.extern_mounts.clone();
+    }
     let (root, root_path) = match &mount {
         Some(mount) => {
             parser.mount_child(mount)?;
@@ -16615,11 +16627,11 @@ pub fn parse_prepared_owned(
     owner: super::owner_path::Issued,
 ) -> Result<ParsedProgram, super::source::SourceError> {
     let projection = super::source::PreparedLexInput::prepared(source, &budget, snapshot)?;
-    parse_projection(source, projection, 0, Arc::from([]), None, budget, owner)
+    parse_projection(source, projection, 0, None, None, budget, owner)
 }
 
 /// Parse one file's shallow view in its own session, rendered at its crate
-/// assembly base (PARSE-SPLIT.md step B). Not yet scheduled as PARSE_FILE.
+/// assembly base (PARSE-SPLIT.md step B), scheduled by PARSE_FILE.
 pub fn parse_file_view_owned(
     view: &super::source::FileView,
     budget: super::expansion_budget::ExpansionBudget,
@@ -16632,7 +16644,7 @@ pub fn parse_file_view_owned(
         &view.prepared,
         projection,
         view.base,
-        sites,
+        Some(sites),
         None,
         budget,
         owner,
@@ -16672,7 +16684,50 @@ pub fn parse_child_view_owned(
         &view.prepared,
         projection,
         view.base,
-        sites,
+        Some(sites),
+        Some(mount),
+        budget,
+        owner,
+    )
+}
+
+/// Attach a separate crate at the shared namespace root without inheriting
+/// the user's textual macros or original-source crate authority.
+pub(super) fn parse_attachment_view_owned(
+    view: &super::source::FileView,
+    parent: &ParsedProgram,
+    budget: super::expansion_budget::ExpansionBudget,
+    snapshot: super::owner_path::Issued,
+    owner: super::owner_path::Issued,
+) -> Result<ParsedProgram, super::source::SourceError> {
+    let entry = ChildEntry {
+        module: parent
+            .program
+            .modules
+            .source_root()
+            .map_err(|error| super::source::SourceError::syntax(None, error.to_string()))?,
+        path: AstPath::new(parent.program.names.as_ref(), PathAnchor::Crate, &[])
+            .map_err(|error| super::source::SourceError::syntax(None, error.to_string()))?,
+        macros: None,
+        frontier: None,
+        no_std_roots: Arc::from([]),
+        forbid_unsafe_roots: Arc::from([]),
+    };
+    let mount = ChildMount {
+        parent: &parent.program,
+        entry: &entry,
+    };
+    let projection = super::source::PreparedLexInput::attachment_file_view(
+        view,
+        parent.program.names.session().sources(),
+        &budget,
+        snapshot,
+    )?;
+    parse_projection(
+        &view.prepared,
+        projection,
+        view.base,
+        Some(Arc::from(view.child_sites.as_slice())),
         Some(mount),
         budget,
         owner,
@@ -16704,6 +16759,15 @@ pub(super) struct ChildMount<'a> {
 /// file order; nothing is re-parsed.
 pub fn merge_crate_files(
     files: &[ParsedProgram],
+    budget: super::expansion_budget::ExpansionBudget,
+    owner: super::owner_path::Issued,
+) -> Result<ParsedProgram, String> {
+    merge_crate_file_refs(&files.iter().collect::<Vec<_>>(), budget, owner)
+}
+
+/// Graph entry borrows each immutable file fact, never cloning Program per file.
+pub(super) fn merge_crate_file_refs(
+    files: &[&ParsedProgram],
     budget: super::expansion_budget::ExpansionBudget,
     owner: super::owner_path::Issued,
 ) -> Result<ParsedProgram, String> {
@@ -16761,20 +16825,90 @@ pub fn merge_crate_files(
     let mut c_abi = (*root.program.c_abi).clone();
     let mut generated_metadata = root.program.generated_metadata.to_vec();
     let mut generated_owners = root.program.generated_owners.to_vec();
+    let mut embedded_issuers = root.program.embedded_issuers.to_vec();
+    let mut no_std_roots = root.program.no_std_roots.to_vec();
+    let mut extern_crate_aliases = root.program.extern_crate_aliases.to_vec();
+    name_validation::validate_struct_sources(&root.program)?;
+    generated_owners::validate(&root.program)?;
+    generated_metadata::validate(&root.program)?;
+    for (index, function) in program.functions.iter_mut().enumerate() {
+        if let Some(source) = &function.embedded_source {
+            function.embedded_source =
+                Some(source.relocate_parsed(function, index, 0, &root.program, names.budget())?);
+        }
+    }
+    for (index, block) in program.impls.iter_mut().enumerate() {
+        if let Some(source) = &block.primitive_source {
+            block.primitive_source =
+                Some(source.relocate_parsed(block, index, 0, &root.program, names.budget())?);
+        }
+    }
     for file in rest {
         let p = &file.program;
-        if p.prelude_module.is_some()
-            || p.prelude_scope.is_some()
-            || !p.extern_mounts.is_empty()
-            || !p.embedded_issuers.is_empty()
-        {
-            return Err("unsupported: crate-root declarations in a child file".into());
+        name_validation::validate_struct_sources(p)?;
+        generated_owners::validate(p)?;
+        generated_metadata::validate(p)?;
+        let mut metadata = p.generated_metadata.to_vec();
+        generated_metadata::rebase(&mut metadata, program.structs.len(), program.impls.len())
+            .map_err(|error| error.message)?;
+        let mut owners = p.generated_owners.to_vec();
+        generated_owners::rebase(&mut owners, program.impls.len(), program.traits.len())?;
+        for (target, incoming) in [
+            (&mut program.prelude_module, p.prelude_module),
+            (&mut program.prelude_scope, p.prelude_scope),
+            (&mut program.core_prelude_scope, p.core_prelude_scope),
+            (&mut program.core_library_module, p.core_library_module),
+        ] {
+            if let Some(incoming) = incoming {
+                if target.is_some_and(|previous| previous != incoming) {
+                    return Err("conflicting native prelude file metadata".into());
+                }
+                *target = Some(incoming);
+            }
         }
-        program.functions.extend(p.functions.iter().cloned());
+        for mount in &p.extern_mounts {
+            if !program.extern_mounts.contains(mount) {
+                program.extern_mounts.push(*mount);
+            }
+        }
+        embedded_issuers.extend(p.embedded_issuers.iter().cloned());
+        for root in p.no_std_roots.iter() {
+            if !no_std_roots.contains(root) {
+                no_std_roots.push(*root);
+            }
+        }
+        extern_crate_aliases.extend(p.extern_crate_aliases.iter().cloned());
+        let function_offset = program.functions.len();
+        for (index, function) in p.functions.iter().enumerate() {
+            let mut relocated = function.clone();
+            if let Some(source) = &function.embedded_source {
+                relocated.embedded_source = Some(source.relocate_parsed(
+                    function,
+                    index,
+                    function_offset,
+                    p,
+                    names.budget(),
+                )?);
+            }
+            program.functions.push(relocated);
+        }
         program.constants.extend(p.constants.iter().cloned());
         program.structs.extend(p.structs.iter().cloned());
         program.enums.extend(p.enums.iter().cloned());
-        program.impls.extend(p.impls.iter().cloned());
+        let implementation_offset = program.impls.len();
+        for (index, block) in p.impls.iter().enumerate() {
+            let mut relocated = block.clone();
+            if let Some(source) = &block.primitive_source {
+                relocated.primitive_source = Some(source.relocate_parsed(
+                    block,
+                    index,
+                    implementation_offset,
+                    p,
+                    names.budget(),
+                )?);
+            }
+            program.impls.push(relocated);
+        }
         program.traits.extend(p.traits.iter().cloned());
         program
             .trait_imports
@@ -16802,8 +16936,8 @@ pub fn merge_crate_files(
                 .map(|(k, v)| (k.clone(), v.clone())),
         );
         c_abi.repr_c.extend(p.c_abi.repr_c.iter().cloned());
-        generated_metadata.extend(p.generated_metadata.iter().cloned());
-        generated_owners.extend(p.generated_owners.iter().cloned());
+        generated_metadata.extend(metadata);
+        generated_owners.extend(owners);
     }
     program.struct_sources =
         name_validation::capture_struct_sources(&names, &program.structs).map_err(|e| e.message)?;
@@ -16815,6 +16949,9 @@ pub fn merge_crate_files(
     program.c_abi = Arc::new(c_abi);
     program.generated_metadata = generated_metadata.into();
     program.generated_owners = generated_owners.into();
+    program.embedded_issuers = embedded_issuers.into();
+    program.no_std_roots = no_std_roots.into();
+    program.extern_crate_aliases = extern_crate_aliases.into();
     Ok(ParsedProgram {
         program,
         items,
@@ -16828,11 +16965,13 @@ fn parse_projection(
     source: &super::source::PreparedSource,
     projection: super::source::PreparedLexInput<'_>,
     base: u32,
-    child_sites: Arc<[usize]>,
+    child_sites: Option<Arc<[usize]>>,
     mount: Option<ChildMount<'_>>,
     budget: super::expansion_budget::ExpansionBudget,
     owner: super::owner_path::Issued,
 ) -> Result<ParsedProgram, super::source::SourceError> {
+    let file_view = child_sites.is_some();
+    let child_sites = child_sites.unwrap_or_else(|| Arc::from([]));
     let mapped = |error: ParseError| {
         let mut diagnostic = super::source::SourceError::syntax(
             error.primary.or_else(|| {
@@ -16858,6 +16997,10 @@ fn parse_projection(
     };
     let mut no_std_roots = Vec::new();
     let mut forbid_unsafe_roots = Vec::new();
+    if let Some(mount) = &mount {
+        no_std_roots.extend(mount.entry.no_std_roots.iter().copied());
+        forbid_unsafe_roots.extend(mount.entry.forbid_unsafe_roots.iter().copied());
+    }
     for policy in &source.crate_policies {
         if let Some(root) = policy.forbid_unsafe_root(source)? {
             forbid_unsafe_roots.push(
@@ -16877,7 +17020,11 @@ fn parse_projection(
         }
     }
     let issuers = source.embedded_issuers(projection.snapshot(), &budget)?;
-    let inherits = mount.as_ref().is_some_and(|m| m.entry.macros.is_some());
+    // A macro-free ancestor still has to publish a textual frontier for a
+    // macro-bearing descendant. Whole-source parsing used to discover the
+    // descendant's tokens up front, which hid this dependency.
+    // Every file must record occurrences because a sibling may introduce scopes.
+    let inherits = file_view || mount.is_some() || !child_sites.is_empty();
     let tokens = native_input_with(&projection, budget, owner, source.edition(), inherits)
         .map_err(mapped)?;
     parse_syntax_tokens_policy(
@@ -16911,7 +17058,11 @@ mod provider_source_context;
 mod provider_source_domain;
 mod root_resolution;
 pub mod sema_lower;
-pub use root_resolution::resolve;
+pub use root_resolution::{
+    ResolutionNamespace, ResolvedModuleItems, finish_resolution, prepare_resolution,
+    prepare_resolution_owned, resolution_module_indices, resolution_modules, resolve,
+    resolve_module_items,
+};
 #[cfg(test)]
 mod generic_trait_source_tests {
     use super::*;
@@ -19138,6 +19289,32 @@ impl PlanCtx {
         catalog_owner: super::owner_path::Issued,
         world_owner: super::owner_path::Issued,
     ) -> Result<Self, String> {
+        signature_graph::immediate(Self::from_shared_program_with_signatures(
+            shared,
+            budget,
+            eager,
+            catalog_owner,
+            world_owner,
+            |inputs| std::future::ready(signature_graph::compute_standalone(inputs, budget)),
+        ))
+    }
+
+    /// The callback publishes the final immutable inputs and obtains keyed
+    /// callable outputs. Only the existing signatures debt boundary joins them.
+    pub(crate) async fn from_shared_program_with_signatures<F, Fut>(
+        shared: Arc<Program>,
+        budget: &ir::PlanBudget,
+        eager: bool,
+        catalog_owner: super::owner_path::Issued,
+        world_owner: super::owner_path::Issued,
+        compute_signatures: F,
+    ) -> Result<Self, String>
+    where
+        F: FnOnce(Arc<signature_graph::CallableSignatureInputs>) -> Fut,
+        Fut: std::future::Future<
+                Output = Result<Vec<Arc<signature_graph::CallableSignatureOutput>>, String>,
+            >,
+    {
         let program = shared.as_ref();
         program.validate_name_handles()?;
         program.validate_c_source()?;
@@ -20212,219 +20389,121 @@ impl PlanCtx {
             .ok_or("closure provider domains shared before source schema completion")?
             .install_closure_provider_domains(budget)?;
         provider_source_context::install_closure_source_contexts(&mut contexts, &registry, budget)?;
-        for (index, id) in registry.function_ids.iter().copied().enumerate() {
-            let f = match registry.callable_sources[index] {
-                CallableSource::Free(i) => &program.functions[i],
-                CallableSource::Associated {
-                    implementation,
-                    item,
-                } => &program.impls[implementation].items[item].function,
-                CallableSource::TraitDefault { trait_index, item } => program.traits[trait_index]
-                    .items[item]
-                    .default
-                    .as_ref()
-                    .ok_or("missing source default body")?,
-            };
-            let info = registry.declaration(id)?;
-            state.source_context = Some(registry.source_type_context(id)?);
-            let mut bindings = generic_bindings(&registry, &info.env, budget)?;
-            let context = contexts
-                .entry(id)
-                .or_insert_with(|| CallableContext {
-                    module: info.path.module,
-                    self_ty: None,
-                    associated_owner: None,
-                    receiver: ReceiverKind::None,
-                })
-                .clone();
-            if let Some(ty) = &context.self_ty {
-                bindings.insert(GenericBindingKey::SelfType, ty.clone());
-            }
-            let caller = if !info.env.is_generic() {
-                ir::FactsCtx::Concrete
-            } else {
-                ir::FactsCtx::Universal(&info.env)
-            };
-            let mut names = std::collections::HashSet::new();
-            for (name, _) in &f.params {
-                if let Some(key) = name.checked_key(program.names.as_ref())?
-                    && !names.insert(key)
-                {
-                    return Err("duplicate parameter".into());
-                }
-            }
-            // Additional exact conservative admission, not a refund or carveout
-            // from the existing broad declaration reservation.
-            let capacity = f
-                .params
-                .len()
-                .checked_add(usize::from(context.receiver != ReceiverKind::None))
-                .ok_or("signature params overflow")?;
-            let (mut params, params_storage) = StoredSchema::params(capacity, budget)?;
-            budget.charge_work(f.params.len())?;
-            for (_, ty) in &f.params {
-                params.push(state.source_ty(&registry, ty, &bindings, caller, budget, 0, true)?);
-            }
-            if context.receiver != ReceiverKind::None {
-                budget.charge_work(params.len() + 1)?;
-                params.insert(
-                    0,
-                    receiver_ty(
-                        context.receiver,
-                        context
-                            .self_ty
-                            .clone()
-                            .ok_or("receiver without Self type")?,
-                    ),
-                );
-            }
-            let result =
-                state.source_ty(&registry, &f.result, &bindings, caller, budget, 0, true)?;
-            reject_slice_result(&result)?;
-            if info.env.is_generic() {
-                for ty in params.iter().chain(std::iter::once(&result)) {
-                    if !raw_type_has_projection(ty, budget, 0)? {
-                        validate_root_carrier(ty, caller, budget)?;
-                    }
-                }
-            }
-            let region_mode = source_region_mode(
-                &f.regions,
-                &f.params,
-                &f.result,
-                matches!(registry.callable_sources[index], CallableSource::Free(_)),
-                budget,
-            )?;
-            state.retain(budget, 128)?;
-            source_schemas.set_region_mode(id, region_mode, &registry, budget)?;
-            let signature = ir::Signature {
-                ref_contract: canonical_ref_contract(
-                    (program.names.as_ref(), budget),
-                    &f.regions,
-                    &f.params,
-                    &f.result,
-                    (context.receiver, region_mode),
-                    &params,
-                    &result,
-                )?,
-                params,
-                result,
-            };
-            source_schemas.source_regions.insert(
-                source_schemas::decl_slot(id, &registry, budget)?,
-                carrier_regions::attach(
-                    &registry,
-                    &f.regions,
-                    &f.params,
-                    &f.result,
-                    match registry.callable_sources[index] {
-                        CallableSource::Associated { implementation, .. } => {
-                            Some(&program.impls[implementation])
-                        }
-                        _ => None,
-                    },
-                    &signature,
-                    context.receiver,
-                    original_source_regions(
-                        (program.names.as_ref(), budget),
-                        id,
-                        &f.regions,
-                        &f.params,
-                        &f.result,
-                        &signature.ref_contract,
-                        context.receiver,
-                    )?,
-                    budget,
-                )?,
-                budget,
-            )?;
-            let mut rows = Vec::new();
-            append_implicit_sized(&registry, &info.env, &mut rows, budget)?;
-            if let CallableSource::Associated { implementation, .. } =
-                registry.callable_sources[index]
+        associated_declarations::seal(&mut registry, &mut state, budget)?;
+        state.source_context = None;
+        let root = program.modules.source_root().map_err(module_diagnostic)?;
+        let mut has_main = false;
+        for f in &program.functions {
+            if f.module == root
+                && f.name.segments().len() == 1
+                && f.type_params.is_empty()
+                && f.params.is_empty()
+                && matches!(f.result, Type::Unit)
             {
-                append_source_bounds(
-                    &mut state,
-                    &registry,
-                    &bindings,
-                    &program.impls[implementation].bounds,
-                    &mut rows,
-                    caller,
+                has_main |= program.symbols.matches(
+                    program.names.as_ref(),
+                    f.name.segments()[0],
+                    super::semantic_name::BuiltinAtom::EntryMain,
+                )?;
+            }
+        }
+        if !has_main {
+            return Err("main must exist, take no arguments and return ()".into());
+        }
+        // Recipe declarations follow the catalog prefix in the catalog's own
+        // (non-source) index range; source identities carry SOURCE_BIT.
+        let source_end = catalog_builder.source_start();
+        // `program` was name-validated on entry to this constructor.
+        let inventory = recipes::inventory_validated(program, budget)?;
+        let catalog = catalog_builder
+            .finish(source_end, inventory, budget)
+            .map_err(|e| e.into_legacy_diagnostic(budget))?;
+        let registry_mut =
+            Arc::get_mut(&mut registry).ok_or("registry shared before catalog seal")?;
+        for entry in catalog.declarations() {
+            if entry.declaration.index < u64::from(source_end) {
+                continue;
+            }
+            budget.charge_work(1)?;
+            budget.retain_bytes(1024 + entry.name.len() * 4)?;
+            registry_mut.push_declaration(catalog_decl_info(entry, budget)?)?;
+            if let Some(schema) = &entry.schema {
+                source_schemas.functions.insert(
+                    source_schemas::decl_slot(entry.declaration, registry_mut, budget)?,
+                    StoredSchema::copy(schema, budget)?,
                     budget,
                 )?;
-                if let Some(path) = &program.impls[implementation].trait_path {
-                    let trait_ref = state
-                        .source_trait_application(
-                            &registry,
-                            path,
-                            context
-                                .self_ty
-                                .as_ref()
-                                .ok_or("trait impl item without Self")?,
-                            &bindings,
-                            caller,
-                            budget,
-                        )?
-                        .reject_equalities()?;
-                    if rows.len() >= tr::MAX_PREDICATES {
-                        return Err("predicate environment limit exceeded".into());
-                    }
-                    budget.retain_bytes(std::mem::size_of::<ir::Predicate>())?;
-                    let old_capacity = rows.capacity();
-                    rows.try_reserve_exact(1).map_err(|_| {
-                        super::source::SourceError::from_token(
-                            super::token_session::TokenError::Budget(
-                                registry.names.budget().poison_allocation(),
-                            ),
-                        )
-                        .to_string()
-                    })?;
-                    budget.retain_bytes(
-                        rows.capacity()
-                            .saturating_sub(old_capacity)
-                            .saturating_sub(1)
-                            .checked_mul(std::mem::size_of::<ir::Predicate>())
-                            .ok_or("trait impl item predicate capacity overflow")?,
-                    )?;
-                    rows.push(ir::Predicate::Implements(trait_ref));
-                }
             }
-            append_source_bounds(
-                &mut state, &registry, &bindings, &f.bounds, &mut rows, caller, budget,
+            source_schemas.set_region_mode(
+                entry.declaration,
+                entry.info.region_contract_mode,
+                registry_mut,
+                budget,
             )?;
-            if let CallableSource::TraitDefault { trait_index, .. } =
-                registry.callable_sources[index]
-            {
-                let declaration = registry.trait_ids[trait_index];
-                let owner = registry.declaration(declaration)?;
-                append_source_bounds(
-                    &mut state,
-                    &registry,
-                    &bindings,
-                    &program.traits[trait_index].bounds,
-                    &mut rows,
-                    caller,
-                    budget,
-                )?;
-                let mut args = symbolic_args(&owner.param_env, budget)?;
-                args.remove(0);
-                budget.retain_bytes(256 + args.capacity() * std::mem::size_of::<ir::Ty>())?;
-                rows.push(ir::Predicate::Implements(ir::TraitRef {
-                    declaration,
-                    self_ty: context.self_ty.clone().ok_or("default without Self")?,
-                    args: args.into(),
-                }));
+            if matches!(
+                entry.callable_provider,
+                Some(CallableProvider::Recipe { .. })
+            ) {
+                registry_mut.function_ids.push(entry.declaration);
             }
-            source_schemas.functions.insert(
-                source_schemas::decl_slot(id, &registry, budget)?,
-                StoredSchema {
-                    value: tr::GenericSchema {
-                        env: info.env.clone(),
-                        signature,
-                        predicates: rows.into(),
-                    },
-                    params_storage,
-                },
+        }
+        // Seal the callable position index after the final recipe suffix.
+        let mut positions = HashMap::new();
+        positions
+            .try_reserve(registry_mut.function_ids.len())
+            .map_err(|_| "callable position index allocation limit exceeded")?;
+        budget.charge_work(registry_mut.function_ids.len())?;
+        for (index, id) in registry_mut.function_ids.iter().enumerate() {
+            positions.entry(*id).or_insert(index);
+        }
+        registry_mut.function_positions = positions;
+        let mut peers: HashMap<ir::DeclId, Vec<ir::DeclId>> = HashMap::new();
+        for id in &registry_mut.function_ids {
+            budget.charge_work(1)?;
+            if let Some(owner) = &registry_mut.declaration(*id)?.path.associated
+                && owner.trait_decl.is_none()
+            {
+                peers.entry(owner.nominal).or_default().push(*id);
+            }
+        }
+        registry_mut.inherent_peers = peers;
+        registry_mut.function_positions_sealed = true;
+        let mut owner_sites = HashMap::new();
+        for provider in registry_mut.closure_recipes.keys() {
+            budget.charge_work(1)?;
+            let info = registry_mut.declaration(*provider)?;
+            let Some(function) = program.functions.get(info.source_index) else {
+                continue;
+            };
+            let key =
+                name_scope::path_key(program.names.as_ref(), &function.name, Namespace::Type)?;
+            if let Some(source) = registry_mut.program.closure_sources.get(&key)
+                && source.stored.is_some()
+            {
+                owner_sites.insert(*provider, registry_mut.closure_source_owner(source)?);
+            }
+        }
+        registry_mut.closure_owner_sites = owner_sites;
+        // The registry is final before any signature input is published. The
+        // remaining source schema builder and PlanState stay local to this debt
+        // constructor and are never graph facts.
+        let signature_inputs = signature_graph::CallableSignatureInputs::new(
+            registry.clone(),
+            contexts,
+            &mut state,
+            budget,
+        )?;
+        let contexts = signature_inputs.contexts();
+        let outputs = compute_signatures(signature_inputs.clone()).await?;
+        if outputs.len() != signature_inputs.callable_count() {
+            return Err("source callable signature output count changed".into());
+        }
+        for (index, output) in outputs.iter().enumerate() {
+            output.install(
+                &signature_inputs,
+                index,
+                &mut source_schemas,
+                &mut state,
                 budget,
             )?;
         }
@@ -20534,101 +20613,6 @@ impl PlanCtx {
                 )?;
             }
         }
-        associated_declarations::seal(&mut registry, &mut state, budget)?;
-        state.source_context = None;
-        let root = program.modules.source_root().map_err(module_diagnostic)?;
-        let mut has_main = false;
-        for f in &program.functions {
-            if f.module == root
-                && f.name.segments().len() == 1
-                && f.type_params.is_empty()
-                && f.params.is_empty()
-                && matches!(f.result, Type::Unit)
-            {
-                has_main |= program.symbols.matches(
-                    program.names.as_ref(),
-                    f.name.segments()[0],
-                    super::semantic_name::BuiltinAtom::EntryMain,
-                )?;
-            }
-        }
-        if !has_main {
-            return Err("main must exist, take no arguments and return ()".into());
-        }
-        // Recipe declarations follow the catalog prefix in the catalog's own
-        // (non-source) index range; source identities carry SOURCE_BIT.
-        let source_end = catalog_builder.source_start();
-        // `program` was name-validated on entry to this constructor.
-        let inventory = recipes::inventory_validated(program, budget)?;
-        let catalog = catalog_builder
-            .finish(source_end, inventory, budget)
-            .map_err(|e| e.into_legacy_diagnostic(budget))?;
-        let registry_mut =
-            Arc::get_mut(&mut registry).ok_or("registry shared before catalog seal")?;
-        for entry in catalog.declarations() {
-            if entry.declaration.index < u64::from(source_end) {
-                continue;
-            }
-            budget.charge_work(1)?;
-            budget.retain_bytes(1024 + entry.name.len() * 4)?;
-            registry_mut.push_declaration(catalog_decl_info(entry, budget)?)?;
-            if let Some(schema) = &entry.schema {
-                source_schemas.functions.insert(
-                    source_schemas::decl_slot(entry.declaration, registry_mut, budget)?,
-                    StoredSchema::copy(schema, budget)?,
-                    budget,
-                )?;
-            }
-            source_schemas.set_region_mode(
-                entry.declaration,
-                entry.info.region_contract_mode,
-                registry_mut,
-                budget,
-            )?;
-            if matches!(
-                entry.callable_provider,
-                Some(CallableProvider::Recipe { .. })
-            ) {
-                registry_mut.function_ids.push(entry.declaration);
-            }
-        }
-        // Seal the callable position index after the final recipe suffix.
-        let mut positions = HashMap::new();
-        positions
-            .try_reserve(registry_mut.function_ids.len())
-            .map_err(|_| "callable position index allocation limit exceeded")?;
-        budget.charge_work(registry_mut.function_ids.len())?;
-        for (index, id) in registry_mut.function_ids.iter().enumerate() {
-            positions.entry(*id).or_insert(index);
-        }
-        registry_mut.function_positions = positions;
-        let mut peers: HashMap<ir::DeclId, Vec<ir::DeclId>> = HashMap::new();
-        for id in &registry_mut.function_ids {
-            budget.charge_work(1)?;
-            if let Some(owner) = &registry_mut.declaration(*id)?.path.associated
-                && owner.trait_decl.is_none()
-            {
-                peers.entry(owner.nominal).or_default().push(*id);
-            }
-        }
-        registry_mut.inherent_peers = peers;
-        registry_mut.function_positions_sealed = true;
-        let mut owner_sites = HashMap::new();
-        for provider in registry_mut.closure_recipes.keys() {
-            budget.charge_work(1)?;
-            let info = registry_mut.declaration(*provider)?;
-            let Some(function) = program.functions.get(info.source_index) else {
-                continue;
-            };
-            let key =
-                name_scope::path_key(program.names.as_ref(), &function.name, Namespace::Type)?;
-            if let Some(source) = registry_mut.program.closure_sources.get(&key)
-                && source.stored.is_some()
-            {
-                owner_sites.insert(*provider, registry_mut.closure_source_owner(source)?);
-            }
-        }
-        registry_mut.closure_owner_sites = owner_sites;
         // Qualify every declaration before graph-facing publication. The sealed
         // callable index resolves each call without scanning other bodies.
         for function in &program.functions {
@@ -20659,7 +20643,7 @@ impl PlanCtx {
             registry,
             nominal_schemas,
             nominals,
-            contexts: Arc::new(contexts),
+            contexts,
             source_schemas,
             shared_env: None,
             module_items: Arc::from([]),

@@ -211,6 +211,11 @@ const SOURCE_ADMISSION: u32 = 128;
 const CHECK: u32 = 104;
 const BUILD: u32 = 105;
 const RESOLVE: u32 = 106;
+/// Ordinary free-function resolution, keyed by namespace module ordinal.
+/// Namespace/header preparation and final assembly remain explicit RESOLVE debt.
+const RESOLVE_MODULE: u32 = 148;
+/// Source callable schema computation, keyed by sealed signature module ordinal.
+const SIGNATURE_MODULE: u32 = 149;
 const SOURCE: u32 = 107;
 const LOWER: u32 = 108;
 const ANALYZE: u32 = 109;
@@ -345,6 +350,47 @@ impl InstanceBodyFact {
 struct ConcreteProofFact {
     concrete: ownership::ConcreteCfg,
 }
+/// Successful source admission for one exact canonical closed body. Generic
+/// instances never use this proof: they require their own substituted analysis.
+struct ClosedSourceProof {
+    concrete: ownership::ConcreteCfg,
+    publication: Arc<source_replay::CanonicalSourcePublication>,
+    const_context: bool,
+}
+impl crate::engine::Fact for ClosedSourceProof {}
+impl ClosedSourceProof {
+    fn reuse(
+        &self,
+        publication: &Arc<source_replay::CanonicalSourcePublication>,
+        body: &InstanceBodyFact,
+        target: &ir::CallTarget,
+        lowered: &Arc<cfg::Function>,
+        const_context: bool,
+        budget: &ir::PlanBudget,
+    ) -> Result<ownership::ConcreteCfg, Error> {
+        if !Arc::ptr_eq(&self.publication, publication)
+            || !Arc::ptr_eq(self.concrete.function(), lowered)
+            || self.const_context != const_context
+            || self.concrete.facts().target() != Some(target)
+            || body.facts.target() != Some(target)
+            || !Arc::ptr_eq(self.concrete.facts().world(), body.facts.world())
+            || !target.type_args.is_empty()
+            || !self.concrete.analysis().passed()
+            || !self.concrete.budget().same_authority(budget)
+        {
+            return Err(Error::new(
+                "closed source proof changed exact body authority",
+            ));
+        }
+        publication
+            .validate_source(&body.checked, &body.facts, budget)
+            .map_err(|error| source_fact_error(error, budget))?;
+        lowered
+            .validate_source_publication(publication, budget)
+            .map_err(|error| source_fact_error(error, budget))?;
+        Ok(self.concrete.clone())
+    }
+}
 /// `SSA`, `LOCAL_OPT` and `IPO_OPT` output. `None` means the function is
 /// outside the optimizer's current subset and keeps the stack emitter.
 ///
@@ -428,6 +474,8 @@ const ANALYSIS_OUTPUT: usize = 1;
 /// `SOURCE_ADMISSION` third output: the CFG it analyzed (generic template CFG
 /// for universal callables). CHECK-mode CFG accounting reads this, never LOWER.
 const SOURCE_CFG_OUTPUT: usize = 2;
+/// Exact successful closed-source ownership proof, or None for universal bodies.
+const SOURCE_CLOSED_PROOF_OUTPUT: usize = 3;
 /// `PARSE` outputs: parsed syntax, assembled source accounting/diagnostics,
 /// and the admitted file identities used by the scoped per-file syntax route.
 const PARSE_OUTPUTS: usize = 3;
@@ -441,6 +489,87 @@ struct ParseFilesFact {
     files: std::collections::HashMap<keys::SourceFile, u32>,
 }
 impl crate::engine::Fact for ParseFilesFact {}
+
+#[derive(Debug)]
+struct ParseFileFailure {
+    kind: source::SourceErrorKind,
+    message: Arc<str>,
+    _storage: expansion_budget::RetainedBytes,
+}
+impl ParseFileFailure {
+    fn ordered_retry(kind: source::SourceErrorKind) -> bool {
+        matches!(
+            kind,
+            source::SourceErrorKind::Syntax | source::SourceErrorKind::Unsupported
+        )
+    }
+    fn from_error(
+        error: source::SourceError,
+        budget: &expansion_budget::ExpansionBudget,
+    ) -> Result<Self, Error> {
+        use expansion_budget::{Counter, Storage};
+        let location_bytes = error.location.as_ref().map_or(0, |location| {
+            location
+                .path
+                .as_os_str()
+                .len()
+                .saturating_mul(3)
+                .saturating_add(128)
+        });
+        let bytes = error
+            .message
+            .len()
+            .checked_add(location_bytes)
+            .and_then(|n| n.checked_add(128 + std::mem::size_of::<Self>()))
+            .ok_or_else(|| Error::new("parse failure diagnostic size overflow"))?;
+        budget
+            .charge(Counter::DiagnosticBytes, bytes as u64)
+            .map_err(|error| Error::new(error.to_string()))?;
+        let lease = budget
+            .reserve(Storage::Retained, bytes as u64)
+            .map_err(|error| Error::new(error.to_string()))?;
+        let temporary = budget
+            .reserve(Storage::Temporary, bytes as u64)
+            .map_err(|error| Error::new(error.to_string()))?;
+        let kind = error.kind;
+        let mut rendered = String::new();
+        rendered
+            .try_reserve_exact(bytes)
+            .map_err(|_| Error::new("parse failure diagnostic allocation failed"))?;
+        std::fmt::write(&mut rendered, format_args!("{error}"))
+            .map_err(|_| Error::new("parse failure diagnostic formatting failed"))?;
+        let message = Arc::from(rendered);
+        drop(temporary);
+        let storage = lease
+            .retain()
+            .map_err(|error| Error::new(error.to_string()))?;
+        Ok(Self {
+            kind,
+            message,
+            _storage: storage,
+        })
+    }
+    fn inherited(&self, budget: &expansion_budget::ExpansionBudget) -> Result<Self, Error> {
+        let storage = budget
+            .reserve(
+                expansion_budget::Storage::Retained,
+                std::mem::size_of::<Self>() as u64,
+            )
+            .and_then(|lease| lease.retain())
+            .map_err(|error| Error::new(error.to_string()))?;
+        Ok(Self {
+            kind: self.kind,
+            message: self.message.clone(),
+            _storage: storage,
+        })
+    }
+}
+impl crate::engine::Fact for ParseFileFailure {}
+impl std::fmt::Display for ParseFileFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
 
 struct Snapshot {
     input: Input,
@@ -748,8 +877,10 @@ impl Provider for CompilerProvider {
             | ASSOCIATED_CONST_HEADER
             | ASSOCIATED_CONST_SELECT
             | OPAQUE_CALL_DISPATCH => 2,
-            TEMPLATE_BODY | SOURCE_ADMISSION => 3,
+            TEMPLATE_BODY => 3,
+            SOURCE_ADMISSION => 4,
             PARSE => PARSE_OUTPUTS,
+            RESOLVE | SIGNATURES => 2,
             _ => 1,
         }
     }
@@ -856,12 +987,14 @@ impl Provider for CompilerProvider {
                 }
                 PARSE_FILE => {
                     let file = keys::SourceFile::from_words(&key.params)?;
+                    let attachment = key.params.len() == 1 && key.params[0] != 0;
                     let manifest = cx
                         .request_root(&keys::ParseDebtRoot)
                         .get(PARSE_FILES_OUTPUT);
                     let source = cx.request_item(&file).get(0);
                     let parent = file
                         .parent()
+                        .or_else(|| attachment.then(keys::SourceFile::input))
                         .map(|parent| cx.request_item(&keys::ParseFile(parent)).get(0));
                     let manifest: Arc<ParseFilesFact> = cx.read_fact(manifest).await?;
                     let base = *manifest
@@ -873,12 +1006,14 @@ impl Provider for CompilerProvider {
                         .as_ref()
                         .as_ref()
                         .map_err(|_| Error::new("admitted parse file has a failed source"))?;
-                    let view = source::FileView::of(unit, base, &this.0.source_options)
+                    let options = this.0.source_options.for_ordinal(&key.params);
+                    let view = source::FileView::for_graph(unit, base, &options, &key.params)
                         .map_err(|error| Error::new(error.to_string()))?;
-                    let parent: Option<Arc<Result<frontend::ParsedProgram, ()>>> = match parent {
-                        Some(handle) => Some(cx.read_fact(handle).await?),
-                        None => None,
-                    };
+                    let parent: Option<Arc<Result<frontend::ParsedProgram, ParseFileFailure>>> =
+                        match parent {
+                            Some(handle) => Some(cx.read_fact(handle).await?),
+                            None => None,
+                        };
                     let budget = expansion_budget::ExpansionBudget::default();
                     let mut issuer = owner_path::OwnerIssuer::new(cx.owner_root()?, &budget)
                         .map_err(|error| Error::new(format!("owner issuance failed: {error:?}")))?;
@@ -889,18 +1024,34 @@ impl Provider for CompilerProvider {
                         .issue(owner_path::OwnerDomain::TokenSession)
                         .map_err(|error| Error::new(format!("owner issuance failed: {error:?}")))?;
                     let parsed = match parent.as_deref() {
-                        None => frontend::parse_file_view_owned(&view, budget, snapshot, owner)
-                            .map_err(|_| ()),
+                        None => {
+                            frontend::parse_file_view_owned(&view, budget.clone(), snapshot, owner)
+                        }
+                        Some(Ok(parent)) if attachment => frontend::parse_attachment_view_owned(
+                            &view,
+                            parent,
+                            budget.clone(),
+                            snapshot,
+                            owner,
+                        ),
                         Some(Ok(parent)) => frontend::parse_child_view_owned(
                             &view,
                             parent,
                             *key.params.last().unwrap() as usize,
-                            budget,
+                            budget.clone(),
                             snapshot,
                             owner,
-                        )
-                        .map_err(|_| ()),
-                        Some(Err(())) => Err(()),
+                        ),
+                        Some(Err(error)) => {
+                            return cx.publish_fact(
+                                0,
+                                Err::<frontend::ParsedProgram, _>(error.inherited(&budget)?),
+                            );
+                        }
+                    };
+                    let parsed = match parsed {
+                        Ok(parsed) => Ok(parsed),
+                        Err(error) => Err(ParseFileFailure::from_error(error, &budget)?),
                     };
                     cx.publish_fact(0, parsed)
                 }
@@ -918,10 +1069,7 @@ impl Provider for CompilerProvider {
                     // Synthetic crate attachments still need their assembly
                     // transport. Do not approximate them with shallow views.
                     let options = &this.0.source_options;
-                    let split = !options.prelude
-                        && options.externs.is_empty()
-                        && !options.library
-                        && !options.cfg.names.contains("test")
+                    let split = !options.cfg.names.contains("test")
                         && !matches!(this.0.input, Input::ProbeFile(_, _));
                     let mut file_ids = Vec::new();
                     let mut assembler = source::SourceAssembler::new(&this.0.source_options);
@@ -966,11 +1114,14 @@ impl Provider for CompilerProvider {
                     let mut parsed_files = Vec::new();
                     let mut file_error = false;
                     for handle in handles {
-                        let parsed: Arc<Result<frontend::ParsedProgram, ()>> =
+                        let parsed: Arc<Result<frontend::ParsedProgram, ParseFileFailure>> =
                             cx.read_fact(handle).await?;
                         match parsed.as_ref() {
-                            Ok(parsed) => parsed_files.push(parsed.clone()),
-                            Err(()) => file_error = true,
+                            Ok(_) => parsed_files.push(parsed),
+                            Err(error) if ParseFileFailure::ordered_retry(error.kind) => {
+                                file_error = true
+                            }
+                            Err(error) => return Err(Error::new(error.to_string())),
                         }
                     }
                     // Graph route: the session owner is issued from this PARSE
@@ -986,11 +1137,15 @@ impl Provider for CompilerProvider {
                     let owner = issuer
                         .issue(owner_path::OwnerDomain::TokenSession)
                         .map_err(|error| Error::new(format!("owner issuance failed: {error:?}")))?;
-                    // A shallow parent can fail after an earlier child site.
-                    // Until syntax errors carry splice-order keys, select the
-                    // exact existing whole-source diagnostic on any file error.
+                    // Only syntax/unsupported errors may replay the assembled
+                    // parser for splice-order diagnostics. Authority, resource,
+                    // source and infrastructure failures always fail closed.
                     let parsed = if split && !file_error {
-                        frontend::merge_crate_files(&parsed_files, parse_budget, owner)
+                        let files = parsed_files
+                            .iter()
+                            .filter_map(|file| file.as_ref().as_ref().ok())
+                            .collect::<Vec<_>>();
+                        frontend::merge_crate_file_refs(&files, parse_budget, owner)
                             .map_err(Error::new)
                     } else {
                         frontend::parse_prepared_owned(&prepared, parse_budget, snapshot, owner)
@@ -999,11 +1154,30 @@ impl Provider for CompilerProvider {
                     cx.publish_fact(1, prepared)?;
                     cx.publish_fact(0, parsed?)
                 }
+                RESOLVE_MODULE => {
+                    let ordinal = item_index(&key, "missing resolution module")?;
+                    let namespace_handle = cx.request(keys::ResolveDebtRoot.key()).get(1);
+                    let namespace: Arc<Arc<frontend::ResolutionNamespace>> =
+                        cx.read_fact(namespace_handle).await?;
+                    crate::engine::scale_task_work(
+                        u64::try_from(
+                            frontend::resolution_module_indices(&namespace, ordinal)
+                                .map_err(Error::new)?
+                                .len(),
+                        )
+                        .unwrap_or(u64::MAX)
+                        .saturating_mul(WORK_PER_PROGRAM_ITEM),
+                    );
+                    let items =
+                        frontend::resolve_module_items(&namespace, ordinal).map_err(Error::new)?;
+                    cx.publish_fact(0, items)
+                }
                 RESOLVE => {
                     let program = match &this.0.input {
                         Input::Program(program) => {
                             cx.read(cx.request(keys::ParseDebtRoot.key()).get(0))
                                 .await?;
+                            cx.publish(1, 1)?;
                             program.clone()
                         }
                         _ => {
@@ -1013,10 +1187,45 @@ impl Provider for CompilerProvider {
                                 std::mem::size_of::<frontend::Program>()
                                     + 2 * std::mem::size_of::<usize>(),
                             )?;
-                            Arc::new(frontend::resolve(&parsed).map_err(Error::new)?)
+                            let namespace = frontend::prepare_resolution_owned(parsed.clone())
+                                .map_err(Error::new)?;
+                            let module_keys = (0..frontend::resolution_modules(&namespace).len())
+                                .map(keys::Item::<RESOLVE_MODULE>)
+                                .collect::<Vec<_>>();
+                            let namespace = Arc::new(namespace);
+                            cx.publish_fact(1, namespace.clone())?;
+                            let handles = cx.request_all(module_keys.iter(), 0);
+                            let mut items = Vec::with_capacity(handles.len());
+                            for handle in handles {
+                                let item: Arc<frontend::ResolvedModuleItems> =
+                                    cx.read_fact(handle).await?;
+                                items.push(item.as_ref().clone());
+                            }
+                            Arc::new(
+                                frontend::finish_resolution(&namespace, items)
+                                    .map_err(Error::new)?,
+                            )
                         }
                     };
                     cx.publish_fact(0, program)
+                }
+                SIGNATURE_MODULE => {
+                    let ordinal = item_index(&key, "missing signature module")?;
+                    let inputs: Arc<Arc<frontend::signature_graph::CallableSignatureInputs>> = cx
+                        .read_fact(cx.request(keys::SignaturesDebtRoot.key()).get(1))
+                        .await?;
+                    crate::engine::scale_task_work(
+                        u64::try_from(inputs.module_input_size(ordinal).map_err(Error::new)?)
+                            .unwrap_or(u64::MAX)
+                            .saturating_mul(WORK_PER_CALLABLE_UNIT),
+                    );
+                    let output = frontend::signature_graph::compute_module_signatures(
+                        inputs.as_ref().clone(),
+                        ordinal,
+                        &this.0.budget,
+                    )
+                    .map_err(Error::new)?;
+                    cx.publish_fact(0, output)
                 }
                 SIGNATURES => {
                     let program: Arc<Arc<frontend::Program>> =
@@ -1035,13 +1244,34 @@ impl Provider for CompilerProvider {
                     let world = issuer
                         .issue(owner_path::OwnerDomain::TraitWorld)
                         .map_err(|error| Error::new(format!("owner issuance failed: {error:?}")))?;
-                    let context = frontend::PlanCtx::from_shared_program_with(
+                    let signature_cx = &cx;
+                    let context = frontend::PlanCtx::from_shared_program_with_signatures(
                         program.as_ref().clone(),
                         &this.0.budget,
                         false,
                         catalog,
                         world,
+                        |inputs| async move {
+                            let module_keys = (0..inputs.module_count())
+                                .map(keys::Item::<SIGNATURE_MODULE>)
+                                .collect::<Vec<_>>();
+                            signature_cx
+                                .publish_fact(1, inputs.clone())
+                                .map_err(|error| error.to_string())?;
+                            let handles = signature_cx.request_all(module_keys.iter(), 0);
+                            let mut outputs = Vec::with_capacity(handles.len());
+                            for handle in handles {
+                                let output: Arc<frontend::signature_graph::ModuleSignatureOutput> =
+                                    signature_cx
+                                        .read_fact(handle)
+                                        .await
+                                        .map_err(|error| error.to_string())?;
+                                outputs.push(output);
+                            }
+                            frontend::signature_graph::finish_module_signatures(&inputs, outputs)
+                        },
                     )
+                    .await
                     .map_err(Error::new)?;
                     cx.publish_fact(0, context)
                 }
@@ -1899,13 +2129,23 @@ impl Provider for CompilerProvider {
                         publication
                             .validate_source(&body.checked, &body.facts, &this.0.budget)
                             .map_err(|error| source_fact_error(error, &this.0.budget))?;
-                        cfg::lower_source_closed(publication, &this.0.budget)
-                            .map_err(|error| source_fact_error(error, &this.0.budget))?
+                        let lowered: Arc<Arc<cfg::Function>> = cx
+                            .read_item(
+                                &keys::Item::<SOURCE_ADMISSION>(instance_source),
+                                SOURCE_CFG_OUTPUT,
+                            )
+                            .await?;
+                        lowered
+                            .validate_source_publication(publication, &this.0.budget)
+                            .map_err(|error| source_fact_error(error, &this.0.budget))?;
+                        lowered.as_ref().clone()
                     } else {
-                        cfg::lower_with_facts(&body.checked, &body.facts, &this.0.budget)
-                            .map_err(Error::new)?
+                        Arc::new(
+                            cfg::lower_with_facts(&body.checked, &body.facts, &this.0.budget)
+                                .map_err(Error::new)?,
+                        )
                     };
-                    cx.publish_fact(0, Arc::new(lowered))
+                    cx.publish_fact(0, lowered)
                 }
                 ANALYZE => {
                     let types = facts.types().await?;
@@ -1917,17 +2157,6 @@ impl Provider for CompilerProvider {
                     body.validate_current_engine(cx.authority())?;
                     scale_task_work_by_cfg(&lowered);
                     let identity = instance_identity(&key, instance_source, &lowered.name);
-                    if !Self::universal_body(&types, instance_target.declaration)? {
-                        let template = facts.template(instance_source).await?;
-                        lowered
-                            .validate_source_publication(
-                                template.publication.as_ref().ok_or_else(|| {
-                                    Error::new("closed Source CFG omitted canonical publication")
-                                })?,
-                                &this.0.budget,
-                            )
-                            .map_err(|error| source_fact_error(error, &this.0.budget))?;
-                    }
                     if has_drop(&lowered) {
                         if let Some(index) = key_root_slot(&key) {
                             let demand: Arc<root_cleanup::RootCleanupDemand> =
@@ -1942,6 +2171,35 @@ impl Provider for CompilerProvider {
                                 .validate_cleanup(&lowered, &this.0.budget)
                                 .map_err(Error::new)?;
                         }
+                    }
+                    if !Self::universal_body(&types, instance_target.declaration)? {
+                        let template = facts.template(instance_source).await?;
+                        let publication = template.publication.as_ref().ok_or_else(|| {
+                            Error::new("closed source proof omitted canonical publication")
+                        })?;
+                        let proof: Arc<Option<ClosedSourceProof>> = cx
+                            .read_item(
+                                &keys::Item::<SOURCE_ADMISSION>(instance_source),
+                                SOURCE_CLOSED_PROOF_OUTPUT,
+                            )
+                            .await?;
+                        let proof = proof.as_ref().as_ref().ok_or_else(|| {
+                            Error::new("closed source admission omitted successful proof")
+                        })?;
+                        let const_context = types
+                            .callable_constness(instance_target.declaration)
+                            .map_err(Error::new)?
+                            == frontend::Constness::Const;
+                        let concrete = proof.reuse(
+                            publication,
+                            &body,
+                            &instance_target,
+                            &lowered,
+                            const_context,
+                            &this.0.budget,
+                        )?;
+                        cx.publish_fact(ANALYSIS_OUTPUT, concrete.analysis().clone())?;
+                        return cx.publish_fact(0, ConcreteProofFact { concrete });
                     }
                     let closed = cfg::close(lowered, body.facts.clone(), &this.0.budget)
                         .map_err(Error::new)?;
@@ -2252,6 +2510,7 @@ impl Provider for CompilerProvider {
                             publication.facts().phase() == traits::FactsPhase::Universal
                         });
                     if abstract_source || Self::universal_body(&types, declaration)? {
+                        cx.publish_fact(SOURCE_CLOSED_PROOF_OUTPUT, None::<ClosedSourceProof>)?;
                         let effects = cx.request(function(UNIVERSAL_EFFECTS_READY, index)).get(0);
                         let proof = cx
                             .request(function(UNIVERSAL_ANALYZE, index))
@@ -2316,6 +2575,15 @@ impl Provider for CompilerProvider {
                         ) {
                             Ok(concrete) => {
                                 cx.publish_fact(ANALYSIS_OUTPUT, concrete.analysis().clone())?;
+                                this.retain(envelope::<Option<ClosedSourceProof>>())?;
+                                cx.publish_fact(
+                                    SOURCE_CLOSED_PROOF_OUTPUT,
+                                    Some(ClosedSourceProof {
+                                        concrete,
+                                        publication: publication.clone(),
+                                        const_context,
+                                    }),
+                                )?;
                             }
                             Err(analysis) => {
                                 let message = analysis_diagnostic(
@@ -3188,6 +3456,236 @@ mod owner_route_tests {
     use super::*;
 
     #[test]
+    fn closed_source_proof_reuse_requires_exact_publication_cfg_and_context() {
+        for workers in [1, 8] {
+            let budget = ir::PlanBudget::default();
+            let snapshot = Arc::new(Snapshot {
+                input: Input::Text("fn first() {} fn main() {}".into()),
+                source_options: source::SourceOptions::default(),
+                budget: budget.clone(),
+            });
+            let engine = Engine::new(CompilerProvider(snapshot));
+            let check = engine.request(keys::CheckRoot.key());
+            let report = engine.run(workers).unwrap();
+            assert_eq!(report.failures, 0, "{:?}", report.node_errors);
+            check.completion().unwrap();
+            let load = |index| {
+                engine
+                    .fact_of::<Option<ClosedSourceProof>>(
+                        &keys::Item::<SOURCE_ADMISSION>(index).key(),
+                        SOURCE_CLOSED_PROOF_OUTPUT,
+                    )
+                    .unwrap()
+            };
+            let first = load(0);
+            let second = load(1);
+            let proof = first.as_ref().as_ref().unwrap();
+            let other = second.as_ref().as_ref().unwrap();
+            let body = InstanceBodyFact {
+                facts: proof.publication.facts().clone(),
+                checked: proof.publication.source().clone(),
+            };
+            let target = body.facts.target().unwrap();
+            let cfg = proof.concrete.function();
+            assert!(
+                proof
+                    .reuse(
+                        &proof.publication,
+                        &body,
+                        target,
+                        cfg,
+                        proof.const_context,
+                        &budget
+                    )
+                    .is_ok()
+            );
+            assert!(
+                proof
+                    .reuse(
+                        &other.publication,
+                        &body,
+                        target,
+                        cfg,
+                        proof.const_context,
+                        &budget
+                    )
+                    .is_err()
+            );
+            let copied_cfg = Arc::new(cfg.as_ref().clone());
+            assert!(
+                proof
+                    .reuse(
+                        &proof.publication,
+                        &body,
+                        target,
+                        &copied_cfg,
+                        proof.const_context,
+                        &budget
+                    )
+                    .is_err()
+            );
+            assert!(
+                proof
+                    .reuse(
+                        &proof.publication,
+                        &body,
+                        target,
+                        cfg,
+                        !proof.const_context,
+                        &budget
+                    )
+                    .is_err()
+            );
+            assert!(
+                proof
+                    .reuse(
+                        &proof.publication,
+                        &body,
+                        other.concrete.facts().target().unwrap(),
+                        cfg,
+                        proof.const_context,
+                        &budget
+                    )
+                    .is_err()
+            );
+            assert!(
+                proof
+                    .reuse(
+                        &proof.publication,
+                        &body,
+                        target,
+                        cfg,
+                        proof.const_context,
+                        &ir::PlanBudget::default()
+                    )
+                    .is_err()
+            );
+            let copied_body = InstanceBodyFact {
+                facts: body.facts.clone(),
+                checked: Arc::new(body.checked.as_ref().clone()),
+            };
+            assert!(
+                proof
+                    .reuse(
+                        &proof.publication,
+                        &copied_body,
+                        target,
+                        cfg,
+                        proof.const_context,
+                        &budget
+                    )
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn parse_file_failures_retry_only_ordered_user_diagnostics() {
+        use source::SourceErrorKind::*;
+        for kind in [Syntax, Unsupported] {
+            assert!(ParseFileFailure::ordered_retry(kind));
+        }
+        for kind in [Io, Limit, Cycle, Module, Contract, Infrastructure] {
+            assert!(!ParseFileFailure::ordered_retry(kind));
+        }
+        let budget = expansion_budget::ExpansionBudget::default();
+        let failure = ParseFileFailure::from_error(
+            source::SourceError::syntax(None, "invalid item"),
+            &budget,
+        )
+        .unwrap();
+        assert_eq!(failure.kind, Syntax);
+        assert!(failure._storage.bytes() >= failure.message.len() as u64);
+        let inherited = failure.inherited(&budget).unwrap();
+        assert!(Arc::ptr_eq(&failure.message, &inherited.message));
+        assert!(inherited._storage.bytes() >= std::mem::size_of::<ParseFileFailure>() as u64);
+        let limits = expansion_budget::ExpansionLimits {
+            bytes: 1,
+            ..Default::default()
+        };
+        let exhausted = expansion_budget::ExpansionBudget::new(limits);
+        assert!(
+            ParseFileFailure::from_error(
+                source::SourceError::syntax(None, "cannot bypass limit"),
+                &exhausted
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn default_prelude_parse_publishes_successful_file_facts() {
+        for (library, dependency, text) in [
+            (false, false, "fn main() { let x = Some(7i32); }"),
+            (true, false, "#![no_std]\npub fn value() -> i32 { 7i32 }"),
+            (false, true, "fn main() { let x = geom::double(7i64); }"),
+        ] {
+            for workers in [1, 8] {
+                let snapshot = Arc::new(Snapshot {
+                    input: Input::Text(text.into()),
+                    source_options: source::SourceOptions {
+                        library,
+                        externs: if dependency {
+                            vec![source::ExternCrate {
+                                name: "geom".into(),
+                                root: std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(
+                                    "tests/fixtures/projects/workspace/crates/geom/src/lib.rs",
+                                ),
+                                cfg: source::SourceOptions::default().cfg,
+                                cap_lints_allow: false,
+                            }]
+                        } else {
+                            Vec::new()
+                        },
+                        ..Default::default()
+                    },
+                    budget: ir::PlanBudget::default(),
+                });
+                let engine = Engine::new(CompilerProvider(snapshot));
+                let parse = engine.request(keys::ParseDebtRoot.key());
+                engine.run(workers).unwrap();
+                parse.completion().unwrap();
+                let manifest = parse.fact::<ParseFilesFact>(PARSE_FILES_OUTPUT).unwrap();
+                assert!(manifest.files.len() > 20, "prelude files were not split");
+                if dependency {
+                    assert!(
+                        manifest
+                            .files
+                            .contains_key(&keys::SourceFile::from_words(&[2, 0]).unwrap())
+                    );
+                }
+                for file in manifest.files.keys() {
+                    let key = crate::engine::ItemKey::key(&keys::ParseFile(file.clone()));
+                    let parsed = engine
+                        .fact_of::<Result<frontend::ParsedProgram, ParseFileFailure>>(&key, 0)
+                        .unwrap();
+                    assert!(
+                        parsed.is_ok(),
+                        "file fell back to assembled parsing: {file:?}: {:?}",
+                        parsed.as_ref().as_ref().err().map(|error| &error.message)
+                    );
+                    parsed
+                        .as_ref()
+                        .as_ref()
+                        .unwrap()
+                        .program
+                        .validate_name_handles()
+                        .unwrap_or_else(|error| {
+                            panic!("file {file:?} has invalid lexical authority: {error}")
+                        });
+                }
+                let parsed = parse.fact::<frontend::ParsedProgram>(0).unwrap();
+                parsed
+                    .program
+                    .validate_name_handles()
+                    .expect("merged file lexical authority");
+                assert!(parsed.program.prelude_module.is_some());
+                assert!(parsed.program.prelude_scope.is_some());
+            }
+        }
+    }
+
+    #[test]
     fn parse_file_rejects_unadmitted_identity() {
         for workers in [1, 8] {
             let snapshot = Arc::new(Snapshot {
@@ -3212,7 +3710,7 @@ mod owner_route_tests {
             );
             assert!(
                 unknown
-                    .fact::<Result<frontend::ParsedProgram, ()>>(0)
+                    .fact::<Result<frontend::ParsedProgram, ParseFileFailure>>(0)
                     .is_err()
             );
         }

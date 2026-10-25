@@ -333,6 +333,46 @@ pub struct FileView {
 impl FileView {
     /// The shallow view of `unit`, mounted at assembly FileId `base`.
     pub fn of(unit: &FileUnit, base: u32, options: &SourceOptions) -> Result<Self, SourceError> {
+        Self::mounted(unit, base, options, None, false)
+    }
+
+    /// Graph transport uses the same admitted external-crate wrapper and
+    /// inert library entry as assembly, without copying any sibling's text.
+    pub(super) fn for_graph(
+        unit: &FileUnit,
+        base: u32,
+        options: &SourceOptions,
+        ordinal: &[u64],
+    ) -> Result<Self, SourceError> {
+        let external = match ordinal {
+            [root] if *root >= 2 => Some(
+                options
+                    .externs
+                    .get(*root as usize - 2)
+                    .ok_or_else(|| {
+                        Loader::error(SourceErrorKind::Contract, None, "unknown file-view crate")
+                    })?
+                    .name
+                    .as_str(),
+            ),
+            _ => None,
+        };
+        Self::mounted(
+            unit,
+            base,
+            options,
+            external,
+            ordinal == [0] && options.library,
+        )
+    }
+
+    fn mounted(
+        unit: &FileUnit,
+        base: u32,
+        options: &SourceOptions,
+        external: Option<&str>,
+        library: bool,
+    ) -> Result<Self, SourceError> {
         let mut prepared = PreparedSource {
             edition: unit.edition,
             debug_assertions: options.cfg.debug_assertions(),
@@ -343,16 +383,30 @@ impl FileView {
             .sources
             .add(unit.path.clone(), unit.contents.clone());
         prepared.crate_roots.push(id);
-        if unit.forbid_unsafe_code {
+        if unit.forbid_unsafe_code || unit.no_std {
             prepared.crate_policies.push(CratePolicy {
                 root: id,
                 original: unit.contents.clone(),
                 no_std: unit.no_std,
-                forbid_unsafe_code: true,
+                forbid_unsafe_code: unit.forbid_unsafe_code,
             });
         }
         prepared.source_bytes = unit.contents.len();
         prepared.files = 1;
+        let anchor = SourceSpan {
+            file: id,
+            lo: 0,
+            hi: 0,
+        };
+        if let Some(name) = external {
+            append_segment(
+                &mut prepared,
+                &format!("\npub mod {EXTERN_PREFIX}{name} {{\n"),
+                anchor,
+                true,
+            )?;
+        }
+        let prefix = prepared.text.len();
         for segment in &unit.origins {
             append_segment(
                 &mut prepared,
@@ -367,10 +421,25 @@ impl FileView {
         if let Some(error) = &unit.terminal {
             return Err(copy_error(error, error.primary).with_sources(&prepared.sources));
         }
+        if external.is_some() {
+            append_segment(&mut prepared, "\n}\n", anchor, true)?;
+        }
+        if library {
+            append_segment(&mut prepared, "\nfn main() {}\n", anchor, true)?;
+        }
+        if let Some(attachment) = source_embedded::EmbeddedFile::attach(id, unit)? {
+            prepared.embedded_files.push(attachment);
+            prepared.embedded_transport =
+                Some(source_embedded::AssemblyTransport::issue(&prepared)?);
+        }
         Ok(Self {
             prepared,
             base,
-            child_sites: unit.children.iter().map(|child| child.at).collect(),
+            child_sites: unit
+                .children
+                .iter()
+                .map(|child| prefix + child.at)
+                .collect(),
         })
     }
 }
@@ -3162,6 +3231,13 @@ mod tests {
             issue(OwnerDomain::TokenSession),
         )
         .unwrap();
+        let mut forged = p0.clone();
+        forged.program.structs[0].shape = super::super::frontend::StructShape::Unit;
+        assert!(
+            merge_crate_files(&[forged], budget.clone(), issue(OwnerDomain::TokenSession),)
+                .is_err(),
+            "merge must validate original struct authority before recapture"
+        );
         let merged = merge_crate_files(
             &[p0, p1, p2],
             budget.clone(),

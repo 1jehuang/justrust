@@ -157,33 +157,24 @@ pub(super) fn capture_struct_sources(
     }))
 }
 
-/// Every child is visited, including unused declarations, unreachable bodies,
-/// unmatched patterns, public fields, and unselected generic arguments.
-/// No recursion or unaccounted traversal storage is used here. Existing source
-/// depth validation remains a separate gate, with its existing policy unchanged.
-pub(super) fn validate_program_names(program: &Program) -> Result<(), String> {
+/// Check original syntax before a trusted merge may recapture relocated rows.
+pub(super) fn validate_struct_sources(program: &Program) -> Result<(), String> {
     if program.struct_sources.rows.len() != program.structs.len() {
         return Err("contract: original struct declaration count changed".into());
     }
-    generated_owners::validate(program)?;
-    generated_metadata::validate(program)?;
-    let mut validator = Validator::new(program)?;
-    validator.require_coverage = true;
-    for recipe in generated_metadata::debug_recipes(&program.generated_metadata) {
-        if recipe.implementation.is_none() {
-            validator.work(1)?;
-            validator.generated.push(recipe.scope).map_err(transport)?;
-        }
-    }
-    if let Some(scopes) = &program.scopes {
-        scopes
-            .check_item_authority(program.names.as_ref(), program.modules.as_ref())
-            .map_err(scope_diagnostic)?;
-    }
-    validator.many(&program.functions, |value| Visit::Function(value, None))?;
-    validator.many(&program.constants, Visit::Const)?;
     for (declaration, original) in program.structs.iter().zip(&program.struct_sources.rows) {
-        validator.work(declaration.fields.len() + declaration.name.len() + 1)?;
+        program
+            .names
+            .budget()
+            .charge(
+                Counter::Work,
+                (declaration.fields.len() + declaration.name.len() + 1) as u64,
+            )
+            .map_err(|error| transport(TokenError::Budget(error)))?;
+        declaration
+            .name
+            .check(&*program.names)
+            .map_err(native_adapter::name_diagnostic)?;
         if declaration.module != original.module
             || declaration.shape != original.shape
             || declaration.name.key(Namespace::Type) != original.name
@@ -202,8 +193,34 @@ pub(super) fn validate_program_names(program: &Program) -> Result<(), String> {
                 return Err("contract: original struct field identity changed".into());
             }
         }
-        validator.push(Visit::Struct(declaration))?;
     }
+    Ok(())
+}
+
+/// Every child is visited, including unused declarations, unreachable bodies,
+/// unmatched patterns, public fields, and unselected generic arguments.
+/// No recursion or unaccounted traversal storage is used here. Existing source
+/// depth validation remains a separate gate, with its existing policy unchanged.
+pub(super) fn validate_program_names(program: &Program) -> Result<(), String> {
+    validate_struct_sources(program)?;
+    generated_owners::validate(program)?;
+    generated_metadata::validate(program)?;
+    let mut validator = Validator::new(program)?;
+    validator.require_coverage = true;
+    for recipe in generated_metadata::debug_recipes(&program.generated_metadata) {
+        if recipe.implementation.is_none() {
+            validator.work(1)?;
+            validator.generated.push(recipe.scope).map_err(transport)?;
+        }
+    }
+    if let Some(scopes) = &program.scopes {
+        scopes
+            .check_item_authority(program.names.as_ref(), program.modules.as_ref())
+            .map_err(scope_diagnostic)?;
+    }
+    validator.many(&program.functions, |value| Visit::Function(value, None))?;
+    validator.many(&program.constants, Visit::Const)?;
+    validator.many(&program.structs, Visit::Struct)?;
     validator.many(&program.enums, Visit::Enum)?;
     validator.many(&program.impls, Visit::Impl)?;
     validator.many(&program.traits, Visit::Trait)?;

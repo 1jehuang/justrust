@@ -89,6 +89,26 @@ impl<'a> PreparedLexInput<'a> {
         budget: &ExpansionBudget,
         owner: super::super::owner_path::Issued,
     ) -> Result<Self, SourceError> {
+        Self::linked_file_view(view, parent, true, budget, owner)
+    }
+
+    /// A separate crate shares namespace stores, not its original-source root.
+    pub(in crate::compiler) fn attachment_file_view(
+        view: &'a super::FileView,
+        parent: &SourceSnapshot,
+        budget: &ExpansionBudget,
+        owner: super::super::owner_path::Issued,
+    ) -> Result<Self, SourceError> {
+        Self::linked_file_view(view, parent, false, budget, owner)
+    }
+
+    fn linked_file_view(
+        view: &'a super::FileView,
+        parent: &SourceSnapshot,
+        join_root: bool,
+        budget: &ExpansionBudget,
+        owner: super::super::owner_path::Issued,
+    ) -> Result<Self, SourceError> {
         let prepared = &view.prepared;
         let root = parent
             .file(0)
@@ -106,7 +126,13 @@ impl<'a> PreparedLexInput<'a> {
             siblings.push(parent.unlinked());
             snapshot.linked_with(siblings, budget)
         })
-        .and_then(|snapshot| snapshot.join_crate_root(root))
+        .and_then(|snapshot| {
+            if join_root {
+                snapshot.join_crate_root(root)
+            } else {
+                Ok(snapshot)
+            }
+        })
         .map_err(SourceError::from_token)?;
         Self::new(&prepared.text, Some(&prepared.origins), snapshot, budget)
     }

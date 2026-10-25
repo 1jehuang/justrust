@@ -606,6 +606,40 @@ fn original_token_range<'a>(
 }
 
 impl FunctionSource {
+    /// Trusted file merge changes only the enclosing free-function ordinal.
+    pub(super) fn relocate_parsed(
+        &self,
+        function: &Function,
+        index: usize,
+        offset: usize,
+        program: &Program,
+        budget: &crate::compiler::expansion_budget::ExpansionBudget,
+    ) -> Result<Arc<Self>, String> {
+        let original = self.original()?;
+        if original.function_index != index {
+            return Err("embedded function changed original file ordinal".into());
+        }
+        original.replay_source(function, &program.names, &program.embedded_issuers)?;
+        let index = index
+            .checked_add(offset)
+            .ok_or("embedded function ordinal overflow")?;
+        let admitted = budget
+            .reserve(
+                crate::compiler::expansion_budget::Storage::Retained,
+                (std::mem::size_of::<SourceFunction>()
+                    + std::mem::size_of::<Self>()
+                    + 4 * std::mem::size_of::<usize>()) as u64,
+            )
+            .and_then(|lease| lease.retain())
+            .map_err(|error| error.to_string())?;
+        let mut relocated = (**original).clone();
+        relocated.function_index = index;
+        relocated._admitted = admitted;
+        Ok(Arc::new(Self {
+            phase: FunctionPhase::Original(Arc::new(relocated)),
+        }))
+    }
+
     pub(super) fn original(&self) -> Result<&Arc<SourceFunction>, String> {
         match &self.phase {
             FunctionPhase::Original(original) => Ok(original),

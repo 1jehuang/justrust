@@ -67,3 +67,92 @@ fn rejected_source_move_retains_failed_analysis_before_codegen() {
         assert!(report.failures > 0);
     }
 }
+
+#[test]
+fn module_signature_producers_are_keyed_and_do_not_grow_with_sibling_callables() {
+    for workers in [1, 8] {
+        let mut previous = None;
+        for count in [2, 4] {
+            let mut source = String::from("mod nested{pub fn identity(x:i32)->i32{x}}");
+            for index in 0..count {
+                source.push_str(&format!("fn leaf{index}(x:i32)->i32{{x}}"));
+            }
+            source.push_str("fn main(){let _=nested::identity(2);}");
+            let compiled = compiler::compile(source, workers, true).unwrap();
+            let modules = compiled
+                .report
+                .node_evaluations
+                .iter()
+                .filter(|(key, _)| key.kind == 149)
+                .cloned()
+                .collect::<Vec<_>>();
+            assert!(
+                modules.len() >= 2,
+                "root and nested module must have separate schema producers"
+            );
+            assert!(
+                modules
+                    .iter()
+                    .all(|(key, evaluations)| key.params.len() == 1 && *evaluations == 1)
+            );
+            if let Some(previous) = &previous {
+                assert_eq!(
+                    &modules, previous,
+                    "adding sibling functions must not add schema graph dependencies"
+                );
+            }
+            previous = Some(modules);
+            assert!(compiled.executable.is_none());
+            assert!(
+                compiled
+                    .report
+                    .node_evaluations
+                    .iter()
+                    .all(|(key, _)| !matches!(key.kind, 103 | 105 | 130..=133))
+            );
+        }
+    }
+}
+
+#[test]
+fn module_signature_diagnostics_follow_callable_order_not_module_completion_order() {
+    // The module's free function registers before the root's bad free
+    // signature, but its bad associated signature registers afterward. Module
+    // zero therefore must not win just because it is collected first.
+    let source = "mod a{pub fn good(){}pub struct S{x:i32}impl S{pub fn later()->[i32]{loop{}}}}fn earlier(x:i32,x:i32){}fn main(){}";
+    for workers in [1, 8] {
+        for check in [true, false] {
+            let failure = compiler::compile_observed(source.into(), workers, check)
+                .err()
+                .unwrap();
+            assert!(
+                failure.error.to_string().contains("duplicate parameter"),
+                "{}",
+                failure.error
+            );
+            assert!(
+                !failure.error.to_string().contains("unsupported"),
+                "later unsupported signatures must not mask an earlier invalid signature"
+            );
+            let report = failure.report.unwrap();
+            assert!(report.capture_complete);
+            let module_ids = report
+                .node_evaluations
+                .iter()
+                .zip(&report.node_ids)
+                .filter_map(|((key, _), id)| (key.kind == 149).then_some(*id))
+                .collect::<Vec<_>>();
+            assert!(
+                module_ids.len() >= 2,
+                "the invalid fixture must reach independent signature module producers"
+            );
+            assert!(
+                report
+                    .node_errors
+                    .iter()
+                    .all(|(id, _)| !module_ids.contains(id)),
+                "source diagnostics must be immutable outputs, not racing module failures"
+            );
+        }
+    }
+}

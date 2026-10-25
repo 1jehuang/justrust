@@ -529,14 +529,32 @@ graph-integrity evidence are recorded in the feature contracts. G0-G12 remain op
       those maps first. Next: per-module
       declaration fact keyed by module-path key, TRAIT_IMPLS from it, move
       `facts.types()` consumers kind by kind, then delete SIGNATURES.
-      PARSE split activation (2026-10-25): attachment-free, no-prelude inputs
-      now demand typed `PARSE_FILE(SourceFile)` nodes using the existing file-view,
-      child-mount and crate-merge helpers. Each file reads its own SOURCE, an
-      immutable admission/render-id manifest and its immediate parent's syntax.
-      PARSE still performs all-file admission and merge, children wait for the
-      complete parent, and any file syntax error uses the original assembled
-      parse to preserve diagnostic order. Prelude/extern/harness/library/probe
-      transport remains on the assembled path. This is not PARSE-root removal.
+      Module-work split (2026-10-25): RESOLVE publishes its exact immutable
+      parsed snapshot/namespace prerequisite before `RESOLVE_MODULE` (148)
+      resolves ordinary free-function bodies per module. SIGNATURES publishes
+      finalized schema inputs before `SIGNATURE_MODULE` (149) computes source
+      callable schemas per module. Outputs bind their exact input snapshot;
+      source errors are selected by original callable order, not scheduling.
+      Namespace/header preparation and final assembly remain explicit root debt.
+      Gates: `semantic_resolution::resolver_module_facts_read_only_exact_namespace_snapshot`,
+      `nominal_graph` module-signature tests and `graph_integrity`.
+      Closed-source native instances reuse SOURCE_ADMISSION's exact CFG and
+      successful ownership proof through typed outputs, with canonical
+      publication, target, trait-world, const-context and CFG identity checks.
+      Generic instances still require substituted analysis and CHECK never
+      demands executable lowering. Gates: `compiler` graph acceptance,
+      `owner_route_tests::closed_source_proof_reuse_requires_exact_publication_cfg_and_context`
+      and `root_cleanup_graph`.
+      PARSE split activation (2026-10-25): default-prelude, no-prelude,
+      library and extern inputs now demand typed `PARSE_FILE(SourceFile)` nodes
+      using the existing file-view, child-mount and crate-merge helpers. Each
+      file reads its own SOURCE, an immutable admission/render-id manifest and
+      its immediate parent's syntax (attachment roots read the input root).
+      PARSE still performs all-file admission and merge, and children wait for
+      the complete parent. Syntax/unsupported failures may use the original
+      assembled parse to preserve diagnostic order; resource, contract and
+      infrastructure failures fail closed without retry. Test harness and probe
+      transport remain on the assembled path. This is not PARSE-root removal.
       Coverage: `source_error_order` pins exact file dependencies, stock/native
       CHECK/BUILD/run at workers 1/8 and child-before-late-parent diagnostics;
       `compiler::owner_route_tests::parse_file_rejects_unadmitted_identity`

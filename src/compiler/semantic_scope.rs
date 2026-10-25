@@ -189,8 +189,9 @@ impl ExpansionAdmission {
         session: &TokenSession,
         span: SpanId,
     ) -> Result<(), ScopeError> {
+        self.validate_session(session)?;
         session.budget().charge(Counter::Work, 1)?;
-        if session.id() != self.session {
+        if span.session_owner() != self.session {
             return Err(TokenError::ForeignHandle.into());
         }
         let data = session.span(span)?;
@@ -715,6 +716,35 @@ impl ScopeArena {
             .map(|index| Some(&*self.linked[index].1))
             .map_err(|_| ScopeError::ForeignOwner)
     }
+    /// Association indices are local to their name session, not to the
+    /// merged crate view. Select the exact file owner before reading one.
+    fn occurrence_arena(
+        &self,
+        names: &impl NameAccess,
+        ident: AstIdent,
+    ) -> Result<&ScopeArena, ScopeError> {
+        self.check_names(names)?;
+        let owner = semantic_name::occurrence_owner(names, ident)?;
+        self.session_arena(owner)?.ok_or(ScopeError::ForeignNames)
+    }
+    fn session_arena(&self, owner: SessionId) -> Result<Option<&ScopeArena>, ScopeError> {
+        if owner == self.names {
+            return Ok(Some(self));
+        }
+        let mut found = None;
+        for (_, arena) in self.linked.iter() {
+            self.budget.charge(Counter::Work, 1)?;
+            if arena.names == owner {
+                // The merged view has already checked the caller's name and
+                // budget authority. A linked file retains its own task budget,
+                // so it must not be mistaken for that merged view's issuer.
+                if found.replace(&**arena).is_some() {
+                    return Err(ScopeError::ConflictingAssociation);
+                }
+            }
+        }
+        Ok(found)
+    }
     fn scope(&self, id: ScopeId) -> Result<ScopeRecord, ScopeError> {
         if let Some(arena) = self.linked_arena(id.owner)? {
             return arena.scope(id);
@@ -773,11 +803,12 @@ impl ScopeArena {
     ) -> Result<ScopeId, ScopeError> {
         self.check_names(names)?;
         let occurrence = semantic_name::occurrence_index(names, ident)?;
-        let at = self
+        let arena = self.occurrence_arena(names, ident)?;
+        let at = arena
             .association(occurrence)?
             .and_then(|row| row.reference.map(|(at, _)| at))
             .ok_or(ScopeError::UnrecordedOccurrence)?;
-        self.function(at)
+        arena.function(at)
     }
     pub fn reference_frontier(
         &self,
@@ -786,7 +817,8 @@ impl ScopeArena {
     ) -> Result<FrontierId, ScopeError> {
         self.check_names(names)?;
         let occurrence = semantic_name::occurrence_index(names, ident)?;
-        self.association(occurrence)?
+        self.occurrence_arena(names, ident)?
+            .association(occurrence)?
             .and_then(|row| row.reference.map(|(at, _)| at))
             .ok_or(ScopeError::UnrecordedOccurrence)
     }
@@ -934,13 +966,16 @@ impl ScopeArena {
         Ok(())
     }
     fn anchor(&self, expansion: ExpansionId) -> Result<Option<ExpansionAdmission>, ScopeError> {
-        let hash = self.hasher.hash_one(expansion);
-        Ok(self
-            .find_index(&self.anchor_index, hash, |index| {
-                self.anchors.as_slice()[index as usize].expansion == expansion
+        let Some(arena) = self.session_arena(expansion.session_owner())? else {
+            return Ok(None);
+        };
+        let hash = arena.hasher.hash_one(expansion);
+        Ok(arena
+            .find_index(&arena.anchor_index, hash, |index| {
+                arena.anchors.as_slice()[index as usize].expansion == expansion
             })?
-            .and_then(|slot| self.anchor_index.slots[slot])
-            .map(|index| self.anchors.as_slice()[index as usize]))
+            .and_then(|slot| arena.anchor_index.slots[slot])
+            .map(|index| arena.anchors.as_slice()[index as usize]))
     }
     fn grow_anchor_index(&mut self) -> Result<(), ScopeError> {
         if self
@@ -980,7 +1015,8 @@ impl ScopeArena {
     ) -> Result<BindingId, ScopeError> {
         self.check_names(names)?;
         let occurrence = semantic_name::occurrence_index(names, ident)?;
-        self.association(occurrence)?
+        self.occurrence_arena(names, ident)?
+            .association(occurrence)?
             .and_then(|row| row.declaration.map(|(_, _, id)| id))
             .ok_or(ScopeError::UnrecordedOccurrence)
     }
@@ -991,7 +1027,8 @@ impl ScopeArena {
     ) -> Result<Option<BindingId>, ScopeError> {
         self.check_names(names)?;
         let occurrence = semantic_name::occurrence_index(names, ident)?;
-        self.association(occurrence)?
+        self.occurrence_arena(names, ident)?
+            .association(occurrence)?
             .and_then(|row| row.reference.map(|(_, id)| id))
             .ok_or(ScopeError::UnrecordedOccurrence)
     }
@@ -1017,7 +1054,7 @@ impl ScopeArena {
                     }
                     return Err(ScopeError::UnregisteredExpansion);
                 };
-                if anchor.owner != self.owner || anchor.function != function {
+                if anchor.owner != function.owner || anchor.function != function {
                     return Err(ScopeError::FunctionMismatch);
                 }
                 Ok(())
@@ -1235,6 +1272,121 @@ mod tests {
             literal,
             capture,
         )
+    }
+
+    #[test]
+    fn linked_file_occurrences_keep_exact_association_owners() {
+        let mut files = Vec::new();
+        let mut arenas = Vec::new();
+        let mut rows = Vec::new();
+        let mut expansions = Vec::new();
+        for _ in 0..3 {
+            let (mut names, span, expansion, literal, capture) = fixture();
+            let TokenKind::Ident(mut token_ident) = literal.kind else {
+                panic!("identifier")
+            };
+            token_ident.context = names.session().root_context();
+            let token = Token {
+                kind: TokenKind::Ident(token_ident),
+                span,
+            };
+            let declaration = names.from_token(token, Edition::E2024).unwrap();
+            let reference = names.from_token(token, Edition::E2024).unwrap();
+            let mut scopes = ScopeArenaBuilder::for_builder(&mut names).unwrap();
+            let root = scopes.function_root(&names).unwrap();
+            let function = scopes.function(root).unwrap();
+            let (at, binding) = scopes.bind(&names, root, declaration).unwrap();
+            assert_eq!(
+                scopes.resolve_reference(&names, at, reference).unwrap(),
+                Some(binding)
+            );
+            let admission = scopes.anchor_expansion(&names, expansion, at, at).unwrap();
+            let expanded = names
+                .admit_expanded_token(literal, Edition::E2024, &admission)
+                .unwrap();
+            let captured = names
+                .admit_expanded_token(capture, Edition::E2024, &admission)
+                .unwrap();
+            for ident in [expanded, captured] {
+                assert_eq!(
+                    scopes.resolve_reference(&names, at, ident).unwrap(),
+                    Some(binding)
+                );
+            }
+            expansions.push((expansion, expanded, captured, admission));
+            rows.push((declaration, reference, function, at, binding));
+            arenas.push(scopes.freeze().unwrap());
+            files.push(names.freeze().unwrap());
+        }
+        let (mut names, _, _, _, _) = fixture();
+        names.link_crate_files(files.clone()).unwrap();
+        names.join_crate(&files[0]).unwrap();
+        let mut scopes = ScopeArenaBuilder::for_builder(&mut names).unwrap();
+        // The third file's names are admitted, but its scope authority is not.
+        scopes.link_crate_files(arenas[..2].to_vec()).unwrap();
+        let scopes = scopes.freeze().unwrap();
+        let names = names.freeze().unwrap();
+        assert_eq!(
+            semantic_name::occurrence_index(&*names, rows[0].0).unwrap(),
+            semantic_name::occurrence_index(&*names, rows[1].0).unwrap()
+        );
+        for &(declaration, reference, function, at, binding) in &rows[..2] {
+            assert_eq!(
+                scopes.declaration_for(&*names, declaration).unwrap(),
+                binding
+            );
+            assert_eq!(
+                scopes.reference_for(&*names, reference).unwrap(),
+                Some(binding)
+            );
+            assert_eq!(
+                scopes.reference_function(&*names, reference).unwrap(),
+                function
+            );
+            assert_eq!(scopes.reference_frontier(&*names, reference).unwrap(), at);
+            assert!(matches!(
+                scopes.reference_for(&*names, declaration),
+                Err(ScopeError::UnrecordedOccurrence)
+            ));
+        }
+        assert!(matches!(
+            scopes.reference_for(&*names, rows[2].1),
+            Err(ScopeError::ForeignNames)
+        ));
+        for (index, &(expansion, expanded, captured, admission)) in
+            expansions[..2].iter().enumerate()
+        {
+            assert_eq!(scopes.anchor(expansion).unwrap(), Some(admission));
+            for ident in [expanded, captured] {
+                scopes
+                    .check_occurrence(&*names, ident, Some(rows[index].2))
+                    .unwrap();
+                assert_eq!(
+                    scopes.reference_for(&*names, ident).unwrap(),
+                    Some(rows[index].4)
+                );
+                assert!(matches!(
+                    scopes.check_occurrence(&*names, ident, Some(rows[1 - index].2)),
+                    Err(ScopeError::FunctionMismatch)
+                ));
+                admission
+                    .validate_span(names.session(), names.span(ident).unwrap())
+                    .unwrap();
+            }
+            assert!(
+                admission
+                    .validate_span(
+                        names.session(),
+                        names.span(expansions[1 - index].1).unwrap()
+                    )
+                    .is_err()
+            );
+        }
+        assert_eq!(scopes.anchor(expansions[2].0).unwrap(), None);
+        assert!(matches!(
+            scopes.check_occurrence(&*names, expansions[2].1, Some(rows[0].2)),
+            Err(ScopeError::UnregisteredExpansion)
+        ));
     }
 
     struct NestedFixture {

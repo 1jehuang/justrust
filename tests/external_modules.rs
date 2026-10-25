@@ -408,14 +408,59 @@ fn external_source_graph_is_shared_and_accounts_for_all_files() {
             ("src/foo.rs", "pub fn value() -> i32 { 7 }"),
         ];
         let scratch = fixture(&files);
-        // One plan for the shape oracle, not one per worker/mode run.
-        let loaded = compiler::source::load(&scratch.path("src/input.rs")).unwrap();
-        let program = native_prelude::parse(&loaded.text).unwrap();
+        // Independent source/frontend inventories define the exact producer set,
+        // not a total copied from an observed compiler run.
+        let options = compiler::source::SourceOptions::default();
+        let budget = compiler::token_primitives::ExpansionBudget::default();
+        let mut assembler = compiler::source::SourceAssembler::new(&options);
+        let mut step = assembler
+            .provide(std::sync::Arc::new(compiler::source::prepare_root_unit(
+                &scratch.path("src/input.rs"),
+                &options,
+                &budget,
+            )))
+            .unwrap();
+        let prepared = loop {
+            match step {
+                compiler::source::AssemblyStep::Done(prepared) => break prepared,
+                compiler::source::AssemblyStep::Need(need) => {
+                    let unit = match need.parent {
+                        None => compiler::source::prepare_prelude_unit(&options, &budget),
+                        Some(parent) => compiler::source::prepare_child_unit(
+                            &parent, need.index, &options, &budget,
+                        ),
+                    };
+                    step = assembler.provide(std::sync::Arc::new(unit)).unwrap();
+                }
+            }
+        };
+        let parsed = compiler::frontend::parse_prepared(&prepared).unwrap();
+        let namespace = compiler::frontend::prepare_resolution(&parsed).unwrap();
+        let resolution_modules = compiler::frontend::resolution_modules(&namespace).len();
+        let program = compiler::frontend::resolve(&parsed).unwrap();
         let plan = compiler::frontend::PlanCtx::from_program(
             &program,
             &compiler::ir::PlanBudget::default(),
         )
         .unwrap();
+        let signature_modules = (0..plan.callable_count())
+            .map(|index| plan.callable_decl(index).unwrap())
+            .filter(|declaration| {
+                matches!(
+                    plan.callable_provider(*declaration).unwrap(),
+                    compiler::frontend::CallableProvider::Source { .. }
+                )
+            })
+            .map(|declaration| plan.callable_context(declaration).unwrap().module)
+            .collect::<std::collections::HashSet<_>>()
+            .len();
+        let declaring_modules = plan
+            .sema_declarations()
+            .iter()
+            .filter(|declaration| declaration.id.is_source())
+            // DeclId::source_index encodes the canonical module in bits20..63.
+            .map(|declaration| (declaration.id.index >> 20) & ((1 << 43) - 1))
+            .collect::<std::collections::BTreeSet<_>>();
         for workers in [1, 8] {
             for check in [false, true] {
                 let result =
@@ -494,8 +539,47 @@ fn external_source_graph_is_shared_and_accounts_for_all_files() {
                         }
                     }
                 }
-                // Embedded native library files are independent SOURCE facts.
-                expected.extend(native_prelude::library_source_keys());
+                for ordinal in 0..plan.module_inventory_count() {
+                    for declaration in &plan.module_inventory(ordinal).unwrap().constants {
+                        for kind in [118, 119, 120] {
+                            expected.push(Key::new(kind, vec![declaration.index]));
+                        }
+                    }
+                }
+                // The exact file inventory includes embedded library sources.
+                // Parsing preserves every canonical source-forest ordinal.
+                let mut source_files = vec![source.clone(), child.clone()];
+                source_files.extend(native_prelude::library_source_keys());
+                expected.extend(source_files.iter().skip(2).cloned());
+                expected.extend(
+                    source_files
+                        .iter()
+                        .map(|file| Key::new(121, file.params.clone())),
+                );
+                // Resolution and signature producers are keyed by their own
+                // independently derived typed module inventories. Declaration
+                // producers instead use canonical module keys from source DeclIds.
+                expected.extend(
+                    (0..resolution_modules).map(|ordinal| Key::new(148, vec![ordinal as u64])),
+                );
+                expected.extend(
+                    (0..signature_modules).map(|ordinal| Key::new(149, vec![ordinal as u64])),
+                );
+                // Only explicit trait-completeness demand fans out over every
+                // declaring module. Its inventory is independent of which
+                // MODULE_DECLS nodes happened to appear in the report.
+                let trait_completeness = result
+                    .report
+                    .node_evaluations
+                    .iter()
+                    .any(|(key, _)| key.kind == 144);
+                if trait_completeness {
+                    expected.extend(
+                        declaring_modules
+                            .iter()
+                            .map(|module| Key::new(147, vec![*module])),
+                    );
+                }
                 // Per-module inventories, associated-constant headers,
                 // nominal well-formedness, per-instance, per-signature and
                 // per-trait/impl/item coherence nodes are keyed
@@ -509,6 +593,24 @@ fn external_source_graph_is_shared_and_accounts_for_all_files() {
                         .filter(|(key, _)| infrastructure.contains(&key.kind))
                         .all(|(_, count)| *count == 1)
                 );
+                let actual_keys = result
+                    .report
+                    .node_evaluations
+                    .iter()
+                    .filter(|(key, _)| !infrastructure.contains(&key.kind))
+                    .map(|(key, _)| key.clone())
+                    .collect::<std::collections::HashSet<_>>();
+                let expected_keys = expected
+                    .iter()
+                    .cloned()
+                    .collect::<std::collections::HashSet<_>>();
+                assert_eq!(
+                    actual_keys,
+                    expected_keys,
+                    "unexpected keys: {:?}; missing keys: {:?}",
+                    actual_keys.difference(&expected_keys).collect::<Vec<_>>(),
+                    expected_keys.difference(&actual_keys).collect::<Vec<_>>()
+                );
                 assert_eq!(
                     result
                         .report
@@ -518,6 +620,85 @@ fn external_source_graph_is_shared_and_accounts_for_all_files() {
                         .count(),
                     expected.len()
                 );
+                // Pin every new producer's dependency shape, including the
+                // native-prelude attachment. More nodes cannot hide a join.
+                for ((key, count), node) in result
+                    .report
+                    .node_evaluations
+                    .iter()
+                    .zip(&result.report.node_ids)
+                {
+                    let mut dependencies = match key.kind {
+                        121 => {
+                            assert!(!key.params.is_empty());
+                            assert!(
+                                source_files
+                                    .iter()
+                                    .any(|source| source.params == key.params)
+                            );
+                            let mut parents = vec![(100, vec![], 2), (107, key.params.clone(), 0)];
+                            if key.params.len() > 1 {
+                                parents.push((121, key.params[..key.params.len() - 1].to_vec(), 0));
+                            } else if key.params[0] != 0 {
+                                parents.push((121, vec![0], 0));
+                            }
+                            parents
+                        }
+                        144 => {
+                            let mut parents = vec![(106, vec![], 0)];
+                            parents.extend(
+                                declaring_modules
+                                    .iter()
+                                    .map(|module| (147, vec![*module], 0)),
+                            );
+                            parents
+                        }
+                        147 => {
+                            assert_eq!(key.params.len(), 1);
+                            vec![(106, vec![], 0)]
+                        }
+                        148 => {
+                            assert_eq!(key.params.len(), 1);
+                            vec![(106, vec![], 1)]
+                        }
+                        149 => {
+                            assert_eq!(key.params.len(), 1);
+                            vec![(101, vec![], 1)]
+                        }
+                        _ => continue,
+                    };
+                    assert_eq!(*count, 1, "producer repeated {key:?}");
+                    let tasks = result
+                        .report
+                        .events
+                        .iter()
+                        .filter(|event| event.node == Some(*node))
+                        .filter_map(|event| event.task)
+                        .collect::<std::collections::HashSet<_>>();
+                    let mut actual = result
+                        .report
+                        .dependency_edges
+                        .iter()
+                        .filter(|(task, _, _)| tasks.contains(task))
+                        .map(|(_, producer, output)| {
+                            let index = result
+                                .report
+                                .node_ids
+                                .iter()
+                                .position(|id| id == producer)
+                                .unwrap();
+                            let producer = &result.report.node_evaluations[index].0;
+                            (producer.kind, producer.params.clone(), *output)
+                        })
+                        .collect::<Vec<_>>();
+                    actual.sort();
+                    actual.dedup();
+                    dependencies.sort();
+                    assert_eq!(
+                        actual, dependencies,
+                        "unexpected producer dependencies for {key:?}"
+                    );
+                }
                 for key in expected {
                     let entries: Vec<_> = result
                         .report

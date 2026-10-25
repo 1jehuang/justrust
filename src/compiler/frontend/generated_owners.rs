@@ -458,10 +458,45 @@ pub(super) fn validate(program: &Program) -> Result<(), String> {
             || !headers(&program.names, &row.header, &original.header, &budget)?
             || !signatures(&program.names, &row.signature, &original.signature, &budget)?
         {
-            return Err(
-                "generated callable differs from its original container or signature".into(),
-            );
+            return Err(format!(
+                "generated callable differs from its original container or signature: owner {:?}/{:?}, item {}/{}, receiver {:?}/{:?}, visibility {:?}/{:?}, member {}, header {}, signature {}",
+                row.owner,
+                original.owner,
+                row.item,
+                original.item,
+                row.receiver,
+                original.receiver,
+                row.visibility,
+                original.visibility,
+                exact_source_ident(&program.names, row.member, original.member)?,
+                headers(&program.names, &row.header, &original.header, &budget)?,
+                signatures(&program.names, &row.signature, &original.signature, &budget)?,
+            ));
         }
+    }
+    Ok(())
+}
+
+/// File merging relocates only container ordinals, after validating the
+/// original file certificate. Scope, header and exact occurrence stay sealed.
+pub(super) fn rebase(
+    certificates: &mut [Certificate],
+    implementation_offset: usize,
+    trait_offset: usize,
+) -> Result<(), String> {
+    for certificate in certificates {
+        certificate.owner = match certificate.owner {
+            Owner::Implementation(index) => Owner::Implementation(
+                index
+                    .checked_add(implementation_offset)
+                    .ok_or("generated implementation index overflow")?,
+            ),
+            Owner::Trait(index) => Owner::Trait(
+                index
+                    .checked_add(trait_offset)
+                    .ok_or("generated trait index overflow")?,
+            ),
+        };
     }
     Ok(())
 }

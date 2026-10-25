@@ -788,6 +788,15 @@ impl NameStore {
 }
 
 /// Internal occurrence association identity, not semantic identifier equality.
+pub(super) fn occurrence_owner(
+    names: &impl super::semantic_path::NameAccess,
+    ident: AstIdent,
+) -> Result<SessionId, NameError> {
+    names.check(ident)?;
+    Ok(ident.owner)
+}
+
+/// Internal occurrence association identity, not semantic identifier equality.
 pub(super) fn occurrence_index(
     names: &impl super::semantic_path::NameAccess,
     ident: AstIdent,
