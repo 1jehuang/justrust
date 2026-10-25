@@ -11971,3 +11971,35 @@ to 401.327 / 406.483 ms, while one-worker consumer CHECK is effectively flat
 (942.537 / 941.978 and 941.662 / 943.200 ms). The earlier original-to-current
 one-worker CHECK regression remains unresolved. Budget, graph and unchanged
 Adler2 acceptance gates pass with the two annotation changes.
+
+### Hosted 96-core Adler2 baseline (2026-10-25)
+
+`bench/hosted_compiler.py` runs directly on the authenticated hosted machine,
+not through a timed SSH/build wrapper. It records topology, allowed CPU set,
+source/compiler hashes, stock sysroot/compiler identity, load observations,
+randomized order, full diagnostics and separate untimed native phase profiles.
+Its 16 runner regressions cover failure, artifact and sampling contracts.
+`data/runs/frontend-hosted-20261025/baseline.json` pins unchanged Adler2 2.0.1,
+release native binary `c2bcb144...`, stock rustc 1.99.0, edition 2021,
+optimization off, debug/overflow checks enabled, seven fresh-process samples
+and one warmup. The host exposes 96 AMD EPYC 9R45 cores without SMT, all allowed.
+This is warm-filesystem single-library latency, not Cargo, incremental, cold
+cache or full-corpus performance. Native library-mode artifacts are not stock
+reusable rlibs, so backend scopes are explicitly recorded rather than equated.
+
+Stock CHECK/BUILD medians are 23.293/28.098 ms. Native CHECK/BUILD medians at
+workers 1, 8, 24, 48 and 96 are respectively 572.568/724.659,
+468.085/565.931, 464.222/543.123, 462.755/539.226 and 467.270/545.512 ms.
+Thus 96 workers do not make this small workload faster than stock, and scaling
+beyond eight workers is weak. No 2-10x gain is established. Separate phase
+profiles still show substantial serial signature/namespace/parser work; their
+summed wall intervals are not sampled CPU shares. Hosted perf sampling is
+permission-blocked (`perf_event_paranoid=4`); no security setting was changed.
+
+`thinlto.json` measures the same source and worker matrix using a compiler
+built with `justrust build --release --bin jr-rust --config
+'profile.release.lto="thin"' --config profile.release.codegen-units=1`.
+Its native binary is `6839ad61...`. It does not establish an improvement:
+one-worker CHECK/BUILD are 581.098/735.171 ms and 96-worker values are
+465.382/544.350 ms, with stock controls 22.932/28.128 ms. Keep the ordinary
+release profile rather than promoting this slower-to-build configuration.
