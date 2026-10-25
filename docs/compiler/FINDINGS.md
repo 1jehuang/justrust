@@ -12024,3 +12024,21 @@ process-wall observations, not a comprehensive synthetic or corpus speedup.
 Native remains much slower than stock here and the requested 2-10x goal is
 not met. Budget, concurrent-ledger, engine, graph integrity and unchanged
 Adler2 stock/native acceptance at workers 1 and 8 pass.
+
+### Rejected linked atom directory (2026-10-25)
+
+An immutable prepaid fingerprint directory replaced repeated linked-store
+searches in an experimental compiler. Correctness and graph gates passed,
+but actual hosted latency did not establish a useful improvement. The
+uncontended reversed-order pair `atom-index-repeat-before.json` /
+`atom-index-repeat-after.json` in `data/runs/frontend-hosted-20261025/`
+uses the same frozen seven-sample Adler2 protocol and stock controls above.
+Run `python3 bench/suite.py compare <before> <after>` to reproduce the comparison.
+At 96 workers CHECK changes 420.186 to 427.098 ms (1.64% more time), while
+BUILD changes 509.776 to 502.076 ms (1.51% less). One-worker CHECK/BUILD
+change 539.550/692.919 to 541.368/692.326 ms, effectively flat. Intermediate
+worker results are mixed. Stock CHECK/BUILD controls change +1.10%/-0.58%.
+An earlier pair was also mixed and overlapped a short hosted bootstrap build,
+so it is not used to promote the change. Reject the additional directory and
+retain the simpler shipped lookup. Faster lookup counters alone are not
+evidence of faster compilation, and no 2-10x gain follows from this experiment.
