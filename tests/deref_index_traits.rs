@@ -184,3 +184,21 @@ fn boxed_array_index_assignment_through_deref_mut() {
         "5 8 13\n",
     );
 }
+
+#[test]
+fn boxed_array_index_borrows_through_deref() {
+    run(
+        "fn main(){let mut b=Box::new([1u32,2,3]);let i=2;{let r=&mut b[i];*r+=5;}let m=&mut b[0];*m=9;let x=&b[i];let y=&b[1];println!(\"{} {} {}\",x,y,b[0]);}",
+        "8 2 9\n",
+    );
+    for source in [
+        "fn main(){let mut b=Box::new([1u32,2,3]);let x=&b[1];let m=&mut b[0];*m=1;println!(\"{}\",x);}",
+        "fn main(){let b=Box::new([1u32,2,3]);let m=&mut b[0];*m=1;}",
+        "fn main(){let b=Box::new([1u32,2,3]);let x=&b[3];println!(\"{}\",x);}",
+    ] {
+        assert!(
+            compiler::compile(source.into(), 1, true).is_err(),
+            "{source}"
+        );
+    }
+}

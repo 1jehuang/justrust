@@ -251,6 +251,13 @@ impl type_check::Checker<'_> {
         } else {
             ("ops", "Index", "index")
         };
+        if self.index_reference_hint(&owner, index)?.is_none()
+            && let Some(array @ ir::Ty::Array { .. }) = self.deref_target_hint(&owner)?
+        {
+            return self
+                .borrow_array_through_deref(kind, base, &owner, array, value, literal.is_some())
+                .map(Some);
+        }
         let (owner, first) = match self.index_autoderef_kind(&owner, base, index, kind)? {
             Some((target, carrier)) => (target, First::Lowered(carrier)),
             None => (owner, First::Borrow(kind, base)),
@@ -829,6 +836,84 @@ impl type_check::Checker<'_> {
             return Ok(None);
         }
         self.slice_index(carrier, index).map(Some)
+    }
+
+    /// `&boxed[i]` / `&mut boxed[i]` with `boxed: Box<[T; N]>`: the overloaded
+    /// (mutable) deref result is held in a temporary reference and the borrow
+    /// names `(*tmp)[i]`, bounds-checking a runtime index once.
+    fn borrow_array_through_deref(
+        &mut self,
+        kind: ir::BorrowKind,
+        base: &Expr,
+        owner: &ir::Ty,
+        array: ir::Ty,
+        original: &Expr,
+        constant: bool,
+    ) -> Result<ir::ExprId, String> {
+        let carrier = self
+            .receiver_overloaded_deref(base, owner, kind)?
+            .ok_or("unsupported: overloaded deref for builtin array index borrow")?;
+        let carrier_ty = self.exprs[carrier.0].ty.clone();
+        let local = self.temporary("$index_deref", carrier_ty, true)?;
+        self.charge_node(std::mem::size_of::<ir::LocalId>() + 3 * 64)?;
+        self.borrow_temporaries.push((local, false));
+        let mut statements = vec![ir::TypedStmt::Assign {
+            local,
+            value: carrier,
+        }];
+        let mut completes = self.flow(carrier).completes;
+        let mut projection = vec![ir::Projection::Deref];
+        match original {
+            Expr::Index { index, .. } if constant => {
+                self.index_type(&array, *index)?;
+                projection.push(ir::Projection::ConstantIndex(*index));
+            }
+            Expr::DynamicIndex { index, .. } => {
+                let usize_ty = ir::Ty::Int(ir::IntTy::Usize);
+                let index =
+                    self.expr_expected_when(index, self.reachable && completes, Some(&usize_ty))?;
+                let flow = self.flow(index);
+                self.require_index(&flow)?;
+                completes &= flow.completes;
+                let saved = self.temporary(
+                    &format!("$bi{}", self.locals.len()),
+                    usize_ty.clone(),
+                    false,
+                )?;
+                statements.push(ir::TypedStmt::Let {
+                    local: saved,
+                    value: index,
+                });
+                let checked = self.for_expr(usize_ty, ir::ExprKind::Local(saved))?;
+                self.index_bounds_probe(
+                    &ir::Place {
+                        local,
+                        projection: projection.clone(),
+                    },
+                    checked,
+                    original,
+                    &mut statements,
+                )?;
+                projection.push(ir::Projection::DynamicIndex(saved));
+            }
+            _ => return Err("unsupported builtin array index borrow shape".into()),
+        }
+        let borrowed = self.borrow_expression(kind, ir::Place { local, projection })?;
+        let ty = self.exprs[borrowed.0].ty.clone();
+        let id = ir::ExprId(self.exprs.len());
+        self.exprs.push(ir::TypedExpr {
+            ty: if completes { ty } else { ir::Ty::Never },
+            completion: if completes {
+                ir::Completion::Returns
+            } else {
+                ir::Completion::Never
+            },
+            kind: ir::ExprKind::Block(ir::TypedBlock {
+                statements,
+                tail: completes.then_some(borrowed),
+            }),
+        });
+        Ok(id)
     }
 
     fn index_autoderef_kind(
