@@ -59,10 +59,20 @@ pub struct Meter {
     /// (0 = only the fixed per-task default). Grows monotonically and is
     /// never shared with another node.
     pub work_allowance: AtomicU64,
+    /// A resource ledger in this node has latched a failure. Healthy-node
+    /// admission may avoid ledger reads, but after this flag is set each
+    /// budget must consult its own sticky failure before charging more work.
+    ledger_failure: AtomicBool,
     /// Typed per-node budget ledgers (see [`with_ledger`]).
     pub ledgers: Ledgers,
 }
 impl Meter {
+    pub(crate) fn mark_ledger_failure(&self) {
+        self.ledger_failure.store(true, Ordering::Release);
+    }
+    pub(crate) fn has_ledger_failure(&self) -> bool {
+        self.ledger_failure.load(Ordering::Acquire)
+    }
     /// Effective per-task work limit: the fixed default or the allowance this
     /// task derived from its own input size, whichever is larger.
     pub fn work_limit(&self, default: u64) -> u64 {

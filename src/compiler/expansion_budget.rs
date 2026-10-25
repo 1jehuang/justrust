@@ -143,6 +143,11 @@ impl Default for BudgetSnapshot {
 }
 impl State {
     fn latch(&mut self, failure: BudgetFailure) -> BudgetFailure {
+        crate::engine::with_current_meter(|meter| {
+            if let Some(meter) = meter {
+                meter.mark_ledger_failure();
+            }
+        });
         self.snapshot.failure.get_or_insert(failure).clone()
     }
     fn healthy(&self) -> Result<(), BudgetFailure> {
@@ -361,36 +366,39 @@ impl ExpansionBudget {
     #[inline]
     pub fn charge(&self, counter: Counter, n: u64) -> Result<(), BudgetFailure> {
         // Hot path: default-limit work inside a graph node is bounded by the
-        // node's own meter alone; the ledger is touched only on failure or
-        // when the token was constructed invalid.
+        // node's own meter alone. Once any ledger failed, consult this exact
+        // budget's sticky failure too. A different healthy budget is still
+        // usable, subject to the same node-wide work admission as before.
         if counter == Counter::Work
             && self.identity.invalid.is_none()
             && self.limits_ref().counters[Counter::Work as usize]
                 == ExpansionLimits::default().counters[Counter::Work as usize]
             && let Some(result) = crate::engine::with_current_meter(|meter| {
                 let meter = meter?;
-                let limit = meter.work_limit(self.limits_ref().counters[Counter::Work as usize]);
-                Some(
-                    crate::engine::Meter::admit(&meter.work, n, limit)
-                        .map_err(|used| (used, limit)),
-                )
+                Some((|| {
+                    if meter.has_ledger_failure() {
+                        self.check()?;
+                    }
+                    let limit =
+                        meter.work_limit(self.limits_ref().counters[Counter::Work as usize]);
+                    crate::engine::Meter::admit(&meter.work, n, limit).map_err(|used| {
+                        self.with(|s, _| {
+                            if let Err(failure) = s.healthy() {
+                                return failure;
+                            }
+                            s.latch(BudgetFailure {
+                                kind: BudgetFailureKind::Limit,
+                                resource: BudgetResource::Counter(counter),
+                                used,
+                                requested: n,
+                                limit,
+                            })
+                        })
+                    })
+                })())
             })
         {
-            return match result {
-                Ok(()) => Ok(()),
-                Err((used, limit)) => Err(self.with(|s, _| {
-                    if let Err(failure) = s.healthy() {
-                        return failure;
-                    }
-                    s.latch(BudgetFailure {
-                        kind: BudgetFailureKind::Limit,
-                        resource: BudgetResource::Counter(counter),
-                        used,
-                        requested: n,
-                        limit,
-                    })
-                })),
-            };
+            return result;
         }
         self.with(|s, meter| {
             s.healthy()?;
@@ -966,6 +974,66 @@ mod tests {
         let root = engine.request(crate::compiler::keys::test_key(0, vec![]));
         assert_eq!(engine.run(1).unwrap().failures, 0);
         assert!(root.result(0).is_ok());
+    }
+
+    #[test]
+    fn graph_default_work_preserves_sticky_budget_failure() {
+        use crate::engine::{Context, Engine, Key, Provider, TaskFuture};
+        struct Poison;
+        impl Provider for Poison {
+            fn outputs(&self, _: &Key) -> usize {
+                1
+            }
+            fn start(&self, cx: Context, _: Key) -> TaskFuture {
+                Box::pin(async move {
+                    for allocation in [false, true] {
+                        let budget = ExpansionBudget::default();
+                        let first = if allocation {
+                            budget.poison_allocation()
+                        } else {
+                            budget.charge(Counter::InputTokens, u64::MAX).unwrap_err()
+                        };
+                        for amount in [0, 1] {
+                            assert_eq!(budget.charge(Counter::Work, amount), Err(first.clone()));
+                            assert_eq!(
+                                budget.clone().charge(Counter::Work, amount),
+                                Err(first.clone())
+                            );
+                        }
+                        let independent = ExpansionBudget::default();
+                        independent.charge(Counter::Work, 1).unwrap();
+                        independent.check().unwrap();
+                    }
+                    let invalid = ExpansionBudget::new(ExpansionLimits {
+                        bytes: ExpansionLimits::default().bytes + 1,
+                        ..ExpansionLimits::default()
+                    });
+                    let first = invalid.check().unwrap_err();
+                    assert_eq!(invalid.charge(Counter::Work, 0), Err(first));
+
+                    let budget = ExpansionBudget::default();
+                    let remaining = crate::engine::with_current_meter(|meter| {
+                        let meter = meter.unwrap();
+                        meter.work_limit(budget.limits().counters[Counter::Work as usize])
+                            - meter.work.load(std::sync::atomic::Ordering::Relaxed)
+                    });
+                    budget.charge(Counter::Work, remaining).unwrap();
+                    let first = budget.charge(Counter::Work, 1).unwrap_err();
+                    assert_eq!(first.resource, BudgetResource::Counter(Counter::Work));
+                    assert_eq!(budget.charge(Counter::Work, 0), Err(first));
+                    let independent = ExpansionBudget::default();
+                    assert!(independent.charge(Counter::Work, 1).is_err());
+                    cx.publish_fact(0, ())?;
+                    Ok(())
+                })
+            }
+        }
+        for workers in [1, 8] {
+            let engine = Engine::new(Poison);
+            let root = engine.request(crate::compiler::keys::test_key(0, vec![]));
+            assert_eq!(engine.run(workers).unwrap().failures, 0);
+            assert!(root.result(0).is_ok());
+        }
     }
 
     use std::sync::Barrier;
