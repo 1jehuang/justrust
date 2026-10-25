@@ -432,6 +432,26 @@ impl<T> super::ops::IndexMut<usize> for Vec<T> {
     }
 }
 
+// Length is checked before any element comparison. Equal-length inputs are
+// visited left to right and stop at the first unequal pair, as std does.
+impl<T: super::cmp::PartialEq<U>, U> super::cmp::PartialEq<Vec<U>> for Vec<T> {
+    fn eq(&self, other: &Vec<U>) -> bool {
+        if self.len != other.len {
+            return false;
+        }
+        let mut i = 0usize;
+        while i < self.len {
+            if !self.get_ref(i).eq(other.get_ref(i)) {
+                return false;
+            }
+            i += 1usize;
+        }
+        true
+    }
+}
+
+impl<T: super::cmp::Eq> super::cmp::Eq for Vec<T> {}
+
 impl<T: super::cmp::PartialEq> Vec<T> {
     pub fn contains(&self, value: &T) -> bool {
         let mut i = 0usize;

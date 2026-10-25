@@ -4,6 +4,37 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 
+#[path = "support/iterator_oracle.rs"]
+mod iterator_oracle;
+
+#[test]
+fn vec_equality_preserves_elements_order_and_trait_bounds() {
+    for source in [
+        "fn require_eq<T:Eq>(_:&T){}fn main(){let a=vec![1i32,2];let b=vec![1i32,2];let short=vec![1i32];let empty:Vec<i32>=Vec::new();require_eq(&a);println!(\"{} {} {} {}\",a==b,a!=short,empty==Vec::<i32>::new(),a.len());}",
+        "struct Probe(i32);impl PartialEq for Probe{fn eq(&self,other:&Self)->bool{println!(\"cmp {} {}\",self.0,other.0);self.0==other.0}}fn main(){let a=vec![Probe(1),Probe(2),Probe(3)];let b=vec![Probe(1),Probe(9),Probe(3)];println!(\"{}\",a==b);let short=vec![Probe(1)];println!(\"{}\",a==short);}",
+        "struct Left(i32);struct Right(i32);impl PartialEq<Right> for Left{fn eq(&self,other:&Right)->bool{self.0==other.0}}fn main(){let a=vec![Left(1),Left(2)];let b=vec![Right(1),Right(2)];let c=vec![Right(1),Right(3)];println!(\"{} {}\",a==b,a==c);}",
+    ] {
+        iterator_oracle::stock_native(source);
+    }
+    for source in [
+        "struct NoEq;fn unused(){let a=vec![NoEq];let b=vec![NoEq];let _equal=a==b;}fn main(){}",
+        "fn main(){let a=vec![1i32];let b=vec![true];println!(\"{}\",a==b);}",
+    ] {
+        iterator_oracle::stock_and_native_reject_observed(source, |workers, check, failure| {
+            assert!(
+                failure.resource_usage.first_failure.is_none(),
+                "workers={workers} check={check}: {}",
+                failure.error
+            );
+            assert!(
+                !failure.error.to_string().contains("unsupported"),
+                "workers={workers} check={check}: {}",
+                failure.error
+            );
+        });
+    }
+}
+
 fn compare(source: &str, expected: &str, tag: &str) {
     let base = std::env::var_os("JCODE_SCRATCH_DIR")
         .map(std::path::PathBuf::from)
