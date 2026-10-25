@@ -83,7 +83,8 @@ def run(args):
                 'samples': args.n, 'warmups': args.warmup, 'execution': 'local-direct-fresh-process',
                 'cache': 'warm-filesystem-fresh-output', 'host': platform.node(),
                 'machine': platform.machine(), 'cpu': Path('/proc/cpuinfo').read_text().split('model name')[1].splitlines()[0],
-                'cpu_count': os.cpu_count(), 'runner_sha256': digest(__file__), 'timeout': args.timeout}
+                'cpu_count': os.cpu_count(), 'cpu_affinity': sorted(os.sched_getaffinity(0)),
+                'runner_sha256': digest(__file__), 'timeout': args.timeout}
     result = {'native_frontend': SCHEMA, 'contract': contract, 'binary': str(binary),
               'binary_sha256': binary_hash, 'started': time.strftime('%Y-%m-%dT%H:%M:%S%z'),
               'scope': 'Scoped frontend only, contended/uncontrolled. Not comprehensive synthetic evidence.',

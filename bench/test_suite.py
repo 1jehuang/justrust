@@ -5,6 +5,7 @@ import contextlib
 import hashlib
 import io
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -405,6 +406,7 @@ class NativeFrontendMeasurements(unittest.TestCase):
             self.assertIn(str(root / 'project/src/dependency.rs'), result['contract']['inputs'])
             self.assertIn(str(root / 'project/Cargo.toml'), result['contract']['inputs'])
             self.assertEqual(result['binary_sha256'], native_frontend.digest(root / 'compiler'))
+            self.assertEqual(result['contract']['cpu_affinity'], sorted(os.sched_getaffinity(0)))
             self.assertIn('uncontrolled', native_frontend.compare(result, result))
             with self.assertRaisesRegex(ValueError, 'overwrite'):
                 native_frontend.run(self.args(root))
@@ -425,7 +427,7 @@ class NativeFrontendMeasurements(unittest.TestCase):
             root = Path(tmp)
             self.fixture(root)
             result, _ = self.collect(root)
-            for key in ('inputs', 'opt', 'edition', 'execution', 'host', 'environment', 'consumer_extern'):
+            for key in ('inputs', 'opt', 'edition', 'execution', 'host', 'environment', 'consumer_extern', 'cpu_affinity'):
                 altered = copy.deepcopy(result)
                 altered['contract'][key] = 'different'
                 with self.subTest(key=key), self.assertRaisesRegex(ValueError, 'incompatible'):
