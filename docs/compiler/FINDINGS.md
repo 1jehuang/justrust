@@ -11930,3 +11930,24 @@ same-affinity original-to-current comparison: one-worker consumer BUILD is
 CHECK is 883.910 / 948.214 ms. Library BUILD is 651.762 / 654.876 ms. Thus the
 consumer BUILD improvement does **not** establish a frontend-wide improvement;
 the one-worker CHECK regression remains a measured optimization target.
+
+A subsequent resolver-cache overlay / moved-body assembly experiment passed
+unchanged Adler2 and the graph gates but did not improve latency.
+`cache-affinity-before.json` / `cache-affinity-after.json`, with the same
+CPU 0-3 restriction, show library one-worker CHECK 518.628 / 519.212 ms,
+consumer one-worker CHECK 948.049 / 956.465 ms, and consumer eight-worker
+BUILD 824.649 / 884.935 ms. These uncontrolled differences are not evidence
+of a speedup. The isolated experiment was removed rather than adding cache
+and assembly complexity without a demonstrated benefit.
+
+The smaller name-access change retains the authenticated occurrence's serving
+store for subsequent spelling/context reads, rather than routing those handles
+through the merged store again. `linked_name_spelling_does_not_repeat_merged_symbol_routing`
+pins two merged-store work units and one owning-store work unit per linked
+spelling read. Foreign captured symbols/contexts still require their explicit
+links, and both merged and owning budget poison remain enforced.
+`name-affinity-before.json` / `name-affinity-after.json` show all eight Adler2
+latency changes within 1.2%: library one-worker CHECK 516.267 / 519.258 ms and
+consumer one-worker CHECK 951.681 / 946.230 ms. This removes redundant routing
+work but establishes no material Adler2 wall-time improvement. The CHECK
+regression is not fixed by either follow-up.

@@ -680,24 +680,31 @@ impl NameStore {
     }
 
     fn record(&self, ident: AstIdent) -> Result<&NameData, NameError> {
+        self.serving_record(ident).map(|(record, _)| record)
+    }
+    /// Keep the exact authenticated occurrence owner for subsequent handle
+    /// reads. Symbols and macro contexts still use TokenSession's checked
+    /// serving APIs because a captured handle may belong to another file.
+    fn serving_record(&self, ident: AstIdent) -> Result<(&NameData, &NameStore), NameError> {
         self.budget().charge(Counter::Work, 1)?;
         if !self.session.admits(ident.owner) {
             // A linked crate sibling serves its own occurrences.
             return match self.session.linked_store(ident.owner)? {
-                Some(store) => store.record(ident),
+                Some(store) => store.serving_record(ident),
                 None => Err(TokenError::ForeignHandle.into()),
             };
         }
         self.records
             .as_slice()
             .get(ident.index as usize)
+            .map(|record| (record, self))
             .ok_or_else(|| TokenError::InvalidHandle.into())
     }
     pub fn check(&self, ident: AstIdent) -> Result<(), NameError> {
         self.record(ident).map(|_| ())
     }
     pub fn key(&self, ident: AstIdent, class: LookupClass) -> Result<NameKey, NameError> {
-        let record = self.record(ident)?;
+        let (record, serving) = self.serving_record(ident)?;
         // Only the compiler-private, driver-proof-checked ingress can append
         // nonroot records. Lifetime and type parameter names, like item names, have textual lookup
         // under semi-transparent macro marks. Their AstIdent still retains the
@@ -707,7 +714,7 @@ impl NameStore {
         // The first slice admits one semi-transparent mark;
         // item/member references use its checked invocation (root) context.
         // Local keys retain their mark and resolve through lexical frontiers.
-        let context = if record.context == self.session.root_context()
+        let context = if record.context == SyntaxContextId::ROOT
             || !matches!(
                 class,
                 LookupClass::Item(_)
@@ -717,13 +724,13 @@ impl NameStore {
             ) {
             record.context
         } else {
-            match *self.session.context(record.context)? {
+            match *serving.session.context(record.context)? {
                 super::hygiene::ContextData::Mark {
                     parent,
                     transparency: super::hygiene::Transparency::SemiTransparent,
                     ..
                 } if matches!(
-                    self.session.context(parent)?,
+                    serving.session.context(parent)?,
                     super::hygiene::ContextData::Root
                 ) =>
                 {
@@ -739,7 +746,8 @@ impl NameStore {
         })
     }
     pub fn spelling(&self, ident: AstIdent) -> Result<&str, NameError> {
-        Ok(self.session.symbol(self.record(ident)?.spelling)?)
+        let (record, serving) = self.serving_record(ident)?;
+        Ok(serving.session.symbol(record.spelling)?)
     }
     pub fn atom_text(&self, atom: NameAtomId) -> Result<&str, NameError> {
         self.budget().charge(Counter::Work, 1)?;
@@ -879,6 +887,192 @@ mod tests {
             }),
         };
         (session, cap, token, eof)
+    }
+
+    fn linked_names(stores: Vec<Arc<NameStore>>, budget: ExpansionBudget) -> Arc<NameStore> {
+        let (session, cap, _, _) = owned_fixture(budget);
+        let mut builder = NameStoreBuilder::new(session, cap, Edition::E2024).unwrap();
+        builder.link_crate_files(stores).unwrap();
+        builder.freeze().unwrap()
+    }
+
+    fn root_name(budget: ExpansionBudget) -> (Arc<NameStore>, AstIdent) {
+        let (session, cap, token, _) = owned_fixture(budget);
+        let mut builder = NameStoreBuilder::new(session, cap, Edition::E2024).unwrap();
+        let ident = builder.from_token(token, Edition::E2024).unwrap();
+        (builder.freeze().unwrap(), ident)
+    }
+
+    #[test]
+    fn linked_name_serving_preserves_keys_spelling_and_exact_owner() {
+        let (owner, ident) = root_name(ExpansionBudget::default());
+        let merged = linked_names(vec![owner.clone()], ExpansionBudget::default());
+        let (record, serving) = merged.serving_record(ident).unwrap();
+        assert!(std::ptr::eq(serving, owner.as_ref()));
+        assert!(std::ptr::eq(record, owner.record(ident).unwrap()));
+        assert_eq!(
+            merged.spelling(ident).unwrap(),
+            owner.spelling(ident).unwrap()
+        );
+        for class in [
+            LookupClass::Local,
+            LookupClass::Label,
+            LookupClass::Member,
+            LookupClass::TypeParameter,
+            LookupClass::LifetimeParameter,
+            LookupClass::Item(Namespace::Type),
+        ] {
+            assert_eq!(
+                merged.key(ident, class).unwrap(),
+                owner.key(ident, class).unwrap()
+            );
+        }
+        let (_, foreign) = root_name(ExpansionBudget::default());
+        for result in [
+            merged.check(foreign),
+            merged.spelling(foreign).map(|_| ()),
+            merged.key(foreign, LookupClass::Local).map(|_| ()),
+        ] {
+            assert!(matches!(
+                result,
+                Err(NameError::Token(TokenError::ForeignHandle))
+            ));
+        }
+        let invalid = AstIdent {
+            index: u32::MAX,
+            ..ident
+        };
+        assert!(matches!(
+            merged.spelling(invalid),
+            Err(NameError::Token(TokenError::InvalidHandle))
+        ));
+    }
+
+    #[test]
+    fn linked_name_spelling_does_not_repeat_merged_symbol_routing() {
+        let owner_budget = ExpansionBudget::default();
+        let merged_budget = ExpansionBudget::default();
+        let (owner, ident) = root_name(owner_budget.clone());
+        let merged = linked_names(vec![owner], merged_budget.clone());
+        let work = Counter::Work as usize;
+        let before_merged = merged_budget.snapshot().counters[work];
+        let before_owner = owner_budget.snapshot().counters[work];
+        assert_eq!(merged.spelling(ident).unwrap(), "x");
+        // One occurrence read and one authenticated linked-owner lookup at
+        // the merged store, then one occurrence read at the serving store.
+        // Reading the symbol does not route through the merged store again.
+        assert_eq!(merged_budget.snapshot().counters[work] - before_merged, 2);
+        assert_eq!(owner_budget.snapshot().counters[work] - before_owner, 1);
+    }
+
+    #[test]
+    fn linked_name_serving_enforces_both_merged_and_owning_budget_poison() {
+        for poison_owner in [false, true] {
+            let owner_budget = ExpansionBudget::default();
+            let merged_budget = ExpansionBudget::default();
+            let (owner, ident) = root_name(owner_budget.clone());
+            let merged = linked_names(vec![owner], merged_budget.clone());
+            let failure = if poison_owner {
+                owner_budget.poison_allocation()
+            } else {
+                merged_budget.poison_allocation()
+            };
+            for result in [
+                merged.check(ident),
+                merged.spelling(ident).map(|_| ()),
+                merged
+                    .key(ident, LookupClass::Item(Namespace::Type))
+                    .map(|_| ()),
+            ] {
+                assert!(
+                    matches!(result, Err(NameError::Token(TokenError::Budget(error))) if error == failure)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn linked_name_serving_checks_foreign_captured_symbol_and_macro_context() {
+        let donor_budget = ExpansionBudget::default();
+        let (mut session, cap, token, _) = owned_fixture(donor_budget.clone());
+        let krate = session
+            .register_crate_root(session.sources().file(0).unwrap())
+            .unwrap();
+        let expansion = session
+            .add_expansion(ExpansionRecord {
+                definition: token.span,
+                call: token.span,
+                parent: None,
+                defining_crate: krate,
+                edition: Edition::E2024,
+            })
+            .unwrap();
+        let context = session
+            .apply_mark(
+                session.root_context(),
+                expansion,
+                Transparency::SemiTransparent,
+            )
+            .unwrap();
+        let span = session
+            .with_context(token.span, context, Some(expansion))
+            .unwrap();
+        let mut donor = NameStoreBuilder::new(session, cap, Edition::E2024).unwrap();
+        let root = donor.from_token(token, Edition::E2024).unwrap();
+        let mut captured = donor.data(root).unwrap();
+        captured.context = context;
+        captured.span = span;
+        let donor = donor.freeze().unwrap();
+        let (session, cap, _, _) = owned_fixture(ExpansionBudget::default());
+        let mut carrier = NameStoreBuilder::new(session, cap, Edition::E2024).unwrap();
+        carrier.link_crate_files(vec![donor]).unwrap();
+        // Exercise the storage/read boundary directly, not expansion admission.
+        // Both foreign handles are valid in the explicitly linked carrier.
+        let ident = carrier.append(captured).unwrap();
+        let carrier = carrier.freeze().unwrap();
+        let merged = linked_names(vec![carrier.clone()], ExpansionBudget::default());
+        assert_eq!(merged.spelling(ident).unwrap(), "x");
+        assert_eq!(
+            merged.key(ident, LookupClass::Local).unwrap().context,
+            context
+        );
+        for class in [
+            LookupClass::Member,
+            LookupClass::TypeParameter,
+            LookupClass::LifetimeParameter,
+            LookupClass::Item(Namespace::Value),
+        ] {
+            assert_eq!(
+                merged.key(ident, class).unwrap(),
+                carrier.key(ident, class).unwrap()
+            );
+            assert_eq!(
+                merged.key(ident, class).unwrap().context,
+                SyntaxContextId::ROOT
+            );
+        }
+        // An authenticated occurrence is not authority for arbitrary foreign
+        // payload handles. Without the donor link both reads must fail closed.
+        let (session, cap, _, _) = owned_fixture(ExpansionBudget::default());
+        let mut unlinked = NameStoreBuilder::new(session, cap, Edition::E2024).unwrap();
+        let forged = unlinked.append(captured).unwrap();
+        let unlinked = unlinked.freeze().unwrap();
+        let merged_unlinked = linked_names(vec![unlinked], ExpansionBudget::default());
+        assert!(matches!(
+            merged_unlinked.spelling(forged),
+            Err(NameError::Token(TokenError::ForeignHandle))
+        ));
+        assert!(matches!(
+            merged_unlinked.key(forged, LookupClass::Member),
+            Err(NameError::Token(TokenError::ForeignHandle))
+        ));
+        let failure = donor_budget.poison_allocation();
+        assert!(
+            matches!(merged.spelling(ident), Err(NameError::Token(TokenError::Budget(error))) if error == failure)
+        );
+        assert!(
+            matches!(merged.key(ident, LookupClass::Member), Err(NameError::Token(TokenError::Budget(error))) if error == failure)
+        );
     }
 
     #[test]
