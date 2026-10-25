@@ -158,6 +158,16 @@ pub(super) fn inventory(
 ) -> Result<tr::RecipeShapeInventory, String> {
     // Inventory walks source before publishing recipes, including cold panic sites.
     program.validate_name_handles()?;
+    inventory_validated(program, budget)
+}
+
+/// `inventory` for a program whose name handles the caller has already
+/// validated in this same computation (the borrow is immutable, so the
+/// result cannot change in between).
+pub(super) fn inventory_validated(
+    program: &Program,
+    budget: &ir::PlanBudget,
+) -> Result<tr::RecipeShapeInventory, String> {
     let mut descriptors = Vec::new();
     fn add(
         ds: &mut Vec<tr::RecipeDescriptor>,

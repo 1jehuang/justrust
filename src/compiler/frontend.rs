@@ -20532,7 +20532,8 @@ impl PlanCtx {
         // Recipe declarations follow the catalog prefix in the catalog's own
         // (non-source) index range; source identities carry SOURCE_BIT.
         let source_end = catalog_builder.source_start();
-        let inventory = recipes::inventory(program, budget)?;
+        // `program` was name-validated on entry to this constructor.
+        let inventory = recipes::inventory_validated(program, budget)?;
         let catalog = catalog_builder
             .finish(source_end, inventory, budget)
             .map_err(|e| e.into_legacy_diagnostic(budget))?;
