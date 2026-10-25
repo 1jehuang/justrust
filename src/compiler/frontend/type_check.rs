@@ -1375,11 +1375,10 @@ impl<'s> Checker<'s> {
                 let base = self.inference_evidence(base, depth + 1)?;
                 let dummy = Inference::empty(self)?;
                 if let Some(ty) = dummy.resolve(&base, false, depth + 1)? {
-                    let receiver = if let ir::Ty::Ref { referent, .. } = &ty {
-                        referent.as_ref()
-                    } else {
-                        &ty
-                    };
+                    let mut receiver = &ty;
+                    while let ir::Ty::Ref { referent, .. } = receiver {
+                        receiver = referent.as_ref();
+                    }
                     let receiver = if let ir::Ty::Struct(nominal) = receiver
                         && !self.has_member(nominal.def().source_decl, field)?
                         && let Some(target) = self.deref_target_hint(receiver)?
@@ -5000,11 +4999,10 @@ impl<'a> Checker<'a> {
             Expr::Unary { .. } | Expr::Binary { .. } => self.operator_result_hint(e)?,
             Expr::Field { base, field } => {
                 if let Some(ty) = self.scalar_hint(base)? {
-                    let receiver = if let ir::Ty::Ref { referent, .. } = &ty {
-                        referent.as_ref()
-                    } else {
-                        &ty
-                    };
+                    let mut receiver = &ty;
+                    while let ir::Ty::Ref { referent, .. } = receiver {
+                        receiver = referent.as_ref();
+                    }
                     if let ir::Ty::Struct(nominal) = receiver
                         && !self.has_member(nominal.def().source_decl, field)?
                         && let Some(target) = self.deref_target_hint(receiver)?
@@ -11378,6 +11376,24 @@ impl<'a> Checker<'a> {
                             source.fields.push(FieldSelector::Deref);
                             self.checked_place(&source)?;
                         }
+                        let ty = referent.as_ref().clone();
+                        self.accessible(&ty)?;
+                        let deref = ir::ExprId(self.exprs.len());
+                        self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
+                        self.exprs.push(ir::TypedExpr {
+                            ty: ty.clone(),
+                            completion: self.exprs[base.0].completion,
+                            kind: ir::ExprKind::Deref { value: base },
+                        });
+                        base = deref;
+                        flow.ty = ty;
+                    }
+                    // Further reference layers (`i.q` with `i: &&T`) are read
+                    // through the already dereferenced carrier.
+                    for _ in 0..ir::MAX_PATTERN_PROJECTION_DEPTH {
+                        let ir::Ty::Ref { referent, .. } = &flow.ty else {
+                            break;
+                        };
                         let ty = referent.as_ref().clone();
                         self.accessible(&ty)?;
                         let deref = ir::ExprId(self.exprs.len());

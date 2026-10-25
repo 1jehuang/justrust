@@ -185,6 +185,17 @@ let c=RefCell::new(vec![1u32,2]);let g=c.borrow();for x in g.iter(){println!(\"{
 }
 
 #[test]
+fn field_reads_through_nested_references() {
+    compare(
+        "struct It{id:u32,q:u32}\nfn f(i:&&It)->u32{i.q}\n\
+fn main(){let v=vec![It{id:2,q:0},It{id:1,q:4}];let n=v.iter().filter(|i|i.q==0).count();\
+let e:Vec<&It>=v.iter().filter(|i|i.q==4).collect();let r=&v[0];println!(\"{} {} {} {}\",n,e.len(),f(&r),v[1].id);}\n",
+        "1 1 0 1\n",
+        "nested-ref-field",
+    );
+}
+
+#[test]
 fn collect_into_partially_annotated_vec() {
     compare(
         "fn main(){let w=vec![(1u32,2u64)];let x:Vec<_>=w.into_iter().collect();println!(\"{:?}\",x);\
