@@ -11951,3 +11951,23 @@ latency changes within 1.2%: library one-worker CHECK 516.267 / 519.258 ms and
 consumer one-worker CHECK 951.681 / 946.230 ms. This removes redundant routing
 work but establishes no material Adler2 wall-time improvement. The CHECK
 regression is not fixed by either follow-up.
+
+A local `samply record` attempt was blocked by `perf_event_paranoid=2`; no
+kernel security setting was changed. `stack-offset-diagnostics.json` retains
+12 owned-process GDB interruptions at 40 ms intervals, with exact commands
+and stacks. These are wall-offset diagnostics, not statistically sampled CPU
+shares or benchmark timings. Several stacks enter metering/ledger admission,
+allocation and trait-schema validation. This motivated allowing the existing
+`ExpansionBudget::charge` and `PlanBudget::charge_counted` implementations to
+inline, without changing any charge, limit, poison check or tracked caller.
+
+`inline-affinity-before.json` / `inline-affinity-after.json` show one-worker
+library CHECK 523.285 / 516.377 ms. Repeating in reversed binary order
+(`inline-reverse-baseline.json` / `inline-reverse-candidate.json`) gives
+521.424 / 512.288 ms. That is a small observed 1.3-1.8% reduction for this cell,
+not a general or statistically established compiler speedup. Other cells are
+mixed on repetition: eight-worker library CHECK changes from 409.847 / 398.081
+to 401.327 / 406.483 ms, while one-worker consumer CHECK is effectively flat
+(942.537 / 941.978 and 941.662 / 943.200 ms). The earlier original-to-current
+one-worker CHECK regression remains unresolved. Budget, graph and unchanged
+Adler2 acceptance gates pass with the two annotation changes.

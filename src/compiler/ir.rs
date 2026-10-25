@@ -2769,7 +2769,7 @@ impl PlanBudget {
     /// size); a budget built with a tighter limit also bounds its own charges
     /// within the node. Outside polling only the budget's own limit applies.
     #[track_caller]
-    #[inline(never)]
+    #[inline]
     fn charge_counted(&self, amount: usize, kind: ResourceBudgetKind) -> Result<(), String> {
         let caller = std::panic::Location::caller();
         let defaults = PlanLimits::default();

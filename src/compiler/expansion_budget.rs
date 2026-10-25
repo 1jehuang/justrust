@@ -358,7 +358,7 @@ impl ExpansionBudget {
     pub fn check(&self) -> Result<(), BudgetFailure> {
         self.with(|s, _| s.healthy())
     }
-    #[inline(never)]
+    #[inline]
     pub fn charge(&self, counter: Counter, n: u64) -> Result<(), BudgetFailure> {
         // Hot path: default-limit work inside a graph node is bounded by the
         // node's own meter alone; the ledger is touched only on failure or
