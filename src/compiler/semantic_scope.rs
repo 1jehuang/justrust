@@ -282,6 +282,9 @@ pub struct ScopeArena {
     /// served (the textual macro scope a parent file had at `mod child;`);
     /// function scopes stay file-local.
     linked: Arc<[(NonZeroU64, Arc<ScopeArena>)]>,
+    /// Exact file-session authority mapped to the owner-sorted linked array.
+    /// Constructed and checked once, never rebuilt by occurrence lookups.
+    linked_sessions: Arc<[(SessionId, usize)]>,
     names: SessionId,
     scopes: BudgetVec<ScopeRecord>,
     frontiers: BudgetVec<FrontierRecord>,
@@ -342,6 +345,7 @@ impl ScopeArenaBuilder {
             arena: ScopeArena {
                 owner: owner.tag().bits(),
                 linked: Arc::from([]),
+                linked_sessions: Arc::from([]),
                 names: names.session().id(),
                 scopes: BudgetVec::new(&budget, Storage::Retained)?,
                 frontiers: BudgetVec::new(&budget, Storage::Retained)?,
@@ -568,16 +572,57 @@ impl ScopeArenaBuilder {
         if !self.arena.linked.is_empty() {
             return Err(TokenError::InvalidInput("crate sibling scopes already linked").into());
         }
-        self.arena
+        let count = arenas.len();
+        if count == 0 {
+            return Ok(());
+        }
+        // Prepay both sorting passes, index construction and Arc relocation.
+        // The temporary vectors coexist with the final Arc allocations during
+        // conversion, so their full backing capacities remain charged too.
+        let levels = u64::from(count.ilog2()) + 1;
+        let work = (count as u64)
+            .checked_mul(
+                levels
+                    .checked_mul(2)
+                    .and_then(|n| n.checked_add(6))
+                    .ok_or(TokenError::IdExhausted)?,
+            )
+            .ok_or(TokenError::IdExhausted)?;
+        self.arena.budget.charge(Counter::Work, work)?;
+        let backing_bytes = |owners: usize, sessions: usize| -> Result<u64, ScopeError> {
+            owners
+                .checked_mul(size_of::<(NonZeroU64, Arc<ScopeArena>)>())
+                .and_then(|n| {
+                    sessions
+                        .checked_mul(size_of::<(SessionId, usize)>())
+                        .and_then(|s| n.checked_add(s))
+                })
+                .map(|n| n as u64)
+                .ok_or_else(|| TokenError::IdExhausted.into())
+        };
+        let mut scratch = self
+            .arena
             .budget
-            .charge(Counter::Work, arenas.len() as u64)?;
+            .reserve(Storage::Temporary, backing_bytes(count, count)?)?;
         let mut linked: Vec<(NonZeroU64, Arc<ScopeArena>)> = Vec::new();
         linked
-            .try_reserve_exact(arenas.len())
+            .try_reserve_exact(count)
             .map_err(|_| self.arena.budget.poison_allocation())?;
+        scratch.resize(backing_bytes(linked.capacity(), count)?)?;
+        let mut sessions = Vec::new();
+        sessions
+            .try_reserve_exact(count)
+            .map_err(|_| self.arena.budget.poison_allocation())?;
+        scratch.resize(backing_bytes(linked.capacity(), sessions.capacity())?)?;
         for arena in arenas {
             if arena.owner == self.arena.owner {
                 return Err(TokenError::InvalidInput("a scope arena cannot link itself").into());
+            }
+            if arena.names == self.arena.names {
+                return Err(TokenError::InvalidInput(
+                    "linked scope session collides with its own session",
+                )
+                .into());
             }
             linked.push((arena.owner, arena));
         }
@@ -585,7 +630,28 @@ impl ScopeArenaBuilder {
         if linked.windows(2).any(|pair| pair[0].0 == pair[1].0) {
             return Err(TokenError::InvalidInput("duplicate linked scope owner").into());
         }
-        self.arena.linked = linked.into();
+        for (position, (_, arena)) in linked.iter().enumerate() {
+            sessions.push((arena.names, position));
+        }
+        sessions.sort_unstable_by_key(|(session, _)| session.bits());
+        if sessions.windows(2).any(|pair| pair[0].0 == pair[1].0) {
+            return Err(TokenError::InvalidInput("duplicate linked scope session").into());
+        }
+        let retained = backing_bytes(count, count)?
+            .checked_add((4 * size_of::<usize>()) as u64)
+            .ok_or(TokenError::IdExhausted)?;
+        self.arena._lease.resize(
+            self.arena
+                ._lease
+                .bytes()
+                .checked_add(retained)
+                .ok_or(TokenError::IdExhausted)?,
+        )?;
+        let linked = linked.into();
+        let sessions = sessions.into();
+        self.arena.linked = linked;
+        self.arena.linked_sessions = sessions;
+        drop(scratch);
         Ok(())
     }
     pub fn freeze(mut self) -> Result<Arc<ScopeArena>, ScopeError> {
@@ -731,19 +797,21 @@ impl ScopeArena {
         if owner == self.names {
             return Ok(Some(self));
         }
-        let mut found = None;
-        for (_, arena) in self.linked.iter() {
-            self.budget.charge(Counter::Work, 1)?;
-            if arena.names == owner {
-                // The merged view has already checked the caller's name and
-                // budget authority. A linked file retains its own task budget,
-                // so it must not be mistaken for that merged view's issuer.
-                if found.replace(&**arena).is_some() {
-                    return Err(ScopeError::ConflictingAssociation);
-                }
-            }
-        }
-        Ok(found)
+        // std's binary search may perform a final comparison after narrowing
+        // a non-power-of-two slice, so floor(log2(n)) + 1 is not sufficient.
+        let comparisons = self
+            .linked_sessions
+            .len()
+            .checked_ilog2()
+            .map_or(0, |n| u64::from(n) + 2);
+        self.budget.charge(Counter::Work, comparisons)?;
+        // The merged view has already checked caller name/budget authority.
+        // A linked file keeps its distinct original task budget and identity.
+        Ok(self
+            .linked_sessions
+            .binary_search_by_key(&owner.bits(), |(session, _)| session.bits())
+            .ok()
+            .map(|index| &*self.linked[self.linked_sessions[index].1].1))
     }
     fn scope(&self, id: ScopeId) -> Result<ScopeRecord, ScopeError> {
         if let Some(arena) = self.linked_arena(id.owner)? {
@@ -1323,7 +1391,9 @@ mod tests {
         names.join_crate(&files[0]).unwrap();
         let mut scopes = ScopeArenaBuilder::for_builder(&mut names).unwrap();
         // The third file's names are admitted, but its scope authority is not.
-        scopes.link_crate_files(arenas[..2].to_vec()).unwrap();
+        let mut reversed = arenas[..2].to_vec();
+        reversed.reverse();
+        scopes.link_crate_files(reversed).unwrap();
         let scopes = scopes.freeze().unwrap();
         let names = names.freeze().unwrap();
         assert_eq!(
@@ -1387,6 +1457,219 @@ mod tests {
             scopes.check_occurrence(&*names, expansions[2].1, Some(rows[0].2)),
             Err(ScopeError::UnregisteredExpansion)
         ));
+        assert!(
+            scopes
+                .session_arena(files[2].session().id())
+                .unwrap()
+                .is_none()
+        );
+        let (mut foreign, span, _, _, _) = fixture();
+        let forged = foreign.intern_root("x", span).unwrap();
+        assert!(scopes.declaration_for(&*names, forged).is_err());
+    }
+
+    #[test]
+    fn linked_file_session_index_rejects_duplicate_authorities() {
+        let (mut names, _, _, _, _) = fixture();
+        let first = ScopeArenaBuilder::for_builder(&mut names)
+            .unwrap()
+            .freeze()
+            .unwrap();
+        let second = ScopeArenaBuilder::for_builder(&mut names)
+            .unwrap()
+            .freeze()
+            .unwrap();
+        assert_ne!(first.owner, second.owner);
+        assert_eq!(first.names, second.names);
+        let (mut merged_names, _, _, _, _) = fixture();
+        for files in [vec![first.clone(), second.clone()], vec![second, first]] {
+            let mut merged = ScopeArenaBuilder::for_builder(&mut merged_names).unwrap();
+            let before = merged.arena.budget.snapshot();
+            assert!(matches!(
+                merged.link_crate_files(files),
+                Err(ScopeError::Token(TokenError::InvalidInput(
+                    "duplicate linked scope session"
+                )))
+            ));
+            assert!(merged.arena.linked.is_empty());
+            assert!(merged.arena.linked_sessions.is_empty());
+            let after = merged.arena.budget.snapshot();
+            assert_eq!(after.retained_bytes, before.retained_bytes);
+            assert_eq!(after.temporary_bytes, before.temporary_bytes);
+        }
+        let own_session = ScopeArenaBuilder::for_builder(&mut merged_names)
+            .unwrap()
+            .freeze()
+            .unwrap();
+        let mut merged = ScopeArenaBuilder::for_builder(&mut merged_names).unwrap();
+        assert_ne!(merged.arena.owner, own_session.owner);
+        assert!(matches!(
+            merged.link_crate_files(vec![own_session]),
+            Err(ScopeError::Token(TokenError::InvalidInput(
+                "linked scope session collides with its own session"
+            )))
+        ));
+        assert!(merged.arena.linked.is_empty());
+        assert!(merged.arena.linked_sessions.is_empty());
+    }
+
+    #[test]
+    fn linked_file_session_index_prepays_backings_and_arc_peak() {
+        let (mut names, _, _, _, _) = fixture();
+        let file = ScopeArenaBuilder::for_builder(&mut names)
+            .unwrap()
+            .freeze()
+            .unwrap();
+        let (mut merged_names, _, _, _, _) = fixture();
+        let mut merged = ScopeArenaBuilder::for_builder(&mut merged_names).unwrap();
+        let budget = merged.arena.budget.clone();
+        let before = budget.snapshot();
+        merged.link_crate_files(vec![file.clone()]).unwrap();
+        let backing =
+            (size_of::<(NonZeroU64, Arc<ScopeArena>)>() + size_of::<(SessionId, usize)>()) as u64;
+        let retained = backing + (4 * size_of::<usize>()) as u64;
+        let after = budget.snapshot();
+        assert_eq!(after.retained_bytes - before.retained_bytes, retained);
+        assert_eq!(after.temporary_bytes, before.temporary_bytes);
+        assert!(
+            after.peak_bytes >= before.retained_bytes + before.temporary_bytes + backing + retained
+        );
+        assert_eq!(merged.arena.linked_sessions.len(), 1);
+        assert_eq!(
+            merged
+                .arena
+                .session_arena(file.names)
+                .unwrap()
+                .unwrap()
+                .owner,
+            file.owner
+        );
+        assert!(merged.link_crate_files(vec![file]).is_err());
+    }
+
+    #[test]
+    fn linked_file_session_index_lookup_work_grows_logarithmically() {
+        let mut deltas = Vec::new();
+        for count in [3usize, 16, 64] {
+            let mut files = Vec::new();
+            let mut arenas = Vec::new();
+            for _ in 0..count {
+                let (mut names, _, _, _, _) = fixture();
+                arenas.push(
+                    ScopeArenaBuilder::for_builder(&mut names)
+                        .unwrap()
+                        .freeze()
+                        .unwrap(),
+                );
+                files.push(names.freeze().unwrap());
+            }
+            let (mut names, _, _, _, _) = fixture();
+            names.link_crate_files(files).unwrap();
+            let mut merged = ScopeArenaBuilder::for_builder(&mut names).unwrap();
+            let expected = u64::from(count.ilog2()) + 2;
+            let owners = arenas
+                .iter()
+                .map(|arena| (arena.names, arena.owner))
+                .collect::<Vec<_>>();
+            arenas.reverse();
+            merged.link_crate_files(arenas).unwrap();
+            let merged = merged.freeze().unwrap();
+            let budget = merged.budget();
+            for (session, owner) in owners {
+                let before = budget.snapshot().counters[Counter::Work as usize];
+                assert_eq!(merged.session_arena(session).unwrap().unwrap().owner, owner);
+                let delta = budget.snapshot().counters[Counter::Work as usize] - before;
+                assert_eq!(delta, expected, "{count} sibling lookup");
+            }
+            let (foreign, _, _, _, _) = fixture();
+            let before = budget.snapshot().counters[Counter::Work as usize];
+            assert!(
+                merged
+                    .session_arena(foreign.session().id())
+                    .unwrap()
+                    .is_none()
+            );
+            assert_eq!(
+                budget.snapshot().counters[Counter::Work as usize] - before,
+                expected
+            );
+            deltas.push(expected);
+        }
+        assert_eq!(deltas, [3, 6, 8]);
+    }
+
+    #[test]
+    fn linked_file_session_index_rejects_resource_limits_before_publication() {
+        use super::super::expansion_budget::{BudgetFailureKind, BudgetResource};
+        for mode in 0..3 {
+            let (mut names, _, _, _, _) = fixture();
+            let file = ScopeArenaBuilder::for_builder(&mut names)
+                .unwrap()
+                .freeze()
+                .unwrap();
+            let (mut merged_names, _, _, _, _) = fixture();
+            let mut merged = ScopeArenaBuilder::for_builder(&mut merged_names).unwrap();
+            let budget = merged.arena.budget.clone();
+            let backing = (size_of::<(NonZeroU64, Arc<ScopeArena>)>()
+                + size_of::<(SessionId, usize)>()) as u64;
+            let retained = backing + (4 * size_of::<usize>()) as u64;
+            let blocker = if mode == 0 {
+                let used = budget.snapshot().counters[Counter::Work as usize];
+                budget
+                    .charge(
+                        Counter::Work,
+                        budget.limits().counters[Counter::Work as usize] - used,
+                    )
+                    .unwrap();
+                None
+            } else {
+                let before = budget.snapshot();
+                let remaining = if mode == 1 {
+                    backing - 1
+                } else {
+                    backing + retained - 1
+                };
+                Some(
+                    budget
+                        .reserve(
+                            Storage::Temporary,
+                            budget.limits().bytes
+                                - before.retained_bytes
+                                - before.temporary_bytes
+                                - remaining,
+                        )
+                        .unwrap(),
+                )
+            };
+            let before = budget.snapshot();
+            let error = merged.link_crate_files(vec![file]).unwrap_err();
+            let ScopeError::Token(TokenError::Budget(failure)) = error else {
+                panic!("expected original resource failure: {error:?}")
+            };
+            assert_eq!(failure.kind, BudgetFailureKind::Limit);
+            assert_eq!(
+                failure.resource,
+                if mode == 0 {
+                    BudgetResource::Counter(Counter::Work)
+                } else {
+                    BudgetResource::Bytes
+                }
+            );
+            if mode == 2 {
+                assert_eq!(
+                    failure.used,
+                    before.retained_bytes + before.temporary_bytes + backing
+                );
+                assert_eq!(failure.requested, retained);
+            }
+            assert!(merged.arena.linked.is_empty());
+            assert!(merged.arena.linked_sessions.is_empty());
+            let after = budget.snapshot();
+            assert_eq!(after.retained_bytes, before.retained_bytes);
+            assert_eq!(after.temporary_bytes, before.temporary_bytes);
+            assert_eq!(after.failure, Some(failure));
+            drop(blocker);
+        }
     }
 
     struct NestedFixture {

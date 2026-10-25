@@ -11906,3 +11906,27 @@ scope-session searches. Do not hide this regression behind the original
 baseline comparison. All-file admission, final merge, complete-parent waits,
 namespace/header preparation and final signature assembly remain optimization
 targets, not completed root-removal work.
+
+Follow-up session indexing replaces a full linked-scope scan on every
+occurrence/expansion lookup with an immutable, prepaid exact-session index.
+The existing `linked_file_session_index_lookup_work_grows_logarithmically`
+regression pins work charges of 3, 6 and 8 for 3, 16 and 64 sibling files;
+duplicate session authorities and resource exhaustion fail before publication.
+This is a bounded-lookup improvement, not an established Adler2 latency win.
+
+`index-unpinned-before.json` / `index-unpinned-after.json` retain a misleading
+mixed result: one-worker library times worsened about 31% while consumer times
+improved. The laptop exposes four 5.1-5.2 GHz maximum-frequency cores, eight
+4.0 GHz cores and four 3.7 GHz cores. A follow-up restricted **both** binaries to
+CPUs 0-3 with `taskset -c 0-3`; the runner now records inherited CPU affinity in
+its comparison contract. `index-affinity-before.json` /
+`index-affinity-after.json` show all eight changes within 1%, so no material
+Adler2 speedup is attributed to the index. Eight workers share four cores in
+these runs. Frequency, contention and thermals remain uncontrolled.
+
+`original-affinity.json` against `index-affinity-after.json` provides the
+same-affinity original-to-current comparison: one-worker consumer BUILD is
+1406.748 / 1117.313 ms, but library CHECK is 458.275 / 525.274 ms and consumer
+CHECK is 883.910 / 948.214 ms. Library BUILD is 651.762 / 654.876 ms. Thus the
+consumer BUILD improvement does **not** establish a frontend-wide improvement;
+the one-worker CHECK regression remains a measured optimization target.
