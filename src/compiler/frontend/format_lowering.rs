@@ -450,7 +450,13 @@ impl Checker<'_> {
     /// Types the library formatter may handle (nominal values, references,
     /// str, floats, scalars with specs). Final acceptance is trait selection.
     fn library_formattable(&self, ty: &ir::Ty) -> bool {
-        !matches!(ty, ir::Ty::Never | ir::Ty::Tuple(_))
+        // Tuples up to arity four have prelude Debug impls; others keep the
+        // precise native diagnostic.
+        match ty {
+            ir::Ty::Never => false,
+            ir::Ty::Tuple(fields) => (1..=4).contains(&fields.len()),
+            _ => true,
+        }
     }
 }
 

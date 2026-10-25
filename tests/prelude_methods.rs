@@ -528,3 +528,25 @@ fn str_slice_methods_match_stock() {
         }],
     );
 }
+
+#[test]
+fn tuples_of_library_debug_elements_format_through_prelude_impls() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "tuple-library-debug",
+        &[
+            Case {
+                name: "str_string_float_char_nominal_fields",
+                source: "#[derive(Debug)]\nstruct P(u8);\nfn main(){let t=(1,\"a\");println!(\"{:?}\",t);println!(\"{:?}\",(String::from(\"x\"),2.5,'c'));println!(\"{:?}\",(P(3),true));println!(\"{:?}\",(1,2));let r=&t;println!(\"{:?} {}\",r,r.0);let _=P(0).0;}",
+                expect: Expect::Run(
+                    "(1, \"a\")\n(\"x\", 2.5, 'c')\n(P(3), true)\n(1, 2)\n(1, \"a\") 1\n",
+                ),
+            },
+            Case {
+                name: "tuple_with_non_debug_field",
+                source: "struct N;\nfn main(){let t=(1,N);println!(\"{:?}\",t);}",
+                expect: Expect::Invalid("E0277"),
+            },
+        ],
+    );
+}
