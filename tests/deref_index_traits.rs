@@ -202,3 +202,13 @@ fn boxed_array_index_borrows_through_deref() {
         );
     }
 }
+
+#[test]
+fn inferred_string_local_deref_coerces_at_str_argument() {
+    run(
+        "fn main(){let mut s=String::new();for i in 0..3{s.push_str(&i.to_string());}let n=7u32;let t=n.to_string();s.push_str(&t);println!(\"{}\",s);}",
+        "0127\n",
+    );
+    let source = "fn main(){let mut s=String::new();let t=5u32;s.push_str(&t);println!(\"{}\",s);}";
+    assert!(compiler::compile(source.into(), 1, true).is_err());
+}

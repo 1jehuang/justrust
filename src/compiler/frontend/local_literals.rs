@@ -92,6 +92,10 @@ struct Solver<'a: 's, 'b: 's, 's> {
     /// expectation (e.g. `let v: Vec<&dyn P> = vec![&a]`) fix the target first;
     /// at quiescence the remaining ones fall back to equality.
     lazy_coercions: Vec<(Term, Term)>,
+    /// `&x -> &str` / `&x -> &[T]` where `x`'s type is not known yet: stock
+    /// may deref-coerce (`&String -> &str`), so the referents are only equated
+    /// once `x` is known, or at quiescence.
+    pending_referents: Vec<(Term, Term)>,
     iterator_items: Vec<iteration::Pending>,
     /// `(carrier, payload)` for `e?` whose carrier was not yet nominal.
     tries: Vec<(Term, Term)>,
@@ -210,6 +214,7 @@ fn solve_body_with_seed<'a: 's, 'b: 's, 's>(
         trait_application_pending: false,
         coercions: Vec::new(),
         lazy_coercions: Vec::new(),
+        pending_referents: Vec::new(),
         iterator_items: Vec::new(),
         tries: Vec::new(),
         patterns: Vec::new(),
@@ -929,6 +934,15 @@ impl<'s> Solver<'_, '_, 's> {
                 if matches!(self.domain(b), Domain::Fixed(ir::Ty::Dyn(_))) {
                     return Ok(());
                 }
+                if matches!(self.domain(a), Domain::Unknown)
+                    && matches!(
+                        self.domain(b),
+                        Domain::Fixed(ir::Ty::Str) | Domain::Slice(_)
+                    )
+                {
+                    self.pending_referents.push((actual, expected));
+                    return Ok(());
+                }
                 self.coerce(a, b)
             }
             // `Box<T> -> Box<dyn P>` unsizing is proven by the checker; the
@@ -1412,6 +1426,31 @@ impl<'s> Solver<'_, '_, 's> {
                     self.coerce(actual, expected)?;
                     progress = true;
                 }
+            }
+            for (actual, expected) in std::mem::take(&mut self.pending_referents) {
+                let Domain::Ref(_, inner) = self.domain(actual) else {
+                    self.coerce(actual, expected)?;
+                    progress = true;
+                    continue;
+                };
+                if matches!(self.domain(inner), Domain::Unknown) {
+                    self.pending_referents.push((actual, expected));
+                } else {
+                    self.coerce(actual, expected)?;
+                    progress = true;
+                }
+            }
+            if !progress && !self.pending_referents.is_empty() {
+                for (actual, expected) in std::mem::take(&mut self.pending_referents) {
+                    if let (Domain::Ref(_, a), Domain::Ref(_, b)) =
+                        (self.domain(actual), self.domain(expected))
+                    {
+                        self.unify(a, b)?;
+                    } else {
+                        self.unify(actual, expected)?;
+                    }
+                }
+                continue;
             }
             if !progress && !self.lazy_coercions.is_empty() {
                 for (actual, expected) in std::mem::take(&mut self.lazy_coercions) {
