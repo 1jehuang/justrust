@@ -251,11 +251,15 @@ impl type_check::Checker<'_> {
         } else {
             ("ops", "Index", "index")
         };
+        let (owner, first) = match self.index_autoderef_kind(&owner, base, index, kind)? {
+            Some((target, carrier)) => (target, First::Lowered(carrier)),
+            None => (owner, First::Borrow(kind, base)),
+        };
         let call = self.operator_call(
             spec,
             owner,
             Some(index_ty),
-            First::Borrow(kind, base),
+            first,
             std::slice::from_ref(index),
         )?;
         self.record_operator(pointer, call)?;
@@ -316,6 +320,25 @@ impl type_check::Checker<'_> {
         if !writable {
             return Err("E0596: cannot mutably index an immutable place".into());
         }
+        // Stock index autoderef through `DerefMut`: `guard[i] = x` with
+        // `guard: RefMut<Vec<T>>` / `Box<Vec<T>>` assigns through
+        // `IndexMut` on the first `Deref` target that has an `Index` impl.
+        let mut deref_carrier = None;
+        if self.index_reference_hint(&owner, index)?.is_none()
+            && let Some(target) = self.deref_target_hint(&owner)?
+            && self.index_reference_hint(&target, index)?.is_some()
+        {
+            let call = self.operator_call(
+                ("ops", "DerefMut", "deref_mut"),
+                owner.clone(),
+                None,
+                First::Place(ir::BorrowKind::Mut, &base),
+                &[],
+            )?;
+            self.record_operator(statement as *const Stmt as usize | 3, call)?;
+            deref_carrier = Some(call);
+            owner = target;
+        }
         let reference = self
             .index_reference_hint(&owner, index)?
             .ok_or("no Index implementation for indexed assignment")?;
@@ -356,7 +379,10 @@ impl type_check::Checker<'_> {
             ("ops", "IndexMut", "index_mut"),
             owner,
             Some(idx_ty),
-            First::Place(ir::BorrowKind::Mut, &base),
+            match deref_carrier {
+                Some(carrier) => First::Lowered(carrier),
+                None => First::Place(ir::BorrowKind::Mut, &base),
+            },
             std::slice::from_ref(index),
         )?;
         self.record_operator(statement as *const Stmt as usize | 1, call)?;
@@ -693,6 +719,16 @@ impl type_check::Checker<'_> {
         base: &Expr,
         index: &Expr,
     ) -> Result<Option<(ir::Ty, ir::ExprId)>, String> {
+        self.index_autoderef_kind(owner, base, index, ir::BorrowKind::Shared)
+    }
+
+    fn index_autoderef_kind(
+        &mut self,
+        owner: &ir::Ty,
+        base: &Expr,
+        index: &Expr,
+        kind: ir::BorrowKind,
+    ) -> Result<Option<(ir::Ty, ir::ExprId)>, String> {
         if self.index_reference_hint(owner, index)?.is_some() {
             return Ok(None);
         }
@@ -705,8 +741,7 @@ impl type_check::Checker<'_> {
         {
             return Ok(None);
         }
-        let Some(carrier) = self.receiver_overloaded_deref(base, owner, ir::BorrowKind::Shared)?
-        else {
+        let Some(carrier) = self.receiver_overloaded_deref(base, owner, kind)? else {
             return Ok(None);
         };
         Ok(Some((target, carrier)))

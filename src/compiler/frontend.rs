@@ -2203,6 +2203,12 @@ impl SourceInventory {
                         &here.child(41, 0, budget)?,
                         budget,
                     )?;
+                    // Index autoderef through `DerefMut` (`guard[i] = x`).
+                    self.operator_site(
+                        statement as *const Stmt as usize | 3,
+                        &here.child(41, 1, budget)?,
+                        budget,
+                    )?;
                     self.expr(
                         index,
                         &here.child(4, 0, budget)?,
@@ -2226,6 +2232,12 @@ impl SourceInventory {
                     self.operator_site(
                         statement as *const Stmt as usize | 1,
                         &here.child(41, 0, budget)?,
+                        budget,
+                    )?;
+                    // Index autoderef through `DerefMut` (`guard[i] = x`).
+                    self.operator_site(
+                        statement as *const Stmt as usize | 3,
+                        &here.child(41, 1, budget)?,
                         budget,
                     )?;
                     self.expr(
@@ -2252,6 +2264,12 @@ impl SourceInventory {
                     self.operator_site(
                         statement as *const Stmt as usize | 1,
                         &here.child(41, 0, budget)?,
+                        budget,
+                    )?;
+                    // Index autoderef through `DerefMut` (`guard[i] = x`).
+                    self.operator_site(
+                        statement as *const Stmt as usize | 3,
+                        &here.child(41, 1, budget)?,
                         budget,
                     )?;
                     self.expr(

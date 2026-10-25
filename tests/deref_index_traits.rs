@@ -155,3 +155,16 @@ impl std::ops::Deref for P { type Target = W; fn deref(&self) -> &W { &self.w } 
 fn main() { let p = P { w: W { v: 4 } }; let b = p.missing; println!(\"{}\", b); }";
     assert!(compiler::compile(source.into(), 1, true).is_err());
 }
+
+#[test]
+fn index_mut_through_deref_mut_guards() {
+    run(
+        "use std::cell::RefCell;
+fn main(){let c=RefCell::new(vec![1u32,2]);
+{let mut g=c.borrow_mut();let r=&mut g[0];*r+=5;}
+{let mut g=c.borrow_mut();g[1]=9;}
+{let mut b=Box::new(vec![3u32]);b[0]+=1;let r=&mut b[0];*r*=2;println!(\"{}\",b[0]);}
+println!(\"{:?}\",c.borrow());}",
+        "8\n[6, 9]\n",
+    );
+}
