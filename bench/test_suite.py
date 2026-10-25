@@ -353,5 +353,115 @@ class HostedMeasurements(unittest.TestCase):
         suite.PASS_TIMES = False
 
 
+class NativeFrontendMeasurements(unittest.TestCase):
+    def args(self, root):
+        import native_frontend
+        parser = argparse.ArgumentParser()
+        sub = parser.add_subparsers()
+        native_frontend.add_parser(sub)
+        return parser.parse_args(['native-frontend', '--binary', str(root / 'compiler'),
+                                  '--source', str(root / 'project/src/lib.rs'), '--lib',
+                                  '--input-root', str(root / 'project'), '--scratch', str(root),
+                                  '-n', '3', '-o', str(root / 'result.json')])
+
+    def fixture(self, root):
+        (root / 'project/src').mkdir(parents=True)
+        (root / 'project/src/lib.rs').write_text('mod dependency;')
+        (root / 'project/src/dependency.rs').write_text('pub fn value() {}')
+        (root / 'project/Cargo.toml').write_text('[package]\nname="p"\n')
+        (root / 'compiler').write_text('pinned binary fixture')
+
+    def collect(self, root, mutate=None, failed=False):
+        import native_frontend
+        commands = []
+        def invoke(cmd, **kwargs):
+            commands.append(cmd)
+            self.assertEqual(kwargs['env'], {'PATH': '/usr/bin:/bin', 'LANG': 'C',
+                                             'LC_ALL': 'C', 'JR_OPT': 'off'})
+            if mutate:
+                mutate()
+            if failed:
+                return native_frontend.subprocess.CompletedProcess(cmd, 1, b'', b'unsupported')
+            mode = 'check' if '--check' in cmd else 'build'
+            if mode == 'build':
+                output = Path(cmd[cmd.index('-o') + 1])
+                self.assertFalse(output.exists())
+                output.write_bytes(b'artifact')
+            summary = {'mode': mode, 'workers': int(cmd[cmd.index('--workers') + 1]),
+                       'failures': 0, 'capture_complete': True, 'events_dropped': 0}
+            return native_frontend.subprocess.CompletedProcess(cmd, 0, json.dumps(summary).encode(), b'')
+        with patch.object(native_frontend.subprocess, 'run', side_effect=invoke), contextlib.redirect_stdout(io.StringIO()):
+            native_frontend.run(self.args(root))
+        return json.loads((root / 'result.json').read_text()), commands
+
+    def test_all_cells_warmup_fresh_outputs_and_dependency_identity(self):
+        import native_frontend
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.fixture(root)
+            result, commands = self.collect(root)
+            self.assertEqual(len(commands), 16)
+            self.assertEqual(len(result['cells']), 4)
+            self.assertIn(str(root / 'project/src/dependency.rs'), result['contract']['inputs'])
+            self.assertIn(str(root / 'project/Cargo.toml'), result['contract']['inputs'])
+            self.assertEqual(result['binary_sha256'], native_frontend.digest(root / 'compiler'))
+            self.assertIn('uncontrolled', native_frontend.compare(result, result))
+            with self.assertRaisesRegex(ValueError, 'overwrite'):
+                native_frontend.run(self.args(root))
+
+    def test_changes_during_run_abort_without_result(self):
+        for filename in ('compiler', 'project/src/dependency.rs'):
+            with self.subTest(filename=filename), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                self.fixture(root)
+                with self.assertRaisesRegex(ValueError, 'identity changed'):
+                    self.collect(root, mutate=lambda: (root / filename).write_text('changed'))
+                self.assertFalse((root / 'result.json').exists())
+
+    def test_comparison_refuses_changed_contract_missing_cells_or_failed_warmups(self):
+        import copy
+        import native_frontend
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.fixture(root)
+            result, _ = self.collect(root)
+            for key in ('inputs', 'opt', 'edition', 'execution', 'host', 'environment', 'consumer_extern'):
+                altered = copy.deepcopy(result)
+                altered['contract'][key] = 'different'
+                with self.subTest(key=key), self.assertRaisesRegex(ValueError, 'incompatible'):
+                    native_frontend.compare(result, altered)
+            altered = copy.deepcopy(result)
+            altered['cells'].pop()
+            with self.assertRaisesRegex(ValueError, 'cells'):
+                native_frontend.compare(result, altered)
+            for section in ('samples', 'warmups'):
+                altered = copy.deepcopy(result)
+                altered['cells'][0][section][0]['ok'] = False
+                with self.assertRaisesRegex(ValueError, 'failed or incomplete'):
+                    native_frontend.compare(result, altered)
+            with self.assertRaisesRegex(ValueError, 'native frontend results only'):
+                native_frontend.compare(result, {'synth': {}})
+
+    def test_failed_native_compile_is_retained_not_speed_evidence(self):
+        import native_frontend
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.fixture(root)
+            result, _ = self.collect(root, failed=True)
+            self.assertEqual(result['cells'][0]['samples'][0]['stderr'], 'unsupported')
+            with self.assertRaisesRegex(ValueError, 'failed or incomplete'):
+                native_frontend.compare(result, result)
+
+    def test_consumer_extern_is_not_added_to_library_itself(self):
+        import native_frontend
+        args = argparse.Namespace(edition='2021', opt='off', debug_assertions='yes',
+                                  cfg=['feature="std"'], extern=[], consumer_extern=['adler2=/p/lib.rs'])
+        library = native_frontend.command('/compiler', '/p/lib.rs', True, 1, 'check', '/out', args)
+        consumer = native_frontend.command('/compiler', '/consumer.rs', False, 8, 'build', '/out', args, consumer=True)
+        self.assertNotIn('--extern', library)
+        self.assertIn('adler2=/p/lib.rs', consumer)
+        self.assertNotIn('--lib', consumer)
+
+
 if __name__ == "__main__":
     unittest.main()

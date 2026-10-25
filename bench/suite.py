@@ -1422,6 +1422,12 @@ def cmd_run_synth(args, identity=None) -> None:
 
 def cmd_show(args) -> None:
     r = json.loads(Path(args.file).read_text())
+    if "native_frontend" in r:
+        print(r["scope"])
+        for cell in r["cells"]:
+            values = [s["wall_ns"] / 1e6 for s in cell["samples"]]
+            print(f'{cell["case"]} w{cell["workers"]} {cell["mode"]}: {values} ms')
+        return
     if "synth" in r:
         synth_run, _ = _synth()
         print(synth_run.table(r["synth"]))
@@ -1434,6 +1440,13 @@ def cmd_show(args) -> None:
 
 def cmd_compare(args) -> None:
     a, b = (json.loads(Path(f).read_text()) for f in (args.a, args.b))
+    if "native_frontend" in a or "native_frontend" in b:
+        import native_frontend
+        try:
+            print(native_frontend.compare(a, b))
+        except ValueError as error:
+            sys.exit(f"bench: {error}")
+        return
     if "synth" in a or "synth" in b:
         if not ("synth" in a and "synth" in b):
             sys.exit("bench: compare a synthetic result with another synthetic result")
@@ -1529,6 +1542,8 @@ def cmd_compare(args) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
+    import native_frontend
+    native_frontend.add_parser(sub)
     sub.add_parser("list").set_defaults(fn=cmd_list)
     r = sub.add_parser("run")
     r.add_argument("scenarios", nargs="*")

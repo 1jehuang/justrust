@@ -46,6 +46,44 @@ cold-build, contention, hosted-mode, and correctness checks. See
 blocked, say so explicitly rather than substituting one convenient loop.
 Real-usage trends remain the reality check, not a controlled attribution test.
 
+## Scoped clean-room native frontend measurements
+
+`native-frontend` measures already-built `jr-rust` binaries directly. It never
+rebuilds or installs them and does not run the historical stable-client synth
+workload. Preserve the baseline binary before rebuilding the compiler.
+
+```sh
+python3 bench/suite.py native-frontend --binary /scratch/frontend-before-jr-rust \
+  --source /pinned/adler2/src/lib.rs --input-root /pinned/adler2 --lib \
+  --edition 2021 --cfg 'feature="std"' --opt off \
+  --consumer /pinned/consumer.rs --consumer-extern adler2=/pinned/adler2/src/lib.rs \
+  --scratch /scratch -n 5 -o /scratch/frontend-before.json
+# Repeat with candidate --binary and a distinct output, keeping other arguments fixed.
+python3 bench/suite.py compare /scratch/frontend-before.json /scratch/frontend-after.json
+```
+
+Each case runs CHECK and BUILD at workers 1 and 8, with discarded warmups,
+repeated fresh processes and fresh output paths on a warm filesystem. Consumer
+cases and their source-path externs are optional. `--extern NAME=PATH` supplies
+source dependencies to all cases, whereas `--consumer-extern` applies only to
+the consumer. These are native source dependencies, not stock rlibs. Builds are
+compile timings, not runtime correctness or stock-differential acceptance tests.
+
+Entry-point directories, extern directories, explicit `--input-root` trees and
+the consumer file are hashed before every invocation and after the run. Pass
+all project and dependency roots explicitly, including files outside entry-point
+directories. Tree hashing excludes `.git`, `target`, and `__pycache__`, rejects
+nested symlinks, and includes manifests and other dependency files. Inputs must
+not live inside the scratch output directory. Existing result files are never
+overwritten. Results pin binary bytes, runner bytes, inputs, flags, worker counts,
+sampling settings, machine, and a minimal fixed process environment. Comparison
+refuses mismatched contracts, incomplete cells and any failed sample or warmup.
+
+Results are **scoped, local, contended/uncontrolled frontend evidence only**.
+They report medians and deltas without declaring statistically established wins.
+They do not support comprehensive synthetic workload or general agent-wait claims.
+Existing stable-client `run`, synthetic and `compare` behavior is unchanged.
+
 ## Explicit native compiler identity (local synthetic runs)
 
 Use `suite.py run --toolchain SPEC --toolchain-identity PRIVATE_JSON` when two
