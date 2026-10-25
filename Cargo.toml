@@ -24,5 +24,13 @@ path = "src/main.rs"
 name = "jr-rust"
 path = "src/compiler_cli.rs"
 
+# The compiler under test runs thousands of times per suite; an unoptimized
+# binary made the Adler2 probe and acceptance tests roughly 8x slower.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 2
+
 [profile.release]
 debug = 1
