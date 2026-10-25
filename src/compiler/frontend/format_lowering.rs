@@ -221,6 +221,12 @@ impl Checker<'_> {
                 &self.exprs[id.0].kind,
                 ir::ExprKind::Deref { value }
                     if matches!(self.exprs[value.0].kind, ir::ExprKind::Call { .. })
+            ) || matches!(
+                // `boxed[i]` through Deref to a builtin array: the checked
+                // slice read is already a copied value.
+                &self.exprs[id.0].kind,
+                ir::ExprKind::SliceIndex { slice, .. }
+                    if self.deref_call_rooted(*slice)
             );
             let place = static_source_place(argument)
                 .ok()
@@ -477,5 +483,17 @@ pub(super) fn rust_ty_name(ty: &ir::Ty) -> String {
         ir::Ty::Bool => "bool".into(),
         ir::Ty::Char => "char".into(),
         other => format!("{other:?}"),
+    }
+}
+
+impl Checker<'_> {
+    /// A slice carrier produced by an overloaded `Deref` call, possibly
+    /// unsized from `&[T; N]` (`boxed[i]` with `boxed: Box<[T; N]>`).
+    fn deref_call_rooted(&self, slice: ir::ExprId) -> bool {
+        let slice = match self.exprs[slice.0].kind {
+            ir::ExprKind::ArrayToSlice { reference } => reference,
+            _ => slice,
+        };
+        matches!(self.exprs[slice.0].kind, ir::ExprKind::Call { .. })
     }
 }
