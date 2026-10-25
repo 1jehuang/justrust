@@ -467,3 +467,16 @@ fn main() {
 "#,
     );
 }
+
+#[test]
+fn unsuffixed_literal_trait_method_receivers_use_literal_fallback() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "literal-receiver-fallback",
+        &[Case {
+            name: "to_string_and_ord_on_unsuffixed_literals",
+            source: "fn main(){let t=5.to_string();println!(\"{}\",t);let b=2.5;println!(\"{}\",b.to_string());println!(\"{}\",7.max(3));}",
+            expect: Expect::Run("5\n2.5\n7\n"),
+        }],
+    );
+}

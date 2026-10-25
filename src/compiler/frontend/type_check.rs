@@ -8816,9 +8816,20 @@ impl<'a> Checker<'a> {
         {
             return Err(PRE_2021_ARRAY_INTO_ITER.into());
         }
-        let ty = self
-            .method_receiver_hint(receiver)?
-            .ok_or("unsupported unresolved receiver type")?;
+        // Unsuffixed literal receivers that the local solver admitted (trait
+        // methods; ambiguous inherent calls are E0689 earlier) use the
+        // i32/f64 literal fallback.
+        let literal_fallback = match receiver {
+            Expr::Integer(literal) if literal.suffix.is_none() => Some(ir::Ty::Int(ir::IntTy::I32)),
+            Expr::Float(literal) if literal.suffix.is_none() => {
+                Some(ir::Ty::Float(ir::FloatTy::F64))
+            }
+            _ => None,
+        };
+        let ty = match self.method_receiver_hint(receiver)? {
+            Some(ty) => ty,
+            None => literal_fallback.ok_or("unsupported unresolved receiver type")?,
+        };
         let Some(selected) =
             self.method_selection_with_inference(&ty, name, type_args, args, expected)?
         else {
