@@ -529,6 +529,18 @@ graph-integrity evidence are recorded in the feature contracts. G0-G12 remain op
       those maps first. Next: per-module
       declaration fact keyed by module-path key, TRAIT_IMPLS from it, move
       `facts.types()` consumers kind by kind, then delete SIGNATURES.
+      PARSE split activation (2026-10-25): attachment-free, no-prelude inputs
+      now demand typed `PARSE_FILE(SourceFile)` nodes using the existing file-view,
+      child-mount and crate-merge helpers. Each file reads its own SOURCE, an
+      immutable admission/render-id manifest and its immediate parent's syntax.
+      PARSE still performs all-file admission and merge, children wait for the
+      complete parent, and any file syntax error uses the original assembled
+      parse to preserve diagnostic order. Prelude/extern/harness/library/probe
+      transport remains on the assembled path. This is not PARSE-root removal.
+      Coverage: `source_error_order` pins exact file dependencies, stock/native
+      CHECK/BUILD/run at workers 1/8 and child-before-late-parent diagnostics;
+      `compiler::owner_route_tests::parse_file_rejects_unadmitted_identity`
+      rejects forged file keys. Historical resume notes below predate activation.
       PARSE split resume notes (2026-10-22, after steps 1a-1h, A, 7341a8948;
       steps B-D not started). Keys: `PARSE_FILE` kind 121 keyed by SOURCE
       ordinal words; `MODULE_TREE` (new kind, keyed `[0]` = crate root

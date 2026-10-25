@@ -146,6 +146,142 @@ fn source_subtrees_are_discovered_by_their_own_parent() {
             assert_children_discovered_before_publication(&compilation.report, &[0, 1], 1);
             assert_eq!(compilation.source_files, 5);
             assert_eq!(compilation.executable.is_none(), check);
+            let mut parsed: Vec<_> = compilation
+                .report
+                .node_evaluations
+                .iter()
+                .filter(|(key, _)| key.kind == 121)
+                .map(|(key, count)| {
+                    assert_eq!(*count, 1);
+                    key.params.clone()
+                })
+                .collect();
+            parsed.sort();
+            assert_eq!(
+                parsed,
+                [
+                    vec![0],
+                    vec![0, 0],
+                    vec![0, 0, 0],
+                    vec![0, 1],
+                    vec![0, 1, 0]
+                ]
+            );
+            // Each syntax producer reads only admission, its own SOURCE,
+            // and (for children) the immediate parent's syntax checkpoint.
+            let report = &compilation.report;
+            for ((key, _), id) in report.node_evaluations.iter().zip(&report.node_ids) {
+                if key.kind != 121 {
+                    continue;
+                }
+                let tasks: Vec<_> = report
+                    .events
+                    .iter()
+                    .filter(|event| event.node == Some(*id))
+                    .filter_map(|event| event.task)
+                    .collect();
+                let mut actual = Vec::new();
+                for &(task, producer, output) in &report.dependency_edges {
+                    if !tasks.contains(&task) {
+                        continue;
+                    }
+                    let index = report
+                        .node_ids
+                        .iter()
+                        .position(|id| *id == producer)
+                        .unwrap();
+                    let producer = &report.node_evaluations[index].0;
+                    actual.push((producer.kind, producer.params.clone(), output));
+                }
+                actual.sort();
+                actual.dedup();
+                let mut expected = vec![(100, vec![], 2), (107, key.params.clone(), 0)];
+                if key.params.len() > 1 {
+                    expected.push((121, key.params[..key.params.len() - 1].to_vec(), 0));
+                }
+                expected.sort();
+                assert_eq!(actual, expected);
+            }
+        }
+    }
+}
+
+#[test]
+fn split_parse_preserves_nested_macro_mounts_and_runtime() {
+    use std::process::Command;
+    let tree = Tree::new(&[
+        (
+            "main.rs",
+            "macro_rules! value { () => { pub fn value()->i32 { 7i32 } } } mod a; fn main(){ let x = a::d::deep(); if x != 8i32 { loop {} } }",
+        ),
+        ("a.rs", "value!(); pub mod d;"),
+        ("a/d.rs", "pub fn deep()->i32 { super::value() + 1i32 }"),
+    ]);
+    let stock = tree.0.join("stock");
+    let status = Command::new("rustc")
+        .args(["--edition=2024", "--crate-name=split_parse"])
+        .arg(tree.0.join("main.rs"))
+        .arg("-o")
+        .arg(&stock)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    assert!(Command::new(&stock).status().unwrap().success());
+    for workers in [1, 8] {
+        for check in [true, false] {
+            let result = compiler::compile_file_observed_with_options(
+                tree.0.join("main.rs"),
+                workers,
+                check,
+                compiler::source::SourceOptions {
+                    prelude: false,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            assert_eq!(
+                result
+                    .report
+                    .node_evaluations
+                    .iter()
+                    .filter(|(key, _)| key.kind == 121)
+                    .count(),
+                3
+            );
+            assert_eq!(result.executable.is_none(), check);
+            if let Some(bytes) = result.executable {
+                use std::os::unix::fs::PermissionsExt;
+                let executable = tree.0.join(format!("native-{workers}"));
+                fs::write(&executable, bytes).unwrap();
+                fs::set_permissions(&executable, fs::Permissions::from_mode(0o755)).unwrap();
+                assert!(Command::new(&executable).status().unwrap().success());
+            }
+        }
+    }
+}
+
+#[test]
+fn split_parse_keeps_child_error_before_late_parent_error() {
+    let tree = Tree::new(&[
+        ("main.rs", "mod child; fn late() -> {} fn main(){}"),
+        ("child.rs", "fn early() -> {}"),
+    ]);
+    for workers in [1, 8] {
+        for check in [true, false] {
+            let failure = compiler::compile_file_observed_with_options(
+                tree.0.join("main.rs"),
+                workers,
+                check,
+                compiler::source::SourceOptions {
+                    prelude: false,
+                    ..Default::default()
+                },
+            )
+            .err()
+            .expect("invalid unused functions must reject");
+            let error = failure.error.to_string();
+            assert!(error.contains("child.rs"), "{error}");
+            assert!(!error.contains("main.rs:"), "{error}");
         }
     }
 }

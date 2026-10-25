@@ -72,6 +72,18 @@ impl ItemKey for SourceFile {
     }
 }
 
+/// Parsing identity is exactly the source forest identity, not a rendered file id.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct ParseFile(pub SourceFile);
+
+impl ItemKey for ParseFile {
+    const KIND: u32 = super::PARSE_FILE;
+
+    fn params(&self) -> (u64, Vec<u64>) {
+        self.0.params()
+    }
+}
+
 /// A per-item (declaration, instance or file ordinal) key of node kind `K`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct Item<const K: u32>(pub usize);
@@ -171,6 +183,10 @@ mod tests {
         assert!(root.parent().is_none());
         let child = root.child(2).child(5);
         assert_eq!(child.key(), Key::new(super::super::SOURCE, vec![0, 2, 5]));
+        assert_eq!(
+            ParseFile(child.clone()).key(),
+            Key::new(super::super::PARSE_FILE, vec![0, 2, 5])
+        );
         assert_eq!(child.parent().unwrap(), root.child(2));
         assert_ne!(root.child(2).child(5), root.child(5).child(2));
         let library = SourceFile::from_words(&[1, 2, 5]).unwrap();
