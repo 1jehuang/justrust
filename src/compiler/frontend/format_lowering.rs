@@ -53,6 +53,18 @@ impl Checker<'_> {
             borrow = self.format_lit(referent.clone(), ir::ExprKind::Deref { value: borrow })?;
             referent = inner;
         }
+        // `[T; N]` Debug prints as its `[T]` slice: unsize the shared borrow.
+        if let (FormatTrait::Debug, ir::Ty::Array { element, .. }) = (spec.format, &referent) {
+            let slice = ir::Ty::Slice {
+                element: element.clone(),
+            };
+            let target = ir::Ty::Ref {
+                kind: ir::BorrowKind::Shared,
+                referent: Arc::new(slice.clone()),
+            };
+            borrow = self.coerce_shared_array_to_slice(borrow, &target)?;
+            referent = slice;
+        }
         let referent = &referent;
         let unsized_str = matches!(referent, ir::Ty::Str);
         let (trait_name, method) = match (spec.format, unsized_str) {
@@ -438,7 +450,7 @@ impl Checker<'_> {
     /// Types the library formatter may handle (nominal values, references,
     /// str, floats, scalars with specs). Final acceptance is trait selection.
     fn library_formattable(&self, ty: &ir::Ty) -> bool {
-        !matches!(ty, ir::Ty::Never | ir::Ty::Tuple(_) | ir::Ty::Array { .. })
+        !matches!(ty, ir::Ty::Never | ir::Ty::Tuple(_))
     }
 }
 

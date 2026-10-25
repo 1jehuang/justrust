@@ -480,3 +480,23 @@ fn unsuffixed_literal_trait_method_receivers_use_literal_fallback() {
         }],
     );
 }
+
+#[test]
+fn arrays_of_library_debug_elements_format_as_slices() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "array-library-debug",
+        &[
+            Case {
+                name: "str_nominal_string_and_empty_arrays",
+                source: "#[derive(Debug)]\nstruct P(u8);\nfn main(){let a:[&str;2]=[\"p\",\"q\"];println!(\"{:?}\",a);let b=[P(1),P(2)];println!(\"{:?} {}\",b,3);let d=[String::from(\"x\")];println!(\"{:?}\",d);let e:[u8;0]=[];println!(\"{:?}\",e);println!(\"{:?}\",[1u8,2u8]);let _=&b[0].0;}",
+                expect: Expect::Run("[\"p\", \"q\"]\n[P(1), P(2)] 3\n[\"x\"]\n[]\n[1, 2]\n"),
+            },
+            Case {
+                name: "array_of_non_debug_elements",
+                source: "struct N;\nfn main(){let a=[N,N];println!(\"{:?}\",a);}",
+                expect: Expect::Invalid("E0277"),
+            },
+        ],
+    );
+}
