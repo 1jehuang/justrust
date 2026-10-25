@@ -139,17 +139,36 @@ fn first_diagnostic(stderr: &[u8]) -> String {
 }
 
 fn run_program(name: &str, scratch: &Scratch) -> Outcome {
+    let one = run_program_with_workers(name, scratch, 1);
+    let eight = run_program_with_workers(name, scratch, 8);
+    match (one, eight) {
+        (Outcome::Pass, Outcome::Pass) => Outcome::Pass,
+        (Outcome::Rejected(one), Outcome::Rejected(eight)) => {
+            Outcome::Rejected(format!("workers 1: {one}; workers 8: {eight}"))
+        }
+        (one, eight) => Outcome::Broken(format!(
+            "worker matrix did not pass or explicitly reject consistently: workers 1: {one:?}, workers 8: {eight:?}"
+        )),
+    }
+}
+
+fn run_program_with_workers(name: &str, scratch: &Scratch, workers: usize) -> Outcome {
     let source = fixtures().join(format!("{name}.rs"));
     let expected = fs::read(fixtures().join(format!("{name}.stdout"))).unwrap();
-    let output = scratch.path(name);
+    let output = scratch.path(&format!("{name}-w{workers}"));
     let compiler = env!("CARGO_BIN_EXE_jr-rust");
     let check = capture(
-        Command::new(compiler).arg(&source).arg("--check"),
+        Command::new(compiler)
+            .arg(&source)
+            .args(["--workers", &workers.to_string(), "--check"]),
         scratch,
         Duration::from_secs(60),
     );
     let build = capture(
-        Command::new(compiler).arg(&source).arg("-o").arg(&output),
+        Command::new(compiler)
+            .arg(&source)
+            .args(["--workers", &workers.to_string(), "-o"])
+            .arg(&output),
         scratch,
         Duration::from_secs(60),
     );

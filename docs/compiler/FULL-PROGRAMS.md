@@ -65,7 +65,23 @@ Runner regression tests:
 python3 -m unittest discover -s experiments -p test_adler2_repo_probe.py
 ```
 
-## Status (2026-10-23)
+## Current gate (2026-10-25)
+
+`justrust test --test full_programs -- --nocapture` now checks and builds every
+unchanged fixture at workers 1 and 8, running each successful executable against
+its stored stdout oracle. The current ratchet passes 16/20 programs. Trait
+objects (13) and tokenizer/calculator (18) were already working on replay and
+are now marked `pass`, rather than retaining stale rejection expectations.
+`scripts/full_programs_oracle.sh` also verified all twenty stored outputs
+against stock rustc 1.99.1 without regenerating them.
+
+Four explicit native boundaries remain: recursive nominal layout in linked
+list (12), `split_at_mut` on generic mutable slices in sorting (16), unresolved
+nominal source constraints in word count (17), and owned trait-object types in
+inventory (20). Passing the ratchet is not passing the full twenty-program
+acceptance goal. The source fixtures were not adapted to bypass these gaps.
+
+## Historical status (2026-10-23)
 
 11/20 manifest entries pass, including the unchanged matrix and string-processing
 programs. The full hosted corpus ratchet passed in

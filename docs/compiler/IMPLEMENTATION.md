@@ -6,6 +6,13 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 
 ## Completed foundations, not full compatibility
 
+- [ ] Complete all twenty unchanged full programs. The current
+  `justrust test --test full_programs -- --nocapture` gate checks/builds every
+  fixture at workers 1 and 8 and runs successful outputs against stored stock
+  stdout: 16/20 currently pass. Remaining boundaries are recursive nominal
+  layout (12), generic mutable-slice `split_at_mut` (16), nominal source
+  constraints (17), and owned trait objects (20). See `FULL-PROGRAMS.md`.
+
 - [x] Source `Option` and `Result` lazy combinators preserve branch selection,
   error types and FnOnce capture cleanup. `option_map` and `result_map` lazy
   combinator tests compare CHECK/BUILD/run with stock at workers 1 and 8.
