@@ -180,8 +180,27 @@ impl Solver<'_, '_, '_> {
                 return Ok(true);
             }
             let (left, right) = match (kind, right) {
+                // A still-open arithmetic operand may yet resolve to `&T`
+                // (`i as u32 * x` with `x` from an iterator projection);
+                // equating it with the scalar side now would be a guess.
+                (Kind::Binary(op) | Kind::Assign(op), Some(right))
+                    if !comparison(op)
+                        && !self.projection_defaults
+                        && matches!(self.domain(right), Domain::Unknown)
+                        && matches!(
+                            self.domain(left),
+                            Domain::Fixed(ir::Ty::Int(_) | ir::Ty::Float(_))
+                        ) =>
+                {
+                    return Ok(false);
+                }
                 (Kind::Binary(op), Some(right)) => {
                     let (left, right) = self.scalar_reference_operands(op, left, right);
+                    (left, Some(right))
+                }
+                // `x += &y`: primitives implement `OpAssign<&T> for T`.
+                (Kind::Assign(op), Some(right)) if !comparison(op) => {
+                    let (_, right) = self.scalar_reference_operands(op, left, right);
                     (left, Some(right))
                 }
                 _ => (left, right),

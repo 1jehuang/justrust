@@ -6247,7 +6247,27 @@ impl<'a> Checker<'a> {
                 "compound assignment requires primitive integer or bitwise Bool destination".into(),
             );
         }
-        let value = self.expr_expected(value, if shift { None } else { Some(ty) })?;
+        let mut value = self.expr_expected(value, if shift { None } else { Some(ty) })?;
+        // `x op= &y`: primitives implement `OpAssign<&T> for T`; the shared
+        // operand is read through once (a Copy scalar).
+        if !shift
+            && let ir::Ty::Ref {
+                kind: ir::BorrowKind::Shared,
+                referent,
+            } = &self.exprs[value.0].ty
+            && referent.as_ref() == ty
+        {
+            let ty = referent.as_ref().clone();
+            let completion = self.exprs[value.0].completion;
+            self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
+            let id = ir::ExprId(self.exprs.len());
+            self.exprs.push(ir::TypedExpr {
+                ty,
+                kind: ir::ExprKind::Deref { value },
+                completion,
+            });
+            value = id;
+        }
         let flow = self.flow(value);
         if shift {
             if flow.ty == ir::Ty::Never {

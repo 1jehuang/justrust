@@ -1129,3 +1129,34 @@ fn main() {
         ],
     );
 }
+
+/// `T op &T` with the reference operand still open when the operator is
+/// queued (enumerate tuple patterns), and `T op= &T`.
+#[test]
+fn scalar_operators_with_reference_operands_match_stock() {
+    use closure_oracle::{Case, Expect};
+    parse_oracle(
+        "scalar-ref-operands",
+        &[
+            Case {
+                name: "enumerate_mul_and_ref_compound_assign",
+                source: r#"fn main() {
+    let xs: Vec<u32> = vec![1, 9, 25];
+    let mut total = 0u32;
+    let mut t2 = 0u32;
+    for (i, x) in xs.iter().enumerate() {
+        total += i as u32 * x;
+        t2 += x;
+    }
+    println!("{} {}", total, t2);
+}"#,
+                expect: Expect::Run("59 35\n"),
+            },
+            Case {
+                name: "ref_compound_assign_wrong_type",
+                source: r#"fn main() { let a = 1u8; let mut t = 0u32; t += &a; println!("{}", t); }"#,
+                expect: Expect::Invalid("E0308"),
+            },
+        ],
+    );
+}
