@@ -12,6 +12,59 @@ fn elided_projected_returns_share_canonical_cfg_and_analysis() {
             assert_eq!(compiled.control_flow.len(), 4);
             assert_eq!(compiled.analyses.len(), 4);
             assert!(compiled.analyses.iter().all(|analysis| analysis.passed()));
+            let report = &compiled.report;
+            assert_eq!(report.events_dropped, 0);
+            let node = |kind, index| {
+                let key = Key::new(kind, vec![index]);
+                let found = report
+                    .node_evaluations
+                    .iter()
+                    .zip(&report.node_ids)
+                    .filter(|((actual, _), _)| *actual == key)
+                    .collect::<Vec<_>>();
+                assert_eq!(found.len(), 1, "{key:?}");
+                assert_eq!(found[0].0.1, 1, "{key:?} evaluated repeatedly");
+                *found[0].1
+            };
+            // Each closed callable publishes one canonical source CFG (slot 2)
+            // and ownership proof (slot 3), for both CHECK and BUILD.
+            assert_eq!(
+                report
+                    .node_evaluations
+                    .iter()
+                    .filter(|(key, _)| key.kind == 128
+                        && key.params.first().is_some_and(|index| *index < 4))
+                    .count(),
+                4
+            );
+            for index in 0..4 {
+                node(128, index);
+            }
+            assert!(
+                report
+                    .node_evaluations
+                    .iter()
+                    .filter(|(key, _)| key.kind == 128)
+                    .all(|(_, count)| *count == 1),
+                "source and embedded-prelude admissions must be shared"
+            );
+            for kind in [102, 108, 109] {
+                assert_eq!(
+                    report
+                        .node_evaluations
+                        .iter()
+                        .filter(|(key, _)| key.kind == kind)
+                        .count(),
+                    if check { 0 } else { 4 },
+                    "instance kind {kind}"
+                );
+            }
+            if check {
+                assert!(!report.node_evaluations.iter().any(|(key, _)| matches!(
+                    key.kind,
+                    102 | 103 | 105 | 108 | 109 | 130..=133 | 142
+                )));
+            }
             for (index, function) in compiled.control_flow[..3].iter().enumerate() {
                 let contract = &function.ref_contract;
                 assert_eq!(contract.region_count, 1);
@@ -43,16 +96,34 @@ fn elided_projected_returns_share_canonical_cfg_and_analysis() {
                 );
             }
             for index in 0..4 {
-                for kind in [102, 108, 109] {
-                    let key = Key::new(kind, vec![index]);
-                    let evaluations: Vec<_> = compiled
-                        .report
-                        .node_evaluations
+                if check {
+                    continue;
+                }
+                node(102, index);
+                for (kind, output) in [(108, 2), (109, 3)] {
+                    let consumer = node(kind, index);
+                    let tasks = report
+                        .events
                         .iter()
-                        .filter(|(actual, _)| *actual == key)
-                        .collect();
-                    assert_eq!(evaluations.len(), 1);
-                    assert_eq!(evaluations[0].1, 1);
+                        .filter(|event| event.node == Some(consumer))
+                        .filter_map(|event| event.task)
+                        .collect::<std::collections::HashSet<_>>();
+                    let source_nodes = (0..4)
+                        .map(|i| node(128, i))
+                        .collect::<std::collections::HashSet<_>>();
+                    let reads = report
+                        .dependency_edges
+                        .iter()
+                        .filter(|(task, producer, _)| {
+                            tasks.contains(task) && source_nodes.contains(producer)
+                        })
+                        .map(|(_, producer, slot)| (*producer, *slot))
+                        .collect::<std::collections::HashSet<_>>();
+                    assert_eq!(
+                        reads,
+                        std::collections::HashSet::from([(node(128, index), output)]),
+                        "instance {index} kind {kind} must reuse exactly its canonical source output"
+                    );
                 }
             }
             assert_eq!(
