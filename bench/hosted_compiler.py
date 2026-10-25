@@ -332,6 +332,198 @@ def benchmark(args, report):
     return 0 if complete and all(event['ok'] for event in report['events']) else 1
 
 
+def _require(condition, message):
+    if not condition:
+        raise ValueError('invalid hosted compiler evidence: ' + message)
+
+
+def _digest(value):
+    return isinstance(value, str) and len(value) == 64 and all(c in '0123456789abcdef' for c in value)
+
+
+def _positive(value):
+    return type(value) is int and value > 0
+
+
+def _validate_hosted(result):
+    """Reconstruct the measurement contract, never trusting cached medians."""
+    _require(isinstance(result, dict) and type(result.get('hosted_compiler')) is int
+             and result['hosted_compiler'] == SCHEMA, 'schema mismatch')
+    # Includes nested profiles and observations, not just headline samples.
+    json.dumps(result, allow_nan=False)
+    _require(result.get('ok') is True and result.get('measurements_ok') is True
+             and 'error' not in result, 'failed or incomplete run')
+    meta = result['metadata']
+    _require(isinstance(meta, dict), 'missing metadata')
+    workers = meta['workers']
+    _require(isinstance(workers, list) and workers and all(_positive(w) for w in workers)
+             and len(set(workers)) == len(workers), 'worker inventory')
+    repeats, warmups = meta['repeats'], meta['warmups']
+    _require(_positive(repeats) and repeats >= 7 and _positive(warmups),
+             'at least seven measured samples and one warmup required')
+    _require(type(meta['seed']) is int and meta['order'] in ('random', 'rotate'), 'execution order')
+    _require(type(meta['timeout_seconds']) in (int, float) and meta['timeout_seconds'] > 0,
+             'timeout')
+    _require(meta['edition'] in ('2015', '2018', '2021', '2024')
+             and meta['optimization'] == 'native off / rustc opt-level=0'
+             and meta['debug_assertions'] == 'yes' and meta['overflow_checks'] == 'yes'
+             and meta['panic'] == 'abort; native default source configuration, no panic CLI flag'
+             and meta['stock_threads'] == 'rustc default, no -Zthreads'
+             and meta['stock_invocation'] == 'direct sysroot rustc binary; rustup launcher resolution is untimed',
+             'unsupported compilation flags')
+    _require(isinstance(meta['cfg'], list) and all(isinstance(c, str) for c in meta['cfg']), 'cfg')
+    _require(isinstance(meta['environment'], dict) and meta['environment']
+             and all(isinstance(k, str) and isinstance(v, str) for k, v in meta['environment'].items()),
+             'environment')
+    _require(isinstance(meta['inputs'], dict) and meta['inputs']
+             and all(isinstance(k, str) and _digest(v) for k, v in meta['inputs'].items())
+             and meta['inputs'].get(meta['source']) == meta['source_sha256'], 'source identity')
+    _require(_digest(meta['runner_sha256']), 'runner identity')
+    native, stock, launcher = meta['binary'], meta['timed_rustc'], meta['rustc']
+    _require(all(isinstance(p, str) and Path(p).is_absolute() for p in (native, stock, launcher))
+             and native not in (stock, launcher), 'compiler paths')
+    hashes = meta['binary_hashes']
+    _require(isinstance(hashes, dict) and all(_digest(v) for v in hashes.values())
+             and all(path in hashes for path in (native, stock, launcher)), 'compiler hashes')
+    _require(isinstance(meta['rustc_verbose'], str) and meta['rustc_verbose'].strip()
+             and str(Path(meta['rustc_sysroot'].strip()) / 'bin' / 'rustc') == stock,
+             'actual stock toolchain')
+    topology_data = meta['topology']
+    _require(isinstance(topology_data, dict) and topology_data.get('host')
+             and topology_data.get('machine') and topology_data.get('platform')
+             and _positive(topology_data.get('logical_cpus')), 'host topology')
+    affinity = topology_data['observation']['affinity']
+    _require(isinstance(affinity, list) and affinity and all(type(n) is int and n >= 0 for n in affinity)
+             and affinity == sorted(set(affinity)), 'host affinity')
+    exclusions = meta['inventory_exclusions']
+    _require(isinstance(exclusions, list) and len(exclusions) >= 2
+             and all(isinstance(p, str) for p in exclusions)
+             and Path(exclusions[0]).is_absolute() and Path(exclusions[1]).is_absolute(),
+             'inventory exclusions')
+    matrix = cells(workers)
+    actual_cells = result['cells']
+    _require(isinstance(actual_cells, list) and len(actual_cells) == len(matrix), 'cell matrix')
+    events = result['events']
+    _require(isinstance(events, list), 'events')
+    has_profiles = any('profile_events' in c for c in actual_cells)
+    expected = [('metadata', None, 0), ('metadata', None, 1)]
+    for phase, rounds in [('warmup', warmups), ('measurement', repeats)]:
+        for iteration, row in enumerate(schedule(len(matrix), rounds, meta['order'],
+                                                 meta['seed'] + (phase == 'measurement'))):
+            expected.extend((phase, index, iteration) for index in row)
+    if has_profiles:
+        expected.extend(('profile', index, 0) for index, c in enumerate(matrix) if c['backend'] == 'native')
+    _require(len(events) == len(expected), 'missing or extra events')
+    references = [{} for _ in matrix]
+    directories = set()
+    for position, (event, (phase, index, iteration)) in enumerate(zip(events, expected)):
+        _require(isinstance(event, dict) and event.get('ok') is True
+                 and type(event.get('returncode')) is int and event['returncode'] == 0
+                 and 'error' not in event and event.get('phase') == phase
+                 and event.get('timed') is (phase == 'measurement')
+                 and isinstance(event.get('stdout'), str) and isinstance(event.get('stderr'), str),
+                 f'failed or malformed event {position}')
+        _require(('process_wall_ns' in event) == (phase == 'measurement'), 'profile/warmup mixed with samples')
+        if phase == 'measurement':
+            _require(_positive(event['process_wall_ns']), 'non-positive or non-integer sample')
+        for side in ('before', 'after'):
+            snapshot = event[side]
+            _require(snapshot['affinity'] == affinity, 'event affinity changed')
+            load = snapshot['loadavg']
+            _require(isinstance(load, list) and len(load) == 3
+                     and all(type(n) in (int, float) and math.isfinite(n) and n >= 0 for n in load),
+                     'missing or non-finite load observation')
+        cwd = Path(event['cwd'])
+        _require(cwd.is_absolute() and Path(exclusions[1]) in cwd.parents, 'fresh output directory')
+        if phase == 'metadata':
+            name, args = [('rustc_verbose', ['--version', '--verbose']),
+                          ('rustc_sysroot', ['--print', 'sysroot'])][iteration]
+            _require(event.get('name') == name and event['command'] == [launcher, *args]
+                     and event['stdout'] == meta[name], 'toolchain metadata event')
+            continue
+        _require(type(event.get('cell')) is int and event['cell'] == index
+                 and type(event.get('iteration')) is int and event['iteration'] == iteration,
+                 'event inventory or iteration')
+        _require(str(cwd) not in directories, 'reused output directory')
+        directories.add(str(cwd))
+        cell = matrix[index]
+        artifact = cwd / ('artifact.native' if cell['backend'] == 'native'
+                          else 'artifact.rmeta' if cell['mode'] == 'check' else 'artifact.rlib')
+        profile = cwd / 'profile.json' if phase == 'profile' else None
+        _require(event['command'] == command(cell, native, stock, meta['source'], artifact,
+                                            meta['edition'], meta['cfg'], profile), 'command/flags differ')
+        references[index].setdefault(phase + '_events', []).append(position)
+        if cell['backend'] == 'native':
+            data = strict_json(event['stdout'])
+            _require(isinstance(data, dict) and type(data.get('schema')) is int and data['schema'] == 1
+                     and data.get('mode') == cell['mode'] and type(data.get('workers')) is int
+                     and data['workers'] == cell['workers'] and data.get('capture_complete') is True
+                     and type(data.get('failures')) is int and data['failures'] == 0
+                     and type(data.get('events_dropped')) is int and data['events_dropped'] == 0
+                     and _positive(data.get('total_ns')) and type(data.get('engine_ns')) is int
+                     and 0 <= data['engine_ns'] <= data['total_ns']
+                     and json.dumps(data, sort_keys=True) == json.dumps(event.get('native_summary'), sort_keys=True),
+                     'native stdout/summary mismatch')
+        if cell['backend'] == 'stock' or cell['mode'] == 'build':
+            emitted = event['artifact']
+            _require(_positive(emitted['bytes']) and _digest(emitted['sha256']), 'artifact identity')
+        else:
+            _require('artifact' not in event, 'CHECK unexpectedly emitted artifact')
+        if phase == 'profile':
+            data = event['profile']
+            _require(isinstance(data, dict) and data.get('schema') == 1
+                     and data.get('mode') == cell['mode'] and data.get('workers') == cell['workers']
+                     and data.get('success') is True and _positive(data.get('compiler_wall_ns')),
+                     'phase profile identity')
+        else:
+            _require('profile' not in event, 'profile data mixed into process samples')
+    medians = []
+    for index, (actual, cell) in enumerate(zip(actual_cells, matrix)):
+        _require({key: actual.get(key) for key in cell} == cell, 'worker/cell inventory')
+        _require(set(actual) == set(cell) | set(references[index]) | {'statistics'}, 'cell field inventory')
+        for field, indices in references[index].items():
+            _require(actual[field] == indices and all(type(n) is int for n in actual[field]),
+                     'missing, duplicate or cross-linked event references')
+        measured = [events[n]['process_wall_ns'] for n in references[index]['measurement_events']]
+        recomputed = statistics_for(measured, repeats)
+        _require(actual['statistics'] == recomputed, 'forged or stale cached statistics')
+        medians.append(recomputed['median_ns'])
+    # Ignore only explicitly volatile fields. New metadata fields must also
+    # match, rather than silently escaping the comparison contract.
+    contract = dict(meta)
+    for field in ('recorded_at', 'binary', 'compiler_revision'):
+        contract.pop(field, None)
+    contract['binary_hashes'] = {k: v for k, v in hashes.items() if k != native}
+    contract['topology'] = {k: v for k, v in topology_data.items() if k != 'observation'}
+    contract['affinity'] = affinity
+    contract['inventory_exclusions'] = exclusions[1:]
+    contract['profiles'] = has_profiles
+    for field in ('measurement', 'scope', 'backend_scopes', 'profiling'):
+        _require(bool(result.get(field)), 'missing measurement/backend scope')
+        contract[field] = result[field]
+    return contract, matrix, medians
+
+
+def compare(a, b):
+    """Strict matched-run comparison, including independent stock controls."""
+    try:
+        ca, matrix, ma = _validate_hosted(a)
+        cb, other_matrix, mb = _validate_hosted(b)
+        _require(ca == cb and matrix == other_matrix,
+                 'source/flags/host/affinity/runner/stock toolchain contracts differ')
+    except (KeyError, IndexError, TypeError, AttributeError, OverflowError) as error:
+        raise ValueError(f'invalid hosted compiler evidence: missing or malformed {error}') from error
+    lines = ['Scoped direct-host library process-wall comparison only, not a global compiler or corpus claim.',
+             'Compiler exec/startup included; SSH/setup/hash/profile excluded. Stock rows are host-drift controls, not corrections.',
+             f'A native {a["metadata"]["binary_hashes"][a["metadata"]["binary"]]}',
+             f'B native {b["metadata"]["binary_hashes"][b["metadata"]["binary"]]}']
+    for cell, before, after in zip(matrix, ma, mb):
+        label = ('stock control' if cell['backend'] == 'stock' else f'native w{cell["workers"]}')
+        lines.append(f'{label} {cell["mode"]}: {before / 1e6:.3f} -> {after / 1e6:.3f} ms '
+                     f'({100 * (after / before - 1):+.2f}%), n={a["metadata"]["repeats"]}')
+    return '\n'.join(lines)
+
+
 def parser():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('--source', type=Path, required=True, help='unchanged Rust library entry point')

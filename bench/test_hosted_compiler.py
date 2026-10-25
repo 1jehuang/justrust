@@ -5,6 +5,7 @@ Run: python3 -m unittest discover -s bench -p test_hosted_compiler.py -v
 """
 import argparse
 import contextlib
+import copy
 import io
 import itertools
 import json
@@ -385,6 +386,163 @@ if native:
         self.assertEqual(sum(event['timed'] for event in report['events']), 12)
         self.assertTrue(all(cell['statistics']['count'] == 2 for cell in report['cells']))
         self.assertEqual(list(self.scratch.iterdir()), [])
+
+
+class HostedCompareTests(unittest.TestCase):
+    def setUp(self):
+        fixture = SyntheticRunnerTests('test_success_metadata_artifact_scopes_fresh_dirs_and_untimed_profiles')
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        status, self.report, _ = fixture.run_fake(['--repeats', '7', '--profile'])
+        self.assertEqual(status, 0)
+        self.root = fixture.root
+        self.report['metadata']['topology'].update(
+            machine='x86_64', platform='synthetic-linux', cpu_models=['synthetic CPU'],
+            cpu_topology=[{'cpu': n, 'core_id': str(n), 'physical_package_id': '0',
+                           'thread_siblings_list': str(n)} for n in range(96)],
+            observation={'affinity': list(range(96)), 'loadavg': [0.1, 0.2, 0.3]})
+
+    def reject(self, candidate):
+        with self.assertRaises(ValueError):
+            bench.compare(self.report, candidate)
+
+    def test_native_binary_revision_and_timestamp_may_change_but_controls_remain(self):
+        candidate = copy.deepcopy(self.report)
+        meta = candidate['metadata']
+        original = meta['binary']
+        replacement = str(self.root / 'candidate-native')
+        del meta['binary_hashes'][original]
+        meta['binary_hashes'][replacement] = 'a' * 64
+        meta.update(binary=replacement, compiler_revision='new-revision', recorded_at='later')
+        meta['inventory_exclusions'][0] = str(self.root / 'candidate.json')
+        for event in candidate['events']:
+            if event.get('cell') is not None and candidate['cells'][event['cell']]['backend'] == 'native':
+                event['command'][0] = replacement
+                if event['timed']:
+                    event['process_wall_ns'] *= 2
+        for cell in candidate['cells']:
+            values = [candidate['events'][n]['process_wall_ns'] for n in cell['measurement_events']]
+            cell['statistics'] = bench.statistics_for(values, 7)
+        before = copy.deepcopy((self.report, candidate))
+        text = bench.compare(self.report, candidate)
+        self.assertIn('native w1 check: 0.000 -> 0.000 ms (+100.00%), n=7', text)
+        self.assertIn('stock control check:', text)
+        self.assertIn('(+0.00%), n=7', text)
+        self.assertIn('not a global compiler or corpus claim', text)
+        self.assertEqual((self.report, candidate), before)
+
+    def test_identity_flags_workers_and_toolchain_changes_are_rejected(self):
+        mutations = {
+            'worker': lambda r: r['metadata']['workers'].append(24),
+            'input': lambda r: r['metadata']['inputs'].__setitem__(r['metadata']['source'], 'a' * 64),
+            'edition': lambda r: r['metadata'].__setitem__('edition', '2024'),
+            'cfg': lambda r: r['metadata']['cfg'].append('feature="changed"'),
+            'optimization': lambda r: r['metadata'].__setitem__('optimization', 'opt3'),
+            'debug': lambda r: r['metadata'].__setitem__('debug_assertions', 'no'),
+            'panic': lambda r: r['metadata'].__setitem__('panic', 'unwind'),
+            'environment': lambda r: r['metadata']['environment'].__setitem__('JR_OPT', 'final'),
+            'stock hash': lambda r: r['metadata']['binary_hashes'].__setitem__(r['metadata']['timed_rustc'], 'b' * 64),
+            'launcher hash': lambda r: r['metadata']['binary_hashes'].__setitem__(r['metadata']['rustc'], 'b' * 64),
+            'rustc version': lambda r: r['metadata'].__setitem__('rustc_verbose', 'different rustc'),
+            'runner': lambda r: r['metadata'].__setitem__('runner_sha256', 'c' * 64),
+            'host': lambda r: r['metadata']['topology'].__setitem__('host', 'other host'),
+            'topology': lambda r: r['metadata']['topology']['cpu_topology'][0].__setitem__('core_id', 'other'),
+            'affinity': lambda r: r['metadata']['topology']['observation'].__setitem__('affinity', [0]),
+            'extra flag': lambda r: r['metadata'].__setitem__('new_compiler_flag', True),
+        }
+        for name, mutate in mutations.items():
+            with self.subTest(name=name):
+                candidate = copy.deepcopy(self.report)
+                mutate(candidate)
+                self.reject(candidate)
+
+    def test_even_self_consistent_changed_input_contract_is_rejected(self):
+        candidate = copy.deepcopy(self.report)
+        source = candidate['metadata']['source']
+        candidate['metadata']['inputs'][source] = 'a' * 64
+        candidate['metadata']['source_sha256'] = 'a' * 64
+        bench.compare(candidate, candidate)  # internally complete, unlike a stale header
+        self.reject(candidate)
+
+    def test_cell_matrix_reference_and_schedule_mutations_are_rejected(self):
+        for change in ('remove cell', 'duplicate cell', 'worker', 'missing event', 'duplicate reference',
+                       'missing reference', 'cross reference', 'extra event', 'iteration', 'command'):
+            with self.subTest(change=change):
+                candidate = copy.deepcopy(self.report)
+                cell = candidate['cells'][2]
+                index = cell['measurement_events'][0]
+                if change == 'remove cell': candidate['cells'].pop()
+                elif change == 'duplicate cell': candidate['cells'][-1] = candidate['cells'][0]
+                elif change == 'worker': cell['workers'] = 96
+                elif change == 'missing event': candidate['events'].pop(index)
+                elif change == 'extra event': candidate['events'].append(candidate['events'][-1])
+                elif change == 'duplicate reference': cell['measurement_events'][1] = index
+                elif change == 'missing reference': cell['measurement_events'].pop()
+                elif change == 'cross reference': cell['measurement_events'][0] = candidate['cells'][0]['measurement_events'][0]
+                elif change == 'iteration': candidate['events'][index]['iteration'] = 6
+                elif change == 'command': candidate['events'][index]['command'].append('--check')
+                self.reject(candidate)
+
+    def test_failures_nonfinite_malformed_and_incomplete_samples_are_rejected(self):
+        for phase in ('warmup_events', 'measurement_events', 'profile_events'):
+            for field, value in [('ok', False), ('returncode', 9), ('returncode', False),
+                                 ('process_wall_ns', math.nan), ('process_wall_ns', math.inf),
+                                 ('process_wall_ns', 0), ('process_wall_ns', True)]:
+                with self.subTest(phase=phase, field=field, value=value):
+                    candidate = copy.deepcopy(self.report)
+                    candidate['events'][candidate['cells'][2][phase][0]][field] = value
+                    self.reject(candidate)
+        for field, value in [('repeats', 6), ('warmups', 0), ('timeout_seconds', math.inf)]:
+            candidate = copy.deepcopy(self.report)
+            candidate['metadata'][field] = value
+            self.reject(candidate)
+        for malformed in ({}, {'hosted_compiler': 1}, {'native_frontend': 1}, None, []):
+            self.reject(malformed)
+
+    def test_forged_cached_stats_and_native_summary_are_rejected(self):
+        for statistic in ('count', 'median_ns', 'mean_ns', 'min_ns', 'max_ns'):
+            candidate = copy.deepcopy(self.report)
+            candidate['cells'][2]['statistics'][statistic] += 1
+            self.reject(candidate)
+        for field in ('native_summary', 'stdout'):
+            candidate = copy.deepcopy(self.report)
+            event = candidate['events'][candidate['cells'][2]['measurement_events'][0]]
+            if field == 'native_summary': event[field]['workers'] = 96
+            else: event[field] = '{"mode":"check","capture_complete":false}'
+            self.reject(candidate)
+        candidate = copy.deepcopy(self.report)
+        event = candidate['events'][candidate['cells'][2]['measurement_events'][0]]
+        data = json.loads(event['stdout'])
+        data['failures'] = 1
+        event.update(stdout=json.dumps(data), native_summary=data)
+        self.reject(candidate)
+
+    def test_event_affinity_profile_scope_and_artifacts_are_enforced(self):
+        for change in ('affinity', 'profile timing', 'profile failed', 'artifact', 'cwd'):
+            candidate = copy.deepcopy(self.report)
+            cell = candidate['cells'][2]
+            event = candidate['events'][cell['measurement_events'][0]]
+            if change == 'affinity': event['after']['affinity'] = [0]
+            elif change == 'profile timing': event['profile'] = {'success': True}
+            elif change == 'profile failed': candidate['events'][cell['profile_events'][0]]['profile']['success'] = False
+            elif change == 'artifact': candidate['events'][candidate['cells'][1]['measurement_events'][0]]['artifact']['bytes'] = 0
+            elif change == 'cwd': event['cwd'] = '/unrelated/output'
+            self.reject(candidate)
+
+    def test_suite_routes_hosted_schema_and_rejects_mixed_or_invalid_evidence(self):
+        import suite
+        first, second = self.root / 'a.json', self.root / 'b.json'
+        first.write_text(json.dumps(self.report))
+        second.write_text(json.dumps(self.report))
+        args = argparse.Namespace(a=str(first), b=str(second))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            suite.cmd_compare(args)
+        self.assertIn('stock control check:', out.getvalue())
+        for invalid in ({'native_frontend': 1}, {'hosted_compiler': 1, 'ok': False}):
+            second.write_text(json.dumps(invalid))
+            with self.assertRaisesRegex(SystemExit, 'bench:'):
+                suite.cmd_compare(args)
 
 
 if __name__ == '__main__':

@@ -1440,6 +1440,13 @@ def cmd_show(args) -> None:
 
 def cmd_compare(args) -> None:
     a, b = (json.loads(Path(f).read_text()) for f in (args.a, args.b))
+    if "hosted_compiler" in a or "hosted_compiler" in b:
+        import hosted_compiler
+        try:
+            print(hosted_compiler.compare(a, b))
+        except ValueError as error:
+            sys.exit(f"bench: {error}")
+        return
     if "native_frontend" in a or "native_frontend" in b:
         import native_frontend
         try:
