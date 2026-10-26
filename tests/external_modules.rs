@@ -491,7 +491,6 @@ fn external_source_graph_is_shared_and_accounts_for_all_files() {
                     assert_eq!(entries[0].1, 1, "source file operation repeated");
                 }
                 let mut expected = vec![
-                    Key::new(100, vec![]),
                     Key::new(106, vec![]),
                     Key::new(101, vec![]),
                     Key::new(104, vec![]),
@@ -555,6 +554,12 @@ fn external_source_graph_is_shared_and_accounts_for_all_files() {
                     source_files
                         .iter()
                         .map(|file| Key::new(121, file.params.clone())),
+                );
+                // Admission is chained per file: one ADMIT per SOURCE.
+                expected.extend(
+                    source_files
+                        .iter()
+                        .map(|file| Key::new(150, file.params.clone())),
                 );
                 // Resolution and signature producers are keyed by their own
                 // independently derived typed module inventories. Declaration
@@ -636,7 +641,8 @@ fn external_source_graph_is_shared_and_accounts_for_all_files() {
                                     .iter()
                                     .any(|source| source.params == key.params)
                             );
-                            let mut parents = vec![(100, vec![], 2), (107, key.params.clone(), 0)];
+                            let mut parents =
+                                vec![(150, key.params.clone(), 0), (107, key.params.clone(), 0)];
                             if key.params.len() > 1 {
                                 parents.push((121, key.params[..key.params.len() - 1].to_vec(), 0));
                             } else if key.params[0] != 0 {
@@ -665,6 +671,7 @@ fn external_source_graph_is_shared_and_accounts_for_all_files() {
                             assert_eq!(key.params.len(), 1);
                             vec![(101, vec![], 1)]
                         }
+                        150 => Vec::new(),
                         _ => continue,
                     };
                     assert_eq!(*count, 1, "producer repeated {key:?}");
@@ -693,6 +700,22 @@ fn external_source_graph_is_shared_and_accounts_for_all_files() {
                         .collect::<Vec<_>>();
                     actual.sort();
                     actual.dedup();
+                    if key.kind == 150 {
+                        // Admission is a per-file chain: it reads only other
+                        // ADMIT checkpoints and its own or its parent's SOURCE.
+                        let parent = &key.params[..key.params.len().saturating_sub(1)];
+                        for (kind, params, _) in &actual {
+                            assert!(
+                                *kind == 150
+                                    || (*kind == 107
+                                        && (params == &key.params
+                                            || (key.params.len() > 1 && params == parent))),
+                                "ADMIT {key:?} read {kind} {params:?}"
+                            );
+                        }
+                        assert!(actual.contains(&(107, key.params.clone(), 0)));
+                        continue;
+                    }
                     dependencies.sort();
                     assert_eq!(
                         actual, dependencies,

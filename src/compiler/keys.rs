@@ -5,9 +5,7 @@
 //! and `build` roots plus recorded whole-program debt that may only shrink.
 
 #[allow(unused_imports)]
-pub(crate) use crate::engine::{
-    BuildRoot, CheckRoot, ParseDebtRoot, ResolveDebtRoot, SignaturesDebtRoot,
-};
+pub(crate) use crate::engine::{BuildRoot, CheckRoot, ResolveDebtRoot, SignaturesDebtRoot};
 use crate::engine::{ItemKey, Key};
 
 /// One file's canonical position in the source forest. Roots distinguish the
@@ -78,6 +76,18 @@ pub(crate) struct ParseFile(pub SourceFile);
 
 impl ItemKey for ParseFile {
     const KIND: u32 = super::PARSE_FILE;
+
+    fn params(&self) -> (u64, Vec<u64>) {
+        self.0.params()
+    }
+}
+
+/// Admission identity: the same source forest identity, one node per file.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct Admit(pub SourceFile);
+
+impl ItemKey for Admit {
+    const KIND: u32 = super::ADMIT;
 
     fn params(&self) -> (u64, Vec<u64>) {
         self.0.params()
@@ -161,7 +171,6 @@ mod tests {
             ResolveDebtRoot.key(),
             Key::new(super::super::RESOLVE, vec![])
         );
-        assert_eq!(ParseDebtRoot.key(), Key::new(super::super::PARSE, vec![]));
         assert_eq!(Params::<110>(3, vec![1]).key(), Key::new(110, vec![3, 1]));
         assert_eq!(
             Item::<{ super::super::BODY }>(7).key(),
@@ -186,6 +195,10 @@ mod tests {
         assert_eq!(
             ParseFile(child.clone()).key(),
             Key::new(super::super::PARSE_FILE, vec![0, 2, 5])
+        );
+        assert_eq!(
+            crate::engine::ItemKey::key(&Admit(child.clone())),
+            Key::new(super::super::ADMIT, vec![0, 2, 5])
         );
         assert_eq!(child.parent().unwrap(), root.child(2));
         assert_ne!(root.child(2).child(5), root.child(5).child(2));

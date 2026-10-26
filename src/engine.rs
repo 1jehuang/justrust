@@ -399,8 +399,6 @@ root_keys! {
     CheckRoot = 104;
     /// Sealed `build` root.
     BuildRoot = 105;
-    /// DEBT (may only shrink): whole-program parse.
-    ParseDebtRoot = 100;
     /// DEBT (may only shrink): whole-program signatures.
     SignaturesDebtRoot = 101;
     /// DEBT (may only shrink): whole-program resolve.

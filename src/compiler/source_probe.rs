@@ -830,9 +830,9 @@ mod tests {
                 engine.run(workers).unwrap();
                 check.completion().unwrap();
                 let prepared = engine
-                    .fact_of::<super::super::PreparedSource>(
-                        &compiler::keys::ParseDebtRoot.key(),
-                        compiler::PREPARED_SOURCE_OUTPUT,
+                    .fact_of::<compiler::SourceAccounting>(
+                        &compiler::keys::ResolveDebtRoot.key(),
+                        compiler::SOURCE_ACCOUNTING_OUTPUT,
                     )
                     .unwrap();
                 let inputs = prepared.probes[0].inputs();
@@ -880,9 +880,9 @@ mod tests {
                 assert!(build.completion().is_err());
                 assert!(
                     engine
-                        .fact_of::<super::super::PreparedSource>(
-                            &compiler::keys::ParseDebtRoot.key(),
-                            compiler::PREPARED_SOURCE_OUTPUT
+                        .fact_of::<compiler::SourceAccounting>(
+                            &compiler::keys::ResolveDebtRoot.key(),
+                            compiler::SOURCE_ACCOUNTING_OUTPUT
                         )
                         .is_none()
                 );

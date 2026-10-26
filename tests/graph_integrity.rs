@@ -607,7 +607,6 @@ fn flat_source(count: usize) -> String {
 
 fn kind_name(kind: u32) -> String {
     match kind {
-        100 => "parse",
         101 => "signatures",
         102 => "body",
         103 => "object",
@@ -638,6 +637,7 @@ fn kind_name(kind: u32) -> String {
         148 => "resolve_module",
         149 => "signature_module",
         147 => "module_decls",
+        150 => "admit",
         _ => return format!("kind{kind}"),
     }
     .to_string()
@@ -650,7 +650,7 @@ const PERMANENT_WHOLE_PROGRAM: &[&str] = &["check", "build"];
 
 /// Whole-program nodes that exist today and must be split into per-file or
 /// per-item facts. This list may only shrink.
-const WHOLE_PROGRAM_DEBT: &[&str] = &["parse", "resolve", "signatures"];
+const WHOLE_PROGRAM_DEBT: &[&str] = &["resolve", "signatures"];
 
 /// Ceiling on how much the transitive dependency closure of an independent leaf
 /// function grows when the program doubles from 16 to 32 functions. A value

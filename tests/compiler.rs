@@ -811,7 +811,6 @@ fn compiler_graph_shares_check_and_build_and_check_only_never_demands_codegen() 
                 // These operation IDs are the compiler graph schema, not fixtures.
                 let mut expected = vec![
                     Key::new(107, vec![0]), // Root source file unit.
-                    Key::new(100, vec![]),
                     Key::new(106, vec![]),
                     Key::new(101, vec![]),
                     Key::new(104, vec![]),
@@ -869,6 +868,13 @@ fn compiler_graph_shares_check_and_build_and_check_only_never_demands_codegen() 
                 }
                 // Embedded native library files are independent SOURCE facts.
                 expected.extend(native_prelude::library_source_keys());
+                // Every admitted SOURCE file has exactly one ADMIT node.
+                let admitted: Vec<_> = expected
+                    .iter()
+                    .filter(|key| key.kind == 107)
+                    .map(|key| Key::new(150, key.params.clone()))
+                    .collect();
+                expected.extend(admitted);
                 // Per-module inventories, associated-constant headers,
                 // nominal well-formedness, per-instance, per-signature and
                 // per-trait/impl/item coherence nodes are keyed

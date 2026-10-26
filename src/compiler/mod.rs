@@ -199,7 +199,7 @@ fn source_fact_error(error: traits::FactsError, budget: &ir::PlanBudget) -> Erro
     Error::new(rendered)
 }
 
-const PARSE: u32 = 100;
+const ADMIT: u32 = 150;
 const PARSE_FILE: u32 = 121;
 const SIGNATURES: u32 = 101;
 const BODY: u32 = 102;
@@ -477,19 +477,17 @@ const ANALYSIS_OUTPUT: usize = 1;
 const SOURCE_CFG_OUTPUT: usize = 2;
 /// Exact successful closed-source ownership proof, or None for universal bodies.
 const SOURCE_CLOSED_PROOF_OUTPUT: usize = 3;
-/// `PARSE` outputs: parsed syntax, assembled source accounting/diagnostics,
-/// and the admitted file identities used by the scoped per-file syntax route.
-const PARSE_OUTPUTS: usize = 3;
-const PREPARED_SOURCE_OUTPUT: usize = 1;
-const PARSE_FILES_OUTPUT: usize = 2;
-
-/// Admission remains whole-crate debt. This immutable manifest is published
-/// before any syntax task is awaited, so file tasks never wait on PARSE's
-/// completion. Rendered ids follow the assembler's depth-first source order.
-struct ParseFilesFact {
-    files: std::collections::HashMap<keys::SourceFile, u32>,
+/// RESOLVE output 3: crate-wide source accounting from the final admission
+/// state (and probe evidence for probe inputs).
+#[derive(Default)]
+struct SourceAccounting {
+    source_bytes: usize,
+    files: usize,
+    compiler_image: Option<Arc<procfs::CompilerImage>>,
+    probes: Vec<source::SourceProbeRecord>,
 }
-impl crate::engine::Fact for ParseFilesFact {}
+impl crate::engine::Fact for SourceAccounting {}
+const SOURCE_ACCOUNTING_OUTPUT: usize = 3;
 
 #[derive(Debug)]
 struct ParseFileFailure {
@@ -864,6 +862,97 @@ impl CompilerProvider {
             )),
         }
     }
+    /// The crate's syntax, from per-file admission and per-file parses.
+    /// Probe inputs and splice-ordered syntax diagnostics still replay the
+    /// assembled parser inside RESOLVE (whole-program debt).
+    async fn crate_syntax(
+        &self,
+        cx: &Context,
+    ) -> Result<(frontend::ParsedProgram, SourceAccounting), Error> {
+        let options = &self.0.source_options;
+        let root = source::source_admit::final_root(options);
+        let admitted: Arc<source::source_admit::AdmitState> = cx
+            .read_item(&keys::Admit(keys::SourceFile::from_words(&[root])?), 1)
+            .await?;
+        if let Some(error) = admitted.failure() {
+            return Err(Error::new(error.to_string()));
+        }
+        let mut accounting = SourceAccounting {
+            source_bytes: admitted.source_bytes,
+            files: admitted.files,
+            compiler_image: options.compiler_image.clone(),
+            probes: Vec::new(),
+        };
+        let budget = expansion_budget::ExpansionBudget::default();
+        let mut issuer = owner_path::OwnerIssuer::new(cx.owner_root()?, &budget)
+            .map_err(|error| Error::new(format!("owner issuance failed: {error:?}")))?;
+        let snapshot = issuer
+            .issue(owner_path::OwnerDomain::SourceSnapshot)
+            .map_err(|error| Error::new(format!("owner issuance failed: {error:?}")))?;
+        let owner = issuer
+            .issue(owner_path::OwnerDomain::TokenSession)
+            .map_err(|error| Error::new(format!("owner issuance failed: {error:?}")))?;
+        if let Input::ProbeFile(_, request) = &self.0.input {
+            let prepared = self.assemble(cx).await?;
+            let prepared = source::attach_probe(prepared, options, request)
+                .map_err(|error| Error::new(error.to_string()))?;
+            accounting.source_bytes = prepared.source_bytes;
+            accounting.files = prepared.files;
+            accounting.probes = prepared.probes.clone();
+            let parsed = frontend::parse_prepared_owned(&prepared, budget, snapshot, owner)
+                .map_err(|error| Error::new(error.to_string()))?;
+            return Ok((parsed, accounting));
+        }
+        let file_keys = admitted
+            .admitted()
+            .iter()
+            .map(|ordinal| keys::SourceFile::from_words(ordinal).map(keys::ParseFile))
+            .collect::<Result<Vec<_>, _>>()?;
+        let handles = cx.request_all(file_keys.iter(), 0);
+        let mut parsed_files = Vec::with_capacity(handles.len());
+        let mut retry = false;
+        for handle in handles {
+            let parsed: Arc<Result<frontend::ParsedProgram, ParseFileFailure>> =
+                cx.read_fact(handle).await?;
+            match parsed.as_ref() {
+                Ok(_) => parsed_files.push(parsed),
+                Err(error) if ParseFileFailure::ordered_retry(error.kind) => retry = true,
+                Err(error) => return Err(Error::new(error.to_string())),
+            }
+        }
+        // Only syntax/unsupported errors replay the assembled parser for
+        // splice-order diagnostics. Authority, resource, source and
+        // infrastructure failures always fail closed.
+        let parsed = if retry {
+            let prepared = self.assemble(cx).await?;
+            frontend::parse_prepared_owned(&prepared, budget, snapshot, owner)
+                .map_err(|error| Error::new(error.to_string()))?
+        } else {
+            let files = parsed_files
+                .iter()
+                .filter_map(|file| file.as_ref().as_ref().ok())
+                .collect::<Vec<_>>();
+            frontend::merge_crate_file_refs(&files, budget, owner).map_err(Error::new)?
+        };
+        Ok((parsed, accounting))
+    }
+    /// Sequential assembly of every admitted file (diagnostic replay only).
+    async fn assemble(&self, cx: &Context) -> Result<source::PreparedSource, Error> {
+        let mut assembler = source::SourceAssembler::new(&self.0.source_options);
+        let root: Arc<source::UnitResult> = cx.read_item(&keys::SourceFile::input(), 0).await?;
+        let mut step = assembler.provide(root);
+        loop {
+            match step.map_err(|error| Error::new(error.to_string()))? {
+                source::AssemblyStep::Done(prepared) => return Ok(*prepared),
+                source::AssemblyStep::Need(need) => {
+                    let unit: Arc<source::UnitResult> = cx
+                        .read_item(&keys::SourceFile::from_words(&need.ordinal)?, 0)
+                        .await?;
+                    step = assembler.provide(unit);
+                }
+            }
+        }
+    }
     /// Account retained fact storage in the shared planning ledger.
     fn retain(&self, bytes: usize) -> Result<(), Error> {
         self.0.budget.retain_bytes(bytes).map_err(Error::new)
@@ -880,8 +969,8 @@ impl Provider for CompilerProvider {
             | OPAQUE_CALL_DISPATCH => 2,
             TEMPLATE_BODY => 3,
             SOURCE_ADMISSION => 4,
-            PARSE => PARSE_OUTPUTS,
-            RESOLVE => 3,
+            ADMIT => 2,
+            RESOLVE => 4,
             SIGNATURES => 2,
             _ => 1,
         }
@@ -990,27 +1079,43 @@ impl Provider for CompilerProvider {
                 PARSE_FILE => {
                     let file = keys::SourceFile::from_words(&key.params)?;
                     let attachment = key.params.len() == 1 && key.params[0] != 0;
-                    let manifest = cx
-                        .request_root(&keys::ParseDebtRoot)
-                        .get(PARSE_FILES_OUTPUT);
+                    let admitted = cx.request_item(&keys::Admit(file.clone())).get(0);
+                    // The cfg(test) harness entry closes over every admitted
+                    // test, so only the harness root waits on the crate exit.
+                    let harness = (key.params == [0]
+                        && this.0.source_options.cfg.names.contains("test"))
+                    .then(|| cx.request_item(&keys::Admit(file.clone())).get(1));
                     let source = cx.request_item(&file).get(0);
                     let parent = file
                         .parent()
                         .or_else(|| attachment.then(keys::SourceFile::input))
                         .map(|parent| cx.request_item(&keys::ParseFile(parent)).get(0));
-                    let manifest: Arc<ParseFilesFact> = cx.read_fact(manifest).await?;
-                    let base = *manifest
-                        .files
-                        .get(&file)
-                        .ok_or_else(|| Error::new("parse file was not admitted"))?;
+                    let admitted: Arc<source::source_admit::AdmitState> =
+                        cx.read_fact(admitted).await?;
+                    if admitted.failed() {
+                        return Err(Error::new("parse file was not admitted"));
+                    }
+                    let base = admitted.id();
+                    let entry = match harness {
+                        Some(handle) => {
+                            let exit: Arc<source::source_admit::AdmitState> =
+                                cx.read_fact(handle).await?;
+                            if exit.failed() {
+                                return Err(Error::new("parse file crate was not admitted"));
+                            }
+                            exit.entry_text().map(str::to_owned)
+                        }
+                        None => None,
+                    };
                     let source: Arc<source::UnitResult> = cx.read_fact(source).await?;
                     let unit = source
                         .as_ref()
                         .as_ref()
                         .map_err(|_| Error::new("admitted parse file has a failed source"))?;
                     let options = this.0.source_options.for_ordinal(&key.params);
-                    let view = source::FileView::for_graph(unit, base, &options, &key.params)
-                        .map_err(|error| Error::new(error.to_string()))?;
+                    let view =
+                        source::FileView::for_graph(unit, base, &options, &key.params, entry)
+                            .map_err(|error| Error::new(error.to_string()))?;
                     let parent: Option<Arc<Result<frontend::ParsedProgram, ParseFileFailure>>> =
                         match parent {
                             Some(handle) => Some(cx.read_fact(handle).await?),
@@ -1057,104 +1162,81 @@ impl Provider for CompilerProvider {
                     };
                     cx.publish_fact(0, parsed)
                 }
-                PARSE => {
-                    if matches!(this.0.input, Input::Program(_)) {
-                        cx.publish_fact(
-                            PARSE_FILES_OUTPUT,
-                            ParseFilesFact {
-                                files: Default::default(),
-                            },
-                        )?;
-                        cx.publish(1, 1)?;
-                        return cx.publish(0, 1);
-                    }
-                    // Synthetic crate attachments still need their assembly
-                    // transport. Do not approximate them with shallow views.
+                ADMIT => {
                     let options = &this.0.source_options;
-                    let split = !options.cfg.names.contains("test")
-                        && !matches!(this.0.input, Input::ProbeFile(_, _));
-                    let mut file_ids = Vec::new();
-                    let mut assembler = source::SourceAssembler::new(&this.0.source_options);
-                    let root_unit: Arc<source::UnitResult> =
-                        cx.read_item(&keys::SourceFile::input(), 0).await?;
-                    if split {
-                        file_ids.push(keys::SourceFile::input());
-                    }
-                    let mut step = assembler.provide(root_unit);
-                    let prepared = loop {
-                        match step.map_err(|error| Error::new(error.to_string()))? {
-                            source::AssemblyStep::Done(prepared) => break *prepared,
-                            source::AssemblyStep::Need(need) => {
-                                let unit: Arc<source::UnitResult> = cx
-                                    .read_item(&keys::SourceFile::from_words(&need.ordinal)?, 0)
+                    let file = keys::SourceFile::from_words(&key.params)?;
+                    let mut anchor = None;
+                    let mut state = match file.parent() {
+                        None => match source::source_admit::previous_root(key.params[0], options) {
+                            None => source::source_admit::AdmitState::default(),
+                            Some(root) => {
+                                let previous: Arc<source::source_admit::AdmitState> = cx
+                                    .read_item(
+                                        &keys::Admit(keys::SourceFile::from_words(&[root])?),
+                                        1,
+                                    )
                                     .await?;
-                                if split {
-                                    file_ids.push(keys::SourceFile::from_words(&need.ordinal)?);
+                                previous.as_ref().clone()
+                            }
+                        },
+                        Some(parent) => {
+                            let index = *key.params.last().unwrap() as usize;
+                            // Request every predecessor before awaiting any.
+                            let entry = cx.request_item(&keys::Admit(parent.clone())).get(0);
+                            let previous = index.checked_sub(1).map(|previous| {
+                                cx.request_item(&keys::Admit(parent.child(previous))).get(1)
+                            });
+                            let parent_unit = cx.request_item(&parent).get(0);
+                            let entry: Arc<source::source_admit::AdmitState> =
+                                cx.read_fact(entry).await?;
+                            let mut state = match previous {
+                                Some(previous) => {
+                                    let previous: Arc<source::source_admit::AdmitState> =
+                                        cx.read_fact(previous).await?;
+                                    previous.as_ref().clone()
                                 }
-                                step = assembler.provide(unit);
+                                None => entry.as_ref().clone(),
+                            };
+                            if !state.failed() {
+                                let parent_unit: Arc<source::UnitResult> =
+                                    cx.read_fact(parent_unit).await?;
+                                let parent_unit = parent_unit.as_ref().as_ref().map_err(|_| {
+                                    Error::new("admitted child of a failed source file")
+                                })?;
+                                anchor = source::source_admit::before_child(
+                                    &mut state,
+                                    parent_unit,
+                                    entry.id(),
+                                    parent.depth() + 1,
+                                    index,
+                                );
                             }
+                            state
                         }
                     };
-                    let prepared = match &this.0.input {
-                        Input::ProbeFile(_, request) => {
-                            source::attach_probe(prepared, &this.0.source_options, request)
-                                .map_err(|error| Error::new(error.to_string()))?
-                        }
-                        _ => prepared,
-                    };
-                    let file_keys = file_ids
-                        .iter()
-                        .map(|file| keys::ParseFile(file.clone()))
-                        .collect::<Vec<_>>();
-                    let files = file_ids
-                        .into_iter()
-                        .enumerate()
-                        .map(|(base, file)| (file, base as u32))
-                        .collect();
-                    cx.publish_fact(PARSE_FILES_OUTPUT, ParseFilesFact { files })?;
-                    let handles = cx.request_all(file_keys.iter(), 0);
-                    let mut parsed_files = Vec::new();
-                    let mut file_error = false;
-                    for handle in handles {
-                        let parsed: Arc<Result<frontend::ParsedProgram, ParseFileFailure>> =
-                            cx.read_fact(handle).await?;
-                        match parsed.as_ref() {
-                            Ok(_) => parsed_files.push(parsed),
-                            Err(error) if ParseFileFailure::ordered_retry(error.kind) => {
-                                file_error = true
-                            }
-                            Err(error) => return Err(Error::new(error.to_string())),
-                        }
+                    if state.failed() {
+                        cx.publish_fact(0, state.clone())?;
+                        return cx.publish_fact(1, state);
                     }
-                    // Graph route: the session owner is issued from this PARSE
-                    // node's own root, never a fresh standalone mint.
-                    let parse_budget = expansion_budget::ExpansionBudget::default();
-                    let mut issuer = owner_path::OwnerIssuer::new(cx.owner_root()?, &parse_budget)
-                        .map_err(|error| Error::new(format!("owner issuance failed: {error:?}")))?;
-                    // The lexical source snapshot is a sibling owner issued
-                    // by this same PARSE node, never a global counter.
-                    let snapshot = issuer
-                        .issue(owner_path::OwnerDomain::SourceSnapshot)
-                        .map_err(|error| Error::new(format!("owner issuance failed: {error:?}")))?;
-                    let owner = issuer
-                        .issue(owner_path::OwnerDomain::TokenSession)
-                        .map_err(|error| Error::new(format!("owner issuance failed: {error:?}")))?;
-                    // Only syntax/unsupported errors may replay the assembled
-                    // parser for splice-order diagnostics. Authority, resource,
-                    // source and infrastructure failures always fail closed.
-                    let parsed = if split && !file_error {
-                        let files = parsed_files
-                            .iter()
-                            .filter_map(|file| file.as_ref().as_ref().ok())
-                            .collect::<Vec<_>>();
-                        frontend::merge_crate_file_refs(&files, parse_budget, owner)
-                            .map_err(Error::new)
-                    } else {
-                        frontend::parse_prepared_owned(&prepared, parse_budget, snapshot, owner)
-                            .map_err(|error| Error::new(error.to_string()))
+                    // Only an admitted position demands its file, so discovery
+                    // stops at the first error in source order.
+                    let unit: Arc<source::UnitResult> = cx.read_item(&file, 0).await?;
+                    source::source_admit::admit(&mut state, &key.params, &unit, anchor, options);
+                    cx.publish_fact(0, state.clone())?;
+                    let Ok(unit) = unit.as_ref() else {
+                        return cx.publish_fact(1, state);
                     };
-                    cx.publish_fact(1, prepared)?;
-                    cx.publish_fact(0, parsed?)
+                    if state.failed() {
+                        return cx.publish_fact(1, state);
+                    }
+                    let id = state.id();
+                    if let Some(last) = unit.children.len().checked_sub(1) {
+                        let exit: Arc<source::source_admit::AdmitState> =
+                            cx.read_item(&keys::Admit(file.child(last)), 1).await?;
+                        state = exit.as_ref().clone();
+                    }
+                    source::source_admit::finish(&mut state, &key.params, unit, id, options);
+                    cx.publish_fact(1, state)
                 }
                 RESOLVE_MODULE => {
                     let ordinal = item_index(&key, "missing resolution module")?;
@@ -1178,8 +1260,7 @@ impl Provider for CompilerProvider {
                     this.retain(envelope::<frontend::ValidatedProgram>())?;
                     let program = match &this.0.input {
                         Input::Program(program) => {
-                            cx.read(cx.request(keys::ParseDebtRoot.key()).get(0))
-                                .await?;
+                            cx.publish_fact(3, SourceAccounting::default())?;
                             scale_task_work_by_items(program);
                             let sealed = frontend::ValidatedProgram::new(program.clone())
                                 .map_err(Error::new)?;
@@ -1188,8 +1269,9 @@ impl Provider for CompilerProvider {
                             program.clone()
                         }
                         _ => {
-                            let parsed: Arc<frontend::ParsedProgram> =
-                                facts.get(keys::ParseDebtRoot.key()).await?;
+                            let (parsed, accounting) = this.crate_syntax(&cx).await?;
+                            cx.publish_fact(3, accounting)?;
+                            let parsed = Arc::new(parsed);
                             this.retain(
                                 std::mem::size_of::<frontend::Program>()
                                     + 2 * std::mem::size_of::<usize>(),
@@ -3303,15 +3385,12 @@ fn compile_input_configured(
         Input::Program(_) => (0, 0, None),
         Input::Text(_) | Input::File(_) | Input::ProbeFile(_, _) => {
             let loaded = engine
-                .fact_of::<source::PreparedSource>(
-                    &keys::ParseDebtRoot.key(),
-                    PREPARED_SOURCE_OUTPUT,
-                )
+                .fact_of::<SourceAccounting>(&keys::ResolveDebtRoot.key(), SOURCE_ACCOUNTING_OUTPUT)
                 .ok_or_else(|| failure(Error::new("missing loaded source accounting"), &report))?;
             (
                 loaded.source_bytes,
                 loaded.files,
-                loaded.compiler_image().cloned(),
+                loaded.compiler_image.clone(),
             )
         }
     };
@@ -3665,20 +3744,29 @@ mod owner_route_tests {
                     },
                     budget: ir::PlanBudget::default(),
                 });
-                let engine = Engine::new(CompilerProvider(snapshot));
-                let parse = engine.request(keys::ParseDebtRoot.key());
+                let engine = Engine::new(CompilerProvider(snapshot.clone()));
+                let parse = engine.request(keys::ResolveDebtRoot.key());
                 engine.run(workers).unwrap();
                 parse.completion().unwrap();
-                let manifest = parse.fact::<ParseFilesFact>(PARSE_FILES_OUTPUT).unwrap();
-                assert!(manifest.files.len() > 20, "prelude files were not split");
+                let root = source::source_admit::final_root(&snapshot.source_options);
+                let admitted = engine
+                    .fact_of::<source::source_admit::AdmitState>(
+                        &crate::engine::ItemKey::key(&keys::Admit(
+                            keys::SourceFile::from_words(&[root]).unwrap(),
+                        )),
+                        1,
+                    )
+                    .unwrap();
+                let files = admitted
+                    .admitted()
+                    .iter()
+                    .map(|ordinal| keys::SourceFile::from_words(ordinal).unwrap())
+                    .collect::<Vec<_>>();
+                assert!(files.len() > 20, "prelude files were not split");
                 if dependency {
-                    assert!(
-                        manifest
-                            .files
-                            .contains_key(&keys::SourceFile::from_words(&[2, 0]).unwrap())
-                    );
+                    assert!(files.contains(&keys::SourceFile::from_words(&[2, 0]).unwrap()));
                 }
-                for file in manifest.files.keys() {
+                for file in &files {
                     let key = crate::engine::ItemKey::key(&keys::ParseFile(file.clone()));
                     let parsed = engine
                         .fact_of::<Result<frontend::ParsedProgram, ParseFileFailure>>(&key, 0)
@@ -3698,13 +3786,6 @@ mod owner_route_tests {
                             panic!("file {file:?} has invalid lexical authority: {error}")
                         });
                 }
-                let parsed = parse.fact::<frontend::ParsedProgram>(0).unwrap();
-                parsed
-                    .program
-                    .validate_name_handles()
-                    .expect("merged file lexical authority");
-                assert!(parsed.program.prelude_module.is_some());
-                assert!(parsed.program.prelude_scope.is_some());
             }
         }
     }
@@ -3781,7 +3862,7 @@ mod owner_route_tests {
     }
 
     /// The parsed program of one graph compile and its engine authority.
-    fn graph_parsed(source: &str) -> (Arc<frontend::ParsedProgram>, u64) {
+    fn graph_parsed(source: &str) -> (Arc<Result<frontend::ParsedProgram, ParseFileFailure>>, u64) {
         let snapshot = Arc::new(Snapshot {
             input: Input::Text(source.into()),
             source_options: source::SourceOptions::default(),
@@ -3789,10 +3870,14 @@ mod owner_route_tests {
         });
         let engine = Engine::new(CompilerProvider(snapshot));
         let authority = engine.authority().get();
-        let parse = engine.request(keys::ParseDebtRoot.key());
+        let key = crate::engine::ItemKey::key(&keys::ParseFile(keys::SourceFile::input()));
+        let parse = engine.request(key.clone());
         engine.run(2).unwrap();
         parse.completion().unwrap();
-        (parse.fact::<frontend::ParsedProgram>(0).unwrap(), authority)
+        let parsed = engine
+            .fact_of::<Result<frontend::ParsedProgram, ParseFileFailure>>(&key, 0)
+            .unwrap();
+        (parsed, authority)
     }
 
     fn minted_by(tag: u64) -> Option<u64> {
@@ -3813,16 +3898,17 @@ mod owner_route_tests {
         const SOURCE: &str = "fn f() -> i32 { 1 } fn main() { f(); }";
         let (a, a_engine) = graph_parsed(SOURCE);
         let (b, b_engine) = graph_parsed(SOURCE);
+        let (a, b) = (a.as_ref().as_ref().unwrap(), b.as_ref().as_ref().unwrap());
         let direct = frontend::parse_unresolved(SOURCE).unwrap();
         // The graph session owner was minted under its producing engine's
-        // authority: the PARSE node's own root, not a standalone mint.
-        assert_eq!(minted_by(owner(&a)), Some(a_engine));
-        assert_eq!(minted_by(owner(&b)), Some(b_engine));
+        // authority: the PARSE_FILE node's own root, not a standalone mint.
+        assert_eq!(minted_by(owner(a)), Some(a_engine));
+        assert_eq!(minted_by(owner(b)), Some(b_engine));
         // A direct parse mints under a fresh standalone authority.
         let direct_root = minted_by(owner(&direct)).expect("direct parse tag recorded");
         assert_ne!(direct_root, a_engine);
         assert_ne!(direct_root, b_engine);
-        assert_ne!(owner(&a), owner(&b), "two graph compiles share an owner");
+        assert_ne!(owner(a), owner(b), "two graph compiles share an owner");
         // Foreign grafts across graph compiles still reject.
         let ident = a.program.functions[0].name.segments()[0];
         assert!(b.program.names.spelling(ident).is_err());

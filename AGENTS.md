@@ -76,7 +76,7 @@ awaits a typed output (this records the dependency edge), `cx.publish_fact(i, v)
 finalizes output `i`, `cx.fork(fut)` exposes an independent branch, `cx.fail`
 reports failure. In `src/compiler/mod.rs` reads go through the `Facts` helper
 (`facts.get(Key::new(KIND, params))`). Node kinds are the `const ...: u32`
-values there (100 `PARSE` through 115 `UNIVERSAL_EFFECTS_READY`). docs/compiler/COMPILER.md
+values there (101 `SIGNATURES` through 150 `ADMIT`). docs/compiler/COMPILER.md
 "Graph operations" describes what each one does.
 
 **How to write a node.**
@@ -100,9 +100,10 @@ values there (100 `PARSE` through 115 `UNIVERSAL_EFFECTS_READY`). docs/compiler/
   declaration identities and ordered type arguments, never display names.
 - Local `Cell`/`RefCell`/loops inside one node's computation are fine.
 
-**Known debt, may only shrink.** `parse`, `resolve` and `signatures` are
-still whole-program nodes (`mono_plan` was replaced by per-instance
-`INSTANCE` on 2026-10-22). No mutable state is reachable from facts and no
+**Known debt, may only shrink.** `resolve` and `signatures` are
+still whole-program nodes (`parse` was replaced by per-file `ADMIT` and
+`PARSE_FILE` on 2026-10-26, `mono_plan` by per-instance `INSTANCE` on
+2026-10-22). No mutable state is reachable from facts and no
 process-global state remains (both debt files empty since 2026-10-22). Do not copy these
 patterns into new code. Split or remove them when
 you are nearby. Current numbers live in docs/compiler/GRAPH-INTEGRITY.md.

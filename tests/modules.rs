@@ -514,7 +514,6 @@ fn module_resolution_is_shared_and_check_never_demands_codegen() {
                 assert_eq!(report.failures, 0);
                 let mut expected = vec![
                     Key::new(107, vec![0]), // Root source file unit.
-                    Key::new(100, vec![]),
                     Key::new(106, vec![]),
                     Key::new(101, vec![]),
                     Key::new(104, vec![]),
@@ -618,6 +617,13 @@ fn module_resolution_is_shared_and_check_never_demands_codegen() {
                     }
                 }
                 expected.extend(native_prelude::library_source_keys());
+                // Every admitted SOURCE file has exactly one ADMIT node.
+                let admitted: Vec<_> = expected
+                    .iter()
+                    .filter(|key| key.kind == 107)
+                    .map(|key| Key::new(150, key.params.clone()))
+                    .collect();
+                expected.extend(admitted);
                 assert_eq!(report.node_evaluations.len(), expected.len());
                 for key in expected {
                     let entries: Vec<_> = report

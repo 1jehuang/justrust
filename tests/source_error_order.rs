@@ -195,7 +195,7 @@ fn source_subtrees_are_discovered_by_their_own_parent() {
                 }
                 actual.sort();
                 actual.dedup();
-                let mut expected = vec![(100, vec![], 2), (107, key.params.clone(), 0)];
+                let mut expected = vec![(150, key.params.clone(), 0), (107, key.params.clone(), 0)];
                 if key.params.len() > 1 {
                     expected.push((121, key.params[..key.params.len() - 1].to_vec(), 0));
                 }

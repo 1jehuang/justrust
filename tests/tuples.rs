@@ -505,7 +505,6 @@ fn tuple_checked_bodies_are_shared_once_and_check_does_not_demand_codegen() {
                 let mut expected = vec![
                     // Text now uses the same configured SOURCE transport as files.
                     Key::new(107, vec![0]),
-                    Key::new(100, vec![]),
                     Key::new(106, vec![]),
                     Key::new(101, vec![]),
                     Key::new(104, vec![]),
@@ -609,6 +608,13 @@ fn tuple_checked_bodies_are_shared_once_and_check_does_not_demand_codegen() {
                     }
                 }
                 expected.extend(native_prelude::library_source_keys());
+                // Every admitted SOURCE file has exactly one ADMIT node.
+                let admitted: Vec<_> = expected
+                    .iter()
+                    .filter(|key| key.kind == 107)
+                    .map(|key| Key::new(150, key.params.clone()))
+                    .collect();
+                expected.extend(admitted);
                 assert_eq!(report.node_evaluations.len(), expected.len());
                 for key in expected {
                     let entries: Vec<_> = report

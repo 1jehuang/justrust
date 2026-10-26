@@ -1323,12 +1323,11 @@ fn all_body_graph() {
                             );
                             if matches!(case.phase, Phase::ParseProjection | Phase::StaticLifetime)
                             {
-                                assert!(
-                                    report
-                                        .node_evaluations
-                                        .iter()
-                                        .any(|(key, count)| key.kind == 100 && *count == 1)
-                                );
+                                assert!(report.node_evaluations.iter().any(
+                                    |(key, count)| key.kind == 121
+                                        && key.params == [0]
+                                        && *count == 1
+                                ));
                                 assert!(
                                     !report
                                         .node_evaluations

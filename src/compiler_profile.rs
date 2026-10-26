@@ -99,7 +99,6 @@ impl Profile<'_> {
 
 fn phase(kind: u32) -> &'static str {
     match kind {
-        100 => "parse",
         101 => "signatures",
         102 => "body",
         103 => "object",
@@ -143,6 +142,7 @@ fn phase(kind: u32) -> &'static str {
         148 => "resolve_module",
         149 => "signature_module",
         147 => "module_decls",
+        150 => "admit",
         _ => "other",
     }
 }

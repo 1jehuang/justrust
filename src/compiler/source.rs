@@ -23,6 +23,8 @@ pub use source_cfg::CfgSet;
 pub use source_lex::{PreparedLexInput, PreparedMode, PreparedViewId, ProjectedSpan};
 pub use source_map::{FileId, OriginSegment, SourceMap, SourceSpan};
 pub use source_probe::{SourceProbeRecord, SourceProbeRequest, attach_probe, prepare_probe_file};
+#[path = "source_admit.rs"]
+pub(super) mod source_admit;
 #[path = "source_embedded.rs"]
 mod source_embedded;
 pub(super) use source_embedded::EmbeddedOriginalFile;
@@ -350,7 +352,7 @@ pub struct FileView {
 impl FileView {
     /// The shallow view of `unit`, mounted at assembly FileId `base`.
     pub fn of(unit: &FileUnit, base: u32, options: &SourceOptions) -> Result<Self, SourceError> {
-        Self::mounted(unit, base, options, None, false)
+        Self::mounted(unit, base, options, None, None)
     }
 
     /// Graph transport uses the same admitted external-crate wrapper and
@@ -360,6 +362,7 @@ impl FileView {
         base: u32,
         options: &SourceOptions,
         ordinal: &[u64],
+        entry: Option<String>,
     ) -> Result<Self, SourceError> {
         let external = match ordinal {
             [root] if *root >= 2 => Some(
@@ -374,13 +377,11 @@ impl FileView {
             ),
             _ => None,
         };
-        Self::mounted(
-            unit,
-            base,
-            options,
-            external,
-            ordinal == [0] && options.library,
-        )
+        let entry = entry.or_else(|| {
+            (ordinal == [0] && options.library && !options.cfg.names.contains("test"))
+                .then(|| "\nfn main() {}\n".to_string())
+        });
+        Self::mounted(unit, base, options, external, entry.as_deref())
     }
 
     fn mounted(
@@ -388,7 +389,7 @@ impl FileView {
         base: u32,
         options: &SourceOptions,
         external: Option<&str>,
-        library: bool,
+        entry: Option<&str>,
     ) -> Result<Self, SourceError> {
         let mut prepared = PreparedSource {
             compiler_image: options.compiler_image.clone(),
@@ -442,8 +443,8 @@ impl FileView {
         if external.is_some() {
             append_segment(&mut prepared, "\n}\n", anchor, true)?;
         }
-        if library {
-            append_segment(&mut prepared, "\nfn main() {}\n", anchor, true)?;
+        if let Some(entry) = entry {
+            append_segment(&mut prepared, entry, anchor, true)?;
         }
         if let Some(attachment) = source_embedded::EmbeddedFile::attach(id, unit)? {
             prepared.embedded_files.push(attachment);
