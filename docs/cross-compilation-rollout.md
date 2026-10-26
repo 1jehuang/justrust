@@ -11,7 +11,8 @@ support.
 - Successful `build`, `check`, and `clippy` reports explicitly say tests were
   not run. Successful `test --no-run` says test binaries were built but not run.
   Existing test execution, failure precedence and command exit status remain
-  unchanged. Both compact and detailed reports use this distinction.
+  unchanged. Both compact and detailed reports use this distinction, retaining
+  the existing `justrust: ok` success prefix used by CI consumers.
 - The opt-in helper in [cross-test-bundles.md](cross-test-bundles.md) packages
   only test executables named by successful Cargo JSON output. The immutable
   manifest records `compiled` / `not-tested`; the separate local execution
@@ -24,6 +25,10 @@ support.
   validation of our existing MSVC release target or arbitrary native libraries.
 - A real Linux test bundle exercised both passing and deliberately failing
   invocations. Cross-OS runtime testing is not claimed.
+- The existing Linux, macOS and Windows CI jobs now run
+  `ci/check-test-bundle.sh` to exercise native success, deliberate failure and
+  immutable build status. The script passed locally on Linux. Adding these
+  jobs is not evidence that their macOS/Windows executions have passed yet.
 
 The installed client was rebuilt from committed sources, excluding concurrent
 uncommitted Linux release work. The helper is currently a repository Python
@@ -46,6 +51,11 @@ The run summaries are exported under `data/runs/`:
 - `20261025-225111827-4192104`: installed committed client on that warm Windows
   GNU build emitted `test binaries built, tests not run (--no-run)` and reused
   its artifacts without compilation.
+- `20261025-225307728-11734`: Linux native CI fixture compiled without running
+  tests, then its bundle passed one selected test and preserved an intentional
+  failing test's nonzero exit in a separate result.
+- `20261025-225308219-11879` and `20261025-225318517-11548`: the success-prefix
+  regression tests and hosted clippy passed after the CI compatibility update.
 
 These are correctness/feasibility checks, not before/after performance evidence.
 No speedup or general cross-platform compatibility claim is made.
