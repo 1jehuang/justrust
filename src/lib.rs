@@ -14,6 +14,7 @@ mod agent_output;
 mod agents;
 mod buildd;
 mod buildscript;
+mod cross_tools;
 mod depcache;
 mod depcache_gc;
 mod depcache_prebuilt;

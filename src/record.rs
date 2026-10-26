@@ -262,6 +262,11 @@ pub fn exec_cargo(args: &[OsString]) -> ! {
         report_build_failure(args, "toolchain_required", false, Some(1));
         std::process::exit(1);
     }
+    if let Err(error) = apply_cross_tools(&mut cmd, pinned.as_ref(), args) {
+        eprintln!("justrust: {error:#}");
+        report_build_failure(args, "toolchain_required", false, Some(1));
+        std::process::exit(1);
+    }
     let cargo = PathBuf::from(cmd.get_program());
     let err = crate::sys::exec(cmd.args(args));
     eprintln!("justrust: failed to exec {}: {err}", cargo.display());
@@ -431,6 +436,27 @@ fn apply_musl_linker(
 
 /// Explicit cross targets must have libraries in the selected compiler's own
 /// sysroot. Never borrow a system libcore for a different compiler version.
+fn apply_cross_tools(
+    cmd: &mut Command,
+    pinned: Option<&crate::toolchain::Toolchain>,
+    args: &[OsString],
+) -> Result<()> {
+    // A system-toolchain opt-out preserves the user's own linker configuration.
+    if !cfg!(target_os = "linux") || pinned.is_none() {
+        return Ok(());
+    }
+    if requested_targets(args, std::env::var_os("CARGO_BUILD_TARGET"))
+        .iter()
+        .any(|target| target.to_str().is_some_and(crate::cross_tools::supported))
+    {
+        let root = crate::cross_tools::ensure().map_err(|error| {
+            ToolchainRequired(format!("Windows GNU tools unavailable: {error:#}"))
+        })?;
+        crate::cross_tools::apply(cmd, &root)?;
+    }
+    Ok(())
+}
+
 pub(crate) fn requested_targets(args: &[OsString], env_target: Option<OsString>) -> Vec<OsString> {
     let mut targets = Vec::new();
     let mut args = args.iter().take_while(|a| *a != "--");
@@ -492,15 +518,17 @@ fn compatible_toolchain(
     // Custom JSON targets may use build-std. Leave their policy to Cargo.
     // Zig release builds use the selected compiler's own official target
     // libraries, never the host's default rustup toolchain or borrowed std.
-    if matches!(subcommand(args).as_deref(), Some("zigbuild" | "build"))
-        && !matches!(
-            std::env::var("JUSTRUST_TOOLCHAIN_AUTO_INSTALL").as_deref(),
-            Ok("0" | "off" | "false")
-        )
-    {
+    if matches!(
+        subcommand(args).as_deref(),
+        Some("zigbuild" | "build" | "test" | "check" | "clippy")
+    ) && !matches!(
+        std::env::var("JUSTRUST_TOOLCHAIN_AUTO_INSTALL").as_deref(),
+        Ok("0" | "off" | "false")
+    ) {
         for target in &targets {
             if let Some(target_name) = target.to_str()
-                && crate::remote_artifacts::musl_target(target_name)
+                && (crate::remote_artifacts::musl_target(target_name)
+                    || crate::cross_tools::supported(target_name))
                 && !target_has_core(&tc.bin("rustc"), target)
                 && let Err(error) =
                     crate::toolchain::add_target(&tc, target_name, &mut std::io::stderr())
@@ -722,6 +750,7 @@ fn record(
         }
     }
     apply_musl_linker(&mut cmd, pinned.as_ref(), &cargo_args)?;
+    apply_cross_tools(&mut cmd, pinned.as_ref(), &cargo_args)?;
     if meta.subcommand == "zigbuild" && cfg!(target_os = "linux") {
         let tools = crate::release_tools::ensure()
             .map_err(|error| ToolchainRequired(format!("release tools unavailable: {error:#}")))?;

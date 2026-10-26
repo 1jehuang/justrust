@@ -926,11 +926,11 @@ pub fn add_component(tc: &Toolchain, name: &str, log: &mut dyn std::io::Write) -
     result
 }
 
-/// Add official musl std to the selected compiler, under the installer lock.
+/// Add an approved official target std to the selected compiler, under the installer lock.
 /// Publish only the target directory after the download checksum and layout
 /// have been verified. In particular, never copy libraries from system rustup.
 pub(crate) fn add_target(tc: &Toolchain, target: &str, log: &mut dyn std::io::Write) -> Result<()> {
-    if !crate::remote_artifacts::musl_target(target) {
+    if !crate::remote_artifacts::musl_target(target) && !crate::cross_tools::supported(target) {
         bail!("automatic target installation does not support {target}");
     }
     let spec = Spec::parse(&tc.id)?;
