@@ -8157,11 +8157,11 @@ impl ValidatedTraitWorld {
                 facts.original,
             )?,
             Predicate::ProjectionEq { projection, ty } => self
-                .validate_equality_domain_with_facts(
+                .validate_equality_domain_with_active(
                     projection,
                     ty,
                     facts.env(),
-                    &mut active.replays,
+                    active,
                     facts.original,
                 )?,
         }
@@ -8758,8 +8758,26 @@ impl ValidatedTraitWorld {
         depth: usize,
         scratch: &mut ProofScratch,
     ) -> Result<Closedness> {
+        self.closedness_of_root_with_storage(
+            ty,
+            env,
+            usage,
+            depth,
+            &mut scratch.closedness,
+            &mut scratch.closedness_storage,
+        )
+    }
+    fn closedness_of_root_with_storage(
+        &self,
+        ty: &Ty,
+        env: &GenericEnv,
+        usage: TypeUse,
+        depth: usize,
+        rows: &mut Vec<ClosednessValidation>,
+        storage: &mut Vec<ir::PlanReservation>,
+    ) -> Result<Closedness> {
         charged(&self.budget, self.budget.check_depth(depth))?;
-        for entry in &scratch.closedness {
+        for entry in rows.iter() {
             charged(&self.budget, self.budget.charge_work(1))?;
             if entry.world == self.id
                 && entry.usage == usage
@@ -8793,11 +8811,11 @@ impl ValidatedTraitWorld {
             has_parameters: walk.has_parameters,
             has_opaque: walk.has_opaque,
         };
-        if !ty.is_nominal_back_edge() && scratch.closedness.len() < MAX_SCRATCH_OBLIGATIONS {
+        if !ty.is_nominal_back_edge() && rows.len() < MAX_SCRATCH_OBLIGATIONS {
             push_scratch_row(
                 &self.budget,
-                &mut scratch.closedness,
-                &mut scratch.closedness_storage,
+                rows,
+                storage,
                 ClosednessValidation {
                     world: self.id,
                     ty: ty.clone(),
@@ -8815,10 +8833,32 @@ impl ValidatedTraitWorld {
         env: &GenericEnv,
         scratch: &mut ProofScratch,
     ) -> Result<bool> {
-        let root = self.closedness_of_root(&goal.self_ty, env, TypeUse::Root, 0, scratch)?;
+        self.goal_is_closed_with_storage(
+            goal,
+            env,
+            &mut scratch.closedness,
+            &mut scratch.closedness_storage,
+        )
+    }
+    fn goal_is_closed_with_storage(
+        &self,
+        goal: &TraitRef,
+        env: &GenericEnv,
+        rows: &mut Vec<ClosednessValidation>,
+        storage: &mut Vec<ir::PlanReservation>,
+    ) -> Result<bool> {
+        let root = self.closedness_of_root_with_storage(
+            &goal.self_ty,
+            env,
+            TypeUse::Root,
+            0,
+            rows,
+            storage,
+        )?;
         let mut closed = !root.has_parameters && !root.has_opaque;
         for ty in goal.args.iter() {
-            let actual = self.closedness_of_root(ty, env, TypeUse::Actual, 0, scratch)?;
+            let actual =
+                self.closedness_of_root_with_storage(ty, env, TypeUse::Actual, 0, rows, storage)?;
             closed &= !actual.has_parameters && !actual.has_opaque;
         }
         Ok(closed)

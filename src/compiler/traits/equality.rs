@@ -623,6 +623,40 @@ impl ValidatedTraitWorld {
         replays: &mut NominalReplays,
         caller: Option<&ValidatedFacts>,
     ) -> Result<()> {
+        self.validate_equality_domain_policy(projection, rhs, env, replays, caller, |goal, env| {
+            self.goal_is_closed(goal, env)
+        })
+    }
+    // Only callers already owning a proof arena use its existing completed-root
+    // inventory. Metadata replays and closedness have disjoint mutable borrows;
+    // no arena, authority, or retained allocation is created by this adapter.
+    pub(super) fn validate_equality_domain_with_active(
+        &self,
+        projection: &ir::AssociatedTypeProjection,
+        rhs: &Ty,
+        env: &GenericEnv,
+        active: &mut ProofScratch,
+        caller: Option<&ValidatedFacts>,
+    ) -> Result<()> {
+        let ProofScratch {
+            replays,
+            closedness,
+            closedness_storage,
+            ..
+        } = active;
+        self.validate_equality_domain_policy(projection, rhs, env, replays, caller, |goal, env| {
+            self.goal_is_closed_with_storage(goal, env, closedness, closedness_storage)
+        })
+    }
+    fn validate_equality_domain_policy(
+        &self,
+        projection: &ir::AssociatedTypeProjection,
+        rhs: &Ty,
+        env: &GenericEnv,
+        replays: &mut NominalReplays,
+        caller: Option<&ValidatedFacts>,
+        mut goal_is_closed: impl FnMut(&TraitRef, &GenericEnv) -> Result<bool>,
+    ) -> Result<()> {
         self.check_normalization_budget()?;
         self.validate_ty_metadata_with_facts(
             &self.projection_type(projection)?,
@@ -635,7 +669,7 @@ impl ValidatedTraitWorld {
         // Raw admission is solver-free. Metadata, including rejected children,
         // has already been validated above.
         if matches!(rhs, Ty::Param(_)) {
-            if self.goal_is_closed(&projection.trait_ref, env)? {
+            if goal_is_closed(&projection.trait_ref, env)? {
                 return Err(FactsError::unsupported(
                     &self.budget,
                     "unsupported: closed equality cannot infer a rigid RHS parameter",
@@ -1045,7 +1079,7 @@ impl ValidatedTraitWorld {
         active: &mut ProofScratch,
     ) -> Result<()> {
         self.check_context(context)?;
-        self.validate_equality_domain_with(projection, rhs, context.env(), &mut active.replays)?;
+        self.validate_equality_domain_with_active(projection, rhs, context.env(), active, None)?;
         self.require_equality_rhs_sized(rhs, context, active)
     }
 
@@ -1735,6 +1769,601 @@ impl ValidatedTraitWorld {
 mod tests {
     use super::*;
     use crate::compiler::frontend::{self, PlanCtx};
+
+    // Genuine source-owned caller, projection, RHS parameter and opaque return.
+    struct ActiveEqualityCase {
+        world: Arc<ValidatedTraitWorld>,
+        facts: Arc<ValidatedFacts>,
+        projection: ir::AssociatedTypeProjection,
+        rhs: Ty,
+        opaque: Ty,
+    }
+    fn active_equality_fixture() -> ActiveEqualityCase {
+        let source = frontend::parse(
+            "trait Has{type Out;}struct Number{value:i32}impl Has for Number{type Out=i32;}fn probe<T:Has<Out=U>,U>(x:T,y:U){}fn make()->impl Has<Out=i32>{Number{value:0}}fn main(){}",
+        ).unwrap();
+        let plan = PlanCtx::from_program(&source, &PlanBudget::default()).unwrap();
+        let world = plan.trait_world().unwrap();
+        let facts = world
+            .callable_facts(plan.function_decl(0).unwrap())
+            .unwrap();
+        let (projection, rhs) = facts
+            .predicates
+            .predicates
+            .iter()
+            .find_map(|row| match row {
+                Predicate::ProjectionEq { projection, ty } => {
+                    Some((projection.clone(), ty.clone()))
+                }
+                _ => None,
+            })
+            .unwrap();
+        assert!(matches!(rhs, Ty::Param(_)));
+        let opaque = world
+            .schema
+            .declaration_schema(plan.function_decl(1).unwrap())
+            .unwrap()
+            .signature
+            .result
+            .clone();
+        assert!(matches!(opaque, Ty::Opaque(_)));
+        ActiveEqualityCase {
+            world,
+            facts,
+            projection,
+            rhs,
+            opaque,
+        }
+    }
+
+    #[test]
+    fn active_equality_closedness_warm_preserves_context_source_and_rejection() {
+        let ActiveEqualityCase {
+            world,
+            facts,
+            projection,
+            rhs,
+            opaque,
+        } = active_equality_fixture();
+        let context = ProofContext::from_facts(&facts);
+        let mut active = ProofScratch::default();
+        let before = facts.budget().usage_snapshot().work;
+        world
+            .validate_equality_domain_in(&projection, &rhs, context, &mut active)
+            .unwrap();
+        let cold_work = facts.budget().usage_snapshot().work - before;
+        let rows = active.closedness.len();
+        assert!(rows > 0);
+        let before = facts.budget().usage_snapshot().work;
+        world
+            .validate_equality_domain_in(&projection, &rhs, context, &mut active)
+            .unwrap();
+        let warm_work = facts.budget().usage_snapshot().work - before;
+        assert!(warm_work > 0 && warm_work < cold_work);
+        assert_eq!(active.closedness.len(), rows);
+        // The second production caller keeps its ordinary proof/cycle policy.
+        let predicate = Predicate::ProjectionEq {
+            projection: projection.clone(),
+            ty: rhs.clone(),
+        };
+        let mut proving = ProofScratch::default();
+        for _ in 0..2 {
+            world.require_in(&predicate, context, &mut proving).unwrap();
+        }
+        assert!(proving.checked.as_ref().unwrap().closedness.len() > 0);
+        let ActiveEqualityCase { facts: foreign, .. } = active_equality_fixture();
+        assert!(
+            foreign
+                .world()
+                .validate_equality_domain_in(&projection, &rhs, context, &mut active,)
+                .is_err()
+        );
+        let mut changed = facts.as_ref().clone();
+        changed.predicates = world.empty.clone();
+        assert!(
+            world
+                .validate_equality_domain_in(
+                    &projection,
+                    &rhs,
+                    ProofContext::from_facts(&changed),
+                    &mut active,
+                )
+                .is_err()
+        );
+        assert!(
+            world
+                .validate_equality_domain_in(
+                    &projection,
+                    &rhs,
+                    ProofContext {
+                        original: None,
+                        predicates: &world.empty,
+                        phase: FactsPhase::Closed
+                    },
+                    &mut active,
+                )
+                .is_err()
+        );
+        let mut forged = projection.clone();
+        forged.item = facts.declaration();
+        assert!(
+            world
+                .validate_equality_domain_in(&forged, &rhs, context, &mut active)
+                .is_err()
+        );
+        assert_eq!(active.closedness.len(), rows);
+        // Exact source occurrence is still checked before any warm decision.
+        let Ty::Opaque(original) = opaque else {
+            unreachable!()
+        };
+        let forged_opaque = Ty::Opaque(Arc::new(ir::OpaqueTy::new(
+            original.owner(),
+            original.owner_args().into(),
+            original.site() + 1,
+            original.bounds().into(),
+            original.captured_regions().into(),
+        )));
+        let mut late = projection.clone();
+        late.trait_ref.self_ty = Ty::Tuple(Arc::from([
+            projection.trait_ref.self_ty.clone(),
+            forged_opaque,
+        ]));
+        assert!(
+            world
+                .validate_equality_domain_in(&late, &rhs, context, &mut active)
+                .is_err()
+        );
+        assert_eq!(active.closedness.len(), rows);
+        let owner = world
+            .headers
+            .impls
+            .iter()
+            .find(|header| {
+                header
+                    .associated_types
+                    .iter()
+                    .any(|value| value.associated == projection.item)
+            })
+            .unwrap();
+        let Ty::Struct(nominal) = &owner.trait_ref.self_ty else {
+            panic!("source Number implementation")
+        };
+        let mut forged_definition = nominal.def().clone();
+        forged_definition.module = foreign.world().catalog.modules().core_root();
+        late.trait_ref.self_ty = Ty::Struct(ir::StructTy::new(forged_definition));
+        assert!(
+            world
+                .validate_equality_domain_in(&late, &rhs, context, &mut active)
+                .is_err()
+        );
+        assert_eq!(active.closedness.len(), rows);
+        // A valid closed root is not permission to infer a rigid RHS, even warm.
+        let mut closed = projection.clone();
+        closed.trait_ref.self_ty = Ty::Bool;
+        for _ in 0..2 {
+            let error = world
+                .validate_equality_domain_in(&closed, &rhs, context, &mut active)
+                .unwrap_err();
+            assert_eq!(error.kind(), FactsErrorKind::Unsupported);
+        }
+    }
+
+    #[test]
+    fn active_equality_closedness_complete_flags_usage_and_identity() {
+        let ActiveEqualityCase {
+            world,
+            facts,
+            projection,
+            opaque,
+            ..
+        } = active_equality_fixture();
+        let parameter = projection.trait_ref.self_ty.clone();
+        let mut active = ProofScratch::default();
+        for (ty, flags) in [
+            (
+                Ty::Tuple(Arc::from([Ty::Bool, parameter.clone()])),
+                (true, false),
+            ),
+            (
+                Ty::Tuple(Arc::from([Ty::Bool, opaque.clone()])),
+                (false, true),
+            ),
+            (Ty::Tuple(Arc::from([parameter, opaque])), (true, true)),
+            (Ty::Tuple(Arc::from([Ty::Bool, Ty::Unit])), (false, false)),
+        ] {
+            let mut walk = TypeWalk::default();
+            let height = world
+                .validate_ty_inner(&ty, facts.env(), 0, TypeUse::Root, &mut walk)
+                .unwrap();
+            assert_eq!((walk.has_parameters, walk.has_opaque), flags);
+            let expected = (height, walk.has_parameters, walk.has_opaque);
+            for _ in 0..2 {
+                let result = world
+                    .closedness_of_root_with_storage(
+                        &ty,
+                        facts.env(),
+                        TypeUse::Root,
+                        0,
+                        &mut active.closedness,
+                        &mut active.closedness_storage,
+                    )
+                    .unwrap();
+                assert_eq!(
+                    (result.height, result.has_parameters, result.has_opaque),
+                    expected
+                );
+            }
+            let rows = active.closedness.len();
+            let actual = world
+                .closedness_of_root_with_storage(
+                    &ty,
+                    facts.env(),
+                    TypeUse::Actual,
+                    0,
+                    &mut active.closedness,
+                    &mut active.closedness_storage,
+                )
+                .unwrap();
+            assert_eq!(
+                (actual.height, actual.has_parameters, actual.has_opaque),
+                expected
+            );
+            assert_eq!(active.closedness.len(), rows + 1);
+            // Same display/structure is not the retained allocation identity.
+            let Ty::Tuple(parts) = &ty else {
+                unreachable!()
+            };
+            let separate = Ty::Tuple(parts.iter().cloned().collect::<Vec<_>>().into());
+            assert!(!same_closedness_input(&ty, &separate));
+            let collision = world
+                .closedness_of_root_with_storage(
+                    &separate,
+                    facts.env(),
+                    TypeUse::Root,
+                    0,
+                    &mut active.closedness,
+                    &mut active.closedness_storage,
+                )
+                .unwrap();
+            assert_eq!(
+                (
+                    collision.height,
+                    collision.has_parameters,
+                    collision.has_opaque
+                ),
+                expected
+            );
+            assert_eq!(active.closedness.len(), rows + 2);
+            let separate_env = GenericEnv::new(facts.env().scopes(), facts.budget()).unwrap();
+            let result = world
+                .closedness_of_root_with_storage(
+                    &ty,
+                    &separate_env,
+                    TypeUse::Root,
+                    0,
+                    &mut active.closedness,
+                    &mut active.closedness_storage,
+                )
+                .unwrap();
+            assert_eq!(
+                (result.height, result.has_parameters, result.has_opaque),
+                expected
+            );
+            assert_eq!(active.closedness.len(), rows + 3);
+        }
+        // An invalid late child is never retained as a completed root.
+        let ActiveEqualityCase { facts: foreign, .. } = active_equality_fixture();
+        let foreign_parameter = Ty::Param(foreign.env().ordered_params().next().unwrap());
+        let invalid = Ty::Tuple(Arc::from([Ty::Bool, foreign_parameter]));
+        let rows = active.closedness.len();
+        assert!(
+            world
+                .closedness_of_root_with_storage(
+                    &invalid,
+                    facts.env(),
+                    TypeUse::Root,
+                    0,
+                    &mut active.closedness,
+                    &mut active.closedness_storage,
+                )
+                .is_err()
+        );
+        assert_eq!(active.closedness.len(), rows);
+        // A world change misses the completed-root key even for a universally
+        // valid primitive. This raw helper grants no caller/context authority.
+        world
+            .closedness_of_root_with_storage(
+                &Ty::Bool,
+                facts.env(),
+                TypeUse::Root,
+                0,
+                &mut active.closedness,
+                &mut active.closedness_storage,
+            )
+            .unwrap();
+        let rows = active.closedness.len();
+        let foreign_result = foreign
+            .world()
+            .closedness_of_root_with_storage(
+                &Ty::Bool,
+                facts.env(),
+                TypeUse::Root,
+                0,
+                &mut active.closedness,
+                &mut active.closedness_storage,
+            )
+            .unwrap();
+        assert!(!foreign_result.has_parameters && !foreign_result.has_opaque);
+        assert_eq!(active.closedness.len(), rows + 1);
+    }
+
+    #[test]
+    fn active_equality_closedness_warm_exact_work_short_and_issuers() {
+        for short in [false, true] {
+            let ActiveEqualityCase {
+                world,
+                facts,
+                projection,
+                rhs,
+                ..
+            } = active_equality_fixture();
+            let mut active = ProofScratch::default();
+            let context = ProofContext::from_facts(&facts);
+            for _ in 0..2 {
+                world
+                    .validate_equality_domain_in(&projection, &rhs, context, &mut active)
+                    .unwrap();
+            }
+            let rows = active.closedness.len();
+            let before = facts.budget().usage_snapshot().work;
+            world
+                .validate_equality_domain_in(&projection, &rhs, context, &mut active)
+                .unwrap();
+            let cost = facts
+                .budget()
+                .usage_snapshot()
+                .work
+                .checked_sub(before)
+                .unwrap();
+            assert!(cost > 0);
+            let filler = facts
+                .budget()
+                .limits()
+                .work
+                .checked_sub(facts.budget().usage_snapshot().work)
+                .and_then(|remaining| remaining.checked_sub(cost))
+                .and_then(|remaining| remaining.checked_add(usize::from(short)))
+                .unwrap();
+            facts.budget().charge_work(filler).unwrap();
+            let result = world.validate_equality_domain_in(&projection, &rhs, context, &mut active);
+            assert_eq!(result.is_err(), short);
+            assert_eq!(active.closedness.len(), rows);
+            if short {
+                assert_eq!(
+                    facts.budget().first_resource_failure().unwrap().kind,
+                    ir::ResourceBudgetKind::Work
+                );
+                let failure = facts.budget().first_resource_failure();
+                assert!(
+                    world
+                        .validate_equality_domain_in(&projection, &rhs, context, &mut active)
+                        .is_err()
+                );
+                assert_eq!(facts.budget().first_resource_failure(), failure);
+            }
+        }
+        for planner in [false, true] {
+            let ActiveEqualityCase {
+                world,
+                facts,
+                projection,
+                rhs,
+                ..
+            } = active_equality_fixture();
+            let mut active = ProofScratch::default();
+            let context = ProofContext::from_facts(&facts);
+            world
+                .validate_equality_domain_in(&projection, &rhs, context, &mut active)
+                .unwrap();
+            let rows = active.closedness.len();
+            if planner {
+                facts.budget().poison_ledger_for_tests();
+            } else {
+                assert!(
+                    world
+                        .catalog
+                        .modules()
+                        .budget()
+                        .charge(crate::compiler::expansion_budget::Counter::Work, u64::MAX,)
+                        .is_err()
+                );
+            }
+            let failure = facts.budget().first_resource_failure();
+            for _ in 0..2 {
+                assert!(
+                    matches!(world.validate_equality_domain_in(&projection, &rhs, context, &mut active),
+                    Err(error) if error.is_resource())
+                );
+                assert_eq!(active.closedness.len(), rows);
+                assert_eq!(facts.budget().first_resource_failure(), failure);
+            }
+        }
+    }
+
+    #[test]
+    fn active_equality_closedness_warm_depth_rechecks_cached_height() {
+        let ActiveEqualityCase {
+            world,
+            facts,
+            projection,
+            ..
+        } = active_equality_fixture();
+        let ty = Ty::Tuple(Arc::from([projection.trait_ref.self_ty]));
+        let mut active = ProofScratch::default();
+        let first = world
+            .closedness_of_root_with_storage(
+                &ty,
+                facts.env(),
+                TypeUse::Root,
+                0,
+                &mut active.closedness,
+                &mut active.closedness_storage,
+            )
+            .unwrap();
+        assert!(first.height > 0);
+        let rows = active.closedness.len();
+        let depth = facts
+            .budget()
+            .limits()
+            .depth
+            .checked_sub(first.height)
+            .unwrap();
+        world
+            .closedness_of_root_with_storage(
+                &ty,
+                facts.env(),
+                TypeUse::Root,
+                depth,
+                &mut active.closedness,
+                &mut active.closedness_storage,
+            )
+            .unwrap();
+        assert!(matches!(world.closedness_of_root_with_storage(
+            &ty, facts.env(), TypeUse::Root, depth + 1,
+            &mut active.closedness, &mut active.closedness_storage,
+        ), Err(error) if error.is_resource()));
+        assert_eq!(active.closedness.len(), rows);
+    }
+
+    #[test]
+    fn active_equality_closedness_actual_peak_short_and_drop() {
+        let ActiveEqualityCase {
+            world,
+            facts,
+            projection,
+            ..
+        } = active_equality_fixture();
+        let ty = Ty::Tuple(Arc::from([projection.trait_ref.self_ty]));
+        let before = facts.budget().usage_snapshot();
+        assert_eq!(before.bytes, before.reservations.current_bytes);
+        assert!(!before.reservations.counters_saturated);
+        let lift_bytes = before
+            .reservations
+            .peak_bytes
+            .checked_sub(before.bytes)
+            .unwrap();
+        let lift = facts.budget().reserve_bytes(lift_bytes).unwrap();
+        let window = facts.budget().usage_snapshot();
+        assert_eq!(window.bytes, window.reservations.peak_bytes);
+        let mut measured = ProofScratch::default();
+        world
+            .closedness_of_root_with_storage(
+                &ty,
+                facts.env(),
+                TypeUse::Root,
+                0,
+                &mut measured.closedness,
+                &mut measured.closedness_storage,
+            )
+            .unwrap();
+        let after = facts.budget().usage_snapshot();
+        assert_eq!(after.bytes, after.reservations.current_bytes);
+        assert!(!after.reservations.counters_saturated);
+        let peak = after
+            .reservations
+            .peak_bytes
+            .checked_sub(window.bytes)
+            .unwrap();
+        let net = after.bytes.checked_sub(window.bytes).unwrap();
+        assert!(peak >= net && net > 0);
+        let paid = scratch_row_bytes::<ClosednessValidation>().unwrap();
+        assert_eq!(measured.closedness.len(), 1);
+        drop(measured);
+        assert_eq!(facts.budget().usage_snapshot().bytes, after.bytes - paid);
+        drop(lift);
+        for short in [false, true] {
+            let current = facts.budget().usage_snapshot().bytes;
+            let headroom = peak.checked_sub(usize::from(short)).unwrap();
+            let filler = facts
+                .budget()
+                .reserve_bytes(
+                    facts
+                        .budget()
+                        .limits()
+                        .bytes
+                        .checked_sub(current)
+                        .unwrap()
+                        .checked_sub(headroom)
+                        .unwrap(),
+                )
+                .unwrap();
+            let mut active = ProofScratch::default();
+            let result = world.closedness_of_root_with_storage(
+                &ty,
+                facts.env(),
+                TypeUse::Root,
+                0,
+                &mut active.closedness,
+                &mut active.closedness_storage,
+            );
+            assert_eq!(result.is_err(), short);
+            if short {
+                assert!(active.closedness.is_empty());
+                assert_eq!(
+                    facts.budget().first_resource_failure().unwrap().kind,
+                    ir::ResourceBudgetKind::Bytes
+                );
+            }
+            let failure = facts.budget().first_resource_failure();
+            let before_drop = facts.budget().usage_snapshot().bytes;
+            drop(active);
+            let after_owner_drop = facts.budget().usage_snapshot().bytes;
+            if !short {
+                assert_eq!(after_owner_drop, before_drop - paid);
+            }
+            drop(filler);
+            assert_eq!(facts.budget().first_resource_failure(), failure);
+            assert_eq!(
+                facts.budget().usage_snapshot().bytes,
+                after_owner_drop
+                    - facts
+                        .budget()
+                        .limits()
+                        .bytes
+                        .checked_sub(current)
+                        .unwrap()
+                        .checked_sub(headroom)
+                        .unwrap()
+            );
+        }
+        // Explicit ledger poison is distinct from an ordinary denied reserve:
+        // admitted owner and parent leases conservatively cannot refund it.
+        let ActiveEqualityCase {
+            world,
+            facts,
+            projection,
+            ..
+        } = active_equality_fixture();
+        let parent = facts.budget().reserve_bytes(17).unwrap();
+        let mut active = ProofScratch::default();
+        world
+            .closedness_of_root_with_storage(
+                &projection.trait_ref.self_ty,
+                facts.env(),
+                TypeUse::Root,
+                0,
+                &mut active.closedness,
+                &mut active.closedness_storage,
+            )
+            .unwrap();
+        assert_eq!(active.closedness.len(), 1);
+        let live = facts.budget().usage_snapshot().bytes;
+        facts.budget().poison_ledger_for_tests();
+        drop(active);
+        assert_eq!(facts.budget().usage_snapshot().bytes, live);
+        drop(parent);
+        assert_eq!(facts.budget().usage_snapshot().bytes, live);
+    }
 
     #[test]
     fn associated_assignment_source_rejects_missing_foreign_and_rebound_rows() {
