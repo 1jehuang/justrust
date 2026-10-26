@@ -10,8 +10,9 @@ that same tenant SSH connection. No cloud protocol change is required.
 
 On a fresh Linux runner, `JCODE_API_KEY` selects hosted automatically. Existing
 backend configuration takes precedence, so `justrust remote use hosted` makes
-that selection explicit. Store an account API key as a GitHub Actions secret,
-not in source, logs, an artifact, or a fork PR workflow.
+that selection explicit. Store a dedicated `scope=build` API key as a GitHub
+Actions secret, not a personal account key and never in source, logs, an
+artifact, or a fork PR workflow.
 
 ```sh
 justrust remote use hosted
@@ -141,7 +142,12 @@ outputs are not automatically portable musl binaries.
    to a reviewed immutable commit containing this support, install with
    `cargo install --path <checkout> --locked`, and pin actions and Rust versions
    according to the repository's supply-chain policy.
-2. Configure a `JCODE_API_KEY` secret for an entitled account. Restrict this job
+2. Configure a `JCODE_API_KEY` secret using a dedicated build-only key for an
+   entitled account. `POST /v1/keys` with `{"name":"GitHub Linux CI","scope":"build"}`
+   issues one when authenticated by the account owner. Transfer its value
+   directly to the secret store via stdin, never logs or command arguments.
+   Build-only credentials cannot manage keys, billing plans or spending caps.
+   Restrict this job
    to trusted refs. Set a timeout, serialize builds sharing a checkout path, and
    use least privilege (`contents: read` is sufficient for a validation job).
 3. Build with the strict command above, verify the expected binary exists, run
@@ -182,11 +188,20 @@ recorded to `JUSTRUST_DISABLE=1` execution. Unrecorded Zig initialization was
 also exercised. Local execution here is specifically the recording-parity
 check; the release artifact checks above ran through hosted admission.
 
-GitHub Actions validation has not run: the repository secret list contains no
-`JCODE_API_KEY` and the `JUSTRUST_HOSTED_RELEASES` variable is unset. Keep the
-gate off until an authorized durable key is provisioned and the manual CI run
-passes. The immutable bootstrap client is
-`d0c35300773df0103e3beeb090a5a1a5c6681185`. No public release was created.
+The first rollout was blocked by a missing `JCODE_API_KEY`. On 2026-10-26,
+a dedicated build-only credential was provisioned after the account backend's
+scope allowlist and additive database migration were tested and deployed.
+Live checks confirmed identity access and denied key management, billing
+reads and cap mutation. Its plaintext went directly into GitHub's secret
+store and was not persisted locally. GitHub-hosted validation run `40278548116`
+passed both targets on 2026-10-26, building stable commit
+`aa1e1d662d79f664d5cc55c5078dfab6717bf187`. The Linux job completed in 5m48s.
+Both binaries from artifact `12631910735` were downloaded and independently
+passed the same static ELF, exact-version and native/QEMU smoke checks.
+The repository gate was enabled at `2026-10-26T06:19:52Z` only after these checks.
+A standalone copy of the manual workflow is registered on default branch
+`main`, since GitHub requires registration there to dispatch it on `stable`.
+This does not merge the compiler branches.
 
 ## Repository rollout gate
 
@@ -205,14 +220,22 @@ not by silently compiling locally. With the variable unset, the original local
 Linux zigbuild jobs remain active. macOS and Windows compile/package commands
 are unchanged. Hosted jobs sharing the checkout path are serialized.
 
-As of the initial implementation, the repository had no `JCODE_API_KEY` secret.
-Local authenticated hosted validation is not proof that GitHub Actions has
-credentials. The gate must stay off until that independent prerequisite and
-the nonpublishing CI run are verified. No new public release is required to
-install the reviewed bootstrap client.
+The immutable bootstrap client is
+`d0c35300773df0103e3beeb090a5a1a5c6681185`. Local authenticated validation alone
+is not proof that GitHub Actions works: promotion requires the separate
+nonpublishing CI acceptance run. No new public release is required to install
+the reviewed bootstrap client.
+
+The accepted binaries have SHA-256 digests:
+
+| Target | SHA-256 |
+| --- | --- |
+| x86_64 musl | `4af319c72c131519c8695068604261ebd87d608651939a4bfc8f184c14db16f8` |
+| aarch64 musl | `3c6f93ee02f7eb52fecb37a93daba5cbf904f5b50a8cfb43fece365b1aad6c92` |
 
 Hosted builds use the account's normal build allowance and admission rules.
-Nothing here changes billing, provisions API secrets, runs a public release,
-or certifies a particular application's release ABI. The existing public release
-publishing step remains unchanged. This document describes the supported
-client path and a gated rollout, not an already-promoted Linux release service.
+The client and workflows do not provision credentials or raise billing limits.
+The owner-authorized build-only credential was provisioned separately for this
+rollout. No public release was published during validation. The existing public
+release publishing step remains unchanged. The Linux hosted path is now enabled
+for subsequent releases; macOS and Windows remain unchanged.
