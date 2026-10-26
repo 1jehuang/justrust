@@ -49,6 +49,10 @@ const FORWARDED_ENV: &[&str] = &[
     "JCODE_RELEASE_BUILD",
     "JCODE_BUILD_METADATA_FILE",
     "JCODE_BUILD_SEMVER",
+    "JCODE_BUILD_GIT_HASH",
+    "JCODE_BUILD_GIT_DATE",
+    "JCODE_BUILD_GIT_TAG",
+    "JCODE_BUILD_GIT_DIRTY",
     "JCODE_BUILD_CHANGELOG_RAW",
     "JUSTRUST_MAX_WARNINGS",
     "RUST_BACKTRACE",
@@ -1466,6 +1470,13 @@ mod tests {
             ("CARGO_PROFILE_RELEASE_CODEGEN_UNITS", "1"),
             ("CARGO_PROFILE_RELEASE_RPATH", "false"),
             ("CARGO_BUILD_RUSTC_WRAPPER", ""),
+            (
+                "JCODE_BUILD_GIT_HASH",
+                "0123456789abcdef0123456789abcdef01234567",
+            ),
+            ("JCODE_BUILD_GIT_DATE", "2026-10-26T21:24:12Z"),
+            ("JCODE_BUILD_GIT_TAG", "v1.2.3"),
+            ("JCODE_BUILD_GIT_DIRTY", "false"),
         ];
         let expected: Vec<_> = controls
             .iter()
@@ -1477,7 +1488,11 @@ mod tests {
                 .find(|(k, _)| *k == name)
                 .map(|(_, v)| v.to_string())
         });
-        assert_eq!(env, expected);
+        let mut sorted_env = env.clone();
+        sorted_env.sort();
+        let mut expected = expected;
+        expected.sort();
+        assert_eq!(sorted_env, expected);
         for msg in [
             Msg::Run {
                 id: 1,
@@ -1517,6 +1532,8 @@ mod tests {
                 ("RUSTC_WORKSPACE_WRAPPER", wrapper),
                 ("CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER", wrapper),
                 ("CARGO_PROFILE_RELEASE_UNKNOWN", "secret"),
+                ("JCODE_BUILD_GIT_TOKEN", "secret"),
+                ("JCODE_BUILD_GIT_DIR", "/private/repo/.git"),
                 ("CARGO_REGISTRIES_PRIVATE_TOKEN", "secret"),
                 ("AWS_SECRET_ACCESS_KEY", "secret"),
             ];
@@ -1552,6 +1569,10 @@ mod tests {
             "JCODE_RELEASE_BUILD",
             "JCODE_BUILD_METADATA_FILE",
             "JCODE_BUILD_SEMVER",
+            "JCODE_BUILD_GIT_HASH",
+            "JCODE_BUILD_GIT_DATE",
+            "JCODE_BUILD_GIT_TAG",
+            "JCODE_BUILD_GIT_DIRTY",
             "JCODE_BUILD_CHANGELOG_RAW",
             "JUSTRUST_TOOLCHAIN_DIST",
             "JUSTRUST_TOOLCHAIN_REQUIRED",
