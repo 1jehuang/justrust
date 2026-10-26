@@ -75,8 +75,110 @@ struct Projection {
     field: FieldSelector,
     result: Term,
 }
+/// Admission-only scratch owned by one inference solve. It never stores a
+/// normalization answer, and the borrowed original facts cannot be rebound.
+struct ProjectionMetadata<'f> {
+    scratch: std::cell::RefCell<tr::TraitScratch>,
+    original: &'f tr::ValidatedFacts,
+    // Field order drops all scratch buffers and child owners before this lease.
+    _storage: ir::PlanReservation,
+}
+impl<'f> ProjectionMetadata<'f> {
+    fn new(original: &'f tr::ValidatedFacts) -> Result<Self, String> {
+        // Include the containing Option discriminant/padding conservatively.
+        let storage = original
+            .budget()
+            .reserve_bytes(std::mem::size_of::<Option<Self>>())?;
+        Ok(Self {
+            scratch: std::cell::RefCell::new(tr::TraitScratch::default()),
+            original,
+            _storage: storage,
+        })
+    }
+    fn normalize(
+        &self,
+        facts: &tr::ValidatedFacts,
+        ty: &ir::Ty,
+        budget: &ir::PlanBudget,
+    ) -> Result<ir::Ty, String> {
+        facts
+            .normalize_substituted_projection_type_scratch(ty, budget, self.original, &self.scratch)
+            .map_err(|error| error.into_legacy_diagnostic(budget))
+    }
+}
+
+#[cfg(test)]
+mod projection_metadata_tests {
+    use super::*;
+
+    fn facts() -> Arc<tr::ValidatedFacts> {
+        let program = super::super::parse("fn probe<T>(x:T){}fn main(){}").unwrap();
+        let plan =
+            super::super::PlanCtx::from_program(&program, &ir::PlanBudget::default()).unwrap();
+        plan.trait_world()
+            .unwrap()
+            .callable_facts(plan.function_decl(0).unwrap())
+            .unwrap()
+    }
+
+    #[test]
+    fn solver_projection_metadata_header_exact_short_drop_and_poison() {
+        for short in [false, true] {
+            let facts = facts();
+            let budget = facts.budget();
+            let paid = std::mem::size_of::<Option<ProjectionMetadata<'_>>>();
+            let before = budget.usage_snapshot().bytes;
+            let filler_bytes = budget.limits().bytes - before - paid + usize::from(short);
+            let filler = budget.reserve_bytes(filler_bytes).unwrap();
+            let before_owner = budget.usage_snapshot().bytes;
+            let result = ProjectionMetadata::new(&facts);
+            assert_eq!(result.is_err(), short);
+            if let Ok(owner) = result {
+                assert_eq!(budget.usage_snapshot().bytes, before_owner + paid);
+                drop(owner);
+                assert_eq!(budget.usage_snapshot().bytes, before_owner);
+            } else {
+                assert_eq!(
+                    budget.first_resource_failure().unwrap().kind,
+                    ir::ResourceBudgetKind::Bytes
+                );
+                assert_eq!(budget.usage_snapshot().bytes, before_owner);
+            }
+            let failure = budget.first_resource_failure();
+            drop(filler);
+            assert_eq!(budget.usage_snapshot().bytes, before);
+            assert_eq!(budget.first_resource_failure(), failure);
+        }
+        let facts = facts();
+        let before = facts.budget().usage_snapshot().bytes;
+        let owner = ProjectionMetadata::new(&facts).unwrap();
+        let ty = ir::Ty::Tuple(Arc::from([ir::Ty::Bool, ir::Ty::Int(ir::IntTy::I32)]));
+        facts
+            .validate_ty_metadata_scratch(&ty, facts.budget(), &mut owner.scratch.borrow_mut())
+            .unwrap();
+        assert!(facts.budget().usage_snapshot().bytes > before);
+        drop(owner);
+        assert_eq!(facts.budget().usage_snapshot().bytes, before);
+
+        let owner = ProjectionMetadata::new(&facts).unwrap();
+        let parent = facts.budget().reserve_bytes(64).unwrap();
+        let live = facts.budget().usage_snapshot().bytes;
+        facts.budget().poison_ledger_for_tests();
+        assert!(
+            owner
+                .normalize(&facts, &ir::Ty::Unit, facts.budget())
+                .is_err()
+        );
+        assert!(ProjectionMetadata::new(&facts).is_err());
+        drop(owner);
+        drop(parent);
+        assert_eq!(facts.budget().usage_snapshot().bytes, live);
+    }
+}
+
 struct Solver<'a: 's, 'b: 's, 's> {
     checker: &'a Checker<'b>,
+    projection_metadata: Option<ProjectionMetadata<'b>>,
     variables: Vec<Variable>,
     scopes: Vec<HashMap<LocalKey, Term>>,
     sites: Vec<(usize, Term)>,
@@ -202,8 +304,14 @@ fn solve_body_with_seed<'a: 's, 'b: 's, 's>(
     preparation: Option<&'s nominal_manifest::Inputs<'s>>,
     source_seed: Option<&nominal_manifest::SourceSeed>,
 ) -> Result<Solver<'a, 'b, 's>, String> {
+    let projection_metadata = checker
+        .facts()
+        .validated()
+        .map(ProjectionMetadata::new)
+        .transpose()?;
     let mut solver = Solver {
         checker,
+        projection_metadata,
         variables: Vec::new(),
         scopes: Vec::new(),
         sites: Vec::new(),

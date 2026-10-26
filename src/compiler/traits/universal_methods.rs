@@ -18,6 +18,35 @@ pub(super) struct UniversalMethodEvidence {
 }
 
 impl ValidatedFacts {
+    /// Admission-only reuse for one immutable original caller. The RefCell
+    /// borrow ends before any recursive normalization/equality/dependency work.
+    pub(in crate::compiler) fn normalize_substituted_projection_type_scratch(
+        &self,
+        ty: &Ty,
+        budget: &PlanBudget,
+        original: &ValidatedFacts,
+        scratch: &std::cell::RefCell<TraitScratch>,
+    ) -> Result<Ty> {
+        self.world.check_facts(self, false)?;
+        self.world.check_nominal_replay_issuer()?;
+        if !std::ptr::eq(self, original) || !self.budget().same_authority(budget) {
+            return Err(FactsError::invalid(
+                budget,
+                "solver metadata changed original caller or planning authority",
+            ));
+        }
+        if !self.world.type_contains_projection(ty, 0)? {
+            return Ok(ty.clone());
+        }
+        {
+            let mut admission = scratch.try_borrow_mut().map_err(|_| {
+                FactsError::invalid(budget, "recursive solver metadata admission borrow")
+            })?;
+            self.validate_ty_metadata_scratch(ty, budget, &mut admission)?;
+        }
+        self.normalize_substituted_projection_type_after_metadata(ty, budget)
+    }
+
     /// Structural substitution may close an opaque associated family. Resolve
     /// it before executable consumers such as cleanup planning inspect it.
     /// Schema substitution deliberately does not call this entry point.
@@ -31,6 +60,14 @@ impl ValidatedFacts {
             return Ok(ty.clone());
         }
         self.validate_ty_metadata_with_budget(ty, budget)?;
+        self.normalize_substituted_projection_type_after_metadata(ty, budget)
+    }
+
+    fn normalize_substituted_projection_type_after_metadata(
+        &self,
+        ty: &Ty,
+        budget: &PlanBudget,
+    ) -> Result<Ty> {
         let context = ProofContext::from_facts(self);
         self.world
             .map_universal_projection_type(ty, self.env(), 0, &mut |projection| {
@@ -799,6 +836,268 @@ mod tests {
                 method_args: Arc::from([]),
             },
         )
+    }
+
+    fn admission_projection(facts: &ValidatedFacts, call: &TraitCall) -> Ty {
+        facts
+            .world()
+            .instantiate_universal_required_item(call, facts)
+            .unwrap()
+            .0
+            .signature
+            .result
+    }
+
+    #[test]
+    fn solver_metadata_admission_warm_rejects_scope_source_and_borrow_changes() {
+        let (world, facts, call) = fixture();
+        let ty = admission_projection(&facts, &call);
+        assert!(matches!(ty, Ty::AssociatedType(_)));
+        let scratch = std::cell::RefCell::new(TraitScratch::default());
+        for _ in 0..2 {
+            let normal = facts
+                .normalize_substituted_projection_type_scratch(
+                    &ty,
+                    facts.budget(),
+                    &facts,
+                    &scratch,
+                )
+                .unwrap();
+            assert!(world.eq_ty(&normal, &ty, 0).unwrap());
+            assert!(scratch.try_borrow_mut().is_ok());
+        }
+        let nested = Ty::Tuple(Arc::from([ty.clone(), Ty::Bool]));
+        let nested_normal = facts
+            .normalize_substituted_projection_type_scratch(
+                &nested,
+                facts.budget(),
+                &facts,
+                &scratch,
+            )
+            .unwrap();
+        assert!(world.eq_ty(&nested_normal, &nested, 0).unwrap());
+        let rows = scratch.borrow().proofs.replays.replay_counts();
+        assert!(rows.2 > 0);
+        // Even an equivalent cloned facts value is not this solver's original.
+        // Ordered environment, subject, phase and registry are inseparable from it.
+        for mode in 0..4 {
+            let mut changed = facts.as_ref().clone();
+            match mode {
+                0 => {}
+                1 => changed.subject = FactsSubject::SchemaItem(facts.declaration()),
+                2 => changed.predicates = world.empty.clone(),
+                _ => changed.closure_mode = Some(ir::ClosureKind::FnOnce),
+            }
+            assert!(
+                changed
+                    .normalize_substituted_projection_type_scratch(
+                        &ty,
+                        facts.budget(),
+                        &facts,
+                        &scratch,
+                    )
+                    .is_err()
+            );
+            assert_eq!(scratch.borrow().proofs.replays.replay_counts(), rows);
+        }
+        let (_, foreign, _) = fixture();
+        assert!(
+            foreign
+                .normalize_substituted_projection_type_scratch(
+                    &ty,
+                    foreign.budget(),
+                    &facts,
+                    &scratch,
+                )
+                .is_err()
+        );
+        let foreign_budget = PlanBudget::default();
+        assert!(
+            facts
+                .normalize_substituted_projection_type_scratch(
+                    &ty,
+                    &foreign_budget,
+                    &facts,
+                    &scratch,
+                )
+                .is_err()
+        );
+        let Ty::AssociatedType(projection) = &ty else {
+            unreachable!()
+        };
+        let mut forged = projection.as_ref().clone();
+        // A real method declaration cannot be forged into an associated item.
+        forged.item = call.item;
+        assert!(
+            facts
+                .normalize_substituted_projection_type_scratch(
+                    &Ty::AssociatedType(Arc::new(forged)),
+                    facts.budget(),
+                    &facts,
+                    &scratch,
+                )
+                .is_err()
+        );
+        assert_eq!(scratch.borrow().proofs.replays.replay_counts(), rows);
+        let held = scratch.borrow_mut();
+        assert!(
+            facts
+                .normalize_substituted_projection_type_scratch(
+                    &ty,
+                    facts.budget(),
+                    &facts,
+                    &scratch,
+                )
+                .is_err()
+        );
+        drop(held);
+        facts
+            .normalize_substituted_projection_type_scratch(&ty, facts.budget(), &facts, &scratch)
+            .unwrap();
+    }
+
+    #[test]
+    fn solver_metadata_admission_warm_depth_remains_checked() {
+        let (_, facts, call) = fixture();
+        let ty = admission_projection(&facts, &call);
+        let scratch = std::cell::RefCell::new(TraitScratch::default());
+        facts
+            .normalize_substituted_projection_type_scratch(&ty, facts.budget(), &facts, &scratch)
+            .unwrap();
+        let rows = scratch.borrow().proofs.replays.replay_counts();
+        let mut nested = ty.clone();
+        for _ in 0..=facts.budget().limits().depth {
+            nested = Ty::Ref {
+                kind: ir::BorrowKind::Shared,
+                referent: Arc::new(nested),
+            };
+        }
+        let failure = facts.budget().first_resource_failure();
+        assert_eq!(failure, None);
+        let error = facts
+            .normalize_substituted_projection_type_scratch(
+                &nested,
+                facts.budget(),
+                &facts,
+                &scratch,
+            )
+            .unwrap_err();
+        assert!(error.is_resource());
+        assert_eq!(
+            error.to_string(),
+            "associated type traversal depth limit exceeded"
+        );
+        assert_eq!(facts.budget().first_resource_failure(), failure);
+        assert_eq!(scratch.borrow().proofs.replays.replay_counts(), rows);
+        // Static traversal exhaustion rejects this input without poisoning the ledger.
+        facts
+            .normalize_substituted_projection_type_scratch(&ty, facts.budget(), &facts, &scratch)
+            .unwrap();
+        assert_eq!(scratch.borrow().proofs.replays.replay_counts(), rows);
+        assert_eq!(facts.budget().first_resource_failure(), failure);
+    }
+
+    #[test]
+    fn solver_metadata_admission_warm_exact_work_short_and_live_poison() {
+        for short in [false, true] {
+            let (_, facts, call) = fixture();
+            let ty = admission_projection(&facts, &call);
+            let scratch = std::cell::RefCell::new(TraitScratch::default());
+            facts
+                .normalize_substituted_projection_type_scratch(
+                    &ty,
+                    facts.budget(),
+                    &facts,
+                    &scratch,
+                )
+                .unwrap();
+            let before = facts.budget().usage_snapshot().work;
+            facts
+                .normalize_substituted_projection_type_scratch(
+                    &ty,
+                    facts.budget(),
+                    &facts,
+                    &scratch,
+                )
+                .unwrap();
+            let cost = facts
+                .budget()
+                .usage_snapshot()
+                .work
+                .checked_sub(before)
+                .unwrap();
+            assert!(cost > 0);
+            let rows = scratch.borrow().proofs.replays.replay_counts();
+            let filler = facts
+                .budget()
+                .limits()
+                .work
+                .checked_sub(facts.budget().usage_snapshot().work)
+                .and_then(|remaining| remaining.checked_sub(cost))
+                .and_then(|remaining| remaining.checked_add(usize::from(short)))
+                .unwrap();
+            facts.budget().charge_work(filler).unwrap();
+            let result = facts.normalize_substituted_projection_type_scratch(
+                &ty,
+                facts.budget(),
+                &facts,
+                &scratch,
+            );
+            assert_eq!(result.is_err(), short);
+            assert_eq!(scratch.borrow().proofs.replays.replay_counts(), rows);
+            if short {
+                assert_eq!(
+                    facts.budget().first_resource_failure().unwrap().kind,
+                    ir::ResourceBudgetKind::Work
+                );
+                let failure = facts.budget().first_resource_failure();
+                assert!(
+                    facts
+                        .normalize_substituted_projection_type_scratch(
+                            &ty,
+                            facts.budget(),
+                            &facts,
+                            &scratch,
+                        )
+                        .is_err()
+                );
+                assert_eq!(facts.budget().first_resource_failure(), failure);
+            }
+        }
+        for planner in [false, true] {
+            let (world, facts, call) = fixture();
+            let ty = admission_projection(&facts, &call);
+            let scratch = std::cell::RefCell::new(TraitScratch::default());
+            facts
+                .normalize_substituted_projection_type_scratch(
+                    &ty,
+                    facts.budget(),
+                    &facts,
+                    &scratch,
+                )
+                .unwrap();
+            let rows = scratch.borrow().proofs.replays.replay_counts();
+            if planner {
+                facts.budget().poison_ledger_for_tests();
+            } else {
+                assert!(
+                    world
+                        .catalog
+                        .modules()
+                        .budget()
+                        .charge(crate::compiler::expansion_budget::Counter::Work, u64::MAX,)
+                        .is_err()
+                );
+            }
+            for _ in 0..2 {
+                assert!(
+                    matches!(facts.normalize_substituted_projection_type_scratch(
+                    &ty, facts.budget(), &facts, &scratch,
+                ), Err(error) if error.is_resource())
+                );
+                assert_eq!(scratch.borrow().proofs.replays.replay_counts(), rows);
+            }
+        }
     }
 
     #[test]

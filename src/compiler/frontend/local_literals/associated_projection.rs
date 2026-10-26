@@ -270,10 +270,12 @@ impl<'s> Solver<'_, '_, 's> {
                         return Ok(Some(equality.ty().clone()));
                     }
                 }
-                return facts
-                    .normalize_substituted_projection_type(&projection, &plan.budget)
-                    .map(Some)
-                    .map_err(|error| error.into_legacy_diagnostic(&plan.budget));
+                return self
+                    .projection_metadata
+                    .as_ref()
+                    .ok_or_else(|| "missing original solver metadata scope".to_string())?
+                    .normalize(facts, &projection, &plan.budget)
+                    .map(Some);
             }
             return Ok(Some(projection));
         }
@@ -282,9 +284,11 @@ impl<'s> Solver<'_, '_, 's> {
             caller.validate_ty_with_budget(&projection, &plan.budget)?;
             return Ok(Some(projection));
         };
-        let normal = facts
-            .normalize_substituted_projection_type(&projection, &plan.budget)
-            .map_err(|error| error.into_legacy_diagnostic(&plan.budget))?;
+        let normal = self
+            .projection_metadata
+            .as_ref()
+            .ok_or_else(|| "missing original solver metadata scope".to_string())?
+            .normalize(facts, &projection, &plan.budget)?;
         caller.validate_ty_with_budget(&normal, &plan.budget)?;
         Ok(Some(normal))
     }

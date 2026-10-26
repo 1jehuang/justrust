@@ -120,6 +120,11 @@ fn inspect_with_opaque_hint(
     checker.declaration = Some(declaration);
     let malformed = Expr::NativeSyscall(Vec::new());
     let mut solver = Solver {
+        projection_metadata: checker
+            .facts()
+            .validated()
+            .map(ProjectionMetadata::new)
+            .transpose()?,
         checker: &checker,
         variables: Vec::new(),
         scopes: vec![HashMap::new()],
