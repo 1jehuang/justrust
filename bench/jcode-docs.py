@@ -49,7 +49,8 @@ def apply_candidate(root, patch, allowed):
     if not patch:
         raise ValueError("candidate patch is empty")
     git(root, "init", "-q")
-    git(root, "add", "-A")
+    # Archive files can be tracked upstream despite matching .gitignore.
+    git(root, "add", "--force", "-A")
     tree = git(root, "write-tree").decode().strip()
     subprocess.run(["git", "-C", str(root), "apply", "--index", "--binary", "-"],
                    input=patch, check=True)

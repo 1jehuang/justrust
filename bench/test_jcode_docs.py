@@ -20,6 +20,7 @@ class DocsBenchmarkTests(unittest.TestCase):
             with self.subTest(allowed=allowed), tempfile.TemporaryDirectory() as d:
                 root = Path(d)
                 (root / "src.rs").write_text("old\n")
+                (root / ".gitignore").write_text("src.rs\n")
                 if succeeds:
                     self.assertEqual(driver.apply_candidate(root, patch_bytes, allowed), ["src.rs"])
                     self.assertEqual((root / "src.rs").read_text(), "new\n")
