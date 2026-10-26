@@ -12,7 +12,7 @@ The existing release workflow is not replaced by these helpers.
 | `x86_64-pc-windows-gnu` | Managed MinGW and validated PE transfer | Prior full-feature Jcode cross-build trial exists, but this is not the official MSVC release target. See [trial](jcode-hosted-release-trial-20261026.md). |
 | `x86_64-pc-windows-msvc`, `aarch64-pc-windows-msvc` | Pinned cargo-xwin configuration and architecture-specific PE validation | Actual hosted requests reached setup and correctly refused absent explicit Microsoft SDK-license consent. No MSVC Jcode artifact claimed. |
 | `x86_64-apple-darwin`, `aarch64-apple-darwin` | Inventory-checked host-local SDK import, pinned Zig, architecture-specific Mach-O validation | Actual hosted requests correctly refused absent a managed Apple SDK. No full macOS Jcode artifact claimed. |
-| `aarch64-unknown-linux-gnu` | Rebuilt standard-library and target-only emulated-TLS enforcement | Initial Zig probe blocked by the mandatory Cortex-A53 linker workaround. Native GNU cross-toolchain replacement is in progress. No release-readiness claim yet. |
+| `aarch64-unknown-linux-gnu` | Managed GNU cross-toolchain, rebuilt standard library and target-only emulated-TLS enforcement | Full-feature Jcode built and downloaded, including vendored OpenSSL. ELF/TLS structure verified, requires glibc 2.39. Native execution not tested. See [trial](jcode-arm64-hosted-trial-20261026.md). |
 
 For MSVC, see [managed Windows MSVC](managed-windows-msvc.md). The license
 consent is an operator decision, not an environment variable that the agent may
@@ -28,8 +28,9 @@ succeed. Preserve the official release's rebuilt-std/emulated-TLS contract.
 
 ## Verification so far
 
-The integrated platform implementation passed 805 tests, with four ignored and
-none failed, on hosted run `20261026-151043412-611366`. This is source-level
+The integrated native GNU platform implementation passed 808 tests, with five ignored and
+none failed, on hosted run `20261026-151514353-642553`. Strict clippy passed
+on run `20261026-151526211-642552`. This is source-level
 regression evidence, not execution of Windows, macOS, or ARM64 release binaries.
 The actual Windows/MSVC and Darwin requests were run with remote execution
 required and returned nonzero for their missing prerequisites. No fallback

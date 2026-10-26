@@ -8216,3 +8216,17 @@ before atomic replacement and before advertising cached artifacts for reuse.
 Hosted regression `20261026-145854935-539475` passed 788 tests with 4 ignored.
 Commands, hashes, remaining platform gates and the reusable container check
 are in `docs/hosted-glibc217.md` and `ci/check-jcode-glibc217.sh`.
+
+## Hosted ARM64 Jcode release compilation (2026-10-26)
+
+Full-feature Jcode at `eaba9240aa4a02401a113debb3cce463bf335074` now cross-builds
+on hosted Linux x86_64 using pinned GNU tools, rebuilt std and emulated TLS.
+The first run `20261026-151916181-673081` exposed missing cross OpenSSL;
+the existing vendored-OpenSSL feature fixes this without disabling PDF/Bedrock.
+
+Run `20261026-152034595-679135` took 139.78s build wall time, 154.31s including
+the trial script. Warm run `20261026-152323026-695569` had 630 fresh units,
+zero compiled, and 2.2s hosted client time with the same artifact SHA256.
+The executable is AArch64 ELF64 with no PT_TLS and requires GLIBC_2.39.
+Native execution, Termux compatibility and release publication remain untested.
+See `docs/jcode-arm64-hosted-trial-20261026.md` for exact flags and artifact hash.
