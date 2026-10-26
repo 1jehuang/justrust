@@ -1193,9 +1193,9 @@ impl Summary {
             return None;
         }
         match self.subcommand.as_str() {
-            "build" | "b" | "zigbuild" => Some("build succeeded, tests not run"),
-            "check" | "c" => Some("check succeeded, tests not run"),
-            "clippy" => Some("lint succeeded, tests not run"),
+            "build" | "b" | "zigbuild" => Some("ok: build succeeded, tests not run"),
+            "check" | "c" => Some("ok: check succeeded, tests not run"),
+            "clippy" => Some("ok: lint succeeded, tests not run"),
             "test" | "t"
                 if self
                     .args
@@ -1203,7 +1203,7 @@ impl Summary {
                     .take_while(|arg| arg.as_str() != "--")
                     .any(|arg| arg == "--no-run") =>
             {
-                Some("test binaries built, tests not run (--no-run)")
+                Some("ok: test binaries built, tests not run (--no-run)")
             }
             _ => None,
         }
@@ -1522,20 +1522,20 @@ mod tests {
     #[test]
     fn compile_only_commands_disclose_tests_not_run() {
         for (command, args, expected) in [
-            ("build", vec![], "build succeeded, tests not run"),
-            ("b", vec![], "build succeeded, tests not run"),
-            ("zigbuild", vec![], "build succeeded, tests not run"),
-            ("check", vec![], "check succeeded, tests not run"),
-            ("clippy", vec![], "lint succeeded, tests not run"),
+            ("build", vec![], "ok: build succeeded, tests not run"),
+            ("b", vec![], "ok: build succeeded, tests not run"),
+            ("zigbuild", vec![], "ok: build succeeded, tests not run"),
+            ("check", vec![], "ok: check succeeded, tests not run"),
+            ("clippy", vec![], "ok: lint succeeded, tests not run"),
             (
                 "test",
                 vec!["--no-run"],
-                "test binaries built, tests not run (--no-run)",
+                "ok: test binaries built, tests not run (--no-run)",
             ),
             (
                 "t",
                 vec!["--release", "--no-run"],
-                "test binaries built, tests not run (--no-run)",
+                "ok: test binaries built, tests not run (--no-run)",
             ),
         ] {
             let summary = Summary {
@@ -1545,6 +1545,11 @@ mod tests {
             };
             assert_eq!(summary.compile_only_status(), Some(expected));
             assert!(summary.agent_footer(&Default::default()).contains(expected));
+            assert!(
+                summary
+                    .agent_footer(&Default::default())
+                    .starts_with("\njustrust: ok:")
+            );
             assert!(summary.one_line().contains(expected));
         }
     }
