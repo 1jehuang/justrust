@@ -388,8 +388,22 @@ fn raw_lifetimes_preserve_normalized_identity() {
 }
 
 #[test]
-fn warning_only_crate_lints_keep_stock_acceptance() {
-    for source in [
+fn warning_only_crate_lints_crate_attributes() {
+    warning_only_crate_lints_stock_acceptance(0..4);
+}
+
+#[test]
+fn warning_only_crate_lints_item_attributes() {
+    warning_only_crate_lints_stock_acceptance(4..7);
+}
+
+#[test]
+fn warning_only_crate_lints_associated_attributes() {
+    warning_only_crate_lints_stock_acceptance(7..10);
+}
+
+fn warning_only_crate_lints_stock_acceptance(cases: std::ops::Range<usize>) {
+    let sources = [
         "#![warn(missing_debug_implementations)]\npub struct Hidden; fn main(){println!(\"{}\",1);}",
         "#![allow(missing_debug_implementations)] #![forbid(unsafe_code)] fn main(){println!(\"{}\",1);}",
         "#![cfg_attr(all(), warn(missing_debug_implementations))] fn main(){println!(\"{}\",1);}",
@@ -400,9 +414,15 @@ fn warning_only_crate_lints_keep_stock_acceptance() {
         "struct S;impl S{#[doc=\"value\"]#[allow(dead_code)]fn value()->i32{42}}fn main(){println!(\"{}\",S::value());}",
         "trait T{#[doc=\"output\"]#[allow(dead_code)]type A;#[doc=\"value\"]#[warn(dead_code)]const N:u8;}fn main(){println!(\"{}\",1);}",
         "struct S;impl S{#[inline]#[allow(unused_attributes)]fn first()->i32{20}#[warn(dead_code)]#[inline]fn second()->i32{22}}fn main(){println!(\"{}\",S::first()+S::second());}",
-    ] {
+    ];
+    assert!(cases.start < cases.end && cases.end <= sources.len());
+    for source in &sources[cases] {
         stock_native_run(source);
     }
+}
+
+#[test]
+fn warning_only_crate_lints_rejection_boundaries() {
     // Error-level ordinary lints remain explicit boundaries: they are not
     // implemented by the native compiler, even when stock emits no violation.
     for source in [
@@ -2118,37 +2138,96 @@ fn bounded_panic_family_literals_delimiters_and_locations() {
     }
 }
 
-#[test]
-fn bounded_panic_family_exact_grammar_and_diagnostics() {
-    for name in ["unreachable", "todo", "unimplemented"] {
-        for input in [
-            "42",
-            "message",
-            "\"{}\"",
-            "\"{name}\"",
-            "\"message\", 42",
-            "\"message\",,",
-            "\"message\" \"extra\"",
-        ] {
-            for (open, close) in [("(", ")"), ("[", "]"), ("{", "}")] {
+// Expose matrix shards to libtest instead of serializing 126 stock rustc
+// invocations in one test, which otherwise determines the suite's long tail.
+macro_rules! panic_grammar_test {
+    ($test:ident, $name:literal, $open:literal, $close:literal) => {
+        #[test]
+        fn $test() {
+            let (name, open, close) = ($name, $open, $close);
+            for input in [
+                "42",
+                "message",
+                "\"{}\"",
+                "\"{name}\"",
+                "\"message\", 42",
+                "\"message\",,",
+                "\"message\" \"extra\"",
+            ] {
                 let source = format!("fn main(){{{name}!{open}{input}{close}}}");
                 stock_native_reject(&source);
             }
         }
-        stock_native_run(&format!(
-            "fn main(){{if false{{{name}!(\"{{{{ok}}}}\\n\",);}}}}"
-        ));
-        stock_native_run(&format!("fn main(){{if false{{{name}!(r#\"raw\"#);}}}}"));
-        for input in [",", ",,", "\"message\";", "(\"message\")", "b\"bytes\""] {
-            assert!(
-                parse(&format!("fn main(){{{name}!({input})}}")).is_err(),
-                "{name} input={input}"
-            );
+    };
+}
+
+panic_grammar_test!(
+    bounded_panic_grammar_unreachable_paren,
+    "unreachable",
+    "(",
+    ")"
+);
+panic_grammar_test!(
+    bounded_panic_grammar_unreachable_bracket,
+    "unreachable",
+    "[",
+    "]"
+);
+panic_grammar_test!(
+    bounded_panic_grammar_unreachable_brace,
+    "unreachable",
+    "{",
+    "}"
+);
+panic_grammar_test!(bounded_panic_grammar_todo_paren, "todo", "(", ")");
+panic_grammar_test!(bounded_panic_grammar_todo_bracket, "todo", "[", "]");
+panic_grammar_test!(bounded_panic_grammar_todo_brace, "todo", "{", "}");
+panic_grammar_test!(
+    bounded_panic_grammar_unimplemented_paren,
+    "unimplemented",
+    "(",
+    ")"
+);
+panic_grammar_test!(
+    bounded_panic_grammar_unimplemented_bracket,
+    "unimplemented",
+    "[",
+    "]"
+);
+panic_grammar_test!(
+    bounded_panic_grammar_unimplemented_brace,
+    "unimplemented",
+    "{",
+    "}"
+);
+
+macro_rules! panic_grammar_valid_test {
+    ($test:ident, $name:literal) => {
+        #[test]
+        fn $test() {
+            bounded_panic_grammar_valid_and_parser_boundaries($name);
         }
-        good(&format!(
-            "#[cfg(any())]fn absent(){{{name}!(unknown + 2);}}fn main(){{}}"
-        ));
+    };
+}
+
+panic_grammar_valid_test!(bounded_panic_grammar_valid_unreachable, "unreachable");
+panic_grammar_valid_test!(bounded_panic_grammar_valid_todo, "todo");
+panic_grammar_valid_test!(bounded_panic_grammar_valid_unimplemented, "unimplemented");
+
+fn bounded_panic_grammar_valid_and_parser_boundaries(name: &str) {
+    stock_native_run(&format!(
+        "fn main(){{if false{{{name}!(\"{{{{ok}}}}\\n\",);}}}}"
+    ));
+    stock_native_run(&format!("fn main(){{if false{{{name}!(r#\"raw\"#);}}}}"));
+    for input in [",", ",,", "\"message\";", "(\"message\")", "b\"bytes\""] {
+        assert!(
+            parse(&format!("fn main(){{{name}!({input})}}")).is_err(),
+            "{name} input={input}"
+        );
     }
+    good(&format!(
+        "#[cfg(any())]fn absent(){{{name}!(unknown + 2);}}fn main(){{}}"
+    ));
 }
 
 #[test]

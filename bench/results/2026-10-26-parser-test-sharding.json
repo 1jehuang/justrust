@@ -1,0 +1,69 @@
+{
+  "scope": "Targeted real differential-test scheduling only, not compiler or comprehensive session-weighted performance",
+  "date": "2026-10-26",
+  "base_revision": "6300ff4d9c3ccac01cc837d59ed9f137a7f05243",
+  "conditions": {
+    "execution": "justrust hosted default, 96 logical CPUs, default libtest parallelism",
+    "bootstrap_toolchain": "nightly-2026-10-08",
+    "stock_oracle": "rustc 1.98.1, verified by tests/support/stock_rustc.rs",
+    "working_tree": "Shared checkout with pre-existing compiler feature edits. Only parser_tests.rs changed for this optimization. Not an isolated pinned benchmark.",
+    "comparison": "Compare test execution, excluding recompilation and hosted sync. Single observations with concurrent foreign load, not a statistical benchmark. The same stock invocations, CHECK/BUILD, workers 1/8, runtime comparisons and invalid-input assertions remain. Shards let libtest schedule existing work, they do not skip or cache it.",
+    "general_speed_claim": false
+  },
+  "panic_grammar": {
+    "before_command": "justrust test --lib bounded_panic_family_exact_grammar_and_diagnostics -- --exact compiler::frontend::parser_tests::bounded_panic_family_exact_grammar_and_diagnostics",
+    "before": {
+      "run_id": "20261026-141950703-276647",
+      "passed": 1,
+      "test_run_seconds": 75.603,
+      "summed_test_seconds": 75.591,
+      "compile_seconds": 0.0,
+      "average_foreign_cores": 9.446
+    },
+    "after_command": "justrust test --lib bounded_panic_grammar",
+    "after": {
+      "run_id": "20261026-142455975-317127",
+      "passed": 12,
+      "test_run_seconds": 6.709,
+      "summed_test_seconds": 73.157,
+      "compile_seconds": 18.768,
+      "average_foreign_cores": 15.076
+    },
+    "coverage": "3 macros x 3 delimiters x 7 invalid inputs, both stock emit modes and native workers 1/8. Each macro also retains 2 stock/native valid-run sources, 5 parser rejections and cfg-disabled acceptance."
+  },
+  "warning_lints": {
+    "before_command": "justrust test --lib warning_only_crate_lints_keep_stock_acceptance",
+    "before": {
+      "run_id": "20261026-142347818-308216",
+      "passed": 1,
+      "test_run_seconds": 23.995,
+      "summed_test_seconds": 23.975,
+      "compile_seconds": 0.0,
+      "average_foreign_cores": 17.511
+    },
+    "after_command": "justrust test --lib warning_only_crate_lints",
+    "after": {
+      "run_id": "20261026-142523241-320206",
+      "passed": 4,
+      "test_run_seconds": 8.731,
+      "summed_test_seconds": 23.921,
+      "compile_seconds": 0.0,
+      "average_foreign_cores": 5.588
+    },
+    "coverage": "All 10 stock/native valid-run sources, 2 unsupported error-level lint sources at workers 1/8 and CHECK/BUILD, and 5 stock/native invalid sources retained."
+  },
+  "validation": {
+    "check_run_id": "20261026-142455203-317022",
+    "graph_integrity_run_id": "20261026-142542987-316631",
+    "graph_integrity": "17 passed, 1 pre-existing ignored",
+    "full_library_run_id": "20261026-142553977-323879",
+    "full_library": "2054 passed, 1 pre-existing ignored, zero compilation, test execution 34.06 seconds, hosted end-to-end 35.3 seconds",
+    "remaining_full_library_long_tail": [
+      {"test": "compiler::frontend::canonical_source_replay_tests::root_borrow_identity_inference_keeps_source_and_loan_authority", "seconds": 33.65},
+      {"test": "compiler::frontend::native_adapter::tests::matcher_only_punctuation_is_deferred_without_semantic_admission", "seconds": 33.45},
+      {"test": "compiler::frontend::parser_tests::literal_output_lexical_shadowing_never_falls_back_to_builtin", "seconds": 24.37},
+      {"test": "compiler::frontend::parser_tests::bounded_panic_family_shadowing_never_falls_back", "seconds": 24.36},
+      {"test": "compiler::frontend::parser_tests::builtin_assert_does_not_reinterpret_shadowing_or_unsupported_messages", "seconds": 23.59}
+    ]
+  }
+}
