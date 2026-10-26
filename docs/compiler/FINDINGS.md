@@ -12042,3 +12042,30 @@ An earlier pair was also mixed and overlapped a short hosted bootstrap build,
 so it is not used to promote the change. Reject the additional directory and
 retain the simpler shipped lookup. Faster lookup counters alone are not
 evidence of faster compilation, and no 2-10x gain follows from this experiment.
+
+### Rejected source-publication replay cache (2026-10-26)
+
+A transient caller-bound nominal replay arena retained successful read proofs
+across source-publication lookup attempts. Exact caller/world/environment/budget
+checks, forged-input and sticky-poison tests, graph integrity, and unchanged
+Adler2 compatibility passed. The unchanged 20-program matrix remained 15/20,
+with no new successful program.
+
+Retain the simpler implementation: measured end-to-end gains were not consistent.
+The isolated baseline is committed `522a405c0`, binary SHA
+`058aad1ab47b38677b4fb26543a2695934e4341dd8a3aa1bb24d26c5dea733a0`.
+The candidate SHA is
+`12c1326165b77b2f84b57e914575dc98e57c15a80b85730558cbc72a62a5c8b6`.
+Both used the same 96-core hosted Adler2 protocol described above, seven samples,
+one warmup, seed 20261025, direct process wall, and separate untimed profiles.
+Under `data/runs/frontend-hosted-20261026/`, compare `head-0153.json` against
+`replay-0142.json`, and `head-reverse-0156.json` against
+`replay-reverse-0156.json`, using `python3 bench/suite.py compare`.
+The second pair executes candidate before baseline. At 96 workers, the first
+pair changes CHECK 509.973 to 499.454 ms (-2.06%) and BUILD 586.261 to
+590.880 ms (+0.79%). The reversed pair changes CHECK 496.944 to 496.632 ms
+(-0.06%) and BUILD 584.341 to 584.626 ms (+0.05%). Intermediate worker
+results are mixed or slower. Stock controls in the reversed pair move +4.02%
+CHECK and +0.44% BUILD, so these small changes do not establish a useful win.
+The earlier `integration-0109.json` is retained for historical context only,
+not isolated attribution. No comprehensive workload or 2-10x speedup is claimed.
