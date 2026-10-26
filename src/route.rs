@@ -99,16 +99,25 @@ fn routable(sub: &str) -> bool {
     matches!(sub, "check" | "clippy" | "test")
 }
 
-/// Optimized release builds support native GNU and explicit static musl targets.
+/// Cross execution is never allowed. Windows GNU is explicit build-only.
 fn unsupported_hosted_target(args: &[OsString], env_target: Option<OsString>) -> bool {
     let native = format!("{}-unknown-linux-gnu", std::env::consts::ARCH);
     let musl_build = args
         .first()
         .is_some_and(|a| a == "zigbuild" || a == "build");
+    let strings: Vec<String> = args
+        .iter()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
+    let windows_compile = crate::remote_artifacts::build_target(&strings)
+        == Some(crate::cross_tools::WINDOWS_GNU)
+        && (args.first().is_some_and(|a| a == "build")
+            || crate::remote_artifacts::test_no_run(&strings));
     crate::record::requested_targets(args, env_target)
         .iter()
         .any(|target| {
             target != native.as_str()
+                && !(windows_compile && target == crate::cross_tools::WINDOWS_GNU)
                 && !(musl_build
                     && target
                         .to_str()
@@ -136,6 +145,10 @@ fn routable_build(args: &[String]) -> bool {
             return false;
         }
     } else if let Some(target) = crate::remote_artifacts::build_target(args) {
+        if target == crate::cross_tools::WINDOWS_GNU {
+            // Explicit cross artifacts are requested locally even for debug.
+            return true;
+        }
         let native = format!("{}-unknown-linux-gnu", std::env::consts::ARCH);
         if target != native && !crate::remote_artifacts::musl_target(target) {
             return false;
@@ -685,6 +698,39 @@ mod tests {
             ],
             None
         ));
+    }
+
+    #[test]
+    fn windows_gnu_is_explicit_build_or_compile_only_never_runtime() {
+        let target = "--target=x86_64-pc-windows-gnu";
+        for args in [
+            vec!["build", target],
+            vec!["build", "--release", target],
+            vec!["test", "--no-run", target],
+        ] {
+            let os = args.iter().map(OsString::from).collect::<Vec<_>>();
+            assert!(!unsupported_hosted_target(&os, None), "{args:?}");
+        }
+        assert!(routable_build(&["build".into(), target.into()]));
+        for args in [
+            vec!["test", target],
+            vec!["test", target, "--", "--no-run"],
+            vec!["check", target],
+            vec!["clippy", target],
+            vec!["build", "--target=x86_64-pc-windows-msvc"],
+        ] {
+            let os = args.iter().map(OsString::from).collect::<Vec<_>>();
+            assert!(unsupported_hosted_target(&os, None), "{args:?}");
+        }
+        assert!(unsupported_hosted_target(
+            &["build".into()],
+            Some(crate::cross_tools::WINDOWS_GNU.into())
+        ));
+        assert!(!routable_build(&[
+            "build".into(),
+            target.into(),
+            target.into()
+        ]));
     }
 
     #[test]

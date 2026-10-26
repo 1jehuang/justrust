@@ -9,6 +9,20 @@ fn strict_remote_rejects_local_and_unsupported_builds_before_cargo() {
         vec!["build", "--local", "--release"],
         vec!["build", "--remote"],
         vec!["test", "--local", "--no-run"],
+        vec!["test", "--remote", "--target=x86_64-pc-windows-gnu"],
+        vec![
+            "test",
+            "--remote",
+            "--target=x86_64-pc-windows-gnu",
+            "--",
+            "--no-run",
+        ],
+        vec![
+            "test",
+            "--remote",
+            "--no-run",
+            "--target=x86_64-pc-windows-msvc",
+        ],
         vec![
             "test",
             "--remote",

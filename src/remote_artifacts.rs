@@ -110,7 +110,11 @@ fn artifact_name(n: &str, mode: u32) -> bool {
     {
         return false;
     }
-    n.ends_with(".so") || n.contains(".so.") || mode & 0o111 != 0
+    n.ends_with(".so")
+        || n.contains(".so.")
+        || n.ends_with(".exe")
+        || n.ends_with(".dll")
+        || mode & 0o111 != 0
 }
 
 /// Artifacts in a profile dir: top-level files and `examples/`.
@@ -192,7 +196,7 @@ pub(crate) fn test_no_run(args: &[String]) -> bool {
 /// Resolve only Cargo's selected test executables, including fresh artifacts.
 /// Source paths are not artifact authorities: every executable must be a real
 /// file within this run's resolved target directory, without symlink escapes.
-fn selected_tests(dir: &Path, output: &str) -> Result<Vec<serde_json::Value>> {
+fn selected_tests(dir: &Path, output: &str, windows: bool) -> Result<Vec<serde_json::Value>> {
     let root = dir
         .canonicalize()
         .context("test target directory missing")?;
@@ -207,7 +211,10 @@ fn selected_tests(dir: &Path, output: &str) -> Result<Vec<serde_json::Value>> {
             continue;
         };
         if value["reason"] == "build-finished" {
-            success = value["success"] == true;
+            if value["success"] != true {
+                bail!("test artifact stream contains an unsuccessful Cargo build-finished event");
+            }
+            success = true;
         }
         if value["reason"] != "compiler-artifact" || value["profile"]["test"] != true {
             continue;
@@ -223,7 +230,11 @@ fn selected_tests(dir: &Path, output: &str) -> Result<Vec<serde_json::Value>> {
         if !safe_name(name) || !path.is_file() || path.canonicalize()? != root.join(relative) {
             bail!("unsafe selected test executable {executable:?}");
         }
-        if crate::sys::mode(&std::fs::metadata(path)?, path) & 0o111 == 0 {
+        if windows {
+            if path.extension().is_none_or(|e| e != "exe") {
+                bail!("selected Windows test artifact is not an .exe: {executable}");
+            }
+        } else if crate::sys::mode(&std::fs::metadata(path)?, path) & 0o111 == 0 {
             bail!("selected test artifact is not executable: {executable}");
         }
         selected.insert(name.to_owned(), value);
@@ -262,7 +273,12 @@ fn selected_run(req: &Request) -> Result<(PathBuf, Vec<serde_json::Value>)> {
     } else {
         crate::slots::target_dir_in_result(Path::new(&summary.cwd), &os)?
     };
-    let artifacts = selected_tests(&dir, &std::fs::read_to_string(run.join("output.jsonl"))?)?;
+    let windows = build_target(&summary.args) == Some(crate::cross_tools::WINDOWS_GNU);
+    let artifacts = selected_tests(
+        &dir,
+        &std::fs::read_to_string(run.join("output.jsonl"))?,
+        windows,
+    )?;
     Ok((dir, artifacts))
 }
 
@@ -559,10 +575,35 @@ fn check_native_test(data: &[u8]) -> Result<()> {
     Ok(())
 }
 
+fn check_windows(data: &[u8], executable: bool) -> Result<()> {
+    use object::{Object, ObjectKind, ObjectSection};
+    let file = object::File::parse(data).context("expected Windows PE artifact")?;
+    if file.format() != object::BinaryFormat::Pe
+        || file.architecture() != object::Architecture::X86_64
+        || !file.is_64()
+        || !matches!(file.flags(), object::FileFlags::Coff { characteristics } if characteristics & object::pe::IMAGE_FILE_EXECUTABLE_IMAGE != 0)
+        || !matches!(file.kind(), ObjectKind::Executable | ObjectKind::Dynamic)
+        || (executable && file.kind() != ObjectKind::Executable)
+    {
+        bail!(
+            "artifact is not a matching Windows PE x86-64 {}",
+            if executable { "executable" } else { "image" }
+        );
+    }
+    for section in file.sections() {
+        section
+            .data()
+            .context("invalid Windows PE section extent")?;
+    }
+    Ok(())
+}
+
 enum Validation<'a> {
     NativeBuild,
     Musl(&'a str),
     Test,
+    WindowsBuild,
+    WindowsTest,
 }
 
 fn apply(
@@ -574,7 +615,7 @@ fn apply(
     data: &[u8],
     validation: Validation<'_>,
 ) -> Result<PathBuf> {
-    let compile_only = matches!(validation, Validation::Test);
+    let compile_only = matches!(validation, Validation::Test | Validation::WindowsTest);
     if !safe_name(name) {
         bail!("unsafe artifact name {name:?}");
     }
@@ -616,6 +657,10 @@ fn apply(
         match validation {
             Validation::Test => check_native_test(&std::fs::read(&tmp)?)?,
             Validation::Musl(target) => check_static_musl(&std::fs::read(&tmp)?, target)?,
+            Validation::WindowsBuild => {
+                check_windows(&std::fs::read(&tmp)?, name.ends_with(".exe"))?
+            }
+            Validation::WindowsTest => check_windows(&std::fs::read(&tmp)?, true)?,
             Validation::NativeBuild if mode & 0o111 != 0 || name.contains(".so") => {
                 check_libs(&tmp)?
             }
@@ -660,6 +705,7 @@ fn fetch_inner(
         profile_dir(&cwd, args)?
     };
     let musl = build_target(args).filter(|target| musl_target(target));
+    let windows = build_target(args) == Some(crate::cross_tools::WINDOWS_GNU);
     let mut records = load_records();
     // A newer locally built file is not evidence that it is this hosted
     // release. Only reuse files with known remote provenance for musl.
@@ -669,7 +715,7 @@ fn fetch_inner(
         have_list(&dir, &records)
     }
     .into_iter()
-    .filter(|h| musl.is_none() || h.id.is_some())
+    .filter(|h| (musl.is_none() && !windows) || h.id.is_some())
     .collect();
     let backend = crate::remote_backend::load().context("no remote machine configured")?;
     let t = backend.ensure_ready()?;
@@ -708,7 +754,7 @@ fn fetch_inner(
             }
             match serde_json::from_str::<Frame>(&line).context("bad artifact frame")? {
                 Frame::Hello { arch, dir } => {
-                    if musl.is_none() && arch != std::env::consts::ARCH {
+                    if musl.is_none() && !windows && arch != std::env::consts::ARCH {
                         bail!(
                             "the machine builds for {arch}, this machine is {}",
                             std::env::consts::ARCH
@@ -768,7 +814,11 @@ fn fetch_inner(
                     }
                     let mut data = vec![0; len as usize];
                     r.read_exact(&mut data)?;
-                    let validation = if test_run.is_some() {
+                    let validation = if windows && test_run.is_some() {
+                        Validation::WindowsTest
+                    } else if windows {
+                        Validation::WindowsBuild
+                    } else if test_run.is_some() {
                         Validation::Test
                     } else if let Some(target) = musl {
                         Validation::Musl(target)
@@ -864,9 +914,85 @@ pub fn available() -> bool {
 mod tests {
     use super::*;
 
+    fn pe_fixture(machine: u16, dll: bool) -> Vec<u8> {
+        let mut bytes = vec![0; 1024];
+        bytes[..2].copy_from_slice(b"MZ");
+        bytes[60..64].copy_from_slice(&128u32.to_le_bytes());
+        bytes[128..132].copy_from_slice(b"PE\0\0");
+        bytes[132..134].copy_from_slice(&machine.to_le_bytes());
+        bytes[134..136].copy_from_slice(&1u16.to_le_bytes());
+        bytes[148..150].copy_from_slice(&240u16.to_le_bytes());
+        bytes[150..152].copy_from_slice(&(if dll { 0x2022u16 } else { 0x22u16 }).to_le_bytes());
+        bytes[152..154].copy_from_slice(&0x20bu16.to_le_bytes());
+        bytes[184..188].copy_from_slice(&4096u32.to_le_bytes());
+        bytes[188..192].copy_from_slice(&512u32.to_le_bytes());
+        bytes[208..212].copy_from_slice(&8192u32.to_le_bytes());
+        bytes[212..216].copy_from_slice(&512u32.to_le_bytes());
+        bytes[260..264].copy_from_slice(&16u32.to_le_bytes());
+        bytes[392..397].copy_from_slice(b".text");
+        bytes[400..404].copy_from_slice(&1u32.to_le_bytes());
+        bytes[404..408].copy_from_slice(&4096u32.to_le_bytes());
+        bytes[408..412].copy_from_slice(&512u32.to_le_bytes());
+        bytes[412..416].copy_from_slice(&512u32.to_le_bytes());
+        bytes[428..432].copy_from_slice(&0x60000020u32.to_le_bytes());
+        bytes
+    }
+
+    #[test]
+    fn windows_artifacts_require_x86_64_pe_and_tests_cannot_be_dlls() {
+        check_windows(&pe_fixture(0x8664, false), true).unwrap();
+        assert!(check_windows(&pe_fixture(0x8664, true), false).is_ok());
+        assert!(check_windows(&pe_fixture(0x8664, true), true).is_err());
+        assert!(check_windows(&pe_fixture(0xaa64, false), true).is_err());
+        assert!(check_windows(b"#!/bin/sh\necho not a PE", true).is_err());
+        assert!(
+            check_windows(
+                &elf_fixture(object::elf::EM_X86_64, object::elf::PT_LOAD, false),
+                true
+            )
+            .is_err()
+        );
+        assert!(artifact_name("test.exe", 0o644));
+        assert!(artifact_name("runtime.dll", 0o644));
+        let mut not_executable = pe_fixture(0x8664, false);
+        not_executable[150..152].copy_from_slice(&0u16.to_le_bytes());
+        assert!(check_windows(&not_executable, true).is_err());
+        assert!(check_windows(&pe_fixture(0x8664, false)[..512], true).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn selected_windows_test_needs_exe_not_unix_executable_mode() {
+        let root = std::env::temp_dir().join(format!("jr-selected-pe-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let exe = root.join("test.exe");
+        std::fs::write(&exe, pe_fixture(0x8664, false)).unwrap();
+        crate::sys::set_mode(&exe, 0o644).unwrap();
+        let events = [
+            serde_json::json!({"reason":"compiler-artifact", "profile":{"test":true}, "executable":exe}),
+            serde_json::json!({"reason":"build-finished", "success":true}),
+        ];
+        let output = events
+            .into_iter()
+            .map(|event| {
+                serde_json::to_string(&crate::record::OutputLine {
+                    t: 0.0,
+                    s: "o".into(),
+                    l: event.to_string(),
+                })
+                .unwrap()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(selected_tests(&root, &output, true).unwrap().len(), 1);
+        assert!(selected_tests(&root, &output, false).is_err());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
     #[cfg(unix)]
     #[test]
     fn selected_tests_use_only_successful_cargo_artifacts() {
+        let selected_tests = |root: &Path, output: &str| super::selected_tests(root, output, false);
         let root = std::env::temp_dir().join(format!("jr-selected-{}", std::process::id()));
         std::fs::create_dir_all(root.join("debug/deps")).unwrap();
         let selected = root.join("debug/deps/selected-123");
@@ -911,6 +1037,17 @@ mod tests {
                 &log(vec![
                     artifact(&selected, true),
                     serde_json::json!({"reason":"build-finished","success":false})
+                ])
+            )
+            .is_err()
+        );
+        assert!(
+            selected_tests(
+                &root,
+                &log(vec![
+                    artifact(&selected, true),
+                    serde_json::json!({"reason":"build-finished","success":false}),
+                    success.clone(),
                 ])
             )
             .is_err()

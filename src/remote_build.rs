@@ -822,7 +822,7 @@ fn run_remote_inner(
     let mut submitted = false;
     let mut first_out = false;
     let mut run_files: Vec<u8> = Vec::new();
-    let mut compile_stdout = Vec::new();
+    let mut compile_stdout = CompileOutput::default();
     let mut so = std::io::stdout();
     let mut se = std::io::stderr();
     loop {
@@ -893,7 +893,7 @@ fn run_remote_inner(
                         so.write_all(&data)?;
                         so.flush()?;
                     } else {
-                        compile_stdout.extend_from_slice(&data);
+                        compile_stdout.push(&data, &mut so, &mut se, json_output)?;
                     }
                 } else {
                     se.write_all(&data)?;
@@ -910,21 +910,9 @@ fn run_remote_inner(
                 mark("exit");
                 hosted_run.finish("done", Some(code));
                 if compile_only {
-                    // Preserve all rendered compiler diagnostics, including failed
-                    // builds, without publishing unusable remote executable paths.
-                    for line in compile_stdout.split(|b| *b == b'\n') {
-                        if let Ok(value) = serde_json::from_slice::<serde_json::Value>(line)
-                            && value["reason"] == "compiler-message"
-                        {
-                            if json_output {
-                                serde_json::to_writer(&mut so, &value)?;
-                                so.write_all(b"\n")?;
-                            } else if let Some(rendered) = value["message"]["rendered"].as_str() {
-                                se.write_all(rendered.as_bytes())?;
-                            }
-                        }
-                    }
+                    compile_stdout.finish(&mut so, &mut se, json_output)?;
                     if code == 0 {
+                        compile_stdout.require_success()?;
                         diagnostic.stage = "remote_artifacts";
                         let (line, artifacts) = crate::remote_artifacts::fetch_tests(
                             &full, started_at, run_id,
@@ -1009,7 +997,85 @@ fn run_remote_inner(
     }
 }
 
-/// Where a remote build runs, for `justrust status`: "hosted" or "remote".
+/// Only one incomplete Cargo JSON line is buffered. Diagnostic records stream
+/// immediately, but remote artifact paths never reach the local Cargo consumer.
+#[derive(Default)]
+struct CompileOutput {
+    partial: Vec<u8>,
+    successful: bool,
+    failed: bool,
+}
+
+impl CompileOutput {
+    const MAX_LINE: usize = 16 * 1024 * 1024;
+
+    fn push(
+        &mut self,
+        bytes: &[u8],
+        out: &mut impl Write,
+        err: &mut impl Write,
+        json: bool,
+    ) -> Result<()> {
+        for piece in bytes.split_inclusive(|b| *b == b'\n') {
+            if self.partial.len().saturating_add(piece.len()) > Self::MAX_LINE {
+                bail!("remote Cargo JSON line exceeds the 16 MiB safety limit");
+            }
+            self.partial.extend_from_slice(piece);
+            if piece.ends_with(b"\n") {
+                self.emit(out, err, json)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn emit(&mut self, out: &mut impl Write, err: &mut impl Write, json: bool) -> Result<()> {
+        if self.partial.is_empty() {
+            return Ok(());
+        }
+        match serde_json::from_slice::<serde_json::Value>(&self.partial) {
+            Ok(value) if value["reason"] == "compiler-message" => {
+                if json {
+                    serde_json::to_writer(&mut *out, &value)?;
+                    out.write_all(b"\n")?;
+                    out.flush()?;
+                } else if let Some(rendered) = value["message"]["rendered"].as_str() {
+                    err.write_all(rendered.as_bytes())?;
+                    err.flush()?;
+                }
+            }
+            Ok(value) if value["reason"] == "build-finished" => {
+                self.successful |= value["success"] == true;
+                self.failed |= value["success"] != true;
+            }
+            // Ordinary text is a diagnostic, never part of the local JSON stream.
+            Err(_) => {
+                err.write_all(&self.partial)?;
+                if !self.partial.ends_with(b"\n") {
+                    err.write_all(b"\n")?;
+                }
+                err.flush()?;
+            }
+            _ => (),
+        }
+        self.partial.clear();
+        Ok(())
+    }
+
+    fn finish(&mut self, out: &mut impl Write, err: &mut impl Write, json: bool) -> Result<()> {
+        self.emit(out, err, json)
+    }
+
+    fn require_success(&self) -> Result<()> {
+        if self.failed || !self.successful {
+            bail!(
+                "remote test artifacts require an exclusively successful Cargo build-finished stream"
+            );
+        }
+        Ok(())
+    }
+}
+
+/// Force Cargo's machine-readable artifact stream without changing selectors.
 fn compile_only_args(args: &[String]) -> Vec<String> {
     let mut result = Vec::new();
     let mut iter = args.iter();
@@ -1178,6 +1244,54 @@ pub fn run(sub: &str, args: Vec<String>) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn compile_output_streams_diagnostics_but_not_remote_artifacts() {
+        let mut stream = super::CompileOutput::default();
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        stream.push(b"{\"reason\":\"compiler-message\",\"message\":{\"rendered\":\"warning now\\n\"}}\n", &mut out, &mut err, false).unwrap();
+        assert_eq!(err, b"warning now\n");
+        assert!(stream.partial.is_empty());
+        stream.push(b"{\"reason\":\"compiler-artifact\",\"executable\":\"/remote/test\"}\n{\"reason\":\"build-", &mut out, &mut err, false).unwrap();
+        assert!(out.is_empty());
+        assert!(stream.require_success().is_err());
+        stream
+            .push(b"finished\",\"success\":true}\n", &mut out, &mut err, false)
+            .unwrap();
+        assert!(stream.require_success().is_ok());
+        assert!(stream.partial.is_empty());
+        stream.push(b"{\"reason\":\"build-finished\",\"success\":false}\n{\"reason\":\"build-finished\",\"success\":true}\n", &mut out, &mut err, false).unwrap();
+        assert!(stream.require_success().is_err());
+        assert!(!String::from_utf8_lossy(&err).contains("/remote/test"));
+    }
+
+    #[test]
+    fn compile_output_handles_json_chunks_and_bounded_lines() {
+        let mut stream = super::CompileOutput::default();
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let message =
+            b"{\"reason\":\"compiler-message\",\"message\":{\"rendered\":\"error details\"}}";
+        for byte in message {
+            stream.push(&[*byte], &mut out, &mut err, true).unwrap();
+        }
+        assert!(out.is_empty());
+        stream.finish(&mut out, &mut err, true).unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&out).unwrap()["message"]["rendered"],
+            "error details"
+        );
+        assert!(err.is_empty());
+        assert!(
+            stream
+                .push(
+                    &vec![b'x'; super::CompileOutput::MAX_LINE + 1],
+                    &mut out,
+                    &mut err,
+                    true
+                )
+                .is_err()
+        );
+    }
+
     #[test]
     fn compile_only_json_preserves_test_selection_and_separator() {
         let args = [
