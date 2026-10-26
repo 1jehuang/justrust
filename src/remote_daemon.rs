@@ -854,10 +854,13 @@ fn remember_root(dest: &str, root: &Path) {
 
 /// Start tracking a root: rsync it once, then remember its manifest.
 fn add_root(d: &Daemon, st: &mut Sync, link: &Link, root: &Path) -> Result<()> {
+    let total = Instant::now();
     link.mirror.prepare(root)?;
+    let prepared = total.elapsed();
     // Scan before rsync: a file edited during the copy then differs from
     // the manifest and is pushed again by the next flush.
     let scan = remote_sync::scan(root)?;
+    let scanned = total.elapsed();
     let t = Instant::now();
     // Keyed by backend, not address: hosted machines change addresses, and
     // a seed whose source is gone on the machine is simply skipped.
@@ -890,7 +893,10 @@ fn add_root(d: &Daemon, st: &mut Sync, link: &Link, root: &Path) -> Result<()> {
             t.elapsed().as_secs_f64()
         ));
     }
+    let seed_time = t.elapsed();
+    let transfer = Instant::now();
     let n = link.mirror.rsync_with(root, seeded)?;
+    let transfer_time = transfer.elapsed();
     remember_root(dest, root);
     link.send(
         &Msg::Synced {
@@ -915,6 +921,21 @@ fn add_root(d: &Daemon, st: &mut Sync, link: &Link, root: &Path) -> Result<()> {
         t.elapsed().as_secs_f64()
     ));
     refresh_watches(d, root, &scan.files);
+    log(&format!(
+        "source mirror {}: total {:.3}s, prepare {:.3}s, scan {:.3}s ({} files, {} oversized), seed {:.3}s, checksum rsync {:.3}s, finalize {:.3}s",
+        root.display(),
+        total.elapsed().as_secs_f64(),
+        prepared.as_secs_f64(),
+        (scanned - prepared).as_secs_f64(),
+        scan.files.len(),
+        scan.oversized.len(),
+        seed_time.as_secs_f64(),
+        transfer_time.as_secs_f64(),
+        transfer
+            .elapsed()
+            .saturating_sub(transfer_time)
+            .as_secs_f64(),
+    ));
     st.roots.insert(
         root.to_path_buf(),
         Root {
@@ -929,12 +950,15 @@ fn add_root(d: &Daemon, st: &mut Sync, link: &Link, root: &Path) -> Result<()> {
 
 /// Push every difference between `root` and its manifest. Returns files sent.
 fn push_root(d: &Daemon, st: &mut Sync, root: &Path) -> Result<usize> {
+    let total = Instant::now();
     let scan = remote_sync::scan(root)?;
+    let scanned = total.elapsed();
     let mut new = scan.files;
     let diff = {
         let r = st.roots.get(root).context("unknown root")?;
         remote_sync::diff(&r.manifest, &new)
     };
+    let compared = total.elapsed();
     let link = st.link.clone().context("not connected")?;
     if !diff.is_empty() {
         if diff.changed.len() + diff.deleted.len() > remote_sync::RSYNC_ABOVE {
@@ -995,7 +1019,23 @@ fn push_root(d: &Daemon, st: &mut Sync, root: &Path) -> Result<usize> {
         }
     }
     let n = diff.changed.len() + diff.deleted.len();
+    let sent = total.elapsed();
     refresh_watches(d, root, &new);
+    if total.elapsed() >= Duration::from_secs(1) {
+        log(&format!(
+            "source push {}: total {:.3}s, scan {:.3}s ({} files, {} oversized), diff {:.3}s, transfer {:.3}s ({} changed, {} deleted), watches {:.3}s",
+            root.display(),
+            total.elapsed().as_secs_f64(),
+            scanned.as_secs_f64(),
+            new.len(),
+            scan.oversized.len(),
+            (compared - scanned).as_secs_f64(),
+            (sent - compared).as_secs_f64(),
+            diff.changed.len(),
+            diff.deleted.len(),
+            (total.elapsed() - sent).as_secs_f64(),
+        ));
+    }
     if let Some(r) = st.roots.get_mut(root) {
         r.manifest = new;
         r.oversized = scan.oversized;

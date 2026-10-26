@@ -1169,6 +1169,29 @@ mod tests {
         std::fs::remove_dir_all(&d).unwrap();
     }
 
+    /// Read-only focused diagnostic, not a substitute for bench/suite.py.
+    #[test]
+    #[ignore = "set JUSTRUST_SCAN_BENCH_ROOT to a representative source tree"]
+    fn representative_source_scan() {
+        let root = PathBuf::from(std::env::var_os("JUSTRUST_SCAN_BENCH_ROOT").unwrap());
+        let mut expected = None;
+        for iteration in 0..5 {
+            let start = std::time::Instant::now();
+            let scan = scan(&root).unwrap();
+            eprintln!(
+                "source scan {iteration}: {:.3}s, {} files, {} oversized",
+                start.elapsed().as_secs_f64(),
+                scan.files.len(),
+                scan.oversized.len()
+            );
+            if let Some((files, oversized)) = &expected {
+                assert_eq!(&scan.files, files, "source tree changed during diagnostic");
+                assert_eq!(&scan.oversized, oversized);
+            }
+            expected = Some((scan.files, scan.oversized));
+        }
+    }
+
     #[test]
     fn origin_urls_become_anonymous_https_or_nothing() {
         let a = |u: &str| anonymous_https(u);
