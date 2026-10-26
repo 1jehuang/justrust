@@ -1,0 +1,219 @@
+{
+ "started": "2026-10-26T15:51:13-0700",
+ "env": {
+  "host": "xps14",
+  "cpu": "Intel(R) Core(TM) Ultra X9 388H",
+  "ncpu": 16,
+  "mem_gb": 62.3,
+  "kernel": "7.2.11-arch1-1",
+  "foreign_rustc_policy": "proc-stat-live-excluding-Z-X-x-fail-closed-v1",
+  "justrust": "justrust 0.1.0-alpha.19",
+  "justrust_rev": "aff53e608888",
+  "benchmark_repo_rev": "aff53e608888",
+  "justrust_binary_revision": null,
+  "justrust_revision_source": "repository HEAD, not binary revision",
+  "justrust_binary_sha256": "db19676b0328048a9037e298cd800cd967c8514ba8286b7dddc713ec020ecc97",
+  "justrust_dirty": true,
+  "rustc": "rustc 1.101.0-nightly (1d81eb4ad 2026-10-07)",
+  "toolchain": "nightly-2026-10-08",
+  "optimization_env": {},
+  "rustc_threads": null,
+  "workspace_threads": null,
+  "pass_times": false,
+  "miniz_opt_level": null,
+  "cargo": "cargo 1.99.1 (5f94df478 2026-08-27) (Arch Linux rust 1:1.99.1-1)",
+  "governor": "powersave",
+  "on_ac": "0",
+  "snapshots": {
+   "desktop": {
+    "jcode-desktop": "7d38fb7",
+    "jcode": "abff94eeb"
+   },
+   "justrust": {
+    "justrust": "f97fcc2"
+   },
+   "rewrite": {
+    "justrust-clean-room": "7bc3f6e5f"
+   }
+  },
+  "execution": "local",
+  "hosted_early": false
+ },
+ "runs_per_scenario": 3,
+ "scenarios": {
+  "rewrite-lib-test-edit": {
+   "what": "One test-body edit in the pinned compiler library, then a filtered semantic test; opt-level=1, debug=2, assertions and overflow checks unchanged",
+   "cmd": [
+    "test",
+    "--config",
+    "profile.dev.debug=2",
+    "--lib",
+    "mutable_callable_instantiation_preserves_writable_carrier_envelope"
+   ],
+   "samples": [
+    {
+     "id": "20261026-155143233-885074749",
+     "wall": 11.77,
+     "first_error": null,
+     "first_fail": null,
+     "early": null,
+     "recorded_wall": 11.74,
+     "cpu": 17.54,
+     "startup": 0.03,
+     "compile": 10.393,
+     "test_run": 0.0,
+     "units": 1,
+     "local_units": 1,
+     "dep_units": 0,
+     "reuse": {
+      "compiled": 1,
+      "fresh": 9,
+      "depcache_hits": 0,
+      "depcache_misses": 0,
+      "depcache_saved_secs": 0.0,
+      "script_hits": 0,
+      "script_saved_secs": 0.0,
+      "slot_refreshed_units": 0,
+      "local_hits": 0,
+      "local_saved_secs": -0.0
+     },
+     "split": {
+      "frontend": 3.107,
+      "codegen": 4.201,
+      "link": 0.201,
+      "incremental": 1.289,
+      "other": 1.582
+     },
+     "link_secs": 0.201,
+     "hotpatch": null,
+     "tests_passed": 1,
+     "tests_failed": 0,
+     "other_cores": 2.51,
+     "foreign_rustc_before": 0,
+     "load_before": 7.69,
+     "noisy": false,
+     "top_unit": "justrust_engine (test)",
+     "workspace_frontend_threads": null
+    },
+    {
+     "id": "20261026-155205065-885074641",
+     "wall": 11.305,
+     "first_error": null,
+     "first_fail": null,
+     "early": null,
+     "recorded_wall": 11.276,
+     "cpu": 17.6,
+     "startup": 0.021,
+     "compile": 9.987,
+     "test_run": 0.0,
+     "units": 1,
+     "local_units": 1,
+     "dep_units": 0,
+     "reuse": {
+      "compiled": 1,
+      "fresh": 9,
+      "depcache_hits": 0,
+      "depcache_misses": 0,
+      "depcache_saved_secs": 0.0,
+      "script_hits": 0,
+      "script_saved_secs": 0.0,
+      "slot_refreshed_units": 0,
+      "local_hits": 0,
+      "local_saved_secs": -0.0
+     },
+     "split": {
+      "frontend": 3.147,
+      "codegen": 3.907,
+      "link": 0.237,
+      "incremental": 1.164,
+      "other": 1.524
+     },
+     "link_secs": 0.237,
+     "hotpatch": null,
+     "tests_passed": 1,
+     "tests_failed": 0,
+     "other_cores": 2.41,
+     "foreign_rustc_before": 0,
+     "load_before": 6.83,
+     "noisy": false,
+     "top_unit": "justrust_engine (test)",
+     "workspace_frontend_threads": null
+    },
+    {
+     "id": "20261026-155226435-885074378",
+     "wall": 10.652,
+     "first_error": null,
+     "first_fail": null,
+     "early": null,
+     "recorded_wall": 10.621,
+     "cpu": 17.26,
+     "startup": 0.02,
+     "compile": 9.153,
+     "test_run": 0.0,
+     "units": 1,
+     "local_units": 1,
+     "dep_units": 0,
+     "reuse": {
+      "compiled": 1,
+      "fresh": 9,
+      "depcache_hits": 0,
+      "depcache_misses": 0,
+      "depcache_saved_secs": 0.0,
+      "script_hits": 0,
+      "script_saved_secs": 0.0,
+      "slot_refreshed_units": 0,
+      "local_hits": 0,
+      "local_saved_secs": -0.0
+     },
+     "split": {
+      "frontend": 2.923,
+      "codegen": 3.434,
+      "link": 0.201,
+      "incremental": 1.253,
+      "other": 1.334
+     },
+     "link_secs": 0.201,
+     "hotpatch": null,
+     "tests_passed": 1,
+     "tests_failed": 0,
+     "other_cores": 2.43,
+     "foreign_rustc_before": 0,
+     "load_before": 5.91,
+     "noisy": false,
+     "top_unit": "justrust_engine (test)",
+     "workspace_frontend_threads": null
+    }
+   ],
+   "stats": {
+    "first_fail": null,
+    "first_fail_min": null,
+    "first_fail_max": null,
+    "n": 3,
+    "first_error": null,
+    "first_error_min": null,
+    "first_error_max": null,
+    "median": 11.305,
+    "min": 10.652,
+    "max": 11.77,
+    "quiet_n": 3,
+    "quiet_median": 11.305,
+    "phases": {
+     "startup": 0.021,
+     "compile": 9.987,
+     "test_run": 0.0,
+     "cpu": 17.54,
+     "link_secs": 0.201
+    },
+    "split": {
+     "frontend": 3.107,
+     "codegen": 3.907,
+     "link": 0.201,
+     "incremental": 1.253,
+     "other": 1.524
+    },
+    "units": 1
+   }
+  }
+ },
+ "finished": "2026-10-26T15:52:37-0700"
+}

@@ -1,5 +1,40 @@
 # Findings: where agent build time goes
 
+## 2026-10-26: Local compiler test edits without test-profile ThinLTO
+
+The recent clean-room run `20261026-153635937-779805` spent 30.66s of
+31.69s rebuilding the library test binary, versus 0.99s running its selected
+test. This was compiler rebuild latency, not a need to test hosted-service
+behavior. The user requested local execution for ordinary tests because of
+security and control concerns; the following comparison is entirely local.
+
+`bench/cleanroom-test-profile.py` drives the existing `bench/suite.py` harness
+on pinned clean-room revision `7bc3f6e5f`, changing a test body before each
+filtered semantic test. On this XPS14, nightly-2026-10-08, three measured
+samples per side after warmup and with `--quiet-wait 10`, the comparison is:
+
+```
+python3 bench/suite.py compare \
+  bench/results/20261026-rewrite-local-baseline-confirm.json \
+  bench/results/20261026-rewrite-local-lto-confirm.json
+rewrite-lib-test-edit          11.30    8.42   -2.88   -26%  faster
+```
+
+All six confirmation samples passed the harness's quiet-sample check. The
+only candidate change is `[profile.test] lto = "off"` in the clean-room
+manifest. Optimization level 1, full debug information, debug assertions,
+overflow checks, development builds, and release builds remain unchanged.
+The measured benefit is specific to local test-body edits, not a promise
+that every compiler source edit or the full suite becomes 26% faster. The
+session-weighted synthetic gate was not run and no global client default is
+being promoted. Switching profiles incurs a one-time artifact rebuild.
+
+An earlier debug=1 experiment regressed from 11.43s to 16.79s median and was
+rejected. Those first comparisons had noisy samples and are retained as
+exploratory evidence, not controlled speedup claims. Hosted pinned-suite
+attempts were stopped after the user clarified local execution; an attempt
+also hit `cannot protect source activity: No such file or directory`.
+
 ## 2026-10-26: Slow-run inventory and development DEFLATE tail
 
 `bench/SLOW-RUNS.md` inventories all recorded runs and separates remote client
