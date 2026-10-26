@@ -1275,6 +1275,14 @@ fn independent_slice_pair_rows(
     Ok(Some((roots, families)))
 }
 
+/// An unexported witness minted only at successful complete body-view replay.
+/// It cannot outlive the original builder inputs and is consumed at sealing.
+struct BodyViewValidated<'a> {
+    function: &'a cfg::Function,
+    facts: &'a super::traits::ValidatedFacts,
+    view: Arc<super::traits::CarrierContractView>,
+}
+
 /// The sole cell-state builder feeds the existing Plan queries, conflict and
 /// activation logic. Families are value relations, never fabricated loans.
 struct CarrierBuilder<'a, 'b> {
@@ -1308,6 +1316,7 @@ struct CarrierBuilder<'a, 'b> {
     // so dataflow revisits do not replay identical authority proofs.
     call_effects: Vec<Option<Option<Arc<CarrierEffects>>>>,
     body: Option<Arc<super::traits::CarrierContractView>>,
+    body_validated: Option<BodyViewValidated<'a>>,
     physical_body: Option<super::opaque_physical::PhysicalCarrierFlow>,
     body_signature: Option<ir::Signature>,
     call_rows: Vec<Vec<(CarrierLocation, ReferenceOriginId)>>,
@@ -2860,6 +2869,7 @@ impl<'a, 'b> CarrierBuilder<'a, 'b> {
             },
             call_effects: vec![None; f.blocks.len()],
             body: None,
+            body_validated: None,
             physical_body: None,
             body_signature: None,
             call_rows,
@@ -3021,6 +3031,16 @@ impl<'a, 'b> CarrierBuilder<'a, 'b> {
                         }
                     }
                     if valid {
+                        if view_validated && physical.is_none() && builder.physical_body.is_none() {
+                            builder
+                                .budget
+                                .reserve_bytes(size_of::<Option<BodyViewValidated<'_>>>())?;
+                            builder.body_validated = Some(BodyViewValidated {
+                                function: f,
+                                facts: authority,
+                                view: view.clone(),
+                            });
+                        }
                         builder.body = Some(view);
                     }
                 }
@@ -5161,6 +5181,7 @@ impl CarrierBuilder<'_, '_> {
             family_cover_locals: self.family_cover_locals,
             family_inputs: self.family_inputs,
             body: self.body,
+            body_validation: None,
             physical_body: self.physical_body,
             body_signature: self.body_signature,
             authority,
@@ -5463,6 +5484,164 @@ struct Point {
     activated: Set,
 }
 
+/// Private, immutable evidence from one successful validated Plan constructor.
+/// Not a graph Fact and never returned independently of its borrow plan.
+struct BodyValidationReceipt {
+    function: Arc<cfg::Function>,
+    facts: Arc<super::traits::ValidatedFacts>,
+    view: Arc<super::traits::CarrierContractView>,
+    signature: ir::Signature,
+}
+impl BodyValidationReceipt {
+    fn payload_bytes(params: usize) -> Result<usize, Exhausted> {
+        add(
+            size_of::<Option<Self>>(),
+            add(mul(params, size_of::<Ty>())?, 2 * size_of::<usize>())?,
+        )
+    }
+    fn issue(
+        plan: &Plan,
+        validated: Option<BodyViewValidated<'_>>,
+        function: &Arc<cfg::Function>,
+        facts: &Arc<super::traits::ValidatedFacts>,
+        budget: &mut Budget,
+        max_bytes: usize,
+    ) -> Result<Option<Self>, Exhausted> {
+        let Some(validated) = validated else {
+            return Ok(None);
+        };
+        let (Some(view), Some(signature), Some(original)) =
+            (&plan.body, &plan.body_signature, &plan.authority)
+        else {
+            return Ok(None);
+        };
+        if !std::ptr::eq(validated.function, function.as_ref())
+            || !std::ptr::eq(validated.facts, facts.as_ref())
+            || !Arc::ptr_eq(&validated.view, view)
+            || plan.physical_body.is_some()
+            || view.contract().results.is_empty()
+            || !Arc::ptr_eq(original, facts)
+            || !plan.problems.is_empty()
+        {
+            return Ok(None);
+        }
+        if let Err(error) = view.check_body_replay_context(facts) {
+            if error.is_resource() {
+                return Err(Exhausted);
+            }
+            return Ok(None);
+        }
+        let bytes = Self::payload_bytes(signature.params.len())?;
+        if add(plan.bytes, bytes)? > max_bytes {
+            return Err(Exhausted);
+        }
+        // The copied parameter slots are new payload. All referenced semantic
+        // inputs remain charged to their original producers. No refund on drop.
+        budget.reserve_bytes(bytes)?;
+        budget.spend(add(signature.params.len(), 1)?)?;
+        facts
+            .budget()
+            .charge_work(add(signature.params.len(), 1)?)
+            .map_err(|_| Exhausted)?;
+        facts.budget().retain_bytes(bytes).map_err(|_| Exhausted)?;
+        let mut params = Vec::new();
+        params
+            .try_reserve_exact(signature.params.len())
+            .map_err(|_| Exhausted)?;
+        if params.capacity() > signature.params.len() {
+            return Err(Exhausted);
+        }
+        params.extend(signature.params.iter().cloned());
+        Ok(Some(Self {
+            function: function.clone(),
+            facts: facts.clone(),
+            view: view.clone(),
+            signature: ir::Signature {
+                ref_contract: signature.ref_contract.clone(),
+                params,
+                result: signature.result.clone(),
+            },
+        }))
+    }
+    fn check_result(
+        &self,
+        function: &cfg::Function,
+        view: &Arc<super::traits::CarrierContractView>,
+        facts: &super::traits::ValidatedFacts,
+        signature: &ir::Signature,
+        location: &CarrierLocation,
+    ) -> Result<Option<Problem>, Exhausted> {
+        // Check the ORIGINAL payer/context even if the supplied context changed.
+        // In particular an old poisoned payer cannot be replaced by a fresh one.
+        let live = self.view.check_body_replay_context(&self.facts);
+        if let Err(error) = live {
+            if error.is_resource() {
+                return Err(Exhausted);
+            }
+            return Ok(Some(Problem::Invalid(
+                error
+                    .into_diagnostic(self.facts.budget())
+                    .map_err(|_| Exhausted)?,
+            )));
+        }
+        if !std::ptr::eq(function, self.function.as_ref()) {
+            let error = super::traits::FactsError::from_message(
+                self.facts.budget(),
+                "body replay receipt changed its original CFG allocation",
+            );
+            return Ok(Some(Problem::Invalid(
+                error
+                    .into_diagnostic(self.facts.budget())
+                    .map_err(|_| Exhausted)?,
+            )));
+        }
+        let exact_identity = Arc::ptr_eq(view, &self.view)
+            && std::ptr::eq(facts, self.facts.as_ref())
+            && Arc::ptr_eq(&signature.ref_contract, &self.signature.ref_contract);
+        let exact = if exact_identity {
+            match self
+                .facts
+                .world()
+                .signatures_equal(signature, &self.signature)
+            {
+                Ok(same) => same,
+                Err(error) if error.is_resource() => return Err(Exhausted),
+                Err(error) => {
+                    return Ok(Some(Problem::Invalid(
+                        error
+                            .into_diagnostic(self.facts.budget())
+                            .map_err(|_| Exhausted)?,
+                    )));
+                }
+            }
+        } else {
+            false
+        };
+        if !exact {
+            // No permission transfers to a changed function/view/facts/signature.
+            return result_flow_problem(
+                Some(view),
+                Some(facts),
+                ir::SignatureSubject::Body,
+                signature,
+                location,
+                &mut false,
+            );
+        }
+        // This local flag is not authority: the exact constructor-issued typed
+        // receipt above is. The existing guard still rechecks actual subject,
+        // signature, location and facts.validate_signature on every result.
+        result_flow_problem(
+            Some(view),
+            Some(facts),
+            ir::SignatureSubject::Body,
+            signature,
+            location,
+            &mut true,
+        )
+    }
+}
+
 pub(super) struct Plan {
     offsets: Vec<usize>,
     points: Vec<Option<Point>>,
@@ -5479,6 +5658,7 @@ pub(super) struct Plan {
     family_cover_locals: Option<Vec<Ty>>,
     family_inputs: Vec<FamilyOrigin>,
     body: Option<Arc<super::traits::CarrierContractView>>,
+    body_validation: Option<BodyValidationReceipt>,
     physical_body: Option<super::opaque_physical::PhysicalCarrierFlow>,
     body_signature: Option<ir::Signature>,
     authority: Option<Arc<super::traits::ValidatedFacts>>,
@@ -5897,7 +6077,21 @@ impl Plan {
         builder.authority = Some(facts.clone());
         builder.effect_table = table.cloned();
         builder.initialize_regions()?;
-        builder.solve()
+        let body_validated = builder.body_validated.take();
+        let mut plan = builder.solve()?;
+        // Only this constructor has the exact original function/facts Arcs.
+        // The solver's private body slot is populated only after every result
+        // row authenticated in CarrierBuilder::new. Legacy and physical plans
+        // never receive this receipt.
+        plan.body_validation =
+            BodyValidationReceipt::issue(&plan, body_validated, f, facts, budget, max_bytes)?;
+        if let Some(receipt) = &plan.body_validation {
+            plan.bytes = add(
+                plan.bytes,
+                BodyValidationReceipt::payload_bytes(receipt.signature.params.len())?,
+            )?;
+        }
+        Ok(plan)
     }
     pub(super) fn effects(&self) -> Option<&Arc<CarrierEffects>> {
         self.effects.as_ref()
@@ -6323,15 +6517,23 @@ impl Plan {
             }
             let mut view_validated = false;
             for row in body.contract().results.iter() {
-                if let Some(problem) = physical_result_flow_problem(
-                    self.physical_body.as_ref(),
-                    Some(body),
-                    authority,
-                    ir::SignatureSubject::Body,
-                    signature,
-                    &row.location,
-                    &mut view_validated,
-                )? {
+                let problem = if let (Some(receipt), Some(actual)) =
+                    (&self.body_validation, facts.validated())
+                    && self.physical_body.is_none()
+                {
+                    receipt.check_result(f, body, actual, signature, &row.location)?
+                } else {
+                    physical_result_flow_problem(
+                        self.physical_body.as_ref(),
+                        Some(body),
+                        authority,
+                        ir::SignatureSubject::Body,
+                        signature,
+                        &row.location,
+                        &mut view_validated,
+                    )?
+                };
+                if let Some(problem) = problem {
                     return Ok(Some(problem));
                 }
                 let projection = value_projection(&row.location);
@@ -6878,6 +7080,252 @@ impl Plan {
 mod parameter_equality_tests {
     use super::*;
     use crate::compiler::{frontend, ownership};
+
+    fn body_receipt_fixture() -> (cfg::TemplateCfg, Plan) {
+        let template = source_template("fn probe<T>(x:T)->T{x}fn main(){}", 0);
+        let mut budget = Budget::new(32_000_000);
+        let plan = Plan::build_validated(
+            template.function(),
+            template.facts(),
+            None,
+            &mut budget,
+            128 * 1024 * 1024,
+        )
+        .unwrap();
+        assert!(plan.problems.is_empty(), "{:?}", plan.problems);
+        assert!(plan.body_validation.is_some());
+        (template, plan)
+    }
+
+    #[test]
+    fn body_receipt_requires_exact_successful_constructor_witness() {
+        let (template, plan) = body_receipt_fixture();
+        let (foreign, other_plan) = body_receipt_fixture();
+        let mut budget = Budget::new(32_000_000);
+        assert!(
+            BodyValidationReceipt::issue(
+                &plan,
+                None,
+                template.function(),
+                template.facts(),
+                &mut budget,
+                128 * 1024 * 1024
+            )
+            .unwrap()
+            .is_none()
+        );
+        for control in 0..3 {
+            let mut witness = BodyViewValidated {
+                function: template.function(),
+                facts: template.facts(),
+                view: plan.body.as_ref().unwrap().clone(),
+            };
+            match control {
+                0 => witness.function = foreign.function(),
+                1 => witness.facts = foreign.facts(),
+                2 => witness.view = other_plan.body.as_ref().unwrap().clone(),
+                _ => unreachable!(),
+            }
+            assert!(
+                BodyValidationReceipt::issue(
+                    &plan,
+                    Some(witness),
+                    template.function(),
+                    template.facts(),
+                    &mut budget,
+                    128 * 1024 * 1024
+                )
+                .unwrap()
+                .is_none()
+            );
+        }
+    }
+
+    #[test]
+    fn body_receipt_exact_foreign_signature_location_and_missing_controls() {
+        let (template, mut plan) = body_receipt_fixture();
+        let receipt = plan.body_validation.as_ref().unwrap();
+        let body = plan.body.as_ref().unwrap();
+        let signature = plan.body_signature.as_ref().unwrap();
+        let location = &body.contract().results[0].location;
+        assert!(
+            receipt
+                .check_result(
+                    template.function(),
+                    body,
+                    template.facts(),
+                    signature,
+                    location
+                )
+                .unwrap()
+                .is_none()
+        );
+        // Another allocation with identical content must take the full path.
+        let copied_view = Arc::new(body.as_ref().clone());
+        assert!(
+            receipt
+                .check_result(
+                    template.function(),
+                    &copied_view,
+                    template.facts(),
+                    signature,
+                    location
+                )
+                .unwrap()
+                .is_none()
+        );
+        let copied_function = template.function().as_ref().clone();
+        assert!(matches!(
+            receipt.check_result(
+                &copied_function,
+                body,
+                template.facts(),
+                signature,
+                location
+            ),
+            Ok(Some(Problem::Invalid(_)))
+        ));
+        let (foreign, _) = body_receipt_fixture();
+        assert!(matches!(
+            receipt.check_result(
+                template.function(),
+                body,
+                foreign.facts(),
+                signature,
+                location
+            ),
+            Ok(Some(Problem::Invalid(_)))
+        ));
+        let mut changed_signature = signature.clone();
+        changed_signature.result = Ty::Bool;
+        assert!(matches!(
+            receipt.check_result(
+                template.function(),
+                body,
+                template.facts(),
+                &changed_signature,
+                location
+            ),
+            Ok(Some(Problem::Invalid(_)))
+        ));
+        let mut changed_location = location.clone();
+        changed_location.path = CarrierPath(Arc::from([CarrierStep::Field(usize::MAX)]));
+        assert!(matches!(
+            receipt.check_result(
+                template.function(),
+                body,
+                template.facts(),
+                signature,
+                &changed_location
+            ),
+            Ok(Some(Problem::Invalid(_)))
+        ));
+        let block = template
+            .function()
+            .blocks
+            .iter()
+            .position(|block| matches!(block.terminator.value, Terminator::Return))
+            .unwrap();
+        let mut changed_function = template.function().as_ref().clone();
+        changed_function.result = Ty::Bool;
+        assert!(matches!(
+            plan.check_return(
+                &changed_function,
+                BlockId(block),
+                FactsCtx::Validated(template.facts()),
+                &mut Budget::new(32_000_000)
+            ),
+            Ok(Some(Problem::Invalid(_)))
+        ));
+        // Receipt absence is not permission and must keep the original full guard.
+        plan.body_validation = None;
+        assert!(
+            plan.check_return(
+                template.function(),
+                BlockId(block),
+                FactsCtx::Validated(template.facts()),
+                &mut Budget::new(32_000_000)
+            )
+            .unwrap()
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn body_receipt_forged_binding_and_live_short_poison_preserve_payload() {
+        for control in 0..4 {
+            let (template, mut plan) = body_receipt_fixture();
+            let facts = template.facts();
+            let ledger = facts.budget();
+            let before = ledger.usage_snapshot();
+            assert!(before.first_failure.is_none());
+            assert!(!before.poisoned);
+            let (foreign, _) = body_receipt_fixture();
+            if control == 1 {
+                // Change only one private binding, never grant another view
+                // authority merely by pointing a receipt at fresh facts.
+                plan.body_validation.as_mut().unwrap().facts = foreign.facts().clone();
+            }
+            let mut held = None;
+            if control == 2 {
+                held = Some(
+                    ledger
+                        .reserve_bytes(ledger.limits().bytes - before.bytes)
+                        .unwrap(),
+                );
+                let full = ledger.usage_snapshot();
+                assert!(full.first_failure.is_none());
+                assert!(!full.poisoned);
+                assert_eq!(full.bytes, ledger.limits().bytes);
+            } else if control == 3 {
+                ledger.poison_ledger_for_tests();
+                assert!(ledger.usage_snapshot().poisoned);
+            }
+            let receipt = plan.body_validation.as_ref().unwrap();
+            let body = plan.body.as_ref().unwrap();
+            let signature = plan.body_signature.as_ref().unwrap();
+            let result = receipt.check_result(
+                template.function(),
+                body,
+                facts,
+                signature,
+                &body.contract().results[0].location,
+            );
+            match control {
+                0 => assert!(result.unwrap().is_none()),
+                1 => assert!(matches!(result, Ok(Some(Problem::Invalid(_))))),
+                2 => {
+                    assert!(result.is_err());
+                    let failure = ledger.first_resource_failure().unwrap();
+                    assert_eq!(failure.kind, ir::ResourceBudgetKind::Bytes);
+                    assert_eq!(failure.used, failure.limit);
+                }
+                3 => {
+                    assert!(result.is_err());
+                    // Even a supplied fresh payer cannot replace the original.
+                    assert!(
+                        receipt
+                            .check_result(
+                                template.function(),
+                                body,
+                                foreign.facts(),
+                                signature,
+                                &body.contract().results[0].location
+                            )
+                            .is_err()
+                    );
+                }
+                _ => unreachable!(),
+            }
+            drop(held);
+            drop(plan);
+            // Neither receipt drop nor the new reuse refunds retained evidence.
+            assert!(ledger.usage_snapshot().bytes >= before.bytes);
+            assert!(
+                ledger.usage_snapshot().reservations.retentions >= before.reservations.retentions
+            );
+        }
+    }
 
     #[test]
     fn effects_payload_counts_nested_rows_and_shared_path_occurrences() {

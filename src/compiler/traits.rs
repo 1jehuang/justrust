@@ -2114,6 +2114,40 @@ impl CarrierContractView {
     pub fn original_env(&self) -> &Arc<GenericEnv> {
         &self.original_env
     }
+    /// Live checks for a private borrow-plan receipt of this exact immutable
+    /// body view. This does not authenticate a receipt or a different view.
+    pub(super) fn check_body_replay_context(&self, facts: &ValidatedFacts) -> Result<()> {
+        facts.world.check_facts(facts, true)?;
+        facts.world.check_context(ProofContext::from_facts(facts))?;
+        facts.world.check_normalization_budget()?;
+        checked_module(
+            facts.budget(),
+            facts
+                .world
+                .catalog
+                .modules()
+                .budget()
+                .check()
+                .map_err(ModuleError::from),
+        )?;
+        if self.physical.is_some()
+            || self.world != facts.world.id
+            || self.registry != facts.registry_snapshot()
+            || self.environment != facts.predicates.index
+            || self.phase != facts.phase()
+            || !self.budget.same_authority(facts.budget())
+            || !matches!(
+                self.result_subject,
+                parameter_equality::EqualityResultSubject::Body { .. }
+            )
+        {
+            return Err(FactsError::invalid(
+                facts.budget(),
+                "body replay receipt has foreign live context",
+            ));
+        }
+        Ok(())
+    }
     pub fn validate_for(&self, facts: &ValidatedFacts) -> Result<()> {
         if self.physical.is_some() {
             return Err(FactsError::invalid(
@@ -10203,6 +10237,43 @@ mod tests {
             result,
         }
     }
+    #[test]
+    fn body_replay_live_guard_rejects_forged_context_and_module_failure() {
+        use crate::compiler::expansion_budget::Counter;
+        let program =
+            crate::compiler::frontend::parse("fn probe<T>(x:T)->T{x}fn main(){}").unwrap();
+        let budget = PlanBudget::default();
+        let plan = crate::compiler::frontend::PlanCtx::from_program(&program, &budget).unwrap();
+        let facts = plan.callable_facts(plan.function_decl(0).unwrap()).unwrap();
+        let view = facts.carrier_contract(SignatureSubject::Body).unwrap();
+        view.check_body_replay_context(&facts).unwrap();
+        for control in 0..5 {
+            let mut forged = view.as_ref().clone();
+            match control {
+                0 => forged.registry = SnapshotId::standalone().unwrap(),
+                1 => forged.environment = usize::MAX,
+                2 => forged.phase = FactsPhase::Schema,
+                3 => forged.world = WorldId(SnapshotId::standalone().unwrap()),
+                4 => forged.budget = PlanBudget::default(),
+                _ => unreachable!(),
+            }
+            assert!(matches!(forged.check_body_replay_context(&facts),
+                Err(error) if error.kind() == FactsErrorKind::InvalidMetadata));
+        }
+        let modules = facts.world().catalog.modules();
+        let module_budget = modules.budget();
+        assert!(
+            module_budget
+                .charge(
+                    Counter::Work,
+                    module_budget.limits().counters[Counter::Work as usize]
+                )
+                .is_err()
+        );
+        assert!(matches!(view.check_body_replay_context(&facts),
+            Err(error) if error.kind() == FactsErrorKind::Resource));
+    }
+
     fn fixture_modules() -> Arc<ModuleArena> {
         super::super::module_identity::ModuleArenaBuilder::for_catalog(
             super::super::expansion_budget::ExpansionBudget::default(),
