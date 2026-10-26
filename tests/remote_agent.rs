@@ -432,6 +432,99 @@ fn failed_writes_fail_barriers_until_fixed() {
 }
 
 #[test]
+fn live_cpu_samples_are_opt_in_and_arrive_before_exit() {
+    let mut a = Agent::start("live-cpu");
+    for (path, data) in [
+        (
+            "/proj/Cargo.toml",
+            "[package]\nname=\"live-cpu\"\nversion=\"0.0.0\"\nedition=\"2024\"\n",
+        ),
+        (
+            "/proj/src/main.rs",
+            r#"
+fn main() {
+    assert!(std::env::var_os("JUSTRUST_LIVE_CPU").is_none());
+    let start = std::time::Instant::now();
+    while start.elapsed().as_millis() < 1200 {
+        std::hint::black_box((0u64..10000).fold(0u64, u64::wrapping_add));
+    }
+    println!("workload complete");
+}
+"#,
+        ),
+    ] {
+        a.send(
+            Msg::Write {
+                path: path.into(),
+                mode: 0o644,
+            },
+            data.as_bytes(),
+        );
+    }
+    assert!(a.barrier(90).is_empty());
+    for (id, enabled) in [(91, true), (92, false)] {
+        let mut env = vec![
+            ("JUSTRUST_TOOLCHAIN".into(), "system".into()),
+            ("JUSTRUST_DISABLE".into(), "0".into()),
+            (
+                "CARGO_TARGET_DIR".into(),
+                a.at("/proj/target").to_string_lossy().into_owned(),
+            ),
+        ];
+        if enabled {
+            env.push((remote_proto::CLIENT_LIVE_CPU.into(), "1".into()));
+        }
+        a.send(
+            Msg::Run {
+                id,
+                cwd: "/proj".into(),
+                args: vec!["run".into(), "--offline".into()],
+                env,
+                roots: vec![],
+                start: false,
+                run_id: format!("live-cpu-{}-{id}", std::process::id()),
+            },
+            &[],
+        );
+        let mut measured = false;
+        let mut output = String::new();
+        loop {
+            match a.recv() {
+                (
+                    Msg::Out {
+                        id: got,
+                        stream: remote_proto::LIVE_CPU_STREAM,
+                    },
+                    data,
+                ) if got == id => {
+                    assert!(enabled, "legacy clients must never see CPU frames");
+                    let cpu: serde_json::Value = serde_json::from_slice(&data).unwrap();
+                    let cores = cpu["build_cores"].as_f64().unwrap();
+                    let ncpu = cpu["ncpu"].as_u64().unwrap();
+                    assert!(ncpu > 0 && cores.is_finite() && cores >= 0.0 && cores <= ncpu as f64);
+                    assert!(cpu["t"].as_f64().unwrap() > 1_700_000_000.0);
+                    measured |= cores > 0.0;
+                }
+                (Msg::Out { id: got, .. }, data) if got == id => {
+                    output.push_str(&String::from_utf8_lossy(&data));
+                }
+                (Msg::RunFiles { id: got }, _) if got == id => {}
+                (Msg::Exit { id: got, code }, _) if got == id => {
+                    assert_eq!(code, 0, "{output}");
+                    assert!(output.contains("workload complete"), "{output}");
+                    assert_eq!(
+                        measured, enabled,
+                        "actual CPU sample must arrive before Exit"
+                    );
+                    break;
+                }
+                other => panic!("unexpected CPU telemetry frame {other:?}: {output}"),
+            }
+        }
+    }
+}
+
+#[test]
 fn runs_stream_output_and_exit_codes() {
     let mut a = Agent::start("run");
     a.send(

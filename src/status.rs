@@ -18,7 +18,7 @@ use crate::record::Meta;
 use crate::shim::Unit;
 use crate::summary::{IndexEntry, Summary};
 use anyhow::Result;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::collections::HashSet;
 use std::fmt::Write as _;
 use std::io::{Read, Seek, SeekFrom};
@@ -26,7 +26,7 @@ use std::path::Path;
 
 /// How long a finished run stays visible in `--waybar` output.
 const SHOW_DONE_SECS: f64 = 8.0;
-/// Only this many of the newest run directories are checked for activity.
+/// Only this many of each run-ID family are checked for activity.
 const SCAN_RUNS: usize = 64;
 
 #[derive(Debug, Serialize, Clone)]
@@ -80,13 +80,7 @@ pub struct Finished {
 
 /// Shared with live CPU snapshot producers. Legacy sample journals provide
 /// the same time and CPU fields, with the machine size taken from metadata.
-#[derive(Deserialize)]
-struct CpuSample {
-    t: f64,
-    build_cores: f64,
-    #[serde(default)]
-    ncpu: usize,
-}
+type CpuSample = crate::record::LiveCpu;
 
 fn measured_cpu(dir: &Path, meta: &Meta, now: f64) -> (usize, Option<f64>, Option<f64>) {
     const MAX_SAMPLE_BYTES: u64 = 16 * 1024;
@@ -350,17 +344,44 @@ fn estimate(
     Some(out)
 }
 
+fn recent_run_ids(runs: &Path) -> Vec<String> {
+    let mut ids = Vec::new();
+    let mut overrides = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(runs) {
+        for entry in entries.flatten() {
+            let Ok(id) = entry.file_name().into_string() else {
+                continue;
+            };
+            let bytes = id.as_bytes();
+            if bytes.len() > 8 && bytes[..8].iter().all(u8::is_ascii_digit) && bytes[8] == b'-' {
+                ids.push(id);
+            } else if let Ok(modified) = entry.metadata().and_then(|m| m.modified()) {
+                overrides.push((modified, id));
+            }
+        }
+    }
+    // Normal IDs sort by date without a stat per historical run. Imports and
+    // explicit ID overrides get their own bounded pool so neither family can
+    // hide the other (for example old readme-* fixtures sorting above dates).
+    ids.sort();
+    overrides.sort();
+    ids.into_iter()
+        .rev()
+        .take(SCAN_RUNS)
+        .chain(
+            overrides
+                .into_iter()
+                .rev()
+                .take(SCAN_RUNS)
+                .map(|(_, id)| id),
+        )
+        .collect()
+}
+
 pub fn collect() -> Result<Status> {
     let runs = paths::runs_dir()?;
     let now = paths::now();
-    let mut ids: Vec<String> = std::fs::read_dir(&runs)
-        .map(|rd| {
-            rd.filter_map(|e| e.ok()?.file_name().into_string().ok())
-                .collect()
-        })
-        .unwrap_or_default();
-    ids.sort();
-    let recent_ids: Vec<&String> = ids.iter().rev().take(SCAN_RUNS).collect();
+    let recent_ids = recent_run_ids(&runs);
     let mut status = Status::default();
     let mut index: Option<Vec<IndexEntry>> = None;
     for id in &recent_ids {
@@ -681,6 +702,15 @@ mod tests {
             (8, Some(2.5), Some(109.0))
         );
         assert_eq!(measured_cpu(&dir, &meta, 120.0), (8, None, None));
+        // Imported IDs must not crowd recent normal runs out of the scan.
+        let runs = dir.join("runs");
+        std::fs::create_dir_all(runs.join("20261025-215400-42")).unwrap();
+        for n in 0..70 {
+            std::fs::create_dir_all(runs.join(format!("readme-fixture-{n}"))).unwrap();
+        }
+        let ids = recent_run_ids(&runs);
+        assert!(ids.iter().any(|id| id == "20261025-215400-42"));
+        assert_eq!(ids.len(), 1 + SCAN_RUNS);
     }
 
     fn s(v: &[&str]) -> Vec<String> {

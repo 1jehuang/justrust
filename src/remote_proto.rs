@@ -36,6 +36,11 @@ pub const RUN_FILES: &[&str] = &[
 ];
 /// Run metadata, not a Cargo environment input: caller Unix file creation mask.
 pub const CLIENT_UMASK: &str = "JUSTRUST_CLIENT_UMASK";
+/// Opt-in run metadata. Agents only send CPU frames to clients requesting
+/// them, preserving compatibility with clients that treat all non-1 streams
+/// as stderr. This flag is removed before spawning the recorded command.
+pub const CLIENT_LIVE_CPU: &str = "JUSTRUST_LIVE_CPU";
+pub const LIVE_CPU_STREAM: u8 = 3;
 
 /// Per-file cap: a run log larger than this is truncated, not dropped.
 const MAX_RUN_FILE: u64 = 64 << 20;
@@ -205,6 +210,7 @@ pub enum Msg {
         may_have_started: bool,
     },
     /// Output of a run: payload bytes, stream 1 = stdout, 2 = stderr.
+    /// Stream 3 is LiveCpu JSON, only after CLIENT_LIVE_CPU=1 opt-in.
     Out {
         id: u64,
         stream: u8,

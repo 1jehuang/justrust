@@ -761,6 +761,7 @@ fn run_remote_inner(
         Err(e) => return infra(format!("{e:#}")),
     };
     let mut env = Vec::new();
+    env.push((crate::remote_proto::CLIENT_LIVE_CPU.into(), "1".into()));
     for var in FORWARDED_ENV {
         if let Ok(v) = std::env::var(var) {
             env.push((var.to_string(), v));
@@ -857,6 +858,14 @@ fn run_remote_inner(
                 diagnostic.may_have_started = true;
             }
             (Msg::Out { stream, .. }, data) => {
+                if stream == crate::remote_proto::LIVE_CPU_STREAM {
+                    if let Ok(cpu) = serde_json::from_slice::<crate::record::LiveCpu>(&data)
+                        && let Some(dir) = &live.dir
+                    {
+                        crate::record::write_live_cpu(dir, &cpu);
+                    }
+                    continue;
+                }
                 diagnostic.may_have_started = true;
                 if trace && !first_out {
                     first_out = true;

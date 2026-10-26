@@ -90,6 +90,25 @@ pub struct Sample {
     pub psi_unavailable: bool,
 }
 
+/// Live, interval CPU usage. This is observational run metadata, never an
+/// input to Cargo or rustc and never a process-count estimate.
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct LiveCpu {
+    pub t: f64,
+    pub build_cores: f64,
+    #[serde(default)]
+    pub ncpu: usize,
+}
+
+pub(crate) fn write_live_cpu(dir: &Path, cpu: &LiveCpu) {
+    if let Ok(bytes) = serde_json::to_vec(cpu) {
+        let tmp = dir.join("cpu.json.tmp");
+        if std::fs::write(&tmp, bytes).is_ok() {
+            let _ = std::fs::rename(tmp, dir.join("cpu.json"));
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ProcRecord {
     pub pid: i32,
@@ -697,9 +716,19 @@ fn record(
     let sampler = {
         let done = done.clone();
         let daemon_pid = run_dir.join(DAEMON_PID_FILE);
+        let sample_dir = run_dir.clone();
         let lines = lines.clone();
         let log_availability = lifecycle.log_availability();
-        std::thread::spawn(move || sample_loop(pid, &daemon_pid, &done, &lines, &log_availability))
+        std::thread::spawn(move || {
+            sample_loop(
+                pid,
+                &daemon_pid,
+                &sample_dir,
+                &done,
+                &lines,
+                &log_availability,
+            )
+        })
     };
 
     let (mut code, mut cpu_user, cpu_sys) = wait_child(&mut child, job.as_ref());
@@ -1176,6 +1205,7 @@ const DAEMON_PID_FILE: &str = "cargo-daemon.pid";
 fn sample_loop(
     root: i32,
     daemon_pid: &Path,
+    run_dir: &Path,
     done: &(Mutex<bool>, std::sync::Condvar),
     lines: &Mutex<OutputCapture>,
     log_availability: &std::sync::atomic::AtomicBool,
@@ -1265,6 +1295,16 @@ fn sample_loop(
             _ => 0.0,
         };
         let build_cores = tree_delta_ticks as f64 / hz / dt;
+        if !samples.is_empty() {
+            write_live_cpu(
+                run_dir,
+                &LiveCpu {
+                    t,
+                    build_cores: build_cores.min(ncpu),
+                    ncpu: ncpu as usize,
+                },
+            );
+        }
         if !samples.is_empty() || stop {
             samples.push(Sample {
                 t,

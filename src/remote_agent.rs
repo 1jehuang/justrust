@@ -690,12 +690,13 @@ fn start_run(
     let mut c = Command::new(executable);
     c.args(args)
         .current_dir(cwd)
-        .envs(
-            env.iter().map(|(k, v)| (k, v)).filter(|(k, _)| {
-                *k != CLIENT_CARGO_HOME && *k != crate::remote_proto::CLIENT_UMASK
-            }),
-        )
+        .envs(env.iter().map(|(k, v)| (k, v)).filter(|(k, _)| {
+            *k != CLIENT_CARGO_HOME
+                && *k != crate::remote_proto::CLIENT_UMASK
+                && *k != crate::remote_proto::CLIENT_LIVE_CPU
+        }))
         .env_remove(crate::remote_proto::CLIENT_UMASK)
+        .env_remove(crate::remote_proto::CLIENT_LIVE_CPU)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -757,6 +758,51 @@ fn start_run(
     state.pid = Some(child.id() as i32);
     track_pgid(child.id() as i32);
     drop(states);
+    let cpu_done: Arc<(Mutex<bool>, std::sync::Condvar)> = Arc::default();
+    let cpu_pump = if env
+        .iter()
+        .any(|(k, v)| k == crate::remote_proto::CLIENT_LIVE_CPU && v == "1")
+    {
+        run_dir(run_id).map(|dir| {
+            let out = out.clone();
+            let done = cpu_done.clone();
+            std::thread::spawn(move || {
+                let mut previous = Vec::new();
+                loop {
+                    let guard = done.0.lock().unwrap();
+                    if *guard {
+                        break;
+                    }
+                    drop(guard);
+                    if let Ok(file) = std::fs::File::open(dir.join("cpu.json")) {
+                        let mut bytes = Vec::new();
+                        if file.take(16 * 1024).read_to_end(&mut bytes).is_ok()
+                            && bytes != previous
+                            && serde_json::from_slice::<crate::record::LiveCpu>(&bytes).is_ok()
+                        {
+                            send(
+                                &out,
+                                &Msg::Out {
+                                    id,
+                                    stream: crate::remote_proto::LIVE_CPU_STREAM,
+                                },
+                                &bytes,
+                            );
+                            previous = bytes;
+                        }
+                    }
+                    let guard = done.0.lock().unwrap();
+                    let _ = done.1.wait_timeout_while(
+                        guard,
+                        std::time::Duration::from_millis(200),
+                        |finished| !*finished,
+                    );
+                }
+            })
+        })
+    } else {
+        None
+    };
     let mut pumps = Vec::new();
     for (stream, pipe) in [
         (
@@ -788,6 +834,11 @@ fn start_run(
     }
     for p in pumps {
         let _ = p.join();
+    }
+    *cpu_done.0.lock().unwrap() = true;
+    cpu_done.1.notify_all();
+    if let Some(pump) = cpu_pump {
+        let _ = pump.join();
     }
     let st = child.wait()?;
     pids.lock().unwrap().remove(&id);
