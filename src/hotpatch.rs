@@ -315,15 +315,42 @@ fn prebuild_index(out: &Path, dir: &Path) {
             return;
         }
         libc::setsid();
-        let null = libc::open(c"/dev/null".as_ptr(), libc::O_RDWR);
-        if null >= 0 {
-            for fd in 0..3 {
-                libc::dup2(null, fd);
-            }
+        if !isolate_index_child_fds() {
+            // Optional speculation must not retain a build/eviction lock or
+            // an output pipe. Older kernels or sandbox policies can reject
+            // close_range: skip prebuilding, not descriptor isolation.
+            libc::_exit(0);
         }
         libc::nice(10);
         let _ = mmap(out).and_then(|m| index_for(out, &m, dir));
         libc::_exit(0);
+    }
+}
+
+/// Called only in the fork child. Use async-signal-safe operations before
+/// indexing, including when tests fork from a multithreaded test harness.
+unsafe fn isolate_index_child_fds() -> bool {
+    // SAFETY: these syscalls operate only on the calling child's fd table.
+    unsafe {
+        let null = libc::open(c"/dev/null".as_ptr(), libc::O_RDWR);
+        if null < 0 {
+            return false;
+        }
+        for fd in 0..3 {
+            if libc::dup2(null, fd) < 0 {
+                return false;
+            }
+        }
+        // CLOEXEC does not help: this child never execs. Inherited flock
+        // descriptors otherwise keep RootLock held until indexing finishes.
+        #[cfg(target_os = "linux")]
+        {
+            libc::syscall(libc::SYS_close_range, 3u32, u32::MAX, 0u32) == 0
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            false
+        }
     }
 }
 
@@ -1201,6 +1228,107 @@ fn relocs(pf: &ElfFile64<object::Endianness>, map: &mut String) -> Res<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn detached_index_child_drops_inherited_flock_and_pipe() {
+        use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+        const CHILD: &str = "JUSTRUST_HOTPATCH_FD_TEST_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            // A raw fork in the shared test harness would briefly duplicate
+            // other tests' flocks before isolation runs, racing their
+            // nonblocking eviction probes. Exercise it in a fresh process.
+            let result = Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "hotpatch::tests::detached_index_child_drops_inherited_flock_and_pipe",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .output()
+                .unwrap();
+            assert!(
+                result.status.success(),
+                "isolated descriptor regression failed:\n{}\n{}",
+                String::from_utf8_lossy(&result.stdout),
+                String::from_utf8_lossy(&result.stderr)
+            );
+            return;
+        }
+        let path = std::env::temp_dir().join(format!("jrhot-fd-lock-{}", std::process::id()));
+        let lock = std::fs::File::create(&path).unwrap();
+        // SAFETY: flock takes an open fd, and pipe initializes both fds.
+        let (read, write) = unsafe {
+            assert_eq!(libc::flock(lock.as_raw_fd(), libc::LOCK_EX), 0);
+            let mut pipe = [-1; 2];
+            assert_eq!(libc::pipe2(pipe.as_mut_ptr(), libc::O_CLOEXEC), 0);
+            (OwnedFd::from_raw_fd(pipe[0]), OwnedFd::from_raw_fd(pipe[1]))
+        };
+        // SAFETY: the child uses only async-signal-safe calls and never
+        // returns into the test harness or runs inherited destructors.
+        let pid = unsafe { libc::fork() };
+        assert!(pid >= 0);
+        if pid == 0 {
+            unsafe {
+                libc::alarm(10);
+                if !isolate_index_child_fds() {
+                    libc::_exit(77);
+                }
+                loop {
+                    libc::pause();
+                }
+            }
+        }
+        struct Child(Option<libc::pid_t>);
+        impl Drop for Child {
+            fn drop(&mut self) {
+                // SAFETY: this is our fork child, reaped even on panic.
+                if let Some(pid) = self.0 {
+                    unsafe {
+                        libc::kill(pid, libc::SIGKILL);
+                        libc::waitpid(pid, std::ptr::null_mut(), 0);
+                    }
+                }
+            }
+        }
+        let mut child = Child(Some(pid));
+        drop(write);
+        let mut poll = libc::pollfd {
+            fd: read.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // EOF must arrive while the child is alive, not only at its exit.
+        assert_eq!(unsafe { libc::poll(&mut poll, 1, 2000) }, 1);
+        assert_ne!(poll.revents & libc::POLLHUP, 0);
+        let probe = std::fs::File::open(&path).unwrap();
+        assert_eq!(
+            unsafe { libc::flock(probe.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+            -1,
+            "isolating the child must not release the parent's lock"
+        );
+        assert_eq!(
+            std::io::Error::last_os_error().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+        drop(lock);
+        assert_eq!(
+            unsafe { libc::flock(probe.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+            0,
+            "detached index child retained a build/eviction flock"
+        );
+        let mut status = 0;
+        let exited = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+        if exited == pid {
+            child.0 = None;
+        }
+        assert!(
+            exited == 0
+                || (exited == pid && libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 77),
+            "child should be alive after isolation, or skip on unsupported close_range"
+        );
+        std::fs::remove_file(path).unwrap();
+    }
 
     fn os(v: &[&str]) -> Vec<OsString> {
         v.iter().map(OsString::from).collect()
