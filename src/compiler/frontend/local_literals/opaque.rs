@@ -4,6 +4,117 @@
 use super::*;
 
 impl Solver<'_, '_, '_> {
+    /// A same-spelling method is not invocation authority. Only conclude
+    /// absence when every retained bound is a non-callable source trait with
+    /// no inherited bounds. Other descriptors remain on ordinary selection.
+    pub(super) fn opaque_excludes_callable_bounds(
+        &self,
+        descriptor: &ir::OpaqueTy,
+    ) -> Result<bool, String> {
+        let plan = self.checker.signatures.plan()?;
+        let world = plan.trait_world()?;
+        for bound in descriptor.bounds() {
+            self.checker.infer_work(0)?;
+            if world
+                .closure_trait_kind(bound.declaration())
+                .map_err(|error| error.into_legacy_diagnostic(&plan.budget))?
+                .is_some()
+            {
+                return Ok(false);
+            }
+            let declaration = plan.declaration(bound.declaration())?;
+            if declaration.kind != ir::DeclKind::Trait
+                || declaration.source_index == usize::MAX
+                || !plan
+                    .registry
+                    .source_trait(bound.declaration())?
+                    .supertraits
+                    .is_empty()
+            {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+    /// Use only the declaration-owned callable bound's input/output terms.
+    /// Unrelated owner actuals (notably inferred closure representations) need
+    /// not be materialized to constrain a call. Checked lowering still proves
+    /// the complete opaque descriptor and canonical invocation signature.
+    pub(super) fn opaque_callable_application(
+        &mut self,
+        descriptor: &Arc<ir::OpaqueTy>,
+        children: &[Term],
+        args: &[Term],
+    ) -> Result<Option<Term>, String> {
+        let plan = self.checker.signatures.plan()?;
+        let world = plan.trait_world()?;
+        if descriptor.types().count() != children.len() {
+            return Err("opaque inference child count changed".into());
+        }
+        for mode in [
+            ir::ClosureKind::Fn,
+            ir::ClosureKind::FnMut,
+            ir::ClosureKind::FnOnce,
+        ] {
+            let mut offset = descriptor.owner_args().len();
+            for bound in descriptor.bounds() {
+                self.checker.infer_work(0)?;
+                let argument_types = bound
+                    .args()
+                    .iter()
+                    .filter(|argument| matches!(argument, ir::OpaqueBoundArg::Type(_)))
+                    .count();
+                let next = offset
+                    .checked_add(argument_types)
+                    .and_then(|offset| offset.checked_add(bound.equalities().len()))
+                    .ok_or("opaque bound inference index overflow")?;
+                if next > children.len() {
+                    return Err("opaque bound inference child count changed".into());
+                }
+                if world
+                    .closure_trait_kind(bound.declaration())
+                    .map_err(|error| error.into_legacy_diagnostic(&plan.budget))?
+                    == Some(mode)
+                    && bound.args().len() == 1
+                    && argument_types == 1
+                {
+                    let mut output = None;
+                    for (index, (item, _)) in bound.equalities().iter().enumerate() {
+                        self.checker.infer_work(0)?;
+                        let declaration = plan.declaration(*item)?;
+                        let callable_output = declaration.kind == ir::DeclKind::AssociatedType
+                            && match declaration.owner {
+                                Some(owner) => {
+                                    world.closure_trait_kind(owner).map_err(|error| {
+                                        error.into_legacy_diagnostic(&plan.budget)
+                                    })? == Some(ir::ClosureKind::FnOnce)
+                                }
+                                None => false,
+                            };
+                        if callable_output {
+                            if output.is_some() {
+                                return Err("opaque callable output equality is duplicated".into());
+                            }
+                            output = Some(children[offset + argument_types + index]);
+                        }
+                    }
+                    if let Some(output) = output {
+                        self.checker.infer_storage(args.len())?;
+                        let actual = if args.is_empty() {
+                            self.fixed(ir::Ty::Unit)?
+                        } else {
+                            self.node(Domain::Tuple(args.to_vec()))?
+                        };
+                        self.coerce(actual, children[offset])?;
+                        return Ok(Some(output));
+                    }
+                }
+                offset = next;
+            }
+        }
+        Ok(None)
+    }
+
     pub(super) fn opaque_identity_matches(
         &self,
         left: &ir::OpaqueTy,

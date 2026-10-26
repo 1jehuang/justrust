@@ -210,6 +210,52 @@ impl PlanCtx {
         let mut applications = BudgetVec::new(self.program.names.budget(), Storage::Temporary)
             .map_err(selection_token_error)?;
         budget.charge_work(1)?;
+        // A reference to an opaque value does not expose its hidden callable
+        // implementation. Reject impossible callable blanket candidates before
+        // enumerating their unconstrained Args, without changing receiver order.
+        if facts.predicates().predicates().is_empty()
+            && self
+                .trait_world()?
+                .closure_trait_kind(trait_id)
+                .map_err(|error| error.into_legacy_diagnostic(budget))?
+                .is_some()
+        {
+            let opaque = match owner {
+                ir::Ty::Opaque(opaque) => Some(opaque),
+                ir::Ty::Ref { referent, .. } => match referent.as_ref() {
+                    ir::Ty::Opaque(opaque) => Some(opaque),
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some(opaque) = opaque {
+                ir::FactsCtx::Validated(facts).validate_ty_with_budget(owner, budget)?;
+                let mut excluded = true;
+                for bound in opaque.bounds() {
+                    budget.charge_work(1)?;
+                    let declaration = self.declaration(bound.declaration())?;
+                    if self
+                        .trait_world()?
+                        .closure_trait_kind(bound.declaration())
+                        .map_err(|error| error.into_legacy_diagnostic(budget))?
+                        .is_some()
+                        || declaration.kind != ir::DeclKind::Trait
+                        || declaration.source_index == usize::MAX
+                        || !self
+                            .registry
+                            .source_trait(bound.declaration())?
+                            .supertraits
+                            .is_empty()
+                    {
+                        excluded = false;
+                        break;
+                    }
+                }
+                if excluded {
+                    return Ok(applications);
+                }
+            }
+        }
         if let ir::Ty::Dyn(object) = owner {
             for application in facts
                 .dynamic_applications(object)

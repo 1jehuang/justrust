@@ -118,7 +118,9 @@ impl<'a: 's, 'b: 's, 's> Solver<'a, 'b, 's> {
         let receiver = self.peel_refs(receiver);
         if !matches!(
             self.domain(receiver),
-            Domain::Callable(_) | Domain::Fixed(ir::Ty::Closure(_) | ir::Ty::FnItem(_))
+            Domain::Callable(_)
+                | Domain::Opaque(_, _)
+                | Domain::Fixed(ir::Ty::Closure(_) | ir::Ty::FnItem(_))
         ) {
             return Ok(None);
         }
@@ -149,6 +151,13 @@ impl<'a: 's, 'b: 's, 's> Solver<'a, 'b, 's> {
         if !canonical {
             return Ok(None);
         }
+        if let Domain::Opaque(descriptor, _) = self.domain(receiver)
+            && self.opaque_excludes_callable_bounds(&descriptor)?
+        {
+            return Err(self.user_error(
+                "E0618: expected a callable value, found opaque type without a callable bound",
+            ));
+        }
         if args.len() != 1 {
             return Err(self.user_error("E0057: wrong number of callable tuple arguments"));
         }
@@ -165,6 +174,9 @@ impl<'a: 's, 'b: 's, 's> Solver<'a, 'b, 's> {
         args: &[Term],
     ) -> Result<Option<Term>, String> {
         match self.domain(term) {
+            Domain::Opaque(descriptor, children) => {
+                self.opaque_callable_application(&descriptor, &children, args)
+            }
             Domain::Callable(callable) => {
                 if callable.params.len() != args.len() {
                     return Err(self.user_error("E0057: wrong number of closure arguments"));
