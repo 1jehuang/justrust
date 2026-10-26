@@ -2,6 +2,185 @@
 //! Checked types are comparison targets, never an inference source.
 use super::*;
 
+fn syntax(source: &Expr, budget: &ir::PlanBudget, depth: usize) -> Result<bool, FactsError> {
+    sr::depth(budget, depth)?;
+    sr::work(budget, 1)?;
+    let children: Vec<&Expr> = match source {
+        Expr::Var(path) => return Ok(is_local_shaped_path(path)),
+        Expr::Borrow { .. } | Expr::Integer(_) | Expr::Bool(_) | Expr::Char(_) => return Ok(true),
+        Expr::Tuple(values)
+        | Expr::Array(values)
+        | Expr::TupleStruct { fields: values, .. }
+        | Expr::Call { args: values, .. } => {
+            source_clone::clone_vector(values, budget).map_err(|e| source_error(budget, &e))?;
+            values.iter().collect()
+        }
+        Expr::Struct { fields, .. } => {
+            source_clone::clone_vector(fields, budget).map_err(|e| source_error(budget, &e))?;
+            fields.iter().map(|(_, value)| value).collect()
+        }
+        Expr::EnumVariant { fields, .. } => {
+            source_clone::clone_vector(fields, budget).map_err(|e| source_error(budget, &e))?;
+            fields.iter().map(|(_, value)| value).collect()
+        }
+        Expr::Repeat { value, .. } => return syntax(value, budget, depth + 1),
+        _ => return Ok(false),
+    };
+    for value in children {
+        if !syntax(value, budget, depth + 1)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+pub(super) fn copy_arguments(
+    args: &[Expr],
+    budget: &ir::PlanBudget,
+) -> Result<Option<Vec<Expr>>, FactsError> {
+    for arg in args {
+        if !syntax(arg, budget, 0)? {
+            return Ok(None);
+        }
+    }
+    source_clone::clone_vector(args, budget).map_err(|e| source_error(budget, &e))?;
+    let mut copied = Vec::new();
+    copied
+        .try_reserve_exact(args.len())
+        .map_err(|_| FactsError::resource(budget, "input syntax allocation"))?;
+    for arg in args {
+        walk_depth(DepthNode::Expr(arg), Some(budget)).map_err(|e| source_error(budget, &e))?;
+        copied.push(arg.clone());
+    }
+    Ok(Some(copied))
+}
+
+pub(super) fn supported(
+    source: &Expr,
+    node: &sr::SourceNode,
+    function: &Function,
+    inventory: &SourceInventory,
+    budget: &ir::PlanBudget,
+    depth: usize,
+) -> Result<bool, FactsError> {
+    sr::depth(budget, depth)?;
+    sr::work(budget, 1)?;
+    match source {
+        Expr::Var(_) | Expr::Borrow { .. } => {
+            sr::work(budget, node.path.len())?;
+            let Some(binding) = inventory.operand_nodes.get(&node.path) else {
+                return Ok(false);
+            };
+            let Some(index) = source_binding_index(&inventory.bindings, binding, budget)? else {
+                return Ok(false);
+            };
+            let site = &inventory.bindings[index];
+            if site.parameter.is_some() {
+                return Ok(true);
+            }
+            let Some(statement) = site.statement else {
+                return Ok(false);
+            };
+            let Some(Stmt::Let { value, .. }) = function.body.statements.get(statement) else {
+                return Ok(false);
+            };
+            supported(
+                value,
+                &site.node.child(3, 0, budget)?,
+                function,
+                inventory,
+                budget,
+                depth + 1,
+            )
+        }
+        Expr::Tuple(values) | Expr::Array(values) => {
+            for (index, value) in values.iter().enumerate() {
+                if !supported(
+                    value,
+                    &node.child(12, index, budget)?,
+                    function,
+                    inventory,
+                    budget,
+                    depth + 1,
+                )? {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        }
+        Expr::TupleStruct { fields, .. } => {
+            for (index, value) in fields.iter().enumerate() {
+                if !supported(
+                    value,
+                    &node.child(14, index, budget)?,
+                    function,
+                    inventory,
+                    budget,
+                    depth + 1,
+                )? {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        }
+        Expr::Struct { fields, .. } => {
+            for (index, (_, value)) in fields.iter().enumerate() {
+                if !supported(
+                    value,
+                    &node.child(14, index, budget)?,
+                    function,
+                    inventory,
+                    budget,
+                    depth + 1,
+                )? {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        }
+        Expr::EnumVariant { fields, .. } => {
+            for (index, (_, value)) in fields.iter().enumerate() {
+                if !supported(
+                    value,
+                    &node.child(14, index, budget)?,
+                    function,
+                    inventory,
+                    budget,
+                    depth + 1,
+                )? {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        }
+        Expr::Repeat { value, .. } => supported(
+            value,
+            &node.child(11, 0, budget)?,
+            function,
+            inventory,
+            budget,
+            depth + 1,
+        ),
+        Expr::Call { args, .. } => {
+            for (index, value) in args.iter().enumerate() {
+                if !supported(
+                    value,
+                    &node.child(9, index, budget)?,
+                    function,
+                    inventory,
+                    budget,
+                    depth + 1,
+                )? {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        }
+        Expr::Integer(_) | Expr::Bool(_) | Expr::Char(_) => Ok(true),
+        _ => Ok(false),
+    }
+}
+
 pub(super) struct Replay<'a> {
     pub original: &'a OriginalSource,
     pub inventory: &'a SourceInventory,
@@ -10,6 +189,71 @@ pub(super) struct Replay<'a> {
     pub budget: &'a ir::PlanBudget,
 }
 impl Replay<'_> {
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn argument(
+        &self,
+        source: &Expr,
+        node: &sr::SourceNode,
+        id: ir::ExprId,
+        call: ir::ExprId,
+        index: usize,
+        expectation: ir::CallExpectation,
+        before: usize,
+        depth: usize,
+    ) -> Result<ir::Ty, FactsError> {
+        if matches!(source, Expr::Var(_))
+            && matches!(
+                expectation,
+                ir::CallExpectation::FirmReference {
+                    kind: ir::BorrowKind::Mut
+                }
+            )
+        {
+            let (local, ty) = self.operand(source, node, before, depth)?;
+            let value = self
+                .checked
+                .exprs
+                .get(id.0)
+                .ok_or_else(|| FactsError::invalid(self.budget, "input reborrow missing"))?;
+            let ir::ExprKind::Borrow {
+                kind: ir::BorrowKind::Mut,
+                place,
+                timing:
+                    ir::BorrowTiming::TwoPhase {
+                        activation,
+                        argument,
+                        reason: ir::ImplicitBorrowKind::MutableArgumentReborrow { carrier },
+                    },
+            } = &value.kind
+            else {
+                return Err(FactsError::invalid(
+                    self.budget,
+                    "input lost authored mutable reborrow",
+                ));
+            };
+            let carrier = self.checked.exprs.get(carrier.0).ok_or_else(|| {
+                FactsError::invalid(self.budget, "input reborrow carrier missing")
+            })?;
+            if *activation != call
+                || *argument != index
+                || place.local != local
+                || place.projection != [ir::Projection::Deref]
+                || !matches!(carrier.kind, ir::ExprKind::Local(actual) if actual == local)
+                || carrier.completion != ir::Completion::Returns
+                || value.completion != ir::Completion::Returns
+                || !self.equal(&ty, &carrier.ty)?
+                || !self.equal(&ty, &value.ty)?
+            {
+                return Err(FactsError::invalid(
+                    self.budget,
+                    "input reborrow changed source identity or type",
+                ));
+            }
+            Ok(ty)
+        } else {
+            self.expression(source, node, id, before, None, depth)
+        }
+    }
     fn equal(&self, a: &ir::Ty, b: &ir::Ty) -> Result<bool, FactsError> {
         self.original
             .facts
@@ -144,20 +388,16 @@ impl Replay<'_> {
         before: usize,
         depth: usize,
     ) -> Result<(ir::LocalId, ir::Ty), FactsError> {
-        let (occurrence, binding) = self
+        sr::work(self.budget, node.path.len())?;
+        let binding = self
             .inventory
-            .local_operands
-            .get(&(source as *const Expr as usize))
+            .operand_nodes
+            .get(&node.path)
             .ok_or_else(|| {
                 FactsError::invalid(self.budget, "input lacks lexical operand authority")
             })?;
-        if !source_node_equal(occurrence, node, self.budget)? {
-            return Err(FactsError::invalid(
-                self.budget,
-                "input lexical occurrence changed",
-            ));
-        }
-        validate_original_occurrence(self.original, occurrence, self.budget)?;
+        let _ = source;
+        validate_original_occurrence(self.original, node, self.budget)?;
         validate_original_occurrence(self.original, binding, self.budget)?;
         let index = source_binding_index(&self.original.bindings, binding, self.budget)?
             .ok_or_else(|| FactsError::invalid(self.budget, "input lexical binding missing"))?;
@@ -177,7 +417,7 @@ impl Replay<'_> {
             referent: Arc::new(referent),
         })
     }
-    fn expression(
+    pub(super) fn expression(
         &self,
         source: &Expr,
         node: &sr::SourceNode,
@@ -194,6 +434,142 @@ impl Replay<'_> {
             .get(id.0)
             .ok_or_else(|| FactsError::invalid(self.budget, "input expression missing"))?;
         let ty = match (source, &actual.kind) {
+            (_, ir::ExprKind::ArrayToSlice { reference }) => {
+                sr::work(self.budget, self.original.unsize_mapping.len())?;
+                if !self
+                    .original
+                    .unsize_mapping
+                    .iter()
+                    .any(|row| row.wrapper == id && row.reference == *reference)
+                {
+                    return Err(FactsError::invalid(
+                        self.budget,
+                        "input slice coercion lacks original correspondence",
+                    ));
+                }
+                let source_ty =
+                    self.expression(source, node, *reference, before, None, depth + 1)?;
+                let Some((kind, element, _)) = source_ty.array_ref_element_len() else {
+                    return Err(FactsError::invalid(
+                        self.budget,
+                        "input slice coercion source is not an array reference",
+                    ));
+                };
+                self.reference(
+                    kind,
+                    ir::Ty::Slice {
+                        element: Arc::new(element.clone()),
+                    },
+                )?
+            }
+            (
+                Expr::Call { .. },
+                ir::ExprKind::Call {
+                    target,
+                    signature,
+                    args,
+                    ..
+                },
+            ) => {
+                let ir::Callee::Direct(direct) = target else {
+                    return Err(FactsError::unsupported(
+                        self.budget,
+                        "input producer requires direct source callable",
+                    ));
+                };
+                sr::work(self.budget, self.inventory.calls.len())?;
+                let source_index = self
+                    .inventory
+                    .calls
+                    .iter()
+                    .position(|site| site.node == *node)
+                    .ok_or_else(|| {
+                        FactsError::invalid(self.budget, "producer source occurrence missing")
+                    })?;
+                sr::work(self.budget, self.original.call_mapping.len())?;
+                let (position, (_, expression, original_target)) = self
+                    .original
+                    .call_mapping
+                    .iter()
+                    .enumerate()
+                    .find(|(_, (index, _, _))| *index == source_index)
+                    .ok_or_else(|| {
+                        FactsError::invalid(self.budget, "producer original call mapping missing")
+                    })?;
+                if *expression != id {
+                    return Err(FactsError::invalid(
+                        self.budget,
+                        "producer expression identity changed",
+                    ));
+                }
+                validate_original_callee(original_target, target, self.budget)?;
+                require_ordinary_free(&self.original.plan, direct.declaration, self.budget)?;
+                let site = &self.inventory.calls[source_index];
+                if site.application.is_some() || site.ordinary.is_none() {
+                    return Err(FactsError::unsupported(
+                        self.budget,
+                        "producer requires inferred ordinary source call",
+                    ));
+                }
+                let inputs = self
+                    .inventory
+                    .argument_syntax
+                    .get(&source_index)
+                    .ok_or_else(|| {
+                        FactsError::unsupported(self.budget, "producer input syntax is unsupported")
+                    })?;
+                let view = self.original.facts.original_callable_schema(
+                    tr::OriginalCallableSubject::Direct(direct.declaration),
+                )?;
+                let canonical = nominal_call_receipts::original_call_signature(
+                    self.original,
+                    position,
+                    id,
+                    target,
+                    signature,
+                    &self.original.facts,
+                    self.budget,
+                    &mut tr::TraitScratch::default(),
+                )?;
+                sr::work(self.budget, self.checked.call_evidence.len())?;
+                let evidence = self
+                    .checked
+                    .call_evidence
+                    .iter()
+                    .find(|row| row.call == id)
+                    .ok_or_else(|| {
+                        FactsError::invalid(self.budget, "producer argument trace missing")
+                    })?;
+                let trace = replay_shared_local_inputs(
+                    id,
+                    self.original,
+                    self.inventory,
+                    inputs,
+                    site,
+                    self.checked,
+                    args,
+                    direct,
+                    signature,
+                    canonical,
+                    &view,
+                    self.signatures,
+                    evidence,
+                    &self.original.facts,
+                    self.budget,
+                    depth + 1,
+                )?;
+                trace.result_type(self.budget, &mut |decl, args| {
+                    self.original
+                        .plan
+                        .intern_nominal(
+                            decl,
+                            args,
+                            ir::FactsCtx::Validated(&self.original.facts),
+                            self.budget,
+                        )
+                        .map_err(|e| source_error(self.budget, &e))
+                })?
+            }
             (Expr::Var(path), ir::ExprKind::Local(local)) if is_local_shaped_path(path) => {
                 let (root, ty) = self.operand(source, node, before, depth)?;
                 if root != *local {
@@ -414,6 +790,12 @@ impl Replay<'_> {
                 )?
             }
             _ => {
+                if syntax(source, self.budget, depth)? {
+                    return Err(FactsError::invalid(
+                        self.budget,
+                        "checked expression changed authenticated source shape",
+                    ));
+                }
                 return Err(FactsError::unsupported(
                     self.budget,
                     "input initializer has no recursive source evidence",

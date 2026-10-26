@@ -135,6 +135,58 @@ pub(super) enum NominalCallablePublication {
 mod canonical_source_replay_tests {
     use super::*;
     #[test]
+    fn recursive_return_and_expected_context_reject_forged_evidence() {
+        for source in [
+            "fn first<T,U>(x:T,y:U)->T{let _=y;x}fn main(){let mut n=7i32;let b=true;let r=first(&mut n,&b);}",
+            "enum E<T>{Some(T),None}fn pair<T,U>(x:T,y:U)->(T,U){(x,y)}fn main(){let mut n=7i32;let b=true;let p=pair((&mut n,&b),E::Some(&b));}",
+            "enum E<T>{Some(T),None}fn empty<T>()->E<T>{E::None}fn main(){let value:E<&i32>=empty();}",
+        ] {
+            let (_, _, budget, publication) = published(source, 1);
+            let original = publication.original();
+            sr::replay_original_calls(
+                publication.source().clone(),
+                original,
+                publication.facts(),
+                &budget,
+            )
+            .unwrap();
+            let mut forged = publication.source().as_ref().clone();
+            let call = forged
+                .exprs
+                .iter_mut()
+                .find(|value| matches!(value.kind, ir::ExprKind::Call { .. }))
+                .unwrap();
+            let ir::ExprKind::Call { signature, .. } = &mut call.kind else {
+                unreachable!()
+            };
+            signature.result = ir::Ty::Bool;
+            assert_eq!(
+                kind_error(sr::replay_original_calls(
+                    Arc::new(forged),
+                    original,
+                    publication.facts(),
+                    &budget
+                )),
+                tr::FactsErrorKind::InvalidMetadata
+            );
+            let mut forged = publication.source().as_ref().clone();
+            let row = Arc::make_mut(&mut forged.call_evidence)
+                .iter_mut()
+                .find(|row| !row.type_actual_regions.is_empty())
+                .unwrap();
+            row.type_actual_regions = Arc::from([]);
+            assert_eq!(
+                kind_error(sr::replay_original_calls(
+                    Arc::new(forged),
+                    original,
+                    publication.facts(),
+                    &budget
+                )),
+                tr::FactsErrorKind::InvalidMetadata
+            );
+        }
+    }
+    #[test]
     fn replay_nominal_identity_matches_canonical_slot_and_is_metered() {
         let (_, plan, _, _) = published("fn main(){}", 0);
         let declaration = plan.function_decl(0).unwrap();
@@ -1442,18 +1494,27 @@ mod canonical_source_replay_tests {
             "fn id<T>(x:T)->T{x}fn f(r:&mut i32){let y=id(r);}",
             "fn same<T>(x:T,y:T)->T{x}fn f(r:&i32){let y=same(r,r);}",
             "fn id<T>(x:T)->T{x}fn f(r:&i32){let a=r;let y=id(a);}",
-            "fn id<T>(x:T)->T{x}fn f(r:&i32){{let a:&i32=r;let y=id(a);}}",
             "fn id<T>(x:T)->T{x}fn f(r:&i32){let y=if true{id(r)}else{r};}",
         ] {
             let program = fixture_program(source);
             let budget = ir::PlanBudget::default();
             let plan = PlanCtx::from_program(&program, &budget).unwrap();
-            assert_eq!(
-                kind_error(plan.publish_callable_body(plan.function_decl(1).unwrap(), &budget)),
-                tr::FactsErrorKind::Unsupported,
-                "{source}"
-            );
+            let PublishedCallableBody::Source(publication) = plan
+                .publish_callable_body(plan.function_decl(1).unwrap(), &budget)
+                .unwrap()
+            else {
+                panic!("{source}")
+            };
+            ir::validate_published_source(&publication, &budget).unwrap();
         }
+        let nested =
+            fixture_program("fn id<T>(x:T)->T{x}fn f(r:&i32){{let a:&i32=r;let y=id(a);}}");
+        let budget = ir::PlanBudget::default();
+        let plan = PlanCtx::from_program(&nested, &budget).unwrap();
+        assert_eq!(
+            kind_error(plan.publish_callable_body(plan.function_decl(1).unwrap(), &budget)),
+            tr::FactsErrorKind::Unsupported
+        );
         let (_, _, budget, shadow) = published(
             "fn id<T>(x:T)->T{x}fn main(){let v=1;let w=2;let r:&i32=&v;let r:&i32=&w;let y=id(r);}",
             1,
@@ -1672,8 +1733,8 @@ mod canonical_source_replay_tests {
     }
 
     #[test]
-    fn root_borrow_unsupported_origins_have_typed_rejections() {
-        for (source, expected) in [
+    fn recursive_root_origins_support_fields_calls_and_chains() {
+        for (source, _former_boundary) in [
             (
                 "fn renamed<T>(x:T)->T{x}struct S{x:i32}fn main(){let value=S{x:1};let r=renamed(&value.x);}",
                 "inferred reference requires original shared local Var",
@@ -1706,28 +1767,14 @@ mod canonical_source_replay_tests {
                         && program.names.spelling(function.name.segments()[0]).unwrap() == "main"
                 })
                 .unwrap();
-            let error = plan
+            let PublishedCallableBody::Source(publication) = plan
                 .publish_callable_body(plan.function_decl(main).unwrap(), &budget)
-                .err()
-                .expect("bounded origin must remain unsupported");
-            assert_eq!(error.kind(), tr::FactsErrorKind::Unsupported);
-            let failure = super::super::compile_observed(source.into(), 1, true)
-                .err()
-                .unwrap();
-            assert!(
-                failure.error.to_string().contains(expected),
-                "{source}: {}",
-                failure.error
-            );
-            let report = failure.report.unwrap();
-            assert!(report.capture_complete);
-            assert!(!report.published_kind(super::super::BUILD));
-            assert!(
-                report
-                    .node_evaluations
-                    .iter()
-                    .all(|(key, _)| key.kind != super::super::OBJECT)
-            );
+                .unwrap()
+            else {
+                panic!("source publication missing")
+            };
+            ir::validate_published_source(&publication, &budget).unwrap();
+            super::super::compile_observed(source.into(), 1, true).unwrap();
         }
     }
 
@@ -1961,7 +2008,7 @@ mod canonical_source_replay_tests {
     #[test]
     fn borrowed_callable_replay_rejects_reborrow_timing_mutations() {
         let (_, _, budget, publication) = published(
-            "trait Marker{}struct S{}impl Marker for S{}fn apply<F>(f:F,x:i32)->i32{x}fn add(n:i32)->impl Marker{S{}}fn main(){let mut a=add(5);let first=&mut a;let result=apply(first,10);}",
+            "trait Marker{}struct S{}impl Marker for S{}fn apply<F>(f:&mut F,x:i32)->i32{x}fn add(n:i32)->impl Marker{S{}}fn main(){let mut a=add(5);let first=&mut a;let result=apply(first,10);}",
             2,
         );
         let original = publication.original().source_for_test();
@@ -2259,8 +2306,9 @@ struct SourceInventory {
     literal_arguments: HashMap<usize, Vec<Expr>>,
     // Rebuilt from exact immutable AST lexical operands, never checked types.
     shared_local_arguments: HashMap<usize, Vec<(sr::SourceNode, Option<ir::BorrowKind>)>>,
-    // Fresh lexical authority for every local operand, keyed only within this AST walk.
-    local_operands: HashMap<usize, (sr::SourceNode, sr::SourceNode)>,
+    // Fresh lexical authority uses exact source paths, including cloned argument syntax.
+    operand_nodes: HashMap<Arc<[u32]>, sr::SourceNode>,
+    argument_syntax: HashMap<usize, Vec<Expr>>,
     constants: Vec<(sr::SourceNode, PathKey)>,
     associated_constants: Vec<(sr::SourceNode, AssociatedConstUse)>,
     associated_constant_pointers: HashMap<usize, usize>,
@@ -2866,7 +2914,8 @@ impl SourceInventory {
             calls: Vec::new(),
             literal_arguments: HashMap::new(),
             shared_local_arguments: HashMap::new(),
-            local_operands: HashMap::new(),
+            operand_nodes: HashMap::new(),
+            argument_syntax: HashMap::new(),
             constants: Vec::new(),
             associated_constants: Vec::new(),
             associated_constant_pointers: HashMap::new(),
@@ -3551,16 +3600,13 @@ impl SourceInventory {
             _ => None,
         };
         if let Some(binding) = local {
-            reserve_source_map(&mut self.local_operands, budget)?;
+            reserve_source_map(&mut self.operand_nodes, budget)?;
             if self
-                .local_operands
-                .insert(expr as *const Expr as usize, (node.clone(), binding))
+                .operand_nodes
+                .insert(node.path.clone(), binding)
                 .is_some()
             {
-                return Err(FactsError::invalid(
-                    budget,
-                    "duplicate lexical source operand",
-                ));
+                return Err(FactsError::invalid(budget, "duplicate lexical source node"));
             }
         }
         match expr {
@@ -3687,6 +3733,10 @@ impl SourceInventory {
                     _ => (None, None),
                 };
                 let index = self.calls.len();
+                if let Some(syntax) = source_input_replay::copy_arguments(args, budget)? {
+                    reserve_source_map(&mut self.argument_syntax, budget)?;
+                    self.argument_syntax.insert(index, syntax);
+                }
                 sr::push(
                     &mut self.calls,
                     SourceCallSite {
@@ -4715,6 +4765,18 @@ impl CanonicalSourceCapability {
         }) else {
             return Ok(None);
         };
+        if site.application.is_none()
+            && recursive_argument_sources_supported(
+                &self.plan,
+                self.declaration,
+                &self.inventory,
+                index,
+                budget,
+            )
+            .map_err(|e| self.render(e))?
+        {
+            return Ok(None);
+        }
         if site.application.is_some() || site.direct_let.is_none() {
             return Ok(None);
         }
@@ -4867,7 +4929,7 @@ impl CanonicalSourceCapability {
         };
         if site.ordinary.is_none()
             || site.application.is_some()
-            || !self.inventory.shared_local_arguments.contains_key(&index)
+            || !self.inventory.argument_syntax.contains_key(&index)
         {
             return Ok(None);
         }
@@ -4877,11 +4939,11 @@ impl CanonicalSourceCapability {
             .map_err(|e| self.render(e))?;
         if !shared_local_input_candidate(&view, signature, args.len(), budget)
             .map_err(|e| self.render(e))?
-            || !recursive_input_sources_supported(
+            || !recursive_argument_sources_supported(
                 &self.plan,
                 self.declaration,
                 &self.inventory,
-                &self.inventory.shared_local_arguments[&index],
+                index,
                 budget,
             )
             .map_err(|e| self.render(e))?
@@ -6340,6 +6402,7 @@ fn borrowed_callable_source_binding(
 
 // This frontier infers input-owned actuals only. A reference-valued result
 // must still pass the existing direct-let/identity-return proof below.
+#[cfg(test)]
 fn shared_input_primitive_result(ty: &ir::Ty) -> bool {
     matches!(
         ty,
@@ -6348,6 +6411,7 @@ fn shared_input_primitive_result(ty: &ir::Ty) -> bool {
 }
 // Shape admission only. No nominal spelling, pointer identity, carrier summary,
 // or prior visit establishes absence. Recursive applications are unsupported.
+#[cfg(test)]
 fn shared_input_closed_result(ty: &ir::Ty, budget: &ir::PlanBudget) -> Result<bool, FactsError> {
     if budget.has_resource_failure() {
         return Err(FactsError::resource(
@@ -6418,6 +6482,7 @@ fn shared_input_closed_result(ty: &ir::Ty, budget: &ir::PlanBudget) -> Result<bo
     }
     Ok(complete)
 }
+#[cfg(test)]
 fn shared_input_result_absence(
     original: &ir::Ty,
     instantiated: &ir::Ty,
@@ -6476,141 +6541,123 @@ fn shared_local_input_candidate(
     let scopes = view.generic_env().scopes();
     if scopes.len() != 1
         || scopes[0].arity() == 0
-        || input_count == 0
         || input_count != view.signature().params.len()
         || input_count != signature.params.len()
-        || !shared_input_closed_result(&view.signature().result, budget)?
-        || !shared_input_closed_result(&signature.result, budget)?
     {
         return Ok(false);
     }
-    let mut carries_reference = false;
+    let mut carries_reference = contains_source_ref(&signature.result, budget, 0)?;
     for parameter in &signature.params {
         carries_reference |= contains_source_ref(parameter, budget, 0)?;
     }
     Ok(carries_reference)
 }
 
-// Dispatch follows the source evidence grammar, not inferred checked types.
-// Producer calls and closures retain their separate callable-source proof.
-fn recursive_input_sources_supported(
+fn recursive_argument_sources_supported(
     plan: &PlanCtx,
     declaration: ir::DeclId,
     inventory: &SourceInventory,
-    inputs: &[(sr::SourceNode, Option<ir::BorrowKind>)],
+    index: usize,
     budget: &ir::PlanBudget,
 ) -> Result<bool, FactsError> {
-    fn expression(
-        value: &Expr,
-        function: &Function,
-        inventory: &SourceInventory,
-        budget: &ir::PlanBudget,
-        depth: usize,
-    ) -> Result<bool, FactsError> {
-        sr::depth(budget, depth)?;
-        sr::work(budget, 1)?;
-        match value {
-            Expr::Var(_) | Expr::Borrow { .. } => {
-                let Some((_, node)) = inventory
-                    .local_operands
-                    .get(&(value as *const Expr as usize))
-                else {
-                    return Ok(false);
-                };
-                let Some(index) = source_binding_index(&inventory.bindings, node, budget)? else {
-                    return Ok(false);
-                };
-                binding(index, function, inventory, budget, depth + 1)
-            }
-            Expr::Integer(_) | Expr::Bool(_) | Expr::Char(_) => Ok(true),
-            Expr::Tuple(values)
-            | Expr::Array(values)
-            | Expr::TupleStruct { fields: values, .. } => {
-                for value in values {
-                    if !expression(value, function, inventory, budget, depth + 1)? {
-                        return Ok(false);
-                    }
-                }
-                Ok(true)
-            }
-            Expr::Struct { fields, .. } => {
-                for (_, value) in fields {
-                    if !expression(value, function, inventory, budget, depth + 1)? {
-                        return Ok(false);
-                    }
-                }
-                Ok(true)
-            }
-            Expr::EnumVariant { fields, .. } => {
-                for (_, value) in fields {
-                    if !expression(value, function, inventory, budget, depth + 1)? {
-                        return Ok(false);
-                    }
-                }
-                Ok(true)
-            }
-            Expr::Repeat { value, .. } => expression(value, function, inventory, budget, depth + 1),
-            _ => Ok(false),
-        }
-    }
-    fn binding(
-        index: usize,
-        function: &Function,
-        inventory: &SourceInventory,
-        budget: &ir::PlanBudget,
-        depth: usize,
-    ) -> Result<bool, FactsError> {
-        sr::depth(budget, depth)?;
-        sr::work(budget, 1)?;
-        let site = &inventory.bindings[index];
-        if site.parameter.is_some() {
-            return Ok(true);
-        }
-        let Some(statement) = site.statement else {
-            return Ok(false);
-        };
-        let Some(Stmt::Let { value, .. }) = function.body.statements.get(statement) else {
-            return Ok(false);
-        };
-        expression(value, function, inventory, budget, depth + 1)
-    }
+    let Some(arguments) = inventory.argument_syntax.get(&index) else {
+        return Ok(false);
+    };
     let function = plan
         .callable_body(&plan.program, declaration)
         .map_err(|e| source_error(budget, &e))?;
-    for (node, _) in inputs {
-        let Some(index) = source_binding_index(&inventory.bindings, node, budget)? else {
-            return Ok(false);
-        };
-        if !binding(index, function, inventory, budget, 0)? {
+    for (position, argument) in arguments.iter().enumerate() {
+        let node = inventory.calls[index].node.child(9, position, budget)?;
+        if !source_input_replay::supported(argument, &node, function, inventory, budget, 0)? {
             return Ok(false);
         }
     }
     Ok(true)
 }
-fn shared_local_source_type(
+
+fn source_result_context(
     original: &OriginalSource,
-    inventory: &SourceInventory,
-    index: usize,
+    site: &SourceCallSite,
+    call: ir::ExprId,
     checked: &ir::CheckedFunction,
     signatures: &Signatures,
     budget: &ir::PlanBudget,
-    depth: usize,
-) -> Result<(ir::LocalId, ir::Ty), FactsError> {
-    source_input_replay::Replay {
-        original,
-        inventory,
-        checked,
-        signatures,
+) -> Result<Option<ir::Ty>, FactsError> {
+    let root = sr::SourceNode {
+        owner: site.node.owner.clone(),
+        path: Arc::from([]),
+    };
+    if source_node_equal(
+        &root.child(1, 0, budget)?.child(6, 0, budget)?,
+        &site.node,
         budget,
+    )? {
+        let function = original
+            .plan
+            .callable_body(&original.plan.program, original.declaration)
+            .map_err(|e| source_error(budget, &e))?;
+        if function.body.tail.is_none() || checked.body.tail != Some(call) {
+            return Err(FactsError::invalid(
+                budget,
+                "declared result context changed source tail",
+            ));
+        }
+        let caller = original
+            .facts
+            .original_callable_schema(tr::OriginalCallableSubject::Direct(original.declaration))?;
+        caller.validate_for(&original.facts)?;
+        let ty = caller.signature().result.clone();
+        original
+            .facts
+            .validate_ty_metadata_with_budget(&ty, budget)?;
+        return Ok(Some(ty));
     }
-    .binding(index, depth)
+    for (index, binding) in original.bindings.iter().enumerate() {
+        sr::work(budget, 1)?;
+        if binding.annotation.is_none() || binding.statement.is_none() {
+            continue;
+        }
+        if !source_node_equal(&binding.node.child(3, 0, budget)?, &site.node, budget)? {
+            continue;
+        }
+        let local = mapped_source_binding(original, index, budget)?;
+        let position = original.root_positions[index].ok_or_else(|| {
+            FactsError::invalid(budget, "expected source context lost root mapping")
+        })?;
+        if !matches!(checked.body.statements.get(position), Some(ir::TypedStmt::Let { local: actual, value }) if *actual == local && *value == call)
+        {
+            return Err(FactsError::invalid(
+                budget,
+                "expected result context changed checked initializer",
+            ));
+        }
+        let ty = checked_local_ty(binding.annotation.as_ref().unwrap(), signatures)
+            .map_err(|e| source_error(budget, &e))?;
+        original
+            .facts
+            .validate_ty_metadata_with_budget(&ty, budget)?;
+        let declaration = checked
+            .locals
+            .get(local.0)
+            .ok_or_else(|| FactsError::invalid(budget, "expected context local missing"))?;
+        if !sr::replay_types_equal(&ty, &declaration.ty, budget)? {
+            return Err(FactsError::invalid(
+                budget,
+                "expected result annotation changed local type",
+            ));
+        }
+        return Ok(Some(ty));
+    }
+    Ok(None)
 }
+
 #[allow(clippy::too_many_arguments)]
 fn replay_shared_local_inputs(
     call_id: ir::ExprId,
     original: &OriginalSource,
     inventory: &SourceInventory,
-    inputs: &[(sr::SourceNode, Option<ir::BorrowKind>)],
+    inputs: &[Expr],
+    site: &SourceCallSite,
     checked: &ir::CheckedFunction,
     arguments: &[ir::ExprId],
     target: &ir::CallTarget,
@@ -6621,127 +6668,96 @@ fn replay_shared_local_inputs(
     evidence: &ir::CallEvidence,
     facts: &tr::ValidatedFacts,
     budget: &ir::PlanBudget,
+    depth: usize,
 ) -> Result<Arc<sr::CallInputTrace>, FactsError> {
-    // Only primitive or authenticated closed-enum results enter this proof.
-    // Neither the checked result nor an expected context infers a slot.
+    sr::depth(budget, depth)?;
     facts.validate_ty_metadata_with_budget(&signature.result, budget)?;
-    if !shared_input_result_absence(
-        &view.signature().result,
-        &canonical_signature.result,
-        facts,
-        budget,
-    )? || !shared_input_closed_result(&signature.result, budget)?
-        || inputs.is_empty()
-        || inputs.len() != arguments.len()
+    facts.validate_ty_metadata_with_budget(&canonical_signature.result, budget)?;
+    if inputs.len() != arguments.len()
         || inputs.len() != signature.params.len()
         || inputs.len() != view.signature().params.len()
+        || evidence.arguments.len() != arguments.len()
     {
-        return Err(FactsError::invalid(
-            budget,
-            "shared input closed result or arity changed",
-        ));
+        return Err(FactsError::invalid(budget, "source input arity changed"));
     }
-    if evidence.arguments.len() != arguments.len() {
-        return Err(FactsError::invalid(
-            budget,
-            "shared input trace argument count changed",
-        ));
-    }
-    let mut reconstructed = Vec::new();
+    let expected = source_result_context(original, site, call_id, checked, signatures, budget)?;
+    let replay = source_input_replay::Replay {
+        original,
+        inventory,
+        checked,
+        signatures,
+        budget,
+    };
+    let before = site
+        .node
+        .path
+        .get(3)
+        .copied()
+        .map(|value| value as usize)
+        .unwrap_or(usize::MAX);
     let mut input_types = Vec::new();
-    for (binding, borrow) in inputs {
-        let source_index = source_binding_index(&original.bindings, binding, budget)?
-            .ok_or_else(|| FactsError::invalid(budget, "input original binding missing"))?;
-        let (local, source_ty) = shared_local_source_type(
-            original,
-            inventory,
-            source_index,
-            checked,
-            signatures,
-            budget,
-            0,
-        )?;
-        let input = if let Some(kind) = borrow {
-            sr::retain(budget, std::mem::size_of::<ir::Ty>() + 32)?;
-            ir::Ty::Ref {
-                kind: *kind,
-                referent: Arc::new(source_ty.clone()),
-            }
-        } else {
-            source_ty.clone()
+    for (index, (source, argument)) in inputs.iter().zip(arguments).enumerate() {
+        let expectation = match &view.signature().params[index] {
+            ir::Ty::Ref { kind, .. } => ir::CallExpectation::FirmReference { kind: *kind },
+            _ => ir::CallExpectation::NoFirmReference,
         };
-        facts.validate_ty_metadata_with_budget(&input, budget)?;
+        let input = replay.argument(
+            source,
+            &site.node.child(9, index, budget)?,
+            *argument,
+            call_id,
+            index,
+            expectation,
+            before,
+            depth + 1,
+        )?;
+        if !sr::replay_types_equal(&input, &signature.params[index], budget)? {
+            return Err(FactsError::invalid(
+                budget,
+                "source input differs from canonical parameter",
+            ));
+        }
         sr::push(&mut input_types, input, budget)?;
-        sr::push(&mut reconstructed, (local, source_ty), budget)?;
     }
-    let trace = sr::infer_call_input_trace(view, &input_types, budget, &mut |decl, args| {
+    let trace = sr::infer_call_input_trace_with_context(
+        view,
+        &input_types,
+        expected.as_ref(),
+        budget,
+        &mut |decl, args| {
+            original
+                .plan
+                .intern_nominal(decl, args, ir::FactsCtx::Validated(facts), budget)
+                .map_err(|e| source_error(budget, &e))
+        },
+    )?;
+    trace.validate_actuals(&target.type_args, budget)?;
+    // The receipt authenticates canonical source signature -> mapped signature.
+    // Re-instantiation from the original declaration and independently inferred
+    // actuals proves the result, including all returned reference carriers.
+    let result = trace.result_type(budget, &mut |decl, args| {
         original
             .plan
             .intern_nominal(decl, args, ir::FactsCtx::Validated(facts), budget)
             .map_err(|e| source_error(budget, &e))
     })?;
-    trace.validate_actuals(&target.type_args, budget)?;
-    for (index, (((_, borrow), argument), (local, source_ty))) in
-        inputs.iter().zip(arguments).zip(&reconstructed).enumerate()
+    if !sr::replay_types_equal(&result, &canonical_signature.result, budget)?
+        || !replay_type_equal(&checked.exprs[call_id.0].ty, &signature.result, budget)?
     {
-        sr::work(budget, 1)?;
-        let input = &input_types[index];
-        let expectation = trace.expected(index, budget)?;
+        return Err(FactsError::invalid(
+            budget,
+            "source result differs from canonical call",
+        ));
+    }
+    for (index, argument) in arguments.iter().enumerate() {
         let row = &evidence.arguments[index];
-        if row.argument != index || row.value != *argument || row.expectation != expectation {
-            return Err(FactsError::invalid(
-                budget,
-                "input trace changed argument or expectation",
-            ));
-        }
-        let value = checked
-            .exprs
-            .get(argument.0)
-            .ok_or_else(|| FactsError::invalid(budget, "input checked argument missing"))?;
-        let exact = if let Some(kind) = borrow {
-            matches!(&value.kind, ir::ExprKind::Borrow { kind: actual_kind, place, timing: ir::BorrowTiming::Immediate }
-                if actual_kind == kind && place.local == *local && place.projection.is_empty())
-        } else if matches!(
-            expectation,
-            ir::CallExpectation::FirmReference {
-                kind: ir::BorrowKind::Mut
-            }
-        ) {
-            match &value.kind {
-                ir::ExprKind::Borrow {
-                    kind: ir::BorrowKind::Mut,
-                    place,
-                    timing:
-                        ir::BorrowTiming::TwoPhase {
-                            activation,
-                            argument: position,
-                            reason: ir::ImplicitBorrowKind::MutableArgumentReborrow { carrier },
-                        },
-                } if *activation == call_id
-                    && *position == index
-                    && place.local == *local
-                    && place.projection == [ir::Projection::Deref] =>
-                {
-                    let carrier = checked.exprs.get(carrier.0).ok_or_else(|| {
-                        FactsError::invalid(budget, "input reborrow carrier missing")
-                    })?;
-                    matches!(carrier.kind, ir::ExprKind::Local(actual) if actual == *local)
-                        && carrier.completion == ir::Completion::Returns
-                        && sr::replay_types_equal(source_ty, &carrier.ty, budget)?
-                }
-                _ => false,
-            }
-        } else {
-            matches!(value.kind, ir::ExprKind::Local(actual) if actual == *local)
-        };
-        if !exact
-            || value.completion != ir::Completion::Returns
-            || !sr::replay_types_equal(input, &value.ty, budget)?
-            || !sr::replay_types_equal(input, &signature.params[index], budget)?
+        if row.argument != index
+            || row.value != *argument
+            || row.expectation != trace.expected(index, budget)?
         {
             return Err(FactsError::invalid(
                 budget,
-                "input checked operand changed source identity or type",
+                "input trace changed argument or expectation",
             ));
         }
     }
@@ -7245,17 +7261,15 @@ pub(super) fn replay_source_body(
         for actual in original_target.type_args.iter() {
             new_reference |= contains_source_ref(actual, budget, 0)?;
         }
-        if !new_reference
-            && !(fresh.shared_local_arguments.contains_key(&index)
-                && shared_local_input_candidate(&view, signature, args.len(), budget)?
-                && recursive_input_sources_supported(
-                    &original.plan,
-                    original.declaration,
-                    &fresh,
-                    &fresh.shared_local_arguments[&index],
-                    budget,
-                )?)
-        {
+        let generalized = shared_local_input_candidate(&view, signature, args.len(), budget)?
+            && recursive_argument_sources_supported(
+                &original.plan,
+                original.declaration,
+                &fresh,
+                index,
+                budget,
+            )?;
+        if !new_reference && !generalized {
             continue;
         }
         require_ordinary_free(&original.plan, expected_decl, budget)?;
@@ -7267,7 +7281,8 @@ pub(super) fn replay_source_body(
         // A freshly borrowed source root (`f(&mut r)`) passed as the only
         // argument of a callable whose result carries no reference likewise
         // has no returned loan; the ordinary borrow analysis checks the loan.
-        if target.type_args.len() == 1
+        if !generalized
+            && target.type_args.len() == 1
             && let ir::Ty::Ref { kind, referent } = &target.type_args[0]
             && (borrowed_callable_leaf(referent, budget, 0)?
                 || (signature.params.len() == 1
@@ -7419,7 +7434,7 @@ pub(super) fn replay_source_body(
             .map_err(|e| source_error(budget, &e))?;
             continue;
         }
-        if let Some(literals) = fresh.literal_arguments.get(&index) {
+        if !generalized && let Some(literals) = fresh.literal_arguments.get(&index) {
             literal_call_inputs::validate(
                 literals,
                 checked,
@@ -7435,16 +7450,8 @@ pub(super) fn replay_source_body(
             )?;
             continue;
         }
-        if let Some(inputs) = fresh.shared_local_arguments.get(&index)
-            && shared_local_input_candidate(&view, signature, inputs.len(), budget)?
-            && recursive_input_sources_supported(
-                &original.plan,
-                original.declaration,
-                &fresh,
-                inputs,
-                budget,
-            )?
-        {
+        if generalized {
+            let inputs = &fresh.argument_syntax[&index];
             let ir::ExprKind::Call {
                 target: checked_callee,
                 ..
@@ -7472,6 +7479,7 @@ pub(super) fn replay_source_body(
                 original,
                 &fresh,
                 inputs,
+                site,
                 checked,
                 args,
                 target,
@@ -7482,6 +7490,7 @@ pub(super) fn replay_source_body(
                 evidence,
                 facts,
                 budget,
+                0,
             )?;
             sr::push(
                 &mut decisions,

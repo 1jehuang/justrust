@@ -288,3 +288,37 @@ one own generic binder. Direct aggregate operands, arbitrary scoped/producer
 expressions and generalized returned-reference inference remain separate work.
 Acceptance lives in `callable_reference_inputs`, with source forgery tests in
 `canonical_source_replay_tests` and solver evidence tests in `source_replay`.
+
+## Recursive returned-result composition
+
+The source integration now reuses the same input trace for reference-bearing
+results. It reconstructs the original result schema using independently inferred
+actuals as rigid terms, rather than inferring from the checked result. Completed
+graph nominal actuals retain their exact capabilities during substitution. The
+old single-slot scalar-reference identity path is no longer required for the
+covered ordinary calls.
+
+Original syntax evidence includes direct aggregate operands and ordinary producer
+calls, so a returned reference can feed another generic call without becoming
+unauthenticated checked-type evidence. Authored root result annotations and
+function-tail declared return types can constrain otherwise input-free calls.
+An opaque `T` still moves a mutable reference,
+whereas an authored `&mut T` preserves reborrow semantics. Existing canonical
+signature, lifetime, ownership, source identity and carrier-region checks remain
+mandatory. Recursive replay and result substitution retain per-task depth and
+work limits.
+
+Body-local structural method constraints also descend through reference-bearing
+nominal arguments. A unique unspecialized blanket implementation can propagate
+receiver and result equalities before the final checked method selection.
+Specialized or competing implementation heads are not guessed. This replaces
+the former top-level numeric/callable-only admission rule; nested reference,
+tuple and array constraints are covered in the existing `local_literals` tests.
+
+`reference_actuals` tests multi-slot reference and aggregate returns, nested and
+mutable references, rigid caller parameters, source result annotations, composed
+calls and conflicting or escaping borrows. These cases compare stock execution
+with native CHECK/BUILD/run at workers 1 and 8. Core and frontend tests mutate
+result schemas, expected contexts, actuals and carrier rows to verify rejection.
+This is not full Rust inference: unsupported expression/context forms, multiple
+inference binders and unrelated trait/projection solving remain separate work.
