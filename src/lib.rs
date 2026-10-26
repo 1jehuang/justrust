@@ -12,9 +12,11 @@
 mod account;
 mod agent_output;
 mod agents;
+mod arm64_tools;
 mod buildd;
 mod buildscript;
 mod cross_tools;
+mod darwin_tools;
 mod depcache;
 mod depcache_gc;
 mod depcache_prebuilt;
@@ -39,6 +41,7 @@ mod findings;
 mod history;
 #[cfg(unix)]
 mod hotpatch;
+mod msvc_tools;
 /// Hot patching rewrites ELF binaries: nothing to do on Windows.
 #[cfg(windows)]
 mod hotpatch {
@@ -462,6 +465,13 @@ enum Command {
 
 #[derive(Subcommand)]
 enum ToolchainCmd {
+    /// Import a lawfully supplied macOS SDK into this build host's managed store.
+    ImportDarwinSdk {
+        source: PathBuf,
+        /// Confirm that you have rights to use this SDK on this host.
+        #[arg(long)]
+        licensed: bool,
+    },
     /// Which toolchain builds here use, and what is installed (default).
     Status,
     /// Download a toolchain (default: the one pinned here) from
@@ -891,6 +901,13 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
         Command::Early { action } => early::command(&action)?,
         Command::Daemon { action, args } => buildd::command(&action, args)?,
         Command::Toolchain { cmd } => match cmd.unwrap_or(ToolchainCmd::Status) {
+            ToolchainCmd::ImportDarwinSdk { source, licensed } => {
+                anyhow::ensure!(
+                    licensed,
+                    "SDK import requires --licensed confirmation from the SDK owner"
+                );
+                println!("{}", darwin_tools::provision(&source)?);
+            }
             ToolchainCmd::Status => toolchain::status()?,
             ToolchainCmd::Install { spec } => toolchain::install_command(spec)?,
             ToolchainCmd::Pin { spec, no_install } => toolchain::pin_command(&spec, no_install)?,

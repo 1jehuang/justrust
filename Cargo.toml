@@ -27,7 +27,7 @@ toml_edit = "0.25"
 flate2 = "1.1.10"
 tar = "0.4"
 memchr = "2"
-object = { version = "=0.37.3", default-features = false, features = ["read_core", "elf", "pe", "std"] }
+object = { version = "=0.37.3", default-features = false, features = ["read_core", "elf", "pe", "macho", "std"] }
 memmap2 = "0.9.11"
 
 # Large artifact round trips otherwise spend their test time in debug DEFLATE.

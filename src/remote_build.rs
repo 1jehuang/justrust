@@ -93,10 +93,58 @@ fn forwarded_env(mut lookup: impl FnMut(&str) -> Option<String>) -> Vec<(String,
             env.push((name.to_owned(), value));
         }
     }
+    if let Some(id) = lookup("JUSTRUST_DARWIN_SDK")
+        && id.len() == 64
+        && id.bytes().all(|b| b.is_ascii_hexdigit())
+    {
+        env.push(("JUSTRUST_DARWIN_SDK".into(), id));
+    }
+    if lookup("JUSTRUST_ACCEPT_MICROSOFT_SDK_LICENSE").as_deref() == Some("1") {
+        env.push(("JUSTRUST_ACCEPT_MICROSOFT_SDK_LICENSE".into(), "1".into()));
+    }
     if lookup("CARGO_BUILD_RUSTC_WRAPPER").as_deref() == Some("") {
         env.push(("CARGO_BUILD_RUSTC_WRAPPER".into(), String::new()));
     }
     env
+}
+
+#[cfg(test)]
+mod platform_env_tests {
+    use super::forwarded_env;
+    #[test]
+    fn sdk_selection_never_forwards_paths_or_signing_keys() {
+        for value in ["/private/sdk", "../sdk", "secret", ""] {
+            assert!(
+                forwarded_env(|name| (name == "JUSTRUST_DARWIN_SDK").then(|| value.into()))
+                    .is_empty()
+            );
+        }
+        let id = "a".repeat(64);
+        assert_eq!(
+            forwarded_env(|name| (name == "JUSTRUST_DARWIN_SDK").then(|| id.clone())),
+            vec![("JUSTRUST_DARWIN_SDK".into(), id)]
+        );
+        assert!(
+            forwarded_env(|name| match name {
+                "APPLE_SIGNING_KEY" | "WINDOWS_CERTIFICATE_PASSWORD" | "SDKROOT" =>
+                    Some("secret".into()),
+                _ => None,
+            })
+            .is_empty()
+        );
+        assert!(
+            forwarded_env(
+                |name| (name == "JUSTRUST_ACCEPT_MICROSOFT_SDK_LICENSE").then(|| "yes".into())
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            forwarded_env(
+                |name| (name == "JUSTRUST_ACCEPT_MICROSOFT_SDK_LICENSE").then(|| "1".into())
+            ),
+            vec![("JUSTRUST_ACCEPT_MICROSOFT_SDK_LICENSE".into(), "1".into())]
+        );
+    }
 }
 
 /// Every directory the machine must mirror for a build started in `cwd`.

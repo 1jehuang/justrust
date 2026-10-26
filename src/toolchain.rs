@@ -933,6 +933,9 @@ pub(crate) fn add_target(tc: &Toolchain, target: &str, log: &mut dyn std::io::Wr
     if !crate::remote_artifacts::musl_target(target)
         && !crate::cross_tools::supported(target)
         && !crate::remote_artifacts::glibc_target(target)
+        && !crate::darwin_tools::supported(target)
+        && !crate::arm64_tools::supported(target)
+        && !crate::msvc_tools::supported(target)
     {
         bail!("automatic target installation does not support {target}");
     }

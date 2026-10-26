@@ -267,8 +267,14 @@ pub fn exec_cargo(args: &[OsString]) -> ! {
         report_build_failure(args, "toolchain_required", false, Some(1));
         std::process::exit(1);
     }
+    let mut platform_args = args.to_vec();
+    if let Err(error) = apply_platform_tools(&mut cmd, &mut platform_args) {
+        eprintln!("justrust: {error:#}");
+        report_build_failure(args, "toolchain_required", false, Some(1));
+        std::process::exit(1);
+    }
     let cargo = PathBuf::from(cmd.get_program());
-    let err = crate::sys::exec(cmd.args(args));
+    let err = crate::sys::exec(cmd.args(&platform_args));
     eprintln!("justrust: failed to exec {}: {err}", cargo.display());
     report_build_failure(args, "cargo_exec", false, Some(127));
     std::process::exit(127);
@@ -477,6 +483,42 @@ pub(crate) fn requested_targets(args: &[OsString], env_target: Option<OsString>)
     targets
 }
 
+fn apply_platform_tools(cmd: &mut Command, args: &mut Vec<OsString>) -> Result<()> {
+    let targets = requested_targets(args, None);
+    let [target] = targets.as_slice() else {
+        return Ok(());
+    };
+    let Some(target) = target.to_str() else {
+        return Ok(());
+    };
+    match subcommand(args).as_deref() {
+        Some("build") if crate::msvc_tools::supported(target) => {
+            let root = crate::msvc_tools::prepare(target)?;
+            crate::msvc_tools::apply(cmd, &root, target)?;
+            let index = args
+                .iter()
+                .position(|arg| arg == "build")
+                .context("missing build subcommand")?;
+            args.insert(index, OsString::from("xwin"));
+        }
+        Some("zigbuild") if crate::darwin_tools::supported(target) => {
+            let id = std::env::var("JUSTRUST_DARWIN_SDK").context(
+                "macOS cross builds require JUSTRUST_DARWIN_SDK=<managed SDK id>; provision a licensed SDK on the host with justrust toolchain import-darwin-sdk --licensed <path>"
+            )?;
+            crate::darwin_tools::apply(cmd, target, &id)?;
+        }
+        Some("zigbuild") if crate::arm64_tools::supported(target) => {
+            let text: Vec<String> = args
+                .iter()
+                .map(|arg| arg.to_string_lossy().into_owned())
+                .collect();
+            crate::arm64_tools::configure(cmd, &text)?;
+        }
+        _ => (),
+    }
+    Ok(())
+}
+
 fn target_has_core(rustc: &Path, target: &OsString) -> bool {
     let normalized = target.to_str().map(crate::remote_artifacts::rust_target);
     let Ok(output) = Command::new(rustc)
@@ -530,6 +572,9 @@ fn compatible_toolchain(
             if let Some(target_name) = target.to_str()
                 && (crate::remote_artifacts::musl_target(target_name)
                     || crate::remote_artifacts::glibc_target(target_name)
+                    || crate::darwin_tools::supported(target_name)
+                    || crate::arm64_tools::supported(target_name)
+                    || crate::msvc_tools::supported(target_name)
                     || crate::cross_tools::supported(target_name))
                 && !target_has_core(&tc.bin("rustc"), target)
                 && let Err(error) =
@@ -758,6 +803,7 @@ fn record(
             .map_err(|error| ToolchainRequired(format!("release tools unavailable: {error:#}")))?;
         crate::release_tools::apply(&mut cmd, tools)?;
     }
+    apply_platform_tools(&mut cmd, &mut cargo_args)?;
     if let Some(p) = &pool {
         cmd.env(crate::test_pool::POOL_ENV, p.sock());
     }

@@ -99,7 +99,13 @@ fn routable(sub: &str) -> bool {
     matches!(sub, "check" | "clippy" | "test")
 }
 
-/// Cross execution is never allowed. Windows GNU is explicit build-only.
+/// Cross execution is never allowed. Additional platform paths are build-only.
+fn extra_zig_target(target: &str) -> bool {
+    crate::remote_artifacts::glibc_target(target)
+        || crate::darwin_tools::supported(target)
+        || crate::arm64_tools::supported(target)
+}
+
 fn unsupported_hosted_target(args: &[OsString], env_target: Option<OsString>) -> bool {
     let native = format!("{}-unknown-linux-gnu", std::env::consts::ARCH);
     let musl_build = args
@@ -118,9 +124,10 @@ fn unsupported_hosted_target(args: &[OsString], env_target: Option<OsString>) ->
         .any(|target| {
             target != native.as_str()
                 && !(args.first().is_some_and(|a| a == "zigbuild")
-                    && target
-                        .to_str()
-                        .is_some_and(crate::remote_artifacts::glibc_target))
+                    && target.to_str().is_some_and(extra_zig_target))
+                && !(args.first().is_some_and(|a| a == "build")
+                    && target.to_str().is_some_and(crate::msvc_tools::supported)
+                    && routable_build(&strings))
                 && !(windows_compile && target == crate::cross_tools::WINDOWS_GNU)
                 && !(musl_build
                     && target
@@ -143,12 +150,17 @@ fn routable_build(args: &[String]) -> bool {
         return false;
     }
     if zig {
-        if !crate::remote_artifacts::build_target(args).is_some_and(|t| {
-            crate::remote_artifacts::musl_target(t) || crate::remote_artifacts::glibc_target(t)
-        }) {
+        if !crate::remote_artifacts::build_target(args)
+            .is_some_and(|t| crate::remote_artifacts::musl_target(t) || extra_zig_target(t))
+        {
             return false;
         }
     } else if let Some(target) = crate::remote_artifacts::build_target(args) {
+        if crate::msvc_tools::supported(target) {
+            let os: Vec<OsString> = args.iter().map(OsString::from).collect();
+            return crate::slots::profile_dir(&os).file_name()
+                != Some(std::ffi::OsStr::new("debug"));
+        }
         if target == crate::cross_tools::WINDOWS_GNU {
             // Explicit cross artifacts are requested locally even for debug.
             return true;
@@ -780,6 +792,9 @@ mod tests {
             "x86_64-unknown-linux-musl",
             "aarch64-unknown-linux-musl",
             crate::remote_artifacts::GLIBC_217_TARGET,
+            "x86_64-apple-darwin",
+            "aarch64-apple-darwin",
+            "aarch64-unknown-linux-gnu",
         ] {
             let args = vec![
                 "zigbuild".into(),
@@ -806,7 +821,8 @@ mod tests {
             "x86_64-unknown-linux-gnu.2.17.0",
             "x86_64-unknown-linux-gnu.2.17/../../escape",
             "aarch64-unknown-linux-gnu.2.17",
-            "aarch64-apple-darwin",
+            "aarch64-apple-ios",
+            "x86_64-pc-windows-msvc",
             "custom.json",
             "",
         ] {
@@ -823,6 +839,29 @@ mod tests {
             "--".into(),
             "--target=x86_64-unknown-linux-musl".into()
         ]));
+    }
+
+    #[test]
+    fn msvc_release_is_build_only() {
+        for target in ["x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc"] {
+            let build = vec![
+                "build".into(),
+                "--release".into(),
+                format!("--target={target}"),
+            ];
+            assert!(routable_build(&build));
+            assert!(!unsupported_hosted_target(
+                &build.iter().map(OsString::from).collect::<Vec<_>>(),
+                None
+            ));
+            for sub in ["test", "check", "run"] {
+                let args = [
+                    OsString::from(sub),
+                    OsString::from(format!("--target={target}")),
+                ];
+                assert!(unsupported_hosted_target(&args, None));
+            }
+        }
     }
 
     const NOW: f64 = 1_000_000.0;

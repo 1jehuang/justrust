@@ -591,18 +591,23 @@ fn check_native_test(data: &[u8]) -> Result<()> {
     Ok(())
 }
 
-fn check_windows(data: &[u8], executable: bool) -> Result<()> {
+fn check_windows_for_target(data: &[u8], executable: bool, target: &str) -> Result<()> {
     use object::{Object, ObjectKind, ObjectSection};
+    let expected = match target {
+        "aarch64-pc-windows-msvc" => object::Architecture::Aarch64,
+        "x86_64-pc-windows-msvc" | "x86_64-pc-windows-gnu" => object::Architecture::X86_64,
+        _ => bail!("unsupported Windows artifact target"),
+    };
     let file = object::File::parse(data).context("expected Windows PE artifact")?;
     if file.format() != object::BinaryFormat::Pe
-        || file.architecture() != object::Architecture::X86_64
+        || file.architecture() != expected
         || !file.is_64()
         || !matches!(file.flags(), object::FileFlags::Coff { characteristics } if characteristics & object::pe::IMAGE_FILE_EXECUTABLE_IMAGE != 0)
         || !matches!(file.kind(), ObjectKind::Executable | ObjectKind::Dynamic)
         || (executable && file.kind() != ObjectKind::Executable)
     {
         bail!(
-            "artifact is not a matching Windows PE x86-64 {}",
+            "artifact is not a matching Windows PE {target} {}",
             if executable { "executable" } else { "image" }
         );
     }
@@ -610,6 +615,37 @@ fn check_windows(data: &[u8], executable: bool) -> Result<()> {
         section
             .data()
             .context("invalid Windows PE section extent")?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+fn check_windows(data: &[u8], executable: bool) -> Result<()> {
+    check_windows_for_target(data, executable, crate::cross_tools::WINDOWS_GNU)
+}
+
+fn check_darwin(data: &[u8], target: &str) -> Result<()> {
+    use object::{Object, ObjectKind, ObjectSection, ObjectSegment};
+    let expected = match target {
+        "aarch64-apple-darwin" => object::Architecture::Aarch64,
+        "x86_64-apple-darwin" => object::Architecture::X86_64,
+        _ => bail!("unsupported Darwin artifact target"),
+    };
+    let file = object::File::parse(data).context("expected Mach-O artifact")?;
+    if file.format() != object::BinaryFormat::MachO
+        || file.architecture() != expected
+        || !file.is_64()
+        || file.kind() != ObjectKind::Executable
+        || file.entry() == 0
+        || file.segments().next().is_none()
+    {
+        bail!("artifact is not a matching Mach-O executable for {target}");
+    }
+    for section in file.sections() {
+        section.data().context("invalid Mach-O section extent")?;
+    }
+    for segment in file.segments() {
+        segment.data().context("invalid Mach-O segment extent")?;
     }
     Ok(())
 }
@@ -675,8 +711,10 @@ enum Validation<'a> {
     Glibc217,
     Musl(&'a str),
     Test,
-    WindowsBuild,
-    WindowsTest,
+    WindowsBuild(&'a str),
+    WindowsTest(&'a str),
+    Darwin(&'a str),
+    Arm64,
 }
 
 fn apply(
@@ -688,7 +726,7 @@ fn apply(
     data: &[u8],
     validation: Validation<'_>,
 ) -> Result<PathBuf> {
-    let compile_only = matches!(validation, Validation::Test | Validation::WindowsTest);
+    let compile_only = matches!(validation, Validation::Test | Validation::WindowsTest(_));
     if !safe_name(name) {
         bail!("unsafe artifact name {name:?}");
     }
@@ -731,10 +769,14 @@ fn apply(
             Validation::Glibc217 => check_glibc_217(&std::fs::read(&tmp)?)?,
             Validation::Test => check_native_test(&std::fs::read(&tmp)?)?,
             Validation::Musl(target) => check_static_musl(&std::fs::read(&tmp)?, target)?,
-            Validation::WindowsBuild => {
-                check_windows(&std::fs::read(&tmp)?, name.ends_with(".exe"))?
+            Validation::WindowsBuild(target) => {
+                check_windows_for_target(&std::fs::read(&tmp)?, name.ends_with(".exe"), target)?
             }
-            Validation::WindowsTest => check_windows(&std::fs::read(&tmp)?, true)?,
+            Validation::WindowsTest(target) => {
+                check_windows_for_target(&std::fs::read(&tmp)?, true, target)?
+            }
+            Validation::Darwin(target) => check_darwin(&std::fs::read(&tmp)?, target)?,
+            Validation::Arm64 => crate::arm64_tools::validate_artifact(&std::fs::read(&tmp)?)?,
             Validation::NativeBuild if mode & 0o111 != 0 || name.contains(".so") => {
                 check_libs(&tmp)?
             }
@@ -780,7 +822,11 @@ fn fetch_inner(
     };
     let musl = build_target(args).filter(|target| musl_target(target));
     let glibc = build_target(args).is_some_and(glibc_target);
-    let windows = build_target(args) == Some(crate::cross_tools::WINDOWS_GNU);
+    let windows = build_target(args).filter(|target| {
+        *target == crate::cross_tools::WINDOWS_GNU || crate::msvc_tools::supported(target)
+    });
+    let darwin = build_target(args).filter(|target| crate::darwin_tools::supported(target));
+    let arm64 = build_target(args).is_some_and(crate::arm64_tools::supported);
     let mut records = load_records();
     // A newer locally built file is not evidence that it is this hosted
     // release. Only reuse files with known remote provenance for musl.
@@ -790,9 +836,28 @@ fn fetch_inner(
         have_list(&dir, &records)
     }
     .into_iter()
-    .filter(|h| (musl.is_none() && !windows && !glibc) || h.id.is_some())
     .filter(|h| {
-        !glibc || std::fs::read(dir.join(&h.name)).is_ok_and(|data| check_glibc_217(&data).is_ok())
+        (musl.is_none() && windows.is_none() && !glibc && darwin.is_none() && !arm64)
+            || h.id.is_some()
+    })
+    .filter(|h| {
+        if !glibc && darwin.is_none() && !arm64 && windows.is_none() {
+            return true;
+        }
+        let validate = |data: &[u8]| {
+            if glibc {
+                check_glibc_217(data)
+            } else if let Some(target) = darwin {
+                check_darwin(data, target)
+            } else if arm64 {
+                crate::arm64_tools::validate_artifact(data)
+            } else if let Some(target) = windows {
+                check_windows_for_target(data, h.name.ends_with(".exe"), target)
+            } else {
+                Ok(())
+            }
+        };
+        std::fs::read(dir.join(&h.name)).is_ok_and(|data| validate(&data).is_ok())
     })
     .collect();
     let backend = crate::remote_backend::load().context("no remote machine configured")?;
@@ -832,7 +897,13 @@ fn fetch_inner(
             }
             match serde_json::from_str::<Frame>(&line).context("bad artifact frame")? {
                 Frame::Hello { arch, dir } => {
-                    if musl.is_none() && !windows && !glibc && arch != std::env::consts::ARCH {
+                    if musl.is_none()
+                        && windows.is_none()
+                        && !glibc
+                        && darwin.is_none()
+                        && !arm64
+                        && arch != std::env::consts::ARCH
+                    {
                         bail!(
                             "the machine builds for {arch}, this machine is {}",
                             std::env::consts::ARCH
@@ -892,10 +963,16 @@ fn fetch_inner(
                     }
                     let mut data = vec![0; len as usize];
                     r.read_exact(&mut data)?;
-                    let validation = if windows && test_run.is_some() {
-                        Validation::WindowsTest
-                    } else if windows {
-                        Validation::WindowsBuild
+                    let validation = if let Some(target) = windows {
+                        if test_run.is_some() {
+                            Validation::WindowsTest(target)
+                        } else {
+                            Validation::WindowsBuild(target)
+                        }
+                    } else if let Some(target) = darwin {
+                        Validation::Darwin(target)
+                    } else if arm64 {
+                        Validation::Arm64
                     } else if test_run.is_some() {
                         Validation::Test
                     } else if let Some(target) = musl {
@@ -1231,6 +1308,63 @@ mod tests {
             .is_err()
         );
         assert!(check_glibc_217(b"GLIBC_2.17").is_err());
+    }
+
+    #[test]
+    fn msvc_pe_architecture_must_match_request() {
+        let arm = pe_fixture(0xaa64, false);
+        check_windows_for_target(&arm, true, "aarch64-pc-windows-msvc").unwrap();
+        assert!(check_windows_for_target(&arm, true, "x86_64-pc-windows-msvc").is_err());
+        assert!(
+            check_windows_for_target(&pe_fixture(0x8664, false), true, "aarch64-pc-windows-msvc")
+                .is_err()
+        );
+        assert!(check_windows_for_target(&arm, true, "untrusted-target").is_err());
+    }
+
+    fn macho_fixture(cpu: u32) -> Vec<u8> {
+        let mut bytes = vec![0u8; 209];
+        for (offset, value) in [
+            (0, 0xfeedfacfu32),
+            (4, cpu),
+            (8, 3),
+            (12, 2),
+            (16, 2),
+            (20, 176),
+            (32, 0x19),
+            (36, 152),
+            (88, 5),
+            (92, 5),
+            (96, 1),
+            (152, 208),
+            (184, 0x80000028),
+            (188, 24),
+        ] {
+            bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+        }
+        bytes[40..46].copy_from_slice(b"__TEXT");
+        bytes[64..72].copy_from_slice(&4096u64.to_le_bytes());
+        bytes[80..88].copy_from_slice(&209u64.to_le_bytes());
+        bytes[104..110].copy_from_slice(b"__text");
+        bytes[120..126].copy_from_slice(b"__TEXT");
+        bytes[136..144].copy_from_slice(&208u64.to_le_bytes());
+        bytes[144..152].copy_from_slice(&1u64.to_le_bytes());
+        bytes[192..200].copy_from_slice(&208u64.to_le_bytes());
+        bytes
+    }
+
+    #[test]
+    fn darwin_requires_matching_executable_and_valid_segment_extents() {
+        for (cpu, target, other) in [
+            (0x01000007, "x86_64-apple-darwin", "aarch64-apple-darwin"),
+            (0x0100000c, "aarch64-apple-darwin", "x86_64-apple-darwin"),
+        ] {
+            let image = macho_fixture(cpu);
+            check_darwin(&image, target).unwrap();
+            assert!(check_darwin(&image, other).is_err());
+            assert!(check_darwin(&image[..208], target).is_err());
+        }
+        assert!(check_darwin(b"not a Mach-O", "x86_64-apple-darwin").is_err());
     }
 
     #[cfg(unix)]
