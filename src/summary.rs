@@ -1176,11 +1176,37 @@ impl Summary {
                 v = "ok, but 0 tests matched the filter".to_owned();
             }
             v
+        } else if let Some(status) = self.compile_only_status() {
+            status.to_owned()
         } else {
             "ok".to_owned()
         };
         out.push_str(&self.agent_report(&verdict, hidden));
         out
+    }
+
+    /// Compilation is not evidence that the resulting program was tested.
+    /// Keep this derived from the recorded command so old summaries get the
+    /// same truthful status without a schema or cache-key change.
+    fn compile_only_status(&self) -> Option<&'static str> {
+        if self.exit != 0 || self.diagnostics.compile_failed || self.tests.has_results() {
+            return None;
+        }
+        match self.subcommand.as_str() {
+            "build" | "b" | "zigbuild" => Some("build succeeded, tests not run"),
+            "check" | "c" => Some("check succeeded, tests not run"),
+            "clippy" => Some("lint succeeded, tests not run"),
+            "test" | "t"
+                if self
+                    .args
+                    .iter()
+                    .take_while(|arg| arg.as_str() != "--")
+                    .any(|arg| arg == "--no-run") =>
+            {
+                Some("test binaries built, tests not run (--no-run)")
+            }
+            _ => None,
+        }
     }
 
     /// The detailed report shown after every agent-mode run: verdict, the full
@@ -1431,6 +1457,9 @@ impl Summary {
         phase("tests", p.test_run);
         phase("tail", p.tail);
         let mut s = parts.join(" · ");
+        if let Some(status) = self.compile_only_status() {
+            s.push_str(&format!(" | {status}"));
+        }
         if let Some(u) = self.top_units.first().filter(|u| u.wall_share >= 0.05) {
             s.push_str(&format!(" | top {} {:.1}s", u.name, u.wall_share));
             if let Some(sp) = &u.split {
@@ -1489,6 +1518,64 @@ mod tests {
         assert!(old.measurement_coverage.is_none());
     }
     use super::*;
+
+    #[test]
+    fn compile_only_commands_disclose_tests_not_run() {
+        for (command, args, expected) in [
+            ("build", vec![], "build succeeded, tests not run"),
+            ("b", vec![], "build succeeded, tests not run"),
+            ("zigbuild", vec![], "build succeeded, tests not run"),
+            ("check", vec![], "check succeeded, tests not run"),
+            ("clippy", vec![], "lint succeeded, tests not run"),
+            (
+                "test",
+                vec!["--no-run"],
+                "test binaries built, tests not run (--no-run)",
+            ),
+            (
+                "t",
+                vec!["--release", "--no-run"],
+                "test binaries built, tests not run (--no-run)",
+            ),
+        ] {
+            let summary = Summary {
+                subcommand: command.into(),
+                args: args.into_iter().map(String::from).collect(),
+                ..Default::default()
+            };
+            assert_eq!(summary.compile_only_status(), Some(expected));
+            assert!(summary.agent_footer(&Default::default()).contains(expected));
+            assert!(summary.one_line().contains(expected));
+        }
+    }
+
+    #[test]
+    fn compile_only_status_preserves_failures_and_real_test_results() {
+        let mut summary = Summary {
+            subcommand: "test".into(),
+            args: vec!["--no-run".into()],
+            ..Default::default()
+        };
+        summary.exit = 1;
+        assert_eq!(summary.compile_only_status(), None);
+        assert!(summary.agent_footer(&Default::default()).contains("FAILED"));
+        summary.exit = 0;
+        summary.diagnostics.compile_failed = true;
+        assert_eq!(summary.compile_only_status(), None);
+        summary.diagnostics.compile_failed = false;
+        summary.tests.passed = 1;
+        assert_eq!(summary.compile_only_status(), None);
+        assert!(
+            summary
+                .agent_footer(&Default::default())
+                .contains("1 test passed")
+        );
+        summary.tests.passed = 0;
+        summary.args = vec!["--".into(), "--no-run".into()];
+        assert_eq!(summary.compile_only_status(), None);
+        summary.args.clear();
+        assert_eq!(summary.compile_only_status(), None);
+    }
 
     #[test]
     fn successful_test_run_ignores_nested_compile_failure() {
