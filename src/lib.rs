@@ -100,6 +100,7 @@ mod remote_sync;
 mod remote_watch;
 mod route;
 mod runs;
+mod savings;
 mod sched;
 mod shadow;
 mod shim;
@@ -199,6 +200,16 @@ enum Command {
         #[arg(short = 'n', long, default_value_t = 20)]
         limit: usize,
         /// Only runs started in or below the current directory.
+        #[arg(long)]
+        here: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Sum known skipped task time across retained recordings (not wall-clock savings).
+    Savings {
+        /// Restrict to the last N days. By default, use all retained history.
+        #[arg(long)]
+        days: Option<u32>,
         #[arg(long)]
         here: bool,
         #[arg(long)]
@@ -789,6 +800,7 @@ fn command_name(c: &Command) -> Option<&'static str> {
         Command::TestBundle { .. } => "test-bundle",
         Command::Log { .. } => "log",
         Command::Runs { .. } => "runs",
+        Command::Savings { .. } => "savings",
         Command::Status { watch: Some(_), .. } => return None,
         Command::Status { .. } => "status",
         Command::Show { .. } => "show",
@@ -865,6 +877,7 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
         Command::Cargo(p) => record::main(p.args),
         Command::Log { id, grep, tail } => runs::log(id.as_deref(), grep.as_deref(), tail)?,
         Command::Runs { limit, here, json } => runs::list(limit, here, json)?,
+        Command::Savings { days, here, json } => savings::command(days, here, json)?,
         Command::Show { id, json } => runs::show(id.as_deref(), json)?,
         Command::Status {
             json,

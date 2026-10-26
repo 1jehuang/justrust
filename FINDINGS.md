@@ -8230,3 +8230,39 @@ zero compiled, and 2.2s hosted client time with the same artifact SHA256.
 The executable is AArch64 ELF64 with no PT_TLS and requires GLIBC_2.39.
 Native execution, Termux compatibility and release publication remain untested.
 See `docs/jcode-arm64-hosted-trial-20261026.md` for exact flags and artifact hash.
+
+## Known skipped-work accounting (2026-10-26)
+
+`justrust savings` now sums original compiler/build-script task durations minus
+measured cache-hit overhead across retained recordings. It separates dependency,
+workspace and build-script hits, deduplicates run IDs, preserves negative savings,
+and reports missing recordings, incomplete historical overhead and malformed rows.
+`--days`, `--here` and `--json` restrict or export the accounting. New summaries
+persist the totals; `show` also reads surviving raw records from older runs.
+This metric is task elapsed time, not CPU seconds, wall-clock wait avoided, a
+stock-toolchain comparison, or a lifetime/fleet counter. Misses, uploads and other
+build costs are not deducted. Original durations can come from other hardware.
+
+The local all-retained report at 15:29 PDT found 376631.77s estimated task time
+avoided: 401583.78s original less 24952.01s measured hit overhead. Coverage was
+25304/36570 indexed runs, with 11266 unavailable and 322617 hits missing full
+historical overhead. These are incomplete historical estimates, not speed claims.
+The last-seven-day snapshot at 15:27 PDT was 13590.28s with 7637/10543 runs covered.
+
+Real Desktop test-edit run `20261026-152734282-724189` passed all 3 fps_counter
+tests and recorded 29 dependency hits, 56.56s original task time, 27.19s complete
+hit-path overhead and 29.37s estimated task time avoided. The build took 34.6s
+(50.1s client wall). Concurrent unrelated source changes also rebuilt dependencies,
+so this is a workflow/instrumentation check, not an isolated speed benchmark.
+The one-line test-message edit was restored byte-for-byte from a backup.
+Final hosted regression `20261026-152803445-727731` passed 813 tests (6 ignored);
+`20261026-152814413-729091` passed clippy with `-D warnings`. Tests cover real
+CLI filtering/deduplication, retained summaries, old/missing timing, negative
+estimates, and actual native cache-hit overhead with unchanged executable output.
+A local-only stock-path fixture used `JUSTRUST_TOOLCHAIN=system`,
+`JUSTRUST_CARGO_FORK=0`, `JUSTRUST_SLOTS=0`, `JUSTRUST_PASSES=0` and one fixed
+`CARGO_TARGET_DIR`: recorded warmup `20261026-152957698-740463`, unrecorded
+`JUSTRUST_DISABLE=1` replay (Cargo reported Fresh), then recorded replay
+`20261026-152958194-740614` (zero compiled, one fresh). This isolates recording
+from toolchain and slot changes; local execution was required to compare the
+same on-disk Cargo artifacts. No comprehensive performance claim is made.

@@ -54,6 +54,9 @@ pub struct Unit {
     /// On a hit, how long the original compile took.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub depcache_saved_secs: Option<f64>,
+    /// Hit path including key computation and restore, excluding recorder writes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_hit_overhead_secs: Option<f64>,
     /// On a miss: keyed env vars cargo does not set itself (user env or a
     /// cargo `[env]`), which keep this unit's key from matching the store.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -184,6 +187,7 @@ fn want_passes(args: &[OsString], local: bool) -> (bool, bool) {
 
 /// Returns `None` only if the compiler could not be spawned at all.
 fn run_unit(real: &PathBuf, args: &[OsString], run_dir: &std::path::Path) -> Option<i32> {
+    let hit_started = std::time::Instant::now();
     let described = describe(args);
     let plan = (!described.local && crate::depcache::enabled())
         .then(|| {
@@ -223,6 +227,7 @@ fn run_unit(real: &PathBuf, args: &[OsString], run_dir: &std::path::Path) -> Opt
             unit.rmeta_secs = Some(unit.wall);
             unit.depcache = "local".into();
             unit.depcache_saved_secs = Some(hit.saved_secs);
+            unit.cache_hit_overhead_secs = Some(hit_started.elapsed().as_secs_f64());
             if let Ok(line) = serde_json::to_string(&unit) {
                 let _ = paths::append_line(&run_dir.join("units.jsonl"), &line);
             }
@@ -268,6 +273,7 @@ fn run_unit(real: &PathBuf, args: &[OsString], run_dir: &std::path::Path) -> Opt
             unit.depcache = tier.into();
             unit.depcache_saved_secs = Some(hit.saved_secs);
             let _ = crate::buildscript::wrap(&plan.out_dir, &plan.crate_name, &plan.extra);
+            unit.cache_hit_overhead_secs = Some(hit_started.elapsed().as_secs_f64());
             if let Ok(line) = serde_json::to_string(&unit) {
                 let _ = paths::append_line(&run_dir.join("units.jsonl"), &line);
             }

@@ -18,6 +18,9 @@ pub struct Summary {
     pub exit: i32,
     /// CPU seconds used by cargo and everything it ran.
     pub cpu_secs: f64,
+    /// Known skipped task durations, never an estimate of stock wall-clock time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub savings: Option<crate::savings::Savings>,
     /// A disclosed lower bound when detached workers escape wait4 accounting.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cpu_secs_note: Option<String>,
@@ -1004,6 +1007,7 @@ pub fn build(
         wall,
         exit,
         cpu_secs,
+        savings: None,
         cpu_secs_note,
         measurement_coverage: Some(measurement_coverage(samples, procs)),
         ncpu: meta.ncpu,
@@ -1073,13 +1077,13 @@ fn is_compile_error(t: &str) -> bool {
 }
 
 impl UnitStats {
-    /// `, depcache 40 hit/3 miss (saved ~12.3s)`, or empty when unused.
+    /// `, depcache 40 hit/3 miss (original ~12.3s of rustc)`, or empty when unused.
     pub fn depcache_line(&self) -> String {
         if self.depcache_hits + self.depcache_misses == 0 {
             return self.localcache_line();
         }
         let saved = if self.depcache_hits > 0 {
-            format!(" (saved ~{:.1}s of rustc)", self.depcache_saved_secs)
+            format!(" (original ~{:.1}s of rustc)", self.depcache_saved_secs)
         } else {
             String::new()
         };
@@ -1103,13 +1107,13 @@ impl UnitStats {
         ) + &self.localcache_line()
     }
 
-    /// `, localcache 3 hit/1 miss (saved ~4.2s)`, or empty when unused.
+    /// `, localcache 3 hit/1 miss (original ~4.2s of rustc)`, or empty when unused.
     pub fn localcache_line(&self) -> String {
         if self.localcache_hits + self.localcache_misses == 0 {
             return String::new();
         }
         let saved = if self.localcache_hits > 0 {
-            format!(" (saved ~{:.1}s of rustc)", self.localcache_saved_secs)
+            format!(" (original ~{:.1}s of rustc)", self.localcache_saved_secs)
         } else {
             String::new()
         };
@@ -1262,6 +1266,11 @@ impl Summary {
         }
 
         // Units.
+        if let Some(savings) = &self.savings
+            && savings.dependency_hits + savings.local_hits + savings.build_script_hits > 0
+        {
+            let _ = writeln!(o, "  avoided {}", savings.line());
+        }
         let u = &self.units;
         let reasons = self.rebuild_summary();
         let _ = writeln!(

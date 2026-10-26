@@ -1017,7 +1017,7 @@ fn exec_real(real: &Path, args: &[OsString]) -> ! {
     std::process::exit(127);
 }
 
-fn record(package: &str, hit: bool, wall: f64, saved: f64, prebuilt: bool) {
+fn record(package: &str, hit: bool, wall: f64, saved: f64, prebuilt: bool, overhead: Option<f64>) {
     let Some(dir) = std::env::var_os("JUSTRUST_RUN_DIR") else {
         return;
     };
@@ -1029,6 +1029,9 @@ fn record(package: &str, hit: bool, wall: f64, saved: f64, prebuilt: bool) {
     });
     if prebuilt {
         line["prebuilt"] = true.into();
+    }
+    if let Some(overhead) = overhead {
+        line["cache_hit_overhead_secs"] = overhead.into();
     }
     let _ = paths::append_line(&Path::new(&dir).join("scripts.jsonl"), &line.to_string());
 }
@@ -1056,6 +1059,7 @@ fn tee<R: Read + Send + 'static>(mut r: R, to_stdout: bool) -> std::thread::Join
 
 /// `justrust __build-script <real> [args]`: run by the wrapper.
 pub fn main(real: PathBuf, args: Vec<OsString>) -> ! {
+    let hit_started = std::time::Instant::now();
     if !enabled() {
         exec_real(&real, &args);
     }
@@ -1079,7 +1083,14 @@ pub fn main(real: PathBuf, args: Vec<OsString>) -> ! {
         for l in &meta.stderr {
             let _ = writeln!(err, "{}", plan.norm.denorm(l));
         }
-        record(&package, true, paths::now() - start, meta.wall, prebuilt);
+        record(
+            &package,
+            true,
+            paths::now() - start,
+            meta.wall,
+            prebuilt,
+            Some(hit_started.elapsed().as_secs_f64()),
+        );
         std::process::exit(0);
     }
     let child = Command::new(&plan.real)
@@ -1096,7 +1107,7 @@ pub fn main(real: PathBuf, args: Vec<OsString>) -> ! {
     let out = t_out.join().unwrap_or_default();
     let err = t_err.join().unwrap_or_default();
     let wall = paths::now() - start;
-    record(&package, false, wall, 0.0, false);
+    record(&package, false, wall, 0.0, false, None);
     let status = match status {
         Ok(s) => s,
         Err(_) => std::process::exit(1),

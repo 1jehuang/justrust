@@ -176,6 +176,11 @@ fn bundled_native_rlib_change_invalidates_shim_depcache() {
             unit.contains(&format!("\"depcache\":\"{expected_cache}\"")),
             "{unit}"
         );
+        if expected_cache == "hit" {
+            let timing: serde_json::Value = serde_json::from_str(unit).unwrap();
+            let overhead = timing["cache_hit_overhead_secs"].as_f64().unwrap();
+            assert!(overhead.is_finite() && overhead >= timing["wall"].as_f64().unwrap());
+        }
         eprintln!("native version {version}: output {version}, depcache {expected_cache}");
     }
 }

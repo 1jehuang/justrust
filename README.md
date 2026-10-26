@@ -69,6 +69,26 @@ and `justrust show` for the timing breakdown.
 
 Other cargo commands (`cargo fmt`, `cargo add`, `cargo tree`) stay plain cargo.
 
+### Known work avoided
+
+`justrust savings` totals recorded cache hits across retained run history.
+Use `--days 7` for the last week, `--here` for this directory and its children,
+or `--json` for structured totals. New run summaries also include the accounting.
+
+The metric is **estimated task time avoided**: the original elapsed durations
+of skipped compiler and build-script jobs minus measured cache-hit overhead.
+Dependency hits include local, remote, peer, and prebuilt cache tiers without
+double counting. Workspace cache hits and build-script hits are counted separately.
+Negative savings are retained when restoring costs more than the original job.
+
+This is not CPU time, user wait saved, or a stock-toolchain comparison. Concurrent
+jobs are summed, original durations can come from different machines, and misses,
+uploads, process startup, recorder work, and other build overhead are not deducted.
+Older recordings lack full key-computation overhead and are marked incomplete.
+Missing recordings are reported, not treated as zero. Totals cover retained
+history on this client, not lifetime or fleet-wide savings. No extra compilation
+or baseline replay is performed by this command.
+
 ## Remote builds
 
 ```sh

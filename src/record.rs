@@ -1033,6 +1033,7 @@ fn finish(
         meta, git, start, end, code, cpu_secs, lines, samples, procs, &units,
     );
     s.sched = sched;
+    s.savings = crate::savings::from_dir(run_dir);
     if let Some(mut e) = early {
         let root = crate::early::workspace_root(Path::new(&meta.cwd))
             .unwrap_or_else(|| PathBuf::from(&meta.cwd));

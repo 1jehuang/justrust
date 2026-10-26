@@ -16,7 +16,15 @@ The existing release workflow is not replaced by these helpers.
 
 For MSVC, see [managed Windows MSVC](managed-windows-msvc.md). The license
 consent is an operator decision, not an environment variable that the agent may
-silently set. LLVM tools are also build-host prerequisites. For Darwin, see
+silently set. LLVM prerequisites have a separate, strictly boolean
+`JUSTRUST_INSTALL_LLVM_TOOLS=1` opt-in, forwarded to hosted builds without
+implying Microsoft SDK-license consent. The helper validates genuine Clang,
+archive/import-library drivers and LLD by compiling and linking SDK-free x86_64
+and ARM64 probes. These probes are not full Windows Jcode builds. Post-install
+hosted probe `20261026-153028117-743725` passed for both architectures without
+Microsoft SDK access or license consent. Separate forwarding regression
+`20261026-152742658-724982` passed both tests.
+For Darwin, see
 [managed Apple SDKs](managed-darwin.md). A signing certificate does not replace
 SDK headers, libraries, or framework stubs. Do not forward arbitrary SDK paths or
 private credentials from clients to compile workers.

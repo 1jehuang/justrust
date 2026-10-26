@@ -235,6 +235,9 @@ pub fn render(s: &Summary, dir: &std::path::Path) -> String {
     }
 
     let u = &s.units;
+    if let Some(savings) = s.savings.clone().or_else(|| crate::savings::from_dir(dir)) {
+        let _ = writeln!(o, "\nKnown skipped work: {}", savings.line());
+    }
     let _ = writeln!(
         o,
         "\nCompilation units: {} compiled ({} local, {} dependencies, {} build scripts){}",
