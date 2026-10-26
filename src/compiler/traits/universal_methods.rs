@@ -568,7 +568,10 @@ impl ValidatedTraitWorld {
             authority.clone(),
         ));
         retain::<CarrierContractView>(&self.budget, 1)?;
+        charged(&self.budget, self.budget.charge_nodes(1))?;
+        retain::<NativeHeapInvariant>(&self.budget, 0)?;
         Ok(CarrierContractView {
+            native_heap_invariants: Arc::from([]),
             nominal: None,
             physical: None,
             closure_result: None,

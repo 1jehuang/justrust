@@ -7,7 +7,7 @@
 //! enabled features. Registry and git dependencies have no native source
 //! and are reported as unsupported rather than silently dropped.
 
-use super::inputs::{DiscoveryInputs, Recorder};
+use super::inputs::{DiscoveryInputs, Recorder, RegistryBinding};
 use super::toml::{self, Spanned, Table, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -507,14 +507,13 @@ fn load_observed(manifest: &Path, inputs: &mut Recorder) -> Result<Workspace, Ma
                 }
                 DependencySource::Registry(registry) => {
                     loader.inputs.uncontrolled();
-                    // An optional source is not required until its feature is
-                    // activated. Keep the locked identity in the manifest;
-                    // visible_dependencies still authenticates an active edge
-                    // and rejects missing or corrupted source before compiling.
-                    if dep.optional && registry_source_root(registry).is_err() {
+                    // Freeze successful discovery once. Missing optional sources
+                    // remain unavailable in this workspace even if installed later.
+                    let selected = registry_source_root(registry);
+                    if dep.optional && selected.is_err() {
                         continue;
                     }
-                    let index = loader.registry_package(registry)?;
+                    let index = loader.registry_package(registry, selected?)?;
                     if loader.packages[index].name != dep.package {
                         return err(format!(
                             "locked registry package `{}` resolved to `{}`",
@@ -870,9 +869,10 @@ impl Loader<'_> {
     fn registry_package(
         &mut self,
         package: &LockedRegistryPackage,
+        selected: (PathBuf, PathBuf),
     ) -> Result<usize, ManifestError> {
         self.inputs.uncontrolled();
-        let root = registry_source_root(package)?;
+        let (root, archive) = selected;
         let index = self
             .find_lock_package(&package.name, &package.version, Some(&package.source))
             .ok_or_else(|| {
@@ -905,6 +905,16 @@ impl Loader<'_> {
             return err("cached registry manifest does not match locked package identity");
         }
         self.packages[loaded].registry = true;
+        self.inputs
+            .bind_registry_package(
+                package,
+                RegistryBinding {
+                    index: loaded,
+                    root,
+                    archive,
+                },
+            )
+            .map_err(|reason| ManifestError(reason.into()))?;
         Ok(loaded)
     }
 
@@ -1250,12 +1260,14 @@ pub fn resolve_features(
         if !dep.target_active {
             return None;
         }
-        let path = match &dep.source {
-            DependencySource::Path(path) => return ws.inputs.path_package(path),
-            DependencySource::Registry(registry) => registry_source_root(registry).ok()?,
-            DependencySource::UnresolvedRegistry | DependencySource::Git => return None,
-        };
-        ws.packages.iter().position(|p| p.root == path)
+        match &dep.source {
+            DependencySource::Path(path) => ws.inputs.path_package(path),
+            DependencySource::Registry(registry) => ws
+                .inputs
+                .registry_package(registry)
+                .map(|binding| binding.index),
+            DependencySource::UnresolvedRegistry | DependencySource::Git => None,
+        }
     };
     loop {
         while let Some((index, feature)) = work.pop() {
@@ -1409,11 +1421,13 @@ pub fn visible_dependencies(
         }
         let index = match &d.source {
             DependencySource::Path(path) => ws.inputs.path_package(path),
-            // Registry authentication remains deliberately live and unshareable.
-            DependencySource::Registry(registry) => registry_source_root(registry)
-                .ok()
-                .and_then(|path| path.canonicalize().ok())
-                .and_then(|path| ws.packages.iter().position(|p| p.root == path)),
+            // Reauthenticate the frozen selection, never discover a new package
+            // using a changed environment or cache directory during planning.
+            DependencySource::Registry(registry) => ws
+                .inputs
+                .registry_package(registry)
+                .filter(|binding| authenticate_registry_binding(registry, binding).is_ok())
+                .map(|binding| binding.index),
             DependencySource::UnresolvedRegistry | DependencySource::Git => None,
         };
         let Some(index) = index else {
@@ -1442,7 +1456,9 @@ pub fn visible_dependencies(
     out
 }
 
-fn registry_source_root(package: &LockedRegistryPackage) -> Result<PathBuf, ManifestError> {
+fn registry_source_root(
+    package: &LockedRegistryPackage,
+) -> Result<(PathBuf, PathBuf), ManifestError> {
     let cargo_home = cargo_home();
     let registry = cargo_home.join("registry");
     if package.source != "registry+https://github.com/rust-lang/crates.io-index" {
@@ -1507,15 +1523,20 @@ fn registry_source_root(package: &LockedRegistryPackage) -> Result<PathBuf, Mani
             .map_err(|e| ManifestError(format!("{}: {e}", archive.display())))?;
         if sha256(&bytes) == package.checksum {
             verify_registry_sources(&source_dir, &archive, &stem)?;
-            matched.push(source_dir);
+            matched.push((source_dir, archive));
         }
     }
     match matched.len() {
-        1 => matched
-            .pop()
-            .unwrap()
-            .canonicalize()
-            .map_err(|e| ManifestError(e.to_string())),
+        1 => {
+            let (root, archive) = matched.pop().unwrap();
+            Ok((
+                root.canonicalize()
+                    .map_err(|e| ManifestError(e.to_string()))?,
+                archive
+                    .canonicalize()
+                    .map_err(|e| ManifestError(e.to_string()))?,
+            ))
+        }
         0 => err(format!(
             "locked registry package `{}` {} from {} failed checksum validation against every cached archive",
             package.name, package.version, package.source
@@ -1525,6 +1546,27 @@ fn registry_source_root(package: &LockedRegistryPackage) -> Result<PathBuf, Mani
             package.name, package.version, package.source
         )),
     }
+}
+
+fn authenticate_registry_binding(
+    package: &LockedRegistryPackage,
+    binding: &RegistryBinding,
+) -> Result<(), ManifestError> {
+    if binding.root.canonicalize().ok().as_ref() != Some(&binding.root)
+        || binding.archive.canonicalize().ok().as_ref() != Some(&binding.archive)
+    {
+        return err("frozen registry source or archive path changed");
+    }
+    let bytes = std::fs::read(&binding.archive)
+        .map_err(|e| ManifestError(format!("{}: {e}", binding.archive.display())))?;
+    if sha256(&bytes) != package.checksum {
+        return err("frozen registry archive checksum changed");
+    }
+    verify_registry_sources(
+        &binding.root,
+        &binding.archive,
+        &format!("{}-{}", package.name, package.version),
+    )
 }
 
 fn validate_locked_version(requirement: &str, locked: &str) -> Result<(), ManifestError> {

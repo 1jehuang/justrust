@@ -335,7 +335,10 @@ fn materialize_definition(
             definition.type_args = actuals;
             definition.fields =
                 fields(&definition.fields.read(budget).map_err(Error::new)?, None)?.into();
-            ir::Ty::Struct(ir::StructTy::new(definition))
+            ir::Ty::Struct(
+                ir::StructTy::new(definition)
+                    .with_native_sequence_binding(source.native_sequence_binding().cloned()),
+            )
         }
         ir::Ty::Enum(source) => {
             budget

@@ -314,11 +314,23 @@ fn higher_order_symbolic_result_replays_original_call_contract() {
         let source = checked.body_for(mode).unwrap();
         validate_source(receipt, &source, &facts).unwrap();
         let view = facts.carrier_contract(ir::SignatureSubject::Body).unwrap();
-        view.validate_for(&facts).unwrap();
+        view.validate_for(&facts).unwrap_or_else(|error| {
+            panic!(
+                "mode={mode:?}; error={error:?}; firstfailure={:?}; usage={:?}",
+                budget.first_resource_failure(),
+                budget.usage_snapshot(),
+            )
+        });
         assert_eq!(view.contract().results.len(), 1);
         let template =
             crate::compiler::cfg::lower_closure_template(source, facts, &checked, mode, &budget)
-                .unwrap();
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "lowering mode={mode:?}; error={error:?}; firstfailure={:?}; usage={:?}",
+                        budget.first_resource_failure(),
+                        budget.usage_snapshot(),
+                    )
+                });
         crate::compiler::ownership::verify_template(template).unwrap();
     }
 }

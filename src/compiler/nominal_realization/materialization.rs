@@ -266,15 +266,18 @@ impl ReadComponent {
                 b.retain_bytes(std::mem::size_of::<ir::StructDef>())
                     .map_err(Error::new)?;
                 let source = n.def();
-                ir::Ty::Struct(ir::StructTy::new(ir::StructDef {
-                    id: id(source.id),
-                    source_decl: source.source_decl,
-                    type_args: actuals,
-                    name: copied_name(&source.name, b)?,
-                    module: source.module,
-                    visibility: source.visibility.clone(),
-                    fields: fields(None, source.fields.len()),
-                }))
+                ir::Ty::Struct(
+                    ir::StructTy::new(ir::StructDef {
+                        id: id(source.id),
+                        source_decl: source.source_decl,
+                        type_args: actuals,
+                        name: copied_name(&source.name, b)?,
+                        module: source.module,
+                        visibility: source.visibility.clone(),
+                        fields: fields(None, source.fields.len()),
+                    })
+                    .with_native_sequence_binding(n.native_sequence_binding().cloned()),
+                )
             }
             ir::Ty::Enum(n) => {
                 b.retain_bytes(std::mem::size_of::<ir::EnumDef>())

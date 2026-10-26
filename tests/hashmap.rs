@@ -12,6 +12,21 @@ fn hashmap_matches_stock() {
         "hashmap",
         &[
             Case {
+                name: "shared_native_field_reference_iteration",
+                source: r#"use std::collections::{HashMap,BTreeMap};fn main(){let mut map:HashMap<&str,&str>=HashMap::new();map.insert("key","value");for(key,value)in &map{println!("{} {}",key,value);}let mut tree:BTreeMap<&str,&str>=BTreeMap::new();tree.insert("other","entry");for(key,value)in &tree{println!("{} {}",key,value);}}"#,
+                expect: Expect::Run("key value\nother entry\n"),
+            },
+            Case {
+                name: "shared_native_field_wrong_family_in_unused_fn",
+                source: r#"use std::collections::HashMap;fn bad<'a,K:std::hash::Hash+Eq,V>(map:&'a HashMap<K,V>)->&'a V{for(key,_)in map{return key;}panic!("empty")}fn main(){}"#,
+                expect: Expect::Invalid("E0308"),
+            },
+            Case {
+                name: "shared_native_field_reference_cannot_escape",
+                source: r#"use std::collections::HashMap;fn unused()->&'static str{let text=String::from("local");let mut map:HashMap<u32,&str>=HashMap::new();map.insert(1u32,text.as_str());for(_,value)in &map{return *value;}""}fn main(){}"#,
+                expect: Expect::Invalid("E0515"),
+            },
+            Case {
                 name: "scalar_api",
                 source: r#"use std::collections::HashMap;
 fn main() {

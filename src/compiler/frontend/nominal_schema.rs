@@ -852,7 +852,7 @@ impl PlanState {
                             }
                             let fields = make_fields(self, &d.fields, d.module)?;
                             let name = self.schema_path_text(registry, &d.name, budget)?;
-                            ir::Ty::Struct(ir::StructTy::new(ir::StructDef {
+                            let definition = ir::StructDef {
                                 id,
                                 source_decl: decl,
                                 type_args: args.to_vec().into(),
@@ -860,7 +860,8 @@ impl PlanState {
                                 module: d.module,
                                 visibility: d.visibility.clone(),
                                 fields: fields.into(),
-                            }))
+                            };
+                            ir::Ty::Struct(ir::StructTy::new(definition))
                         }
                         NominalSchema::Enum(d) => {
                             self.schema_identity(registry, decl, &d.name, d.module, &d.visibility)?;
@@ -978,6 +979,13 @@ impl PlanState {
             if let Some(error) = failure {
                 return Err(error);
             }
+            let ty = match (ty, schema.as_ref()) {
+                (ir::Ty::Struct(value), NominalSchema::Struct(source)) => {
+                    let binding = native_sequence::issue(registry, decl, source, &value, budget)?;
+                    ir::Ty::Struct(value.with_native_sequence_binding(binding))
+                }
+                (ty, _) => ty,
+            };
             if ir::by_value_contains(&ty, id, 0, budget)? {
                 return Err(format!(
                     "recursive type `{}` has infinite size (insert some indirection, e.g. Box)",
@@ -991,6 +999,23 @@ impl PlanState {
             } else {
                 validate_argument(&ty, caller, budget, 0)?;
             }
+            // A projection-free native application was rebuilt here from the
+            // authenticated source schema, not copied from structural fields.
+            // Re-run ordinary argument admission before retaining this exact
+            // allocation's logical source coordinate. This is not a graph read
+            // or executable body proof. Unresolved projection transport stays
+            // unsealed until its existing normalization boundary.
+            let native_transport = transport.is_some()
+                && matches!(&ty, ir::Ty::Struct(value) if value.native_sequence_binding().is_some())
+                && !raw_type_has_projection(&ty, budget, 0)?;
+            if native_transport {
+                validate_argument(&ty, caller, budget, 0)?;
+            }
+            let ty = if transport.is_none() || native_transport {
+                native_sequence::bind_source_substitution(ty, caller, budget)?
+            } else {
+                ty
+            };
             self.nominals
                 .by_slot
                 .try_reserve(1)

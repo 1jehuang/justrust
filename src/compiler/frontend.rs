@@ -134,6 +134,794 @@ pub(super) enum NominalCallablePublication {
 mod canonical_source_replay_tests {
     use super::*;
     #[test]
+    fn shared_local_inputs_replay_all_operands_without_return_context() {
+        let (_, _, budget, publication) = published(
+            "fn consume<T>(left:T,right:T)->bool{true}fn main(){let a=1i32;let b=2i32;let ra=&a;let rb=&b;consume(ra,rb);consume(&ra,&rb);}",
+            1,
+        );
+        let source = publication.source();
+        let original = publication.original().source_for_test();
+        publication
+            .validate_source(source, publication.facts(), &budget)
+            .unwrap();
+        // Direct generic calls infer and instantiate their source-stage
+        // signature before argument emission. These two-argument calls cannot
+        // enter the single-input identity/scalar NoFirmReference exception.
+        assert_eq!(source.call_evidence.len(), 2);
+        for evidence in source.call_evidence.iter() {
+            assert_eq!(evidence.arguments.len(), 2);
+            let ir::ExprKind::Call { args, .. } = &source.exprs[evidence.call.0].kind else {
+                panic!("two-input evidence must name the original call")
+            };
+            for (position, (row, argument)) in evidence.arguments.iter().zip(args).enumerate() {
+                assert_eq!(row.argument, position);
+                assert_eq!(row.value, *argument);
+                assert_eq!(
+                    row.expectation,
+                    ir::CallExpectation::FirmReference {
+                        kind: ir::BorrowKind::Shared,
+                    }
+                );
+            }
+        }
+        for mode in 0..7 {
+            let mut changed = source.as_ref().clone();
+            match mode {
+                0 => {
+                    let call = changed.exprs.iter_mut().find(|e| matches!(&e.kind, ir::ExprKind::Call { args, .. } if args.len() == 2)).unwrap();
+                    let ir::ExprKind::Call { args, .. } = &mut call.kind else {
+                        unreachable!()
+                    };
+                    args.swap(0, 1);
+                }
+                1 => {
+                    let borrow = changed
+                        .exprs
+                        .iter_mut()
+                        .find(|e| {
+                            matches!(
+                                &e.kind,
+                                ir::ExprKind::Borrow {
+                                    kind: ir::BorrowKind::Shared,
+                                    ..
+                                }
+                            )
+                        })
+                        .unwrap();
+                    let ir::ExprKind::Borrow { kind, .. } = &mut borrow.kind else {
+                        unreachable!()
+                    };
+                    *kind = ir::BorrowKind::Mut;
+                }
+                2 => {
+                    let borrow = changed
+                        .exprs
+                        .iter_mut()
+                        .find(|e| matches!(&e.kind, ir::ExprKind::Borrow { .. }))
+                        .unwrap();
+                    let ir::ExprKind::Borrow { place, .. } = &mut borrow.kind else {
+                        unreachable!()
+                    };
+                    place.projection.push(ir::Projection::Deref);
+                }
+                3 => {
+                    let scalar = changed
+                        .exprs
+                        .iter_mut()
+                        .find(|e| matches!(&e.kind, ir::ExprKind::Int(_)))
+                        .unwrap();
+                    let ir::ExprKind::Int(value) = &mut scalar.kind else {
+                        unreachable!()
+                    };
+                    value.bits += 1;
+                }
+                4 => {
+                    let row = Arc::make_mut(&mut changed.call_evidence)
+                        .iter_mut()
+                        .find(|e| e.arguments.len() == 2)
+                        .unwrap();
+                    Arc::make_mut(&mut row.arguments)[0].expectation =
+                        ir::CallExpectation::FirmReference {
+                            kind: ir::BorrowKind::Mut,
+                        };
+                }
+                5 => {
+                    let row = Arc::make_mut(&mut changed.call_evidence)
+                        .iter_mut()
+                        .find(|e| e.arguments.len() == 2)
+                        .unwrap();
+                    row.type_actual_regions = Arc::from([]);
+                }
+                _ => {
+                    let row = Arc::make_mut(&mut changed.call_evidence)
+                        .iter_mut()
+                        .find(|e| e.arguments.len() == 2)
+                        .unwrap();
+                    Arc::make_mut(&mut row.arguments)[0].expectation =
+                        ir::CallExpectation::NoFirmReference;
+                }
+            }
+            assert_eq!(
+                kind_error(replay_source_body(
+                    &original,
+                    &Arc::new(changed),
+                    publication.facts(),
+                    &budget
+                )),
+                tr::FactsErrorKind::InvalidMetadata,
+                "shared local forgery {mode}"
+            );
+        }
+    }
+    #[test]
+    fn shared_local_dispatch_declines_non_candidates_before_replay() {
+        for source in [
+            "fn consume(a:i32,b:i32)->bool{true}fn main(){consume(1i32,2i32);}",
+            "fn consume<T,U>(a:T,b:U)->bool{true}fn main(){consume(1i32,2i32);}",
+            "fn consume<T>(a:T,b:i32)->bool{true}fn main(){consume(1i32,2i32);}",
+        ] {
+            let (_, _, budget, publication) = published(source, 1);
+            let call = publication
+                .source()
+                .exprs
+                .iter()
+                .find_map(|expr| {
+                    if let ir::ExprKind::Call {
+                        target: ir::Callee::Direct(target),
+                        signature,
+                        ..
+                    } = &expr.kind
+                    {
+                        Some((target, signature))
+                    } else {
+                        None
+                    }
+                })
+                .unwrap();
+            let view = publication
+                .facts()
+                .original_callable_schema(tr::OriginalCallableSubject::Direct(call.0.declaration))
+                .unwrap();
+            let mut signature = call.1.clone();
+            // Even an all-shared instantiated signature cannot turn a
+            // nongeneric, multi-slot or mixed original schema into this route.
+            for parameter in &mut signature.params {
+                *parameter = shared_input_reference(parameter.clone(), &budget, 0).unwrap();
+            }
+            assert!(!shared_local_input_candidate(&view, &signature, 2, &budget).unwrap());
+        }
+        let (_, _, budget, publication) = published(
+            "fn consume<T>(a:T,b:T)->bool{true}fn main(){let a=1i32;let b=2i32;consume(&a,&b);}",
+            1,
+        );
+        let (target, signature) = publication
+            .source()
+            .exprs
+            .iter()
+            .find_map(|expr| {
+                if let ir::ExprKind::Call {
+                    target: ir::Callee::Direct(target),
+                    signature,
+                    ..
+                } = &expr.kind
+                {
+                    Some((target, signature))
+                } else {
+                    None
+                }
+            })
+            .unwrap();
+        let view = publication
+            .facts()
+            .original_callable_schema(tr::OriginalCallableSubject::Direct(target.declaration))
+            .unwrap();
+        assert!(shared_local_input_candidate(&view, signature, 2, &budget).unwrap());
+        assert!(!shared_local_input_candidate(&view, signature, 1, &budget).unwrap());
+        let mut mixed = signature.clone();
+        mixed.params[1] = ir::Ty::Bool;
+        assert!(!shared_local_input_candidate(&view, &mixed, 2, &budget).unwrap());
+        mixed.params[1] = ir::Ty::Ref {
+            kind: ir::BorrowKind::Mut,
+            referent: Arc::new(ir::Ty::Bool),
+        };
+        assert!(!shared_local_input_candidate(&view, &mixed, 2, &budget).unwrap());
+    }
+    #[test]
+    fn shared_local_shadowing_keeps_exact_immutable_source_occurrence() {
+        let (_, _, budget, publication) = published(
+            "fn consume<T>(a:T,b:T)->bool{true}fn main(){let a=1i32;let r=&a;let a=2i32;let s=&a;consume(&r,&s);}",
+            1,
+        );
+        publication
+            .validate_source(publication.source(), publication.facts(), &budget)
+            .unwrap();
+        let mut changed = publication.source().as_ref().clone();
+        let mut roots = changed.exprs.iter_mut().filter_map(|expr| {
+            if let ir::ExprKind::Borrow { place, .. } = &mut expr.kind {
+                Some(place)
+            } else {
+                None
+            }
+        });
+        let earlier = roots.next().unwrap().local;
+        let later = roots.next().unwrap();
+        assert_ne!(earlier, later.local);
+        later.local = earlier;
+        let original = publication.original().source_for_test();
+        assert_eq!(
+            kind_error(replay_source_body(
+                &original,
+                &Arc::new(changed),
+                publication.facts(),
+                &budget
+            )),
+            tr::FactsErrorKind::InvalidMetadata
+        );
+        let function = original
+            .plan
+            .callable_body(&original.plan.program, original.declaration)
+            .unwrap();
+        assert!(function.lexical_scope.is_none());
+        assert_eq!(original.bindings.len(), 4);
+        for (binding, root, statement) in [(1, 0, 1u32), (3, 2, 3u32)] {
+            let (operand, origin) = original.bindings[binding]
+                .shared_borrow_origin
+                .as_ref()
+                .unwrap();
+            assert_eq!(operand.owner, original.identity);
+            assert_eq!(operand.path.as_ref(), [1, 0, 2, statement, 3, 0]);
+            assert_eq!(origin, &original.bindings[root].node);
+        }
+        for mode in 0..4 {
+            let mut forged = original.clone();
+            match mode {
+                0 => {
+                    // The older same-spelled scalar is not this occurrence's root.
+                    let (_, origin) = forged.bindings[3].shared_borrow_origin.as_mut().unwrap();
+                    *origin = original.bindings[0].node.clone();
+                }
+                1 => {
+                    let (operand, _) = forged.bindings[3].shared_borrow_origin.as_mut().unwrap();
+                    *operand = original.bindings[1]
+                        .shared_borrow_origin
+                        .as_ref()
+                        .unwrap()
+                        .0
+                        .clone();
+                }
+                2 => forged.bindings[3].shared_borrow_origin = None,
+                _ => {
+                    // A let is not in scope in its own initializer.
+                    let (_, origin) = forged.bindings[3].shared_borrow_origin.as_mut().unwrap();
+                    *origin = original.bindings[3].node.clone();
+                }
+            }
+            assert_eq!(
+                kind_error(replay_source_body(
+                    &forged,
+                    publication.source(),
+                    publication.facts(),
+                    &budget
+                )),
+                tr::FactsErrorKind::InvalidMetadata,
+                "shared borrow occurrence forgery {mode}"
+            );
+        }
+    }
+    #[test]
+    fn shared_local_inventory_vec_and_map_admission_is_exact_short_and_poison_safe() {
+        let (_, _, _, publication) = published(
+            "fn consume<T>(left:T,right:T)->bool{true}fn main(){let a=1i32;let b=2i32;let ra=&a;let rb=&b;consume(ra,rb);}",
+            1,
+        );
+        let original = publication.original().source_for_test();
+        let witness = (original.bindings[2].node.clone(), None);
+        let operation =
+            |budget: &ir::PlanBudget,
+             output: &mut HashMap<usize, Vec<(sr::SourceNode, Option<ir::BorrowKind>)>>|
+             -> Result<(), FactsError> {
+                let mut rows = Vec::new();
+                // Cross Vec capacities 0,4,8 so relocation admission is exercised.
+                for _ in 0..9 {
+                    sr::push(&mut rows, witness.clone(), budget)?;
+                }
+                store_shared_local_inputs(output, 0, rows, budget)
+            };
+        let measure = ir::PlanBudget::default();
+        operation(&measure, &mut HashMap::new()).unwrap();
+        let demand = measure.usage_snapshot();
+        assert!(demand.work > 0 && demand.nodes > 0 && demand.bytes > 0);
+        for guard in 0..5 {
+            let budget = ir::PlanBudget::new(ir::PlanLimits {
+                work: demand.work - usize::from(guard == 1),
+                bytes: demand.bytes - usize::from(guard == 2),
+                nodes: demand.nodes - usize::from(guard == 3),
+                ..ir::PlanLimits::default()
+            });
+            if guard == 4 {
+                budget.poison_ledger_for_tests();
+            }
+            let mut output = HashMap::new();
+            let result = operation(&budget, &mut output);
+            if guard == 0 {
+                result.unwrap();
+                assert_eq!(output[&0].len(), 9);
+                let used = budget.usage_snapshot();
+                assert_eq!(
+                    (used.work, used.bytes, used.nodes),
+                    (demand.work, demand.bytes, demand.nodes)
+                );
+            } else {
+                assert!(
+                    matches!(result, Err(error) if error.kind() == tr::FactsErrorKind::Resource)
+                );
+                assert!(
+                    output.is_empty(),
+                    "failed admission must not install a per-call witness row"
+                );
+                if guard != 4 {
+                    let expected = match guard {
+                        1 => ir::ResourceBudgetKind::Work,
+                        2 => ir::ResourceBudgetKind::Bytes,
+                        _ => ir::ResourceBudgetKind::Nodes,
+                    };
+                    let failure = budget.first_resource_failure().unwrap();
+                    assert_eq!(failure.kind, expected);
+                    budget.poison_ledger_for_tests();
+                    assert!(operation(&budget, &mut output).is_err());
+                    assert_eq!(budget.first_resource_failure(), Some(failure));
+                }
+            }
+        }
+        // Exercise actual per-call map growth, not only the empty-map case.
+        let budget = ir::PlanBudget::default();
+        let mut output = HashMap::new();
+        for index in 0..9 {
+            let mut rows = Vec::new();
+            sr::push(&mut rows, witness.clone(), &budget).unwrap();
+            store_shared_local_inputs(&mut output, index, rows, &budget).unwrap();
+        }
+        assert_eq!(output.len(), 9);
+        let mut duplicate = Vec::new();
+        sr::push(&mut duplicate, witness, &budget).unwrap();
+        assert_eq!(
+            kind_error(store_shared_local_inputs(
+                &mut output,
+                0,
+                duplicate,
+                &budget
+            )),
+            tr::FactsErrorKind::InvalidMetadata
+        );
+        assert_eq!(output.len(), 9);
+    }
+    #[test]
+    fn shared_local_reference_ty_admission_is_exact_short_depth_and_poison_safe() {
+        let operation = |budget: &ir::PlanBudget| -> Result<ir::Ty, FactsError> {
+            let mut ty = ir::Ty::Int(ir::IntTy::I32);
+            for depth in 1..=3 {
+                ty = shared_input_reference(ty, budget, depth)?;
+            }
+            Ok(ty)
+        };
+        let measure = ir::PlanBudget::default();
+        operation(&measure).unwrap();
+        let demand = measure.usage_snapshot();
+        for guard in 0..6 {
+            let budget = ir::PlanBudget::new(ir::PlanLimits {
+                work: demand.work - usize::from(guard == 1),
+                bytes: demand.bytes - usize::from(guard == 2),
+                nodes: demand.nodes - usize::from(guard == 3),
+                depth: 3 - usize::from(guard == 4),
+                ..ir::PlanLimits::default()
+            });
+            if guard == 5 {
+                budget.poison_ledger_for_tests();
+            }
+            let result = operation(&budget);
+            if guard == 0 {
+                let ty = result.unwrap();
+                assert_eq!(ir::root_reference_layers(&ty).unwrap(), 3);
+                let used = budget.usage_snapshot();
+                assert_eq!(
+                    (used.work, used.bytes, used.nodes),
+                    (demand.work, demand.bytes, demand.nodes)
+                );
+            } else {
+                assert!(
+                    matches!(result, Err(error) if error.kind() == tr::FactsErrorKind::Resource)
+                );
+                if guard != 5 {
+                    let expected = match guard {
+                        1 => ir::ResourceBudgetKind::Work,
+                        2 => ir::ResourceBudgetKind::Bytes,
+                        3 => ir::ResourceBudgetKind::Nodes,
+                        _ => ir::ResourceBudgetKind::Depth,
+                    };
+                    let failure = budget.first_resource_failure().unwrap();
+                    assert_eq!(failure.kind, expected);
+                    if guard == 4 {
+                        assert_eq!(
+                            budget.usage_snapshot().bytes,
+                            2 * (std::mem::size_of::<ir::Ty>() + 32)
+                        );
+                    }
+                    budget.poison_ledger_for_tests();
+                    assert!(operation(&budget).is_err());
+                    assert_eq!(budget.first_resource_failure(), Some(failure));
+                }
+            }
+        }
+    }
+    #[test]
+    fn shared_local_input_result_guard_never_grants_escape_authority() {
+        assert!(shared_input_primitive_result(&ir::Ty::Bool));
+        for kind in [ir::BorrowKind::Shared, ir::BorrowKind::Mut] {
+            assert!(!shared_input_primitive_result(&ir::Ty::Ref {
+                kind,
+                referent: Arc::new(ir::Ty::Int(ir::IntTy::I32))
+            }));
+        }
+        assert!(!shared_input_primitive_result(&ir::Ty::Tuple(Arc::from([
+            ir::Ty::Ref {
+                kind: ir::BorrowKind::Shared,
+                referent: Arc::new(ir::Ty::Int(ir::IntTy::I32)),
+            }
+        ]))));
+    }
+
+    fn closed_enum_publication() -> (
+        Program,
+        PlanCtx,
+        ir::PlanBudget,
+        Arc<sr::CanonicalSourcePublication>,
+    ) {
+        published(
+            "enum Order{Low,High}enum Envelope<T>{Empty,Value(T)}fn consume<T>(a:T,b:T)->Envelope<Order>{Envelope::Value(Order::Low)}fn main(){let a=1i32;let b=2i32;let ra=&a;let rb=&b;consume(ra,rb);consume(&ra,&rb);}",
+            1,
+        )
+    }
+    fn closed_enum_call(body: &ir::CheckedFunction) -> (&ir::CallTarget, &ir::Signature) {
+        body.exprs
+            .iter()
+            .find_map(|expression| match &expression.kind {
+                ir::ExprKind::Call {
+                    target: ir::Callee::Direct(target),
+                    signature,
+                    args,
+                    ..
+                } if args.len() == 2 => Some((target, signature)),
+                _ => None,
+            })
+            .unwrap()
+    }
+    #[test]
+    fn shared_local_closed_enum_result_keeps_exact_input_and_metadata_authority() {
+        let (_, _, budget, publication) = closed_enum_publication();
+        let source = publication.source();
+        let original = publication.original().source_for_test();
+        publication
+            .validate_source(source, publication.facts(), &budget)
+            .unwrap();
+        let (target, signature) = closed_enum_call(source);
+        let view = publication
+            .facts()
+            .original_callable_schema(tr::OriginalCallableSubject::Direct(target.declaration))
+            .unwrap();
+        assert!(
+            shared_input_result_absence(
+                &view.signature().result,
+                &signature.result,
+                publication.facts(),
+                &budget
+            )
+            .unwrap()
+        );
+        assert!(!shared_input_primitive_result(&signature.result));
+        for mode in 0..10 {
+            let mut changed = source.as_ref().clone();
+            match mode {
+                0 => {
+                    let expression = changed.exprs.iter_mut().find(|expression| {
+                        matches!(&expression.kind, ir::ExprKind::Call { args, .. } if args.len() == 2)
+                    }).unwrap();
+                    let ir::ExprKind::Call { args, .. } = &mut expression.kind else {
+                        unreachable!()
+                    };
+                    args.swap(0, 1);
+                }
+                1 | 2 => {
+                    let expression = changed
+                        .exprs
+                        .iter_mut()
+                        .find(|expression| matches!(&expression.kind, ir::ExprKind::Borrow { .. }))
+                        .unwrap();
+                    let ir::ExprKind::Borrow { kind, place, .. } = &mut expression.kind else {
+                        unreachable!()
+                    };
+                    if mode == 1 {
+                        *kind = ir::BorrowKind::Mut;
+                    } else {
+                        place.projection.push(ir::Projection::Deref);
+                    }
+                }
+                3 => {
+                    let expression = changed
+                        .exprs
+                        .iter_mut()
+                        .find(|expression| matches!(&expression.kind, ir::ExprKind::Int(_)))
+                        .unwrap();
+                    let ir::ExprKind::Int(value) = &mut expression.kind else {
+                        unreachable!()
+                    };
+                    value.bits += 1;
+                }
+                4..=6 => {
+                    let row = Arc::make_mut(&mut changed.call_evidence)
+                        .iter_mut()
+                        .find(|row| row.arguments.len() == 2)
+                        .unwrap();
+                    if mode == 5 {
+                        row.type_actual_regions = Arc::from([]);
+                    } else {
+                        Arc::make_mut(&mut row.arguments)[0].expectation = if mode == 4 {
+                            ir::CallExpectation::FirmReference {
+                                kind: ir::BorrowKind::Mut,
+                            }
+                        } else {
+                            ir::CallExpectation::NoFirmReference
+                        };
+                    }
+                }
+                7 | 8 => {
+                    let expression = changed.exprs.iter_mut().find(|expression| {
+                        matches!(&expression.kind, ir::ExprKind::Call { args, .. } if args.len() == 2)
+                    }).unwrap();
+                    let ir::ExprKind::Call { signature, .. } = &mut expression.kind else {
+                        unreachable!()
+                    };
+                    if mode == 7 {
+                        signature.result = ir::Ty::Bool;
+                    } else {
+                        let ir::Ty::Enum(value) = &signature.result else {
+                            unreachable!()
+                        };
+                        let mut definition = value.def().clone();
+                        definition.type_args = Arc::from([ir::Ty::Bool]);
+                        signature.result = ir::Ty::Enum(ir::EnumTy::new(definition));
+                    }
+                }
+                _ => {
+                    let row = Arc::make_mut(&mut changed.call_evidence)
+                        .iter_mut()
+                        .find(|row| row.arguments.len() == 2)
+                        .unwrap();
+                    let other = row.arguments[1].value;
+                    Arc::make_mut(&mut row.arguments)[0].value = other;
+                }
+            }
+            assert_eq!(
+                kind_error(replay_source_body(
+                    &original,
+                    &Arc::new(changed),
+                    publication.facts(),
+                    &budget
+                )),
+                tr::FactsErrorKind::InvalidMetadata,
+                "closed enum input/result forgery {mode}"
+            );
+        }
+        let mut wrong_occurrence = original.clone();
+        let (_, origin) = wrong_occurrence.bindings[3]
+            .shared_borrow_origin
+            .as_mut()
+            .unwrap();
+        *origin = original.bindings[0].node.clone();
+        assert_eq!(
+            kind_error(replay_source_body(
+                &wrong_occurrence,
+                source,
+                publication.facts(),
+                &budget
+            )),
+            tr::FactsErrorKind::InvalidMetadata
+        );
+        // Independently corrupt nominal metadata, including the same application
+        // ID with a foreign declaration of identical spelling and field shape.
+        let (_, _, _, foreign) = closed_enum_publication();
+        let ir::Ty::Enum(foreign_result) = &closed_enum_call(foreign.source()).1.result else {
+            unreachable!()
+        };
+        let ir::Ty::Enum(result) = &signature.result else {
+            unreachable!()
+        };
+        for mode in 0..3 {
+            let mut definition = result.def().clone();
+            match mode {
+                0 => definition.source_decl = foreign_result.def().source_decl,
+                1 => definition.type_args = Arc::from([ir::Ty::Bool]),
+                _ => {
+                    let mut variants = definition.variants.to_vec();
+                    variants[1].fields = Arc::<[ir::FieldDef]>::from([]).into();
+                    definition.variants = variants.into();
+                }
+            }
+            let forged = ir::Ty::Enum(ir::EnumTy::new(definition));
+            for (left, right) in [(&forged, &signature.result), (&signature.result, &forged)] {
+                assert_eq!(
+                    kind_error(shared_input_result_absence(
+                        left,
+                        right,
+                        publication.facts(),
+                        &budget
+                    )),
+                    tr::FactsErrorKind::InvalidMetadata
+                );
+            }
+        }
+        // A different ledger cannot authenticate even genuine nominal metadata.
+        assert_eq!(
+            kind_error(shared_input_result_absence(
+                &signature.result,
+                &signature.result,
+                publication.facts(),
+                &ir::PlanBudget::default()
+            )),
+            tr::FactsErrorKind::InvalidMetadata
+        );
+    }
+    // Convert a genuine fixture to owned direct fields before measuring the
+    // scanner alone. This synthetic input is not nominal metadata authority.
+    fn direct_closed_enum_fixture(ty: &ir::Ty, budget: &ir::PlanBudget) -> ir::Ty {
+        let ir::Ty::Enum(value) = ty else {
+            return ty.clone();
+        };
+        let mut definition = value.def().clone();
+        definition.type_args = definition
+            .type_args
+            .iter()
+            .map(|argument| direct_closed_enum_fixture(argument, budget))
+            .collect::<Vec<_>>()
+            .into();
+        let mut variants = definition.variants.to_vec();
+        for variant in &mut variants {
+            let mut fields = variant.fields.read(budget).unwrap().to_vec();
+            for field in &mut fields {
+                field.ty = direct_closed_enum_fixture(&field.ty, budget);
+            }
+            variant.fields = fields.into();
+        }
+        definition.variants = variants.into();
+        ir::Ty::Enum(ir::EnumTy::new(definition))
+    }
+    #[test]
+    fn shared_local_closed_enum_scans_phantoms_every_variant_and_rejects_recursion() {
+        let (_, _, budget, publication) = closed_enum_publication();
+        let ty =
+            direct_closed_enum_fixture(&closed_enum_call(publication.source()).1.result, &budget);
+        let ir::Ty::Enum(value) = &ty else {
+            unreachable!()
+        };
+        assert!(shared_input_closed_result(&ty, &budget).unwrap());
+        let (target, _) = closed_enum_call(publication.source());
+        let view = publication
+            .facts()
+            .original_callable_schema(tr::OriginalCallableSubject::Direct(target.declaration))
+            .unwrap();
+        let parameter = ir::Ty::Param(ir::ParamId {
+            owner: view.generic_env().scopes()[0].binder(),
+            index: 0,
+        });
+        for forbidden in [
+            ir::Ty::Ref {
+                kind: ir::BorrowKind::Shared,
+                referent: Arc::new(ir::Ty::Bool),
+            },
+            ir::Ty::Ref {
+                kind: ir::BorrowKind::Mut,
+                referent: Arc::new(ir::Ty::Bool),
+            },
+            parameter,
+            ir::Ty::Tuple(Arc::from([ir::Ty::Bool])),
+            ir::Ty::Array {
+                element: Arc::new(ir::Ty::Bool),
+                len: 1,
+            },
+            ir::Ty::RawPtr {
+                kind: ir::BorrowKind::Shared,
+                pointee: Arc::new(ir::Ty::Bool),
+            },
+            ir::Ty::Slice {
+                element: Arc::new(ir::Ty::Bool),
+            },
+            ir::Ty::Str,
+            ir::Ty::Never,
+        ] {
+            assert!(!shared_input_closed_result(&forbidden, &budget).unwrap());
+            let mut phantom = value.def().clone();
+            phantom.type_args = Arc::from([forbidden.clone()]);
+            let mut variants = phantom.variants.to_vec();
+            for variant in &mut variants {
+                variant.fields = Arc::<[ir::FieldDef]>::from([]).into();
+            }
+            phantom.variants = variants.into();
+            assert!(
+                !shared_input_closed_result(&ir::Ty::Enum(ir::EnumTy::new(phantom)), &budget)
+                    .unwrap()
+            );
+            let mut payload = value.def().clone();
+            let mut variants = payload.variants.to_vec();
+            let mut fields = variants[1].fields.read(&budget).unwrap().to_vec();
+            fields[0].ty = forbidden;
+            variants[1].fields = fields.into();
+            payload.variants = variants.into();
+            assert!(
+                !shared_input_closed_result(&ir::Ty::Enum(ir::EnumTy::new(payload)), &budget)
+                    .unwrap()
+            );
+        }
+        // An ancestor application ID is a denial, never a visited-success fact.
+        let mut recursive = value.def().clone();
+        recursive.type_args = Arc::from([ty]);
+        assert!(
+            !shared_input_closed_result(&ir::Ty::Enum(ir::EnumTy::new(recursive)), &budget)
+                .unwrap()
+        );
+    }
+    #[test]
+    fn shared_local_closed_enum_admission_is_exact_short_depth_and_poison_safe() {
+        let (_, _, fixture_budget, publication) = closed_enum_publication();
+        let ty = direct_closed_enum_fixture(
+            &closed_enum_call(publication.source()).1.result,
+            &fixture_budget,
+        );
+        let measure = ir::PlanBudget::default();
+        assert!(shared_input_closed_result(&ty, &measure).unwrap());
+        let demand = measure.usage_snapshot();
+        assert!(demand.work > 0 && demand.bytes > 0 && demand.nodes > 0);
+        for guard in 0..6 {
+            let budget = ir::PlanBudget::new(ir::PlanLimits {
+                work: demand.work - usize::from(guard == 1),
+                bytes: demand.bytes - usize::from(guard == 2),
+                nodes: demand.nodes - usize::from(guard == 3),
+                depth: 1 - usize::from(guard == 4),
+                ..ir::PlanLimits::default()
+            });
+            if guard == 5 {
+                budget.poison_ledger_for_tests();
+            }
+            let result = shared_input_closed_result(&ty, &budget);
+            if guard == 0 {
+                assert!(result.unwrap());
+                let used = budget.usage_snapshot();
+                assert_eq!(
+                    (used.work, used.bytes, used.nodes),
+                    (demand.work, demand.bytes, demand.nodes)
+                );
+            } else {
+                assert!(
+                    matches!(result, Err(error) if error.kind() == tr::FactsErrorKind::Resource)
+                );
+                if guard != 5 {
+                    let expected = match guard {
+                        1 => ir::ResourceBudgetKind::Work,
+                        2 => ir::ResourceBudgetKind::Bytes,
+                        3 => ir::ResourceBudgetKind::Nodes,
+                        _ => ir::ResourceBudgetKind::Depth,
+                    };
+                    let failure = budget.first_resource_failure().unwrap();
+                    assert_eq!(failure.kind, expected);
+                    assert!(shared_input_closed_result(&ir::Ty::Bool, &budget).is_err());
+                    budget.poison_ledger_for_tests();
+                    assert!(shared_input_closed_result(&ty, &budget).is_err());
+                    assert!(shared_input_closed_result(&ir::Ty::Bool, &budget).is_err());
+                    assert_eq!(budget.first_resource_failure(), Some(failure));
+                }
+            }
+        }
+    }
+
+    #[test]
     fn static_literal_inputs_reject_forged_multiple_argument_values() {
         let (_, _, budget, publication) = published(
             "struct Holder<T>{value:T}fn keep<T>(value:T,_capacity:usize)->Holder<T>{Holder{value}}fn main(){keep(\"abc\",2usize);}",
@@ -1219,6 +2007,9 @@ struct SourceBindingSite {
     is_declare: bool,
     parameter: Option<usize>,
     statement: Option<usize>,
+    // Exact initializer occurrence and the binding selected while that
+    // immutable AST occurrence's lexical scope is active, before this let binds.
+    shared_borrow_origin: Option<(sr::SourceNode, sr::SourceNode)>,
 }
 #[derive(Clone, Debug)]
 struct SourceCallSite {
@@ -1254,6 +2045,8 @@ struct SourceInventory {
     calls: Vec<SourceCallSite>,
     // Reconstructed from immutable source on each inventory walk, never published.
     literal_arguments: HashMap<usize, Vec<Expr>>,
+    // Rebuilt from exact immutable AST lexical operands, never checked types.
+    shared_local_arguments: HashMap<usize, Vec<(sr::SourceNode, Option<ir::BorrowKind>)>>,
     constants: Vec<(sr::SourceNode, PathKey)>,
     associated_constants: Vec<(sr::SourceNode, AssociatedConstUse)>,
     associated_constant_pointers: HashMap<usize, usize>,
@@ -1349,6 +2142,24 @@ fn reserve_source_map<K: std::hash::Hash + Eq, V>(
         .map_err(|_| FactsError::resource(budget, "source map allocation"))?;
     Ok(())
 }
+fn store_shared_local_inputs(
+    map: &mut HashMap<usize, Vec<(sr::SourceNode, Option<ir::BorrowKind>)>>,
+    index: usize,
+    inputs: Vec<(sr::SourceNode, Option<ir::BorrowKind>)>,
+    budget: &ir::PlanBudget,
+) -> Result<(), FactsError> {
+    sr::work(budget, 1)?;
+    if map.contains_key(&index) {
+        return Err(FactsError::invalid(
+            budget,
+            "duplicate shared input source occurrence",
+        ));
+    }
+    reserve_source_map(map, budget)?;
+    map.insert(index, inputs);
+    Ok(())
+}
+
 fn insert_source_pointer(
     map: &mut HashMap<usize, usize>,
     key: usize,
@@ -1840,6 +2651,7 @@ impl SourceInventory {
             owner: owner.clone(),
             calls: Vec::new(),
             literal_arguments: HashMap::new(),
+            shared_local_arguments: HashMap::new(),
             constants: Vec::new(),
             associated_constants: Vec::new(),
             associated_constant_pointers: HashMap::new(),
@@ -1894,6 +2706,7 @@ impl SourceInventory {
                 statement,
                 required: parameter.is_some(),
                 is_declare: false,
+                shared_borrow_origin: None,
             },
             budget,
         )
@@ -2111,13 +2924,26 @@ impl SourceInventory {
             let here = node.child(2, index, budget)?;
             match statement {
                 Stmt::Let {
-                    name, ty, value, ..
+                    name,
+                    mutable,
+                    ty,
+                    value,
                 } => {
                     let absent =
                         top && matches!(ty, Type::Infer) && matches!(value, Expr::Call { .. });
+                    let initializer = here.child(3, 0, budget)?;
+                    let shared_borrow_origin = match value {
+                        Expr::Borrow {
+                            kind: ir::BorrowKind::Shared,
+                            place,
+                        } if top && !*mutable && place.fields.is_empty() => self
+                            .lookup(place.local, budget)?
+                            .map(|binding| (initializer.clone(), binding)),
+                        _ => None,
+                    };
                     self.expr(
                         value,
-                        &here.child(3, 0, budget)?,
+                        &initializer,
                         None,
                         if absent { Some(here.clone()) } else { None },
                         budget,
@@ -2137,6 +2963,7 @@ impl SourceInventory {
                         budget,
                     )?;
                     self.bindings[binding].required = top;
+                    self.bindings[binding].shared_borrow_origin = shared_borrow_origin;
                     insert_source_pointer(
                         &mut self.statement_pointers,
                         statement as *const Stmt as usize,
@@ -2651,6 +3478,33 @@ impl SourceInventory {
                     },
                     budget,
                 )?;
+                let mut local_arguments = Vec::new();
+                for argument in args {
+                    let witness = match argument {
+                        Expr::Var(path) if is_local_shaped_path(path) => {
+                            self.lookup(path, budget)?.map(|binding| (binding, None))
+                        }
+                        Expr::Borrow {
+                            kind: ir::BorrowKind::Shared,
+                            place,
+                        } if place.fields.is_empty() => self
+                            .lookup(place.local, budget)?
+                            .map(|binding| (binding, Some(ir::BorrowKind::Shared))),
+                        _ => None,
+                    };
+                    let Some(witness) = witness else {
+                        break;
+                    };
+                    sr::push(&mut local_arguments, witness, budget)?;
+                }
+                if !args.is_empty() && local_arguments.len() == args.len() {
+                    store_shared_local_inputs(
+                        &mut self.shared_local_arguments,
+                        index,
+                        local_arguments,
+                        budget,
+                    )?;
+                }
                 if let Some(literals) = literal_call_inputs::copy_arguments(args, budget)? {
                     reserve_source_map(&mut self.literal_arguments, budget)?;
                     self.literal_arguments.insert(index, literals);
@@ -5111,6 +5965,562 @@ fn borrowed_callable_source_binding(
     Ok((local, ty))
 }
 
+// This frontier infers input-owned actuals only. A reference-valued result
+// must still pass the existing direct-let/identity-return proof below.
+fn shared_input_primitive_result(ty: &ir::Ty) -> bool {
+    matches!(
+        ty,
+        ir::Ty::Int(_) | ir::Ty::Float(_) | ir::Ty::Bool | ir::Ty::Char | ir::Ty::Unit
+    )
+}
+// Shape admission only. No nominal spelling, pointer identity, carrier summary,
+// or prior visit establishes absence. Recursive applications are unsupported.
+fn shared_input_closed_result(ty: &ir::Ty, budget: &ir::PlanBudget) -> Result<bool, FactsError> {
+    if budget.has_resource_failure() {
+        return Err(FactsError::resource(
+            budget,
+            "closed result ledger already failed",
+        ));
+    }
+    fn visit(
+        ty: &ir::Ty,
+        ancestors: &mut Vec<ir::NominalAppId>,
+        budget: &ir::PlanBudget,
+        depth: usize,
+    ) -> Result<bool, FactsError> {
+        sr::depth(budget, depth)?;
+        sr::work(budget, 1)?;
+        if shared_input_primitive_result(ty) {
+            return Ok(true);
+        }
+        let ir::Ty::Enum(value) = ty else {
+            return Ok(false);
+        };
+        // Never dereference a recursive back edge or treat it as proved empty.
+        if value.is_back_edge() {
+            return Ok(false);
+        }
+        for ancestor in ancestors.iter() {
+            sr::work(budget, 1)?;
+            if *ancestor == value.id() {
+                return Ok(false);
+            }
+        }
+        sr::push(ancestors, value.id(), budget)?;
+        let complete = (|| {
+            // Phantom arguments count too, even when no field carries them.
+            for argument in value.def().type_args.iter() {
+                if !visit(argument, ancestors, budget, depth + 1)? {
+                    return Ok(false);
+                }
+            }
+            for variant in value.def().variants.iter() {
+                sr::work(budget, 1)?;
+                // Pay for the owned materialization handle before obtaining it.
+                // The read pays its own backing allocation on this same ledger.
+                sr::retain(budget, std::mem::size_of::<Arc<[ir::FieldDef]>>())?;
+                let fields = variant
+                    .fields
+                    .read(budget)
+                    .map_err(|error| source_error(budget, &error))?;
+                for field in fields.iter() {
+                    if !visit(&field.ty, ancestors, budget, depth + 1)? {
+                        return Ok(false);
+                    }
+                }
+                // Keep fields alive across every descendant read. It drops
+                // before this ancestor's stack entry is removed.
+            }
+            Ok(true)
+        })();
+        let _ = ancestors.pop();
+        complete
+    }
+    let mut ancestors = Vec::new();
+    let complete = visit(ty, &mut ancestors, budget, 0)?;
+    // Counted work can use a node-meter fast path. Read the original ledger's
+    // live latch explicitly, even for an empty or fieldless successful scan.
+    if budget.has_resource_failure() {
+        return Err(FactsError::resource(budget, "closed result ledger failed"));
+    }
+    Ok(complete)
+}
+fn shared_input_result_absence(
+    original: &ir::Ty,
+    instantiated: &ir::Ty,
+    facts: &tr::ValidatedFacts,
+    budget: &ir::PlanBudget,
+) -> Result<bool, FactsError> {
+    // Authenticate both definitions and all metadata with the original facts
+    // and ledger. Shape and equal application IDs alone are never authority.
+    facts.validate_ty_metadata_with_budget(original, budget)?;
+    facts.validate_ty_metadata_with_budget(instantiated, budget)?;
+    if !shared_input_closed_result(original, budget)?
+        || !shared_input_closed_result(instantiated, budget)?
+    {
+        return Ok(false);
+    }
+    if !replay_type_equal(original, instantiated, budget)? {
+        return Err(FactsError::invalid(
+            budget,
+            "shared input closed result changed original type",
+        ));
+    }
+    if budget.has_resource_failure() {
+        return Err(FactsError::resource(
+            budget,
+            "closed result proof ledger failed",
+        ));
+    }
+    Ok(true)
+}
+fn shared_input_reference(
+    referent: ir::Ty,
+    budget: &ir::PlanBudget,
+    depth: usize,
+) -> Result<ir::Ty, FactsError> {
+    sr::depth(budget, depth)?;
+    sr::work(budget, 1)?;
+    budget
+        .charge_nodes(1)
+        .map_err(|e| FactsError::resource(budget, &e))?;
+    sr::retain(budget, std::mem::size_of::<ir::Ty>() + 32)?;
+    Ok(ir::Ty::Ref {
+        kind: ir::BorrowKind::Shared,
+        referent: Arc::new(referent),
+    })
+}
+fn shared_scalar_chain(
+    ty: &ir::Ty,
+    budget: &ir::PlanBudget,
+    depth: usize,
+) -> Result<bool, FactsError> {
+    sr::depth(budget, depth)?;
+    sr::work(budget, 1)?;
+    match ty {
+        ir::Ty::Ref {
+            kind: ir::BorrowKind::Shared,
+            referent,
+        } => shared_scalar_chain(referent, budget, depth + 1),
+        ir::Ty::Int(_) | ir::Ty::Bool | ir::Ty::Char => Ok(true),
+        _ => Ok(false),
+    }
+}
+// Dispatch admission only, never proof: non-candidates retain the old fallback.
+// Checked signature shape may deny this route but cannot authenticate an operand.
+fn shared_local_input_candidate(
+    view: &tr::OriginalCallableView,
+    signature: &ir::Signature,
+    input_count: usize,
+    budget: &ir::PlanBudget,
+) -> Result<bool, FactsError> {
+    sr::work(budget, 1)?;
+    let scopes = view.generic_env().scopes();
+    if scopes.len() != 1
+        || scopes[0].arity() != 1
+        || input_count == 0
+        || input_count != view.signature().params.len()
+        || input_count != signature.params.len()
+        || !shared_input_closed_result(&view.signature().result, budget)?
+        || !shared_input_closed_result(&signature.result, budget)?
+    {
+        return Ok(false);
+    }
+    let parameter = ir::Ty::Param(ir::ParamId {
+        owner: scopes[0].binder(),
+        index: 0,
+    });
+    for (original, instantiated) in view.signature().params.iter().zip(&signature.params) {
+        if !replay_type_equal(original, &parameter, budget)?
+            || !matches!(
+                instantiated,
+                ir::Ty::Ref {
+                    kind: ir::BorrowKind::Shared,
+                    ..
+                }
+            )
+            || !shared_scalar_chain(instantiated, budget, 0)?
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+fn shared_local_source_type(
+    original: &OriginalSource,
+    inventory: &SourceInventory,
+    index: usize,
+    checked: &ir::CheckedFunction,
+    signatures: &Signatures,
+    budget: &ir::PlanBudget,
+    depth: usize,
+) -> Result<(ir::LocalId, ir::Ty), FactsError> {
+    sr::depth(budget, depth)?;
+    sr::work(budget, 1)?;
+    let site = original.bindings.get(index).ok_or_else(|| {
+        FactsError::invalid(budget, "shared input binding outside original source")
+    })?;
+    validate_original_occurrence(original, &site.node, budget)?;
+    let local = mapped_source_binding(original, index, budget)?;
+    let actual = checked
+        .locals
+        .get(local.0)
+        .ok_or_else(|| FactsError::invalid(budget, "shared input local missing"))?;
+    if actual.mutable {
+        return Err(FactsError::unsupported(
+            budget,
+            "shared input replay requires immutable bindings",
+        ));
+    }
+    if site.annotation.is_some() || site.parameter.is_some() {
+        return source_binding_type(original, index, checked, signatures, budget);
+    }
+    let statement = site.statement.ok_or_else(|| {
+        FactsError::unsupported(budget, "shared input requires a direct root source let")
+    })?;
+    let ordinal = u32::try_from(statement)
+        .map_err(|_| FactsError::resource(budget, "shared input statement overflow"))?;
+    if site.node.path.as_ref() != [1, 0, 2, ordinal] {
+        return Err(FactsError::invalid(
+            budget,
+            "shared input root occurrence changed",
+        ));
+    }
+    let function = original
+        .plan
+        .callable_body(&original.plan.program, original.declaration)
+        .map_err(|e| source_error(budget, &e))?;
+    let Some(Stmt::Let {
+        value: source,
+        mutable: false,
+        ..
+    }) = function.body.statements.get(statement)
+    else {
+        return Err(FactsError::unsupported(
+            budget,
+            "shared input requires original immutable let",
+        ));
+    };
+    let Expr::Borrow {
+        kind: ir::BorrowKind::Shared,
+        place,
+    } = source
+    else {
+        // Independently reconstruct an annotated or suffixed scalar root and
+        // compare its exact checked initializer, never infer from checked.ty.
+        return source_root_borrow_type(original, index, checked, signatures, budget);
+    };
+    if !place.fields.is_empty() {
+        return Err(FactsError::unsupported(
+            budget,
+            "shared input projections remain unsupported",
+        ));
+    }
+    // Rebuild the immutable source walk and use the correspondence captured
+    // while this initializer's scope was active, not a post-walk name scan.
+    // Ordinary source functions need not carry a macro lexical BindingId.
+    let fresh = inventory.bindings.get(index).ok_or_else(|| {
+        FactsError::invalid(budget, "shared input fresh binding occurrence missing")
+    })?;
+    let (operand, origin) = fresh.shared_borrow_origin.as_ref().ok_or_else(|| {
+        FactsError::invalid(
+            budget,
+            "shared input borrow lacks immutable source occurrence authority",
+        )
+    })?;
+    for witness in [
+        fresh.shared_borrow_origin.as_ref(),
+        site.shared_borrow_origin.as_ref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        sr::work(budget, witness.0.path.len())?;
+        sr::work(budget, witness.1.path.len())?;
+    }
+    if fresh.node != site.node || fresh.shared_borrow_origin != site.shared_borrow_origin {
+        return Err(FactsError::invalid(
+            budget,
+            "shared input retained borrow correspondence changed",
+        ));
+    }
+    validate_original_occurrence(original, operand, budget)?;
+    validate_original_occurrence(original, origin, budget)?;
+    if operand.path.as_ref() != [1, 0, 2, ordinal, 3, 0] {
+        return Err(FactsError::invalid(
+            budget,
+            "shared input borrow operand occurrence changed",
+        ));
+    }
+    let source_index = source_binding_index(&original.bindings, origin, budget)?
+        .ok_or_else(|| FactsError::invalid(budget, "shared input original borrow root missing"))?;
+    let binding = &original.bindings[source_index];
+    let prior_root = if let Some(parameter) = binding.parameter {
+        let parameter = u32::try_from(parameter)
+            .map_err(|_| FactsError::resource(budget, "shared input parameter overflow"))?;
+        binding.node.path.as_ref() == [0, parameter]
+    } else if let Some(prior) = binding.statement {
+        let prior_ordinal = u32::try_from(prior)
+            .map_err(|_| FactsError::resource(budget, "shared input root index overflow"))?;
+        prior < statement && binding.node.path.as_ref() == [1, 0, 2, prior_ordinal]
+    } else {
+        false
+    };
+    if !prior_root {
+        return Err(FactsError::invalid(
+            budget,
+            "shared input borrow root is not an earlier original binding",
+        ));
+    }
+    let (root, referent) = shared_local_source_type(
+        original,
+        inventory,
+        source_index,
+        checked,
+        signatures,
+        budget,
+        depth + 1,
+    )?;
+    let position = original
+        .root_positions
+        .get(index)
+        .copied()
+        .flatten()
+        .ok_or_else(|| FactsError::invalid(budget, "shared input let mapping missing"))?;
+    let Some(ir::TypedStmt::Let {
+        local: bound,
+        value,
+    }) = checked.body.statements.get(position)
+    else {
+        return Err(FactsError::invalid(
+            budget,
+            "shared input checked let occurrence changed",
+        ));
+    };
+    let expression = checked
+        .exprs
+        .get(value.0)
+        .ok_or_else(|| FactsError::invalid(budget, "shared input initializer missing"))?;
+    if *bound != local
+        || expression.completion != ir::Completion::Returns
+        || !matches!(&expression.kind, ir::ExprKind::Borrow { kind: ir::BorrowKind::Shared, place, timing: ir::BorrowTiming::Immediate }
+            if place.local == root && place.projection.is_empty())
+    {
+        return Err(FactsError::invalid(
+            budget,
+            "shared input initializer borrow identity changed",
+        ));
+    }
+    let ty = shared_input_reference(referent, budget, depth)?;
+    if !replay_type_equal(&actual.ty, &ty, budget)?
+        || !replay_type_equal(&expression.ty, &ty, budget)?
+    {
+        return Err(FactsError::invalid(
+            budget,
+            "shared input initializer type changed",
+        ));
+    }
+    Ok((local, ty))
+}
+#[allow(clippy::too_many_arguments)]
+fn replay_shared_local_inputs(
+    original: &OriginalSource,
+    inventory: &SourceInventory,
+    inputs: &[(sr::SourceNode, Option<ir::BorrowKind>)],
+    checked: &ir::CheckedFunction,
+    arguments: &[ir::ExprId],
+    target: &ir::CallTarget,
+    signature: &ir::Signature,
+    canonical_signature: &ir::Signature,
+    view: &tr::OriginalCallableView,
+    signatures: &Signatures,
+    evidence: &ir::CallEvidence,
+    facts: &tr::ValidatedFacts,
+    budget: &ir::PlanBudget,
+) -> Result<(), FactsError> {
+    // Only primitive or authenticated closed-enum results enter this proof.
+    // Neither the checked result nor an expected context infers a slot.
+    facts.validate_ty_metadata_with_budget(&signature.result, budget)?;
+    if !shared_input_result_absence(
+        &view.signature().result,
+        &canonical_signature.result,
+        facts,
+        budget,
+    )? || !shared_input_closed_result(&signature.result, budget)?
+        || inputs.is_empty()
+        || inputs.len() != arguments.len()
+        || inputs.len() != signature.params.len()
+        || inputs.len() != view.signature().params.len()
+    {
+        return Err(FactsError::invalid(
+            budget,
+            "shared input closed result or arity changed",
+        ));
+    }
+    if evidence.arguments.len() != arguments.len() {
+        return Err(FactsError::invalid(
+            budget,
+            "shared input trace argument count changed",
+        ));
+    }
+    // The source checker instantiates a direct call's signature before
+    // emitting arguments. This frontier has shared input parameters and no
+    // retained single-input identity/scalar exception, so its exact source
+    // expectation is FirmReference(Shared), not the declaration's opaque T.
+    for (position, (row, value)) in evidence.arguments.iter().zip(arguments).enumerate() {
+        sr::work(budget, 1)?;
+        if row.argument != position
+            || row.value != *value
+            || row.expectation
+                != (ir::CallExpectation::FirmReference {
+                    kind: ir::BorrowKind::Shared,
+                })
+        {
+            return Err(FactsError::invalid(
+                budget,
+                "shared input trace changed argument or expectation",
+            ));
+        }
+    }
+    let scopes = view.generic_env().scopes();
+    if scopes.len() != 1 || scopes[0].arity() != 1 {
+        return Err(FactsError::unsupported(
+            budget,
+            "shared input replay requires one original own slot",
+        ));
+    }
+    let parameter = ir::Ty::Param(ir::ParamId {
+        owner: scopes[0].binder(),
+        index: 0,
+    });
+    let mut state = sr::CallInferenceState::new(Some(scopes[0].clone()), budget)?;
+    for (index, ((binding, borrow), argument)) in inputs.iter().zip(arguments).enumerate() {
+        sr::work(budget, 1)?;
+        if !replay_type_equal(&view.signature().params[index], &parameter, budget)? {
+            return Err(FactsError::unsupported(
+                budget,
+                "shared input replay requires original parameter T at every position",
+            ));
+        }
+        let source_index = source_binding_index(&original.bindings, binding, budget)?
+            .ok_or_else(|| FactsError::invalid(budget, "shared input original binding missing"))?;
+        let (local, source_ty) = shared_local_source_type(
+            original,
+            inventory,
+            source_index,
+            checked,
+            signatures,
+            budget,
+            0,
+        )?;
+        let input = if let Some(kind) = borrow {
+            if *kind != ir::BorrowKind::Shared {
+                return Err(FactsError::invalid(
+                    budget,
+                    "shared input source borrow kind changed",
+                ));
+            }
+            shared_input_reference(source_ty, budget, 0)?
+        } else {
+            source_ty
+        };
+        if !matches!(
+            &input,
+            ir::Ty::Ref {
+                kind: ir::BorrowKind::Shared,
+                ..
+            }
+        ) || !shared_scalar_chain(&input, budget, 0)?
+        {
+            return Err(FactsError::unsupported(
+                budget,
+                "shared input replay requires shared scalar reference chains",
+            ));
+        }
+        let value = checked
+            .exprs
+            .get(argument.0)
+            .ok_or_else(|| FactsError::invalid(budget, "shared input checked argument missing"))?;
+        let exact = if borrow.is_some() {
+            matches!(&value.kind, ir::ExprKind::Borrow { kind: ir::BorrowKind::Shared, place, timing: ir::BorrowTiming::Immediate }
+                if place.local == local && place.projection.is_empty())
+        } else {
+            matches!(value.kind, ir::ExprKind::Local(actual) if actual == local)
+        };
+        if !exact
+            || value.completion != ir::Completion::Returns
+            || !replay_type_equal(&input, &value.ty, budget)?
+            || !replay_type_equal(&input, &signature.params[index], budget)?
+        {
+            return Err(FactsError::invalid(
+                budget,
+                "shared input checked operand changed source identity or type",
+            ));
+        }
+        facts.validate_ty_metadata_with_budget(&input, budget)?;
+        let schema = state.schema(&view.signature().params[index], 0)?;
+        let evidence = state.type_term(&input, None, 0)?;
+        state.constrain(&schema, &evidence, 0)?;
+    }
+    let actuals = state
+        .finish(false, &mut |_, _| {
+            Err(FactsError::invalid(
+                budget,
+                "shared scalar inference cannot materialize a nominal",
+            ))
+        })?
+        .ok_or_else(|| {
+            FactsError::unsupported(budget, "shared input inference remains unresolved")
+        })?;
+    if actuals.len() != target.type_args.len() {
+        return Err(FactsError::invalid(
+            budget,
+            "shared input inferred actual count changed",
+        ));
+    }
+    for (inferred, supplied) in actuals.iter().zip(target.type_args.iter()) {
+        if !replay_type_equal(inferred, supplied, budget)? {
+            return Err(FactsError::invalid(
+                budget,
+                "shared input inferred actual differs from canonical target",
+            ));
+        }
+    }
+    if actuals.len() != 1
+        || evidence.type_actual_regions.len()
+            != ir::root_reference_layers(&actuals[0]).map_err(|e| source_error(budget, &e))?
+    {
+        return Err(FactsError::invalid(
+            budget,
+            "shared input trace region count changed",
+        ));
+    }
+    for (depth, row) in evidence.type_actual_regions.iter().enumerate() {
+        sr::work(budget, row.location.path.0.len() + 1)?;
+        if row.argument != 0
+            || !row.location.path.0.is_empty()
+            || row.location.channel
+                != ir::CarrierChannel::Fixed(ir::ReferencePosition {
+                    depth: u8::try_from(depth).map_err(|_| {
+                        FactsError::resource(budget, "shared input region depth overflow")
+                    })?,
+                })
+            || row.source != ir::ActualRegion::Elided
+        {
+            return Err(FactsError::invalid(
+                budget,
+                "shared input trace changed exact region occurrence",
+            ));
+        }
+    }
+    ir::validate_callee(
+        &ir::Callee::Direct(target.clone()),
+        signature,
+        ir::FactsCtx::Validated(facts),
+    )
+    .map_err(|e| source_error(budget, &e))
+}
+
 fn borrowed_callable_leaf(
     ty: &ir::Ty,
     budget: &ir::PlanBudget,
@@ -5206,7 +6616,18 @@ pub(super) fn replay_source_body(
         if let Some(ty) = &retained.annotation {
             compare_source_type_work(ty, budget, 0)?;
         }
+        for witness in [
+            fresh.shared_borrow_origin.as_ref(),
+            retained.shared_borrow_origin.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            sr::work(budget, witness.0.path.len())?;
+            sr::work(budget, witness.1.path.len())?;
+        }
         if fresh.node != retained.node
+            || fresh.shared_borrow_origin != retained.shared_borrow_origin
             || !optional_source_type_equal(
                 &fresh.annotation,
                 &retained.annotation,
@@ -5729,6 +7150,48 @@ pub(super) fn replay_source_body(
                 caller_context.module,
                 facts,
                 &original.literal_temporaries,
+                budget,
+            )?;
+            continue;
+        }
+        if let Some(inputs) = fresh.shared_local_arguments.get(&index)
+            && shared_local_input_candidate(&view, signature, inputs.len(), budget)?
+        {
+            let ir::ExprKind::Call {
+                target: checked_callee,
+                ..
+            } = &checked.exprs[id.0].kind
+            else {
+                return Err(FactsError::invalid(
+                    budget,
+                    "shared result witness lost checked call",
+                ));
+            };
+            let canonical_signature = nominal_call_receipts::original_call_signature(
+                original,
+                position,
+                id,
+                checked_callee,
+                signature,
+                facts,
+                budget,
+                &mut call_scratch,
+            )?;
+            let evidence = &checked.call_evidence[evidence_positions[id.0]
+                .ok_or_else(|| FactsError::invalid(budget, "shared input call trace missing"))?];
+            replay_shared_local_inputs(
+                original,
+                &fresh,
+                inputs,
+                checked,
+                args,
+                target,
+                signature,
+                canonical_signature,
+                &view,
+                &signatures,
+                evidence,
+                facts,
                 budget,
             )?;
             continue;
@@ -22251,6 +23714,22 @@ impl SchemaAdapter {
     }
 }
 impl tr::SchemaCx for SchemaAdapter {
+    fn native_sequence_swap(
+        &self,
+        declaration: ir::DeclId,
+    ) -> Result<Option<Arc<native_sequence::NativeSequenceSwap>>, tr::FactsError> {
+        native_sequence::issue_swap(&self.registry, declaration, &self.budget)
+            .map_err(|error| self.error(error))
+    }
+
+    fn native_sequence_slot(
+        &self,
+        declaration: ir::DeclId,
+    ) -> Result<Option<Arc<native_sequence::NativeSequenceSlot>>, tr::FactsError> {
+        native_sequence::issue_slot(&self.registry, declaration, &self.budget)
+            .map_err(|error| self.error(error))
+    }
+
     fn replay_packed_reserve_authority(
         &self,
         authority: &PackedReserveAuthority,
@@ -24037,9 +25516,12 @@ fn collect_source_params(
     Ok(())
 }
 mod dynamic_objects;
+mod native_sequence;
+pub use native_sequence::{NativeSequenceSlot, NativeSequenceSwap};
 mod nominal_declarations;
 mod nominal_realization;
 mod nominal_schema;
+pub(in crate::compiler) use native_sequence::NativeSequenceBinding;
 mod nominal_source_shapes;
 /// One immutable per-body view with a shared canonical application service.
 mod type_check;

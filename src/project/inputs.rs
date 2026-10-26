@@ -29,17 +29,27 @@ struct Observation {
 pub struct DiscoveryInputs {
     environment: std::collections::BTreeMap<String, Option<OsString>>,
     path_packages: std::collections::BTreeMap<PathBuf, usize>,
+    registry_packages:
+        std::collections::BTreeMap<super::manifest::LockedRegistryPackage, RegistryBinding>,
     observations: Vec<Observation>,
     complete: bool,
     uncontrolled: bool,
     identity: [u8; 32],
 }
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct RegistryBinding {
+    pub(crate) index: usize,
+    pub(crate) root: PathBuf,
+    pub(crate) archive: PathBuf,
+}
+
 impl crate::engine::Fact for DiscoveryInputs {}
 impl DiscoveryInputs {
     pub(crate) fn untracked() -> Arc<Self> {
         Arc::new(Self {
             environment: std::collections::BTreeMap::new(),
             path_packages: std::collections::BTreeMap::new(),
+            registry_packages: std::collections::BTreeMap::new(),
             observations: Vec::new(),
             complete: false,
             uncontrolled: true,
@@ -48,6 +58,12 @@ impl DiscoveryInputs {
     }
     pub(crate) fn path_package(&self, path: &Path) -> Option<usize> {
         self.path_packages.get(path).copied()
+    }
+    pub(crate) fn registry_package(
+        &self,
+        package: &super::manifest::LockedRegistryPackage,
+    ) -> Option<&RegistryBinding> {
+        self.registry_packages.get(package)
     }
     pub fn observation_count(&self) -> usize {
         self.observations.len()
@@ -92,6 +108,8 @@ impl DiscoveryInputs {
 pub(crate) struct Recorder {
     environment: std::collections::BTreeMap<String, Option<OsString>>,
     path_packages: std::collections::BTreeMap<PathBuf, usize>,
+    registry_packages:
+        std::collections::BTreeMap<super::manifest::LockedRegistryPackage, RegistryBinding>,
     observations: Vec<Observation>,
     cwd: Option<PathBuf>,
     complete: bool,
@@ -108,6 +126,7 @@ impl Recorder {
         Self {
             environment: std::collections::BTreeMap::new(),
             path_packages: std::collections::BTreeMap::new(),
+            registry_packages: std::collections::BTreeMap::new(),
             observations: Vec::new(),
             complete: cwd.is_some(),
             cwd,
@@ -319,6 +338,43 @@ impl Recorder {
         self.path_packages.insert(path.to_owned(), index);
         Ok(())
     }
+    /// Freeze an authenticated selection, not permission to reuse its mutable bytes.
+    /// Registry inspection still invokes an uncontrolled external tool.
+    pub(crate) fn bind_registry_package(
+        &mut self,
+        package: &super::manifest::LockedRegistryPackage,
+        binding: RegistryBinding,
+    ) -> Result<(), &'static str> {
+        self.uncontrolled();
+        if let Some(previous) = self.registry_packages.get(package) {
+            return if previous == &binding {
+                Ok(())
+            } else {
+                Err("registry selection changed during project discovery")
+            };
+        }
+        let cost = package
+            .name
+            .len()
+            .saturating_add(package.version.len())
+            .saturating_add(package.source.len())
+            .saturating_add(package.checksum.len())
+            .saturating_add(binding.root.as_os_str().len())
+            .saturating_add(binding.archive.as_os_str().len())
+            .saturating_add(64);
+        if self
+            .registry_packages
+            .len()
+            .saturating_add(self.path_packages.len())
+            >= MAX_ENTRIES
+            || cost > self.binding_remaining
+        {
+            return Err("exceeded project discovery registry identity limits");
+        }
+        self.binding_remaining -= cost;
+        self.registry_packages.insert(package.clone(), binding);
+        Ok(())
+    }
     pub(crate) fn uncontrolled(&mut self) {
         self.uncontrolled = true;
     }
@@ -326,6 +382,7 @@ impl Recorder {
         Arc::new(DiscoveryInputs {
             environment: self.environment,
             path_packages: self.path_packages,
+            registry_packages: self.registry_packages,
             observations: self.observations,
             complete: self.complete,
             uncontrolled: self.uncontrolled,
@@ -689,5 +746,208 @@ mod tests {
         assert!(one.matches_current());
         std::fs::remove_file(f.0.join(&raw)).unwrap();
         assert!(!one.matches_current());
+    }
+
+    #[test]
+    fn registry_bindings_are_bounded_and_never_authorize_sharing() {
+        let key = manifest::LockedRegistryPackage {
+            name: "dep".into(),
+            version: "0.1.0".into(),
+            source: "registry+https://github.com/rust-lang/crates.io-index".into(),
+            checksum: "0".repeat(64),
+        };
+        let binding = RegistryBinding {
+            index: 1,
+            root: "/source".into(),
+            archive: "/archive".into(),
+        };
+        let mut recorder = Recorder::new();
+        recorder
+            .bind_registry_package(&key, binding.clone())
+            .unwrap();
+        recorder
+            .bind_registry_package(&key, binding.clone())
+            .unwrap();
+        let mut changed = binding.clone();
+        changed.index = 2;
+        assert!(recorder.bind_registry_package(&key, changed).is_err());
+        let receipt = recorder.finish();
+        assert_eq!(receipt.registry_package(&key), Some(&binding));
+        assert!(receipt.identity().is_none());
+        assert!(!receipt.matches_current());
+        let mut exhausted = Recorder::new();
+        exhausted.binding_remaining = 0;
+        assert!(exhausted.bind_registry_package(&key, binding).is_err());
+        assert!(exhausted.finish().registry_package(&key).is_none());
+    }
+
+    #[test]
+    fn registry_planning_freezes_selection_but_reauthenticates_bytes() {
+        let f = Fixture::new();
+        f.write(
+            "one/registry/src/index.crates.io-1949cf8c6b5b557f/dep-0.1.0/Cargo.toml",
+            "[package]\nname='dep'\nversion='0.1.0'\nedition='2024'\n[features]\nmarker=[]\n",
+        );
+        f.write(
+            "one/registry/src/index.crates.io-1949cf8c6b5b557f/dep-0.1.0/src/lib.rs",
+            "pub fn value() -> i32 { 7 }\n",
+        );
+        let src =
+            f.0.join("one/registry/src/index.crates.io-1949cf8c6b5b557f");
+        let cache =
+            f.0.join("one/registry/cache/index.crates.io-1949cf8c6b5b557f");
+        std::fs::create_dir_all(&cache).unwrap();
+        let archive = cache.join("dep-0.1.0.crate");
+        assert!(
+            std::process::Command::new("tar")
+                .arg("-czf")
+                .arg(&archive)
+                .arg("-C")
+                .arg(&src)
+                .arg("dep-0.1.0")
+                .status()
+                .unwrap()
+                .success()
+        );
+        let sum = std::process::Command::new("sha256sum")
+            .arg(&archive)
+            .output()
+            .unwrap();
+        assert!(sum.status.success());
+        let checksum = String::from_utf8(sum.stdout).unwrap();
+        let checksum = checksum.split_whitespace().next().unwrap();
+        f.write("Cargo.toml", &format!("{MANIFEST}[dependencies]\ndep={{version='=0.1.0',optional=true}}\n[features]\nuse_dep=['dep:dep','dep/marker']\n"));
+        f.write("Cargo.lock", &format!("version=4\n[[package]]\nname='tracked'\nversion='0.1.0'\ndependencies=['dep']\n[[package]]\nname='dep'\nversion='0.1.0'\nsource='registry+https://github.com/rust-lang/crates.io-index'\nchecksum='{checksum}'\n"));
+        f.write("src/main.rs", "fn main() { assert!(dep::value() == 7); }\n");
+        std::os::unix::fs::symlink("one", f.0.join("home")).unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "project::inputs::tests::registry_planning_child",
+                "--nocapture",
+            ])
+            .env("JR_REGISTRY_PLANNING_CHILD", &f.0)
+            .env("CARGO_HOME", f.0.join("home"))
+            .env("CARGO_TARGET_DIR", f.0.join("target"))
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+    }
+
+    #[test]
+    fn registry_planning_child() {
+        let Some(root) = std::env::var_os("JR_REGISTRY_PLANNING_CHILD") else {
+            return;
+        };
+        let root = PathBuf::from(root);
+        let path = root.join("Cargo.toml");
+        let ws = manifest::load(&path).unwrap();
+        let index = ws.packages.iter().position(|p| p.registry).unwrap();
+        let key = match &ws.packages[ws.members[0]].dependencies[0].source {
+            manifest::DependencySource::Registry(key) => key.clone(),
+            _ => panic!("not registry"),
+        };
+        let binding = ws.inputs.registry_package(&key).unwrap().clone();
+        assert_eq!(binding.index, index);
+        assert!(ws.inputs.identity().is_none());
+        let plan = |ws: &manifest::Workspace, available: bool| {
+            let resolved = manifest::resolve_features(
+                ws,
+                &[(ws.members[0], vec!["use_dep".into()], false)],
+                false,
+            )
+            .unwrap();
+            assert!(resolved.enabled[index].contains("marker"));
+            let mut unresolved = Vec::new();
+            let visible = manifest::visible_dependencies(
+                ws,
+                ws.members[0],
+                false,
+                &resolved.active_deps[ws.members[0]],
+                &mut unresolved,
+            );
+            if available {
+                assert_eq!(visible, vec![("dep".into(), index)]);
+                assert!(unresolved.is_empty());
+            } else {
+                assert!(visible.is_empty());
+                assert_eq!(unresolved.len(), 1);
+            }
+        };
+        plan(&ws, true);
+        for workers in [1, 8] {
+            let driver = crate::project::driver::Driver::new(
+                &path,
+                crate::project::driver::Selection {
+                    workers,
+                    features: vec!["use_dep".into()],
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            for command in [
+                crate::project::driver::Command::Check,
+                crate::project::driver::Command::Build,
+                crate::project::driver::Command::Run,
+            ] {
+                assert_eq!(driver.run(command).unwrap(), 0);
+            }
+        }
+        // A new cache becomes visible through the same CARGO_HOME spelling.
+        // Existing planning must neither select it nor lose its feature binding.
+        let other_src = root.join("two/registry/src/index.crates.io-1949cf8c6b5b557f");
+        let other_cache = root.join("two/registry/cache/index.crates.io-1949cf8c6b5b557f");
+        std::fs::create_dir_all(&other_src).unwrap();
+        std::fs::create_dir_all(&other_cache).unwrap();
+        std::fs::copy(&binding.archive, other_cache.join("dep-0.1.0.crate")).unwrap();
+        assert!(
+            std::process::Command::new("tar")
+                .arg("-xzf")
+                .arg(&binding.archive)
+                .arg("-C")
+                .arg(&other_src)
+                .status()
+                .unwrap()
+                .success()
+        );
+        std::fs::remove_file(root.join("home")).unwrap();
+        std::os::unix::fs::symlink("two", root.join("home")).unwrap();
+        plan(&ws, true);
+        let fresh = manifest::load(&path).unwrap();
+        assert_ne!(
+            fresh.inputs.registry_package(&key).unwrap().root,
+            binding.root
+        );
+        let original = std::fs::read(&binding.archive).unwrap();
+        std::fs::write(&binding.archive, b"changed").unwrap();
+        plan(&ws, false);
+        plan(&fresh, true);
+        std::fs::write(&binding.archive, original).unwrap();
+        let source = binding.root.join("src/lib.rs");
+        let original = std::fs::read(&source).unwrap();
+        std::fs::write(&source, b"pub fn value() -> i32 { 8 }\n").unwrap();
+        plan(&ws, false);
+        std::fs::write(&source, &original).unwrap();
+        plan(&ws, true);
+        std::fs::remove_file(&source).unwrap();
+        plan(&ws, false);
+        std::fs::write(&source, original).unwrap();
+        // Missing optional discovery cannot acquire a binding after the fact.
+        std::fs::rename(other_src.join("dep-0.1.0"), other_src.join("saved")).unwrap();
+        let absent = manifest::load(&path).unwrap();
+        assert!(absent.inputs.registry_package(&key).is_none());
+        std::fs::rename(other_src.join("saved"), other_src.join("dep-0.1.0")).unwrap();
+        let mut unresolved = Vec::new();
+        assert!(
+            manifest::visible_dependencies(
+                &absent,
+                absent.members[0],
+                false,
+                &["dep".into()].into(),
+                &mut unresolved
+            )
+            .is_empty()
+        );
+        assert_eq!(unresolved.len(), 1);
     }
 }

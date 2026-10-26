@@ -591,6 +591,28 @@ pub struct InstantiatedSchema {
     pub predicates: Arc<[Predicate]>,
 }
 pub trait SchemaCx {
+    /// An alternate adapter cannot manufacture paired raw exchange authority.
+    fn native_sequence_swap(
+        &self,
+        declaration: DeclId,
+    ) -> Result<Option<Arc<super::frontend::NativeSequenceSwap>>> {
+        let _ = declaration;
+        self.budget()
+            .charge_work(1)
+            .map_err(|message| FactsError::from_message(self.budget(), &message))?;
+        Ok(None)
+    }
+    /// Default deny. Declaration identity alone never proves a raw slot recipe.
+    fn native_sequence_slot(
+        &self,
+        declaration: DeclId,
+    ) -> Result<Option<Arc<super::frontend::NativeSequenceSlot>>> {
+        let _ = declaration;
+        self.budget()
+            .charge_work(1)
+            .map_err(|message| FactsError::from_message(self.budget(), &message))?;
+        Ok(None)
+    }
     fn budget(&self) -> &PlanBudget;
     fn registry_snapshot(&self) -> SnapshotId;
     fn core_catalog(&self) -> &Arc<CoreCatalog>;
@@ -905,6 +927,28 @@ impl OriginalCallableView {
     }
 }
 impl ValidatedFacts {
+    pub(in crate::compiler) fn native_sequence_swap(
+        &self,
+        declaration: DeclId,
+    ) -> Result<Option<Arc<super::frontend::NativeSequenceSwap>>> {
+        self.world.check_original_context(self)?;
+        if self.phase() == FactsPhase::Schema {
+            return Ok(None);
+        }
+        self.world.schema.native_sequence_swap(declaration)
+    }
+
+    pub(in crate::compiler) fn native_sequence_slot(
+        &self,
+        declaration: DeclId,
+    ) -> Result<Option<Arc<super::frontend::NativeSequenceSlot>>> {
+        self.world.check_original_context(self)?;
+        if self.phase() == FactsPhase::Schema {
+            return Ok(None);
+        }
+        self.world.schema.native_sequence_slot(declaration)
+    }
+
     /// Replay against the actual borrowed source adapter, not a capability's
     /// self-reported owner/snapshot. The query never retains these facts/world.
     pub(in crate::compiler) fn replay_packed_reserve_authority(
@@ -2331,10 +2375,18 @@ struct SignatureTopologyProof {
     budget: PlanBudget,
 }
 
+/// A type-argument invariance obligation, not a mutation/effect capability.
+#[derive(Clone, Debug)]
+pub(in crate::compiler) struct NativeHeapInvariant {
+    pub(in crate::compiler) storage: ir::InputCarrier,
+    pub(in crate::compiler) sources: Arc<[ir::InputCarrier]>,
+}
+
 /// Structural declaration transport only. Actual loans and occurrence-local
 /// region solutions belong to the borrow plan, never this world-owned view.
 #[derive(Clone, Debug)]
 pub struct CarrierContractView {
+    native_heap_invariants: Arc<[NativeHeapInvariant]>,
     nominal: Option<Arc<nominal_carriers::NominalCarrierAuthority>>,
     closure_result: Option<(Arc<ir::ClosureTy>, ir::ClosureKind)>,
     physical: Option<super::opaque_physical::PhysicalCarrierIdentity>,
@@ -2362,6 +2414,9 @@ pub struct CarrierContractView {
     budget: PlanBudget,
 }
 impl CarrierContractView {
+    pub(in crate::compiler) fn native_heap_invariants(&self) -> &[NativeHeapInvariant] {
+        &self.native_heap_invariants
+    }
     pub fn original_contract(&self) -> &ir::CarrierContract {
         &self.original_contract
     }
@@ -4101,6 +4156,190 @@ impl ValidatedTraitWorld {
         }
         Ok(true)
     }
+    // A method may accept independently quantified input lifetimes where the
+    // trait requires one shared lifetime. This is contravariance, not erased
+    // lifetime identity. Restrict this proof to reference-free return values.
+    fn reference_free_implementation_refines(
+        &self,
+        required: &Signature,
+        provided: &Signature,
+        env: &GenericEnv,
+        original: Option<&ValidatedFacts>,
+    ) -> Result<bool> {
+        if self.return_refines(&required.ref_contract, &provided.ref_contract)? {
+            return Ok(true);
+        }
+        let a = &required.ref_contract;
+        let b = &provided.ref_contract;
+        if !a.results.is_empty()
+            || !b.results.is_empty()
+            || a.input_regions.len() != b.input_regions.len()
+        {
+            return Ok(false);
+        }
+        for result in [&required.result, &provided.result] {
+            if !self.authenticated_result_carriers_absent(result, env, original)? {
+                return Ok(false);
+            }
+        }
+        // Map each provided binder to the required binder at the same typed
+        // input position. A provided equality cannot identify distinct required
+        // lifetimes. Separate provided binders may instantiate to the same one.
+        let mut map = Vec::new();
+        for (required, provided) in a.input_regions.iter().zip(b.input_regions.iter()) {
+            charged(&self.budget, self.budget.charge_work(map.len() + 1))?;
+            if required.input != provided.input {
+                return Ok(false);
+            }
+            if let Some((_, mapped)) = map.iter().find(|(old, _)| *old == provided.region) {
+                if *mapped != required.region {
+                    return Ok(false);
+                }
+            } else {
+                push(&self.budget, &mut map, (provided.region, required.region))?;
+            }
+        }
+        if map.len() != usize::from(b.region_count) {
+            return Ok(false);
+        }
+        // Both declarations have canonical transitively closed outlives rows.
+        // Every condition imposed by the implementation must follow from the
+        // required contract after substitution, including reflexive equalities.
+        for (long, short) in b.outlives.iter() {
+            charged(
+                &self.budget,
+                self.budget
+                    .charge_work(map.len() * 2 + a.outlives.len() + 1),
+            )?;
+            let Some((_, long)) = map.iter().find(|(old, _)| old == long) else {
+                return Ok(false);
+            };
+            let Some((_, short)) = map.iter().find(|(old, _)| old == short) else {
+                return Ok(false);
+            };
+            if long != short && !a.outlives.contains(&(*long, *short)) {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+    fn authenticated_result_carriers_absent(
+        &self,
+        ty: &Ty,
+        env: &GenericEnv,
+        original: Option<&ValidatedFacts>,
+    ) -> Result<bool> {
+        // Replay exact source/graph authority before inspecting field payloads.
+        self.validate_ty_metadata_with_facts(ty, env, 0, &mut NominalReplays::default(), original)?;
+        let mut visits = 0;
+        let (opaque, _type_height) = charged(
+            &self.budget,
+            ir::reference_type_summary(ty, false, &self.budget, 0, &mut visits),
+        )?;
+        if opaque {
+            return Ok(false);
+        }
+        self.result_carriers_absent(ty)
+    }
+    #[cfg(test)]
+    pub(in crate::compiler) fn result_carriers_absent_for_tests(
+        &self,
+        ty: &Ty,
+        facts: &ValidatedFacts,
+    ) -> Result<bool> {
+        self.check_facts(facts, false)?;
+        self.authenticated_result_carriers_absent(ty, facts.env(), Some(facts))
+    }
+    // Finite inventory, not a recursive success cache. Deduplication only
+    // avoids scheduling an application twice. No pending application proves
+    // absence: final success requires exhausting every queued child.
+    fn result_carriers_absent(&self, ty: &Ty) -> Result<bool> {
+        let mut queue = Vec::new();
+        let mut inventory = Vec::new();
+        self.enqueue_result_carrier(ty, 0, &mut queue, &mut inventory)?;
+        let mut cursor = 0;
+        while cursor < queue.len() {
+            let (current, depth) = queue[cursor].clone();
+            cursor += 1;
+            charged(&self.budget, self.budget.charge_work(1))?;
+            let mut enqueue = |child: &Ty| {
+                self.enqueue_result_carrier(child, depth + 1, &mut queue, &mut inventory)
+            };
+            match &current {
+                Ty::Ref { .. }
+                | Ty::Param(_)
+                | Ty::AssociatedType(_)
+                | Ty::Opaque(_)
+                | Ty::Str
+                | Ty::Slice { .. }
+                | Ty::Dyn(_)
+                | Ty::RawPtr { .. } => return Ok(false),
+                Ty::Tuple(fields) => {
+                    for field in fields.iter() {
+                        enqueue(field)?;
+                    }
+                }
+                Ty::Array { element, .. } => enqueue(element)?,
+                Ty::Struct(value) => {
+                    for actual in value.def().type_args.iter() {
+                        enqueue(actual)?;
+                    }
+                    let fields = nominal_fields(&value.def().fields, &self.budget)?;
+                    for field in fields.iter() {
+                        enqueue(&field.ty)?;
+                    }
+                }
+                Ty::Enum(value) => {
+                    for actual in value.def().type_args.iter() {
+                        enqueue(actual)?;
+                    }
+                    for variant in value.def().variants.iter() {
+                        charged(&self.budget, self.budget.charge_work(1))?;
+                        let fields = nominal_fields(&variant.fields, &self.budget)?;
+                        for field in fields.iter() {
+                            enqueue(&field.ty)?;
+                        }
+                    }
+                }
+                Ty::FnItem(item) => {
+                    for actual in item.type_args.iter() {
+                        enqueue(actual)?;
+                    }
+                }
+                Ty::Closure(closure) => {
+                    for capture in closure.captures() {
+                        enqueue(capture)?;
+                    }
+                }
+                Ty::Int(_) | Ty::Float(_) | Ty::Char | Ty::Bool | Ty::Unit | Ty::Never => {}
+            }
+        }
+        Ok(true)
+    }
+    fn enqueue_result_carrier(
+        &self,
+        ty: &Ty,
+        depth: usize,
+        queue: &mut Vec<(Ty, usize)>,
+        inventory: &mut Vec<ir::NominalAppId>,
+    ) -> Result<()> {
+        charged(&self.budget, self.budget.check_depth(depth))?;
+        charged(&self.budget, self.budget.charge_work(1))?;
+        let nominal = match ty {
+            Ty::Struct(value) => Some(value.id()),
+            Ty::Enum(value) => Some(value.id()),
+            _ => None,
+        };
+        if let Some(id) = nominal {
+            charged(&self.budget, self.budget.charge_work(inventory.len() + 1))?;
+            if inventory.contains(&id) {
+                // Scheduling deduplication, not a success proof.
+                return Ok(());
+            }
+            push(&self.budget, inventory, id)?;
+        }
+        push(&self.budget, queue, (ty.clone(), depth))
+    }
     fn return_origin_refines(
         &self,
         required: &ir::ReturnContract,
@@ -4941,9 +5180,11 @@ impl ValidatedTraitWorld {
                 &expected.signature.result,
                 &target.schema.signature.result,
                 0,
-            )? || !self.return_refines(
-                &expected.signature.ref_contract,
-                &target.schema.signature.ref_contract,
+            )? || !self.reference_free_implementation_refines(
+                &expected.signature,
+                &target.schema.signature,
+                &target.schema.env,
+                None,
             )? {
                 return Err(FactsError::invalid(
                     &self.budget,
@@ -5579,7 +5820,10 @@ impl ValidatedTraitWorld {
         retain::<CarrierContractView>(&self.budget, 1)?;
         let projected_subject = projected.as_ref().map(|proof| proof.goal().clone());
         let fixed = signature.ref_contract.clone();
+        let native_heap_invariants =
+            self.native_heap_invariants(&raw.signature, &retained.contract.inputs)?;
         let view = CarrierContractView {
+            native_heap_invariants,
             nominal: None,
             physical: None,
             closure_result: None,
@@ -6185,6 +6429,75 @@ impl ValidatedTraitWorld {
         )?;
         Ok(a == b)
     }
+    /// A mutable native owner fixes its element type invariantly. Every value
+    /// argument using that same original family must remain valid for the
+    /// storage lifetime. This is not permission to write a shared summary.
+    fn native_heap_invariants(
+        &self,
+        signature: &Signature,
+        inputs: &[ir::InputCarrier],
+    ) -> Result<Arc<[NativeHeapInvariant]>> {
+        let mut rows = Vec::new();
+        for storage in inputs {
+            charged(&self.budget, self.budget.charge_work(1))?;
+            let Some(Ty::Ref {
+                kind: ir::BorrowKind::Mut,
+                referent,
+            }) = signature.params.get(storage.param)
+            else {
+                continue;
+            };
+            let Some(Ty::Param(parameter)) = referent.owned_sequence_element() else {
+                continue;
+            };
+            if storage.location.path.0.as_ref()
+                != [ir::CarrierStep::Referent, ir::CarrierStep::SliceElement]
+                || storage.location.channel
+                    != (ir::CarrierChannel::ParamTail {
+                        parameter: *parameter,
+                        prefix: 0,
+                    })
+            {
+                continue;
+            }
+            let mut sources = Vec::new();
+            for input in inputs {
+                charged(&self.budget, self.budget.charge_work(1))?;
+                if input.param != storage.param
+                    && input.location.channel == storage.location.channel
+                {
+                    push(&self.budget, &mut sources, input.clone())?;
+                }
+            }
+            if !sources.is_empty() {
+                // The view visitor does not traverse these proof pointees.
+                // Prepay the immutable transfer independently of Vec capacity.
+                charged(&self.budget, self.budget.charge_nodes(1))?;
+                retain::<ir::InputCarrier>(&self.budget, sources.len())?;
+                push(
+                    &self.budget,
+                    &mut rows,
+                    NativeHeapInvariant {
+                        storage: storage.clone(),
+                        sources: sources.into(),
+                    },
+                )?;
+            }
+        }
+        charged(&self.budget, self.budget.charge_nodes(1))?;
+        retain::<NativeHeapInvariant>(&self.budget, rows.len())?;
+        Ok(rows.into())
+    }
+
+    #[cfg(test)]
+    pub(in crate::compiler) fn carrier_writable_for_tests(
+        &self,
+        ty: &Ty,
+        location: &ir::CarrierLocation,
+    ) -> Result<bool> {
+        self.carrier_writable(ty, location)
+    }
+
     fn carrier_writable(&self, ty: &Ty, location: &ir::CarrierLocation) -> Result<bool> {
         let mut ty = ty.clone();
         let mut saw_deref = false;
@@ -6209,6 +6522,12 @@ impl ValidatedTraitWorld {
                     if index < len =>
                 {
                     element.as_ref().clone()
+                }
+                (ir::CarrierStep::SliceElement, _) if ty.owned_sequence_element().is_some() => {
+                    // A heap summary, like a slice summary, never grants write
+                    // authority to its potentially shared element family.
+                    all_mutable = false;
+                    ty.owned_sequence_element().unwrap().clone()
                 }
                 (ir::CarrierStep::SliceElement, Ty::Slice { element }) => {
                     // A summary of shared elements never grants write authority.
@@ -8502,7 +8821,16 @@ impl ValidatedTraitWorld {
             retain::<ir::RefContract>(&self.budget, 1)?;
             let mut head_arguments = Vec::new();
             for argument in implementation.trait_ref.args.iter() {
-                push(&self.budget, &mut head_arguments, argument.clone())?;
+                // Only an original root reference is a false callable input.
+                // Preserve every other head argument, including bare str and
+                // parameters that may specialize to str, in its original use.
+                let argument = if matches!(argument, Ty::Ref { .. }) {
+                    retain::<Ty>(&self.budget, 1)?;
+                    Ty::Tuple(Arc::from([argument.clone()]))
+                } else {
+                    argument.clone()
+                };
+                push(&self.budget, &mut head_arguments, argument)?;
             }
             let schema = GenericSchema {
                 env: implementation.schema_env.clone(),
@@ -8536,9 +8864,37 @@ impl ValidatedTraitWorld {
                 }
                 (_, result) => result,
             };
-            if !self.eq_ty(head_self, &goal.self_ty, 0)?
-                || !self.eq_types(&instantiated.signature.params, &goal.args, 0)?
+            let mut arguments_match = instantiated.signature.params.len() == goal.args.len()
+                && instantiated.signature.params.len() == implementation.trait_ref.args.len();
+            for ((original, instantiated), expected) in implementation
+                .trait_ref
+                .args
+                .iter()
+                .zip(instantiated.signature.params.iter())
+                .zip(goal.args.iter())
             {
+                // The original head position, not the specialized type, owns
+                // the wrapper policy. A genuine tuple stays a genuine tuple.
+                let actual = if matches!(original, Ty::Ref { .. }) {
+                    let Ty::Tuple(fields) = instantiated else {
+                        return Err(FactsError::invalid(
+                            &self.budget,
+                            "impl reference head argument wrapper lost",
+                        ));
+                    };
+                    if fields.len() != 1 {
+                        return Err(FactsError::invalid(
+                            &self.budget,
+                            "impl reference head argument wrapper arity changed",
+                        ));
+                    }
+                    &fields[0]
+                } else {
+                    instantiated
+                };
+                arguments_match &= self.eq_ty(actual, expected, 0)?;
+            }
+            if !self.eq_ty(head_self, &goal.self_ty, 0)? || !arguments_match {
                 return Err(FactsError::invalid(
                     &self.budget,
                     "impl head substitution disagrees with matched goal",
@@ -9571,8 +9927,12 @@ impl TraitCx for ValidatedTraitWorld {
             )
         })?;
         let direct = self.discharge_in_with_facts(&target, closed, scratch, closed.original)?;
-        let mut return_matches =
-            self.return_refines(&signature.ref_contract, &direct.signature.ref_contract)?;
+        let mut return_matches = self.reference_free_implementation_refines(
+            &signature,
+            &direct.signature,
+            closed.env(),
+            closed.original,
+        )?;
         if !return_matches
             && !target.type_args.is_empty()
             && self.type_contains_projection(
@@ -12382,6 +12742,324 @@ mod tests {
                 resolved.signature(),
             )
             .unwrap();
+    }
+
+    #[test]
+    fn reference_free_impl_input_regions_require_constraint_implication() {
+        let refine = |world: &ValidatedTraitWorld, required: &Signature, provided: &Signature| {
+            world.reference_free_implementation_refines(required, provided, &world.empty.env, None)
+        };
+        let c = case();
+        let world = c.build().unwrap();
+        let contract = |regions: [u16; 4], edges: &[(u16, u16)]| {
+            let raw = RefContract {
+                region_count: regions.iter().copied().max().unwrap() + 1,
+                input_regions: regions
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, region)| ir::InputRegion {
+                        input: ir::InputReference {
+                            param: i / 2,
+                            position: ir::ReferencePosition {
+                                depth: (i % 2) as u8,
+                            },
+                        },
+                        region: ir::RegionParamId(region),
+                    })
+                    .collect::<Vec<_>>()
+                    .into(),
+                results: Arc::from([]),
+                outlives: edges
+                    .iter()
+                    .map(|(a, b)| (ir::RegionParamId(*a), ir::RegionParamId(*b)))
+                    .collect::<Vec<_>>()
+                    .into(),
+            };
+            ir::normalize_ref_contract(&raw, &c.budget).unwrap()
+        };
+        let signature = |contract| Signature {
+            params: vec![reference(reference(Ty::Int(IntTy::I32))); 2],
+            result: Ty::Bool,
+            ref_contract: contract,
+        };
+        let required = signature(contract([0, 1, 2, 1], &[(1, 0), (1, 2)]));
+        let provided = signature(contract([0, 1, 2, 3], &[(1, 0), (3, 2)]));
+        assert!(
+            !world
+                .return_refines(&required.ref_contract, &provided.ref_contract)
+                .unwrap()
+        );
+        assert!(refine(&world, &required, &provided).unwrap());
+        assert!(!refine(&world, &provided, &required).unwrap());
+        let stronger = signature(contract([0, 1, 2, 3], &[(1, 0), (3, 2), (0, 2)]));
+        assert!(!refine(&world, &required, &stronger).unwrap());
+        let mut forged = provided.clone();
+        Arc::make_mut(&mut Arc::make_mut(&mut forged.ref_contract).input_regions)[3]
+            .input
+            .param = 0;
+        assert!(!refine(&world, &required, &forged).unwrap());
+        let mut returns_reference = provided.clone();
+        returns_reference.result = reference(Ty::Int(IntTy::I32));
+        assert!(!refine(&world, &required, &returns_reference).unwrap());
+        let mut hidden_reference = provided.clone();
+        hidden_reference.result = Ty::Tuple(Arc::from([reference(Ty::Int(IntTy::I32))]));
+        assert!(!refine(&world, &required, &hidden_reference).unwrap());
+        let mut required_reference = required.clone();
+        required_reference.result = hidden_reference.result.clone();
+        assert!(!refine(&world, &required_reference, &provided).unwrap());
+        let mut opaque_required = required.clone();
+        opaque_required.result = c.caller_parameter.clone();
+        assert!(
+            !world
+                .reference_free_implementation_refines(
+                    &opaque_required,
+                    &provided,
+                    &world.callable_header(c.caller).unwrap().schema.env,
+                    None
+                )
+                .unwrap()
+        );
+        let mut opaque_provided = provided.clone();
+        opaque_provided.result = c.caller_parameter.clone();
+        assert!(
+            !world
+                .reference_free_implementation_refines(
+                    &required,
+                    &opaque_provided,
+                    &world.callable_header(c.caller).unwrap().schema.env,
+                    None
+                )
+                .unwrap()
+        );
+
+        // Measure only this proof, not fixture construction. Supply exactly its
+        // observed work/retained-byte demand, then one unit less independently.
+        // These calls all enter the unequal-region fallback and build the map.
+        let before = world.budget.usage_snapshot();
+        assert!(refine(&world, &required, &provided).unwrap());
+        let after = world.budget.usage_snapshot();
+        let work = after.work - before.work;
+        let bytes = after.bytes - before.bytes;
+        assert!(work > 0 && bytes > 0);
+        for guard in 0..4 {
+            let guard_case = case();
+            let guard_world = guard_case.build().unwrap();
+            let budget = &guard_world.budget;
+            let used = budget.usage_snapshot();
+            let remaining_work = work - usize::from(guard == 1);
+            let remaining_bytes = bytes - usize::from(guard == 2);
+            budget
+                .charge_work(budget.limits().work - used.work - remaining_work)
+                .unwrap();
+            budget
+                .retain_bytes(budget.limits().bytes - used.bytes - remaining_bytes)
+                .unwrap();
+            if guard == 3 {
+                budget.poison_ledger_for_tests();
+            }
+            let result = refine(&guard_world, &required, &provided);
+            if guard == 0 {
+                assert!(result.unwrap());
+                let exact = budget.usage_snapshot();
+                assert_eq!(exact.work, budget.limits().work);
+                assert_eq!(exact.bytes, budget.limits().bytes);
+            } else {
+                assert!(matches!(result, Err(error) if error.kind() == FactsErrorKind::Resource));
+                if guard != 3 {
+                    let failure = budget.first_resource_failure().unwrap();
+                    assert_eq!(
+                        failure.kind,
+                        if guard == 1 {
+                            ir::ResourceBudgetKind::Work
+                        } else {
+                            ir::ResourceBudgetKind::Bytes
+                        }
+                    );
+                    budget.poison_ledger_for_tests();
+                    assert!(matches!(refine(&guard_world, &required, &provided),
+                        Err(error) if error.kind() == FactsErrorKind::Resource));
+                    assert_eq!(budget.first_resource_failure(), Some(failure));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn synthetic_impl_heads_preserve_nonreference_arguments_and_reference_policy() {
+        let budget = PlanBudget::default();
+        let program = crate::compiler::frontend::parse(
+            "trait Raw<Rhs:?Sized>{}impl<T:?Sized> Raw<T> for bool{}trait Literal<Rhs:?Sized>{}impl Literal<str> for bool{}trait TupleArg<Rhs>{}impl TupleArg<(i32,bool)> for bool{}trait Borrowed<Rhs>{}impl<T:?Sized> Borrowed<&T> for &T{}fn raw<T:?Sized>() where bool:Raw<T>{}fn literal<T:Literal<str>>(_:T){}fn tuple<T:TupleArg<(i32,bool)>>(_:T){}fn borrowed<T:Borrowed<T>>(_:T){}fn main(){}",
+        ).unwrap();
+        let plan = crate::compiler::frontend::PlanCtx::from_program(&program, &budget).unwrap();
+        let world = plan.trait_world().unwrap();
+        let raw = plan.function_decl(0).unwrap();
+        let literal = plan.function_decl(1).unwrap();
+        let tuple = plan.function_decl(2).unwrap();
+        let borrowed = plan.function_decl(3).unwrap();
+        for actual in [Ty::Str, Ty::Int(IntTy::I32), reference(Ty::Str)] {
+            let facts = world.callable_facts(raw).unwrap();
+            world
+                .discharge_direct(
+                    &CallTarget {
+                        declaration: raw,
+                        type_args: Arc::from([actual]),
+                    },
+                    &facts,
+                )
+                .unwrap();
+        }
+        for declaration in [literal, tuple] {
+            let facts = world.callable_facts(declaration).unwrap();
+            world
+                .discharge_direct(
+                    &CallTarget {
+                        declaration,
+                        type_args: Arc::from([Ty::Bool]),
+                    },
+                    &facts,
+                )
+                .unwrap();
+        }
+        let facts = world.callable_facts(borrowed).unwrap();
+        for leaf in [Ty::Int(IntTy::I32), Ty::Str] {
+            let mut actual = leaf;
+            for _ in 0..3 {
+                actual = reference(actual);
+                world
+                    .discharge_direct(
+                        &CallTarget {
+                            declaration: borrowed,
+                            type_args: Arc::from([actual.clone()]),
+                        },
+                        &facts,
+                    )
+                    .unwrap();
+            }
+        }
+        assert!(
+            world
+                .discharge_direct(
+                    &CallTarget {
+                        declaration: borrowed,
+                        type_args: Arc::from([Ty::Bool]),
+                    },
+                    &facts
+                )
+                .is_err()
+        );
+        // Keep generic_reference_world_transport_and_type_context as the
+        // separate genuine callable raw-None denial gate, without relaxation.
+    }
+
+    #[test]
+    fn reference_free_impl_nominal_results_use_original_facts_not_type_height() {
+        use crate::compiler::frontend;
+        let budget = PlanBudget::default();
+        let program = frontend::parse(
+            "enum Ordering{Less,Equal,Greater} enum Option<T>{None,Some(T)} struct Hidden<'a>{loan:&'a i32} enum Borrowed<'a>{None,Some(Hidden<'a>)} fn clean()->Option<Ordering>{Option::None} fn hidden<'a>(x:&'a i32)->Borrowed<'a>{Borrowed::Some(Hidden{loan:x})} fn main(){}",
+        ).unwrap();
+        let plan = frontend::PlanCtx::from_program(&program, &budget).unwrap();
+        let world = plan.trait_world().unwrap();
+        let clean_id = plan.function_decl(0).unwrap();
+        let hidden_id = plan.function_decl(1).unwrap();
+        let clean_facts = world.callable_facts(clean_id).unwrap();
+        let hidden_facts = world.callable_facts(hidden_id).unwrap();
+        let clean = plan.signature(clean_id).unwrap().signature.result;
+        let hidden = plan.signature(hidden_id).unwrap().signature.result;
+        let (opaque, type_height) =
+            ir::reference_type_summary(&clean, false, &budget, 0, &mut 0).unwrap();
+        assert!(
+            !opaque && type_height > 0,
+            "Option<Ordering> is nested but reference-free"
+        );
+        assert!(
+            world
+                .result_carriers_absent_for_tests(&clean, &clean_facts)
+                .unwrap()
+        );
+        assert_eq!(ir::root_reference_layers(&hidden).unwrap(), 0);
+        assert!(
+            !world
+                .result_carriers_absent_for_tests(&hidden, &hidden_facts)
+                .unwrap()
+        );
+        let make = |mapping: [u16; 4], result: Ty| {
+            let raw = RefContract {
+                region_count: mapping.iter().copied().max().unwrap() + 1,
+                input_regions: mapping
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, region)| ir::InputRegion {
+                        input: ir::InputReference {
+                            param: i / 2,
+                            position: ir::ReferencePosition {
+                                depth: (i % 2) as u8,
+                            },
+                        },
+                        region: ir::RegionParamId(region),
+                    })
+                    .collect::<Vec<_>>()
+                    .into(),
+                results: Arc::from([]),
+                outlives: Arc::from([]),
+            };
+            Signature {
+                params: vec![reference(reference(Ty::Int(IntTy::I32))); 2],
+                result,
+                ref_contract: ir::normalize_ref_contract(&raw, &budget).unwrap(),
+            }
+        };
+        let required = make([0, 1, 2, 1], clean.clone());
+        let provided = make([0, 1, 2, 3], clean.clone());
+        assert!(
+            !world
+                .return_refines(&required.ref_contract, &provided.ref_contract)
+                .unwrap()
+        );
+        assert!(
+            world
+                .reference_free_implementation_refines(
+                    &required,
+                    &provided,
+                    clean_facts.env(),
+                    Some(&clean_facts)
+                )
+                .unwrap()
+        );
+        let hidden_required = make([0, 1, 2, 1], hidden.clone());
+        let hidden_provided = make([0, 1, 2, 3], hidden.clone());
+        assert!(
+            !world
+                .reference_free_implementation_refines(
+                    &hidden_required,
+                    &provided,
+                    hidden_facts.env(),
+                    Some(&hidden_facts)
+                )
+                .unwrap()
+        );
+        assert!(
+            !world
+                .reference_free_implementation_refines(
+                    &required,
+                    &hidden_provided,
+                    hidden_facts.env(),
+                    Some(&hidden_facts)
+                )
+                .unwrap()
+        );
+        let Ty::Enum(owner) = hidden else {
+            panic!("nominal hidden result");
+        };
+        let mut forged = owner.def().clone();
+        let mut variants = forged.variants.to_vec();
+        variants[1].fields = Arc::<[FieldDef]>::from([]).into();
+        forged.variants = variants.into();
+        let forged = Ty::Enum(ir::EnumTy::new(forged));
+        assert!(
+            matches!(world.result_carriers_absent_for_tests(&forged, &hidden_facts),
+            Err(error) if error.kind() == FactsErrorKind::InvalidMetadata)
+        );
     }
 
     #[test]

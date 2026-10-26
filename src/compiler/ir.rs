@@ -704,6 +704,9 @@ pub fn carrier_locations(ty: &Ty, budget: &PlanBudget) -> Result<Arc<[CarrierLoc
                 }
             }
             Ty::Struct(value) => {
+                if let Some(element) = ty.owned_sequence_element() {
+                    child(element)?;
+                }
                 for field in value.def().fields.read(budget)?.iter() {
                     child(&field.ty)?;
                 }
@@ -877,6 +880,9 @@ pub fn carrier_locations(ty: &Ty, budget: &PlanBudget) -> Result<Arc<[CarrierLoc
                         child(CarrierStep::SliceElement, element)?;
                     }
                     Ty::Struct(value) => {
+                        if let Some(element) = ty.owned_sequence_element() {
+                            child(CarrierStep::SliceElement, element)?;
+                        }
                         for (index, field) in value.def().fields.read(budget)?.iter().enumerate() {
                             child(CarrierStep::Field(index), &field.ty)?;
                         }
@@ -941,6 +947,9 @@ pub fn carrier_at(
                 element.as_ref().clone()
             }
             (CarrierStep::SliceElement, Ty::Slice { element }) => element.as_ref().clone(),
+            (CarrierStep::SliceElement, _) if ty.owned_sequence_element().is_some() => {
+                ty.owned_sequence_element().unwrap().clone()
+            }
             (CarrierStep::VariantField { variant, field }, Ty::Enum(value))
                 if variant.owner == value.def().id =>
             {
@@ -2067,6 +2076,9 @@ impl BodySubstitutionProof {
                     Ok(true)
                 }
                 Ty::Struct(value) => {
+                    if let Some(element) = ty.owned_sequence_element() {
+                        return shared_shape(element, budget, depth + 1);
+                    }
                     for field in value.def().fields.read(budget)?.iter() {
                         if !shared_shape(&field.ty, budget, depth + 1)? {
                             return Ok(false);
@@ -2147,6 +2159,22 @@ impl BodySubstitutionProof {
                     if before.def().source_decl == after.def().source_decl
                         && before.def().fields.len() == after.def().fields.len() =>
                 {
+                    if let (Some(before_element), Some(after_element)) = (
+                        original.owned_sequence_element(),
+                        actual.owned_sequence_element(),
+                    ) {
+                        let changed = expand(
+                            before_element,
+                            after_element,
+                            proof,
+                            facts,
+                            budget,
+                            depth + 1,
+                        )?
+                        .is_some();
+                        return Ok((changed && shared_shape(actual, budget, depth + 1)?)
+                            .then(|| actual.clone()));
+                    }
                     let mut changed = false;
                     for (before, after) in before
                         .def()
@@ -5432,9 +5460,12 @@ fn projected_ty_inner(
                 }
                 element.as_ref().clone()
             }
-            Projection::DynamicIndex(_) => match &ty {
+            Projection::DynamicIndex(index) => match &ty {
                 Ty::Array { element, len } if *len <= MAX_ARRAY_LEN => element.as_ref().clone(),
                 Ty::Slice { element } => element.as_ref().clone(),
+                _ if index == LocalId(usize::MAX) && ty.owned_sequence_element().is_some() => {
+                    ty.owned_sequence_element().unwrap().clone()
+                }
                 _ => return Err("runtime place index requires array or slice type".into()),
             },
             Projection::Field(index) => ty
@@ -5473,6 +5504,7 @@ fn projected_ty_inner(
 pub struct StructTy(
     NominalRef<StructDef>,
     Option<super::nominal_realization::ReadNominal>,
+    Option<Arc<super::frontend::NativeSequenceBinding>>,
 );
 
 impl std::fmt::Debug for StructTy {
@@ -5498,16 +5530,28 @@ impl std::fmt::Debug for StructTy {
 }
 
 impl StructTy {
+    pub(super) fn with_native_sequence_binding(
+        mut self,
+        binding: Option<Arc<super::frontend::NativeSequenceBinding>>,
+    ) -> Self {
+        self.2 = binding;
+        self
+    }
+    pub(super) fn native_sequence_binding(
+        &self,
+    ) -> Option<&Arc<super::frontend::NativeSequenceBinding>> {
+        self.2.as_ref()
+    }
     /// The declaration builder must validate the entire by-value dependency DAG
     /// before constructing definitions in dependency-first order.
     pub(super) fn new(def: StructDef) -> Self {
-        Self(NominalRef::Strong(Arc::new(def)), None)
+        Self(NominalRef::Strong(Arc::new(def)), None, None)
     }
     pub(in crate::compiler) fn new_parent_local(def: StructDef) -> Self {
-        Self(NominalRef::Strong(Arc::new(def)), None)
+        Self(NominalRef::Strong(Arc::new(def)), None, None)
     }
     pub fn from_ref(r: NominalRef<StructDef>) -> Self {
-        Self(r, None)
+        Self(r, None, None)
     }
     /// Owned definition of a freshly built, unshared strong handle.
     pub fn into_def(self) -> Result<StructDef, String> {
@@ -6148,6 +6192,41 @@ pub enum OwnedPointerKind {
 }
 
 impl Ty {
+    /// Logical element coordinate, not lifetime or loan-origin authority.
+    pub(super) fn owned_sequence_element(&self) -> Option<&Ty> {
+        let Self::Struct(value) = self else {
+            return None;
+        };
+        let def = value.def();
+        let binding = value.native_sequence_binding()?;
+        if !binding.matches_declaration(def) {
+            return None;
+        }
+        if let Some(read) = value.realization() {
+            read.check_definition(self).ok()?;
+        } else if !binding.matches_original_template(def)
+            && !binding.matches_source_substitution(def)
+        {
+            return None;
+        }
+        let [element] = def.type_args.as_ref() else {
+            return None;
+        };
+        let [pointer, length, capacity] = def.fields.concrete_ownership_fields()? else {
+            return None;
+        };
+        if pointer.name != "ptr"
+            || !matches!(&pointer.ty, Ty::RawPtr { kind: BorrowKind::Mut, pointee } if pointee.as_ref() == element)
+            || length.name != "len"
+            || length.ty != Ty::Int(IntTy::Usize)
+            || capacity.name != "cap"
+            || capacity.ty != Ty::Int(IntTy::Usize)
+        {
+            return None;
+        }
+        Some(element)
+    }
+
     /// Exact reserved owning-pointer carrier. The kind is part of unsizing
     /// authority: a Box share cannot become an Rc share or vice versa.
     pub fn owned_pointer_pointee(&self) -> Option<(OwnedPointerKind, &Ty)> {

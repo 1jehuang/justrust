@@ -187,6 +187,67 @@ fn warm_nominal_replay_observes_original_module_issuer_failure() {
 }
 
 #[test]
+fn symbolic_nominal_hidden_references_cannot_prove_result_absence() {
+    for workers in [1, 8] {
+        let provider = provider(
+            "struct Node<'a>{next:&'a Node<'a>,loan:&'a i32}fn main(){}",
+            &[0],
+            &[],
+        );
+        let plan = provider.plan.clone();
+        let world = plan.trait_world().unwrap();
+        let facts = plan
+            .instance_facts(&ir::CallTarget {
+                declaration: plan.function_decl(0).unwrap(),
+                type_args: Arc::from([]),
+            })
+            .unwrap();
+        let engine = crate::engine::Engine::new(provider);
+        let demand = engine.request(test_root());
+        engine.run(workers).unwrap();
+        demand.completion().unwrap();
+        let reads = demand.fact::<Vec<ReadNominal>>(0).unwrap();
+        assert!(
+            reads[0].is_component(),
+            "regression requires real symbolic component fields"
+        );
+        let root = reads[0].definition().unwrap();
+        reads[0].check_definition(&root).unwrap();
+        facts.validate_ty_metadata(&root).unwrap();
+        assert_eq!(ir::root_reference_layers(&root).unwrap(), 0);
+        let (opaque, height) =
+            ir::reference_type_summary(&root, false, facts.budget(), 0, &mut 0).unwrap();
+        assert!(
+            !opaque && height > 0,
+            "must reach the absence scan, not the opaque rejection"
+        );
+        assert!(
+            !world
+                .result_carriers_absent_for_tests(&root, &facts)
+                .unwrap()
+        );
+        let ir::Ty::Struct(owner) = &root else {
+            panic!("symbolic record");
+        };
+        // Keep simultaneous materializations alive to prove addresses are not
+        // stable evidence. The production scan consumes each read once.
+        let first = owner.def().fields.read(facts.budget()).unwrap();
+        let second = owner.def().fields.read(facts.budget()).unwrap();
+        assert!(!Arc::ptr_eq(&first, &second));
+        assert!(matches!(first[1].ty, ir::Ty::Ref { .. }));
+        assert!(matches!(second[1].ty, ir::Ty::Ref { .. }));
+        let mut forged = owner.def().clone();
+        forged.fields = Arc::<[ir::FieldDef]>::from([]).into();
+        let forged = ir::Ty::Struct(ir::StructTy::new(forged));
+        assert!(
+            world
+                .result_carriers_absent_for_tests(&forged, &facts)
+                .is_err()
+        );
+    }
+}
+
+#[test]
 fn symbolic_component_metadata_preserves_schema_shape_limits() {
     let budget = ir::PlanBudget::default();
     assert!(metadata(&Term::Tuple(vec![]), &budget, 0).is_err());
@@ -458,6 +519,667 @@ fn forged_component_members_fields_witnesses_and_external_receipts_reject() {
             assert!(demand.completion().is_err());
             assert!(demand.fact::<Vec<ReadNominal>>(0).is_err());
         }
+    }
+}
+
+fn native_sequence_provider() -> (Provider, usize) {
+    use crate::compiler::{frontend, source};
+    let options = source::SourceOptions::default();
+    let expansion = crate::compiler::expansion_budget::ExpansionBudget::default();
+    let mut assembler = source::SourceAssembler::new(&options);
+    let mut step = assembler
+        .provide(Arc::new(source::prepare_text_unit(
+            "heap-carrier.rs",
+            "fn main(){} fn foreign<T>(){} fn heap_invariant<T>(owner:&mut Vec<T>,value:T){} fn heap_shared<T>(owner:&Vec<T>,value:T){} fn heap_wrong_family<T,U>(owner:&mut Vec<T>,value:U){} fn heap_aggregate<T>(owner:&std::collections::HashMap<T,T>,value:T){}",
+            &options,
+        )))
+        .unwrap();
+    let prepared = loop {
+        match step {
+            source::AssemblyStep::Done(prepared) => break prepared,
+            source::AssemblyStep::Need(need) => {
+                let unit = match need.parent.as_deref() {
+                    None => source::prepare_prelude_unit(&options, &expansion),
+                    Some(parent) => {
+                        source::prepare_child_unit(parent, need.index, &options, &expansion)
+                    }
+                };
+                step = assembler.provide(Arc::new(unit)).unwrap();
+            }
+        }
+    };
+    let program = frontend::resolve(&frontend::parse_prepared(&prepared).unwrap()).unwrap();
+    // Source spelling selects this fixture's declaration, never grants authority.
+    // The producer must replay the embedded issuer and exact declaration itself.
+    let index = program
+        .structs
+        .iter()
+        .position(|decl| {
+            let path = decl.name.segments();
+            path.len() == 3
+                && path
+                    .iter()
+                    .zip(["__justrust_std", "vec", "Vec"])
+                    .all(|(&name, expected)| program.names.spelling(name).unwrap() == expected)
+        })
+        .expect("embedded native Vec");
+    let main = program
+        .functions
+        .iter()
+        .position(|function| {
+            let path = function.name.segments();
+            path.len() == 1 && program.names.spelling(path[0]).unwrap() == "main"
+        })
+        .expect("source main");
+    let plan =
+        Arc::new(frontend::PlanCtx::from_program(&program, &ir::PlanBudget::default()).unwrap());
+    let world = plan.trait_world().unwrap();
+    let root = producer::key(
+        world.nominal_realization_world(),
+        plan.nominal_declaration(index).unwrap(),
+        &[Term::Ref(ir::BorrowKind::Shared, Box::new(Term::Str))],
+        world.budget(),
+    )
+    .unwrap();
+    (
+        Provider {
+            plan,
+            roots: vec![root],
+            forge: |_| {},
+        },
+        main,
+    )
+}
+
+#[test]
+fn native_heap_carrier_coordinate_uses_exact_nominal_read() {
+    for workers in [1, 8] {
+        let (provider, main) = native_sequence_provider();
+        let plan = provider.plan.clone();
+        let facts = plan
+            .instance_facts(&ir::CallTarget {
+                declaration: plan.function_decl(main).unwrap(),
+                type_args: Arc::from([]),
+            })
+            .unwrap();
+        let engine = crate::engine::Engine::new(provider);
+        let demand = engine.request(test_root());
+        engine.run(workers).unwrap();
+        demand.completion().unwrap();
+        let reads = demand.fact::<Vec<ReadNominal>>(0).unwrap();
+        let root = reads[0].definition().unwrap();
+        facts.validate_ty(&root).unwrap();
+        let leaf = ir::Ty::Ref {
+            kind: ir::BorrowKind::Shared,
+            referent: Arc::new(ir::Ty::Str),
+        };
+        assert_eq!(root.owned_sequence_element(), Some(&leaf));
+        let location = ir::CarrierLocation {
+            path: ir::CarrierPath(Arc::from([ir::CarrierStep::SliceElement])),
+            channel: ir::CarrierChannel::Fixed(ir::ReferencePosition { depth: 0 }),
+        };
+        assert_eq!(
+            ir::carrier_locations(&root, facts.budget())
+                .unwrap()
+                .as_ref(),
+            &[location.clone()]
+        );
+        assert_eq!(
+            ir::carrier_at(&root, &location, facts.budget()).unwrap(),
+            leaf
+        );
+        let summary = ir::CarrierLocation {
+            path: ir::CarrierPath(Arc::from([
+                ir::CarrierStep::Referent,
+                ir::CarrierStep::SliceElement,
+            ])),
+            channel: ir::CarrierChannel::Fixed(ir::ReferencePosition { depth: 0 }),
+        };
+        for kind in [ir::BorrowKind::Shared, ir::BorrowKind::Mut] {
+            let owner = ir::Ty::Ref {
+                kind,
+                referent: Arc::new(root.clone()),
+            };
+            assert!(
+                !facts
+                    .world()
+                    .carrier_writable_for_tests(&owner, &summary)
+                    .unwrap(),
+                "shared heap element summary grants no write even through {kind:?} owner"
+            );
+        }
+        let mutable_leaf = ir::Ty::Ref {
+            kind: ir::BorrowKind::Mut,
+            referent: Arc::new(ir::Ty::Int(ir::IntTy::I32)),
+        };
+        let field = ir::CarrierLocation {
+            path: ir::CarrierPath(Arc::from([
+                ir::CarrierStep::Referent,
+                ir::CarrierStep::Field(0),
+            ])),
+            channel: ir::CarrierChannel::Fixed(ir::ReferencePosition { depth: 0 }),
+        };
+        for (kind, writable) in [(ir::BorrowKind::Shared, false), (ir::BorrowKind::Mut, true)] {
+            let owner = ir::Ty::Ref {
+                kind,
+                referent: Arc::new(ir::Ty::Tuple(Arc::from([mutable_leaf.clone()]))),
+            };
+            assert_eq!(
+                facts
+                    .world()
+                    .carrier_writable_for_tests(&owner, &field)
+                    .unwrap(),
+                writable,
+                "ordinary exact mutable-owner field authority remains intact"
+            );
+        }
+        let ir::Ty::Struct(nominal) = root else {
+            panic!("native owner must be nominal")
+        };
+        let unread = ir::Ty::Struct(
+            ir::StructTy::new_parent_local(nominal.def().clone())
+                .with_native_sequence_binding(nominal.native_sequence_binding().cloned()),
+        );
+        assert!(
+            unread.owned_sequence_element().is_none(),
+            "closed actuals require an issued graph read"
+        );
+        let original = plan
+            .nominal_realization_template(nominal.def().source_decl)
+            .unwrap();
+        assert!(
+            original.owned_sequence_element().is_some(),
+            "exact original own-binder template is issued"
+        );
+        let ir::Ty::Struct(original) = original else {
+            panic!("native source template")
+        };
+        let program = plan.sema_program();
+        for (name, expected) in [
+            ("heap_invariant", 1usize),
+            ("heap_shared", 0),
+            ("heap_wrong_family", 0),
+        ] {
+            let index = program
+                .functions
+                .iter()
+                .position(|function| {
+                    let path = function.name.segments();
+                    path.len() == 1 && program.names.spelling(path[0]).unwrap() == name
+                })
+                .unwrap();
+            let callable = plan
+                .callable_facts(plan.function_decl(index).unwrap())
+                .unwrap();
+            let view = callable
+                .carrier_contract(ir::SignatureSubject::Body)
+                .unwrap();
+            let parameter = callable.env().ordered_params().next().unwrap();
+            let heap_family = ir::CarrierLocation {
+                path: ir::CarrierPath(Arc::from([
+                    ir::CarrierStep::Referent,
+                    ir::CarrierStep::SliceElement,
+                ])),
+                channel: ir::CarrierChannel::ParamTail {
+                    parameter,
+                    prefix: 0,
+                },
+            };
+            let declared_families: Vec<_> = view
+                .source_region_env()
+                .carriers
+                .iter()
+                .filter(|row| row.parameter == Some(0) && row.location.path == heap_family.path)
+                .collect();
+            assert_eq!(declared_families.len(), 1, "source heap family for {name}");
+            assert_eq!(declared_families[0].location, heap_family);
+            assert_eq!(
+                declared_families[0].region,
+                ir::CarrierRegionTerm::Family { parameter },
+                "source declaration retains its own element family for {name}"
+            );
+            assert_eq!(
+                view.native_heap_invariants().len(),
+                expected,
+                "canonical lifetime constraint for {name}"
+            );
+            if expected != 0 {
+                let row = &view.native_heap_invariants()[0];
+                assert_eq!(row.storage.param, 0);
+                assert_eq!(row.sources.len(), 1);
+                assert_eq!(row.sources[0].param, 1);
+                let parameter = callable.env().ordered_params().next().unwrap();
+                let owner = plan
+                    .intern_nominal(
+                        nominal.def().source_decl,
+                        &[ir::Ty::Param(parameter)],
+                        ir::FactsCtx::Universal(callable.env()),
+                        callable.budget(),
+                    )
+                    .unwrap();
+                let receiver = ir::Ty::Ref {
+                    kind: ir::BorrowKind::Mut,
+                    referent: Arc::new(owner),
+                };
+                assert!(
+                    !callable
+                        .world()
+                        .carrier_writable_for_tests(&receiver, &row.storage.location)
+                        .unwrap(),
+                    "lifetime relation never grants shared-summary writes"
+                );
+            }
+        }
+        let aggregate_index = program
+            .functions
+            .iter()
+            .position(|function| {
+                let path = function.name.segments();
+                path.len() == 1 && program.names.spelling(path[0]).unwrap() == "heap_aggregate"
+            })
+            .unwrap();
+        let aggregate = plan
+            .callable_facts(plan.function_decl(aggregate_index).unwrap())
+            .unwrap();
+        let signature = plan
+            .signature(plan.function_decl(aggregate_index).unwrap())
+            .unwrap()
+            .signature;
+        let descriptor = ir::InputCarrier {
+            param: 0,
+            location: ir::CarrierLocation {
+                path: ir::CarrierPath(Arc::from([])),
+                channel: ir::CarrierChannel::Fixed(ir::ReferencePosition { depth: 0 }),
+            },
+        };
+        let families = ir::carrier_locations(&signature.params[0], aggregate.budget()).unwrap();
+        let mut count = 0;
+        for location in families.iter().filter(|location| {
+            matches!(
+                location.channel,
+                ir::CarrierChannel::ParamTail { prefix: 0, .. }
+            )
+        }) {
+            let stored = ir::InputCarrier {
+                param: 0,
+                location: location.clone(),
+            };
+            let retains = |signature: &ir::Signature,
+                           descriptor: &ir::InputCarrier,
+                           stored: &ir::InputCarrier| {
+                aggregate
+                    .world()
+                    .shared_native_field_family_for_tests(signature, descriptor, stored)
+            };
+            assert!(retains(&signature, &descriptor, &stored).unwrap());
+            count += 1;
+            for mode in 0..5 {
+                let mut changed_signature = signature.clone();
+                let mut changed_descriptor = descriptor.clone();
+                let mut changed_stored = stored.clone();
+                match mode {
+                    0 => changed_stored.param = 1,
+                    1 => {
+                        changed_descriptor.location.path = ir::CarrierPath(Arc::from([
+                            ir::CarrierStep::Referent,
+                            ir::CarrierStep::Field(0),
+                        ]))
+                    }
+                    2 => {
+                        let ir::CarrierChannel::ParamTail { parameter, .. } = location.channel
+                        else {
+                            unreachable!()
+                        };
+                        changed_stored.location.channel = ir::CarrierChannel::ParamTail {
+                            parameter: ir::ParamId {
+                                index: parameter.index + 1,
+                                ..parameter
+                            },
+                            prefix: 0,
+                        };
+                    }
+                    3 => {
+                        let ir::Ty::Ref { referent, .. } = &signature.params[0] else {
+                            unreachable!()
+                        };
+                        changed_signature.params[0] = ir::Ty::Ref {
+                            kind: ir::BorrowKind::Mut,
+                            referent: referent.clone(),
+                        };
+                    }
+                    _ => {
+                        changed_stored.location.path = ir::CarrierPath(Arc::from([
+                            ir::CarrierStep::Referent,
+                            ir::CarrierStep::SliceElement,
+                        ]))
+                    }
+                }
+                assert!(
+                    !matches!(
+                        retains(&changed_signature, &changed_descriptor, &changed_stored),
+                        Ok(true)
+                    ),
+                    "aggregate forged mode {mode}"
+                );
+            }
+        }
+        assert_eq!(
+            count, 2,
+            "key and value native fields retain separate coordinates"
+        );
+        let foreign_index = program
+            .functions
+            .iter()
+            .position(|function| {
+                let path = function.name.segments();
+                path.len() == 1 && program.names.spelling(path[0]).unwrap() == "foreign"
+            })
+            .unwrap();
+        let foreign_facts = plan
+            .callable_facts(plan.function_decl(foreign_index).unwrap())
+            .unwrap();
+        let foreign = foreign_facts.env().ordered_params().next().unwrap();
+        assert!(
+            !facts.env().contains(foreign),
+            "foreign binder is genuinely distinct"
+        );
+        let source_application = plan
+            .intern_nominal(
+                nominal.def().source_decl,
+                &[ir::Ty::Param(foreign)],
+                ir::FactsCtx::Universal(foreign_facts.env()),
+                facts.budget(),
+            )
+            .unwrap();
+        assert_eq!(
+            source_application.owned_sequence_element(),
+            Some(&ir::Ty::Param(foreign)),
+            "canonical source interner issues exact binder substitution evidence"
+        );
+        let ir::Ty::Struct(issued_source) = &source_application else {
+            panic!("source application")
+        };
+        assert!(
+            issued_source.realization().is_none(),
+            "this is source schema authority, not executable read"
+        );
+        assert!(
+            plan.intern_nominal(
+                nominal.def().source_decl,
+                &[ir::Ty::Param(foreign)],
+                ir::FactsCtx::Universal(facts.env()),
+                facts.budget()
+            )
+            .is_err(),
+            "warm source application cannot admit foreign parameters in the wrong binder"
+        );
+        let retains_return =
+            |owner: ir::Ty, kind: ir::BorrowKind, storage_param: usize, family: ir::ParamId| {
+                let signature = ir::Signature {
+                    params: vec![ir::Ty::Ref {
+                        kind,
+                        referent: Arc::new(owner),
+                    }],
+                    result: ir::Ty::Unit,
+                    ref_contract: Arc::new(ir::RefContract::default()),
+                };
+                let descriptor = ir::InputCarrier {
+                    param: 0,
+                    location: ir::CarrierLocation {
+                        path: ir::CarrierPath(Arc::from([])),
+                        channel: ir::CarrierChannel::Fixed(ir::ReferencePosition { depth: 0 }),
+                    },
+                };
+                let stored = ir::InputCarrier {
+                    param: storage_param,
+                    location: ir::CarrierLocation {
+                        path: ir::CarrierPath(Arc::from([
+                            ir::CarrierStep::Referent,
+                            ir::CarrierStep::SliceElement,
+                        ])),
+                        channel: ir::CarrierChannel::ParamTail {
+                            parameter: family,
+                            prefix: 0,
+                        },
+                    },
+                };
+                facts
+                    .world()
+                    .shared_return_family_for_tests(&signature, &descriptor, &stored)
+                    .map(|(write, retains)| {
+                        assert!(
+                            !write,
+                            "native return retention never extends slice write eligibility"
+                        );
+                        retains
+                    })
+            };
+        assert!(
+            retains_return(
+                source_application.clone(),
+                ir::BorrowKind::Shared,
+                0,
+                foreign
+            )
+            .unwrap(),
+            "exact source application retains its own shared result family"
+        );
+        for (kind, storage_param, family) in [
+            (ir::BorrowKind::Mut, 0, foreign),
+            (ir::BorrowKind::Shared, 1, foreign),
+            (
+                ir::BorrowKind::Shared,
+                0,
+                ir::ParamId {
+                    index: foreign.index + 1,
+                    ..foreign
+                },
+            ),
+        ] {
+            assert!(
+                !matches!(
+                    retains_return(source_application.clone(), kind, storage_param, family),
+                    Ok(true)
+                ),
+                "changed receiver, parameter or family grants no native return retention"
+            );
+        }
+        let transplanted = ir::Ty::Struct(
+            ir::StructTy::new_parent_local(issued_source.def().clone())
+                .with_native_sequence_binding(issued_source.native_sequence_binding().cloned()),
+        );
+        assert!(
+            !matches!(
+                retains_return(transplanted.clone(), ir::BorrowKind::Shared, 0, foreign),
+                Ok(true)
+            ),
+            "retention replays the exact canonical allocation, not its copied fields"
+        );
+        assert!(
+            transplanted.owned_sequence_element().is_none(),
+            "same ID and fields do not replay retained allocation proof"
+        );
+        let source_closed = plan
+            .intern_nominal(
+                nominal.def().source_decl,
+                &[leaf.clone()],
+                ir::FactsCtx::Concrete,
+                facts.budget(),
+            )
+            .unwrap();
+        assert_eq!(source_closed.owned_sequence_element(), Some(&leaf));
+        let mut substitution_context = plan.as_ref().clone();
+        let transported = ir::substitute_ty(
+            &source_application,
+            foreign_facts.env(),
+            &[leaf.clone()],
+            ir::FactsCtx::Concrete,
+            &mut substitution_context,
+            facts.budget(),
+        )
+        .unwrap();
+        assert_eq!(
+            transported.owned_sequence_element(),
+            Some(&leaf),
+            "canonical transported source allocation retains its exact logical element"
+        );
+        assert_eq!(
+            ir::carrier_locations(&transported, facts.budget())
+                .unwrap()
+                .as_ref(),
+            &[location.clone()]
+        );
+        let ir::Ty::Struct(transported_owner) = &transported else {
+            panic!("native source transport")
+        };
+        assert!(
+            transported_owner.realization().is_none(),
+            "source coordinate does not mint a graph read"
+        );
+        let rebound_transport = ir::Ty::Struct(
+            ir::StructTy::new_parent_local(transported_owner.def().clone())
+                .with_native_sequence_binding(transported_owner.native_sequence_binding().cloned()),
+        );
+        assert!(
+            rebound_transport.owned_sequence_element().is_none(),
+            "copying transported fields cannot replay exact allocation proof"
+        );
+        assert!(
+            ir::substitute_ty(
+                &source_application,
+                foreign_facts.env(),
+                &[ir::Ty::Param(foreign)],
+                ir::FactsCtx::Universal(facts.env()),
+                &mut substitution_context,
+                facts.budget(),
+            )
+            .is_err(),
+            "warm transported schema does not admit a foreign caller binder"
+        );
+        let mut foreign_definition = original.def().clone();
+        foreign_definition.type_args = Arc::from([ir::Ty::Param(foreign)]);
+        let mut fields = foreign_definition
+            .fields
+            .read(facts.budget())
+            .unwrap()
+            .to_vec();
+        fields[0].ty = ir::Ty::RawPtr {
+            kind: ir::BorrowKind::Mut,
+            pointee: Arc::new(ir::Ty::Param(foreign)),
+        };
+        foreign_definition.fields = fields.into();
+        let foreign_schema = ir::Ty::Struct(
+            ir::StructTy::new_parent_local(foreign_definition)
+                .with_native_sequence_binding(original.native_sequence_binding().cloned()),
+        );
+        assert!(
+            foreign_schema.owned_sequence_element().is_none(),
+            "foreign-binder no-read schema needs authenticated substitution"
+        );
+        assert!(ir::carrier_at(&foreign_schema, &location, facts.budget()).is_err());
+        let foreign_owner = ir::Ty::Ref {
+            kind: ir::BorrowKind::Mut,
+            referent: Arc::new(foreign_schema),
+        };
+        assert!(
+            facts
+                .world()
+                .carrier_writable_for_tests(&foreign_owner, &summary)
+                .is_err()
+        );
+        for mode in 0..5 {
+            let mut changed = nominal.def().clone();
+            match mode {
+                0 => changed.name = "Vec".into(),
+                1 => changed.source_decl.index += 1,
+                2 => changed.type_args = Arc::from([ir::Ty::Bool]),
+                3 => {
+                    let mutable = ir::Ty::Ref {
+                        kind: ir::BorrowKind::Mut,
+                        referent: Arc::new(ir::Ty::Str),
+                    };
+                    changed.type_args = Arc::from([mutable.clone()]);
+                    let mut fields = changed.fields.read(facts.budget()).unwrap().to_vec();
+                    fields[0].ty = ir::Ty::RawPtr {
+                        kind: ir::BorrowKind::Mut,
+                        pointee: Arc::new(mutable),
+                    };
+                    changed.fields = fields.into();
+                }
+                _ => changed.fields = Vec::<ir::FieldDef>::new().into(),
+            }
+            let forged = ir::Ty::Struct(
+                ir::StructTy::new_parent_local(changed)
+                    .with_native_sequence_binding(nominal.native_sequence_binding().cloned())
+                    .with_realization(reads[0].clone()),
+            );
+            assert!(
+                forged.owned_sequence_element().is_none(),
+                "changed native owner {mode}"
+            );
+            assert!(
+                facts.validate_ty(&forged).is_err(),
+                "counterfeit read {mode}"
+            );
+            let forged_owner = ir::Ty::Ref {
+                kind: ir::BorrowKind::Mut,
+                referent: Arc::new(forged),
+            };
+            assert!(
+                facts
+                    .world()
+                    .carrier_writable_for_tests(&forged_owner, &summary)
+                    .is_err(),
+                "counterfeit owner {mode} cannot reach writable summary query"
+            );
+        }
+        let first_failure = facts.budget().first_resource_failure();
+        facts.budget().poison_ledger_for_tests();
+        assert!(
+            ir::substitute_ty(
+                &source_application,
+                foreign_facts.env(),
+                &[leaf.clone()],
+                ir::FactsCtx::Concrete,
+                &mut substitution_context,
+                facts.budget(),
+            )
+            .is_err(),
+            "warm source transport observes sticky poisoned ledger"
+        );
+        assert_eq!(facts.budget().first_resource_failure(), first_failure);
+    }
+}
+
+#[test]
+fn copied_native_vec_source_cannot_issue_heap_carriers() {
+    for workers in [1, 8] {
+        let provider = provider(
+            "mod __justrust_std{pub mod vec{pub struct Vec<T>{ptr:*mut T,len:usize,cap:usize}}}fn main(){}",
+            &[0],
+            &[Term::Ref(ir::BorrowKind::Shared, Box::new(Term::Str))],
+        );
+        let budget = provider.plan.trait_world().unwrap().budget().clone();
+        let engine = crate::engine::Engine::new(provider);
+        let demand = engine.request(test_root());
+        engine.run(workers).unwrap();
+        demand.completion().unwrap();
+        let reads = demand.fact::<Vec<ReadNominal>>(0).unwrap();
+        let root = reads[0].definition().unwrap();
+        reads[0].check_definition(&root).unwrap();
+        assert!(
+            root.owned_sequence_element().is_none(),
+            "a real read of copied source is not a native issuer"
+        );
+        let ir::Ty::Struct(value) = &root else {
+            panic!("source record")
+        };
+        assert!(value.native_sequence_binding().is_none());
+        let location = ir::CarrierLocation {
+            path: ir::CarrierPath(Arc::from([ir::CarrierStep::SliceElement])),
+            channel: ir::CarrierChannel::Fixed(ir::ReferencePosition { depth: 0 }),
+        };
+        assert!(ir::carrier_at(&root, &location, &budget).is_err());
     }
 }
 

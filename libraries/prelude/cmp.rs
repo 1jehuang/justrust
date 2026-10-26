@@ -118,6 +118,18 @@ pub trait Ord: Eq + PartialOrd {
     }
 }
 
+impl<T: PartialOrd + ?Sized> PartialOrd for &T {
+    fn partial_cmp(&self, other: &&T) -> Option<Ordering> {
+        <T as PartialOrd>::partial_cmp(*self, *other)
+    }
+}
+
+impl<T: Ord + ?Sized> Ord for &T {
+    fn cmp(&self, other: &&T) -> Ordering {
+        <T as Ord>::cmp(*self, *other)
+    }
+}
+
 impl PartialEq for Ordering {
     fn eq(&self, other: &Ordering) -> bool {
         match (*self, *other) {
@@ -488,7 +500,6 @@ impl Ord for bool {
     }
 }
 
-
 impl<A: PartialEq> PartialEq for (A,) {
     fn eq(&self, other: &(A,)) -> bool {
         <A as PartialEq>::eq(&(*self).0, &(*other).0)
@@ -516,7 +527,8 @@ impl<A: Ord> Ord for (A,) {
 
 impl<A: PartialEq, B: PartialEq> PartialEq for (A, B) {
     fn eq(&self, other: &(A, B)) -> bool {
-        <A as PartialEq>::eq(&(*self).0, &(*other).0) && <B as PartialEq>::eq(&(*self).1, &(*other).1)
+        <A as PartialEq>::eq(&(*self).0, &(*other).0)
+            && <B as PartialEq>::eq(&(*self).1, &(*other).1)
     }
 }
 impl<A: Eq, B: Eq> Eq for (A, B) {}
@@ -549,7 +561,9 @@ impl<A: Ord, B: Ord> Ord for (A, B) {
 
 impl<A: PartialEq, B: PartialEq, C: PartialEq> PartialEq for (A, B, C) {
     fn eq(&self, other: &(A, B, C)) -> bool {
-        <A as PartialEq>::eq(&(*self).0, &(*other).0) && <B as PartialEq>::eq(&(*self).1, &(*other).1) && <C as PartialEq>::eq(&(*self).2, &(*other).2)
+        <A as PartialEq>::eq(&(*self).0, &(*other).0)
+            && <B as PartialEq>::eq(&(*self).1, &(*other).1)
+            && <C as PartialEq>::eq(&(*self).2, &(*other).2)
     }
 }
 impl<A: Eq, B: Eq, C: Eq> Eq for (A, B, C) {}
@@ -590,7 +604,10 @@ impl<A: Ord, B: Ord, C: Ord> Ord for (A, B, C) {
 
 impl<A: PartialEq, B: PartialEq, C: PartialEq, D: PartialEq> PartialEq for (A, B, C, D) {
     fn eq(&self, other: &(A, B, C, D)) -> bool {
-        <A as PartialEq>::eq(&(*self).0, &(*other).0) && <B as PartialEq>::eq(&(*self).1, &(*other).1) && <C as PartialEq>::eq(&(*self).2, &(*other).2) && <D as PartialEq>::eq(&(*self).3, &(*other).3)
+        <A as PartialEq>::eq(&(*self).0, &(*other).0)
+            && <B as PartialEq>::eq(&(*self).1, &(*other).1)
+            && <C as PartialEq>::eq(&(*self).2, &(*other).2)
+            && <D as PartialEq>::eq(&(*self).3, &(*other).3)
     }
 }
 impl<A: Eq, B: Eq, C: Eq, D: Eq> Eq for (A, B, C, D) {}

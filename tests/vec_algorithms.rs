@@ -8,6 +8,126 @@ use std::process::Command;
 mod iterator_oracle;
 
 #[test]
+fn native_heap_exact_swap_preserves_pair_alias_and_mutable_element_origins() {
+    for source in [
+        r#"fn main(){let mut values:Vec<&str>=Vec::new();values.push("first");values.push("second");values.swap(0usize,1usize);println!("{:?}",values);values.swap(1usize,1usize);println!("{:?}",values);}"#,
+        r#"fn main(){let first=String::from("local-a");let second=String::from("local-b");let mut values:Vec<&str>=Vec::new();values.push(first.as_str());values.push(second.as_str());values.swap(0usize,1usize);println!("{:?}",values);}"#,
+        r#"fn main(){let mut first=1i32;let mut second=2i32;let mut values:Vec<&mut i32>=Vec::new();values.push(&mut first);values.push(&mut second);values.swap(0usize,1usize);println!("{} {}",values[0usize],values[1usize]);}"#,
+    ] {
+        iterator_oracle::stock_native(source);
+    }
+    for source in [
+        r#"fn main(){let escaped:Vec<&str>;{let owner=String::from("local");let mut values:Vec<&str>=Vec::new();values.push(owner.as_str());values.push("static");values.swap(0usize,1usize);escaped=values;}println!("{:?}",escaped);}"#,
+        r#"fn main(){let mut values:Vec<&str>=Vec::new();values.push("first");values.push("second");let shared=&values;shared.swap(0usize,1usize);}"#,
+        r#"fn main(){let mut owner=1i32;let mut values:Vec<&mut i32>=Vec::new();values.push(&mut owner);values.push(&mut owner);values.swap(0usize,1usize);println!("{}",values[0usize]);}"#,
+    ] {
+        iterator_oracle::stock_and_native_reject_observed(source, |workers, check, failure| {
+            assert!(
+                failure.resource_usage.first_failure.is_none(),
+                "workers={workers} check={check}: {}",
+                failure.error
+            );
+            assert!(
+                !failure.error.to_string().contains("unsupported"),
+                "workers={workers} check={check}: {}",
+                failure.error
+            );
+        });
+    }
+}
+
+#[test]
+fn native_heap_reference_carriers_preserve_initialized_origins() {
+    for source in [
+        r#"fn main(){let mut values:Vec<&str>=Vec::new();values.push("ccc");values.push("a");values.push("bb");println!("{:?}",values);values.sort_by_key(|s|s.len());println!("{:?}",values);}"#,
+        r#"fn observed<'a>(value:&'a str)->&'a str{println!("push {}",value);value}fn main(){let mut values:Vec<&str>=Vec::new();values.push(observed("first"));values.push(observed("second"));println!("{:?}",values);}"#,
+        r#"fn append<'a>(values:&mut Vec<&'a str>,value:&'a str){values.push(value);}fn main(){let mut values:Vec<&str>=Vec::new();append(&mut values,"first");append(&mut values,"second");println!("{:?}",values);}"#,
+        r#"fn observe(values:&mut[&'static str]){println!("{}",values[0usize]);}fn main(){let mut values=vec!["first","second"];observe(&mut values);println!("{}",values[1usize]);}"#,
+        r#"fn head_mut<'a>(values:&'a mut Vec<&'static str>)->&'a mut &'static str{&mut values[0usize]}fn main(){let mut values=vec!["first"];*head_mut(&mut values)="second";println!("{}",values[0usize]);}"#,
+        r#"fn head<'a>(values:&'a Vec<&'static str>)->&'a &'static str{&values[0usize]}fn main(){let values=vec!["first","second"];println!("{}",*head(&values));}"#,
+        r#"fn main(){let values=vec!["first","second"];for value in &values{println!("{}",value);}}"#,
+        r#"fn main(){let owned=String::from("local");let mut values:Vec<&str>=Vec::new();values.push(owned.as_str());println!("{:?}",values);}"#,
+    ] {
+        iterator_oracle::stock_native(source);
+    }
+    for source in [
+        r#"fn bad_slice<'a,T,U>(values:&'a mut Vec<T>)->&'a mut[U]{values.as_mut_slice()}fn main(){}"#,
+        r#"fn observe(_: &mut[&str]){}fn main(){let values=vec!["first"];observe(&values);}"#,
+        r#"fn main(){let escaped;{let mut values=vec!["local"];escaped=values.as_mut_slice();}println!("{:?}",escaped);}"#,
+        r#"fn bad_mut<'a,T,U>(values:&'a mut Vec<T>)->&'a mut U{&mut values[0usize]}fn main(){}"#,
+        r#"fn main(){let values=vec!["first"];let _=&mut values[0usize];}"#,
+        r#"fn main(){let escaped;{let mut values=vec!["local"];escaped=&mut values[0usize];}println!("{}",escaped);}"#,
+        r#"fn bad<'a,T,U>(values:&'a Vec<T>)->&'a U{&values[0usize]}fn main(){}"#,
+        r#"fn main(){let first=1i32;let mut values:Vec<&i32>=Vec::new();values.push(&first);*values[0usize]=2i32;}"#,
+        r#"fn change(values:&Vec<&str>){values.push("bad");}fn main(){let values:Vec<&str>=Vec::new();change(&values);}"#,
+        r#"fn main(){let escaped:Vec<&str>;{let owned=String::from("local");let mut values:Vec<&str>=Vec::new();values.push(owned.as_str());escaped=values;}println!("{:?}",escaped);}"#,
+        r#"fn main(){let escaped;{let values=vec!["local"];escaped=&values[0usize];}println!("{}",escaped);}"#,
+        r#"fn main(){let escaped;{let values=vec!["local"];escaped=(&values).into_iter();}for value in escaped{println!("{}",value);}}"#,
+        r#"fn main(){let values:Vec<&str>=Vec::new();values.push("x");}"#,
+        r#"fn main(){let mut values:Vec<bool>=Vec::new();values.push("x");}"#,
+    ] {
+        iterator_oracle::stock_and_native_reject_observed(source, |workers, check, failure| {
+            if source.starts_with("fn bad<'a,T,U>")
+                || source.starts_with("fn bad_mut<'a,T,U>")
+                || source.starts_with("fn bad_slice<'a,T,U>")
+            {
+                assert!(
+                    failure.error.to_string().contains("E0308"),
+                    "workers={workers} check={check}: {}",
+                    failure.error
+                );
+            }
+            assert!(
+                failure.resource_usage.first_failure.is_none(),
+                "workers={workers} check={check}: {}",
+                failure.error
+            );
+            assert!(
+                !failure.error.to_string().contains("unsupported"),
+                "workers={workers} check={check}: {}",
+                failure.error
+            );
+        });
+    }
+}
+
+#[test]
+fn native_heap_lifetime_constraints_are_checked_without_codegen() {
+    for source in [
+        r#"fn append<'a>(values:&mut Vec<&'a str>,value:&'a str){values.push(value);}fn main(){let mut values:Vec<&str>=Vec::new();append(&mut values,"first");append(&mut values,"second");println!("{:?}",values);}"#,
+        r#"fn main(){let owned=String::from("local");let mut values:Vec<&str>=Vec::new();values.push(owned.as_str());println!("{:?}",values);}"#,
+        r#"fn observed<'a>(value:&'a str)->&'a str{println!("push {}",value);value}fn main(){let mut values:Vec<&str>=Vec::new();values.push(observed("first"));values.push(observed("second"));println!("{:?}",values);}"#,
+    ] {
+        for workers in [1, 8] {
+            let checked = compiler::compile(source.into(), workers, true)
+                .unwrap_or_else(|error| panic!("CHECK workers={workers}: {error}\n{source}"));
+            assert!(checked.executable.is_none());
+            assert!(
+                checked
+                    .report
+                    .node_evaluations
+                    .iter()
+                    .all(|(key, _)| key.kind != 103)
+            );
+        }
+    }
+    // Same mandatory escape as the stock/BUILD oracle above. CHECK must reject
+    // it semantically before the separate raw-slot executable-proof boundary.
+    let source = r#"fn main(){let escaped:Vec<&str>;{let owned=String::from("local");let mut values:Vec<&str>=Vec::new();values.push(owned.as_str());escaped=values;}println!("{:?}",escaped);}"#;
+    for workers in [1, 8] {
+        let failure = compiler::compile_observed(source.into(), workers, true)
+            .err()
+            .unwrap_or_else(|| panic!("CHECK accepted an escaped native heap element borrow"));
+        assert!(failure.resource_usage.first_failure.is_none());
+        assert!(
+            !failure.error.to_string().contains("unsupported"),
+            "workers={workers}: {}",
+            failure.error
+        );
+    }
+}
+
+#[test]
 fn static_string_vector_seed_replays_all_closed_inputs() {
     for source in [
         "fn main(){let values=vec![\"ccc\",\"a\",\"bb\"];println!(\"{:?}\",values);}",

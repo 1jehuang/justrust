@@ -8,6 +8,96 @@ use std::process::Command;
 mod closure_oracle;
 
 #[test]
+fn reference_ordering_forwards_exact_pointee_traits() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "reference-ordering",
+        &[
+            Case {
+                name: "unsized_str_and_nested_scalar",
+                source: r#"fn compare<T:Ord>(left:T,right:T)->bool{left.cmp(&right).is_lt()}fn partial<T:PartialOrd>(left:T,right:T)->bool{left.partial_cmp(&right).unwrap().is_lt()}fn main(){let a=1i32;let b=2i32;let ra=&a;let rb=&b;println!("{} {} {} {}",compare("a","hé"),compare(ra,rb),compare(&ra,&rb),partial("a","b"));}"#,
+                expect: Expect::Run("true true true true\n"),
+            },
+            Case {
+                name: "nominal_option_ordering_result",
+                source: r#"fn compare<T:PartialOrd>(left:T,right:T)->Option<std::cmp::Ordering>{left.partial_cmp(&right)}fn main(){let a=1i32;let b=2i32;println!("{} {}",compare(&a,&b).unwrap().is_lt(),compare("a","b").unwrap().is_lt());}"#,
+                expect: Expect::Run("true true\n"),
+            },
+            Case {
+                name: "partial_order_keeps_nan_unordered",
+                source: r#"fn partial<T:PartialOrd>(left:T,right:T)->bool{left.partial_cmp(&right).is_none()}fn main(){let nan=0.0f64/0.0f64;let one=1.0f64;println!("{}",partial(&nan,&one));}"#,
+                expect: Expect::Run("true\n"),
+            },
+            Case {
+                name: "unused_reference_without_pointee_ord",
+                source: "struct N;fn require<T:Ord>(_:T){}fn unused(){let value=N;require(&value);}fn main(){}",
+                expect: Expect::Invalid("E0277"),
+            },
+            Case {
+                name: "named_input_regions_valid_control",
+                source: r#"trait Compare{fn same<'a,'b>(&self,left:&'a i32,right:&'b i32)->bool;}struct N;impl Compare for N{fn same<'a,'b>(&self,left:&'a i32,right:&'b i32)->bool{*left==*right}}fn main(){let a=1;let b=1;println!("{}",N.same(&a,&b));}"#,
+                expect: Expect::Run("true\n"),
+            },
+            Case {
+                name: "implementation_strengthens_invariant_input_equality",
+                source: r#"trait Compare{fn same<'a,'b>(&self,left:&mut &'a i32,right:&mut &'b i32)->bool;}struct N;impl Compare for N{fn same<'a>(&self,left:&mut &'a i32,right:&mut &'a i32)->bool{false}}fn main(){}"#,
+                expect: Expect::Invalid("error[E"),
+            },
+            Case {
+                name: "implementation_strengthens_input_outlives",
+                source: r#"trait Compare{fn same<'a,'b>(&self,left:&'a i32,right:&'b i32)->bool;}struct N;impl Compare for N{fn same<'a:'b,'b>(&self,left:&'a i32,right:&'b i32)->bool{false}}fn main(){}"#,
+                expect: Expect::Invalid("error[E"),
+            },
+            Case {
+                name: "unused_float_reference_has_no_total_order",
+                source: "fn require<T:Ord>(_:T){}fn unused(){let value=1.0f64;require(&value);}fn main(){}",
+                expect: Expect::Invalid("E0277"),
+            },
+        ],
+    );
+}
+
+#[test]
+fn shared_local_comparison_inputs_keep_mutability_and_escape_checks() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "shared-local-inputs",
+        &[
+            Case {
+                name: "two_local_shared_reference_depths_without_let_result",
+                source: r#"fn compare<T:Ord>(left:T,right:T)->bool{left.cmp(&right).is_lt()}fn main(){let a=1i32;let b=2i32;let ra=&a;let rb=&b;println!("{} {}",compare(ra,rb),compare(&ra,&rb));}"#,
+                expect: Expect::Run("true true\n"),
+            },
+            Case {
+                name: "root_shadowing_preserves_both_reference_occurrences",
+                source: r#"fn compare<T:Ord>(a:T,b:T)->bool{a.cmp(&b).is_lt()}fn main(){let a=1i32;let r=&a;let a=3i32;let s=&a;println!("{} {}",compare(r,s),compare(&r,&s));}"#,
+                expect: Expect::Run("true true\n"),
+            },
+            Case {
+                name: "parameter_shadowing_keeps_original_occurrence",
+                source: r#"fn compare<T:Ord>(a:T,b:T)->bool{a.cmp(&b).is_lt()}fn probe(a:i32)->bool{let r=&a;let a=3i32;let s=&a;compare(&r,&s)}fn main(){println!("{}",probe(1i32));}"#,
+                expect: Expect::Run("true\n"),
+            },
+            Case {
+                name: "nongeneric_and_explicit_multislot_calls_keep_earlier_routes",
+                source: r#"fn plain(a:&i32,b:&i32)->bool{*a<*b}fn generic<T,U>(a:T,b:U)->bool{true}fn mixed<T>(a:T,b:i32)->bool{true}fn main(){let a=1i32;let b=2i32;let r=&a;let s=&b;println!("{} {} {} {}",plain(r,s),generic::<&i32,&i32>(r,s),generic(a,b),mixed::<&i32>(r,b));}"#,
+                expect: Expect::Run("true true true true\n"),
+            },
+            Case {
+                name: "shared_local_cannot_gain_mutable_authority",
+                source: "fn needs_mut(_: &mut i32){}fn main(){let a=1i32;let r=&a;needs_mut(r);}",
+                expect: Expect::Invalid("E0308"),
+            },
+            Case {
+                name: "primitive_result_call_does_not_make_local_reference_escape",
+                source: "fn probe<T>(left:T,right:T)->bool{true}fn bad<'a>()->&'a i32{let x=1i32;let y=2i32;probe(&x,&y);&x}fn main(){}",
+                expect: Expect::Invalid("E0515"),
+            },
+        ],
+    );
+}
+
+#[test]
 fn heterogeneous_string_equality_preserves_reference_contracts() {
     use closure_oracle::{Case, Expect};
     closure_oracle::check(

@@ -285,6 +285,17 @@ fn packed_query_authority_alternate_schema_default_denies() {
         source_schemas: plan.source_schemas.clone(),
         budget: plan.budget.clone(),
     };
+    let slot = declaration(&plan, "slot");
+    assert!(
+        tr::SchemaCx::native_sequence_slot(&adapter, slot)
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        tr::SchemaCx::native_sequence_slot(&DenyPacked(&adapter), slot)
+            .unwrap()
+            .is_none()
+    );
     tr::SchemaCx::replay_packed_reserve_authority(&adapter, &cap, id).unwrap();
     let error =
         tr::SchemaCx::replay_packed_reserve_authority(&DenyPacked(&adapter), &cap, id).unwrap_err();
@@ -293,4 +304,333 @@ fn packed_query_authority_alternate_schema_default_denies() {
             .to_string()
             .contains("source authority is unavailable")
     );
+}
+
+#[test]
+fn native_swap_source_genuine_checked_pair_and_forged_cfg_reject() {
+    let plan = genuine_plan();
+    let declarations: Vec<_> = (0..plan.callable_count())
+        .map(|index| plan.callable_decl(index).unwrap())
+        .filter(|id| {
+            native_sequence::issue_swap(&plan.registry, *id, &plan.budget)
+                .unwrap()
+                .is_some()
+        })
+        .collect();
+    assert_eq!(
+        declarations.len(),
+        1,
+        "only the exact issued Vec exchange recipe"
+    );
+    let id = declarations[0];
+    let facts = plan.callable_facts(id).unwrap();
+    assert!(facts.native_sequence_swap(id).unwrap().is_some());
+    let checked = type_callable_with_plan(&plan.program, id, &plan, &plan.budget).unwrap();
+    let template =
+        crate::compiler::cfg::lower_template(Arc::new(checked), facts.clone(), &plan.budget)
+            .unwrap();
+    let proof = crate::compiler::ownership::verify_template(template.clone())
+        .unwrap_or_else(|analysis| panic!("{:?}", analysis.diagnostics));
+    assert!(proof.analysis().passed());
+    assert!(
+        proof.carrier_effects().is_some(),
+        "paired storage exchange needs a real proof"
+    );
+    let original = template.function().as_ref();
+    let first_slot = original
+        .blocks
+        .iter()
+        .position(|block| {
+            matches!(
+                block.terminator.value,
+                crate::compiler::cfg::Terminator::Call { .. }
+            )
+        })
+        .map(crate::compiler::cfg::BlockId)
+        .unwrap();
+    assert_ne!(original.entry, first_slot);
+    let mut bypassed_entry = original.clone();
+    bypassed_entry.entry = first_slot;
+    assert!(
+        bypassed_entry
+            .validate_provenance(&facts, &plan.budget)
+            .is_err()
+    );
+
+    let mut changed_guard_edges = 0usize;
+    let mut changed_guards = 0usize;
+    for (index, block) in original.blocks.iter().enumerate().take(first_slot.0) {
+        let crate::compiler::cfg::Terminator::Switch {
+            then_block,
+            else_block,
+            ..
+        } = &block.terminator.value
+        else {
+            continue;
+        };
+        changed_guards += 1;
+        for (change_then, successor) in [(true, *then_block), (false, *else_block)] {
+            if successor == first_slot {
+                continue;
+            }
+            let mut bypassed_guard = original.clone();
+            let crate::compiler::cfg::Terminator::Switch {
+                then_block,
+                else_block,
+                ..
+            } = &mut bypassed_guard.blocks[index].terminator.value
+            else {
+                unreachable!();
+            };
+            if change_then {
+                *then_block = first_slot;
+            } else {
+                *else_block = first_slot;
+            }
+            assert!(
+                bypassed_guard
+                    .validate_provenance(&facts, &plan.budget)
+                    .is_err()
+            );
+            changed_guard_edges += 1;
+        }
+    }
+    assert!(
+        changed_guards >= 2,
+        "bounds and alias guards must both be covered"
+    );
+    assert!(
+        changed_guard_edges >= 2,
+        "bounds and alias successor bypass controls"
+    );
+
+    let mut forged = template.function().as_ref().clone();
+    let block = forged
+        .blocks
+        .iter_mut()
+        .find(|block| {
+            block.statements.iter().any(|statement| {
+                matches!(&statement.value,crate::compiler::cfg::Statement::Assign {destination,..}
+            if destination.projection.as_slice()==[ir::Projection::Deref])
+            })
+        })
+        .unwrap();
+    let store = block
+        .statements
+        .iter()
+        .find(|statement| {
+            matches!(&statement.value,crate::compiler::cfg::Statement::Assign {destination,..}
+            if destination.projection.as_slice()==[ir::Projection::Deref])
+        })
+        .unwrap()
+        .clone();
+    block.statements.push(store);
+    assert!(forged.validate_provenance(&facts, &plan.budget).is_err());
+}
+
+#[test]
+fn native_swap_source_wrong_owner_recipe_context_issuer_and_poison_reject() {
+    let plan = genuine_plan();
+    let id = (0..plan.callable_count())
+        .map(|index| plan.callable_decl(index).unwrap())
+        .find(|id| {
+            native_sequence::issue_swap(&plan.registry, *id, &plan.budget)
+                .unwrap()
+                .is_some()
+        })
+        .unwrap();
+    let position = plan.registry.function_position(id).unwrap();
+    let CallableSource::Associated {
+        implementation,
+        item,
+    } = plan.registry.callable_sources[position]
+    else {
+        panic!("swap must be associated")
+    };
+    assert!(
+        native_sequence::issue_swap(&plan.registry, declaration(&plan, "slot"), &plan.budget)
+            .unwrap()
+            .is_none()
+    );
+    let foreign = genuine_plan();
+    assert!(matches!(
+        native_sequence::issue_swap(&foreign.registry, id, &foreign.budget),
+        Ok(None) | Err(_)
+    ));
+    let registry_copy = || {
+        let mut registry = plan.registry.empty_like();
+        registry.declarations = plan.registry.declarations.clone();
+        registry.slots = plan.registry.slots.clone();
+        registry.functions = plan.registry.functions.clone();
+        registry.function_ids = plan.registry.function_ids.clone();
+        registry.callable_sources = plan.registry.callable_sources.clone();
+        assert!(
+            native_sequence::issue_swap(&registry, id, &plan.budget)
+                .unwrap()
+                .is_some()
+        );
+        registry
+    };
+    for mutation in 0..4 {
+        let mut registry = registry_copy();
+        let mut program = plan.program.as_ref().clone();
+        let function = &mut program.impls[implementation].items[item].function;
+        match mutation {
+            0 => function.body.statements.swap(2, 3),
+            1 => {
+                let Some(Expr::Unsafe(block)) = function.body.tail.as_deref_mut() else {
+                    panic!("unsafe recipe")
+                };
+                block.statements.swap(1, 2);
+            }
+            2 => {
+                let Some(Expr::Unsafe(block)) = function.body.tail.as_deref_mut() else {
+                    panic!("unsafe recipe")
+                };
+                block.statements.push(block.statements[1].clone());
+            }
+            3 => {
+                let Stmt::ImplicitExpr(Expr::If { condition, .. }) =
+                    &mut function.body.statements[1]
+                else {
+                    panic!("alias guard")
+                };
+                let Expr::Binary { op, .. } = condition.as_mut() else {
+                    panic!("alias compare")
+                };
+                *op = BinaryOp::Ne;
+            }
+            _ => unreachable!(),
+        }
+        registry.program = Arc::new(program);
+        assert!(
+            native_sequence::issue_swap(&registry, id, &plan.budget)
+                .unwrap()
+                .is_none(),
+            "mutation={mutation}"
+        );
+    }
+    let mut registry = registry_copy();
+    let mut program = plan.program.as_ref().clone();
+    program.embedded_issuers = Arc::from([]);
+    registry.program = Arc::new(program);
+    assert!(
+        native_sequence::issue_swap(&registry, id, &plan.budget)
+            .unwrap()
+            .is_none()
+    );
+    let poison = ir::PlanBudget::default();
+    poison.poison_ledger_for_tests();
+    assert!(native_sequence::issue_swap(&plan.registry, id, &poison).is_err());
+}
+
+#[test]
+fn native_slot_source_genuine_and_universal_initialized_store() {
+    let plan = genuine_plan();
+    let slot = declaration(&plan, "slot");
+    assert!(
+        native_sequence::issue_slot(&plan.registry, slot, &plan.budget)
+            .unwrap()
+            .is_some()
+    );
+    let push =
+        (0..plan.callable_count())
+            .map(|index| plan.callable_decl(index).unwrap())
+            .find(|declaration| {
+                plan.registry
+                    .source_callable(*declaration)
+                    .is_some_and(|function| {
+                        function.name.segments().last().is_some_and(|name| {
+                            plan.program.names.spelling(*name).unwrap() == "push"
+                        })
+                    })
+            })
+            .unwrap();
+    let facts = plan.callable_facts(push).unwrap();
+    assert!(facts.native_sequence_slot(slot).unwrap().is_some());
+    let checked = type_callable_with_plan(&plan.program, push, &plan, &plan.budget).unwrap();
+    let template =
+        crate::compiler::cfg::lower_template(Arc::new(checked), facts, &plan.budget).unwrap();
+    let proof = crate::compiler::ownership::verify_template(template)
+        .unwrap_or_else(|analysis| panic!("{:?}", analysis.diagnostics));
+    assert!(proof.analysis().passed());
+    assert!(
+        proof.carrier_effects().is_some(),
+        "issued initialized slot store requires a real effect proof"
+    );
+}
+
+#[test]
+fn native_slot_source_copy_wrong_recipe_context_and_poison_reject() {
+    let plan = genuine_plan();
+    let slot = declaration(&plan, "slot");
+    assert!(
+        native_sequence::issue_slot(&plan.registry, declaration(&plan, "size_of"), &plan.budget)
+            .unwrap()
+            .is_none()
+    );
+    let foreign = genuine_plan();
+    assert!(matches!(
+        native_sequence::issue_slot(&foreign.registry, slot, &foreign.budget),
+        Ok(None) | Err(_)
+    ));
+    let mut changed = plan.program.as_ref().clone();
+    changed.functions[named(&plan.program, "slot")].body.tail =
+        Some(Box::new(Expr::Integer(IntegerLiteral {
+            magnitude: 0,
+            suffix: Some(ir::IntTy::Usize),
+        })));
+    let changed = PlanCtx::from_program(&changed, &ir::PlanBudget::default()).unwrap();
+    assert!(
+        native_sequence::issue_slot(
+            &changed.registry,
+            declaration(&changed, "slot"),
+            &changed.budget
+        )
+        .unwrap()
+        .is_none()
+    );
+    let mut unissued = plan.program.as_ref().clone();
+    unissued.embedded_issuers = Arc::from([]);
+    let registration_error =
+        PlanCtx::from_program(&unissued, &ir::PlanBudget::default()).unwrap_err();
+    assert!(
+        registration_error
+            .contains("embedded function registration changed original source or occurrence"),
+        "{registration_error}"
+    );
+    // Exercise the issuer boundary independently of the earlier registration
+    // rejection. Copy only genuine registry rows, then remove the issuer from
+    // its source snapshot. This malformed fixture never becomes a PlanCtx.
+    let mut unissued_registry = plan.registry.empty_like();
+    unissued_registry.declarations = plan.registry.declarations.clone();
+    unissued_registry.slots = plan.registry.slots.clone();
+    unissued_registry.functions = plan.registry.functions.clone();
+    unissued_registry.function_ids = plan.registry.function_ids.clone();
+    unissued_registry.callable_sources = plan.registry.callable_sources.clone();
+    assert!(
+        native_sequence::issue_slot(&unissued_registry, slot, &plan.budget)
+            .unwrap()
+            .is_some()
+    );
+    unissued_registry.program = Arc::new(unissued);
+    assert!(
+        native_sequence::issue_slot(&unissued_registry, slot, &plan.budget)
+            .unwrap()
+            .is_none()
+    );
+    let copied = parse("fn size_of<T>()->usize{let base=4096usize as *const[T;2];let second=unsafe{&(*base)[1]}as *const T;second as usize-4096usize}fn slot<T>(base:*mut T,index:usize)->*mut T{(base as usize+index*size_of::<T>())as *mut T}fn main(){}").unwrap();
+    let copied = PlanCtx::from_program(&copied, &ir::PlanBudget::default()).unwrap();
+    assert!(
+        native_sequence::issue_slot(
+            &copied.registry,
+            declaration(&copied, "slot"),
+            &copied.budget
+        )
+        .unwrap()
+        .is_none()
+    );
+    let poison = ir::PlanBudget::default();
+    poison.poison_ledger_for_tests();
+    assert!(native_sequence::issue_slot(&plan.registry, slot, &poison).is_err());
 }

@@ -372,6 +372,26 @@ impl Collector<'_> {
             .get(&key)
             .ok_or("unknown source nominal carrier")?;
         let info = self.registry.declaration(id)?;
+        if let ir::Ty::Struct(value) = semantic
+            && value.def().source_decl == id
+            && value.native_sequence_binding().is_some_and(|binding| {
+                binding.matches_original_template(value.def())
+                    || binding.matches_source_substitution(value.def())
+            })
+            && let Some(element) = semantic.owned_sequence_element()
+        {
+            let [source_element] = args else {
+                return Err("native source carrier type argument arity mismatch".into());
+            };
+            // Authority identifies the exact canonical source application, not
+            // a lifetime. Walk its SOURCE argument so named regions, elision
+            // and parameter families use the ordinary source traversal rules.
+            // In particular, never recover a region from the substituted Ty.
+            path.push(ir::CarrierStep::SliceElement);
+            self.walk(source_element, element, parameter, path, 0, depth + 1)?;
+            path.pop();
+            return Ok(());
+        }
         let (type_params, region_params, fields): (
             _,
             _,

@@ -13,7 +13,11 @@ use std::mem::size_of;
 use std::sync::Arc;
 
 mod correlation;
+mod native_exchange;
+mod native_storage;
 mod renewal;
+use native_exchange::NativeStorageExchange;
+use native_storage::NativeStorageTransfer;
 
 #[cfg(test)]
 #[path = "borrow/projection_family_tests.rs"]
@@ -78,6 +82,9 @@ pub(super) struct CarrierEffects {
     must_overwrite: Arc<[super::ir::InputCarrier]>,
     /// Strictly ordered by block and occurrence-validated before publication.
     bindings: Arc<[CallCarrierBinding]>,
+    /// Exact source-slot operations, never ordinary write/refinement rows.
+    _native_storage: Arc<[NativeStorageTransfer]>,
+    _native_exchanges: Arc<[NativeStorageExchange]>,
 }
 
 /// Count storage that escapes with the effect summary, not temporary analysis
@@ -589,6 +596,11 @@ fn read_cell_cover(
                         }
                     }
                     Ty::Struct(value) => {
+                        if let Some(element) = ty.owned_sequence_element() {
+                            if !child(&[Projection::DynamicIndex(LocalId(usize::MAX))], element)? {
+                                return Ok(false);
+                            }
+                        }
                         for (index, field) in value
                             .def()
                             .fields
@@ -825,6 +837,11 @@ fn resolve_cells<'a>(
                 let count = match ty {
                     Ty::Array { len, .. } => len,
                     Ty::Slice { .. } => 1,
+                    _ if *step == Projection::DynamicIndex(LocalId(usize::MAX))
+                        && ty.owned_sequence_element().is_some() =>
+                    {
+                        1
+                    }
                     _ if *step == Projection::DynamicIndex(LocalId(usize::MAX)) => {
                         // A declared slice may borrow opaque backing storage
                         // (for example Vec<T>). Its owner is not an array or
@@ -848,14 +865,13 @@ fn resolve_cells<'a>(
                         3,
                     )?)?;
                     let mut selected = candidate.clone();
-                    selected
-                        .place
-                        .projection
-                        .push(if matches!(ty, Ty::Slice { .. }) {
+                    selected.place.projection.push(
+                        if matches!(ty, Ty::Slice { .. }) || ty.owned_sequence_element().is_some() {
                             Projection::DynamicIndex(LocalId(usize::MAX))
                         } else {
                             Projection::ConstantIndex(index)
-                        });
+                        },
+                    );
                     checked_vec_growth(&mut expanded, budget)?;
                     expanded.push(selected);
                 }
@@ -1332,6 +1348,8 @@ struct CarrierBuilder<'a, 'b> {
     effect_table: Option<Arc<super::ownership::CarrierEffectTable>>,
     input_regions: Vec<(InputCarrier, AnalysisRegionId)>,
     family_regions: Vec<(ir::CarrierFamily, CarrierLocation, AnalysisRegionId)>,
+    native_storage: Vec<NativeStorageTransfer>,
+    native_exchanges: Vec<NativeStorageExchange>,
     problems: Vec<(BlockId, Option<usize>, Problem)>,
 }
 impl CarrierBuilder<'_, '_> {
@@ -1975,7 +1993,10 @@ impl CarrierBuilder<'_, '_> {
             }
         }
     }
-    fn transport_effect_input(
+    /// Transport carrier coordinates only, without granting mutation authority.
+    /// Native lifetime invariants use this same owned-component projection but
+    /// are not write envelopes: their only application is a monotone origin union.
+    fn transport_input_components(
         &mut self,
         input: &InputCarrier,
         view: &super::traits::CarrierContractView,
@@ -2048,6 +2069,15 @@ impl CarrierBuilder<'_, '_> {
                 ));
             }
         }
+        Ok(result)
+    }
+    fn transport_effect_input(
+        &mut self,
+        input: &InputCarrier,
+        view: &super::traits::CarrierContractView,
+        owned_destination: bool,
+    ) -> Result<Vec<(InputCarrier, Option<CarrierLocation>)>, Exhausted> {
+        let mut result = self.transport_input_components(input, view, owned_destination)?;
         if owned_destination {
             // A symbolic family may carry a deferred write envelope, but its
             // concrete expansion can include owned values that are not writable
@@ -2881,6 +2911,8 @@ impl<'a, 'b> CarrierBuilder<'a, 'b> {
             regions: RegionRelations::default(),
             effect_table: None,
             input_regions: vec![],
+            native_storage: Vec::new(),
+            native_exchanges: Vec::new(),
             family_regions: vec![],
             problems: vec![],
         };
@@ -3119,6 +3151,8 @@ impl<'a, 'b> CarrierBuilder<'a, 'b> {
             }
             builder.body_signature = Some(signature);
         }
+        builder.prepare_native_storage()?;
+        builder.prepare_native_exchange()?;
         Ok(builder)
     }
 }
@@ -3259,6 +3293,8 @@ impl CarrierBuilder<'_, '_> {
         .map_err(|_| Exhausted)?
         .is_some()
         {
+            self.write_native_storage(state, value, block, statement, diagnose)?;
+            self.write_native_exchange(state, value, block, statement, diagnose)?;
             return Ok(());
         }
         let ty = self.place_ty(self.f, destination)?.clone();
@@ -3417,7 +3453,13 @@ impl CarrierBuilder<'_, '_> {
                 }
                 Ok(vec![(proof.captured_destination(), merged)])
             }
-            Rvalue::Use(operand) => self.operand_value(state, operand),
+            Rvalue::Use(operand) => {
+                if let Some(value) = self.read_native_exchange(state, block, statement)? {
+                    Ok(value)
+                } else {
+                    self.operand_value(state, operand)
+                }
+            }
             // The slice handle carries exactly the input reference's origins
             // and loan set at the same fixed carrier position. Length metadata
             // contributes no provenance.
@@ -4197,6 +4239,89 @@ impl CarrierBuilder<'_, '_> {
                     } else {
                         checked_vec_growth(&mut writes, self.budget)?;
                         writes.push((index, post, strong));
+                    }
+                }
+            }
+        }
+        // Invariant generic arguments constrain stored value lifetimes even
+        // without an executable effect summary. This is a monotone union only:
+        // never a target/write authorization, replacement or must-overwrite.
+        if let Some(view) = &view {
+            for invariant in view.native_heap_invariants() {
+                for (storage, component) in
+                    self.transport_input_components(&invariant.storage, view, true)?
+                {
+                    let Some(Operand::Copy(actual) | Operand::Move(actual)) =
+                        args.get(storage.param)
+                    else {
+                        continue;
+                    };
+                    let mut destination = actual.clone();
+                    destination
+                        .projection
+                        .extend(value_projection(&storage.location));
+                    let ty = self.place_ty(self.f, &destination)?.clone();
+                    let Some(channel) = key_channel(&ty) else {
+                        continue;
+                    };
+                    let mut origins = self.empty_origins()?;
+                    for source in invariant.sources.iter() {
+                        for (source, source_component) in
+                            self.transport_effect_input(source, view, false)?
+                        {
+                            if component.is_some()
+                                && source_component.is_some()
+                                && component != source_component
+                            {
+                                continue;
+                            }
+                            let incoming = self.input_value(&entry, &args, &source)?;
+                            origins.union(&incoming, self.budget)?;
+                        }
+                    }
+                    let (targets, _, failure) = self.lens(&entry, &destination)?;
+                    if let Some(failure) = failure {
+                        if diagnose {
+                            self.problem(
+                                block,
+                                None,
+                                failure.problem(
+                                    "invariant heap lifetime lacks an issued carrier cover",
+                                ),
+                            )?;
+                        }
+                        continue;
+                    }
+                    for target in targets {
+                        let Some(index) = self.cell(&CellKey {
+                            storage: target.place,
+                            channel: channel.clone(),
+                        })?
+                        else {
+                            if diagnose {
+                                self.problem(
+                                    block,
+                                    None,
+                                    Problem::Invalid(
+                                        "invariant heap lifetime lost its issued origin cell"
+                                            .into(),
+                                    ),
+                                )?;
+                            }
+                            continue;
+                        };
+                        let mut post = entry.cells[index].clone();
+                        post.union(&origins, self.budget)?;
+                        if let Some((_, existing, strong)) = writes
+                            .iter_mut()
+                            .find(|(candidate, _, _)| *candidate == index)
+                        {
+                            existing.union(&post, self.budget)?;
+                            *strong = false;
+                        } else {
+                            checked_vec_growth(&mut writes, self.budget)?;
+                            writes.push((index, post, false));
+                        }
                     }
                 }
             }
@@ -5091,17 +5216,33 @@ impl CarrierBuilder<'_, '_> {
             // until the exact raw storage object is modeled. No must-overwrite
             // or replacement summary may be published from this incomplete view.
             let mut unmodeled_raw_write = false;
-            for block in &f.blocks {
+            for (block_index, block) in f.blocks.iter().enumerate() {
                 self.budget.spend(block.statements.len() + 1)?;
-                for statement in &block.statements {
+                for (statement_index, statement) in block.statements.iter().enumerate() {
                     if let Statement::Assign { destination, .. } = &statement.value {
-                        unmodeled_raw_write |= ir::raw_deref_index_optional(
-                            &f.locals[destination.local.0].ty,
-                            &destination.projection,
-                            Some(&self.ledger),
-                        )
-                        .map_err(|_| Exhausted)?
-                        .is_some();
+                        self.budget.spend(self.native_storage.len() + 1)?;
+                        let modeled = self.native_storage.iter().any(|transfer| {
+                            transfer.block == BlockId(block_index)
+                                && transfer.statement == statement_index
+                        });
+                        self.budget.spend(
+                            self.native_exchanges
+                                .len()
+                                .saturating_mul(2)
+                                .saturating_add(1),
+                        )?;
+                        let modeled = modeled
+                            || self.native_exchanges.iter().any(|exchange| {
+                                exchange.writes(BlockId(block_index), statement_index)
+                            });
+                        unmodeled_raw_write |= !modeled
+                            && ir::raw_deref_index_optional(
+                                &f.locals[destination.local.0].ty,
+                                &destination.projection,
+                                Some(&self.ledger),
+                            )
+                            .map_err(|_| Exhausted)?
+                            .is_some();
                     }
                 }
             }
@@ -5122,7 +5263,38 @@ impl CarrierBuilder<'_, '_> {
                     self.budget,
                     &self.ledger,
                 )?;
+                checked_arc_transfer::<NativeStorageTransfer>(
+                    self.native_storage.len(),
+                    self.budget,
+                )?;
+                let mut native_bytes = self
+                    .native_storage
+                    .len()
+                    .checked_mul(size_of::<NativeStorageTransfer>())
+                    .and_then(|bytes| bytes.checked_add(2 * size_of::<usize>()))
+                    .ok_or(Exhausted)?;
+                for transfer in &self.native_storage {
+                    native_bytes = add(native_bytes, transfer.retained_paths(self.budget)?)?;
+                }
+                self.ledger
+                    .retain_bytes(native_bytes)
+                    .map_err(|_| Exhausted)?;
+                checked_arc_transfer::<NativeStorageExchange>(
+                    self.native_exchanges.len(),
+                    self.budget,
+                )?;
+                self.ledger
+                    .retain_bytes(add(
+                        mul(
+                            self.native_exchanges.len(),
+                            size_of::<NativeStorageExchange>(),
+                        )?,
+                        2 * size_of::<usize>(),
+                    )?)
+                    .map_err(|_| Exhausted)?;
                 Some(Arc::new(CarrierEffects {
+                    _native_exchanges: std::mem::take(&mut self.native_exchanges).into(),
+                    _native_storage: std::mem::take(&mut self.native_storage).into(),
                     writes: writes.into(),
                     must_overwrite: must_overwrite.into(),
                     bindings: std::mem::take(&mut self.bindings).into(),

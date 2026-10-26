@@ -8,6 +8,38 @@ impl ValidatedTraitWorld {
         destination: &ir::InputCarrier,
         input: &ir::InputCarrier,
     ) -> Result<bool> {
+        self.retains_shared_sequence_family(signature, destination, input, false)
+    }
+
+    pub(super) fn retains_shared_return_family(
+        &self,
+        signature: &Signature,
+        destination: &ir::InputCarrier,
+        input: &ir::InputCarrier,
+    ) -> Result<bool> {
+        self.retains_shared_sequence_family(signature, destination, input, true)
+    }
+
+    #[cfg(test)]
+    pub(in crate::compiler) fn shared_return_family_for_tests(
+        &self,
+        signature: &Signature,
+        destination: &ir::InputCarrier,
+        input: &ir::InputCarrier,
+    ) -> Result<(bool, bool)> {
+        Ok((
+            self.retains_shared_slice_family(signature, destination, input)?,
+            self.retains_shared_return_family(signature, destination, input)?,
+        ))
+    }
+
+    fn retains_shared_sequence_family(
+        &self,
+        signature: &Signature,
+        destination: &ir::InputCarrier,
+        input: &ir::InputCarrier,
+        allow_native_owner: bool,
+    ) -> Result<bool> {
         if destination.param != input.param {
             return Ok(false);
         }
@@ -52,10 +84,113 @@ impl ValidatedTraitWorld {
             &self.budget,
             ir::carrier_at(ty, &input.location, &self.budget),
         )?;
+        // A returned shared slice can retain element origins from a shared
+        // native owner only when that exact owner independently replays its
+        // original-template, source-substitution or graph-read authority.
+        // This logical coordinate supplies no lifetime edge or write permission.
+        let native_element = match &descriptor {
+            Ty::Ref {
+                kind: ir::BorrowKind::Shared,
+                referent,
+            } if allow_native_owner => referent.owned_sequence_element(),
+            _ => None,
+        };
         Ok(
-            descriptor.shared_slice_element() == Some(&Ty::Param(parameter))
+            (descriptor.shared_slice_element() == Some(&Ty::Param(parameter))
+                || native_element == Some(&Ty::Param(parameter)))
                 && element == Ty::Param(parameter),
         )
+    }
+
+    #[cfg(test)]
+    pub(in crate::compiler) fn shared_native_field_family_for_tests(
+        &self,
+        signature: &Signature,
+        destination: &ir::InputCarrier,
+        input: &ir::InputCarrier,
+    ) -> Result<bool> {
+        self.retains_shared_native_field_family(signature, destination, input)
+    }
+
+    // Retention beneath one shared nominal descriptor is not a lifetime edge.
+    // Follow only owned struct fields to an authenticated native sequence leaf.
+    // Crossing another reference, a sibling descriptor or a different family
+    // cannot retain origins through this descriptor.
+    fn retains_shared_native_field_family(
+        &self,
+        signature: &Signature,
+        destination: &ir::InputCarrier,
+        input: &ir::InputCarrier,
+    ) -> Result<bool> {
+        charged(
+            &self.budget,
+            self.budget.charge_work(
+                destination
+                    .location
+                    .path
+                    .0
+                    .len()
+                    .saturating_add(input.location.path.0.len())
+                    .saturating_add(1),
+            ),
+        )?;
+        if destination.param != input.param
+            || destination.location.channel
+                != ir::CarrierChannel::Fixed(ir::ReferencePosition { depth: 0 })
+        {
+            return Ok(false);
+        }
+        let ir::CarrierChannel::ParamTail {
+            parameter,
+            prefix: 0,
+        } = input.location.channel
+        else {
+            return Ok(false);
+        };
+        let Some(suffix) = input
+            .location
+            .path
+            .0
+            .strip_prefix(destination.location.path.0.as_ref())
+        else {
+            return Ok(false);
+        };
+        let [
+            ir::CarrierStep::Referent,
+            fields @ ..,
+            ir::CarrierStep::SliceElement,
+        ] = suffix
+        else {
+            return Ok(false);
+        };
+        if fields.is_empty() {
+            return Ok(false);
+        }
+        let Some(ty) = signature.params.get(input.param) else {
+            return Ok(false);
+        };
+        let Ty::Ref {
+            kind: ir::BorrowKind::Shared,
+            referent,
+        } = charged(
+            &self.budget,
+            ir::carrier_at(ty, &destination.location, &self.budget),
+        )?
+        else {
+            return Ok(false);
+        };
+        let mut owner = referent.as_ref().clone();
+        for step in fields {
+            charged(&self.budget, self.budget.charge_work(1))?;
+            let (ir::CarrierStep::Field(index), Ty::Struct(_)) = (step, &owner) else {
+                return Ok(false);
+            };
+            let Some(field) = charged(&self.budget, owner.field_ty(*index, &self.budget))? else {
+                return Ok(false);
+            };
+            owner = field;
+        }
+        Ok(owner.owned_sequence_element() == Some(&Ty::Param(parameter)))
     }
 
     pub(super) fn source_carrier_outlives(
@@ -157,23 +292,112 @@ impl ValidatedTraitWorld {
         destination: &ir::CarrierLocation,
         input: &ir::InputCarrier,
     ) -> Result<Option<bool>> {
-        // Returning a borrowed slice retains its stored element origins as
-        // well as its descriptor origin. An element family is eligible only
-        // through an enclosing shared slice that the original contract already
-        // authorizes as a source for this exact output. This is not an extra
-        // lifetime relation between unrelated parameters.
+        // A mutable element or slice borrow keeps the stored origins of that
+        // exact native owner alive. This is return-origin retention only: it
+        // neither makes a heap summary writable nor supplies its lifetime.
+        if matches!(
+            destination.channel,
+            ir::CarrierChannel::Fixed(ir::ReferencePosition { depth: 0 })
+        ) && destination.path.0.is_empty()
+            && let ir::CarrierChannel::ParamTail {
+                parameter,
+                prefix: 0,
+            } = input.location.channel
+            && input.location.path.0.as_ref()
+                == [ir::CarrierStep::Referent, ir::CarrierStep::SliceElement]
+            && matches!(&signature.result,
+                Ty::Ref { kind: ir::BorrowKind::Mut, referent }
+                    if referent.as_ref() == &Ty::Param(parameter)
+                        || matches!(referent.as_ref(), Ty::Slice { element }
+                            if element.as_ref() == &Ty::Param(parameter)))
+            && let Some(Ty::Ref {
+                kind: ir::BorrowKind::Mut,
+                referent,
+            }) = signature.params.get(input.param)
+            && referent.owned_sequence_element() == Some(&Ty::Param(parameter))
+        {
+            let descriptor = ir::InputCarrier {
+                param: input.param,
+                location: destination.clone(),
+            };
+            return match self.source_carrier_eligible(
+                source,
+                signature,
+                destination,
+                &descriptor,
+            )? {
+                Some(eligible) => Ok(Some(eligible)),
+                None => self
+                    .carrier_source_eligible(
+                        signature,
+                        destination,
+                        &signature.result,
+                        &descriptor,
+                        None,
+                    )
+                    .map(Some),
+            };
+        }
+        // A shared aggregate descriptor retains the origins in each of its
+        // owned native fields. Its original descriptor lifetime must still
+        // independently authorize this particular returned reference.
+        if matches!(destination.channel, ir::CarrierChannel::Fixed(_))
+            && matches!(
+                input.location.channel,
+                ir::CarrierChannel::ParamTail { prefix: 0, .. }
+            )
+        {
+            let input_ty = signature.params.get(input.param).ok_or_else(|| {
+                FactsError::invalid(
+                    &self.budget,
+                    "aggregate family source parameter outside signature",
+                )
+            })?;
+            for parent in
+                charged(&self.budget, ir::carrier_locations(input_ty, &self.budget))?.iter()
+            {
+                let parent = ir::InputCarrier {
+                    param: input.param,
+                    location: parent.clone(),
+                };
+                if !self.retains_shared_native_field_family(signature, &parent, input)? {
+                    continue;
+                }
+                let eligible =
+                    match self.source_carrier_eligible(source, signature, destination, &parent)? {
+                        Some(eligible) => eligible,
+                        None => self.carrier_source_eligible(
+                            signature,
+                            destination,
+                            &signature.result,
+                            &parent,
+                            None,
+                        )?,
+                    };
+                if eligible {
+                    return Ok(Some(true));
+                }
+            }
+        }
+        // Returning a shared slice or one of its elements retains stored
+        // element origins as well as its descriptor origin. The exact family
+        // is eligible only through an enclosing shared sequence descriptor
+        // independently authorized for this output by the original contract.
+        // This adds no lifetime relation between unrelated parameters.
         if let ir::CarrierChannel::ParamTail {
             parameter,
             prefix: 0,
         } = input.location.channel
             && input.location.path.0.last() == Some(&ir::CarrierStep::SliceElement)
             && matches!(destination.channel, ir::CarrierChannel::Fixed(_))
-            && charged(
+            && let output = charged(
                 &self.budget,
                 ir::carrier_at(&signature.result, destination, &self.budget),
             )?
-            .shared_slice_element()
-                == Some(&Ty::Param(parameter))
+            && (output.shared_slice_element() == Some(&Ty::Param(parameter))
+                || matches!(&output,
+                    Ty::Ref { kind: ir::BorrowKind::Shared, referent }
+                        if referent.as_ref() == &Ty::Param(parameter)))
         {
             let input_ty = signature.params.get(input.param).ok_or_else(|| {
                 FactsError::invalid(
@@ -188,7 +412,7 @@ impl ValidatedTraitWorld {
                     param: input.param,
                     location: parent.clone(),
                 };
-                if !self.retains_shared_slice_family(signature, &parent, input)? {
+                if !self.retains_shared_return_family(signature, &parent, input)? {
                     continue;
                 }
                 let eligible =
@@ -351,6 +575,11 @@ impl ValidatedTraitWorld {
         if self.retains_shared_slice_family(signature, destination, input)? {
             return Ok(Some(true));
         }
+        // Retaining this descriptor's own stored origins does not introduce
+        // an origin from a different parameter, descriptor or native field.
+        if self.retains_shared_native_field_family(signature, destination, input)? {
+            return Ok(Some(true));
+        }
         let Some(output) = source.carriers.iter().find(|row| {
             row.parameter == Some(destination.param) && row.location == destination.location
         }) else {
@@ -500,6 +729,9 @@ impl ValidatedTraitWorld {
                     }
                     (ir::CarrierStep::SliceElement, Ty::Slice { element }) => {
                         Some(element.as_ref().clone())
+                    }
+                    (ir::CarrierStep::SliceElement, _) if ty.owned_sequence_element().is_some() => {
+                        ty.owned_sequence_element().cloned()
                     }
                     (ir::CarrierStep::VariantField { variant, field }, Ty::Enum(value))
                         if variant.owner == value.def().id =>
