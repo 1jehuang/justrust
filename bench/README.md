@@ -48,12 +48,21 @@ Real-usage trends remain the reality check, not a controlled attribution test.
 
 ## Failure-heavy rewrite test diagnostic
 
+`python3 bench/suite.py run test-retry-storm -n 5` isolates confirmation
+overhead with a pinned, dependency-free fixture: 32 intentionally failing
+tests each sleep 50 ms, plus one passing test. The fixed libtest thread count
+is 16. Warmup populates the failure history, making subsequent runs split
+failed and passing tests. The comparison must preserve all 32 failures and
+the passing test. This is a synthetic mechanism test, not a rewrite speed claim.
+
 `python3 bench/suite.py run rewrite-lib-tests -n 2` runs the library tests
 from a pinned `~/justrust-clean-room` commit. It is explicitly opt-in, does not
 edit the active rewrite checkout, and expects test failures in that snapshot.
 The warmup populates test history so measured runs exercise failure-prioritized
 parallel splitting and isolated failure confirmation. Keep the snapshot, test
 flags, warmup count, and execution mode identical on both sides.
+Debug information is disabled for this warmed, no-edit diagnostic to bound
+local artifact size; the snapshot's optimization level is unchanged.
 
 This diagnoses retry overhead, not compiler performance or general session
 speed. Still run the comprehensive synthetic workload for regression coverage.

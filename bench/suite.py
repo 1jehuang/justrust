@@ -130,6 +130,11 @@ SNAPSHOTS = {
 # Loaded only when explicitly selected. The rewrite checkout is not required
 # for the normal benchmark suite or the session-weighted synthetic workload.
 OPTIONAL_SNAPSHOTS = {
+    "retry-storm": {
+        # A git tree object pins only the small fixture, not the full toolchain.
+        "repos": {"retry-storm": (ROOT, "0f0ea126029703b3148151c7410dd6e2855a4a12")},
+        "cwd": "retry-storm",
+    },
     "rewrite": {
         "repos": {
             "justrust-clean-room": (
@@ -173,13 +178,31 @@ DESKTOP_CHECK = ["check", "-p", "jcode-desktop-ui"]
 
 SCENARIOS = [
     Scenario(
+        "test-retry-storm",
+        "retry-storm",
+        ["test", "--lib"],
+        None,
+        "32 deterministic failures plus one passing shard; isolates serial confirmation overhead",
+        expect_test_fail=True,
+        env={
+            "JUSTRUST_TEST_PARALLEL": "1",
+            "JUSTRUST_TEST_SPLIT": "1",
+            "RUST_TEST_THREADS": "16",
+        },
+        opt_in=True,
+    ),
+    Scenario(
         "rewrite-lib-tests",
         "rewrite",
         ["test", "--lib"],
         None,
         "pinned rewrite library suite, including failure confirmation after parallel splitting",
         expect_test_fail=True,
-        env={"JUSTRUST_TEST_PARALLEL": "1", "JUSTRUST_TEST_SPLIT": "1"},
+        env={
+            "JUSTRUST_TEST_PARALLEL": "1",
+            "JUSTRUST_TEST_SPLIT": "1",
+            "CARGO_PROFILE_DEV_DEBUG": "0",
+        },
         opt_in=True,
     ),
     Scenario(

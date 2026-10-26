@@ -14,6 +14,15 @@ import suite
 
 
 class HostedMeasurements(unittest.TestCase):
+    def test_retry_storm_is_pinned_and_opt_in(self):
+        scenario = suite.BY_NAME["test-retry-storm"]
+        self.assertTrue(scenario.opt_in)
+        self.assertTrue(scenario.expect_test_fail)
+        self.assertEqual(scenario.env["RUST_TEST_THREADS"], "16")
+        self.assertNotIn("retry-storm", suite.SNAPSHOTS)
+        _, tree = suite.OPTIONAL_SNAPSHOTS["retry-storm"]["repos"]["retry-storm"]
+        self.assertEqual(len(tree), 40)
+
     def test_rewrite_retry_workload_is_pinned_and_opt_in(self):
         scenario = suite.BY_NAME["rewrite-lib-tests"]
         self.assertTrue(scenario.opt_in)
