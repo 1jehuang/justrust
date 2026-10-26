@@ -22665,7 +22665,7 @@ impl SchemaAdapter {
             env: &ir::GenericEnv,
             b: &ir::PlanBudget,
             depth: usize,
-            memo: &mut HashMap<(ir::NominalAppId, usize), usize>,
+            memo: &mut NominalValidationMemo,
             state: &mut PlanState,
             descend: bool,
             facts: Option<&tr::ValidatedFacts>,
@@ -22684,9 +22684,9 @@ impl SchemaAdapter {
             if let Some((id, pointer)) = nominal {
                 // Only an already authenticated immutable definition allocation
                 // can skip replay. Equal IDs on a different payload still replay.
-                if let Some(height) = memo.get(&(id, pointer)) {
+                if let Some(height) = memo.get(&(id, pointer), b)? {
                     b.check_depth(depth + height)?;
-                    return Ok(*height);
+                    return Ok(height);
                 }
                 if let ir::NominalIndex::ParentLocal { owner, .. } = id.index {
                     // Minted by the owning parent from its own closure actuals;
@@ -22847,8 +22847,7 @@ impl SchemaAdapter {
                 _ => {}
             }
             if let Some((id, pointer)) = nominal {
-                b.retain_bytes(128)?;
-                memo.insert((id, pointer), height);
+                memo.insert((id, pointer), height, b)?;
             }
             Ok(height)
         }
@@ -22869,7 +22868,7 @@ impl SchemaAdapter {
             env,
             budget,
             layers,
-            &mut HashMap::new(),
+            &mut NominalValidationMemo::new(),
             &mut self.scratch(),
             descend,
             facts,
@@ -23586,6 +23585,137 @@ fn validate_argument(
     argument_height(ty, caller, budget, depth, &mut memo).map(|_| ())
 }
 
+/// Validation-local pointer-and-identity memo. No facts or replay authority escape.
+/// Unlike ArgumentMemo this replaces an uncapped HashMap, so bytes/work remain
+/// the bounds. Leases cover each backing table
+/// until it is dropped, including both allocations during rehash.
+struct NominalValidationMemo {
+    entries: Vec<Option<((ir::NominalAppId, usize), usize)>>,
+    len: usize,
+    _allocation: Option<ir::PlanReservation>,
+    _rounding: Option<ir::PlanReservation>,
+}
+impl NominalValidationMemo {
+    fn new() -> Self {
+        Self {
+            entries: Vec::new(),
+            len: 0,
+            _allocation: None,
+            _rounding: None,
+        }
+    }
+    fn storage_bytes(buckets: usize) -> Result<usize, String> {
+        buckets
+            .checked_mul(std::mem::size_of::<
+                Option<((ir::NominalAppId, usize), usize)>,
+            >())
+            .ok_or_else(|| "nominal validation memo allocation overflow".into())
+    }
+    fn bucket(id: &(ir::NominalAppId, usize), buckets: usize) -> usize {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        id.hash(&mut hasher);
+        (hasher.finish() as usize) & (buckets - 1)
+    }
+    fn slot(
+        entries: &[Option<((ir::NominalAppId, usize), usize)>],
+        id: &(ir::NominalAppId, usize),
+        budget: &ir::PlanBudget,
+    ) -> Result<Option<usize>, String> {
+        if entries.is_empty() {
+            return Ok(None);
+        }
+        let mut slot = Self::bucket(id, entries.len());
+        for _ in 0..entries.len() {
+            budget.charge_work(1)?;
+            match &entries[slot] {
+                None => return Ok(Some(slot)),
+                Some((key, _)) if key == id => return Ok(Some(slot)),
+                _ => slot = (slot + 1) & (entries.len() - 1),
+            }
+        }
+        Err("nominal validation memo bucket resource limit exceeded".into())
+    }
+    fn get(
+        &self,
+        id: &(ir::NominalAppId, usize),
+        budget: &ir::PlanBudget,
+    ) -> Result<Option<usize>, String> {
+        Ok(Self::slot(&self.entries, id, budget)?
+            .and_then(|slot| self.entries[slot].as_ref().map(|(_, height)| *height)))
+    }
+    fn insert(
+        &mut self,
+        id: (ir::NominalAppId, usize),
+        height: usize,
+        budget: &ir::PlanBudget,
+    ) -> Result<(), String> {
+        budget.charge_work(1)?;
+        if let Some(slot) = Self::slot(&self.entries, &id, budget)? {
+            if self.entries[slot].is_some() {
+                self.entries[slot] = Some((id, height));
+                return Ok(());
+            }
+        }
+        // Power-of-two logical bucket count, at most three quarters full.
+        if self.entries.is_empty() || self.len >= self.entries.len() / 4 * 3 {
+            let buckets = if self.entries.is_empty() {
+                4
+            } else {
+                self.entries
+                    .len()
+                    .checked_mul(2)
+                    .ok_or("nominal validation memo allocation overflow")?
+            };
+            let bytes = Self::storage_bytes(buckets)?;
+            // Admit before allocating, with the old table still paid.
+            let allocation = budget.reserve_bytes(bytes)?;
+            budget.charge_work(buckets)?;
+            let mut entries = Vec::new();
+            entries
+                .try_reserve_exact(buckets)
+                .map_err(|_| "infrastructure: nominal validation memo allocation failed")?;
+            let actual_bytes = Self::storage_bytes(entries.capacity())?;
+            let rounding = if actual_bytes > bytes {
+                Some(budget.reserve_bytes(actual_bytes - bytes)?)
+            } else {
+                None
+            };
+            let mut replacement = Self {
+                entries,
+                len: self.len + 1,
+                _allocation: Some(allocation),
+                _rounding: rounding,
+            };
+            let entries = &mut replacement.entries;
+            entries.resize_with(buckets, || None);
+            // Copy, rather than drain: denied work leaves the old memo intact.
+            // Charge scans, every relocation, and every destination probe.
+            for row in &self.entries {
+                budget.charge_work(1)?;
+                if let Some((key, value)) = row {
+                    budget.charge_work(1)?;
+                    let slot = Self::slot(entries, key, budget)?
+                        .ok_or("nominal validation memo missing replacement bucket")?;
+                    entries[slot] = Some((*key, *value));
+                }
+            }
+            let slot = Self::slot(entries, &id, budget)?
+                .ok_or("nominal validation memo missing insertion bucket")?;
+            entries[slot] = Some((id, height));
+            let old = std::mem::replace(self, replacement);
+            drop(old);
+            return Ok(());
+        } else {
+            let slot = Self::slot(&self.entries, &id, budget)?
+                .ok_or("nominal validation memo missing insertion bucket")?;
+            self.entries[slot] = Some((id, height));
+        }
+        self.len += 1;
+        Ok(())
+    }
+}
+
 /// One traversal's temporary height memo. Leases cover each backing table
 /// until it is dropped, including both allocations during rehash.
 struct ArgumentMemo {
@@ -24243,6 +24373,198 @@ mod registry_resource_tests {
             .unwrap(),
             Some(0)
         );
+    }
+
+    #[test]
+    fn nominal_validation_memo_growth_pays_overlap_and_preserves_old_entries_on_denial() {
+        let snapshot = ir::SnapshotId::standalone().unwrap();
+        let id = |index| {
+            (
+                ir::NominalAppId {
+                    snapshot,
+                    index: ir::NominalIndex::SourceSlot(index),
+                },
+                index,
+            )
+        };
+        let first = NominalValidationMemo::storage_bytes(4).unwrap();
+        let second = NominalValidationMemo::storage_bytes(8).unwrap();
+        let exact = ir::PlanBudget::new(ir::PlanLimits {
+            bytes: first + second,
+            ..Default::default()
+        });
+        let mut memo = NominalValidationMemo::new();
+        for index in 0..4 {
+            memo.insert(id(index), index, &exact).unwrap();
+        }
+        assert_eq!(memo.len, 4);
+        for index in 0..4 {
+            assert_eq!(memo.get(&id(index), &exact).unwrap(), Some(index));
+        }
+        assert_eq!(exact.usage_snapshot().bytes, second);
+        drop(memo);
+        assert_eq!(exact.usage_snapshot().bytes, 0);
+        let short = ir::PlanBudget::new(ir::PlanLimits {
+            bytes: first + second - 1,
+            ..Default::default()
+        });
+        let mut denied = NominalValidationMemo::new();
+        for index in 0..3 {
+            denied.insert(id(index), index, &short).unwrap();
+        }
+        assert!(denied.insert(id(3), 3, &short).is_err());
+        assert_eq!(denied.len, 3);
+        assert_eq!(denied.entries.len(), 4);
+        for index in 0..3 {
+            assert_eq!(denied.get(&id(index), &short).unwrap(), Some(index));
+        }
+        let failure = short.first_resource_failure().unwrap();
+        assert_eq!(failure.kind, ir::ResourceBudgetKind::Bytes);
+        assert_eq!(failure.requested, second);
+        assert_eq!(failure.used, first);
+        drop(denied);
+        assert_eq!(short.usage_snapshot().bytes, 0);
+        let poisoned = ir::PlanBudget::default();
+        let mut warm = NominalValidationMemo::new();
+        warm.insert(id(0), 0, &poisoned).unwrap();
+        poisoned.poison_ledger_for_tests();
+        assert!(warm.get(&id(0), &poisoned).is_err());
+        assert!(warm.insert(id(1), 1, &poisoned).is_err());
+        assert_eq!(warm.len, 1);
+        assert!(
+            NominalValidationMemo::new()
+                .insert(id(0), 0, &poisoned)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn nominal_validation_memo_collisions_meter_every_probe_and_transactional_relocation() {
+        let snapshot = ir::SnapshotId::standalone().unwrap();
+        let mut groups: [Vec<(ir::NominalAppId, usize)>; 4] = Default::default();
+        // Pigeonhole principle gives four colliding keys within thirteen IDs.
+        for index in 0..13 {
+            let id = (
+                ir::NominalAppId {
+                    snapshot,
+                    index: ir::NominalIndex::SourceSlot(index),
+                },
+                index,
+            );
+            groups[NominalValidationMemo::bucket(&id, 4)].push(id);
+        }
+        let keys = groups.iter().find(|group| group.len() >= 4).unwrap();
+        let budget = ir::PlanBudget::default();
+        let mut memo = NominalValidationMemo::new();
+        for (height, key) in keys[..3].iter().enumerate() {
+            memo.insert(*key, height, &budget).unwrap();
+        }
+        let before = budget.usage_snapshot().work;
+        assert_eq!(memo.get(&keys[2], &budget).unwrap(), Some(2));
+        assert_eq!(budget.usage_snapshot().work - before, 3);
+        let before = budget.usage_snapshot().work;
+        assert_eq!(memo.get(&keys[3], &budget).unwrap(), None);
+        assert_eq!(budget.usage_snapshot().work - before, 4);
+        let before = budget.usage_snapshot().work;
+        memo.insert(keys[3], 3, &budget).unwrap();
+        let growth_work = budget.usage_snapshot().work - before;
+        for (height, key) in keys[..4].iter().enumerate() {
+            assert_eq!(memo.get(key, &budget).unwrap(), Some(height));
+        }
+        // Same slot and source index in a different namespace is not equal.
+        let foreign = (
+            ir::NominalAppId {
+                snapshot: ir::SnapshotId::standalone().unwrap(),
+                index: keys[0].0.index,
+            },
+            keys[0].1,
+        );
+        let other_payload = (keys[0].0, keys[0].1 + 100);
+        assert_eq!(memo.get(&other_payload, &budget).unwrap(), None);
+        assert_eq!(memo.get(&foreign, &budget).unwrap(), None);
+        drop(memo);
+        assert_eq!(budget.usage_snapshot().bytes, 0);
+
+        let setup = ir::PlanBudget::default();
+        let mut seed = NominalValidationMemo::new();
+        for (height, key) in keys[..3].iter().enumerate() {
+            seed.insert(*key, height, &setup).unwrap();
+        }
+        let setup_work = setup.usage_snapshot().work;
+        drop(seed);
+        let exact = ir::PlanBudget::new(ir::PlanLimits {
+            work: setup_work + growth_work,
+            ..Default::default()
+        });
+        let mut exact_memo = NominalValidationMemo::new();
+        for (height, key) in keys[..4].iter().enumerate() {
+            exact_memo.insert(*key, height, &exact).unwrap();
+        }
+        assert_eq!(exact_memo.len, 4);
+        assert_eq!(exact.usage_snapshot().work, setup_work + growth_work);
+        drop(exact_memo);
+        assert_eq!(exact.usage_snapshot().bytes, 0);
+        // Deny at every work boundary, including destination collision probes
+        // and relocations after replacement allocation. Nothing may be lost.
+        for allowance in 0..growth_work {
+            let limited = ir::PlanBudget::new(ir::PlanLimits {
+                work: setup_work + allowance,
+                ..Default::default()
+            });
+            let mut denied = NominalValidationMemo::new();
+            for (height, key) in keys[..3].iter().enumerate() {
+                denied.insert(*key, height, &limited).unwrap();
+            }
+            let rows = denied.entries.clone();
+            let bytes = limited.usage_snapshot().bytes;
+            assert!(denied.insert(keys[3], 3, &limited).is_err());
+            assert_eq!(denied.len, 3);
+            assert_eq!(denied.entries, rows);
+            assert_eq!(limited.usage_snapshot().bytes, bytes);
+            assert_eq!(
+                limited.first_resource_failure().unwrap().kind,
+                ir::ResourceBudgetKind::Work
+            );
+            drop(denied);
+            assert_eq!(limited.usage_snapshot().bytes, 0);
+        }
+    }
+
+    #[test]
+    fn nominal_validation_repeated_replays_release_temporary_storage() {
+        let program = parse("struct Leaf { value: bool } struct Pair { left: Leaf, right: Leaf } fn value(x: Pair) -> Pair { x } fn main() {}").unwrap();
+        let plan = PlanCtx::from_program(&program, &ir::PlanBudget::default()).unwrap();
+        let ty = plan
+            .function_schema(plan.function_decl(0).unwrap())
+            .unwrap()
+            .signature
+            .result
+            .clone();
+        let budget = ir::PlanBudget::new(ir::PlanLimits {
+            bytes: 4096,
+            ..Default::default()
+        });
+        let env = ir::GenericEnv::new(&[], &budget).unwrap();
+        let adapter = SchemaAdapter {
+            program: plan.program.clone(),
+            catalog: plan.catalog.clone(),
+            registry: plan.registry.clone(),
+            nominal_schemas: plan.nominal_schemas.clone(),
+            nominals: plan.nominals.clone(),
+            contexts: plan.contexts.clone(),
+            source_schemas: plan.source_schemas.clone(),
+            budget: budget.clone(),
+        };
+        let baseline = budget.usage_snapshot().bytes;
+        // The old retained 128-byte charges exceed this same cap after only
+        // a few calls, despite each per-call HashMap already being destroyed.
+        for _ in 0..128 {
+            adapter
+                .validate_nominal_tree(&ty, &env, &budget, true, None)
+                .unwrap();
+            assert_eq!(budget.usage_snapshot().bytes, baseline);
+        }
+        assert!(budget.first_resource_failure().is_none());
     }
 
     #[test]
