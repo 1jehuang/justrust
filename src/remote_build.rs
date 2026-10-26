@@ -791,12 +791,26 @@ fn run_remote_inner(
     let mut r = BufReader::new(sock);
     let mut full = vec![sub.to_string()];
     full.extend(args.iter().cloned());
+    let compile_only = crate::remote_artifacts::test_no_run(&full);
+    let json_output = full
+        .iter()
+        .take_while(|a| a.as_str() != "--")
+        .any(|a| a.starts_with("--message-format=") && a.contains("json"))
+        || full
+            .windows(2)
+            .take_while(|w| w[0] != "--")
+            .any(|w| w[0] == "--message-format" && w[1].contains("json"));
+    let remote_args = if compile_only {
+        compile_only_args(&full)
+    } else {
+        full.clone()
+    };
     write_frame(
         &mut w,
         &Msg::RunSync {
             id: 0,
             cwd: cwd.display().to_string(),
-            args: full.clone(),
+            args: remote_args,
             env,
             roots: roots.iter().map(|r| r.display().to_string()).collect(),
             start,
@@ -808,6 +822,7 @@ fn run_remote_inner(
     let mut submitted = false;
     let mut first_out = false;
     let mut run_files: Vec<u8> = Vec::new();
+    let mut compile_stdout = Vec::new();
     let mut so = std::io::stdout();
     let mut se = std::io::stderr();
     loop {
@@ -872,8 +887,14 @@ fn run_remote_inner(
                     mark("first output");
                 }
                 if stream == 1 {
-                    so.write_all(&data)?;
-                    so.flush()?;
+                    // Selected tests are emitted only after their local files exist.
+                    // Remote JSON contains host paths and cannot be passed through.
+                    if !compile_only {
+                        so.write_all(&data)?;
+                        so.flush()?;
+                    } else {
+                        compile_stdout.extend_from_slice(&data);
+                    }
                 } else {
                     se.write_all(&data)?;
                     se.flush()?;
@@ -888,6 +909,57 @@ fn run_remote_inner(
                 diagnostic.may_have_started = true;
                 mark("exit");
                 hosted_run.finish("done", Some(code));
+                if compile_only {
+                    // Preserve all rendered compiler diagnostics, including failed
+                    // builds, without publishing unusable remote executable paths.
+                    for line in compile_stdout.split(|b| *b == b'\n') {
+                        if let Ok(value) = serde_json::from_slice::<serde_json::Value>(line)
+                            && value["reason"] == "compiler-message"
+                        {
+                            if json_output {
+                                serde_json::to_writer(&mut so, &value)?;
+                                so.write_all(b"\n")?;
+                            } else if let Some(rendered) = value["message"]["rendered"].as_str() {
+                                se.write_all(rendered.as_bytes())?;
+                            }
+                        }
+                    }
+                    if code == 0 {
+                        diagnostic.stage = "remote_artifacts";
+                        let (line, artifacts) = crate::remote_artifacts::fetch_tests(
+                            &full, started_at, run_id,
+                        )
+                        .context(
+                            "compiled tests remotely, but returning selected executables failed",
+                        )?;
+                        let dir = crate::paths::runs_dir()?.join(run_id);
+                        std::fs::create_dir_all(&dir)?;
+                        let manifest = dir.join("selected-artifacts.json");
+                        std::fs::write(&manifest, serde_json::to_vec_pretty(&artifacts)?)?;
+                        for artifact in artifacts {
+                            if json_output {
+                                serde_json::to_writer(&mut so, &artifact)?;
+                                so.write_all(b"\n")?;
+                            } else if let Some(path) = artifact["executable"].as_str() {
+                                writeln!(se, "justrust test executable: {path}")?;
+                            }
+                        }
+                        writeln!(
+                            se,
+                            "justrust remote: {line}; selected manifest {}",
+                            manifest.display()
+                        )?;
+                    }
+                    if json_output {
+                        serde_json::to_writer(
+                            &mut so,
+                            &serde_json::json!({"reason": "build-finished", "success": code == 0}),
+                        )?;
+                        so.write_all(b"\n")?;
+                    }
+                    so.flush()?;
+                    se.flush()?;
+                }
                 // A build is only done once its outputs are here. Counted in
                 // the client wall the router compares against local.
                 if code == 0 && matches!(sub, "build" | "zigbuild") {
@@ -935,6 +1007,27 @@ fn run_remote_inner(
             _ => {}
         }
     }
+}
+
+/// Where a remote build runs, for `justrust status`: "hosted" or "remote".
+fn compile_only_args(args: &[String]) -> Vec<String> {
+    let mut result = Vec::new();
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        if arg == "--" {
+            result.push("--message-format=json-render-diagnostics".into());
+            result.push(arg.clone());
+            result.extend(iter.cloned());
+            return result;
+        }
+        if arg == "--message-format" {
+            let _ = iter.next();
+        } else if !arg.starts_with("--message-format=") {
+            result.push(arg.clone());
+        }
+    }
+    result.push("--message-format=json-render-diagnostics".into());
+    result
 }
 
 /// Where a remote build runs, for `justrust status`: "hosted" or "remote".
@@ -1085,6 +1178,34 @@ pub fn run(sub: &str, args: Vec<String>) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn compile_only_json_preserves_test_selection_and_separator() {
+        let args = [
+            "test",
+            "-p",
+            "fixture",
+            "--no-run",
+            "--message-format",
+            "human",
+            "--",
+            "ignored",
+        ]
+        .map(str::to_owned);
+        assert_eq!(
+            super::compile_only_args(&args),
+            [
+                "test",
+                "-p",
+                "fixture",
+                "--no-run",
+                "--message-format=json-render-diagnostics",
+                "--",
+                "ignored"
+            ]
+            .map(str::to_owned)
+        );
+    }
+
     #[test]
     fn hosted_heartbeat_timeout_ticks_are_deterministic() {
         let mut ticks = [true, true, true, false].into_iter();

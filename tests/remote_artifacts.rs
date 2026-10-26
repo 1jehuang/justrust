@@ -2,6 +2,7 @@
 #![cfg(target_os = "linux")]
 
 use std::io::Write;
+use std::io::{BufRead, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -126,5 +127,132 @@ fn artifact_metadata_preserves_cargo_failure_diagnostics() {
     assert!(cargo_stderr.contains("error:"), "{cargo_stderr}");
     assert!(cargo_stderr.contains("expected `]`"), "{cargo_stderr}");
     assert!(stderr.contains(cargo_stderr.trim()), "{stderr}");
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn compile_only_transports_selected_cargo_tests_without_execution() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = scratch("selected-tests");
+    let binary = Path::new(env!("CARGO_BIN_EXE_justrust"));
+    std::fs::write(root.join("Cargo.toml"), "[package]\nname = \"selected-fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n[lib]\npath = \"lib.rs\"\n").unwrap();
+    std::fs::write(
+        root.join("lib.rs"),
+        "#[test] fn only_selected() { std::fs::write(\"test-ran\", b\"yes\").unwrap(); }\n",
+    )
+    .unwrap();
+    let output = Command::new(binary)
+        .args([
+            "test",
+            "--local",
+            "--no-run",
+            "--message-format=json",
+            "--lib",
+        ])
+        .current_dir(&root)
+        .env("JUSTRUST_HOME", root.join("home"))
+        .env("JUSTRUST_NO_TELEMETRY", "1")
+        .env("JUSTRUST_NO_UPDATE", "1")
+        .env("JUSTRUST_TOOLCHAIN", "system")
+        .env_remove("JUSTRUST_REMOTE_REQUIRED")
+        .env_remove("JUSTRUST_TOOLCHAIN_REQUIRED")
+        .env_remove("JUSTRUST_ON_REMOTE_AGENT")
+        .env_remove("JUSTRUST_RUN_ID_OVERRIDE")
+        .env_remove("JUSTRUST_RUN_DIR")
+        .env_remove("JUSTRUST_DISABLE")
+        .env_remove("JUSTRUST_REAL_CARGO")
+        .env_remove("RUSTC_WRAPPER")
+        .env_remove("RUSTC_WORKSPACE_WRAPPER")
+        .env_remove("RUSTC")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert!(!root.join("test-ran").exists());
+    let artifacts: Vec<serde_json::Value> = String::from_utf8(output.stdout)
+        .unwrap()
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter(|v| {
+            v["reason"] == "compiler-artifact"
+                && v["profile"]["test"] == true
+                && v["executable"].is_string()
+        })
+        .collect();
+    assert_eq!(artifacts.len(), 1);
+    let original = PathBuf::from(artifacts[0]["executable"].as_str().unwrap());
+    let stale = original
+        .parent()
+        .unwrap()
+        .join("stale-unselected-0123456789abcdef");
+    std::fs::copy(&original, &stale).unwrap();
+    let runs = std::fs::read_dir(root.join("home/runs"))
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.join("summary.json").is_file())
+        .collect::<Vec<_>>();
+    assert_eq!(runs.len(), 1);
+    let id = runs[0].file_name().unwrap().to_str().unwrap();
+    let mut child = serve_command(binary, &root).spawn().unwrap();
+    let request = serde_json::json!({"cwd": root, "args": ["test","--no-run","--lib"], "test_run": id, "start":0.0,"have":[]});
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(&serde_json::to_vec(&request).unwrap())
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let mut reader = std::io::BufReader::new(output.stdout.as_slice());
+    let mut downloaded = Vec::new();
+    let mut selected = Vec::new();
+    loop {
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        let frame: serde_json::Value = serde_json::from_str(&line).unwrap();
+        match frame["t"].as_str().unwrap() {
+            "Hello" => (),
+            "Selected" => selected = frame["artifacts"].as_array().unwrap().clone(),
+            "File" => {
+                let name = frame["name"].as_str().unwrap();
+                assert!(!name.contains("stale-unselected"));
+                let mut data = vec![0; frame["len"].as_u64().unwrap() as usize];
+                reader.read_exact(&mut data).unwrap();
+                let local = root.join("download").join(name);
+                std::fs::create_dir_all(local.parent().unwrap()).unwrap();
+                let mut decoder = Command::new("zstd")
+                    .args(["-q", "-d", "-f", "-o"])
+                    .arg(&local)
+                    .stdin(Stdio::piped())
+                    .spawn()
+                    .unwrap();
+                decoder.stdin.take().unwrap().write_all(&data).unwrap();
+                assert!(decoder.wait().unwrap().success());
+                std::fs::set_permissions(&local, std::fs::Permissions::from_mode(0o755)).unwrap();
+                downloaded.push(local);
+            }
+            "End" => break,
+            other => panic!("unexpected artifact frame {other}"),
+        }
+    }
+    assert_eq!(selected.len(), 1);
+    assert_eq!(downloaded.len(), 1);
+    assert_eq!(
+        std::fs::read(&original).unwrap(),
+        std::fs::read(&downloaded[0]).unwrap()
+    );
+    assert!(
+        !root.join("test-ran").exists(),
+        "compile or transfer executed the test"
+    );
+    let test = Command::new(&downloaded[0])
+        .current_dir(&root)
+        .args(["--exact", "only_selected"])
+        .output()
+        .unwrap();
+    assert!(test.status.success(), "{test:?}");
+    assert!(
+        root.join("test-ran").exists(),
+        "downloaded test did not run locally"
+    );
     std::fs::remove_dir_all(root).unwrap();
 }

@@ -515,9 +515,14 @@ pub fn maybe_remote(full: &[OsString]) {
         return say_local("remote machines build for Linux, this host is not Linux");
     }
     let build = routable_build(&args);
-    if build && !(cfg!(target_os = "linux") && crate::remote_artifacts::available()) {
+    let compile_only = crate::remote_artifacts::test_no_run(&args);
+    if (build || compile_only)
+        && !(cfg!(target_os = "linux") && crate::remote_artifacts::available())
+    {
         warm_if_up(full);
-        return say_local("remote `build` needs Linux and `zstd` here to bring the binary back");
+        return say_local(
+            "remote build or compile-only test needs Linux and zstd to return executables",
+        );
     }
     if !routable(sub) && !build {
         // `run` and debug `build` stay here, but their dependencies may

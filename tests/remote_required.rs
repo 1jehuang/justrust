@@ -8,6 +8,19 @@ fn strict_remote_rejects_local_and_unsupported_builds_before_cargo() {
     for args in [
         vec!["build", "--local", "--release"],
         vec!["build", "--remote"],
+        vec!["test", "--local", "--no-run"],
+        vec![
+            "test",
+            "--remote",
+            "--no-run",
+            "--target=wasm32-unknown-unknown",
+        ],
+        vec![
+            "test",
+            "--remote",
+            "--no-run",
+            "--target=aarch64-unknown-linux-musl",
+        ],
         vec![
             "build",
             "--remote",
