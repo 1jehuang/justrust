@@ -168,6 +168,31 @@ fn rejects(label: &str, source: &str) {
 }
 
 #[test]
+fn shared_call_results_reissued_across_backedges_match_stock() {
+    let source = "fn f(p:&i32)->i32{let mut r=p;loop{r=id(r);if true{break;}}*r} fn id<'a>(x:&'a i32)->&'a i32{x} fn main(){println!(\"{}\",f(&42));}";
+    let scratch = Scratch::new();
+    let input = scratch.source(source);
+    let output = scratch.path("stock");
+    let compiled = capture(
+        Command::new("rustc")
+            .arg("--edition=2024")
+            .arg(&input)
+            .arg("-o")
+            .arg(&output),
+        &scratch,
+        20,
+    );
+    assert!(compiled.status.success(), "stock: {compiled:?}");
+    let stock = capture(&mut Command::new(output), &scratch, 5);
+    assert!(stock.status.success(), "stock runtime: {stock:?}");
+    assert_eq!(stock.stdout, b"42\n");
+    assert!(stock.stderr.is_empty(), "stock runtime: {stock:?}");
+    // The original E0502/E0597 renewed-call loop controls remain in
+    // borrowing::rejects_loop_renewed_shared_call_result_conflicts.
+    runs(source, "42\n");
+}
+
+#[test]
 fn accepts_identity() {
     runs(
         r#"fn id<'a>(x:&'a i32)->&'a i32{x} fn run()->i32{let x=7;*id(&x)}

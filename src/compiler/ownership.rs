@@ -7128,20 +7128,15 @@ mod tests {
     }
 
     #[test]
-    fn shared_return_cycles_fail_closed_and_empty_diverging_contract_can_pass() {
+    fn shared_return_cycles_and_empty_diverging_contract_can_pass() {
         let f = borrowed_source(
             "fn f(p:&i32)->i32{let mut r=p;loop{r=id(r);if true{break;}}*r} fn id<'a>(x:&'a i32)->&'a i32{x}",
         );
         let result = analyze(&f);
-        assert!(result.complete);
-        assert!(
-            result
-                .diagnostics
-                .iter()
-                .any(|d| matches!(d.kind, ErrorKind::UnsupportedBorrowing(_))),
-            "{:?}",
-            result.diagnostics
-        );
+        // Shared call-result identities across backedges are intentionally
+        // supported since 3827eb44e. Their finite memberships only grow, while
+        // mutation and owner-death conflicts remain independently checked.
+        assert!(result.passed(), "{:?}", result.diagnostics);
         // Loop-result contextual typing is a separate frontend boundary. This
         // valid private CFG has no normal return and therefore no obligation
         // to fabricate an eligible returned pointer.
