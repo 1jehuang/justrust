@@ -1931,6 +1931,16 @@ PlanCtx/interner/source-context debt and wide adapter activation remain held.
 - [ ] Define stable cross-edit identities and versioned full semantic keys,
       dynamic/negative-input validation, fine-grained invalidation and exact
       build/check/test variant reuse verified against clean recomputation.
+      Source-file foundation: existing per-file facts now retain bounded immutable
+      observations of consumed bytes, canonical paths, file-kind checks and both
+      module lookup candidates (including absence), plus an exhaustive framed
+      identity of supplied `SourceOptions`. `justrust test --lib source_inputs`
+      covers mutation, negative lookup, symlink retargeting, configuration, limits
+      and real CHECK/BUILD/run at workers 1/8. Revalidation is not an atomic
+      snapshot or cache authorization. Project discovery, ambient environment,
+      config files, probe locks, embedded/tool identity and uncontrolled build
+      scripts/proc macros remain explicit shareability blockers. No persistent
+      or global private cache is enabled by this foundation.
 - [ ] Add bounded asynchronous persistence, atomic manifests, durable checkpoint
       contracts, recovery, eviction and corruption/crash/cancellation tests.
 - [ ] Specify authenticated provenance, artifact integrity and authorization for

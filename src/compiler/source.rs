@@ -10,6 +10,8 @@ pub mod source_attrs;
 pub mod source_cfg;
 #[path = "source_derive.rs"]
 mod source_derive;
+#[path = "source_inputs.rs"]
+pub mod source_inputs;
 #[path = "source_lex.rs"]
 pub mod source_lex;
 #[path = "source_map.rs"]
@@ -663,6 +665,8 @@ pub struct ChildModule {
 /// Spans use [`LOCAL_FILE`] for this file.
 #[derive(Debug)]
 pub struct FileUnit {
+    /// External observations captured during this node's source preparation.
+    pub inputs: source_inputs::SourceInputs,
     edition: Edition,
     embedded: Option<source_embedded::EmbeddedUnit>,
     no_std: bool,
@@ -867,6 +871,39 @@ fn file_unit(
     reader: Option<&mut dyn SourceReader>,
     budget: &super::expansion_budget::ExpansionBudget,
 ) -> UnitResult {
+    let Some(reader) = reader else {
+        return file_unit_inner(
+            module, path, directory, depth, ancestors, options, None, budget,
+        );
+    };
+    let mut tracked = source_inputs::TrackingReader::new(reader, options);
+    let result = file_unit_inner(
+        module,
+        path,
+        directory,
+        depth,
+        ancestors,
+        options,
+        Some(&mut tracked),
+        budget,
+    );
+    let inputs = tracked.finish();
+    result.map(|mut unit| {
+        unit.inputs = inputs;
+        unit
+    })
+}
+#[allow(clippy::too_many_arguments)]
+fn file_unit_inner(
+    module: Vec<String>,
+    path: &Path,
+    directory: &Path,
+    depth: usize,
+    ancestors: &[PathBuf],
+    options: &SourceOptions,
+    reader: Option<&mut dyn SourceReader>,
+    budget: &super::expansion_budget::ExpansionBudget,
+) -> UnitResult {
     let anchored = |kind, message: String| UnitFailure {
         error: Loader::error(kind, None, message),
         anchored: true,
@@ -956,6 +993,7 @@ fn snapshot_unit<'a>(
     builder.lexical_budget = budget.clone();
     let terminal = builder.snapshot(directory, depth).err();
     Ok(FileUnit {
+        inputs: source_inputs::SourceInputs::untracked(),
         edition: options.edition,
         embedded: None,
         no_std: builder.no_std,
@@ -1189,6 +1227,7 @@ impl SourceAssembler {
                     unreachable!("failures are handled before take")
                 };
                 FileUnit {
+                    inputs: unit.inputs.clone(),
                     edition: unit.edition,
                     embedded: unit.embedded.clone(),
                     no_std: unit.no_std,
@@ -1425,6 +1464,10 @@ fn append_to(
     Ok(())
 }
 trait SourceReader {
+    /// Only the native filesystem reader may produce revalidatable observations.
+    fn host_filesystem(&self) -> bool {
+        false
+    }
     fn canonicalize(&mut self, p: &Path) -> std::io::Result<PathBuf>;
     fn is_file(&mut self, p: &Path) -> std::io::Result<bool>;
     fn exists(&mut self, p: &Path) -> std::io::Result<bool>;
@@ -1432,6 +1475,9 @@ trait SourceReader {
 }
 struct FsReader;
 impl SourceReader for FsReader {
+    fn host_filesystem(&self) -> bool {
+        true
+    }
     fn canonicalize(&mut self, p: &Path) -> std::io::Result<PathBuf> {
         p.canonicalize()
     }
