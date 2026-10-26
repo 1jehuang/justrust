@@ -1551,6 +1551,98 @@ fn same_closedness_input(left: &Ty, right: &Ty) -> bool {
         _ => false,
     }
 }
+/// Each child allocation is destroyed before its own child-only lease.
+struct RawMetadataArena {
+    env: GenericEnv,
+    child: Box<NominalReplays>,
+    _storage: ir::PlanReservation,
+}
+
+/// Buffer ownership and admission travel together. Rust drops fields in
+/// declaration order: all children and the actual Vec allocation die before
+/// the buffer/header lease. No lease Vec can outlive its own admission.
+#[derive(Default)]
+struct RawMetadataArenas {
+    values: Vec<RawMetadataArena>,
+    storage: Option<ir::PlanReservation>,
+}
+impl RawMetadataArenas {
+    fn buffer_bytes(capacity: usize) -> Option<usize> {
+        capacity
+            .checked_mul(std::mem::size_of::<RawMetadataArena>())?
+            .checked_add(2 * std::mem::size_of::<usize>())
+    }
+
+    fn push_with(
+        &mut self,
+        budget: &PlanBudget,
+        env: &GenericEnv,
+        after_row_growth: impl FnOnce() -> Result<()>,
+    ) -> Result<usize> {
+        let child_storage = charged(
+            budget,
+            budget.reserve_bytes(
+                std::mem::size_of::<NominalReplays>() + 2 * std::mem::size_of::<usize>(),
+            ),
+        )?;
+        if self.values.len() == self.values.capacity() {
+            let capacity = self
+                .values
+                .capacity()
+                .max(1)
+                .checked_mul(2)
+                .ok_or_else(|| FactsError::resource(budget, "raw arena capacity overflow"))?;
+            // Admit the entire replacement, not the capacity delta, while the
+            // old allocation and lease remain live. Pay allocator slack up to
+            // twice the requested capacity and validate the returned capacity.
+            let paid_slots = capacity
+                .checked_mul(2)
+                .ok_or_else(|| FactsError::resource(budget, "raw arena capacity overflow"))?;
+            let prepaid = Self::buffer_bytes(paid_slots)
+                .ok_or_else(|| FactsError::resource(budget, "raw arena storage overflow"))?;
+            let storage = charged(budget, budget.reserve_bytes(prepaid))?;
+            let mut next = Self {
+                values: Vec::new(),
+                storage: Some(storage),
+            };
+            charged(budget, budget.charge_work(self.values.len()))?;
+            next.values
+                .try_reserve_exact(capacity)
+                .map_err(|_| FactsError::resource(budget, "raw arena buffer allocation failed"))?;
+            // A test-only injection through a no-op production closure. Every
+            // error drops next's actual buffer before its lease. Old rows stay.
+            after_row_growth()?;
+            charged(budget, budget.charge_work(0))?;
+            if next.values.capacity() > paid_slots {
+                return Err(FactsError::resource(
+                    budget,
+                    "raw arena allocator exceeded paid capacity",
+                ));
+            }
+            let actual = Self::buffer_bytes(next.values.capacity())
+                .ok_or_else(|| FactsError::resource(budget, "raw arena storage overflow"))?;
+            charged(
+                budget,
+                next.storage.as_mut().unwrap().shrink(prepaid - actual),
+            )?;
+            // Exact returned-capacity admission now owns next. Both leases
+            // remain live until old rows have moved and its buffer is freed.
+            next.values.append(&mut self.values);
+            std::mem::swap(self, &mut next);
+            drop(next);
+        }
+        let index = self.values.len();
+        // GenericEnv is an Arc<[Arc<ParamEnv>]> plus scalar arity. Its derived
+        // clone only pins shared handles, never clones deep scope arrays.
+        self.values.push(RawMetadataArena {
+            env: env.clone(),
+            child: Box::default(),
+            _storage: child_storage,
+        });
+        Ok(index)
+    }
+}
+
 /// Realized nominal facts whose world replay already succeeded inside this
 /// node's computation, keyed by the retained immutable fact allocation. Owned
 /// by the caller's scratch and dropped with it; never in a fact or shared.
@@ -1567,6 +1659,11 @@ pub(in crate::compiler) struct NominalReplays {
     raw_metadata: Option<(WorldId, GenericEnv, Box<NominalReplays>)>,
     // The child never leaves its parent replay computation.
     _raw_metadata_storage: Option<ir::PlanReservation>,
+    /// Additional raw environments of this same world. A caller's formation
+    /// replay can alternate its own environment with several source binders.
+    /// Keep their completed proofs isolated instead of rebuilding every root
+    /// after the first environment. Each row owns its scoped admission.
+    raw_metadata_others: RawMetadataArenas,
     /// Complete raw formation proofs, distinct from metadata-only answers.
     raw_formations: body_validation::RawFormations,
     /// Full caller-authorized predicate formations never enter the raw memo.
@@ -1735,10 +1832,50 @@ impl NominalReplays {
         world: &ValidatedTraitWorld,
         env: &GenericEnv,
     ) -> Result<Option<&mut Self>> {
+        self.raw_metadata_child_with(world, env, || Ok(()))
+    }
+
+    fn raw_metadata_child_with(
+        &mut self,
+        world: &ValidatedTraitWorld,
+        env: &GenericEnv,
+        after_row_growth: impl FnOnce() -> Result<()>,
+    ) -> Result<Option<&mut Self>> {
         charged(&world.budget, world.budget.charge_work(1))?;
+        // Reusing a completed proof never renews a poisoned issuer ledger.
+        checked_module(
+            &world.budget,
+            world
+                .catalog
+                .modules()
+                .budget()
+                .check()
+                .map_err(ModuleError::from),
+        )?;
         if let Some((bound_world, bound_env, _)) = self.raw_metadata.as_ref() {
-            if *bound_world != world.id || !world.same_env(bound_env, env)? {
+            if *bound_world != world.id {
                 return Ok(None);
+            }
+            if !world.same_env(bound_env, env)? {
+                let mut found = None;
+                for (index, row) in self.raw_metadata_others.values.iter().enumerate() {
+                    charged(&world.budget, world.budget.charge_work(1))?;
+                    if world.same_env(&row.env, env)? {
+                        found = Some(index);
+                        break;
+                    }
+                }
+                let index = if let Some(index) = found {
+                    index
+                } else {
+                    if self.raw_metadata_others.values.len() >= MAX_SCRATCH_OBLIGATIONS - 1 {
+                        // Saturation is a cache miss, never a validation success.
+                        return Ok(None);
+                    }
+                    self.raw_metadata_others
+                        .push_with(&world.budget, env, after_row_growth)?
+                };
+                return Ok(Some(self.raw_metadata_others.values[index].child.as_mut()));
             }
         } else {
             let storage = charged(
@@ -12716,12 +12853,11 @@ mod tests {
                 ty, env, 0, &mut parent,
             ), Err(error) if error.kind() == FactsErrorKind::InvalidMetadata));
         }
-        assert!(
-            parent
-                .raw_metadata_child(&world, other.env())
-                .unwrap()
-                .is_none()
-        );
+        let other_raw = parent
+            .raw_metadata_child(&world, other.env())
+            .unwrap()
+            .unwrap();
+        assert_ne!(std::ptr::from_ref(other_raw) as usize, raw_address);
         assert!(
             parent
                 .raw_metadata_child(&foreign_world, facts.env())
@@ -12749,6 +12885,331 @@ mod tests {
             &parameterized, facts.env(), 0, &mut parent, Some(&facts),
         ), Err(error) if error.kind() == FactsErrorKind::Resource));
         assert_eq!(facts.budget().first_resource_failure(), failure);
+    }
+
+    #[test]
+    fn raw_metadata_environment_arenas_retain_only_completed_exact_proofs() {
+        let c = case();
+        let world = c.build().unwrap();
+        let facts = world.callable_facts(c.caller).unwrap();
+        let other = world.callable_facts(c.body).unwrap();
+        assert!(!world.same_env(facts.env(), other.env()).unwrap());
+        let mut parent = NominalReplays::default();
+        assert!(parent.bind_metadata_caller(world.id, Some(&facts)));
+        let context = parent.metadata_context;
+        let mut addresses = Vec::new();
+        for env in [facts.env(), other.env(), world.empty.env()] {
+            world
+                .validate_ty_metadata_with(&c.leaf, env, 0, &mut parent)
+                .unwrap();
+            let raw = parent.raw_metadata_child(&world, env).unwrap().unwrap();
+            addresses.push(std::ptr::from_ref(raw) as usize);
+            assert!(!raw.types.is_empty());
+        }
+        assert_ne!(addresses[0], addresses[1]);
+        assert_ne!(addresses[0], addresses[2]);
+        assert_ne!(addresses[1], addresses[2]);
+        assert_eq!(parent.raw_metadata_others.values.len(), 2);
+        assert!(parent.types.is_empty());
+        assert!(parent.facts.is_empty());
+        let Ty::Struct(original) = &c.leaf else {
+            panic!("nominal fixture")
+        };
+        let mut foreign_module = original.def().clone();
+        foreign_module.module = fixture_modules().core_root();
+        foreign_module.visibility = ir::Visibility::Public;
+        let foreign_module = Ty::Struct(StructTy::new(foreign_module));
+        let mut sibling_field = original.def().clone();
+        sibling_field.fields = Arc::<[FieldDef]>::from([FieldDef {
+            name: "bad_scope".into(),
+            ty: Ty::Unit,
+            visibility: ir::Visibility::Restricted(
+                c.modules
+                    .catalog_module(super::super::module_identity::CatalogModule::Ops),
+            ),
+            lifetime_bound: false,
+        }])
+        .into();
+        let sibling_field = Ty::Struct(StructTy::new(sibling_field));
+        for _ in 0..3 {
+            for (index, env) in [facts.env(), other.env(), world.empty.env()]
+                .into_iter()
+                .enumerate()
+            {
+                let raw = parent.raw_metadata_child(&world, env).unwrap().unwrap();
+                let rows = (raw.types.len(), raw.facts.len(), raw.inputs.len());
+                assert_eq!(std::ptr::from_ref(raw) as usize, addresses[index]);
+                world
+                    .validate_ty_metadata_with(&c.leaf, env, 0, &mut parent)
+                    .unwrap();
+                for forged in [&foreign_module, &sibling_field] {
+                    assert!(matches!(world.validate_ty_metadata_with(
+                        forged, env, 0, &mut parent,
+                    ), Err(error) if error.kind() == FactsErrorKind::InvalidMetadata));
+                }
+                let raw = parent.raw_metadata_child(&world, env).unwrap().unwrap();
+                assert_eq!((raw.types.len(), raw.facts.len(), raw.inputs.len()), rows);
+                assert_eq!(parent.metadata_context, context);
+                assert!(parent.types.is_empty());
+            }
+        }
+        // A failed binder check cannot become a success in the second arena.
+        for _ in 0..2 {
+            assert!(matches!(world.validate_ty_metadata_with(
+                &c.caller_parameter, other.env(), 0, &mut parent,
+            ), Err(error) if error.kind() == FactsErrorKind::InvalidMetadata));
+        }
+        let foreign_world = c.build().unwrap();
+        assert!(
+            parent
+                .raw_metadata_child(&foreign_world, facts.env())
+                .unwrap()
+                .is_none()
+        );
+        let before_drop = facts.budget().usage_snapshot().bytes;
+        let reserved = 3
+            * (std::mem::size_of::<NominalReplays>() + 2 * std::mem::size_of::<usize>())
+            + RawMetadataArenas::buffer_bytes(parent.raw_metadata_others.values.capacity())
+                .unwrap();
+        drop(parent);
+        assert_eq!(
+            before_drop - facts.budget().usage_snapshot().bytes,
+            reserved
+        );
+
+        // Warm all three environment slots, then poison the exact module issuer.
+        let mut poisoned = NominalReplays::default();
+        assert!(poisoned.bind_metadata_caller(world.id, Some(&facts)));
+        for env in [facts.env(), other.env(), world.empty.env()] {
+            world
+                .validate_ty_metadata_with(&c.leaf, env, 0, &mut poisoned)
+                .unwrap();
+        }
+        let module_budget = world.catalog.modules().budget();
+        assert!(
+            module_budget
+                .charge(super::super::expansion_budget::Counter::Work, u64::MAX)
+                .is_err()
+        );
+        let failure = module_budget.snapshot().failure;
+        for env in [facts.env(), other.env(), world.empty.env()] {
+            assert!(matches!(world.validate_ty_metadata_with(
+                &c.leaf, env, 0, &mut poisoned,
+            ), Err(error) if error.kind() == FactsErrorKind::Resource));
+            assert_eq!(module_budget.snapshot().failure, failure);
+        }
+    }
+
+    #[test]
+    fn raw_metadata_additional_environment_exact_short_and_poisoned_admission() {
+        let c = case();
+        let world = c.build().unwrap();
+        let facts = world.callable_facts(c.caller).unwrap();
+        let other = world.callable_facts(c.body).unwrap();
+        let mut measured = NominalReplays::default();
+        measured
+            .raw_metadata_child(&world, facts.env())
+            .unwrap()
+            .unwrap();
+        let before = facts.budget().usage_snapshot();
+        let mut peak = before.bytes;
+        measured
+            .raw_metadata_child_with(&world, other.env(), || {
+                peak = facts.budget().usage_snapshot().bytes;
+                Ok(())
+            })
+            .unwrap()
+            .unwrap();
+        let after = facts.budget().usage_snapshot();
+        let work = after.work - before.work;
+        let bytes = peak - before.bytes;
+        assert!(work > 0 && bytes > 0);
+        for guard in 0..4 {
+            let c = case();
+            let world = c.build().unwrap();
+            let facts = world.callable_facts(c.caller).unwrap();
+            let other = world.callable_facts(c.body).unwrap();
+            let budget = facts.budget();
+            let mut parent = NominalReplays::default();
+            let primary = parent
+                .raw_metadata_child(&world, facts.env())
+                .unwrap()
+                .unwrap();
+            let primary_address = std::ptr::from_ref(primary) as usize;
+            let used = budget.usage_snapshot();
+            budget
+                .charge_work(budget.limits().work - used.work - work + usize::from(guard == 1))
+                .unwrap();
+            budget
+                .retain_bytes(budget.limits().bytes - used.bytes - bytes + usize::from(guard == 2))
+                .unwrap();
+            if guard == 3 {
+                budget.poison_ledger_for_tests();
+            }
+            let mut observed_peak = 0;
+            let result = parent.raw_metadata_child_with(&world, other.env(), || {
+                observed_peak = budget.usage_snapshot().bytes;
+                Ok(())
+            });
+            if guard == 0 {
+                assert!(result.unwrap().is_some());
+                assert_eq!(budget.usage_snapshot().work, budget.limits().work);
+                assert_eq!(observed_peak, budget.limits().bytes);
+                assert_eq!(parent.raw_metadata_others.values.len(), 1);
+            } else {
+                assert!(matches!(result, Err(error) if error.kind() == FactsErrorKind::Resource));
+                assert!(parent.raw_metadata_others.values.is_empty());
+                assert_eq!(
+                    std::ptr::from_ref(parent.raw_metadata.as_ref().unwrap().2.as_ref()) as usize,
+                    primary_address
+                );
+                if guard != 3 {
+                    let failure = budget.first_resource_failure().unwrap();
+                    assert_eq!(
+                        failure.kind,
+                        if guard == 1 {
+                            ir::ResourceBudgetKind::Work
+                        } else {
+                            ir::ResourceBudgetKind::Bytes
+                        }
+                    );
+                    budget.poison_ledger_for_tests();
+                    assert!(
+                        matches!(parent.raw_metadata_child(&world, other.env()), Err(error) if error.kind() == FactsErrorKind::Resource)
+                    );
+                    assert_eq!(budget.first_resource_failure(), Some(failure));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn raw_metadata_nonfirst_growth_exact_short_failure_and_drop() {
+        fn fixture() -> (PlanBudget, Vec<GenericEnv>, RawMetadataArenas) {
+            let budget = PlanBudget::default();
+            let registry = SnapshotId::standalone().unwrap();
+            let declaration = test_support::source_decl(registry, 0, &budget).unwrap();
+            let envs: Vec<_> = (0..16)
+                .map(|arity| {
+                    let parameter_scope = scope(declaration, arity, &budget);
+                    GenericEnv::new(&[parameter_scope], &budget).unwrap()
+                })
+                .collect();
+            let mut rows = RawMetadataArenas::default();
+            rows.push_with(&budget, &envs[0], || Ok(())).unwrap();
+            rows.push_with(&budget, &envs[1], || Ok(())).unwrap();
+            while rows.values.len() < rows.values.capacity() {
+                let index = rows.values.len();
+                rows.push_with(&budget, &envs[index], || Ok(())).unwrap();
+            }
+            assert!(rows.values.len() >= 2 && rows.values.len() < envs.len());
+            (budget, envs, rows)
+        }
+        let (budget, envs, mut rows) = fixture();
+        let index = rows.values.len();
+        let before = budget.usage_snapshot();
+        let mut peak = 0;
+        rows.push_with(&budget, &envs[index], || {
+            peak = budget.usage_snapshot().bytes;
+            Ok(())
+        })
+        .unwrap();
+        let work = budget.usage_snapshot().work - before.work;
+        let bytes = peak - before.bytes;
+        assert!(work >= 2 && bytes > 0);
+        for guard in 0..6 {
+            let (budget, envs, mut rows) = fixture();
+            let count = rows.values.len();
+            let old_capacity = rows.values.capacity();
+            let old_buffer = rows.values.as_ptr();
+            let old_children: Vec<_> = rows
+                .values
+                .iter()
+                .map(|row| std::ptr::from_ref(row.child.as_ref()))
+                .collect();
+            let used = budget.usage_snapshot();
+            if guard <= 2 {
+                budget
+                    .charge_work(budget.limits().work - used.work - work + usize::from(guard == 1))
+                    .unwrap();
+                budget
+                    .retain_bytes(
+                        budget.limits().bytes - used.bytes - bytes + usize::from(guard == 2),
+                    )
+                    .unwrap();
+            }
+            if guard == 3 {
+                budget.poison_ledger_for_tests();
+            }
+            let before = budget.usage_snapshot();
+            let mut observed_peak = 0;
+            let mut grew = false;
+            let result = rows.push_with(&budget, &envs[count], || {
+                grew = true;
+                observed_peak = budget.usage_snapshot().bytes;
+                if guard == 5 {
+                    budget.poison_ledger_for_tests();
+                }
+                if guard >= 4 {
+                    return Err(FactsError {
+                        kind: FactsErrorKind::Resource,
+                        diagnostic: Diagnostic::Static("injected after nonfirst raw arena growth"),
+                    });
+                }
+                Ok(())
+            });
+            if guard == 0 {
+                assert_eq!(result.unwrap(), count);
+                assert!(grew);
+                assert_eq!(observed_peak, budget.limits().bytes);
+                assert_eq!(budget.usage_snapshot().work, budget.limits().work);
+                assert!(rows.values.capacity() >= count + 1);
+                assert_ne!(rows.values.as_ptr(), old_buffer);
+                for (row, child) in rows.values.iter().zip(&old_children) {
+                    assert_eq!(std::ptr::from_ref(row.child.as_ref()), *child);
+                }
+                let expected = (count + 1)
+                    * (std::mem::size_of::<NominalReplays>() + 2 * std::mem::size_of::<usize>())
+                    + RawMetadataArenas::buffer_bytes(rows.values.capacity()).unwrap();
+                let live = budget.usage_snapshot().bytes;
+                drop(rows);
+                assert_eq!(live - budget.usage_snapshot().bytes, expected);
+            } else {
+                assert!(matches!(result, Err(error) if error.kind() == FactsErrorKind::Resource));
+                assert_eq!(rows.values.len(), count);
+                assert_eq!(rows.values.capacity(), old_capacity);
+                assert_eq!(rows.values.as_ptr(), old_buffer);
+                for (row, child) in rows.values.iter().zip(&old_children) {
+                    assert_eq!(std::ptr::from_ref(row.child.as_ref()), *child);
+                }
+                if guard == 4 {
+                    assert!(grew);
+                    assert_eq!(budget.usage_snapshot().bytes, before.bytes);
+                    assert!(budget.first_resource_failure().is_none());
+                }
+                if guard == 1 || guard == 2 {
+                    let first = budget.first_resource_failure().unwrap();
+                    assert_eq!(
+                        first.kind,
+                        if guard == 1 {
+                            ir::ResourceBudgetKind::Work
+                        } else {
+                            ir::ResourceBudgetKind::Bytes
+                        }
+                    );
+                    budget.poison_ledger_for_tests();
+                    assert!(rows.push_with(&budget, &envs[count], || Ok(())).is_err());
+                    assert_eq!(budget.first_resource_failure(), Some(first));
+                }
+                if guard == 3 || guard == 5 {
+                    assert!(budget.usage_snapshot().poisoned);
+                    assert_eq!(grew, guard == 5);
+                    let charged = budget.usage_snapshot().bytes;
+                    drop(rows);
+                    assert_eq!(budget.usage_snapshot().bytes, charged);
+                }
+            }
+        }
     }
 
     #[test]
