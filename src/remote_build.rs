@@ -890,7 +890,7 @@ fn run_remote_inner(
                 hosted_run.finish("done", Some(code));
                 // A build is only done once its outputs are here. Counted in
                 // the client wall the router compares against local.
-                if code == 0 && sub == "build" {
+                if code == 0 && matches!(sub, "build" | "zigbuild") {
                     diagnostic.stage = "remote_artifacts";
                     match crate::remote_artifacts::fetch(&full, started_at) {
                         Ok(line) => eprintln!("justrust remote: {line}"),

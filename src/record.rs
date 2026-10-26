@@ -25,7 +25,7 @@ use std::time::Duration;
 /// --version, ...) is passed straight through with no overhead.
 const RECORDED: &[&str] = &[
     "build", "b", "check", "c", "test", "t", "bench", "run", "r", "clippy", "doc", "d", "rustc",
-    "rustdoc", "nextest", "fix", "miri", "llvm-cov", "insta",
+    "rustdoc", "nextest", "fix", "miri", "llvm-cov", "insta", "zigbuild",
 ];
 
 const SAMPLE_INTERVAL: Duration = Duration::from_millis(200);
@@ -432,6 +432,28 @@ fn compatible_toolchain(
     }
     let targets = requested_targets(args, std::env::var_os("CARGO_BUILD_TARGET"));
     // Custom JSON targets may use build-std. Leave their policy to Cargo.
+    // Zig release builds use the selected compiler's own official target
+    // libraries, never the host's default rustup toolchain or borrowed std.
+    if subcommand(args).as_deref() == Some("zigbuild")
+        && !matches!(
+            std::env::var("JUSTRUST_TOOLCHAIN_AUTO_INSTALL").as_deref(),
+            Ok("0" | "off" | "false")
+        )
+    {
+        for target in &targets {
+            if let Some(target_name) = target.to_str()
+                && crate::remote_artifacts::musl_target(target_name)
+                && !target_has_core(&tc.bin("rustc"), target)
+                && let Err(error) =
+                    crate::toolchain::add_target(&tc, target_name, &mut std::io::stderr())
+            {
+                return Err(ToolchainRequired(format!(
+                    "could not install exact target libraries: {error:#}"
+                ))
+                .into());
+            }
+        }
+    }
     let missing: Vec<_> = targets
         .iter()
         .filter(|t| !t.to_string_lossy().ends_with(".json"))
@@ -640,6 +662,11 @@ fn record(
                 cmd.env("JUSTRUST_RUSTC_TEST_FILTER", f);
             }
         }
+    }
+    if meta.subcommand == "zigbuild" && cfg!(target_os = "linux") {
+        let tools = crate::release_tools::ensure()
+            .map_err(|error| ToolchainRequired(format!("release tools unavailable: {error:#}")))?;
+        crate::release_tools::apply(&mut cmd, tools)?;
     }
     if let Some(p) = &pool {
         cmd.env(crate::test_pool::POOL_ENV, p.sock());

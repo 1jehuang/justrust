@@ -99,13 +99,20 @@ fn routable(sub: &str) -> bool {
     matches!(sub, "check" | "clippy" | "test")
 }
 
-/// Hosted sysroots currently ship only the native GNU target. Keep unsupported
-/// cross targets local before submission, rather than failing E0463 remotely.
+/// Ordinary builds use the native GNU sysroot. Zigbuild additionally installs
+/// exact-version musl libraries for the two supported Linux release targets.
 fn unsupported_hosted_target(args: &[OsString], env_target: Option<OsString>) -> bool {
     let native = format!("{}-unknown-linux-gnu", std::env::consts::ARCH);
+    let zig = args.first().is_some_and(|a| a == "zigbuild");
     crate::record::requested_targets(args, env_target)
         .iter()
-        .any(|target| target != native.as_str())
+        .any(|target| {
+            target != native.as_str()
+                && !(zig
+                    && target
+                        .to_str()
+                        .is_some_and(crate::remote_artifacts::musl_target))
+        })
 }
 
 /// A `build` whose outputs come back cheaply enough to be worth building
@@ -113,14 +120,21 @@ fn unsupported_hosted_target(args: &[OsString], env_target: Option<OsString>) ->
 /// binary is small and a delta of it comes back in under a second. Debug
 /// binaries (100 MB, mostly debug info) and cross builds stay local.
 fn routable_build(args: &[String]) -> bool {
-    if args.first().map(String::as_str) != Some("build") {
+    let zig = args.first().map(String::as_str) == Some("zigbuild");
+    if !zig && args.first().map(String::as_str) != Some("build") {
         return false;
     }
     let cargo: Vec<&String> = args.iter().take_while(|a| *a != "--").collect();
     if cargo.iter().any(|a| a.contains("target-dir")) {
         return false;
     }
-    if let Some(target) = crate::remote_artifacts::build_target(args) {
+    if zig {
+        if !crate::remote_artifacts::build_target(args)
+            .is_some_and(crate::remote_artifacts::musl_target)
+        {
+            return false;
+        }
+    } else if let Some(target) = crate::remote_artifacts::build_target(args) {
         let native = format!("{}-unknown-linux-gnu", std::env::consts::ARCH);
         if target != native {
             return false;
@@ -243,7 +257,7 @@ const NO_HISTORY: &str = "no history for this command";
 
 fn local_only(sub: &str) -> String {
     match sub {
-        "build" => {
+        "build" | "zigbuild" => {
             "debug and cross `build` run locally (only optimized builds come back cheaply)".into()
         }
         _ => format!("`{sub}` always runs locally"),
@@ -701,6 +715,49 @@ mod tests {
             "build".into(),
             "--release".into(),
             "--target".into()
+        ]));
+    }
+
+    #[test]
+    fn zigbuild_routes_only_explicit_optimized_linux_musl_targets() {
+        for target in ["x86_64-unknown-linux-musl", "aarch64-unknown-linux-musl"] {
+            let args = vec![
+                "zigbuild".into(),
+                "--release".into(),
+                format!("--target={target}"),
+            ];
+            assert!(routable_build(&args));
+            let os: Vec<_> = args.iter().map(OsString::from).collect();
+            assert!(!unsupported_hosted_target(&os, None));
+            let mut multiple = args.clone();
+            multiple.push(format!("--target={target}"));
+            assert!(!routable_build(&multiple));
+            let mut redirected = args;
+            redirected.push("--target-dir=/tmp/other".into());
+            assert!(!routable_build(&redirected));
+            assert!(!routable_build(&[
+                "zigbuild".into(),
+                format!("--target={target}")
+            ]));
+        }
+        for target in [
+            "x86_64-unknown-linux-gnu",
+            "aarch64-apple-darwin",
+            "custom.json",
+            "",
+        ] {
+            assert!(!routable_build(&[
+                "zigbuild".into(),
+                "--release".into(),
+                format!("--target={target}")
+            ]));
+        }
+        assert!(!routable_build(&["zigbuild".into(), "--release".into()]));
+        assert!(!routable_build(&[
+            "zigbuild".into(),
+            "--release".into(),
+            "--".into(),
+            "--target=x86_64-unknown-linux-musl".into()
         ]));
     }
 

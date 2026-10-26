@@ -555,6 +555,11 @@ impl Manifest {
 
     /// The tarball for `name` on this target, following `renames`.
     pub fn package(&self, name: &str) -> Result<Package> {
+        self.package_for(name, TARGET)
+    }
+
+    /// Select a component for an explicit target from this exact manifest.
+    fn package_for(&self, name: &str, target: &str) -> Result<Package> {
         let renamed = self
             .table
             .get("renames")
@@ -569,9 +574,9 @@ impl Manifest {
             .with_context(|| format!("component {name} is not in the {} manifest", self.date))?;
         let targets = pkg.get("target").context("no targets")?;
         let t = targets
-            .get(TARGET)
+            .get(target)
             .or_else(|| targets.get("*"))
-            .with_context(|| format!("component {name} has no {TARGET} build"))?;
+            .with_context(|| format!("component {name} has no {target} build"))?;
         if !t
             .get("available")
             .and_then(|a| a.as_bool())
@@ -915,6 +920,63 @@ pub fn add_component(tc: &Toolchain, name: &str, log: &mut dyn std::io::Write) -
         fetch_component(&pkg, &scratch.join("c"), &tc.dir)?;
         info.components.push(pkg.name);
         std::fs::write(tc.dir.join(MARKER), serde_json::to_vec_pretty(&info)?)?;
+        Ok(())
+    })();
+    let _ = std::fs::remove_dir_all(&scratch);
+    result
+}
+
+/// Add official musl std to the selected compiler, under the installer lock.
+/// Publish only the target directory after the download checksum and layout
+/// have been verified. In particular, never copy libraries from system rustup.
+pub(crate) fn add_target(tc: &Toolchain, target: &str, log: &mut dyn std::io::Write) -> Result<()> {
+    if !crate::remote_artifacts::musl_target(target) {
+        bail!("automatic target installation does not support {target}");
+    }
+    let spec = Spec::parse(&tc.id)?;
+    if spec.is_jr() {
+        bail!("{target} must be supplied by the exact jr compiler bundle, not upstream std");
+    }
+    let root = root()?;
+    let _lock = lock_exclusive(&root.join(".install.lock"))?;
+    let relative = Path::new("lib/rustlib").join(target);
+    let destination = tc.dir.join(&relative);
+    let has_core = |dir: &Path| {
+        std::fs::read_dir(dir.join("lib")).is_ok_and(|entries| {
+            entries.flatten().any(|e| {
+                let name = e.file_name();
+                let name = name.to_string_lossy();
+                name.starts_with("libcore-") && name.ends_with(".rlib")
+            })
+        })
+    };
+    if has_core(&destination) {
+        return Ok(());
+    }
+    if destination.exists() {
+        bail!(
+            "incomplete target at {}; repair it before retrying",
+            destination.display()
+        );
+    }
+    let scratch = root.join(format!(".target-{}", std::process::id()));
+    std::fs::create_dir_all(&scratch)?;
+    let result = (|| {
+        let manifest = fetch_manifest(&spec, &scratch)?;
+        let pkg = manifest.package_for("rust-std", target)?;
+        let _ = writeln!(
+            log,
+            "justrust: adding {target} std to exact toolchain {}",
+            tc.id
+        );
+        let prefix = scratch.join("prefix");
+        fetch_component(&pkg, &scratch.join("download"), &prefix)?;
+        let staged = prefix.join(&relative);
+        if !has_core(&staged) {
+            bail!("verified rust-std archive has no core library for {target}");
+        }
+        std::fs::create_dir_all(destination.parent().context("no target parent")?)?;
+        std::fs::rename(&staged, &destination).context("publishing target sysroot")?;
         Ok(())
     })();
     let _ = std::fs::remove_dir_all(&scratch);
@@ -1520,6 +1582,36 @@ to = "clippy-preview"
         let e = m.package("clippy").unwrap_err().to_string();
         assert!(e.contains("not available"), "{e}");
         assert!(m.package("miri").is_err());
+    }
+
+    #[test]
+    fn target_std_selection_never_borrows_native_libraries() {
+        let manifest = Manifest::parse(
+            r#"
+manifest-version = "2"
+date = "2026-10-08"
+[pkg.rust-std.target.x86_64-unknown-linux-gnu]
+available = true
+url = "https://example/native.tar.gz"
+hash = "aa"
+[pkg.rust-std.target.aarch64-unknown-linux-musl]
+available = true
+url = "https://example/arm-musl.tar.gz"
+hash = "bb"
+"#,
+            "manifest-hash".into(),
+        )
+        .unwrap();
+        let package = manifest
+            .package_for("rust-std", "aarch64-unknown-linux-musl")
+            .unwrap();
+        assert_eq!(package.url, "https://example/arm-musl.tar.gz");
+        assert_eq!(package.hash, "bb");
+        assert!(
+            manifest
+                .package_for("rust-std", "x86_64-unknown-linux-musl")
+                .is_err()
+        );
     }
 
     #[test]

@@ -66,6 +66,7 @@ mod paths;
 mod peercache;
 mod procfs;
 mod record;
+mod release_tools;
 mod remote;
 #[cfg(unix)]
 mod remote_agent;
@@ -159,6 +160,9 @@ enum Command {
     /// `cargo build` with compact agent output and a timing profile.
     #[command(disable_help_flag = true)]
     Build(Passthrough),
+    /// `cargo zigbuild` with recording and hosted static musl release support.
+    #[command(disable_help_flag = true)]
+    Zigbuild(Passthrough),
     /// `cargo clippy` with compact agent output and a timing profile.
     #[command(disable_help_flag = true)]
     Clippy(Passthrough),
@@ -587,9 +591,11 @@ struct RemoteArgs {
 /// and ARGS exactly as given, `--help` included (cargo's help, as before).
 fn passthrough_split(argv: &[OsString]) -> Option<(&'static str, Vec<OsString>)> {
     let sub = argv.get(1)?.to_str()?;
-    let sub = ["check", "test", "build", "clippy", "run", "cargo"]
-        .into_iter()
-        .find(|s| *s == sub)?;
+    let sub = [
+        "check", "test", "build", "zigbuild", "clippy", "run", "cargo",
+    ]
+    .into_iter()
+    .find(|s| *s == sub)?;
     Some((sub, argv[2..].to_vec()))
 }
 
@@ -757,6 +763,7 @@ fn command_name(c: &Command) -> Option<&'static str> {
         Command::Check(_)
         | Command::Test(_)
         | Command::Build(_)
+        | Command::Zigbuild(_)
         | Command::Clippy(_)
         | Command::Run(_)
         | Command::Cargo(_)
@@ -803,6 +810,7 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
         Command::Check(p) => agent("check", p.args),
         Command::Test(p) => agent("test", p.args),
         Command::Build(p) => agent("build", p.args),
+        Command::Zigbuild(p) => agent("zigbuild", p.args),
         Command::Clippy(p) => agent("clippy", p.args),
         Command::Run(p) => agent("run", p.args),
         Command::Graph {

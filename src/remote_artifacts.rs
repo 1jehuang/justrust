@@ -196,6 +196,52 @@ pub(crate) fn build_target(args: &[String]) -> Option<&str> {
     target
 }
 
+pub(crate) fn musl_target(target: &str) -> bool {
+    matches!(
+        target,
+        "x86_64-unknown-linux-musl" | "aarch64-unknown-linux-musl"
+    )
+}
+
+/// Do not execute cross binaries or trust `ldd`'s success on the wrong CPU.
+/// Read the ELF program headers, including stripped/static-PIE binaries.
+fn check_static_musl(data: &[u8], target: &str) -> Result<()> {
+    use object::read::elf::{Dyn, ElfFile64, FileHeader, ProgramHeader};
+    let expected = match target {
+        "x86_64-unknown-linux-musl" => object::elf::EM_X86_64,
+        "aarch64-unknown-linux-musl" => object::elf::EM_AARCH64,
+        _ => bail!("unsupported musl artifact target {target}"),
+    };
+    let elf =
+        ElfFile64::<object::Endianness>::parse(data).context("expected ELF64 musl artifact")?;
+    let endian = elf.endian();
+    if elf.elf_header().e_machine(endian) != expected {
+        bail!("artifact architecture does not match {target}");
+    }
+    if !matches!(
+        elf.elf_header().e_type(endian),
+        object::elf::ET_EXEC | object::elf::ET_DYN
+    ) {
+        bail!("musl artifact is not an executable ELF");
+    }
+    if elf.elf_program_headers().is_empty() {
+        bail!("musl artifact has no program headers");
+    }
+    for header in elf.elf_program_headers() {
+        if header.p_type(endian) == object::elf::PT_INTERP {
+            bail!("musl release artifact has a dynamic interpreter");
+        }
+        if let Some(dynamic) = header.dynamic(endian, data)?
+            && dynamic
+                .iter()
+                .any(|entry| entry.tag32(endian) == Some(object::elf::DT_NEEDED))
+        {
+            bail!("musl release artifact depends on shared libraries");
+        }
+    }
+    Ok(())
+}
+
 /// Machine side: `justrust __artifacts`, request on stdin, frames on stdout.
 pub fn serve_main() -> ! {
     let code = match serve(std::io::stdin().lock(), std::io::stdout().lock()) {
@@ -347,6 +393,7 @@ fn apply(
     size: u64,
     patch: bool,
     data: &[u8],
+    musl: Option<&str>,
 ) -> Result<PathBuf> {
     if !safe_name(name) {
         bail!("unsafe artifact name {name:?}");
@@ -383,7 +430,9 @@ fn apply(
             bail!("{name}: {got} bytes, expected {size}");
         }
         crate::sys::set_mode(&tmp, mode)?;
-        if mode & 0o111 != 0 || name.contains(".so") {
+        if let Some(target) = musl {
+            check_static_musl(&std::fs::read(&tmp)?, target)?;
+        } else if mode & 0o111 != 0 || name.contains(".so") {
             check_libs(&tmp)?;
         }
         std::fs::rename(&tmp, &dst)?;
@@ -401,8 +450,16 @@ pub fn fetch(args: &[String], start: f64) -> Result<String> {
     let t0 = Instant::now();
     let cwd = std::env::current_dir()?;
     let dir = profile_dir(&cwd, args)?;
+    let musl = (args.first().map(String::as_str) == Some("zigbuild"))
+        .then(|| build_target(args).filter(|target| musl_target(target)))
+        .flatten();
     let mut records = load_records();
-    let have = have_list(&dir, &records);
+    // A newer locally built file is not evidence that it is this hosted
+    // release. Only reuse files with known remote provenance for musl.
+    let have = have_list(&dir, &records)
+        .into_iter()
+        .filter(|h| musl.is_none() || h.id.is_some())
+        .collect();
     let backend = crate::remote_backend::load().context("no remote machine configured")?;
     let t = backend.ensure_ready()?;
     let req = Request {
@@ -437,7 +494,7 @@ pub fn fetch(args: &[String], start: f64) -> Result<String> {
             }
             match serde_json::from_str::<Frame>(&line).context("bad artifact frame")? {
                 Frame::Hello { arch, .. } => {
-                    if arch != std::env::consts::ARCH {
+                    if musl.is_none() && arch != std::env::consts::ARCH {
                         bail!(
                             "the machine builds for {arch}, this machine is {}",
                             std::env::consts::ARCH
@@ -454,7 +511,7 @@ pub fn fetch(args: &[String], start: f64) -> Result<String> {
                 } => {
                     let mut data = vec![0; len as usize];
                     r.read_exact(&mut data)?;
-                    let dst = apply(&dir, &name, mode, size, patch, &data)?;
+                    let dst = apply(&dir, &name, mode, size, patch, &data, musl)?;
                     let m = std::fs::metadata(&dst)?;
                     records.insert(
                         dst.display().to_string(),
@@ -520,6 +577,61 @@ pub fn available() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn elf_fixture(machine: u16, kind: u32, needed: bool) -> Vec<u8> {
+        let mut bytes = vec![0; 136];
+        bytes[..7].copy_from_slice(b"\x7fELF\x02\x01\x01");
+        bytes[16..18].copy_from_slice(&object::elf::ET_EXEC.to_le_bytes());
+        bytes[18..20].copy_from_slice(&machine.to_le_bytes());
+        bytes[20..24].copy_from_slice(&1u32.to_le_bytes());
+        bytes[32..40].copy_from_slice(&64u64.to_le_bytes());
+        bytes[52..54].copy_from_slice(&64u16.to_le_bytes());
+        bytes[54..56].copy_from_slice(&56u16.to_le_bytes());
+        bytes[56..58].copy_from_slice(&1u16.to_le_bytes());
+        bytes[64..68].copy_from_slice(&kind.to_le_bytes());
+        bytes[72..80].copy_from_slice(&120u64.to_le_bytes());
+        bytes[96..104].copy_from_slice(&16u64.to_le_bytes());
+        if needed {
+            bytes[120..128].copy_from_slice(&(object::elf::DT_NEEDED as u64).to_le_bytes());
+        }
+        bytes
+    }
+
+    #[test]
+    fn static_musl_requires_matching_elf_without_dynamic_dependencies() {
+        for (target, machine) in [
+            ("x86_64-unknown-linux-musl", object::elf::EM_X86_64),
+            ("aarch64-unknown-linux-musl", object::elf::EM_AARCH64),
+        ] {
+            assert!(
+                check_static_musl(&elf_fixture(machine, object::elf::PT_LOAD, false), target)
+                    .is_ok()
+            );
+            assert!(
+                check_static_musl(
+                    &elf_fixture(machine, object::elf::PT_DYNAMIC, false),
+                    target
+                )
+                .is_ok()
+            );
+            assert!(
+                check_static_musl(&elf_fixture(machine, object::elf::PT_INTERP, false), target)
+                    .is_err()
+            );
+            assert!(
+                check_static_musl(&elf_fixture(machine, object::elf::PT_DYNAMIC, true), target)
+                    .is_err()
+            );
+            assert!(
+                check_static_musl(
+                    &elf_fixture(object::elf::EM_ARM, object::elf::PT_LOAD, false),
+                    target
+                )
+                .is_err()
+            );
+            assert!(check_static_musl(b"not ELF", target).is_err());
+        }
+    }
 
     #[test]
     fn explicit_target_forms_and_separator() {
@@ -638,7 +750,7 @@ mod tests {
                     } => {
                         let mut d = vec![0; len as usize];
                         r.read_exact(&mut d).unwrap();
-                        apply(&local, &name, mode, size, patch, &d).unwrap();
+                        apply(&local, &name, mode, size, patch, &d, None).unwrap();
                         got.push((name, len, patch));
                     }
                     Frame::End => return got,
