@@ -494,8 +494,35 @@ fn rooted_component_schema_replay_rejects_changed_definition_world_and_budget() 
         facts
             .validate_ty_metadata_scratch(&root, facts.budget(), &mut scratch)
             .unwrap();
+        // Exercise the complete production replay with exact byte headroom,
+        // then one byte short. Streaming dependencies must still pay for
+        // every encoded key, edge, source equation and topology witness.
+        let world = plan.trait_world().unwrap();
+        let before = facts.budget().usage_snapshot().bytes;
+        reads[0].replay(&root, &world).unwrap();
+        let replay_bytes = facts.budget().usage_snapshot().bytes - before;
+        assert!(replay_bytes > 0);
+        let restore_bytes = facts.budget().usage_snapshot().bytes;
+        let limit = facts.budget().limits().bytes;
+        facts
+            .budget()
+            .usage_for_tests(|usage| usage.bytes = limit - replay_bytes);
+        reads[0].replay(&root, &world).unwrap();
+        assert_eq!(facts.budget().usage_snapshot().bytes, limit);
+        facts
+            .budget()
+            .usage_for_tests(|usage| usage.bytes = limit - replay_bytes + 1);
+        assert!(reads[0].replay(&root, &world).is_err());
+        assert_eq!(
+            facts.budget().first_resource_failure().unwrap().kind,
+            ir::ResourceBudgetKind::Bytes
+        );
+        facts
+            .budget()
+            .usage_for_tests(|usage| usage.bytes = restore_bytes);
         let first_failure = facts.budget().first_resource_failure();
         facts.budget().poison_ledger_for_tests();
+        assert!(reads[0].replay(&root, &world).is_err());
         let failure = facts
             .validate_ty_metadata_scratch(&root, facts.budget(), &mut scratch)
             .unwrap_err();
@@ -506,6 +533,218 @@ fn rooted_component_schema_replay_rejects_changed_definition_world_and_budget() 
         assert!(ir::validate_slice_carrier_with_facts(&root, context).is_err());
         assert_eq!(facts.budget().first_resource_failure(), first_failure);
     }
+}
+
+#[test]
+fn replay_edge_inventory_has_one_paid_buffer_and_rejects_growth_shortage_and_poison() {
+    for count in [0usize, 1, 2, 17, 257] {
+        let bytes = count
+            .checked_mul(std::mem::size_of::<topology::Edge>())
+            .unwrap();
+        let budget = ir::PlanBudget::new(ir::PlanLimits {
+            bytes,
+            ..ir::PlanLimits::default()
+        });
+        let mut edges = ReplayEdges::new(count, &budget).unwrap();
+        let pointer = edges.edges.as_ptr();
+        let capacity = edges.edges.capacity();
+        assert!(capacity >= count);
+        assert_eq!(budget.usage_snapshot().bytes, bytes);
+        assert_eq!(budget.usage_snapshot().reservations.retentions, 1);
+        for target in 0..count {
+            edges
+                .push(
+                    topology::Edge {
+                        target,
+                        by_value: target % 2 == 0,
+                    },
+                    &budget,
+                )
+                .unwrap();
+            assert_eq!(edges.edges.as_ptr(), pointer);
+            assert_eq!(edges.edges.capacity(), capacity);
+            assert_eq!(budget.usage_snapshot().bytes, bytes);
+        }
+        // There is no reserve/grow path, even if the allocator gave excess
+        // capacity. A bad count cannot silently reallocate or add a payload.
+        assert!(
+            edges
+                .push(
+                    topology::Edge {
+                        target: count,
+                        by_value: false
+                    },
+                    &budget
+                )
+                .is_err()
+        );
+        assert_eq!(edges.edges.as_ptr(), pointer);
+        assert_eq!(edges.edges.capacity(), capacity);
+        assert_eq!(edges.edges.len(), count);
+        let paid = budget.usage_snapshot().bytes;
+        let edges = edges.finish().unwrap();
+        assert_eq!(edges.len(), count);
+        assert_eq!(edges.as_ptr(), pointer);
+        assert_eq!(
+            budget.usage_snapshot().bytes,
+            paid,
+            "escaping edges are never refunded"
+        );
+        drop(edges);
+        assert_eq!(
+            budget.usage_snapshot().bytes,
+            paid,
+            "original conservative retained lifetime is unchanged"
+        );
+        if count > 0 {
+            let short = ir::PlanBudget::new(ir::PlanLimits {
+                bytes: bytes - 1,
+                ..ir::PlanLimits::default()
+            });
+            assert!(ReplayEdges::new(count, &short).is_err());
+            assert_eq!(
+                short.first_resource_failure().unwrap().kind,
+                ir::ResourceBudgetKind::Bytes
+            );
+            assert_eq!(short.usage_snapshot().bytes, 0);
+            assert_eq!(short.usage_snapshot().reservations.retentions, 0);
+            let incomplete = ReplayEdges::new(count, &ir::PlanBudget::default()).unwrap();
+            assert!(incomplete.finish().is_err());
+        }
+        assert!(budget.charge_work(usize::MAX).is_err());
+        let first = budget.first_resource_failure();
+        budget.poison_ledger_for_tests();
+        assert!(ReplayEdges::new(count, &budget).is_err());
+        assert_eq!(budget.first_resource_failure(), first);
+    }
+    let budget = ir::PlanBudget::default();
+    let mut warm = ReplayEdges::new(2, &budget).unwrap();
+    warm.push(
+        topology::Edge {
+            target: 0,
+            by_value: true,
+        },
+        &budget,
+    )
+    .unwrap();
+    assert!(budget.charge_work(usize::MAX).is_err());
+    let first = budget.first_resource_failure();
+    budget.poison_ledger_for_tests();
+    assert!(
+        warm.push(
+            topology::Edge {
+                target: 1,
+                by_value: false
+            },
+            &budget
+        )
+        .is_err()
+    );
+    assert_eq!(warm.edges.len(), 1);
+    assert_eq!(budget.first_resource_failure(), first);
+}
+
+#[test]
+fn dependency_replay_borrows_actuals_and_preserves_occurrences_and_limits() {
+    let provider = provider(
+        "struct Node<T>{next:*mut Node<T>}fn main(){}",
+        &[0],
+        &[Term::Bool],
+    );
+    let declaration = provider.plan.nominal_declaration(0).unwrap();
+    let term = Term::Tuple(vec![
+        Term::Nominal(
+            declaration,
+            vec![Term::Nominal(declaration, vec![Term::Bool])],
+        ),
+        Term::Ref(
+            ir::BorrowKind::Shared,
+            Box::new(Term::Nominal(declaration, vec![Term::Bool])),
+        ),
+        // Even a zero array must replay its child equation and owning flag.
+        Term::Array(Box::new(Term::Nominal(declaration, vec![Term::Bool])), 0),
+        Term::RawPtr(
+            ir::BorrowKind::Mut,
+            Box::new(Term::Nominal(declaration, vec![Term::Bool])),
+        ),
+        Term::Slice(Box::new(Term::Nominal(declaration, vec![Term::Bool]))),
+    ]);
+    let mut expected = Vec::new();
+    symbolic::dependencies(&term, true, &mut expected, &ir::PlanBudget::default(), 0).unwrap();
+    let budget = ir::PlanBudget::new(ir::PlanLimits {
+        bytes: 0,
+        ..ir::PlanLimits::default()
+    });
+    let mut actual = Vec::new();
+    symbolic::visit_dependencies(
+        &term,
+        true,
+        &budget,
+        0,
+        &mut |declaration, args, by_value| {
+            actual.push((declaration, args.to_vec(), by_value));
+            Ok(())
+        },
+    )
+    .unwrap();
+    assert_eq!(actual, expected);
+    assert_eq!(
+        actual.iter().map(|entry| entry.2).collect::<Vec<_>>(),
+        vec![true, false, false, true, false, false]
+    );
+    assert_eq!(
+        budget.usage_snapshot().bytes,
+        0,
+        "visitor owns no copied actual payloads"
+    );
+    let Term::Tuple(parts) = &term else {
+        unreachable!()
+    };
+    let Term::Nominal(_, first_actuals) = &parts[0] else {
+        unreachable!()
+    };
+    let mut first = true;
+    symbolic::visit_dependencies(&parts[0], true, &budget, 0, &mut |_, args, _| {
+        if first {
+            assert!(std::ptr::eq(args, first_actuals.as_slice()));
+            first = false;
+        }
+        Ok(())
+    })
+    .unwrap();
+    let measured = ir::PlanBudget::default();
+    symbolic::visit_dependencies(&term, true, &measured, 0, &mut |_, _, _| Ok(())).unwrap();
+    let work = measured.usage_snapshot().work;
+    assert!(work > 1);
+    for (allowance, passes) in [(work, true), (work - 1, false)] {
+        let budget = ir::PlanBudget::new(ir::PlanLimits {
+            work: allowance,
+            ..ir::PlanLimits::default()
+        });
+        assert_eq!(
+            symbolic::visit_dependencies(&term, true, &budget, 0, &mut |_, _, _| Ok(())).is_ok(),
+            passes
+        );
+    }
+    assert!(
+        symbolic::visit_dependencies(
+            &term,
+            true,
+            &measured,
+            measured.limits().depth,
+            &mut |_, _, _| Ok(())
+        )
+        .is_err()
+    );
+    let failure = measured.first_resource_failure();
+    measured.poison_ledger_for_tests();
+    assert!(
+        symbolic::visit_dependencies(&term, true, &measured, 0, &mut |_, _, _| panic!(
+            "poison must precede callback"
+        ))
+        .is_err()
+    );
+    assert_eq!(measured.first_resource_failure(), failure);
 }
 
 #[test]

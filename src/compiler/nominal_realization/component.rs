@@ -53,6 +53,36 @@ fn member_keys(fact: &ComponentFact, b: &ir::PlanBudget) -> Result<Vec<Realizati
     Ok(keys)
 }
 
+/// One fully paid edge buffer, with no growth or overlapping relocation.
+/// The completed vector escapes into the replay's application inventory, so
+/// its original topology storage charge remains retained, never refunded.
+struct ReplayEdges {
+    edges: Vec<topology::Edge>,
+    count: usize,
+}
+impl ReplayEdges {
+    fn new(count: usize, b: &ir::PlanBudget) -> Result<Self, Error> {
+        Ok(Self {
+            edges: topology::storage(count, b)?,
+            count,
+        })
+    }
+    fn push(&mut self, edge: topology::Edge, b: &ir::PlanBudget) -> Result<(), Error> {
+        b.charge_work(1).map_err(Error::new)?;
+        if self.edges.len() >= self.count || self.edges.capacity() < self.count {
+            return Err(Error::new("component dependency count changed"));
+        }
+        self.edges.push(edge);
+        Ok(())
+    }
+    fn finish(self) -> Result<Vec<topology::Edge>, Error> {
+        if self.edges.len() != self.count {
+            return Err(Error::new("component dependency count changed"));
+        }
+        Ok(self.edges)
+    }
+}
+
 /// Reconstruct every dependency and size equation from the retained typed
 /// source proof. No optimistic visited-member success and no field IR exist
 /// during this validation. External dependencies must already be real reads.
@@ -142,19 +172,55 @@ fn validate(
         for actual in &actuals {
             metadata(actual, b, 0)?;
         }
-        let mut deps = Vec::new();
+        // Only the edge inventory survives this replay. Borrow each exact
+        // source actual list while encoding its key, never retain temporary
+        // cloned dependency terms as if they were published payloads.
+        // A charged count pass preserves the original single paid edge
+        // allocation. Closing requirements twice is deliberate paid work,
+        // not an unmetered clone inventory or incremental buffer growth.
+        let mut edge_count = 0usize;
+        let mut count = |_: ir::DeclId, _: &[Term], _: bool| -> Result<(), Error> {
+            edge_count = edge_count
+                .checked_add(1)
+                .ok_or_else(|| Error::new("component dependency count overflow"))?;
+            Ok(())
+        };
+        for requirement in &requirements {
+            let term = symbolic::close_term(requirement, env, &actuals, b, 0)?;
+            symbolic::visit_dependencies(&term, false, b, 0, &mut count)?;
+        }
+        for actual in &actuals {
+            symbolic::visit_dependencies(actual, false, b, 0, &mut count)?;
+        }
+        for (_, retained) in member.fields.iter() {
+            symbolic::visit_dependencies(retained, true, b, 0, &mut count)?;
+        }
+        let mut edges = ReplayEdges::new(edge_count, b)?;
+        let mut edge = |declaration, actuals: &[Term], by_value| -> Result<(), Error> {
+            let key = producer::key(member_world, declaration, actuals, b)?;
+            let mut target = keys.iter().position(|k| k == &key);
+            if target.is_none() {
+                if let Some(external) = fact.external.iter().position(|(k, _)| k == &key) {
+                    used[external] = true;
+                    target = Some(fact.members.len() + external);
+                }
+            }
+            let target = target
+                .ok_or_else(|| Error::new("component omitted exact nominal dependency receipt"))?;
+            edges.push(topology::Edge { target, by_value }, b)
+        };
         for requirement in &requirements {
             let term = symbolic::close_term(requirement, env, &actuals, b, 0)?;
             metadata(&term, b, 0)?;
             sized(&term, b, 0)?;
-            symbolic::dependencies(&term, false, &mut deps, b, 0)?;
+            symbolic::visit_dependencies(&term, false, b, 0, &mut edge)?;
         }
         let original = producer::source_fields(member.source.template(), b)?;
         if original.len() != member.fields.len() {
             return Err(Error::new("component field inventory changed"));
         }
         for actual in &actuals {
-            symbolic::dependencies(actual, false, &mut deps, b, 0)?;
+            symbolic::visit_dependencies(actual, false, b, 0, &mut edge)?;
         }
         for ((coordinate, source), (retained_coordinate, retained)) in
             original.iter().zip(member.fields.iter())
@@ -165,22 +231,9 @@ fn validate(
             }
             metadata(retained, b, 0)?;
             sized(retained, b, 0)?;
-            symbolic::dependencies(retained, true, &mut deps, b, 0)?;
+            symbolic::visit_dependencies(retained, true, b, 0, &mut edge)?;
         }
-        apps[index].edges = topology::storage(deps.len(), b)?;
-        for (declaration, actuals, by_value) in deps {
-            let key = producer::key(member_world, declaration, &actuals, b)?;
-            let mut target = keys.iter().position(|k| k == &key);
-            if target.is_none() {
-                if let Some(external) = fact.external.iter().position(|(k, _)| k == &key) {
-                    used[external] = true;
-                    target = Some(fact.members.len() + external);
-                }
-            }
-            let target = target
-                .ok_or_else(|| Error::new("component omitted exact nominal dependency receipt"))?;
-            apps[index].edges.push(topology::Edge { target, by_value });
-        }
+        apps[index].edges = edges.finish()?;
     }
     if used.iter().any(|used| !used) {
         return Err(Error::new("component includes unrelated external receipt"));

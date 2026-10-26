@@ -70,6 +70,44 @@ pub(super) fn close_term(
 
 type Dependency = (ir::DeclId, Vec<Term>, bool);
 
+/// Replay consumers only need an exact key while this source term is alive.
+/// Borrow its immutable actuals instead of retaining an owned term inventory.
+/// Every occurrence is visited, including duplicate and non-owning edges.
+pub(super) fn visit_dependencies(
+    term: &Term,
+    by_value: bool,
+    b: &ir::PlanBudget,
+    depth: usize,
+    visit: &mut impl FnMut(ir::DeclId, &[Term], bool) -> Result<(), Error>,
+) -> Result<(), Error> {
+    b.check_depth(depth).map_err(Error::new)?;
+    b.charge_work(1).map_err(Error::new)?;
+    match term {
+        Term::Nominal(declaration, actuals) => {
+            visit(*declaration, actuals, by_value)?;
+            for actual in actuals {
+                visit_dependencies(actual, false, b, depth + 1, visit)?;
+            }
+        }
+        Term::Ref(_, child) | Term::RawPtr(_, child) | Term::Slice(child) => {
+            visit_dependencies(child, false, b, depth + 1, visit)?;
+        }
+        Term::Array(child, _) => visit_dependencies(child, by_value, b, depth + 1, visit)?,
+        Term::Tuple(children) => {
+            for child in children {
+                visit_dependencies(child, by_value, b, depth + 1, visit)?;
+            }
+        }
+        Term::Dyn(..) => {
+            return Err(Error::new(
+                "unsupported: recursive symbolic dynamic metadata equations",
+            ));
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 pub(super) fn dependencies(
     term: &Term,
     by_value: bool,
