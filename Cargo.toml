@@ -32,5 +32,10 @@ opt-level = 1
 [profile.dev.package."*"]
 opt-level = 2
 
+# Keep optimized test execution, but skip cross-codegen-unit ThinLTO in the
+# edit/test loop. Full debug info, assertions, and release builds are unchanged.
+[profile.test]
+lto = "off"
+
 [profile.release]
 debug = 1
