@@ -677,10 +677,11 @@ fn finite_drop_presence_finishes_every_owning_equation_before_answering() {
         let argument = crate::compiler::frontend::validate_argument_allocation_for_tests;
         let caller = ir::FactsCtx::Validated(publication.facts());
         assert_eq!(argument(&root, caller, &budget, 0).unwrap(), (false, 0));
-        // Ordinary acyclic roots keep the existing reservation and memo rules.
+        // Scalars never allocate a memo table. Component authority checks above
+        // and below still run before the same allocation-free root return.
         assert_eq!(
             argument(&ir::Ty::Bool, caller, &budget, 0).unwrap(),
-            (true, 0)
+            (false, 0)
         );
         assert!(argument(&root, ir::FactsCtx::Concrete, &budget, 0).is_err());
         assert!(

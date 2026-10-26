@@ -22718,7 +22718,7 @@ impl SchemaAdapter {
                             ir::FactsCtx::Validated(facts),
                             b,
                             depth,
-                            &mut HashMap::new(),
+                            &mut ArgumentMemo::new(),
                         );
                     }
                 } else {
@@ -23582,28 +23582,135 @@ fn validate_argument(
     budget: &ir::PlanBudget,
     depth: usize,
 ) -> Result<(), String> {
-    let _scratch = argument_memo_reservation(ty, budget)?;
-    let mut memo = HashMap::new();
+    let mut memo = ArgumentMemo::new();
     argument_height(ty, caller, budget, depth, &mut memo).map(|_| ())
 }
-fn argument_memo_reservation(
-    ty: &ir::Ty,
-    budget: &ir::PlanBudget,
-) -> Result<Option<ir::PlanReservation>, String> {
-    let capability = match ty {
-        ir::Ty::Struct(value) => value.realization(),
-        ir::Ty::Enum(value) => value.realization(),
-        _ => None,
-    };
-    // This root branch returns from argument_height before any memo access.
-    // This is allocation selection only, not authority: argument_height still
-    // authenticates the definition, original facts, budget and complete height.
-    if capability.is_some_and(|capability| capability.is_component()) {
-        return Ok(None);
+
+/// One traversal's temporary height memo. Leases cover each backing table
+/// until it is dropped, including both allocations during rehash.
+struct ArgumentMemo {
+    entries: Vec<Option<(ir::NominalAppId, usize)>>,
+    len: usize,
+    _allocation: Option<ir::PlanReservation>,
+    _rounding: Option<ir::PlanReservation>,
+}
+impl ArgumentMemo {
+    fn new() -> Self {
+        Self {
+            entries: Vec::new(),
+            len: 0,
+            _allocation: None,
+            _rounding: None,
+        }
     }
-    budget
-        .reserve_bytes(4096 * (std::mem::size_of::<ir::NominalAppId>() + 128))
-        .map(Some)
+    fn storage_bytes(buckets: usize) -> Result<usize, String> {
+        buckets
+            .checked_mul(std::mem::size_of::<Option<(ir::NominalAppId, usize)>>())
+            .ok_or_else(|| "generic argument memo allocation overflow".into())
+    }
+    fn bucket(id: &ir::NominalAppId, buckets: usize) -> usize {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        id.hash(&mut hasher);
+        (hasher.finish() as usize) & (buckets - 1)
+    }
+    fn slot(
+        entries: &[Option<(ir::NominalAppId, usize)>],
+        id: &ir::NominalAppId,
+        budget: &ir::PlanBudget,
+    ) -> Result<Option<usize>, String> {
+        if entries.is_empty() {
+            return Ok(None);
+        }
+        let mut slot = Self::bucket(id, entries.len());
+        for _ in 0..entries.len() {
+            budget.charge_work(1)?;
+            match &entries[slot] {
+                None => return Ok(Some(slot)),
+                Some((key, _)) if key == id => return Ok(Some(slot)),
+                _ => slot = (slot + 1) & (entries.len() - 1),
+            }
+        }
+        Err("generic argument memo bucket resource limit exceeded".into())
+    }
+    fn get(&self, id: &ir::NominalAppId, budget: &ir::PlanBudget) -> Result<Option<usize>, String> {
+        Ok(Self::slot(&self.entries, id, budget)?
+            .and_then(|slot| self.entries[slot].as_ref().map(|(_, height)| *height)))
+    }
+    fn insert(
+        &mut self,
+        id: ir::NominalAppId,
+        height: usize,
+        budget: &ir::PlanBudget,
+    ) -> Result<(), String> {
+        // Keep the original ceiling before insertion, even for a duplicate.
+        if self.len >= 4096 {
+            return Err("generic argument memo resource limit exceeded".into());
+        }
+        budget.charge_work(1)?;
+        if let Some(slot) = Self::slot(&self.entries, &id, budget)? {
+            if self.entries[slot].is_some() {
+                self.entries[slot] = Some((id, height));
+                return Ok(());
+            }
+        }
+        // Power-of-two logical bucket count, at most three quarters full.
+        if self.entries.is_empty() || self.len >= self.entries.len() / 4 * 3 {
+            let buckets = if self.entries.is_empty() {
+                4
+            } else {
+                self.entries
+                    .len()
+                    .checked_mul(2)
+                    .ok_or("generic argument memo allocation overflow")?
+            };
+            let bytes = Self::storage_bytes(buckets)?;
+            // Admit before allocating, with the old table still paid.
+            let allocation = budget.reserve_bytes(bytes)?;
+            budget.charge_work(buckets)?;
+            let mut entries = Vec::new();
+            entries
+                .try_reserve_exact(buckets)
+                .map_err(|_| "infrastructure: generic argument memo allocation failed")?;
+            let actual_bytes = Self::storage_bytes(entries.capacity())?;
+            let rounding = if actual_bytes > bytes {
+                Some(budget.reserve_bytes(actual_bytes - bytes)?)
+            } else {
+                None
+            };
+            let mut replacement = Self {
+                entries,
+                len: self.len + 1,
+                _allocation: Some(allocation),
+                _rounding: rounding,
+            };
+            let entries = &mut replacement.entries;
+            entries.resize_with(buckets, || None);
+            // Copy, rather than drain: denied work leaves the old memo intact.
+            // Charge scans, every relocation, and every destination probe.
+            for row in &self.entries {
+                budget.charge_work(1)?;
+                if let Some((key, value)) = row {
+                    budget.charge_work(1)?;
+                    let slot = Self::slot(entries, key, budget)?
+                        .ok_or("generic argument memo missing replacement bucket")?;
+                    entries[slot] = Some((*key, *value));
+                }
+            }
+            let slot = Self::slot(entries, &id, budget)?
+                .ok_or("generic argument memo missing insertion bucket")?;
+            entries[slot] = Some((id, height));
+            let old = std::mem::replace(self, replacement);
+            drop(old);
+            return Ok(());
+        } else {
+            let slot = Self::slot(&self.entries, &id, budget)?
+                .ok_or("generic argument memo missing insertion bucket")?;
+            self.entries[slot] = Some((id, height));
+        }
+        self.len += 1;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -23613,10 +23720,9 @@ pub(in crate::compiler) fn validate_argument_allocation_for_tests(
     budget: &ir::PlanBudget,
     depth: usize,
 ) -> Result<(bool, usize), String> {
-    let scratch = argument_memo_reservation(ty, budget)?;
-    let mut memo = HashMap::new();
+    let mut memo = ArgumentMemo::new();
     argument_height(ty, caller, budget, depth, &mut memo)?;
-    Ok((scratch.is_some(), memo.len()))
+    Ok((memo.entries.capacity() != 0, memo.len))
 }
 
 fn argument_height(
@@ -23624,7 +23730,7 @@ fn argument_height(
     caller: ir::FactsCtx<'_>,
     budget: &ir::PlanBudget,
     depth: usize,
-    memo: &mut HashMap<ir::NominalAppId, usize>,
+    memo: &mut ArgumentMemo,
 ) -> Result<usize, String> {
     budget
         .check_depth(depth)
@@ -23664,7 +23770,10 @@ fn argument_height(
         ir::Ty::Enum(t) => Some(t.def().id),
         _ => None,
     };
-    if let Some(height) = id.and_then(|id| memo.get(&id).copied()) {
+    if let Some(height) = match id {
+        Some(id) => memo.get(&id, budget)?,
+        None => None,
+    } {
         budget
             .check_depth(depth + height)
             .map_err(|e| format!("generic type nesting resource limit: {e}"))?;
@@ -23718,10 +23827,7 @@ fn argument_height(
         _ => {}
     }
     if let Some(id) = id {
-        if memo.len() >= 4096 {
-            return Err("generic argument memo resource limit exceeded".into());
-        }
-        memo.insert(id, height);
+        memo.insert(id, height, budget)?;
     }
     Ok(height)
 }
@@ -23877,6 +23983,265 @@ mod registry_resource_tests {
             reserve_registry_map(&mut table, 1, &budget)
                 .unwrap_err()
                 .starts_with("contract:")
+        );
+    }
+
+    #[test]
+    fn argument_memo_empty_and_acyclic_traversals_pay_only_live_capacity() {
+        let zero = ir::PlanBudget::new(ir::PlanLimits {
+            bytes: 0,
+            ..Default::default()
+        });
+        assert_eq!(
+            validate_argument_allocation_for_tests(&ir::Ty::Bool, ir::FactsCtx::Concrete, &zero, 0)
+                .unwrap(),
+            (false, 0)
+        );
+        assert_eq!(zero.usage_snapshot().bytes, 0);
+        let program = parse("struct Leaf { value: bool } struct Pair { left: Leaf, right: Leaf } fn value(x: Pair) -> Pair { x } fn main() {}").unwrap();
+        let plan = PlanCtx::from_program(&program, &ir::PlanBudget::default()).unwrap();
+        let ty = plan
+            .function_schema(plan.function_decl(0).unwrap())
+            .unwrap()
+            .signature
+            .result
+            .clone();
+        let budget = ir::PlanBudget::default();
+        let mut memo = ArgumentMemo::new();
+        assert_eq!(
+            argument_height(&ty, ir::FactsCtx::Concrete, &budget, 0, &mut memo).unwrap(),
+            2
+        );
+        assert_eq!(memo.len, 2);
+        let bytes = ArgumentMemo::storage_bytes(memo.entries.capacity()).unwrap();
+        assert_eq!(budget.usage_snapshot().bytes, bytes);
+        let before = memo.entries.clone();
+        assert!(argument_height(&ty, ir::FactsCtx::Concrete, &budget, 128, &mut memo).is_err());
+        assert_eq!(memo.entries, before);
+        let shallow = ir::PlanBudget::new(ir::PlanLimits {
+            depth: 0,
+            ..Default::default()
+        });
+        let mut failed = ArgumentMemo::new();
+        assert!(argument_height(&ty, ir::FactsCtx::Concrete, &shallow, 0, &mut failed).is_err());
+        assert_eq!(failed.len, 0);
+        assert!(failed.entries.is_empty());
+        assert_eq!(shallow.usage_snapshot().bytes, 0);
+        // A memo hit preserves its table and still enforces depth.
+        assert_eq!(
+            argument_height(&ty, ir::FactsCtx::Concrete, &budget, 0, &mut memo).unwrap(),
+            2
+        );
+        assert_eq!(budget.usage_snapshot().bytes, bytes);
+        drop(memo);
+        assert_eq!(budget.usage_snapshot().bytes, 0);
+        let exact = ir::PlanBudget::new(ir::PlanLimits {
+            bytes,
+            ..Default::default()
+        });
+        assert!(validate_argument(&ty, ir::FactsCtx::Concrete, &exact, 0).is_ok());
+        assert_eq!(exact.usage_snapshot().bytes, 0);
+        let short = ir::PlanBudget::new(ir::PlanLimits {
+            bytes: bytes - 1,
+            ..Default::default()
+        });
+        assert!(validate_argument(&ty, ir::FactsCtx::Concrete, &short, 0).is_err());
+        assert_eq!(
+            short.first_resource_failure().unwrap().kind,
+            ir::ResourceBudgetKind::Bytes
+        );
+    }
+
+    #[test]
+    fn argument_memo_growth_pays_overlap_and_preserves_old_entries_on_denial() {
+        let snapshot = ir::SnapshotId::standalone().unwrap();
+        let id = |index| ir::NominalAppId {
+            snapshot,
+            index: ir::NominalIndex::SourceSlot(index),
+        };
+        let first = ArgumentMemo::storage_bytes(4).unwrap();
+        let second = ArgumentMemo::storage_bytes(8).unwrap();
+        let exact = ir::PlanBudget::new(ir::PlanLimits {
+            bytes: first + second,
+            ..Default::default()
+        });
+        let mut memo = ArgumentMemo::new();
+        for index in 0..4 {
+            memo.insert(id(index), index, &exact).unwrap();
+        }
+        assert_eq!(memo.len, 4);
+        for index in 0..4 {
+            assert_eq!(memo.get(&id(index), &exact).unwrap(), Some(index));
+        }
+        assert_eq!(exact.usage_snapshot().bytes, second);
+        drop(memo);
+        assert_eq!(exact.usage_snapshot().bytes, 0);
+        let short = ir::PlanBudget::new(ir::PlanLimits {
+            bytes: first + second - 1,
+            ..Default::default()
+        });
+        let mut denied = ArgumentMemo::new();
+        for index in 0..3 {
+            denied.insert(id(index), index, &short).unwrap();
+        }
+        assert!(denied.insert(id(3), 3, &short).is_err());
+        assert_eq!(denied.len, 3);
+        assert_eq!(denied.entries.len(), 4);
+        for index in 0..3 {
+            assert_eq!(denied.get(&id(index), &short).unwrap(), Some(index));
+        }
+        let failure = short.first_resource_failure().unwrap();
+        assert_eq!(failure.kind, ir::ResourceBudgetKind::Bytes);
+        assert_eq!(failure.requested, second);
+        assert_eq!(failure.used, first);
+        drop(denied);
+        assert_eq!(short.usage_snapshot().bytes, 0);
+        let poisoned = ir::PlanBudget::default();
+        let mut warm = ArgumentMemo::new();
+        warm.insert(id(0), 0, &poisoned).unwrap();
+        poisoned.poison_ledger_for_tests();
+        assert!(warm.get(&id(0), &poisoned).is_err());
+        assert!(warm.insert(id(1), 1, &poisoned).is_err());
+        assert_eq!(warm.len, 1);
+        assert!(ArgumentMemo::new().insert(id(0), 0, &poisoned).is_err());
+    }
+
+    #[test]
+    fn argument_memo_collisions_meter_every_probe_and_transactional_relocation() {
+        let snapshot = ir::SnapshotId::standalone().unwrap();
+        let mut groups: [Vec<ir::NominalAppId>; 4] = Default::default();
+        // Pigeonhole principle gives four colliding keys within thirteen IDs.
+        for index in 0..13 {
+            let id = ir::NominalAppId {
+                snapshot,
+                index: ir::NominalIndex::SourceSlot(index),
+            };
+            groups[ArgumentMemo::bucket(&id, 4)].push(id);
+        }
+        let keys = groups.iter().find(|group| group.len() >= 4).unwrap();
+        let budget = ir::PlanBudget::default();
+        let mut memo = ArgumentMemo::new();
+        for (height, key) in keys[..3].iter().enumerate() {
+            memo.insert(*key, height, &budget).unwrap();
+        }
+        let before = budget.usage_snapshot().work;
+        assert_eq!(memo.get(&keys[2], &budget).unwrap(), Some(2));
+        assert_eq!(budget.usage_snapshot().work - before, 3);
+        let before = budget.usage_snapshot().work;
+        assert_eq!(memo.get(&keys[3], &budget).unwrap(), None);
+        assert_eq!(budget.usage_snapshot().work - before, 4);
+        let before = budget.usage_snapshot().work;
+        memo.insert(keys[3], 3, &budget).unwrap();
+        let growth_work = budget.usage_snapshot().work - before;
+        for (height, key) in keys[..4].iter().enumerate() {
+            assert_eq!(memo.get(key, &budget).unwrap(), Some(height));
+        }
+        // Same slot and source index in a different namespace is not equal.
+        let foreign = ir::NominalAppId {
+            snapshot: ir::SnapshotId::standalone().unwrap(),
+            index: keys[0].index,
+        };
+        assert_eq!(memo.get(&foreign, &budget).unwrap(), None);
+        drop(memo);
+        assert_eq!(budget.usage_snapshot().bytes, 0);
+
+        let setup = ir::PlanBudget::default();
+        let mut seed = ArgumentMemo::new();
+        for (height, key) in keys[..3].iter().enumerate() {
+            seed.insert(*key, height, &setup).unwrap();
+        }
+        let setup_work = setup.usage_snapshot().work;
+        drop(seed);
+        let exact = ir::PlanBudget::new(ir::PlanLimits {
+            work: setup_work + growth_work,
+            ..Default::default()
+        });
+        let mut exact_memo = ArgumentMemo::new();
+        for (height, key) in keys[..4].iter().enumerate() {
+            exact_memo.insert(*key, height, &exact).unwrap();
+        }
+        assert_eq!(exact_memo.len, 4);
+        assert_eq!(exact.usage_snapshot().work, setup_work + growth_work);
+        drop(exact_memo);
+        assert_eq!(exact.usage_snapshot().bytes, 0);
+        // Deny at every work boundary, including destination collision probes
+        // and relocations after replacement allocation. Nothing may be lost.
+        for allowance in 0..growth_work {
+            let limited = ir::PlanBudget::new(ir::PlanLimits {
+                work: setup_work + allowance,
+                ..Default::default()
+            });
+            let mut denied = ArgumentMemo::new();
+            for (height, key) in keys[..3].iter().enumerate() {
+                denied.insert(*key, height, &limited).unwrap();
+            }
+            let rows = denied.entries.clone();
+            let bytes = limited.usage_snapshot().bytes;
+            assert!(denied.insert(keys[3], 3, &limited).is_err());
+            assert_eq!(denied.len, 3);
+            assert_eq!(denied.entries, rows);
+            assert_eq!(limited.usage_snapshot().bytes, bytes);
+            assert_eq!(
+                limited.first_resource_failure().unwrap().kind,
+                ir::ResourceBudgetKind::Work
+            );
+            drop(denied);
+            assert_eq!(limited.usage_snapshot().bytes, 0);
+        }
+    }
+
+    #[test]
+    fn argument_memo_keeps_original_entry_ceiling() {
+        let snapshot = ir::SnapshotId::standalone().unwrap();
+        let budget = ir::PlanBudget::default();
+        let mut memo = ArgumentMemo::new();
+        for index in 0..4096 {
+            memo.insert(
+                ir::NominalAppId {
+                    snapshot,
+                    index: ir::NominalIndex::SourceSlot(index),
+                },
+                0,
+                &budget,
+            )
+            .unwrap();
+        }
+        assert!(
+            memo.insert(
+                ir::NominalAppId {
+                    snapshot,
+                    index: ir::NominalIndex::SourceSlot(4096)
+                },
+                0,
+                &budget
+            )
+            .unwrap_err()
+            .contains("memo resource limit")
+        );
+        assert_eq!(memo.len, 4096);
+        assert!(
+            memo.insert(
+                ir::NominalAppId {
+                    snapshot,
+                    index: ir::NominalIndex::SourceSlot(0),
+                },
+                1,
+                &budget,
+            )
+            .unwrap_err()
+            .contains("memo resource limit")
+        );
+        assert_eq!(memo.len, 4096);
+        assert_eq!(
+            memo.get(
+                &ir::NominalAppId {
+                    snapshot,
+                    index: ir::NominalIndex::SourceSlot(0),
+                },
+                &budget
+            )
+            .unwrap(),
+            Some(0)
         );
     }
 
