@@ -2,6 +2,31 @@ use super::*;
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 
+/// Immediate flock-release assertions require no unrelated fork children.
+/// Forks from other libtests can briefly inherit an open-file-description lock
+/// even with CLOEXEC, so exercise these lifetimes in a single-test subprocess.
+pub(super) fn isolated_lock_test(name: &str) -> bool {
+    const CHILD: &str = "JUSTRUST_LOCK_TEST_CHILD";
+    if std::env::var(CHILD).as_deref() == Ok(name) {
+        return false;
+    }
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", name, "--test-threads=1", "--nocapture"])
+        .env(CHILD, name)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success()
+            && String::from_utf8_lossy(&output.stdout)
+                .contains("test result: ok. 1 passed; 0 failed; 0 ignored"),
+        "isolated lock test failed: {}\n{}\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    true
+}
+
 fn private_scratch(tag: &str) -> PathBuf {
     let dir = super::tests::scratch(tag);
     std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -27,6 +52,11 @@ fn foreign_principal_inode_is_rejected_before_migration() {
 
 #[test]
 fn legacy_0664_migration_preserves_inode_contents_and_live_shared_holder() {
+    if isolated_lock_test(
+        "remote_evict::lock_tests::legacy_0664_migration_preserves_inode_contents_and_live_shared_holder",
+    ) {
+        return;
+    }
     let dir = private_scratch("legacy-lock");
     let path = dir.join("root.lock");
     std::fs::write(&path, b"legacy sentinel").unwrap();
@@ -56,6 +86,11 @@ fn legacy_0664_migration_preserves_inode_contents_and_live_shared_holder() {
 
 #[test]
 fn simultaneous_legacy_migration_keeps_one_inode_and_existing_lease() {
+    if isolated_lock_test(
+        "remote_evict::lock_tests::simultaneous_legacy_migration_keeps_one_inode_and_existing_lease",
+    ) {
+        return;
+    }
     let dir = private_scratch("concurrent-lock-migration");
     let path = dir.join("root.lock");
     std::fs::write(&path, b"unchanged").unwrap();

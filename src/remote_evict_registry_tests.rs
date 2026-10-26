@@ -73,6 +73,11 @@ fn collect(registry: &ev::Registry, mode: ev::Mode) -> (u64, Vec<String>) {
 
 #[test]
 fn restart_retains_authority_and_deletes_only_registered_target() {
+    if ev::lock_tests::isolated_lock_test(
+        "remote_evict::durable::tests::restart_retains_authority_and_deletes_only_registered_target",
+    ) {
+        return;
+    }
     let f = Fixture::new();
     let root = f.root("known");
     let unknown = f.root("unknown");
@@ -98,6 +103,11 @@ fn restart_retains_authority_and_deletes_only_registered_target() {
 
 #[test]
 fn restart_retains_unclean_lease_until_successful_idle_completion() {
+    if ev::lock_tests::isolated_lock_test(
+        "remote_evict::durable::tests::restart_retains_unclean_lease_until_successful_idle_completion",
+    ) {
+        return;
+    }
     let f = Fixture::new();
     let root = f.root("build");
     let mut first = ev::Registry::from_store(f.store()).unwrap();
@@ -122,6 +132,11 @@ fn restart_retains_unclean_lease_until_successful_idle_completion() {
 
 #[test]
 fn concurrent_agents_cannot_clear_each_others_lease() {
+    if ev::lock_tests::isolated_lock_test(
+        "remote_evict::durable::tests::concurrent_agents_cannot_clear_each_others_lease",
+    ) {
+        return;
+    }
     let f = Fixture::new();
     let root = f.root("parallel");
     let mut a = ev::Registry::from_store(f.store()).unwrap();
@@ -145,6 +160,11 @@ fn concurrent_agents_cannot_clear_each_others_lease() {
 
 #[test]
 fn existing_gc_instance_observes_other_agents_recent_activity() {
+    if ev::lock_tests::isolated_lock_test(
+        "remote_evict::durable::tests::existing_gc_instance_observes_other_agents_recent_activity",
+    ) {
+        return;
+    }
     let f = Fixture::new();
     let root = f.root("recent");
     let store = f.store();
@@ -159,6 +179,11 @@ fn existing_gc_instance_observes_other_agents_recent_activity() {
 
 #[test]
 fn fresh_receipt_recheck_catches_activity_after_planning() {
+    if ev::lock_tests::isolated_lock_test(
+        "remote_evict::durable::tests::fresh_receipt_recheck_catches_activity_after_planning",
+    ) {
+        return;
+    }
     let f = Fixture::new();
     let root = f.root("race");
     let store = f.store();
@@ -202,6 +227,11 @@ fn fresh_receipt_recheck_catches_activity_after_planning() {
 
 #[test]
 fn shared_flock_survives_registry_restart() {
+    if ev::lock_tests::isolated_lock_test(
+        "remote_evict::durable::tests::shared_flock_survives_registry_restart",
+    ) {
+        return;
+    }
     let f = Fixture::new();
     let root = f.root("locked");
     let store = f.store();
@@ -218,6 +248,11 @@ fn shared_flock_survives_registry_restart() {
 
 #[test]
 fn foreign_scope_paths_permissions_and_replaced_roots_fail_closed() {
+    if ev::lock_tests::isolated_lock_test(
+        "remote_evict::durable::tests::foreign_scope_paths_permissions_and_replaced_roots_fail_closed",
+    ) {
+        return;
+    }
     let f = Fixture::new();
     let root = f.root("foreign");
     let scope = f.0.join("tenant");
@@ -249,6 +284,11 @@ fn foreign_scope_paths_permissions_and_replaced_roots_fail_closed() {
 
 #[test]
 fn symlink_receipts_and_private_cache_roots_are_never_authority() {
+    if ev::lock_tests::isolated_lock_test(
+        "remote_evict::durable::tests::symlink_receipts_and_private_cache_roots_are_never_authority",
+    ) {
+        return;
+    }
     let f = Fixture::new();
     let root = f.root("project");
     let store = f.store();
@@ -270,6 +310,11 @@ fn symlink_receipts_and_private_cache_roots_are_never_authority() {
 
 #[test]
 fn authenticated_monorepo_root_does_not_require_a_root_manifest() {
+    if ev::lock_tests::isolated_lock_test(
+        "remote_evict::durable::tests::authenticated_monorepo_root_does_not_require_a_root_manifest",
+    ) {
+        return;
+    }
     let f = Fixture::new();
     let root = f.root("monorepo");
     std::fs::remove_file(root.join("Cargo.toml")).unwrap();
@@ -285,6 +330,11 @@ fn authenticated_monorepo_root_does_not_require_a_root_manifest() {
 
 #[test]
 fn enrollment_failure_cannot_bypass_future_build_protection() {
+    if ev::lock_tests::isolated_lock_test(
+        "remote_evict::durable::tests::enrollment_failure_cannot_bypass_future_build_protection",
+    ) {
+        return;
+    }
     let f = Fixture::new();
     let root = f.root(".justrust");
     let mut registry = ev::Registry::from_store(f.store()).unwrap();
@@ -296,6 +346,11 @@ fn enrollment_failure_cannot_bypass_future_build_protection() {
 
 #[test]
 fn real_live_process_cwd_is_excluded() {
+    if ev::lock_tests::isolated_lock_test(
+        "remote_evict::durable::tests::real_live_process_cwd_is_excluded",
+    ) {
+        return;
+    }
     let f = Fixture::new();
     let root = f.root("live");
     let mut child = std::process::Command::new("sleep")

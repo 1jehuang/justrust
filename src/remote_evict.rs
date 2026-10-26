@@ -26,7 +26,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 #[path = "remote_evict_registry.rs"]
 mod durable;
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[path = "remote_evict_lock_tests.rs"]
 mod lock_tests;
 
@@ -904,6 +904,11 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn build_lock_blocks_eviction_lock() {
+        if super::lock_tests::isolated_lock_test(
+            "remote_evict::tests::build_lock_blocks_eviction_lock",
+        ) {
+            return;
+        }
         let base = scratch("lock");
         let a = mirrored(&base, "a");
         let held = build_lock(&a).expect("build lock");

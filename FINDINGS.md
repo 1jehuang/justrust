@@ -21,6 +21,28 @@ Full hosted `justrust test -- --test-threads=1` passed 784 tests
 (`20261026-143543882-404516`), all-target clippy with `-D warnings` passed,
 and all benchmark harness regression tests passed.
 
+Follow-up: detached hotpatch symbol indexing forked without exec and retained
+unrelated inherited descriptors, including flock leases and output pipes.
+The child now isolates stdio and closes descriptors >=3 before indexing,
+or skips optional prebuilding when isolation is unavailable. A subprocess
+regression verifies pipe EOF and release of the child's inherited flock while
+the child stays alive, without releasing the parent's live lock. An intermediate
+hosted default suite exited zero (`20261026-144511276-460041`), but repeated
+parallel gates still required serial retries for eviction-lock failures. Focused
+hotpatch/eviction tests, full serial tests, and all-target clippy with `-D warnings`
+passed. FD cleanup alone did not establish clean default-parallel acceptance,
+and is not a separately measured performance claim.
+
+The final test-only follow-up runs exact lock-lifetime assertion bodies in
+fresh single-test subprocesses, away from unrelated libtest forks. All existing
+assertions remain, child output is captured, and the parent requires exactly
+one passed/unignored test so a stale filter cannot silently skip coverage.
+No retries, global test serialization, or production lock changes were added.
+Two full unsplit parallel hosted suites passed all 785 tests without automatic
+failure-confirmation retries: `20261026-145342655-509649` and
+`20261026-145352802-510494`. Strict all-target clippy also passed
+(`20261026-145358472-509275`).
+
 ## 2026-10-19: Correct the durable-GC rollout's legacy lock-mode regression
 
 The initial durable registry change (`68b0dddec`) rejected group-writable lock
