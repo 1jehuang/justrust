@@ -50,7 +50,7 @@ Real-usage trends remain the reality check, not a controlled attribution test.
 
 `python3 bench/suite.py run test-retry-storm -n 5` isolates confirmation
 overhead with a pinned, dependency-free fixture: 32 intentionally failing
-tests each sleep 50 ms, plus one passing test. The fixed libtest thread count
+tests each sleep 200 ms, plus one passing test. The fixed libtest thread count
 is 16. Warmup populates the failure history, making subsequent runs split
 failed and passing tests. The comparison must preserve all 32 failures and
 the passing test. This is a synthetic mechanism test, not a rewrite speed claim.

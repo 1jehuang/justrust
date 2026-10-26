@@ -7994,3 +7994,111 @@ active leases. One `justrust remote gc --apply` freed 138,805,305,344 bytes
 `justrust test --test graph_integrity` of committed main passed on hosted
 afterwards. The hosted agent now runs the same binary (sha256 2989351da2ba344e...)
 and its plan reports no collection needed.
+
+## 2026-10-26: failure-heavy test confirmation, not unexplained shutdown
+
+The clean-room run `20261025-203723357-3339712` took 98.58s. Its initial
+libtest output ended after 14.88s, then the pool serially retried failed names
+and confirmed apparent flakes. The final confirmation message arrived 83.69s
+later. The summary called this `after build`, hiding the actual source of the
+wait. The original group had 120 failures. This is distinct from recompilation:
+`20261025-203611575-3336121` spent 49.71s of 50.30s compiling.
+
+Commit `7173f6106` keeps selective serial confirmation for small, cheap failure
+sets. More than eight failures, or recorded failed-test durations exceeding
+twice the first group's wall time, use the existing exclusive whole-group
+replay with the original libtest arguments and normal thread count. No tests
+are skipped. The replay's exit status and failures remain authoritative.
+Whole-group confirmation is announced before the wait. Missing retry outcomes
+are no longer described as passes: only explicit successful outcomes earn that
+label. Regression coverage checks the threshold and exact original argument,
+filtered-count, and failure preservation.
+
+### Measurement and validation
+
+The matched mechanism benchmark uses pre-change source `7d523ddb4` and
+candidate source `7173f6106`. The former was archived without a git worktree and
+compiled explicitly; binary hashes are recorded in the result files and differ.
+An initial shared-target build incorrectly reused the candidate artifact; its
+identical hash exposed this, and a forced recompile produced the real baseline.
+No measurements from that invalid baseline were used.
+
+`test-retry-storm` pins fixture tree
+`10d9c88270859a93825e36a48dd2d27733425ae6`: 32 tests deliberately fail after
+200 ms, plus one passing test, with 16 libtest threads. Warmup records failure
+history, then five no-edit measurements on each binary exercise the same
+split/confirmation path. Every measured run retained exactly 32 failures and
+one pass, with zero compilation units.
+
+`bench/suite.py compare bench/results/retry-storm-before.json
+bench/results/retry-storm-after.json` reports:
+
+```text
+test-retry-storm  6.87  0.85  -6.02  -88%  uncontrolled (noisy or unknown samples)
+```
+
+These are observed timings, not a clean benchmark speedup claim: two baseline
+samples and one candidate sample exceeded the background CPU threshold.
+Ranges were 6.861-6.889s before and 0.843-0.856s after. The quiet subsets had
+medians 6.862s (three samples) and 0.848s (four samples), respectively, but the
+standard comparator conservatively marks the whole pair uncontrolled.
+Representative run IDs are `20261025-221853672-3965309838` and
+`20261025-221917158-3969301590`. The earlier 50 ms fixture pair is retained as
+`retry-storm-50ms-{before,after}.json`; two short candidate samples were noisy,
+which motivated the longer signal. Do not combine the two fixture versions.
+This is deliberately a synthetic failure-confirmation test, not evidence that
+all builds or all rewrite tests became faster.
+
+The real pinned rewrite snapshot is `c7bda805f8886369571bc41e3309f4fd36c0bebb`.
+It differs from the active dirty checkout that produced 120 failures: the pinned
+snapshot has three failing tests. Its full library suite is therefore a
+real-workload correctness/regression check, not a reproduction of that failure
+storm. Debug information is disabled on both sides to bound local artifact
+size, with the snapshot's optimization level unchanged. The original installed
+client's two warmed runs took 116.12s and 127.99s, with zero compiled units.
+The candidate took 163.28s and 122.86s, both marked noisy. All four measured
+runs preserved 1932 passing and three failing tests; none compiled a unit.
+The changed whole-group confirmation branch was not exercised by these three
+failures. `bench/suite.py compare` marks this comparison uncontrolled, not an
+attributable improvement or regression. These installed-versus-candidate
+numbers are diagnostic only, not an isolated attribution to this patch.
+
+Full current-client validation: hosted `check` (`20261025-221217424-3903668`),
+`test -- --test-threads=1` (`20261025-221240428-3906202`, 752 passed, three ignored),
+and warning-free `clippy --all-targets -- -D warnings`
+(`20261025-221320396-3903667`). An earlier normal parallel full-suite run passed
+750 tests after six existing eviction/lock tests required isolated confirmation;
+the serial run avoids relying on that masking for the correctness gate. Python
+benchmark-harness tests also pass.
+
+Reinstalled the latest shared stable tree with `cargo install --path . --locked`.
+The installed client then passed all 12 retry-pool tests on hosted in run
+`20261025-222024099-3971224` (12.2s client wall, 0.3s recorded build/test time).
+
+The comprehensive `bench/suite.py run --synth 1 -n 1` baseline hit the execution
+environment's 600-second limit after 11/40 points. Its partial results are kept
+in `bench/results/test-retry-budget-before.partial.json`; they do not constitute
+a completed broad gate and do not support a general session-speed claim.
+Hosted execution of the pinned rewrite snapshot was also attempted, but failed
+before a build summary with `cannot protect source activity: No such file or
+directory`. Source protection was not bypassed. The scoped measurements use
+controlled local execution instead.
+
+### Remaining costs: shared build locks and compiler structure
+
+`20261025-031623949-4077709` spent 49.28s of 60.59s waiting on Cargo's build-dir
+lock, with only 11.26s compiling. Adjacent recorded integration-test and library
+test compilations held the same target directory. This was real compile
+contention, not the pool's post-test confirmation delay. Merely moving the wait
+to a client queue or skipping a lock cannot safely remove it. The next hosted
+change needs bounded target leases, measured artifact seeding/reflinks, exact
+snapshot/intent coalescing, cancellation, and quota-aware eviction. No locking
+or tenant-isolation guarantees were weakened here.
+
+`justrust split --days 2 --top 5` observed 661 edited runs and 4482s of compilation.
+`compiler::frontend::type_check` accounted for 704s over 88 runs. The tool ranked
+`nominal_schema` and `root_resolution` as possible extraction sites, but those
+are estimates, not measured savings. `nominal_schema` imports `super::*` and
+implements parent-owned `PlanState`; moving that file alone is not a valid leaf
+crate extraction. The active rewrite also had overlapping uncommitted compiler
+work. No active compiler files were changed or automatically split.

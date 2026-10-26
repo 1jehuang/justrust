@@ -132,7 +132,7 @@ SNAPSHOTS = {
 OPTIONAL_SNAPSHOTS = {
     "retry-storm": {
         # A git tree object pins only the small fixture, not the full toolchain.
-        "repos": {"retry-storm": (ROOT, "0f0ea126029703b3148151c7410dd6e2855a4a12")},
+        "repos": {"retry-storm": (ROOT, "10d9c88270859a93825e36a48dd2d27733425ae6")},
         "cwd": "retry-storm",
     },
     "rewrite": {
