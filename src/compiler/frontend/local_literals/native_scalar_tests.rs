@@ -2,6 +2,18 @@
 use super::*;
 
 #[test]
+fn opaque_callable_output_hint_keeps_unresolved_owner_terms() {
+    for mode in ["Fn", "FnMut", "FnOnce"] {
+        let source = format!(
+            "fn make<F>(f:F)->impl {mode}(i32)->bool{{move|_:i32|true}}fn probe(){{let value=make(|x:i32|x);}}fn main(){{}}"
+        );
+        inspect_with_opaque_hint(&source, false, Some(Some(ir::Ty::Bool))).unwrap();
+    }
+    let counterfeit = "trait Fake{type Output;fn call(&self,x:i32)->Self::Output;}struct S;impl Fake for S{type Output=bool;fn call(&self,x:i32)->bool{true}}fn make<F>(f:F)->impl Fake<Output=bool>{S}fn probe(){let value=make(|x:i32|x);}fn main(){}";
+    inspect_with_opaque_hint(counterfeit, false, Some(None)).unwrap();
+}
+
+#[test]
 fn loop_result_terms_preserve_values_and_divergence() {
     let (_, types) = inspect(
         "fn probe(){let result=loop{break 7;};let wide:u64=result;}fn main(){}",
@@ -47,7 +59,46 @@ fn loop_result_terms_select_lexical_targets() {
 }
 
 fn inspect(source: &str, malformed_arity: bool) -> Result<(usize, Vec<ir::Ty>), String> {
-    let program = parse(source)?;
+    inspect_with_opaque_hint(source, malformed_arity, None)
+}
+
+fn inspect_with_opaque_hint(
+    source: &str,
+    malformed_arity: bool,
+    opaque_hint: Option<Option<ir::Ty>>,
+) -> Result<(usize, Vec<ir::Ty>), String> {
+    let program = if opaque_hint.is_some() {
+        use crate::compiler::source as source_input;
+        let options = source_input::SourceOptions::default();
+        let expansion = crate::compiler::expansion_budget::ExpansionBudget::default();
+        let mut assembler = source_input::SourceAssembler::new(&options);
+        let mut step = assembler
+            .provide(Arc::new(source_input::prepare_text_unit(
+                "opaque-callable-output-hint.rs",
+                source,
+                &options,
+            )))
+            .map_err(|error| error.to_string())?;
+        let prepared = loop {
+            match step {
+                source_input::AssemblyStep::Done(prepared) => break prepared,
+                source_input::AssemblyStep::Need(need) => {
+                    let unit = match need.parent.as_deref() {
+                        None => source_input::prepare_prelude_unit(&options, &expansion),
+                        Some(parent) => source_input::prepare_child_unit(
+                            parent, need.index, &options, &expansion,
+                        ),
+                    };
+                    step = assembler
+                        .provide(Arc::new(unit))
+                        .map_err(|error| error.to_string())?;
+                }
+            }
+        };
+        resolve(&parse_prepared(&prepared).map_err(|error| error.to_string())?)?
+    } else {
+        parse(source)?
+    };
     let signatures = signature_table(&program)?;
     let index = program
         .functions
@@ -110,6 +161,40 @@ fn inspect(source: &str, malformed_arity: bool) -> Result<(usize, Vec<ir::Ty>), 
     }
     solver.block(&function.body, 0)?;
     solver.solve()?;
+    if let Some(expected) = opaque_hint {
+        let mut tested = false;
+        for term in 0..solver.variables.len() {
+            let Domain::Opaque(descriptor, children) = solver.domain(term) else {
+                continue;
+            };
+            let mut unresolved_owner = None;
+            for child in children.iter().take(descriptor.owner_args().len()) {
+                if solver.resolve(*child, 0)?.is_none() {
+                    unresolved_owner = Some(*child);
+                    break;
+                }
+            }
+            let Some(unresolved_owner) = unresolved_owner else {
+                continue;
+            };
+            let actual = solver.fixed(ir::Ty::Int(ir::IntTy::I32))?;
+            let result = solver.opaque_callable_application(&descriptor, &children, &[actual])?;
+            match (result, &expected) {
+                (Some(result), Some(expected)) => {
+                    assert_eq!(solver.resolve(result, 0)?, Some(expected.clone()));
+                }
+                (None, None) => {}
+                other => panic!("opaque callable hint changed canonical output: {other:?}"),
+            }
+            assert!(solver.resolve(unresolved_owner, 0)?.is_none());
+            tested = true;
+            break;
+        }
+        assert!(
+            tested,
+            "direct hint control must retain an unresolved owner term"
+        );
+    }
     // Builtin `*place` is an operator constraint since d658dd6e1.
     let pending = solver.projections.len() + solver.coercions.len() + solver.operators.len();
     let mut types = Vec::new();

@@ -83,13 +83,29 @@ impl Solver<'_, '_, '_> {
                         self.checker.infer_work(0)?;
                         let declaration = plan.declaration(*item)?;
                         let callable_output = declaration.kind == ir::DeclKind::AssociatedType
-                            && match declaration.owner {
-                                Some(owner) => {
-                                    world.closure_trait_kind(owner).map_err(|error| {
-                                        error.into_legacy_diagnostic(&plan.budget)
-                                    })? == Some(ir::ClosureKind::FnOnce)
-                                }
-                                None => false,
+                            && declaration.owner == Some(bound.declaration())
+                            && world
+                                .closure_trait_kind(bound.declaration())
+                                .map_err(|error| error.into_legacy_diagnostic(&plan.budget))?
+                                == Some(mode)
+                            && {
+                                let owner = plan.declaration(bound.declaration())?;
+                                let source = plan.registry.source_trait(bound.declaration())?;
+                                let associated = source
+                                    .associated_types
+                                    .get(declaration.source_index)
+                                    .ok_or("callable output source member is missing")?;
+                                plan.registry
+                                    .trait_associated_types
+                                    .get(owner.source_index)
+                                    .and_then(|items| items.get(declaration.source_index))
+                                    == Some(item)
+                                    && plan
+                                        .program
+                                        .names
+                                        .spelling(associated.name)
+                                        .map_err(native_adapter::name_diagnostic)?
+                                        == "Output"
                             };
                         if callable_output {
                             if output.is_some() {
