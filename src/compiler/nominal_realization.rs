@@ -193,6 +193,24 @@ pub(super) async fn read_sources(
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct RealizationKey(Key);
 impl RealizationKey {
+    /// Necessary admission only. Complete source/actual/proof replay still
+    /// follows on a cold path, and only completed facts may memoize success.
+    fn check_replay_world(&self, world: u64, budget: &ir::PlanBudget) -> Result<(), Error> {
+        budget.charge_work(1).map_err(Error::new)?;
+        if self.0.kind != KIND
+            || self.0.params.len() < 6
+            || self.0.params[0] != VERSION
+            || self.0.params[1] != CLOSED_REALIZATION
+            || self.0.params[5] > (self.0.params.len() - 6) as u64
+        {
+            return Err(Error::new("invalid closed nominal replay header"));
+        }
+        if self.0.params[2] != world {
+            return Err(Error::new("foreign closed nominal replay world"));
+        }
+        Ok(())
+    }
+
     pub(super) fn encode(
         world: u64,
         declaration: ir::DeclId,
@@ -713,6 +731,74 @@ impl AcyclicRead {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn replay_world_header_rejects_malformed_and_preserves_resource_precedence() {
+        let declaration = ir::DeclId {
+            snapshot: ir::SnapshotId::from_graph_word(41),
+            index: 2,
+        };
+        let key = RealizationKey::encode(7, declaration, &[], 32).unwrap();
+        let budget = ir::PlanBudget::default();
+        key.check_replay_world(7, &budget).unwrap();
+        assert!(
+            key.check_replay_world(8, &budget)
+                .unwrap_err()
+                .to_string()
+                .contains("foreign closed nominal replay world")
+        );
+        for length in 0..6 {
+            let mut short = key.clone();
+            short.0.params.truncate(length);
+            assert!(
+                short
+                    .check_replay_world(7, &budget)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("invalid closed nominal replay header")
+            );
+        }
+        for field in [0, 1, 5] {
+            let mut malformed = key.clone();
+            malformed.0.params[field] = u64::MAX;
+            assert!(
+                malformed
+                    .check_replay_world(7, &budget)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("invalid closed nominal replay header")
+            );
+        }
+        let mut wrong_kind = key.clone();
+        wrong_kind.0.kind = 0;
+        assert!(wrong_kind.check_replay_world(7, &budget).is_err());
+        assert!(budget.first_resource_failure().is_none());
+        for short in [false, true] {
+            let budget = ir::PlanBudget::default();
+            budget
+                .charge_work(budget.limits().work - usize::from(!short))
+                .unwrap();
+            let result = key.check_replay_world(7, &budget);
+            if short {
+                assert!(
+                    result
+                        .unwrap_err()
+                        .to_string()
+                        .contains("planning resource")
+                );
+                let failure = budget.first_resource_failure().unwrap();
+                // A malformed/foreign header must not replace sticky Resource
+                // with an invalid-input diagnostic when admission is poisoned.
+                let error = wrong_kind.check_replay_world(8, &budget).unwrap_err();
+                assert!(error.to_string().contains("planning"));
+                assert_eq!(budget.first_resource_failure(), Some(failure));
+            } else {
+                result.unwrap();
+                assert_eq!(budget.usage_snapshot().work, budget.limits().work);
+                assert!(budget.first_resource_failure().is_none());
+            }
+        }
+    }
 
     #[derive(Clone)]
     struct FactProvider {

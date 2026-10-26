@@ -330,7 +330,7 @@ impl ValidatedTraitWorld {
                 &self.budget,
                 self.budget.check_depth(depth.saturating_add(height)),
             )?;
-            replays.record_type(ty, env, height, &self.budget)?;
+            replays.record_type(ty, env, height, self)?;
             return Ok(height);
         }
 
@@ -551,7 +551,7 @@ impl ValidatedTraitWorld {
         if let Some(key) = key {
             walk.insert(key, height, ty, &self.budget)?;
         }
-        replays.record_type(ty, env, height, &self.budget)?;
+        replays.record_type(ty, env, height, self)?;
         Ok(height)
     }
 

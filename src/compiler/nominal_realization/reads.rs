@@ -161,7 +161,12 @@ impl ReadNominal {
         replays: &mut traits::NominalReplays,
     ) -> Result<(), Error> {
         self.check_definition(ty)?;
-        if replays.contains_fact(self) {
+        self.application_key()
+            .check_replay_world(world.nominal_realization_world(), world.budget())?;
+        if replays
+            .contains_fact(self, world)
+            .map_err(|e| Error::new(e.into_legacy_diagnostic(world.budget())))?
+        {
             return Ok(());
         }
         match self {
@@ -171,7 +176,7 @@ impl ReadNominal {
         // Only a COMPLETELY validated component is recorded. Internal members
         // never borrow success from an in-progress replay marker.
         replays
-            .record_fact(self, world.budget())
+            .record_fact(self, world)
             .map_err(|e| Error::new(e.into_legacy_diagnostic(world.budget())))
     }
     pub(in crate::compiler) fn retain_for_substitution(

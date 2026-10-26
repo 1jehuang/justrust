@@ -47,7 +47,16 @@ impl crate::engine::Provider for Provider {
 }
 
 fn provider(source: &str, root_indices: &[usize], actuals: &[Term]) -> Provider {
+    provider_with_modules(source, root_indices, actuals).0
+}
+
+fn provider_with_modules(
+    source: &str,
+    root_indices: &[usize],
+    actuals: &[Term],
+) -> (Provider, Arc<crate::compiler::module_identity::ModuleArena>) {
     let program = super::super::super::frontend::parse(source).unwrap();
+    let modules = program.modules.clone();
     let plan = Arc::new(
         super::super::super::frontend::PlanCtx::from_program(&program, &ir::PlanBudget::default())
             .unwrap(),
@@ -65,14 +74,116 @@ fn provider(source: &str, root_indices: &[usize], actuals: &[Term]) -> Provider 
             .unwrap()
         })
         .collect();
-    Provider {
-        plan,
-        roots,
-        forge: |_| {},
-    }
+    (
+        Provider {
+            plan,
+            roots,
+            forge: |_| {},
+        },
+        modules,
+    )
 }
 fn test_root() -> Key {
     crate::compiler::keys::params(996, 0, vec![0])
+}
+
+#[test]
+fn retained_nominal_replay_rejects_foreign_world_cold_and_warm() {
+    for (source, component) in [
+        ("struct Empty;fn main(){}", false),
+        ("struct Node{next:*mut Node}fn main(){}", true),
+    ] {
+        for workers in [1, 8] {
+            let own_provider = provider(source, &[0], &[]);
+            let world = own_provider.plan.trait_world().unwrap();
+            let foreign_provider = provider(source, &[0], &[]);
+            let foreign_world = foreign_provider.plan.trait_world().unwrap();
+            assert_ne!(
+                world.nominal_realization_world(),
+                foreign_world.nominal_realization_world()
+            );
+            let engine = crate::engine::Engine::new(own_provider);
+            let demand = engine.request(test_root());
+            engine.run(workers).unwrap();
+            demand.completion().unwrap();
+            let reads = demand.fact::<Vec<ReadNominal>>(0).unwrap();
+            assert_eq!(reads[0].is_component(), component);
+            let root = reads[0].definition().unwrap();
+            let mut replays = crate::compiler::traits::NominalReplays::default();
+            let error = reads[0]
+                .replay_with(&root, &foreign_world, &mut replays)
+                .unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("foreign closed nominal replay world")
+            );
+            assert_eq!(replays.replay_counts(), (0, 0, 0, 0));
+            assert!(foreign_world.budget().first_resource_failure().is_none());
+            reads[0].replay_with(&root, &world, &mut replays).unwrap();
+            let completed = replays.replay_counts();
+            assert!(completed.0 > 0);
+            for _ in 0..2 {
+                let error = reads[0]
+                    .replay_with(&root, &foreign_world, &mut replays)
+                    .unwrap_err();
+                assert!(
+                    error
+                        .to_string()
+                        .contains("foreign closed nominal replay world")
+                );
+                assert_eq!(replays.replay_counts(), completed);
+                assert!(foreign_world.budget().first_resource_failure().is_none());
+                // A rejection never retags or discards the original completion.
+                reads[0].replay_with(&root, &world, &mut replays).unwrap();
+                assert_eq!(replays.replay_counts(), completed);
+            }
+        }
+    }
+}
+
+#[test]
+fn warm_nominal_replay_observes_original_module_issuer_failure() {
+    for workers in [1, 8] {
+        let (provider, modules) =
+            provider_with_modules("struct Node{next:*mut Node}fn main(){}", &[0], &[]);
+        let world = provider.plan.trait_world().unwrap();
+        let engine = crate::engine::Engine::new(provider);
+        let demand = engine.request(test_root());
+        engine.run(workers).unwrap();
+        demand.completion().unwrap();
+        let reads = demand.fact::<Vec<ReadNominal>>(0).unwrap();
+        assert!(reads[0].is_component());
+        let root = reads[0].definition().unwrap();
+        let mut replays = crate::compiler::traits::NominalReplays::default();
+        reads[0].replay_with(&root, &world, &mut replays).unwrap();
+        assert!(replays.contains_fact(&reads[0], &world).unwrap());
+        let completed = replays.replay_counts();
+        assert!(completed.0 > 0);
+        reads[0].replay_with(&root, &world, &mut replays).unwrap();
+        assert_eq!(replays.replay_counts(), completed);
+        assert!(world.budget().first_resource_failure().is_none());
+        assert!(
+            modules
+                .budget()
+                .charge(crate::compiler::expansion_budget::Counter::Work, u64::MAX,)
+                .is_err()
+        );
+        let issuer_failure = modules.budget().snapshot().failure;
+        let error = reads[0]
+            .replay_with(&root, &world, &mut replays)
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("module authority resource boundary")
+        );
+        assert_eq!(replays.replay_counts(), completed);
+        assert_eq!(modules.budget().snapshot().failure, issuer_failure);
+        assert!(reads[0].replay_with(&root, &world, &mut replays).is_err());
+        assert_eq!(replays.replay_counts(), completed);
+        assert_eq!(modules.budget().snapshot().failure, issuer_failure);
+    }
 }
 
 #[test]
@@ -494,32 +605,97 @@ fn rooted_component_schema_replay_rejects_changed_definition_world_and_budget() 
         facts
             .validate_ty_metadata_scratch(&root, facts.budget(), &mut scratch)
             .unwrap();
-        // Exercise the complete production replay with exact byte headroom,
-        // then one byte short. Streaming dependencies must still pay for
-        // every encoded key, edge, source equation and topology witness.
+        // Measure real replay-window peak admission, including scoped owners
+        // that refund before return. Lift current to the historical highwater
+        // with a real parent lease, so old fixture peaks cannot mask this one.
         let world = plan.trait_world().unwrap();
-        let before = facts.budget().usage_snapshot().bytes;
+        let budget = facts.budget();
+        let before = budget.usage_snapshot();
+        assert_eq!(before.bytes, before.reservations.current_bytes);
+        assert!(!before.reservations.counters_saturated);
+        let lift_bytes = before
+            .reservations
+            .peak_bytes
+            .checked_sub(before.bytes)
+            .unwrap();
+        let lift = budget.reserve_bytes(lift_bytes).unwrap();
+        let window = budget.usage_snapshot();
+        assert_eq!(window.bytes, window.reservations.current_bytes);
+        assert_eq!(window.bytes, window.reservations.peak_bytes);
         reads[0].replay(&root, &world).unwrap();
-        let replay_bytes = facts.budget().usage_snapshot().bytes - before;
-        assert!(replay_bytes > 0);
-        let restore_bytes = facts.budget().usage_snapshot().bytes;
-        let limit = facts.budget().limits().bytes;
-        facts
-            .budget()
-            .usage_for_tests(|usage| usage.bytes = limit - replay_bytes);
-        reads[0].replay(&root, &world).unwrap();
-        assert_eq!(facts.budget().usage_snapshot().bytes, limit);
-        facts
-            .budget()
-            .usage_for_tests(|usage| usage.bytes = limit - replay_bytes + 1);
-        assert!(reads[0].replay(&root, &world).is_err());
+        let measured = budget.usage_snapshot();
+        assert_eq!(measured.bytes, measured.reservations.current_bytes);
+        assert!(!measured.reservations.counters_saturated);
+        let replay_net = measured.bytes.checked_sub(window.bytes).unwrap();
+        let replay_peak = measured
+            .reservations
+            .peak_bytes
+            .checked_sub(window.bytes)
+            .unwrap();
+        assert!(replay_peak >= replay_net && replay_net > 0);
+        drop(lift);
         assert_eq!(
-            facts.budget().first_resource_failure().unwrap().kind,
-            ir::ResourceBudgetKind::Bytes
+            budget.usage_snapshot().bytes,
+            measured.bytes.checked_sub(lift_bytes).unwrap()
         );
-        facts
-            .budget()
-            .usage_for_tests(|usage| usage.bytes = restore_bytes);
+
+        // Real filler leases leave exactly P, then P-1, of the unchanged byte
+        // limit. P success plus P-1 failure proves the minimum sufficient
+        // admission. No guessed slack, telemetry reset or raw counter edits.
+        let limit = budget.limits().bytes;
+        let before_exact = budget.usage_snapshot().bytes;
+        let exact_fill = limit
+            .checked_sub(before_exact)
+            .and_then(|remaining| remaining.checked_sub(replay_peak))
+            .unwrap();
+        let exact_filler = budget.reserve_bytes(exact_fill).unwrap();
+        assert_eq!(
+            limit.checked_sub(budget.usage_snapshot().bytes),
+            Some(replay_peak)
+        );
+        assert!(budget.first_resource_failure().is_none());
+        reads[0].replay(&root, &world).unwrap();
+        assert_eq!(
+            budget.usage_snapshot().bytes,
+            limit
+                .checked_sub(replay_peak)
+                .unwrap()
+                .checked_add(replay_net)
+                .unwrap()
+        );
+        drop(exact_filler);
+        assert_eq!(
+            budget.usage_snapshot().bytes,
+            before_exact.checked_add(replay_net).unwrap()
+        );
+        assert_eq!(
+            budget.usage_snapshot().bytes,
+            budget.usage_snapshot().reservations.current_bytes
+        );
+
+        let short_headroom = replay_peak.checked_sub(1).unwrap();
+        let before_short = budget.usage_snapshot().bytes;
+        let short_fill = limit
+            .checked_sub(before_short)
+            .and_then(|remaining| remaining.checked_sub(short_headroom))
+            .unwrap();
+        let short_filler = budget.reserve_bytes(short_fill).unwrap();
+        assert_eq!(
+            limit.checked_sub(budget.usage_snapshot().bytes),
+            Some(short_headroom)
+        );
+        assert!(budget.first_resource_failure().is_none());
+        assert!(reads[0].replay(&root, &world).is_err());
+        let short_failure = budget.first_resource_failure().unwrap();
+        assert_eq!(short_failure.kind, ir::ResourceBudgetKind::Bytes);
+        assert!(!budget.usage_snapshot().poisoned);
+        let before_filler_drop = budget.usage_snapshot().bytes;
+        drop(short_filler);
+        assert_eq!(
+            budget.usage_snapshot().bytes,
+            before_filler_drop.checked_sub(short_fill).unwrap()
+        );
+        assert_eq!(budget.first_resource_failure(), Some(short_failure));
         let first_failure = facts.budget().first_resource_failure();
         facts.budget().poison_ledger_for_tests();
         assert!(reads[0].replay(&root, &world).is_err());

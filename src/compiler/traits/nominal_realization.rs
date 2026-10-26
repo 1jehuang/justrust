@@ -156,7 +156,7 @@ impl ValidatedTraitWorld {
                 "foreign closed nominal input",
             ));
         }
-        if replays.contains_input(input) {
+        if replays.contains_input(input, self)? {
             return Ok(());
         }
         self.replay_nominal_declaration(input.declaration, &input.source)?;
@@ -206,7 +206,7 @@ impl ValidatedTraitWorld {
             }
             self.require_sharing(&expected, context, replays)?;
         }
-        replays.record_input(input, &self.budget)
+        replays.record_input(input, self)
     }
 
     pub(in crate::compiler) fn close_nominal_input(

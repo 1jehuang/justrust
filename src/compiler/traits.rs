@@ -1643,6 +1643,88 @@ impl RawMetadataArenas {
     }
 }
 
+/// An explicitly admitted replay buffer. Actual data and allocation always
+/// drop before the lease, including replacement-buffer failure paths.
+struct MeteredReplayRows<T> {
+    values: Vec<T>,
+    storage: Option<ir::PlanReservation>,
+}
+impl<T> Default for MeteredReplayRows<T> {
+    fn default() -> Self {
+        Self {
+            values: Vec::new(),
+            storage: None,
+        }
+    }
+}
+impl<T> std::ops::Deref for MeteredReplayRows<T> {
+    type Target = [T];
+    fn deref(&self) -> &[T] {
+        &self.values
+    }
+}
+impl<T> MeteredReplayRows<T> {
+    fn buffer_bytes(capacity: usize) -> Option<usize> {
+        capacity
+            .checked_mul(std::mem::size_of::<T>())?
+            .checked_add(std::mem::size_of::<Self>())
+    }
+    fn prepare(&mut self, world: &ValidatedTraitWorld) -> Result<()> {
+        self.prepare_with(world, |_| Ok(()))
+    }
+    fn prepare_with(
+        &mut self,
+        world: &ValidatedTraitWorld,
+        after_growth: impl FnOnce(usize) -> Result<()>,
+    ) -> Result<()> {
+        world.check_nominal_replay_issuer()?;
+        if self.values.len() < self.values.capacity() {
+            return Ok(());
+        }
+        let budget = &world.budget;
+        let requested = self
+            .values
+            .capacity()
+            .max(1)
+            .checked_mul(2)
+            .ok_or_else(|| FactsError::resource(budget, "replay capacity overflow"))?;
+        let paid_slots = requested
+            .checked_mul(2)
+            .ok_or_else(|| FactsError::resource(budget, "replay capacity overflow"))?;
+        let prepaid = Self::buffer_bytes(paid_slots)
+            .ok_or_else(|| FactsError::resource(budget, "replay storage overflow"))?;
+        charged(budget, budget.charge_work(self.values.len()))?;
+        let storage = charged(budget, budget.reserve_bytes(prepaid))?;
+        let mut next = Self {
+            values: Vec::new(),
+            storage: Some(storage),
+        };
+        next.values
+            .try_reserve_exact(requested)
+            .map_err(|_| FactsError::resource(budget, "replay buffer allocation failed"))?;
+        // Production passes a no-op. Tests fail after the actual allocation,
+        // while next still owns its full buffer admission and old is intact.
+        after_growth(next.values.capacity())?;
+        world.check_nominal_replay_issuer()?;
+        if next.values.capacity() > paid_slots {
+            return Err(FactsError::resource(
+                budget,
+                "replay allocator exceeded paid capacity",
+            ));
+        }
+        let actual = Self::buffer_bytes(next.values.capacity())
+            .ok_or_else(|| FactsError::resource(budget, "replay storage overflow"))?;
+        charged(
+            budget,
+            next.storage.as_mut().unwrap().shrink(prepaid - actual),
+        )?;
+        next.values.append(&mut self.values);
+        std::mem::swap(self, &mut next);
+        drop(next);
+        Ok(())
+    }
+}
+
 /// Realized nominal facts whose world replay already succeeded inside this
 /// node's computation, keyed by the retained immutable fact allocation. Owned
 /// by the caller's scratch and dropped with it; never in a fact or shared.
@@ -1670,12 +1752,13 @@ pub(in crate::compiler) struct NominalReplays {
     predicate_formations: TypeWalk,
     // Clones pin each allocation for the memo's lifetime, so pointer
     // identity can never be reused by a different fact.
-    facts: Vec<super::nominal_realization::ReadNominal>,
-    inputs: Vec<Arc<[Predicate]>>,
+    facts: MeteredReplayRows<super::nominal_realization::ReadNominal>,
+    inputs: MeteredReplayRows<Arc<[Predicate]>>,
     /// Types whose metadata walk already succeeded, with the environment and
     /// height. Clones pin the identities compared by `same_type_allocation`.
-    types: Vec<(Ty, GenericEnv, usize)>,
-    type_index: std::collections::HashMap<usize, Vec<usize>>,
+    types: MeteredReplayRows<(Ty, GenericEnv, usize)>,
+    // Sorted by (hash, insertion ordinal), preserving collision candidate order.
+    type_index: MeteredReplayRows<(usize, usize)>,
 }
 /// Types already fully validated by one local computation (for example one
 /// CFG validation pass). Owned by the caller, never published or shared;
@@ -1910,48 +1993,98 @@ impl NominalReplays {
         }
         self.metadata_context == context
     }
+    #[cfg(test)]
+    pub(in crate::compiler) fn replay_counts(&self) -> (usize, usize, usize, usize) {
+        (
+            self.facts.len(),
+            self.inputs.len(),
+            self.types.len(),
+            self.type_index.len(),
+        )
+    }
     pub(in crate::compiler) fn contains_fact(
         &self,
         fact: &super::nominal_realization::ReadNominal,
-    ) -> bool {
-        self.facts.iter().any(|old| old.same_fact(fact))
+        world: &ValidatedTraitWorld,
+    ) -> Result<bool> {
+        world.check_nominal_replay_issuer()?;
+        for old in self.facts.iter() {
+            charged(&world.budget, world.budget.charge_work(1))?;
+            if old.same_fact(fact) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
     pub(in crate::compiler) fn record_fact(
         &mut self,
         fact: &super::nominal_realization::ReadNominal,
-        budget: &PlanBudget,
+        world: &ValidatedTraitWorld,
     ) -> Result<()> {
-        self.admit(budget)?;
-        self.facts.push(fact.clone());
+        self.admit(world)?;
+        self.facts.prepare(world)?;
+        self.facts.values.push(fact.clone());
         Ok(())
     }
-    fn contains_input(&self, input: &ClosedNominalInput) -> bool {
-        self.inputs
-            .iter()
-            .any(|old| Arc::ptr_eq(old, input.obligation_identity()))
+    fn contains_input(
+        &self,
+        input: &ClosedNominalInput,
+        world: &ValidatedTraitWorld,
+    ) -> Result<bool> {
+        world.check_nominal_replay_issuer()?;
+        for old in self.inputs.iter() {
+            charged(&world.budget, world.budget.charge_work(1))?;
+            if Arc::ptr_eq(old, input.obligation_identity()) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
-    fn record_input(&mut self, input: &ClosedNominalInput, budget: &PlanBudget) -> Result<()> {
-        self.admit(budget)?;
-        self.inputs.push(input.obligation_identity().clone());
+    fn record_input(
+        &mut self,
+        input: &ClosedNominalInput,
+        world: &ValidatedTraitWorld,
+    ) -> Result<()> {
+        self.admit(world)?;
+        self.inputs.prepare(world)?;
+        self.inputs.values.push(input.obligation_identity().clone());
         Ok(())
     }
-    /// Height of a previously validated identical type under the same
-    /// environment, if any.
+    fn type_index_start(&self, address: usize, world: &ValidatedTraitWorld) -> Result<usize> {
+        let mut left = 0;
+        let mut right = self.type_index.len();
+        while left < right {
+            charged(&world.budget, world.budget.charge_work(1))?;
+            let middle = left + (right - left) / 2;
+            if self.type_index[middle].0 < address {
+                left = middle + 1;
+            } else {
+                right = middle;
+            }
+        }
+        Ok(left)
+    }
+    /// Complete source/payload authority and ordered environment still decide
+    /// every hit; the sorted hash index only selects candidate ordinals.
     fn validated_type(
         &self,
         world: &ValidatedTraitWorld,
         ty: &Ty,
         env: &GenericEnv,
     ) -> Result<Option<usize>> {
+        world.check_nominal_replay_issuer()?;
         let Some(address) = type_allocation(ty) else {
             return Ok(None);
         };
-        if let Some(candidates) = self.type_index.get(&address) {
-            for &index in candidates {
-                let (old, old_env, height) = &self.types[index];
-                if same_type_allocation(old, ty) && world.same_env(old_env, env)? {
-                    return Ok(Some(*height));
-                }
+        let start = self.type_index_start(address, world)?;
+        for &(hash, index) in &self.type_index[start..] {
+            charged(&world.budget, world.budget.charge_work(1))?;
+            if hash != address {
+                break;
+            }
+            let (old, old_env, height) = &self.types[index];
+            if same_type_allocation(old, ty) && world.same_env(old_env, env)? {
+                return Ok(Some(*height));
             }
         }
         Ok(None)
@@ -1961,41 +2094,61 @@ impl NominalReplays {
         ty: &Ty,
         env: &GenericEnv,
         height: usize,
-        budget: &PlanBudget,
+        world: &ValidatedTraitWorld,
     ) -> Result<()> {
+        self.record_type_with(ty, env, height, world, || Ok(()), || Ok(()))
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn record_type_with(
+        &mut self,
+        ty: &Ty,
+        env: &GenericEnv,
+        height: usize,
+        world: &ValidatedTraitWorld,
+        after_type_growth: impl FnOnce() -> Result<()>,
+        after_index_growth: impl FnOnce() -> Result<()>,
+    ) -> Result<()> {
+        world.check_nominal_replay_issuer()?;
         let Some(address) = type_allocation(ty) else {
             return Ok(());
         };
         if self.types.len() >= MAX_SCRATCH_OBLIGATIONS {
-            // Memo full: correctness is unaffected, later walks just repeat.
+            // Preserve best-effort saturation: full validation repeats later.
             return Ok(());
         }
+        let budget = &world.budget;
         charged(budget, budget.charge_work(1))?;
-        self.types
-            .try_reserve(1)
-            .map_err(|_| FactsError::resource(budget, "type memo allocation failed"))?;
+        // Equal hashes retain first-completed order, as in the old bucket Vec.
+        let mut position = self.type_index_start(address, world)?;
+        while position < self.type_index.len() {
+            charged(budget, budget.charge_work(1))?;
+            if self.type_index[position].0 != address {
+                break;
+            }
+            position += 1;
+        }
+        charged(budget, budget.charge_work(self.type_index.len() - position))?;
+        // All fallible preparations precede BOTH row publications. A failure
+        // may leave larger fully paid capacity, never a partial success row.
+        self.types.prepare_with(world, |_| after_type_growth())?;
         self.type_index
-            .entry(address)
-            .or_default()
-            .push(self.types.len());
-        self.types.push((ty.clone(), env.clone(), height));
+            .prepare_with(world, |_| after_index_growth())?;
+        world.check_nominal_replay_issuer()?;
+        let ordinal = self.types.len();
+        self.types.values.push((ty.clone(), env.clone(), height));
+        self.type_index.values.insert(position, (address, ordinal));
         Ok(())
     }
-    fn admit(&mut self, budget: &PlanBudget) -> Result<()> {
+    fn admit(&self, world: &ValidatedTraitWorld) -> Result<()> {
+        world.check_nominal_replay_issuer()?;
+        let budget = &world.budget;
         if self.facts.len() + self.inputs.len() >= MAX_SCRATCH_OBLIGATIONS {
             return Err(FactsError::resource(
                 budget,
                 "nominal replay memo limit for one computation exceeded",
             ));
         }
-        charged(budget, budget.charge_work(1))?;
-        if self.facts.try_reserve(1).is_err() || self.inputs.try_reserve(1).is_err() {
-            return Err(FactsError::resource(
-                budget,
-                "nominal replay memo allocation failed",
-            ));
-        }
-        Ok(())
+        charged(budget, budget.charge_work(1))
     }
 }
 /// Distinct goals one proof computation may memoize. Per scratch (per
@@ -2853,6 +3006,18 @@ impl ValidatedTraitWorld {
         let world = Arc::new(world);
         world.validate_constant_implementations()?;
         Ok(world)
+    }
+    fn check_nominal_replay_issuer(&self) -> Result<()> {
+        self.check_normalization_budget()?;
+        charged(&self.budget, self.budget.charge_work(0))?;
+        checked_module(
+            &self.budget,
+            self.catalog
+                .modules()
+                .budget()
+                .check()
+                .map_err(ModuleError::from),
+        )
     }
     pub fn registry_snapshot(&self) -> SnapshotId {
         self.registry
@@ -12720,6 +12885,361 @@ mod tests {
     }
 
     #[test]
+    fn replay_rows_exact_short_overlap_and_postgrowth_preserve_old_owner() {
+        for short in [false, true] {
+            let c = case();
+            let world = c.build().unwrap();
+            let budget = &world.budget;
+            let mut rows = MeteredReplayRows::<u64>::default();
+            rows.prepare(&world).unwrap();
+            for value in 0..rows.values.capacity() {
+                rows.values.push(value as u64);
+            }
+            let old_capacity = rows.values.capacity();
+            let old_bytes = MeteredReplayRows::<u64>::buffer_bytes(old_capacity).unwrap();
+            let prepaid = MeteredReplayRows::<u64>::buffer_bytes(old_capacity * 4).unwrap();
+            let used = budget.usage_snapshot().bytes;
+            budget
+                .retain_bytes(budget.limits().bytes - used - prepaid + usize::from(short))
+                .unwrap();
+            let before = budget.usage_snapshot().bytes;
+            let observed = std::cell::Cell::new(0);
+            let result = rows.prepare_with(&world, |actual| {
+                assert!(actual >= old_capacity * 2 && actual <= old_capacity * 4);
+                observed.set(actual);
+                // Entire old owner plus full new allocation admission coexist.
+                assert_eq!(budget.usage_snapshot().bytes, before + prepaid);
+                Ok(())
+            });
+            if short {
+                assert!(matches!(result, Err(error) if error.is_resource()));
+                assert_eq!(observed.get(), 0);
+                assert_eq!(rows.values.capacity(), old_capacity);
+            } else {
+                result.unwrap();
+                assert!(observed.get() > 0);
+                let new_bytes =
+                    MeteredReplayRows::<u64>::buffer_bytes(rows.values.capacity()).unwrap();
+                assert_eq!(
+                    budget.usage_snapshot().bytes,
+                    before - old_bytes + new_bytes
+                );
+            }
+            assert_eq!(rows.len(), old_capacity);
+            assert!(
+                rows.iter()
+                    .enumerate()
+                    .all(|(index, value)| index as u64 == *value)
+            );
+            let paid = MeteredReplayRows::<u64>::buffer_bytes(rows.values.capacity()).unwrap();
+            let before_drop = budget.usage_snapshot().bytes;
+            let first_failure = budget.first_resource_failure();
+            assert_eq!(first_failure.is_some(), short);
+            assert!(!budget.usage_snapshot().poisoned);
+            drop(rows);
+            // A denied reservation latches Resource, not internal ledger poison.
+            // Already admitted bytes still refund without clearing the failure.
+            assert_eq!(before_drop - budget.usage_snapshot().bytes, paid);
+            assert_eq!(budget.first_resource_failure(), first_failure);
+        }
+        let c = case();
+        let world = c.build().unwrap();
+        let mut rows = MeteredReplayRows::<u64>::default();
+        rows.prepare(&world).unwrap();
+        for value in 0..rows.values.capacity() {
+            rows.values.push(value as u64);
+        }
+        let old_capacity = rows.values.capacity();
+        let before = world.budget.usage_snapshot().bytes;
+        let entered = std::cell::Cell::new(false);
+        let error = rows
+            .prepare_with(&world, |actual| {
+                entered.set(true);
+                assert!(actual >= old_capacity * 2);
+                assert_eq!(
+                    world.budget.usage_snapshot().bytes,
+                    before + MeteredReplayRows::<u64>::buffer_bytes(old_capacity * 4).unwrap()
+                );
+                Err(FactsError {
+                    kind: FactsErrorKind::Resource,
+                    diagnostic: Diagnostic::Static("post-growth test denial"),
+                })
+            })
+            .unwrap_err();
+        assert!(error.is_resource());
+        assert!(entered.get());
+        assert_eq!(rows.values.capacity(), old_capacity);
+        assert_eq!(rows.len(), old_capacity);
+        assert_eq!(world.budget.usage_snapshot().bytes, before);
+        assert!(
+            rows.iter()
+                .enumerate()
+                .all(|(index, value)| index as u64 == *value)
+        );
+    }
+
+    #[test]
+    fn replay_rows_explicit_ledger_poison_preserves_parent_charge() {
+        let c = case();
+        let world = c.build().unwrap();
+        let budget = &world.budget;
+        let before_parent = budget.usage_snapshot().bytes;
+        let parent_bytes = 64;
+        let parent = budget.reserve_bytes(parent_bytes).unwrap();
+        let mut rows = MeteredReplayRows::<u64>::default();
+        rows.prepare(&world).unwrap();
+        rows.values.push(7);
+        let paid = MeteredReplayRows::<u64>::buffer_bytes(rows.values.capacity()).unwrap();
+        let before_poison = budget.usage_snapshot().bytes;
+        assert_eq!(before_poison, before_parent + parent_bytes + paid);
+        assert!(budget.first_resource_failure().is_none());
+        budget.poison_ledger_for_tests();
+        assert!(budget.usage_snapshot().poisoned);
+        assert!(matches!(rows.prepare(&world), Err(error) if error.is_resource()));
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0], 7);
+        assert_eq!(budget.usage_snapshot().bytes, before_poison);
+        drop(rows);
+        // Explicit internal poison, unlike a Resource latch, conservatively
+        // retains both this owner's admission and the independent parent.
+        assert_eq!(budget.usage_snapshot().bytes, before_poison);
+        drop(parent);
+        assert_eq!(budget.usage_snapshot().bytes, before_poison);
+        assert!(budget.first_resource_failure().is_none());
+    }
+
+    #[test]
+    fn replay_rows_drop_payload_before_storage_lease() {
+        struct Probe<'a> {
+            budget: &'a PlanBudget,
+            expected: &'a std::cell::Cell<usize>,
+            observed: &'a std::cell::Cell<bool>,
+        }
+        impl Drop for Probe<'_> {
+            fn drop(&mut self) {
+                assert_eq!(self.budget.usage_snapshot().bytes, self.expected.get());
+                self.observed.set(true);
+            }
+        }
+        let c = case();
+        let world = c.build().unwrap();
+        let expected = std::cell::Cell::new(0);
+        let observed = std::cell::Cell::new(false);
+        let before = world.budget.usage_snapshot().bytes;
+        let mut rows = MeteredReplayRows::default();
+        rows.prepare(&world).unwrap();
+        rows.values.push(Probe {
+            budget: &world.budget,
+            expected: &expected,
+            observed: &observed,
+        });
+        expected.set(world.budget.usage_snapshot().bytes);
+        assert!(expected.get() > before);
+        drop(rows);
+        assert!(observed.get());
+        assert_eq!(world.budget.usage_snapshot().bytes, before);
+    }
+
+    #[test]
+    fn replay_warm_lookup_exact_work_short_and_poison_preserve_rows() {
+        for short in [false, true] {
+            let c = case();
+            let world = c.build().unwrap();
+            let facts = world.callable_facts(c.caller).unwrap();
+            let mut replays = NominalReplays::default();
+            world
+                .validate_ty_metadata_with(&c.leaf, facts.env(), 0, &mut replays)
+                .unwrap();
+            let before = world.budget.usage_snapshot().work;
+            let height = replays
+                .validated_type(&world, &c.leaf, facts.env())
+                .unwrap();
+            let cost = world.budget.usage_snapshot().work - before;
+            assert!(height.is_some() && cost > 0);
+            let used = world.budget.usage_snapshot().work;
+            world
+                .budget
+                .charge_work(world.budget.limits().work - used - cost + usize::from(short))
+                .unwrap();
+            let rows = (replays.types.len(), replays.type_index.len());
+            let result = replays.validated_type(&world, &c.leaf, facts.env());
+            if short {
+                assert!(matches!(result, Err(error) if error.is_resource()));
+                let failure = world.budget.first_resource_failure().unwrap();
+                assert!(
+                    matches!(replays.validated_type(&world, &c.leaf, facts.env()),
+                    Err(error) if error.is_resource())
+                );
+                assert_eq!(world.budget.first_resource_failure(), Some(failure));
+            } else {
+                assert_eq!(result.unwrap(), height);
+                assert_eq!(
+                    world.budget.usage_snapshot().work,
+                    world.budget.limits().work
+                );
+            }
+            assert_eq!((replays.types.len(), replays.type_index.len()), rows);
+        }
+    }
+
+    #[test]
+    fn replay_type_second_owner_failure_keeps_completed_rows_and_index() {
+        let c = case();
+        let world = c.build().unwrap();
+        let facts = world.callable_facts(c.caller).unwrap();
+        let mut replays = NominalReplays::default();
+        world
+            .validate_ty_metadata_with(&c.leaf, facts.env(), 0, &mut replays)
+            .unwrap();
+        assert!(replays.types.len() > 0);
+        // Fill both buffers to the same actual bound using completed genuine
+        // metadata roots; duplicate hashes are legitimate completed entries.
+        while replays.types.len() < replays.types.values.capacity()
+            || replays.type_index.len() < replays.type_index.values.capacity()
+        {
+            replays
+                .record_type(&c.leaf, facts.env(), 0, &world)
+                .unwrap();
+            assert!(replays.types.len() < 64);
+        }
+        let rows = replays.types.len();
+        let old_types_capacity = replays.types.values.capacity();
+        let old_index_capacity = replays.type_index.values.capacity();
+        let before = world.budget.usage_snapshot().bytes;
+        let first_entered = std::cell::Cell::new(false);
+        let second_entered = std::cell::Cell::new(false);
+        let result = replays.record_type_with(
+            &c.leaf,
+            facts.env(),
+            0,
+            &world,
+            || {
+                first_entered.set(true);
+                Ok(())
+            },
+            || {
+                second_entered.set(true);
+                Err(FactsError {
+                    kind: FactsErrorKind::Resource,
+                    diagnostic: Diagnostic::Static("second-owner post-growth test denial"),
+                })
+            },
+        );
+        assert!(matches!(result, Err(error) if error.is_resource()));
+        assert!(first_entered.get() && second_entered.get());
+        assert_eq!(replays.types.len(), rows);
+        assert_eq!(replays.type_index.len(), rows);
+        assert!(replays.types.values.capacity() > old_types_capacity);
+        assert_eq!(replays.type_index.values.capacity(), old_index_capacity);
+        let old_bytes =
+            MeteredReplayRows::<(Ty, GenericEnv, usize)>::buffer_bytes(old_types_capacity).unwrap();
+        let new_bytes = MeteredReplayRows::<(Ty, GenericEnv, usize)>::buffer_bytes(
+            replays.types.values.capacity(),
+        )
+        .unwrap();
+        assert_eq!(
+            world.budget.usage_snapshot().bytes,
+            before - old_bytes + new_bytes
+        );
+        for (position, &(_, ordinal)) in replays.type_index.iter().enumerate() {
+            assert_eq!(ordinal, position);
+            assert!(same_type_allocation(&replays.types[ordinal].0, &c.leaf));
+        }
+        assert_eq!(
+            replays
+                .validated_type(&world, &c.leaf, facts.env())
+                .unwrap(),
+            Some(0)
+        );
+        // Retrying cannot observe a half-published success row.
+        replays
+            .record_type(&c.leaf, facts.env(), 0, &world)
+            .unwrap();
+        assert_eq!(replays.types.len(), rows + 1);
+        assert_eq!(replays.type_index.len(), rows + 1);
+    }
+
+    #[test]
+    fn replay_sorted_candidates_keep_source_env_order_and_live_issuer() {
+        let c = case();
+        let world = c.build().unwrap();
+        let facts = world.callable_facts(c.caller).unwrap();
+        let other = world.callable_facts(c.body).unwrap();
+        let mut replays = NominalReplays::default();
+        let parameterized = Ty::Tuple(Arc::from([c.caller_parameter.clone(), c.leaf.clone()]));
+        world
+            .validate_ty_metadata_with(&parameterized, facts.env(), 0, &mut replays)
+            .unwrap();
+        let first = replays
+            .validated_type(&world, &parameterized, facts.env())
+            .unwrap()
+            .unwrap();
+        replays
+            .record_type(&parameterized, facts.env(), first + 1, &world)
+            .unwrap();
+        assert_eq!(
+            replays
+                .validated_type(&world, &parameterized, facts.env())
+                .unwrap(),
+            Some(first)
+        );
+        assert_eq!(
+            replays
+                .validated_type(&world, &parameterized, other.env())
+                .unwrap(),
+            None
+        );
+        assert!(
+            world
+                .validate_ty_metadata_with(&parameterized, other.env(), 0, &mut replays)
+                .is_err()
+        );
+        let Ty::Struct(original) = &c.leaf else {
+            panic!("nominal fixture")
+        };
+        let mut definition = original.def().clone();
+        definition.module = fixture_modules().core_root();
+        definition.visibility = ir::Visibility::Public;
+        let forged = Ty::Struct(StructTy::new(definition));
+        assert_eq!(type_allocation(&c.leaf), type_allocation(&forged));
+        assert_eq!(
+            replays
+                .validated_type(&world, &forged, facts.env())
+                .unwrap(),
+            None
+        );
+        assert!(
+            world
+                .validate_ty_metadata_with(&forged, facts.env(), 0, &mut replays)
+                .is_err()
+        );
+        assert!(replays.type_index.windows(2).all(|rows| rows[0] <= rows[1]));
+        let before = replays.types.len();
+        // Check the issuer while the planning budget is still healthy. A prior
+        // depth denial would otherwise mask this independent authority guard.
+        assert!(world.budget.first_resource_failure().is_none());
+        assert!(
+            world
+                .catalog
+                .modules()
+                .budget()
+                .charge(super::super::expansion_budget::Counter::Work, u64::MAX)
+                .is_err()
+        );
+        let failure = world.catalog.modules().budget().snapshot().failure;
+        assert!(
+            matches!(replays.validated_type(&world, &parameterized, facts.env()),
+            Err(error) if error.is_resource())
+        );
+        assert!(
+            matches!(replays.record_type(&c.leaf, facts.env(), 0, &world),
+            Err(error) if error.is_resource())
+        );
+        assert_eq!(world.catalog.modules().budget().snapshot().failure, failure);
+        assert_eq!(replays.types.len(), before);
+    }
+
+    #[test]
     fn metadata_replay_nested_callers_preserve_parent_and_reject_warm_foreign_inputs() {
         let c = case();
         let world = c.build().unwrap();
@@ -12966,11 +13486,36 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+        fn live_replay_rows<T>(rows: &MeteredReplayRows<T>) -> usize {
+            if rows.storage.is_some() {
+                MeteredReplayRows::<T>::buffer_bytes(rows.values.capacity()).unwrap()
+            } else {
+                assert_eq!(rows.values.capacity(), 0);
+                0
+            }
+        }
+        fn live_nested_inventory(replays: &NominalReplays) -> usize {
+            live_replay_rows(&replays.facts)
+                + live_replay_rows(&replays.inputs)
+                + live_replay_rows(&replays.types)
+                + live_replay_rows(&replays.type_index)
+                + replays
+                    .raw_metadata
+                    .as_ref()
+                    .map_or(0, |(_, _, child)| live_nested_inventory(child))
+                + replays
+                    .raw_metadata_others
+                    .values
+                    .iter()
+                    .map(|row| live_nested_inventory(&row.child))
+                    .sum::<usize>()
+        }
         let before_drop = facts.budget().usage_snapshot().bytes;
         let reserved = 3
             * (std::mem::size_of::<NominalReplays>() + 2 * std::mem::size_of::<usize>())
             + RawMetadataArenas::buffer_bytes(parent.raw_metadata_others.values.capacity())
-                .unwrap();
+                .unwrap()
+            + live_nested_inventory(&parent);
         drop(parent);
         assert_eq!(
             before_drop - facts.budget().usage_snapshot().bytes,
