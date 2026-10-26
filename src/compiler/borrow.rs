@@ -80,6 +80,138 @@ pub(super) struct CarrierEffects {
     bindings: Arc<[CallCarrierBinding]>,
 }
 
+/// Count storage that escapes with the effect summary, not temporary analysis
+/// reservations or their bookkeeping. Repeated shared paths are deliberately
+/// counted per occurrence, so no pointer identity or deduplication is authority.
+fn carrier_effects_payload_bytes(
+    writes: &[ir::CarrierWriteEnvelope],
+    must_overwrite: &[InputCarrier],
+    bindings: &[CallCarrierBinding],
+    budget: &mut Budget,
+) -> Result<usize, Exhausted> {
+    struct Payload<'a> {
+        bytes: usize,
+        budget: &'a mut Budget,
+    }
+    impl Payload<'_> {
+        fn allocation<T>(&mut self, capacity: usize) -> Result<(), Exhausted> {
+            self.budget.spend(1)?;
+            self.bytes = add(self.bytes, mul(capacity, size_of::<T>())?)?;
+            Ok(())
+        }
+        fn arc<T>(&mut self, length: usize) -> Result<(), Exhausted> {
+            self.allocation::<T>(length)?;
+            self.bytes = add(self.bytes, 2 * size_of::<usize>())?;
+            Ok(())
+        }
+        fn location(&mut self, location: &CarrierLocation) -> Result<(), Exhausted> {
+            // Family projection/opaque Arcs are cloned from paid canonical
+            // source/contract facts, never allocated by the carrier analysis.
+            self.arc::<CarrierStep>(location.path.0.len())
+        }
+        fn origins(&mut self, origins: &CarrierOrigins) -> Result<(), Exhausted> {
+            self.allocation::<u64>(origins.references.0.0.capacity())?;
+            self.allocation::<u64>(origins.families.0.0.capacity())
+        }
+        fn place(&mut self, place: &CanonicalPlace) -> Result<(), Exhausted> {
+            self.allocation::<Projection>(place.projection.capacity())?;
+            if let CanonicalRoot::ParameterReferent(_, location) = &place.root {
+                self.location(location)?;
+            }
+            Ok(())
+        }
+        fn targets(&mut self, targets: &Vec<Target>) -> Result<(), Exhausted> {
+            self.allocation::<Target>(targets.capacity())?;
+            for target in targets {
+                self.place(&target.place)?;
+                self.allocation::<usize>(target.authority.capacity())?;
+            }
+            Ok(())
+        }
+        fn region_key(&mut self, key: &RegionKey) -> Result<(), Exhausted> {
+            self.budget.spend(1)?;
+            match key {
+                RegionKey::Family { component, .. } => self.location(component)?,
+                RegionKey::Occurrence {
+                    component: Some(component),
+                    ..
+                } => {
+                    self.location(component)?;
+                }
+                _ => {}
+            }
+            Ok(())
+        }
+        fn binding(&mut self, binding: &CallCarrierBinding) -> Result<(), Exhausted> {
+            // source/function/facts/contract/evidence only clone independently
+            // paid immutable graph allocations. Their Arc handles are already
+            // included in the outer binding array, with no new pointee storage.
+            self.allocation::<CarrierEntrySnapshot>(binding.entry.capacity())?;
+            for entry in &binding.entry {
+                self.location(&entry.input.location)?;
+                self.origins(&entry.origins)?;
+            }
+            self.allocation::<CarrierDestinationBinding>(binding.destinations.capacity())?;
+            for destination in &binding.destinations {
+                self.location(&destination.destination.location)?;
+                self.targets(&destination.targets)?;
+                self.allocation::<(CellKey, CarrierOrigins)>(destination.old.capacity())?;
+                for (cell, origins) in &destination.old {
+                    self.place(&cell.storage)?;
+                    self.origins(origins)?;
+                }
+            }
+            self.allocation::<CallRegionBinding>(binding.regions.capacity())?;
+            for region in &binding.regions {
+                self.budget.spend(1)?;
+                if let Some(component) = &region.component {
+                    self.location(component)?;
+                }
+            }
+            self.allocation::<RegionKey>(binding.relation.keys.capacity())?;
+            for key in &binding.relation.keys {
+                self.region_key(key)?;
+            }
+            self.allocation::<Set>(binding.relation.closure.capacity())?;
+            for row in &binding.relation.closure {
+                self.allocation::<u64>(row.0.capacity())?;
+            }
+            self.targets(&binding.actual_writes)
+        }
+    }
+    let mut payload = Payload { bytes: 0, budget };
+    payload.arc::<CarrierEffects>(1)?;
+    payload.arc::<ir::CarrierWriteEnvelope>(writes.len())?;
+    for write in writes {
+        payload.location(&write.destination.location)?;
+        payload.arc::<InputCarrier>(write.sources.len())?;
+        for input in write.sources.iter() {
+            payload.location(&input.location)?;
+        }
+    }
+    payload.arc::<InputCarrier>(must_overwrite.len())?;
+    for input in must_overwrite {
+        payload.location(&input.location)?;
+    }
+    payload.arc::<CallCarrierBinding>(bindings.len())?;
+    for binding in bindings {
+        payload.binding(binding)?;
+    }
+    Ok(payload.bytes)
+}
+
+fn retain_carrier_effects_payload(
+    writes: &[ir::CarrierWriteEnvelope],
+    must_overwrite: &[InputCarrier],
+    bindings: &[CallCarrierBinding],
+    budget: &mut Budget,
+    ledger: &ir::PlanBudget,
+) -> Result<usize, Exhausted> {
+    let bytes = carrier_effects_payload_bytes(writes, must_overwrite, bindings, budget)?;
+    ledger.retain_bytes(bytes).map_err(|_| Exhausted)?;
+    Ok(bytes)
+}
+
 fn call_binding_subject_matches(
     binding: &CallCarrierBinding,
     f: &cfg::Function,
@@ -4938,18 +5070,15 @@ impl CarrierBuilder<'_, '_> {
                 checked_arc_transfer::<InputCarrier>(must_overwrite.len(), self.budget)?;
                 checked_arc_transfer::<CallCarrierBinding>(self.bindings.len(), self.budget)?;
                 self.retain(size_of::<CarrierEffects>() + size_of::<[usize; 8]>(), 1)?;
-                // All effect rows, occurrence snapshots, paths and component sets
-                // are subsets of this analysis's paid allocations. Retain that
-                // conservative whole-allocation bound in the SAME planning ledger
-                // before publishing an Arc that outlives the local Budget tokens.
-                let retained_payload = self
-                    .budget
-                    .reserved_bytes()
-                    .checked_sub(self.allocation_start)
-                    .ok_or(Exhausted)?;
-                self.ledger
-                    .retain_bytes(retained_payload)
-                    .map_err(|_| Exhausted)?;
+                // Keep the escaping rows and nested owned allocations in the
+                // SAME ledger after temporary analysis reservations are dropped.
+                retain_carrier_effects_payload(
+                    &writes,
+                    &must_overwrite,
+                    &self.bindings,
+                    self.budget,
+                    &self.ledger,
+                )?;
                 Some(Arc::new(CarrierEffects {
                     writes: writes.into(),
                     must_overwrite: must_overwrite.into(),
@@ -6728,6 +6857,37 @@ mod parameter_equality_tests {
     use crate::compiler::{frontend, ownership};
 
     #[test]
+    fn effects_payload_counts_nested_rows_and_shared_path_occurrences() {
+        let count = |writes: &[ir::CarrierWriteEnvelope], must: &[InputCarrier]| {
+            carrier_effects_payload_bytes(writes, must, &[], &mut Budget::new(1_000)).unwrap()
+        };
+        assert_eq!(
+            count(&[], &[]),
+            size_of::<CarrierEffects>() + 8 * size_of::<usize>()
+        );
+        let input = InputCarrier {
+            param: 0,
+            location: CarrierLocation {
+                path: CarrierPath(Arc::from([CarrierStep::Field(0), CarrierStep::Referent])),
+                channel: CarrierChannel::Fixed(ReferencePosition { depth: 0 }),
+            },
+        };
+        let writes = [ir::CarrierWriteEnvelope {
+            destination: input.clone(),
+            sources: Arc::from([input.clone()]),
+        }];
+        // Root, three outer slices and one source slice have five Arc headers.
+        // The same path appears in destination, source and must-overwrite, and
+        // is conservatively covered three times without identity-based reuse.
+        let expected = size_of::<CarrierEffects>()
+            + size_of::<ir::CarrierWriteEnvelope>()
+            + 2 * size_of::<InputCarrier>()
+            + 10 * size_of::<usize>()
+            + 3 * (2 * size_of::<usize>() + 2 * size_of::<CarrierStep>());
+        assert_eq!(count(&writes, &[input]), expected);
+    }
+
+    #[test]
     fn opaque_backing_summary_stays_incomplete_without_invented_cells() {
         let locals = [Ty::Int(ir::IntTy::I32)];
         let resolve = |index| {
@@ -7074,6 +7234,67 @@ mod parameter_equality_tests {
         let effects = plan.effects().unwrap();
         let original = &effects.bindings;
         assert_eq!(original.len(), 2);
+        let payload = |bindings: &[CallCarrierBinding]| {
+            carrier_effects_payload_bytes(
+                &effects.writes,
+                &effects.must_overwrite,
+                bindings,
+                &mut Budget::new(32_000_000),
+            )
+            .unwrap()
+        };
+        let bytes = payload(original);
+        assert!(bytes >= size_of::<CarrierEffects>() + 2 * size_of::<CallCarrierBinding>());
+        // Temporary analysis storage and reservation bookkeeping cannot escape
+        // merely because they were paid during this analysis invocation.
+        build_budget.reserve_bytes(1024 * 1024).unwrap();
+        assert_eq!(payload(original), bytes);
+        let exact = ir::PlanBudget::new(ir::PlanLimits {
+            bytes,
+            ..ir::PlanLimits::default()
+        });
+        let retain = |ledger: &ir::PlanBudget| {
+            retain_carrier_effects_payload(
+                &effects.writes,
+                &effects.must_overwrite,
+                original,
+                &mut Budget::new(32_000_000),
+                ledger,
+            )
+        };
+        assert_eq!(retain(&exact).unwrap(), bytes);
+        assert_eq!(exact.usage_snapshot().bytes, bytes);
+        let short = ir::PlanBudget::new(ir::PlanLimits {
+            bytes: bytes - 1,
+            ..ir::PlanLimits::default()
+        });
+        assert!(retain(&short).is_err());
+        assert_eq!(
+            short.usage_snapshot().first_failure.unwrap().kind,
+            ir::ResourceBudgetKind::Bytes
+        );
+        let poisoned = ir::PlanBudget::default();
+        poisoned.poison_ledger_for_tests();
+        assert!(retain(&poisoned).is_err());
+        assert!(poisoned.usage_snapshot().poisoned);
+        let mut capacity_rows = original.to_vec();
+        let before = payload(&capacity_rows);
+        let old_capacity = capacity_rows[0].actual_writes.capacity();
+        capacity_rows[0].actual_writes.reserve_exact(9);
+        let added_capacity = capacity_rows[0].actual_writes.capacity() - old_capacity;
+        assert_eq!(
+            payload(&capacity_rows) - before,
+            added_capacity * size_of::<Target>()
+        );
+        assert!(
+            carrier_effects_payload_bytes(
+                &effects.writes,
+                &effects.must_overwrite,
+                original,
+                &mut Budget::new(0),
+            )
+            .is_err()
+        );
         let subject_ok = |binding: &CallCarrierBinding| {
             call_binding_subject_matches(
                 binding,
