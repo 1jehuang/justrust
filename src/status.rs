@@ -18,9 +18,10 @@ use crate::record::Meta;
 use crate::shim::Unit;
 use crate::summary::{IndexEntry, Summary};
 use anyhow::Result;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fmt::Write as _;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 
 /// How long a finished run stays visible in `--waybar` output.
@@ -34,6 +35,13 @@ pub struct Active {
     pub label: String,
     pub cwd: String,
     pub args: Vec<String>,
+    pub agent_session: Option<String>,
+    /// Logical CPUs on the build machine, or 0 when not yet known.
+    pub ncpu: usize,
+    /// Measured process-tree CPU usage, in cores, or null if unavailable/stale.
+    pub cpu_cores: Option<f64>,
+    /// Unix timestamp of the CPU measurement (not the status poll).
+    pub sampled_at: Option<f64>,
     /// "local", "remote" (own machine) or "hosted".
     pub place: String,
     pub elapsed: f64,
@@ -65,6 +73,63 @@ pub struct Finished {
     pub ok: bool,
     pub ago: f64,
     pub place: String,
+    pub cwd: String,
+    pub args: Vec<String>,
+    pub agent_session: Option<String>,
+}
+
+/// Shared with live CPU snapshot producers. Legacy sample journals provide
+/// the same time and CPU fields, with the machine size taken from metadata.
+#[derive(Deserialize)]
+struct CpuSample {
+    t: f64,
+    build_cores: f64,
+    #[serde(default)]
+    ncpu: usize,
+}
+
+fn measured_cpu(dir: &Path, meta: &Meta, now: f64) -> (usize, Option<f64>, Option<f64>) {
+    const MAX_SAMPLE_BYTES: u64 = 16 * 1024;
+    let snapshot = std::fs::File::open(dir.join("cpu.json"))
+        .ok()
+        .and_then(|f| serde_json::from_reader(f.take(MAX_SAMPLE_BYTES)).ok());
+    let sample: Option<CpuSample> = snapshot.or_else(|| {
+        let mut f = std::fs::File::open(dir.join("samples.jsonl")).ok()?;
+        let len = f.metadata().ok()?.len();
+        let offset = len.saturating_sub(MAX_SAMPLE_BYTES);
+        f.seek(SeekFrom::Start(offset)).ok()?;
+        let mut tail = String::new();
+        f.take(MAX_SAMPLE_BYTES).read_to_string(&mut tail).ok()?;
+        // Discard a possibly truncated first line when reading the tail.
+        let tail = if offset > 0 {
+            tail.split_once('\n')?.1
+        } else {
+            &tail
+        };
+        tail.lines()
+            .rev()
+            .find_map(|line| serde_json::from_str(line).ok())
+    });
+    let Some(sample) = sample else {
+        return (meta.ncpu, None, None);
+    };
+    let ncpu = if sample.ncpu > 0 {
+        sample.ncpu
+    } else {
+        meta.ncpu
+    };
+    if !sample.t.is_finite()
+        || !sample.build_cores.is_finite()
+        || sample.t < meta.start
+        || now - sample.t > 5.0
+        || sample.t - now > 1.0
+        || sample.build_cores < 0.0
+        || ncpu == 0
+        || sample.build_cores > ncpu as f64
+    {
+        return (ncpu, None, None);
+    }
+    (ncpu, Some(sample.build_cores), Some(sample.t))
 }
 
 /// Where a run ran: its `meta.json` says, else the index's remote marker.
@@ -310,6 +375,7 @@ pub fn collect() -> Result<Status> {
             continue;
         }
         let live = crate::live::load(&dir).unwrap_or_default();
+        let (ncpu, cpu_cores, sampled_at) = measured_cpu(&dir, &meta, now);
         let done_units = crate::summary::load_units(&dir);
         let index = index.get_or_insert_with(crate::runs::load_index);
         let est = estimate(now, &meta, &live, &done_units, index, &runs);
@@ -324,6 +390,10 @@ pub fn collect() -> Result<Status> {
             label: label(&meta.cwd, &meta.args),
             cwd: meta.cwd.clone(),
             args: meta.args.clone(),
+            agent_session: meta.agent_session.clone(),
+            ncpu,
+            cpu_cores,
+            sampled_at,
             place: place_of(Some(&meta), false),
             elapsed: now - meta.start,
             units_finished: done_units.len(),
@@ -354,6 +424,9 @@ pub fn collect() -> Result<Status> {
                     ok: r.exit == 0,
                     ago,
                     place: place_of(read_meta(&runs.join(&r.id)).as_ref(), r.remote.is_some()),
+                    cwd: r.cwd.clone(),
+                    args: r.args.clone(),
+                    agent_session: r.agent_session.clone(),
                 });
             }
         }
@@ -550,6 +623,66 @@ pub fn command(json: bool, waybar: bool, watch: Option<f64>) -> Result<()> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn cpu_samples_are_measured_fresh_and_bounded() {
+        let dir = std::env::temp_dir().join(format!(
+            "justrust-status-{}-{}",
+            std::process::id(),
+            paths::now()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        struct Cleanup(std::path::PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let _cleanup = Cleanup(dir.clone());
+        let meta = Meta {
+            start: 100.0,
+            ncpu: 8,
+            ..Default::default()
+        };
+        assert_eq!(measured_cpu(&dir, &meta, 110.0), (8, None, None));
+        // A journal with a partially written trailing line still exposes the
+        // last complete sample. Counts of processes never enter this math.
+        std::fs::write(
+            dir.join("samples.jsonl"),
+            "{\"t\":109.0,\"build_cores\":2.5,\"rustc_procs\":99}\n{\"t\":",
+        )
+        .unwrap();
+        assert_eq!(
+            measured_cpu(&dir, &meta, 110.0),
+            (8, Some(2.5), Some(109.0))
+        );
+        for value in [
+            "{\"t\":104.0,\"build_cores\":2.5}",
+            "{\"t\":112.0,\"build_cores\":2.5}",
+            "{\"t\":99.0,\"build_cores\":2.5}",
+            "{\"t\":109.0,\"build_cores\":-1}",
+            "{\"t\":109.0,\"build_cores\":9}",
+        ] {
+            std::fs::write(dir.join("cpu.json"), value).unwrap();
+            assert_eq!(measured_cpu(&dir, &meta, 110.0), (8, None, None), "{value}");
+        }
+        // A remote snapshot supplies the remote CPU count, not this host's.
+        std::fs::write(
+            dir.join("cpu.json"),
+            "{\"t\":110.0,\"build_cores\":12.5,\"ncpu\":32}",
+        )
+        .unwrap();
+        assert_eq!(
+            measured_cpu(&dir, &meta, 110.0),
+            (32, Some(12.5), Some(110.0))
+        );
+        std::fs::write(dir.join("cpu.json"), "malformed").unwrap();
+        assert_eq!(
+            measured_cpu(&dir, &meta, 110.0),
+            (8, Some(2.5), Some(109.0))
+        );
+        assert_eq!(measured_cpu(&dir, &meta, 120.0), (8, None, None));
+    }
+
     fn s(v: &[&str]) -> Vec<String> {
         v.iter().map(|x| x.to_string()).collect()
     }
@@ -580,6 +713,10 @@ mod tests {
             label: "jcode check".into(),
             cwd: "/w".into(),
             args: s(&["check"]),
+            agent_session: None,
+            ncpu: 0,
+            cpu_cores: None,
+            sampled_at: None,
             place: "hosted".into(),
             elapsed: 4.0,
             live: LiveState {
@@ -594,6 +731,11 @@ mod tests {
             active: vec![a],
             recent: None,
         };
+        let json = serde_json::to_value(&st).unwrap();
+        assert_eq!(json["active"][0]["ncpu"], 0);
+        for field in ["agent_session", "cpu_cores", "sampled_at"] {
+            assert!(json["active"][0].get(field).unwrap().is_null());
+        }
         let v: serde_json::Value = serde_json::from_str(&render_waybar(&st)).unwrap();
         let text = v["text"].as_str().unwrap();
         assert!(
@@ -610,6 +752,9 @@ mod tests {
                 ok: true,
                 ago: 1.0,
                 place: "local".into(),
+                cwd: "/w".into(),
+                args: s(&["test"]),
+                agent_session: None,
             }),
         };
         let v: serde_json::Value = serde_json::from_str(&render_waybar(&done)).unwrap();
