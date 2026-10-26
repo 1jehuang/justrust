@@ -15,11 +15,14 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
   known deferred assignment types reuse no-fallback inference. The same trace now
   reconstructs returned references and reference-bearing aggregate results from
   original result schemas, including composed producer calls and independently
-  authored root annotations and declared function-tail result types.
-  `reference_actuals` covers multiple slots, rigid caller parameters,
-  mutable/nested results, context conflicts and escaping
-  borrows at workers 1/8. General scoped expression/context coverage and unsupported
-  callable forms remain open; see `GENERIC-INFERENCE.md`.
+  authored annotations and declared function-tail result types. Exact scoped
+  binding evidence supports nested blocks, shadowing and control-flow branches;
+  fully explicit producers retain source-authored type arguments, including
+  output-only calls. `reference_actuals` covers multiple slots, rigid caller
+  parameters, mutable/nested results, scoped and explicit producer composition,
+  context conflicts and escaping borrows at workers 1/8. Partial `_` producer
+  applications and unsupported callable forms remain open; see
+  `GENERIC-INFERENCE.md`.
 
 - [ ] Complete all twenty unchanged full programs. The current
   `justrust test --test full_programs -- --nocapture` gate checks/builds every

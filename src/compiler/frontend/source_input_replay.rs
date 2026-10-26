@@ -2,6 +2,203 @@
 //! Checked types are comparison targets, never an inference source.
 use super::*;
 
+// Navigate the immutable AST through the same general walker used by source
+// validation. The transient pointer index only selects an exact SourceNode,
+// never a spelling or an assumed enclosing-expression shape.
+fn source_statement<'a>(
+    function: &'a Function,
+    inventory: &SourceInventory,
+    node: &sr::SourceNode,
+    budget: &ir::PlanBudget,
+) -> Result<Option<&'a Stmt>, FactsError> {
+    let mut found = None;
+    walk_depth_inspecting(
+        DepthNode::Block(&function.body),
+        None,
+        Some(&inventory.names),
+        Some(&mut |part, depth| {
+            budget.check_depth(depth)?;
+            budget.charge_work(1)?;
+            if let DepthNode::Block(block) = part {
+                for statement in &block.statements {
+                    budget.charge_work(1)?;
+                    if let Some(index) = inventory
+                        .statement_pointers
+                        .get(&(statement as *const Stmt as usize))
+                        && inventory.bindings[*index].node == *node
+                    {
+                        found = Some(statement);
+                    }
+                }
+            }
+            Ok(())
+        }),
+    )
+    .map_err(|e| source_error(budget, &e))?;
+    Ok(found)
+}
+
+fn checked_blocks(
+    checked: &ir::CheckedFunction,
+    budget: &ir::PlanBudget,
+    mut visit: impl FnMut(&ir::TypedBlock) -> Result<(), FactsError>,
+) -> Result<(), FactsError> {
+    let mut blocks = Vec::new();
+    sr::push(&mut blocks, &checked.body, budget)?;
+    // Expressions live in one arena, so no expression-edge traversal (and no
+    // repeated visits through shared expression IDs) is needed.
+    for expression in &checked.exprs {
+        sr::work(budget, 1)?;
+        match &expression.kind {
+            ir::ExprKind::Block(block)
+            | ir::ExprKind::LabeledBlock { body: block, .. }
+            | ir::ExprKind::Loop { body: block, .. } => sr::push(&mut blocks, block, budget)?,
+            ir::ExprKind::If {
+                then_block,
+                else_block,
+                ..
+            } => {
+                sr::push(&mut blocks, then_block, budget)?;
+                sr::push(&mut blocks, else_block, budget)?;
+            }
+            _ => {}
+        }
+    }
+    while let Some(block) = blocks.pop() {
+        visit(block)?;
+        for statement in &block.statements {
+            sr::work(budget, 1)?;
+            if let ir::TypedStmt::While { body, .. } = statement {
+                sr::push(&mut blocks, body, budget)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn capture_scoped_initializers(
+    cap: &CanonicalSourceCapability,
+    checked: &ir::CheckedFunction,
+    budget: &ir::PlanBudget,
+) -> Result<Vec<(usize, ir::LocalId, ir::ExprId)>, FactsError> {
+    let bindings = cap.scoped_bindings.borrow();
+    if bindings.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut locals = HashMap::new();
+    for (index, local) in bindings.iter() {
+        reserve_source_map(&mut locals, budget)?;
+        if locals.insert(*local, *index).is_some() {
+            return Err(FactsError::invalid(budget, "duplicate scoped source local"));
+        }
+    }
+    let mut result = Vec::new();
+    checked_blocks(checked, budget, |block| {
+        for statement in &block.statements {
+            sr::work(budget, 1)?;
+            if let ir::TypedStmt::Let { local, value } = statement
+                && let Some(index) = locals.remove(local)
+            {
+                sr::push(&mut result, (index, *local, *value), budget)?;
+            }
+        }
+        Ok(())
+    })?;
+    if !locals.is_empty() {
+        return Err(FactsError::invalid(
+            budget,
+            "scoped source initializer missing",
+        ));
+    }
+    Ok(result)
+}
+
+fn precedes(binding: &sr::SourceNode, operand: &sr::SourceNode) -> bool {
+    let Some((ordinal, parent)) = binding.path.split_last() else {
+        return false;
+    };
+    let Some((2, block)) = parent.split_last() else {
+        return false;
+    };
+    if operand.owner != binding.owner {
+        return false;
+    }
+    match operand.path.strip_prefix(block) {
+        // The initializer executes before its own binding enters scope. A
+        // later statement (including its nested blocks) may use the binding.
+        Some([2, next, ..]) => next > ordinal,
+        Some([6, ..]) => true, // enclosing block tail
+        _ => false,
+    }
+}
+
+pub(super) fn initializer(
+    original: &OriginalSource,
+    index: usize,
+    checked: &ir::CheckedFunction,
+    budget: &ir::PlanBudget,
+) -> Result<(ir::LocalId, ir::ExprId), FactsError> {
+    let site = original
+        .bindings
+        .get(index)
+        .ok_or_else(|| FactsError::invalid(budget, "input binding missing"))?;
+    if site.statement.is_some() {
+        let local = mapped_source_binding(original, index, budget)?;
+        let position = original
+            .root_positions
+            .get(index)
+            .copied()
+            .flatten()
+            .ok_or_else(|| FactsError::invalid(budget, "input let mapping missing"))?;
+        if let Some(ir::TypedStmt::Let {
+            local: actual,
+            value,
+        }) = checked.body.statements.get(position)
+            && *actual == local
+        {
+            return Ok((local, *value));
+        }
+        return Err(FactsError::invalid(budget, "input checked let changed"));
+    }
+    let mut mapping = None;
+    for (source, local, value) in &original.scoped_initializers {
+        sr::work(budget, 1)?;
+        if *source == index && mapping.replace((*local, *value)).is_some() {
+            return Err(FactsError::invalid(
+                budget,
+                "duplicate scoped initializer mapping",
+            ));
+        }
+    }
+    let (local, value) =
+        mapping.ok_or_else(|| FactsError::invalid(budget, "scoped initializer mapping missing"))?;
+    let mut matches = 0;
+    checked_blocks(checked, budget, |block| {
+        for statement in &block.statements {
+            sr::work(budget, 1)?;
+            if let ir::TypedStmt::Let {
+                local: actual,
+                value: actual_value,
+            } = statement
+                && *actual == local
+            {
+                if *actual_value != value {
+                    return Err(FactsError::invalid(budget, "scoped initializer changed"));
+                }
+                matches += 1;
+            }
+        }
+        Ok(())
+    })?;
+    if matches != 1 {
+        return Err(FactsError::invalid(
+            budget,
+            "scoped initializer occurrence changed",
+        ));
+    }
+    Ok((local, value))
+}
+
 fn syntax(source: &Expr, budget: &ir::PlanBudget, depth: usize) -> Result<bool, FactsError> {
     sr::depth(budget, depth)?;
     sr::work(budget, 1)?;
@@ -23,7 +220,9 @@ fn syntax(source: &Expr, budget: &ir::PlanBudget, depth: usize) -> Result<bool, 
             source_clone::clone_vector(fields, budget).map_err(|e| source_error(budget, &e))?;
             fields.iter().map(|(_, value)| value).collect()
         }
-        Expr::Repeat { value, .. } => return syntax(value, budget, depth + 1),
+        Expr::Repeat { value, .. } | Expr::Apply { value, .. } => {
+            return syntax(value, budget, depth + 1);
+        }
         _ => return Ok(false),
     };
     for value in children {
@@ -78,10 +277,9 @@ pub(super) fn supported(
             if site.parameter.is_some() {
                 return Ok(true);
             }
-            let Some(statement) = site.statement else {
-                return Ok(false);
-            };
-            let Some(Stmt::Let { value, .. }) = function.body.statements.get(statement) else {
+            let Some(Stmt::Let { value, .. }) =
+                source_statement(function, inventory, &site.node, budget)?
+            else {
                 return Ok(false);
             };
             supported(
@@ -153,6 +351,14 @@ pub(super) fn supported(
             }
             Ok(true)
         }
+        Expr::Apply { value, .. } => supported(
+            value,
+            &node.child(7, 0, budget)?,
+            function,
+            inventory,
+            budget,
+            depth + 1,
+        ),
         Expr::Repeat { value, .. } => supported(
             value,
             &node.child(11, 0, budget)?,
@@ -189,6 +395,297 @@ pub(super) struct Replay<'a> {
     pub budget: &'a ir::PlanBudget,
 }
 impl Replay<'_> {
+    /// Preserve unresolved numeric source terms through aggregate structure.
+    /// Nonliteral leaves contribute only after ordinary source replay has
+    /// authenticated them. No checked expression type seeds these constraints.
+    #[allow(clippy::too_many_arguments)]
+    fn input_term(
+        &self,
+        source: &Expr,
+        node: &sr::SourceNode,
+        id: ir::ExprId,
+        checker: &Checker<'_>,
+        state: &sr::CallInferenceState,
+        depth: usize,
+    ) -> Result<sr::InferTerm, FactsError> {
+        sr::depth(self.budget, depth)?;
+        sr::work(self.budget, 1)?;
+        let actual = self
+            .checked
+            .exprs
+            .get(id.0)
+            .ok_or_else(|| FactsError::invalid(self.budget, "array source operand missing"))?;
+        match (source, &actual.kind) {
+            (Expr::Integer(_), ir::ExprKind::Int(_)) => checker
+                .inference_evidence(source, depth)
+                .map_err(|e| source_error(self.budget, &e)),
+            (Expr::Tuple(fields), ir::ExprKind::Tuple(values)) if fields.len() == values.len() => {
+                let mut terms = Vec::new();
+                for (index, (source, value)) in fields.iter().zip(values).enumerate() {
+                    sr::push(
+                        &mut terms,
+                        self.input_term(
+                            source,
+                            &node.child(12, index, self.budget)?,
+                            *value,
+                            checker,
+                            state,
+                            depth + 1,
+                        )?,
+                        self.budget,
+                    )?;
+                }
+                state.node(sr::InferKind::Tuple(terms.into()))
+            }
+            (Expr::Array(fields), ir::ExprKind::Array(values)) if fields.len() == values.len() => {
+                let element =
+                    self.array_element_term(fields, values, node, checker, state, None, depth + 1)?;
+                state.node(sr::InferKind::Array(element, fields.len()))
+            }
+            (
+                Expr::Repeat { value, len },
+                ir::ExprKind::Repeat {
+                    value: actual,
+                    len: actual_len,
+                },
+            ) if len == actual_len => {
+                let element = self.input_term(
+                    value,
+                    &node.child(11, 0, self.budget)?,
+                    *actual,
+                    checker,
+                    state,
+                    depth + 1,
+                )?;
+                state.node(sr::InferKind::Array(element, *len))
+            }
+            _ => {
+                let ty = self.expression(source, node, id, None, depth + 1)?;
+                state.type_term(&ty, None, depth + 1)
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn array_element_term(
+        &self,
+        fields: &[Expr],
+        values: &[ir::ExprId],
+        node: &sr::SourceNode,
+        checker: &Checker<'_>,
+        state: &sr::CallInferenceState,
+        expected: Option<&ir::Ty>,
+        depth: usize,
+    ) -> Result<sr::InferTerm, FactsError> {
+        sr::depth(self.budget, depth)?;
+        let mut element = expected
+            .map(|ty| state.type_term(ty, None, depth))
+            .transpose()?;
+        for (index, (source, value)) in fields.iter().zip(values).enumerate() {
+            let next = self.input_term(
+                source,
+                &node.child(12, index, self.budget)?,
+                *value,
+                checker,
+                state,
+                depth + 1,
+            )?;
+            element = Some(match element {
+                Some(previous) => state.merge(&previous, &next, depth + 1)?,
+                None => next,
+            });
+        }
+        match element {
+            Some(element) => Ok(element),
+            None => state.node(sr::InferKind::Unknown(false)),
+        }
+    }
+
+    fn array_element_type(
+        &self,
+        fields: &[Expr],
+        values: &[ir::ExprId],
+        node: &sr::SourceNode,
+        expected: Option<&ir::Ty>,
+        depth: usize,
+    ) -> Result<ir::Ty, FactsError> {
+        let module = self
+            .original
+            .plan
+            .callable_context(self.original.declaration)
+            .map_err(|e| source_error(self.budget, &e))?
+            .module;
+        let checker = Checker::new(self.signatures, ir::Ty::Unit, module);
+        let state = sr::CallInferenceState::new(None, self.budget)?;
+        let expected = match expected {
+            Some(ir::Ty::Array { element, .. }) => Some(element.as_ref()),
+            _ => None,
+        };
+        let element =
+            self.array_element_term(fields, values, node, &checker, &state, expected, depth)?;
+        // Rust's integer fallback applies after all sibling constraints have
+        // merged, never while visiting the first unsuffixed element.
+        state
+            .resolve(&element, true, depth, &mut |decl, args| {
+                self.original
+                    .plan
+                    .intern_nominal(
+                        decl,
+                        args,
+                        ir::FactsCtx::Validated(&self.original.facts),
+                        self.budget,
+                    )
+                    .map_err(|e| source_error(self.budget, &e))
+            })?
+            .ok_or_else(|| {
+                FactsError::unsupported(self.budget, "array element source type is unresolved")
+            })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn explicit_producer(
+        &self,
+        application: &GenericPath,
+        inputs: &[Expr],
+        node: &sr::SourceNode,
+        id: ir::ExprId,
+        arguments: &[ir::ExprId],
+        target: &ir::Callee,
+        signature: &ir::Signature,
+        canonical: &ir::Signature,
+        evidence: &ir::CallEvidence,
+        depth: usize,
+    ) -> Result<ir::Ty, FactsError> {
+        sr::depth(self.budget, depth)?;
+        let (_, written) = application
+            .application()
+            .map_err(|e| source_error(self.budget, &e))?;
+        if written
+            .iter()
+            .any(type_check::partial_annotation::has_nested_infer)
+        {
+            return Err(FactsError::unsupported(
+                self.budget,
+                "producer requires fully authored type arguments",
+            ));
+        }
+        let ir::Callee::Direct(direct) = target else {
+            return Err(FactsError::invalid(
+                self.budget,
+                "explicit producer changed target role",
+            ));
+        };
+        let context = self
+            .original
+            .plan
+            .callable_context(self.original.declaration)
+            .map_err(|e| source_error(self.budget, &e))?;
+        let checker = Checker::new(self.signatures, ir::Ty::Unit, context.module);
+        checker
+            .push_application(application, Namespace::Value)
+            .map_err(|e| source_error(self.budget, &e))?;
+        let (name, authored, regions) =
+            checker.applications.borrow_mut().pop().ok_or_else(|| {
+                FactsError::invalid(self.budget, "producer authored application missing")
+            })?;
+        if self.original.plan.registry.functions.get(&name) != Some(&direct.declaration)
+            || authored.len() != direct.type_args.len()
+        {
+            return Err(FactsError::invalid(
+                self.budget,
+                "producer authored target or arity changed",
+            ));
+        }
+        for (source, actual) in authored.iter().zip(direct.type_args.iter()) {
+            if !self.equal(source, actual)? {
+                return Err(FactsError::invalid(
+                    self.budget,
+                    "producer authored type argument changed",
+                ));
+            }
+        }
+        self.original.facts.validate_signature_with(
+            ir::SignatureSubject::Call(target),
+            canonical,
+            &mut tr::TraitScratch::default(),
+        )?;
+        if inputs.len() != arguments.len()
+            || arguments.len() != canonical.params.len()
+            || evidence.arguments.len() != arguments.len()
+        {
+            return Err(FactsError::invalid(
+                self.budget,
+                "explicit producer input arity changed",
+            ));
+        }
+        for (index, (source, argument)) in inputs.iter().zip(arguments).enumerate() {
+            // Explicit application instantiates the signature before checking
+            // arguments. In contrast to inferred calls, T = &mut U supplies
+            // a firm mutable-reference expectation here.
+            let expectation = match &canonical.params[index] {
+                ir::Ty::Ref { kind, .. } => ir::CallExpectation::FirmReference { kind: *kind },
+                _ => ir::CallExpectation::NoFirmReference,
+            };
+            let input = self.argument(
+                source,
+                &node.child(9, index, self.budget)?,
+                *argument,
+                id,
+                index,
+                expectation,
+                Some(&canonical.params[index]),
+                depth + 1,
+            )?;
+            let row = &evidence.arguments[index];
+            if !self.equal(&input, &canonical.params[index])?
+                || row.argument != index
+                || row.value != *argument
+                || row.expectation != expectation
+            {
+                return Err(FactsError::invalid(
+                    self.budget,
+                    "explicit producer source input changed",
+                ));
+            }
+        }
+        // Preserve authored region occurrences, including elided nested ones.
+        let mut expected_regions = Vec::new();
+        for row in regions.iter() {
+            sr::push(&mut expected_regions, row.clone(), self.budget)?;
+        }
+        for (argument, ty) in authored.iter().enumerate() {
+            for location in ir::carrier_locations(ty, self.budget)
+                .map_err(|e| source_error(self.budget, &e))?
+                .iter()
+            {
+                sr::work(self.budget, expected_regions.len() + 1)?;
+                if matches!(location.channel, ir::CarrierChannel::Fixed(_))
+                    && !expected_regions
+                        .iter()
+                        .any(|row| row.argument == argument && row.location == *location)
+                {
+                    sr::push(
+                        &mut expected_regions,
+                        ir::TypeActualRegion {
+                            argument,
+                            location: location.clone(),
+                            source: ir::ActualRegion::Elided,
+                        },
+                        self.budget,
+                    )?;
+                }
+            }
+        }
+        if expected_regions.as_slice() != evidence.type_actual_regions.as_ref()
+            || !self.equal(&canonical.result, &signature.result)?
+        {
+            return Err(FactsError::invalid(
+                self.budget,
+                "explicit producer regions or result changed",
+            ));
+        }
+        Ok(canonical.result.clone())
+    }
     #[allow(clippy::too_many_arguments)]
     pub(super) fn argument(
         &self,
@@ -198,7 +695,7 @@ impl Replay<'_> {
         call: ir::ExprId,
         index: usize,
         expectation: ir::CallExpectation,
-        before: usize,
+        expected: Option<&ir::Ty>,
         depth: usize,
     ) -> Result<ir::Ty, FactsError> {
         if matches!(source, Expr::Var(_))
@@ -209,7 +706,7 @@ impl Replay<'_> {
                 }
             )
         {
-            let (local, ty) = self.operand(source, node, before, depth)?;
+            let (local, ty) = self.operand(node, depth)?;
             let value = self
                 .checked
                 .exprs
@@ -251,7 +748,7 @@ impl Replay<'_> {
             }
             Ok(ty)
         } else {
-            self.expression(source, node, id, before, None, depth)
+            self.expression(source, node, id, expected, depth)
         }
     }
     fn equal(&self, a: &ir::Ty, b: &ir::Ty) -> Result<bool, FactsError> {
@@ -298,17 +795,6 @@ impl Replay<'_> {
             }
             return Ok((local, ty));
         }
-        let statement = site.statement.ok_or_else(|| {
-            FactsError::unsupported(self.budget, "input evidence requires a root source binding")
-        })?;
-        let ordinal = u32::try_from(statement)
-            .map_err(|_| FactsError::resource(self.budget, "input statement overflow"))?;
-        if site.node.path.as_ref() != [1, 0, 2, ordinal] {
-            return Err(FactsError::invalid(
-                self.budget,
-                "input binding occurrence changed",
-            ));
-        }
         let function = self
             .original
             .plan
@@ -318,37 +804,20 @@ impl Replay<'_> {
             value: source,
             mutable,
             ..
-        }) = function.body.statements.get(statement)
+        }) = source_statement(function, self.inventory, &site.node, self.budget)?
         else {
             return Err(FactsError::unsupported(
                 self.budget,
                 "input evidence requires initialized source let",
             ));
         };
-        let local = mapped_source_binding(self.original, index, self.budget)?;
-        let position = self
-            .original
-            .root_positions
-            .get(index)
-            .copied()
-            .flatten()
-            .ok_or_else(|| FactsError::invalid(self.budget, "input let mapping missing"))?;
-        let Some(ir::TypedStmt::Let {
-            local: actual,
-            value,
-        }) = self.checked.body.statements.get(position)
-        else {
-            return Err(FactsError::invalid(
-                self.budget,
-                "input checked let changed",
-            ));
-        };
+        let (local, value) = initializer(self.original, index, self.checked, self.budget)?;
         let declaration = self
             .checked
             .locals
             .get(local.0)
             .ok_or_else(|| FactsError::invalid(self.budget, "input checked local missing"))?;
-        if *actual != local || declaration.mutable != *mutable {
+        if declaration.mutable != *mutable {
             return Err(FactsError::invalid(
                 self.budget,
                 "input binding identity or mutability changed",
@@ -364,8 +833,7 @@ impl Replay<'_> {
         let ty = self.expression(
             source,
             &site.node.child(3, 0, self.budget)?,
-            *value,
-            statement,
+            value,
             annotation.as_ref(),
             depth + 1,
         )?;
@@ -383,9 +851,7 @@ impl Replay<'_> {
     }
     fn operand(
         &self,
-        source: &Expr,
         node: &sr::SourceNode,
-        before: usize,
         depth: usize,
     ) -> Result<(ir::LocalId, ir::Ty), FactsError> {
         sr::work(self.budget, node.path.len())?;
@@ -396,13 +862,12 @@ impl Replay<'_> {
             .ok_or_else(|| {
                 FactsError::invalid(self.budget, "input lacks lexical operand authority")
             })?;
-        let _ = source;
         validate_original_occurrence(self.original, node, self.budget)?;
         validate_original_occurrence(self.original, binding, self.budget)?;
         let index = source_binding_index(&self.original.bindings, binding, self.budget)?
             .ok_or_else(|| FactsError::invalid(self.budget, "input lexical binding missing"))?;
         let site = &self.original.bindings[index];
-        if site.parameter.is_none() && !site.statement.is_some_and(|s| s < before) {
+        if site.parameter.is_none() && !precedes(&site.node, node) {
             return Err(FactsError::invalid(
                 self.budget,
                 "input initializer refers to a later binding",
@@ -422,7 +887,6 @@ impl Replay<'_> {
         source: &Expr,
         node: &sr::SourceNode,
         id: ir::ExprId,
-        before: usize,
         expected: Option<&ir::Ty>,
         depth: usize,
     ) -> Result<ir::Ty, FactsError> {
@@ -434,6 +898,13 @@ impl Replay<'_> {
             .get(id.0)
             .ok_or_else(|| FactsError::invalid(self.budget, "input expression missing"))?;
         let ty = match (source, &actual.kind) {
+            (Expr::Apply { value, .. }, _) => self.expression(
+                value,
+                &node.child(7, 0, self.budget)?,
+                id,
+                expected,
+                depth + 1,
+            )?,
             (_, ir::ExprKind::ArrayToSlice { reference }) => {
                 sr::work(self.budget, self.original.unsize_mapping.len())?;
                 if !self
@@ -447,8 +918,7 @@ impl Replay<'_> {
                         "input slice coercion lacks original correspondence",
                     ));
                 }
-                let source_ty =
-                    self.expression(source, node, *reference, before, None, depth + 1)?;
+                let source_ty = self.expression(source, node, *reference, None, depth + 1)?;
                 let Some((kind, element, _)) = source_ty.array_ref_element_len() else {
                     return Err(FactsError::invalid(
                         self.budget,
@@ -505,10 +975,10 @@ impl Replay<'_> {
                 validate_original_callee(original_target, target, self.budget)?;
                 require_ordinary_free(&self.original.plan, direct.declaration, self.budget)?;
                 let site = &self.inventory.calls[source_index];
-                if site.application.is_some() || site.ordinary.is_none() {
+                if site.ordinary.is_none() {
                     return Err(FactsError::unsupported(
                         self.budget,
-                        "producer requires inferred ordinary source call",
+                        "producer requires ordinary source call",
                     ));
                 }
                 let inputs = self
@@ -540,38 +1010,53 @@ impl Replay<'_> {
                     .ok_or_else(|| {
                         FactsError::invalid(self.budget, "producer argument trace missing")
                     })?;
-                let trace = replay_shared_local_inputs(
-                    id,
-                    self.original,
-                    self.inventory,
-                    inputs,
-                    site,
-                    self.checked,
-                    args,
-                    direct,
-                    signature,
-                    canonical,
-                    &view,
-                    self.signatures,
-                    evidence,
-                    &self.original.facts,
-                    self.budget,
-                    depth + 1,
-                )?;
-                trace.result_type(self.budget, &mut |decl, args| {
-                    self.original
-                        .plan
-                        .intern_nominal(
-                            decl,
-                            args,
-                            ir::FactsCtx::Validated(&self.original.facts),
-                            self.budget,
-                        )
-                        .map_err(|e| source_error(self.budget, &e))
-                })?
+                if let Some(application) = &site.application {
+                    self.explicit_producer(
+                        application,
+                        inputs,
+                        node,
+                        id,
+                        args,
+                        target,
+                        signature,
+                        canonical,
+                        evidence,
+                        depth + 1,
+                    )?
+                } else {
+                    let trace = replay_shared_local_inputs(
+                        id,
+                        self.original,
+                        self.inventory,
+                        inputs,
+                        site,
+                        self.checked,
+                        args,
+                        direct,
+                        signature,
+                        canonical,
+                        &view,
+                        self.signatures,
+                        evidence,
+                        &self.original.facts,
+                        self.budget,
+                        depth + 1,
+                    )?;
+                    trace.result_type(self.budget, &mut |decl, args| {
+                        self.original
+                            .plan
+                            .intern_nominal(
+                                decl,
+                                args,
+                                ir::FactsCtx::Validated(&self.original.facts),
+                                self.budget,
+                            )
+                            .map_err(|e| source_error(self.budget, &e))
+                    })?
+                }
             }
             (Expr::Var(path), ir::ExprKind::Local(local)) if is_local_shaped_path(path) => {
-                let (root, ty) = self.operand(source, node, before, depth)?;
+                let (root, ty) = self.operand(node, depth)?;
                 if root != *local {
                     return Err(FactsError::invalid(self.budget, "input alias root changed"));
                 }
@@ -585,7 +1070,7 @@ impl Replay<'_> {
                     timing: ir::BorrowTiming::Immediate,
                 },
             ) => {
-                let (root, mut ty) = self.operand(source, node, before, depth)?;
+                let (root, mut ty) = self.operand(node, depth)?;
                 let checker = Checker::new(
                     self.signatures,
                     ir::Ty::Unit,
@@ -643,12 +1128,16 @@ impl Replay<'_> {
             | (Expr::Array(fields), ir::ExprKind::Array(values))
                 if fields.len() == values.len() =>
             {
+                let array_element = if matches!(source, Expr::Array(_)) {
+                    Some(self.array_element_type(fields, values, node, expected, depth + 1)?)
+                } else {
+                    None
+                };
                 let mut types = Vec::new();
                 for (index, (field, value)) in fields.iter().zip(values).enumerate() {
                     let hint = match expected {
                         Some(ir::Ty::Tuple(types)) => types.get(index),
-                        Some(ir::Ty::Array { element, .. }) => Some(element.as_ref()),
-                        _ => None,
+                        _ => array_element.as_ref(),
                     };
                     sr::push(
                         &mut types,
@@ -656,7 +1145,6 @@ impl Replay<'_> {
                             field,
                             &node.child(12, index, self.budget)?,
                             *value,
-                            before,
                             hint,
                             depth + 1,
                         )?,
@@ -709,7 +1197,6 @@ impl Replay<'_> {
                     value,
                     &node.child(11, 0, self.budget)?,
                     *actual_value,
-                    before,
                     hint,
                     depth + 1,
                 )?;
@@ -731,7 +1218,6 @@ impl Replay<'_> {
                         .collect(),
                     values,
                     node,
-                    before,
                     expected,
                     depth,
                 )?
@@ -749,7 +1235,6 @@ impl Replay<'_> {
                         .collect(),
                     values,
                     node,
-                    before,
                     expected,
                     depth,
                 )?
@@ -784,7 +1269,6 @@ impl Replay<'_> {
                         .collect(),
                     values,
                     node,
-                    before,
                     expected,
                     depth,
                 )?
@@ -834,7 +1318,6 @@ impl Replay<'_> {
         fields: Vec<(FieldSelector, &Expr)>,
         values: &[(usize, ir::ExprId)],
         node: &sr::SourceNode,
-        before: usize,
         expected: Option<&ir::Ty>,
         depth: usize,
     ) -> Result<ir::Ty, FactsError> {
@@ -937,7 +1420,6 @@ impl Replay<'_> {
                 source,
                 &node.child(14, position, self.budget)?,
                 *value,
-                before,
                 hint.as_ref(),
                 depth + 1,
             )?;

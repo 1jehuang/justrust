@@ -271,8 +271,9 @@ original parameter's argument expectation: an inferred `T = &mut U` moves its
 operand, while an authored `&mut T` parameter reborrows it. Explicit applications
 retain their existing argument-checking rules.
 
-Input types are reconstructed recursively from original root bindings or
-parameters, with exact lexical operand and initializer correspondence. Product,
+Input types are reconstructed recursively from original bindings or
+parameters, with exact lexical operand and initializer correspondence, including
+nested block and control-flow scopes. Product,
 array/repeat, record, tuple-struct and enum constructors replay their field
 identities and types. Graph-backed nominal types remain authenticated through
 original declarations, ordered arguments and typed realization evidence, not
@@ -281,13 +282,13 @@ checks remain mandatory. Independently known deferred assignment types use the
 same no-fallback inference machinery, rather than admitting only scalar and
 single-reference shapes.
 
-The trace API can also retain an independently authored expected result type.
-This is solver infrastructure, not by itself source-level returned-reference
-support. The input integration still requires a closed reference-free result and
-one own generic binder. Direct aggregate operands, arbitrary scoped/producer
-expressions and generalized returned-reference inference remain separate work.
-Acceptance lives in `callable_reference_inputs`, with source forgery tests in
-`canonical_source_replay_tests` and solver evidence tests in `source_replay`.
+The trace API also retains an independently authored expected result type.
+The initial input-only integration required a closed reference-free result and
+one own generic binder. Returned-result composition and scoped source evidence
+below remove the former result and root-binding restrictions, while retaining
+one own inference binder. Acceptance lives in `callable_reference_inputs`, with
+source forgery tests in `canonical_source_replay_tests` and solver evidence tests
+in `source_replay`.
 
 ## Recursive returned-result composition
 
@@ -300,13 +301,21 @@ covered ordinary calls.
 
 Original syntax evidence includes direct aggregate operands and ordinary producer
 calls, so a returned reference can feed another generic call without becoming
-unauthenticated checked-type evidence. Authored root result annotations and
-function-tail declared return types can constrain otherwise input-free calls.
-An opaque `T` still moves a mutable reference,
+unauthenticated checked-type evidence. Authored result annotations, including
+nested let bindings, and function-tail declared return types can constrain
+otherwise input-free calls. Fully explicit generic producers reconstruct their
+arguments from authored type arguments and canonical signatures, including
+output-only and phantom parameters. Partial `_` producer applications remain
+unsupported in this recursive evidence path. Exact lexical identities distinguish
+shadowed bindings and separate control-flow scopes; source binding correspondences
+are authenticated rather than inferred from checked locals. An opaque `T` still
+moves a mutable reference,
 whereas an authored `&mut T` preserves reborrow semantics. Existing canonical
 signature, lifetime, ownership, source identity and carrier-region checks remain
 mandatory. Recursive replay and result substitution retain per-task depth and
-work limits.
+work limits. Array element constraints use the same structural terms and merge
+all source siblings before numeric fallback, preserving mixed-suffix inference
+independently of element order, including nested tuples and arrays.
 
 Body-local structural method constraints also descend through reference-bearing
 nominal arguments. A unique unspecialized blanket implementation can propagate

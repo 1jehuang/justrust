@@ -1,5 +1,5 @@
-//! Reference-containing aggregates as generic actuals (`T = Option<&i32>`),
-//! e.g. `{:?}` of `Option<&T>` through the blanket DebugArg impl.
+//! Reference-bearing generic inputs and results, source-authored contexts,
+//! recursive producer composition, and blanket method inference.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[path = "support/iterator_oracle.rs"]
 mod differential;
@@ -190,6 +190,97 @@ fn generic_reference_result_uses_declared_return_context() {
             source: "fn empty<T>()->Option<T>{None}fn make<'a>()->Option<&'a i32>{empty()}fn main(){let value=make();match value{None=>println!(\"none\"),Some(_)=>println!(\"some\")}}",
             expect: Expect::Run("none\n"),
         }],
+    );
+}
+
+#[test]
+fn generic_results_compose_with_scoped_bindings() {
+    check_generalized_cases(
+        "generic-scoped-results",
+        &[Case {
+            name: "nested_shadowed_source_bindings",
+            source: "fn identity<T>(x:T)->T{x}fn first<T,U>(x:T,y:U)->T{let _=y;x}fn main(){let n=1i32;{let n=7i32;let r=identity(&n);let flag=true;let result=first(r,&flag);println!(\"{}\",*result);}println!(\"{}\",n);}",
+            expect: Expect::Run("7\n1\n"),
+        }],
+    );
+}
+
+#[test]
+fn generic_results_compose_with_explicit_producers() {
+    check_generalized_cases(
+        "generic-explicit-results",
+        &[
+            Case {
+                name: "explicit_producer_type_argument",
+                source: "fn identity<T>(x:T)->T{x}fn first<T,U>(x:T,y:U)->T{let _=y;x}fn main(){let n=7i32;let flag=true;let r=identity::<&i32>(&n);let result=first(r,&flag);println!(\"{}\",*result);}",
+                expect: Expect::Run("7\n"),
+            },
+            Case {
+                name: "nested_explicit_producer_type_argument",
+                source: "fn identity<T>(x:T)->T{x}fn first<T,U>(x:T,y:U)->T{let _=y;x}fn main(){let n=7i32;let flag=true;let result=first(identity::<&i32>(&n),&flag);println!(\"{}\",*result);}",
+                expect: Expect::Run("7\n"),
+            },
+            Case {
+                name: "explicit_output_only_producer_type_argument",
+                source: "fn empty<T>()->Option<T>{None}fn identity<T>(x:T)->T{x}fn main(){let value=empty::<&i32>();let result=identity(value);match result{None=>println!(\"none\"),Some(_)=>println!(\"some\")}}",
+                expect: Expect::Run("none\n"),
+            },
+        ],
+    );
+}
+
+#[test]
+fn scoped_generic_results_reject_escaping_borrows() {
+    check_generalized_cases(
+        "generic-scoped-escape",
+        &[Case {
+            name: "nested_producer_borrow_escape",
+            source: "fn identity<T>(x:T)->T{x}fn first<T,U>(x:T,y:U)->T{let _=y;x}fn main(){let result;{let n=7i32;let flag=true;let r=identity(&n);result=first(r,&flag);}println!(\"{}\",*result);}",
+            expect: Expect::Invalid("E0597"),
+        }],
+    );
+}
+
+#[test]
+fn generic_scoped_result_annotation_constrains_inference() {
+    check_generalized_cases(
+        "generic-scoped-context",
+        &[Case {
+            name: "nested_result_annotation",
+            source: "fn empty<T>()->Option<T>{None}fn main(){{let value:Option<&i32>=empty();match value{None=>println!(\"none\"),Some(_)=>println!(\"some\")}}}",
+            expect: Expect::Run("none\n"),
+        }],
+    );
+}
+
+#[test]
+fn generic_results_compose_inside_control_flow() {
+    check_generalized_cases(
+        "generic-branch-results",
+        &[Case {
+            name: "distinct_branch_local_origins",
+            source: "fn identity<T>(x:T)->T{x}fn show(flag:bool){if flag{let n=7i32;let r=identity(&n);println!(\"{}\",*r);}else{let n=9i32;let r=identity(&n);println!(\"{}\",*r);}}fn main(){show(true);show(false);}",
+            expect: Expect::Run("7\n9\n"),
+        }],
+    );
+}
+
+#[test]
+fn generic_reference_inputs_preserve_array_literal_constraints() {
+    check_generalized_cases(
+        "generic-array-constraints",
+        &[
+            Case {
+                name: "array_suffix_constraints_are_order_independent",
+                source: "fn length<T>(s:&[T])->usize{s.len()}fn main(){let a=[3u8,4];let b=[3,4u8];println!(\"{} {}\",length(&a),length(&b));}",
+                expect: Expect::Run("2 2\n"),
+            },
+            Case {
+                name: "conflicting_array_suffix_constraints",
+                source: "fn length<T>(s:&[T])->usize{s.len()}fn main(){let a=[3u8,4u16];println!(\"{}\",length(&a));}",
+                expect: Expect::Invalid("E0308"),
+            },
+        ],
     );
 }
 

@@ -257,8 +257,25 @@ mod canonical_source_replay_tests {
             "fn consume<T,U>(a:&mut T,b:&mut U)->bool{true}fn main(){let mut a=1i32;let mut b=2i32;let r=&mut a;let s=&mut b;consume(r,s);consume(r,s);}",
             "struct Wrap<T>{value:T}fn consume<T,U>(a:T,b:U)->bool{true}fn main(){let a=1i32;let b=2i32;let left=Wrap{value:(&a,&b)};let right=Wrap{value:[&a,&b]};consume(left,right);}",
             "struct Wrap<T>(T);fn consume<T,U>(a:T,b:U)->bool{true}fn main(){let a=1i32;let b=2i32;let left=Wrap(&a);let right=Wrap(&b);consume(left,right);}",
+            "fn consume<T,U>(a:T,b:U)->bool{true}fn main(){{let a=1i32;let b=2i32;let r=&a;let s=&b;consume(r,s);}}",
+            "fn consume<T,U>(a:T,b:U)->bool{true}fn main(){let a=9i32;if true{let a=1i32;let b=2i32;consume(&a,&b);}else{let b=3i32;consume(&a,&b);}}",
+            "fn consume<T,U>(a:T,b:U)->bool{true}fn main(){while false{let a=1i32;let b=2i32;consume(&a,&b);}}",
+            "fn consume<T,U>(a:T,b:U)->bool{true}fn main(){loop{let a=1i32;let b=2i32;consume(&a,&b);break;}}",
+            "fn consume<T,U>(a:T,b:U)->bool{true}fn main(){match true{true=>{let a=1i32;let b=2i32;consume(&a,&b);},false=>{let a=3i32;let b=4i32;consume(&a,&b);}}}",
+            "fn identity<T>(x:T)->T{x}fn consume<T,U>(a:T,b:U)->bool{true}fn main(){{let a=1i32;let b=2i32;let r:&i32=identity(&a);consume(r,&b);}}",
+            "fn identity<T>(x:T)->T{x}fn consume<T,U>(a:T,b:U)->bool{true}fn main(){let a=1i32;let b=2i32;consume(identity::<&i32>(&a),identity::<&i32>(&b));}",
+            "fn identity<T>(x:T)->T{x}fn consume<T,U>(a:T,b:U)->bool{true}fn main(){{let a=1i32;let b=2i32;let r=identity::<&i32>(&a);let s=identity::<&i32>(&b);consume(r,s);}}",
+            "fn identity<T>(x:T)->T{x}fn consume<T,U>(a:T,b:U)->bool{true}fn main(){let mut a=1i32;let mut b=2i32;let r=&mut a;let s=&mut b;consume(identity::<&mut i32>(r),identity::<&mut i32>(s));}",
+            "fn choose<T,U>(x:T)->T{x}fn consume<T,U>(a:T,b:U)->bool{true}fn main(){let a=1i32;let b=2i32;consume(choose::<&i32,bool>(&a),choose::<&i32,char>(&b));}",
+            "fn identity<T>(x:T)->T{x}fn consume<T,U>(a:T,b:U)->bool{true}fn main(){let a=1i32;consume(identity::<u8>(1),&a);}",
+            "fn consume<T,U>(a:T,b:U)->bool{true}fn main(){let n=1i32;let a=[3u8,4];consume(a,&n);}",
+            "fn consume<T,U>(a:T,b:U)->bool{true}fn main(){let n=1i32;let a=[3,4u8];consume(a,&n);}",
+            "fn consume<T,U>(a:T,b:U)->bool{true}fn main(){let n=1i32;let a=[(3,4u8),(5u16,6)];consume(a,&n);}",
+            "fn consume<T,U>(a:T,b:U)->bool{true}fn main(){let n=1i32;let a=[[3,4u8],[5u8,6]];consume(a,&n);}",
+            "fn consume<T,U>(a:T,b:U)->bool{true}fn main(){let n=1i32;let x=3u8;let a=[4,x];consume(a,&n);}",
         ] {
-            let (_, _, budget, publication) = published(source, 1);
+            let main = fixture_program(source).functions.len() - 1;
+            let (_, _, budget, publication) = published(source, main);
             let original = publication.original().source_for_test();
             replay_source_body(
                 &original,
@@ -323,6 +340,152 @@ mod canonical_source_replay_tests {
                     "recursive input forgery {mode}: {source}"
                 );
             }
+        }
+    }
+    #[test]
+    fn source_array_constraints_reject_conflicts_and_forged_values() {
+        for elements in ["3u8,4u16", "3u16,4u8"] {
+            let source = format!(
+                "fn length<T>(s:&[T])->usize{{s.len()}}fn main(){{let a=[{elements}];let _=length(&a);}}"
+            );
+            let stock = super::parser_tests::stock_compile(
+                &source,
+                std::path::Path::new("/dev/null"),
+                true,
+            );
+            assert!(!stock.status.success());
+            for workers in [1, 8] {
+                for check in [true, false] {
+                    let failure = super::super::compile_observed(source.clone(), workers, check)
+                        .err()
+                        .unwrap();
+                    let diagnostic = failure.error.to_string();
+                    assert!(
+                        !diagnostic.contains("Unsupported")
+                            && !diagnostic.contains("resource limit"),
+                        "{diagnostic}"
+                    );
+                }
+            }
+        }
+        for elements in ["3u8,4", "3,4u8"] {
+            let source = format!(
+                "fn length<T>(s:&[T])->usize{{s.len()}}fn main(){{let a=[{elements}];let _=length(&a);}}"
+            );
+            let (_, _, budget, publication) = published(&source, 1);
+            let original = publication.original().source_for_test();
+            for mode in 0..3 {
+                let mut forged = publication.source().as_ref().clone();
+                if mode == 2 {
+                    let array = forged
+                        .exprs
+                        .iter_mut()
+                        .find_map(|expr| match &mut expr.kind {
+                            ir::ExprKind::Array(values) => Some(values),
+                            _ => None,
+                        })
+                        .unwrap();
+                    array.swap(0, 1);
+                } else {
+                    let literal = forged
+                        .exprs
+                        .iter_mut()
+                        .find(|expr| matches!(expr.kind, ir::ExprKind::Int(_)))
+                        .unwrap();
+                    let ir::ExprKind::Int(value) = &mut literal.kind else {
+                        unreachable!()
+                    };
+                    if mode == 0 {
+                        value.bits += 1;
+                    } else {
+                        value.ty = ir::IntTy::U16;
+                        literal.ty = ir::Ty::Int(ir::IntTy::U16);
+                    }
+                }
+                assert_eq!(
+                    kind_error(replay_source_body(
+                        &original,
+                        &Arc::new(forged),
+                        publication.facts(),
+                        &budget
+                    )),
+                    tr::FactsErrorKind::InvalidMetadata,
+                    "array evidence mutation {mode}: {elements}"
+                );
+            }
+        }
+    }
+    #[test]
+    fn scoped_producer_replay_rejects_forged_correspondences() {
+        let source = "fn choose<T,U>(x:T)->T{x}fn consume<T,U>(a:T,b:U)->bool{true}fn main(){{let a=1i32;let b=2i32;let r=choose::<&i32,bool>(&a);let s=choose::<&i32,char>(&b);consume(r,s);}}";
+        let (_, _, budget, publication) = published(source, 2);
+        let original = publication.original().source_for_test();
+        assert_eq!(original.scoped_initializers.len(), 4);
+        for mode in 0..6 {
+            let mut forged = original.clone();
+            match mode {
+                0 => {
+                    forged.scoped_initializers.pop();
+                }
+                1 => forged
+                    .scoped_initializers
+                    .push(forged.scoped_initializers[0]),
+                2 => forged.scoped_initializers[2].2 = forged.scoped_initializers[3].2,
+                3 => forged.scoped_initializers[2].1 = forged.scoped_initializers[3].1,
+                4 => forged.scoped_initializers[0].0 = usize::MAX,
+                _ => {
+                    let index = forged.scoped_initializers[0].0;
+                    forged.bindings[index].node = forged.bindings[forged.scoped_initializers[1].0]
+                        .node
+                        .clone();
+                }
+            }
+            assert_eq!(
+                kind_error(replay_source_body(
+                    &forged,
+                    publication.source(),
+                    publication.facts(),
+                    &budget
+                )),
+                tr::FactsErrorKind::InvalidMetadata,
+                "scoped correspondence mutation {mode}"
+            );
+        }
+        for mode in 0..4 {
+            let mut forged = publication.source().as_ref().clone();
+            let call = forged.exprs.iter_mut().find(|value| matches!(&value.kind,
+                ir::ExprKind::Call { target: ir::Callee::Direct(target), .. } if target.type_args.len() == 2 && target.type_args[1] == ir::Ty::Bool)).unwrap();
+            let ir::ExprKind::Call {
+                target: ir::Callee::Direct(target),
+                signature,
+                args,
+                ..
+            } = &mut call.kind
+            else {
+                unreachable!()
+            };
+            match mode {
+                0 => Arc::make_mut(&mut target.type_args)[1] = ir::Ty::Char,
+                1 => signature.result = ir::Ty::Bool,
+                2 => args[0] = ir::ExprId(usize::MAX),
+                _ => {
+                    let evidence = Arc::make_mut(&mut forged.call_evidence)
+                        .iter_mut()
+                        .find(|row| !row.type_actual_regions.is_empty())
+                        .unwrap();
+                    evidence.type_actual_regions = Arc::from([]);
+                }
+            }
+            assert_eq!(
+                kind_error(replay_source_body(
+                    &original,
+                    &Arc::new(forged),
+                    publication.facts(),
+                    &budget
+                )),
+                tr::FactsErrorKind::InvalidMetadata,
+                "explicit producer mutation {mode}"
+            );
         }
     }
     #[test]
@@ -1495,6 +1658,7 @@ mod canonical_source_replay_tests {
             "fn same<T>(x:T,y:T)->T{x}fn f(r:&i32){let y=same(r,r);}",
             "fn id<T>(x:T)->T{x}fn f(r:&i32){let a=r;let y=id(a);}",
             "fn id<T>(x:T)->T{x}fn f(r:&i32){let y=if true{id(r)}else{r};}",
+            "fn id<T>(x:T)->T{x}fn f(r:&i32){{let a:&i32=r;let y=id(a);}}",
         ] {
             let program = fixture_program(source);
             let budget = ir::PlanBudget::default();
@@ -1507,14 +1671,6 @@ mod canonical_source_replay_tests {
             };
             ir::validate_published_source(&publication, &budget).unwrap();
         }
-        let nested =
-            fixture_program("fn id<T>(x:T)->T{x}fn f(r:&i32){{let a:&i32=r;let y=id(a);}}");
-        let budget = ir::PlanBudget::default();
-        let plan = PlanCtx::from_program(&nested, &budget).unwrap();
-        assert_eq!(
-            kind_error(plan.publish_callable_body(plan.function_decl(1).unwrap(), &budget)),
-            tr::FactsErrorKind::Unsupported
-        );
         let (_, _, budget, shadow) = published(
             "fn id<T>(x:T)->T{x}fn main(){let v=1;let w=2;let r:&i32=&v;let r:&i32=&w;let y=id(r);}",
             1,
@@ -2159,6 +2315,7 @@ mod canonical_source_replay_tests {
             array_iters: Default::default(),
             builtin_intrinsics: Default::default(),
             unsizes: Default::default(),
+            scoped_bindings: Default::default(),
             bindings: Default::default(),
             narrow: Default::default(),
             emissions: Default::default(),
@@ -4371,6 +4528,7 @@ pub(super) struct CanonicalSourceCapability {
     array_iters: std::cell::RefCell<Vec<iterator_source::ArrayIterOccurrence>>,
     builtin_intrinsics: std::cell::RefCell<Vec<BuiltinIntrinsicOccurrence>>,
     unsizes: std::cell::RefCell<Vec<UnsizeOccurrence>>,
+    scoped_bindings: std::cell::RefCell<Vec<(usize, ir::LocalId)>>,
     bindings: std::cell::RefCell<Vec<(usize, ir::LocalId)>>,
     narrow: std::cell::RefCell<Vec<RawSharedOccurrence>>,
     emissions: std::cell::RefCell<Vec<(usize, usize)>>,
@@ -4396,6 +4554,7 @@ pub(super) struct OriginalSource {
     array_iter_mapping: Vec<iterator_source::ArrayIterOccurrence>,
     builtin_intrinsic_mapping: Vec<BuiltinIntrinsicOccurrence>,
     unsize_mapping: Vec<UnsizeOccurrence>,
+    scoped_initializers: Vec<(usize, ir::LocalId, ir::ExprId)>,
     binding_mapping: Vec<(usize, ir::LocalId)>,
     narrow: Vec<RawSharedOccurrence>,
     root_positions: Vec<Option<usize>>,
@@ -4731,6 +4890,14 @@ impl CanonicalSourceCapability {
             .get(&(statement as *const Stmt as usize))
         {
             if !self.inventory.bindings[*index].required {
+                if matches!(statement, Stmt::Let { .. }) {
+                    sr::push(
+                        &mut self.scoped_bindings.borrow_mut(),
+                        (*index, local),
+                        budget,
+                    )
+                    .map_err(|e| self.render(e))?;
+                }
                 return Ok(());
             }
             sr::push(&mut self.bindings.borrow_mut(), (*index, local), budget)
@@ -6614,18 +6781,15 @@ fn source_result_context(
     }
     for (index, binding) in original.bindings.iter().enumerate() {
         sr::work(budget, 1)?;
-        if binding.annotation.is_none() || binding.statement.is_none() {
+        if binding.annotation.is_none() || binding.parameter.is_some() {
             continue;
         }
         if !source_node_equal(&binding.node.child(3, 0, budget)?, &site.node, budget)? {
             continue;
         }
-        let local = mapped_source_binding(original, index, budget)?;
-        let position = original.root_positions[index].ok_or_else(|| {
-            FactsError::invalid(budget, "expected source context lost root mapping")
-        })?;
-        if !matches!(checked.body.statements.get(position), Some(ir::TypedStmt::Let { local: actual, value }) if *actual == local && *value == call)
-        {
+        let (local, initializer) =
+            source_input_replay::initializer(original, index, checked, budget)?;
+        if initializer != call {
             return Err(FactsError::invalid(
                 budget,
                 "expected result context changed checked initializer",
@@ -6688,13 +6852,6 @@ fn replay_shared_local_inputs(
         signatures,
         budget,
     };
-    let before = site
-        .node
-        .path
-        .get(3)
-        .copied()
-        .map(|value| value as usize)
-        .unwrap_or(usize::MAX);
     let mut input_types = Vec::new();
     for (index, (source, argument)) in inputs.iter().zip(arguments).enumerate() {
         let expectation = match &view.signature().params[index] {
@@ -6708,7 +6865,7 @@ fn replay_shared_local_inputs(
             call_id,
             index,
             expectation,
-            before,
+            None,
             depth + 1,
         )?;
         if !sr::replay_types_equal(&input, &signature.params[index], budget)? {
@@ -7922,6 +8079,7 @@ impl PlanCtx {
                     array_iters: Default::default(),
                     builtin_intrinsics: Default::default(),
                     unsizes: Default::default(),
+                    scoped_bindings: Default::default(),
                     bindings: Default::default(),
                     narrow: Default::default(),
                     emissions: Default::default(),
@@ -7983,6 +8141,8 @@ impl PlanCtx {
                         });
                     }
                 };
+                let scoped_initializers =
+                    source_input_replay::capture_scoped_initializers(&cap, &checked, budget)?;
                 let root_positions = canonical_root_positions(&cap, budget)?;
                 let mut literal_temporaries = HashMap::new();
                 for (index, id, _) in cap.calls.borrow().iter() {
@@ -8028,6 +8188,7 @@ impl PlanCtx {
                     array_iter_mapping: cap.array_iters.take(),
                     builtin_intrinsic_mapping: cap.builtin_intrinsics.take(),
                     unsize_mapping: cap.unsizes.take(),
+                    scoped_initializers,
                     binding_mapping: cap.bindings.take(),
                     narrow: cap.narrow.take(),
                     root_positions,
@@ -19183,12 +19344,13 @@ fn walk_depth_checked(
 ) -> Result<(), String> {
     walk_depth_inspecting(root, budget, names, None)
 }
-type SourceNodeInspector<'a> = dyn FnMut(&DepthNode<'_>, usize) -> Result<(), String> + 'a;
-fn walk_depth_inspecting(
-    root: DepthNode<'_>,
+type SourceNodeInspector<'a, 'source> =
+    dyn FnMut(&DepthNode<'source>, usize) -> Result<(), String> + 'a;
+fn walk_depth_inspecting<'source>(
+    root: DepthNode<'source>,
     budget: Option<&ir::PlanBudget>,
     names: Option<&NameStore>,
-    mut inspect: Option<&mut SourceNodeInspector<'_>>,
+    mut inspect: Option<&mut SourceNodeInspector<'_, 'source>>,
 ) -> Result<(), String> {
     let mut stack = Vec::new();
     let mut checked_stack = names
