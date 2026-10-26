@@ -203,6 +203,84 @@ impl CallInferenceState {
             .ok_or_else(|| FactsError::invalid(&self.budget, "inference schema has no binder"))?;
         self.type_term(ty, Some(env.binder()), depth)
     }
+    /// Instantiate only explicit own-slot markers. Rigid caller parameters
+    /// are leaves and must never be rebound by index or display spelling.
+    fn bind_schema(
+        &self,
+        schema: &InferTerm,
+        slots: &[InferTerm],
+        depth: usize,
+    ) -> Result<InferTerm, FactsError> {
+        self.work(depth)?;
+        let kind = match schema.as_ref() {
+            InferKind::Slot(index) => {
+                let bound = slots.get(*index).ok_or_else(|| {
+                    FactsError::invalid(&self.budget, "result schema slot outside inferred binder")
+                })?;
+                // A rigid actual still contributes its full type depth at
+                // this insertion point. Do not hide a deep result behind a
+                // constant-cost clone of the already materialized value.
+                if let InferKind::Rigid(ty) = bound.as_ref()
+                    && !replay_types_equal_at(ty, ty, &self.budget, depth)?
+                {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "invalid rigid result actual",
+                    ));
+                }
+                return Ok(bound.clone());
+            }
+            InferKind::Tuple(fields) => {
+                self.storage(fields.len())?;
+                InferKind::Tuple(
+                    self.collect_terms(
+                        fields.len(),
+                        fields
+                            .iter()
+                            .map(|term| self.bind_schema(term, slots, depth + 1)),
+                    )?,
+                )
+            }
+            InferKind::Nominal(declaration, fields) => {
+                self.storage(fields.len())?;
+                InferKind::Nominal(
+                    *declaration,
+                    self.collect_terms(
+                        fields.len(),
+                        fields
+                            .iter()
+                            .map(|term| self.bind_schema(term, slots, depth + 1)),
+                    )?,
+                )
+            }
+            InferKind::Opaque(descriptor, fields) => {
+                self.storage(fields.len())?;
+                InferKind::Opaque(
+                    descriptor.clone(),
+                    self.collect_terms(
+                        fields.len(),
+                        fields
+                            .iter()
+                            .map(|term| self.bind_schema(term, slots, depth + 1)),
+                    )?,
+                )
+            }
+            InferKind::Ref(kind, inner) => {
+                InferKind::Ref(*kind, self.bind_schema(inner, slots, depth + 1)?)
+            }
+            InferKind::RawPtr(kind, inner) => {
+                InferKind::RawPtr(*kind, self.bind_schema(inner, slots, depth + 1)?)
+            }
+            InferKind::Array(inner, len) => {
+                InferKind::Array(self.bind_schema(inner, slots, depth + 1)?, *len)
+            }
+            InferKind::Slice(inner) => {
+                InferKind::Slice(self.bind_schema(inner, slots, depth + 1)?)
+            }
+            _ => return Ok(schema.clone()),
+        };
+        self.node(kind)
+    }
     /// Add one independently authenticated input type to the call's constraints.
     /// The caller owns source authentication. This operation neither consults
     /// checked result types nor applies fallback to unresolved inputs.
@@ -1272,6 +1350,49 @@ impl CallInputTrace {
         &self.actuals
     }
 
+    fn validate_shape(&self, budget: &ir::PlanBudget) -> Result<(), FactsError> {
+        work(budget, 1)?;
+        if self.schemas.len() != self.evidence.len()
+            || self.slots.len() != self.actuals.len()
+            || (self.binder.is_none() && !self.slots.is_empty())
+        {
+            return Err(FactsError::invalid(
+                budget,
+                "source inference trace arity changed",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Reconstruct a returned call's type solely from its original result
+    /// schema and source-inferred own slots. Materialization is deliberately
+    /// lazy: callers that only need actuals do not demand result nominals.
+    /// The callback retains responsibility for authenticated nominal inputs.
+    pub(super) fn result_type(
+        &self,
+        budget: &ir::PlanBudget,
+        materialize: &mut impl FnMut(ir::DeclId, &[ir::Ty]) -> Result<ir::Ty, FactsError>,
+    ) -> Result<ir::Ty, FactsError> {
+        self.validate_shape(budget)?;
+        let state = CallInferenceState::new(None, budget)?;
+        // Finished actuals came from original source constraints. Preserve
+        // their exact typed nominal capabilities rather than re-interning a
+        // nominal embedded in an input slot during returned-type replay.
+        state.storage(self.actuals.len())?;
+        let bindings = state.collect_terms(
+            self.actuals.len(),
+            self.actuals
+                .iter()
+                .map(|actual| state.node(InferKind::Rigid(actual.clone()))),
+        )?;
+        let result = state.bind_schema(&self.result_schema, &bindings, 0)?;
+        state
+            .resolve(&result, false, 0, materialize)?
+            .ok_or_else(|| {
+                FactsError::invalid(budget, "source-inferred result remained unresolved")
+            })
+    }
+
     /// The authored input schema, not the inferred actual, determines whether
     /// checking this argument supplied a firm reference expectation. In
     /// particular, `T = &mut U` must preserve a move where `&mut T` reborrows.
@@ -1280,13 +1401,7 @@ impl CallInputTrace {
         argument: usize,
         budget: &ir::PlanBudget,
     ) -> Result<ir::CallExpectation, FactsError> {
-        work(budget, 1)?;
-        if self.schemas.len() != self.evidence.len() {
-            return Err(FactsError::invalid(
-                budget,
-                "input expectation arity changed",
-            ));
-        }
+        self.validate_shape(budget)?;
         let schema = self.schemas.get(argument).ok_or_else(|| {
             FactsError::invalid(budget, "input expectation argument outside signature")
         })?;
@@ -1302,7 +1417,7 @@ impl CallInputTrace {
         actuals: &[ir::Ty],
         budget: &ir::PlanBudget,
     ) -> Result<(), FactsError> {
-        work(budget, 1)?;
+        self.validate_shape(budget)?;
         if actuals.len() != self.actuals.len() {
             return Err(FactsError::invalid(
                 budget,
@@ -1323,7 +1438,8 @@ impl CallInputTrace {
         other: &Self,
         budget: &ir::PlanBudget,
     ) -> Result<(), FactsError> {
-        work(budget, 1)?;
+        self.validate_shape(budget)?;
+        other.validate_shape(budget)?;
         if self.binder != other.binder
             || self.schemas.len() != other.schemas.len()
             || self.evidence.len() != other.evidence.len()
@@ -1840,6 +1956,39 @@ mod replay_type_equality_tests {
             assert_ne!(&source, graph);
             assert!(replay_types_equal(&source, graph, &budget).unwrap());
             assert!(replay_types_equal(graph, &source, &budget).unwrap());
+            let own = Arc::new(
+                ir::ParamEnv::new(
+                    ir::BinderId {
+                        declaration: ir::DeclId {
+                            snapshot: ir::SnapshotId::standalone().unwrap(),
+                            index: 0,
+                        },
+                    },
+                    1,
+                )
+                .unwrap(),
+            );
+            let parameter = ir::Ty::Param(ir::ParamId {
+                owner: own.binder(),
+                index: 0,
+            });
+            let trace = infer_input_schema_trace(
+                Some(own),
+                std::slice::from_ref(&parameter),
+                &parameter,
+                std::slice::from_ref(graph),
+                &budget,
+                &mut |_, _| Ok(graph.clone()),
+            )
+            .unwrap();
+            // Returning T must preserve the exact finished graph actual, not
+            // re-intern it through a caller callback under a different ID.
+            let returned = trace
+                .result_type(&budget, &mut |_, _| {
+                    panic!("finished nominal actual was unnecessarily reconstructed")
+                })
+                .unwrap();
+            assert!(replay_types_equal(&returned, graph, &budget).unwrap());
             let nested = |ty: ir::Ty| ir::Ty::Ref {
                 kind: ir::BorrowKind::Shared,
                 referent: Arc::new(ir::Ty::Tuple(Arc::from([
@@ -2000,6 +2149,240 @@ mod call_input_trace_tests {
     }
 
     #[test]
+    fn recursive_call_result_keeps_same_binder_input_rigid_and_meters_full_depth() {
+        let budget = ir::PlanBudget::default();
+        let own = env(1);
+        let parameter = param(&own, 0);
+        let result = reference(ir::BorrowKind::Shared, parameter.clone());
+        // A recursive call's caller parameter has the same declaration ID as
+        // the callee slot, but source input evidence is still rigid, not a
+        // unification variable or an occurs-check cycle.
+        let recursive = infer_input_schema_trace_with_context(
+            Some(own.clone()),
+            std::slice::from_ref(&parameter),
+            &result,
+            std::slice::from_ref(&parameter),
+            Some(&result),
+            &budget,
+            &mut |_, _| unreachable!(),
+        )
+        .unwrap();
+        assert_eq!(recursive.actuals(), std::slice::from_ref(&parameter));
+        assert_eq!(
+            recursive
+                .result_type(&budget, &mut |_, _| unreachable!())
+                .unwrap(),
+            result
+        );
+
+        let deep_actual = reference(
+            ir::BorrowKind::Shared,
+            reference(ir::BorrowKind::Shared, ir::Ty::Char),
+        );
+        let deep_result = reference(
+            ir::BorrowKind::Shared,
+            reference(ir::BorrowKind::Shared, parameter.clone()),
+        );
+        let deep = infer_input_schema_trace(
+            Some(own),
+            &[parameter],
+            &deep_result,
+            &[deep_actual],
+            &budget,
+            &mut |_, _| unreachable!(),
+        )
+        .unwrap();
+        let limited = ir::PlanBudget::new(ir::PlanLimits {
+            depth: 3,
+            ..Default::default()
+        });
+        assert!(
+            deep.result_type(&limited, &mut |_, _| unreachable!())
+                .unwrap_err()
+                .is_resource()
+        );
+    }
+
+    #[test]
+    fn returned_reference_chain_uses_only_source_inferred_results() {
+        let budget = ir::PlanBudget::default();
+        let caller = env(1);
+        let rigid = param(&caller, 0);
+        let first = env(1);
+        let first_result = reference(ir::BorrowKind::Shared, param(&first, 0));
+        let first_trace = infer_input_schema_trace(
+            Some(first.clone()),
+            &[param(&first, 0)],
+            &first_result,
+            std::slice::from_ref(&rigid),
+            &budget,
+            &mut |_, _| unreachable!(),
+        )
+        .unwrap();
+        let first_output = first_trace
+            .result_type(&budget, &mut |_, _| unreachable!())
+            .unwrap();
+        assert_eq!(
+            first_output,
+            reference(ir::BorrowKind::Shared, rigid.clone())
+        );
+
+        let second = env(1);
+        let second_result = reference(ir::BorrowKind::Shared, param(&second, 0));
+        let annotation = reference(ir::BorrowKind::Shared, first_output.clone());
+        let second_trace = infer_input_schema_trace_with_context(
+            Some(second.clone()),
+            &[param(&second, 0)],
+            &second_result,
+            std::slice::from_ref(&first_output),
+            Some(&annotation),
+            &budget,
+            &mut |_, _| unreachable!(),
+        )
+        .unwrap();
+        let replay = infer_input_schema_trace_with_context(
+            Some(second.clone()),
+            &[param(&second, 0)],
+            &second_result,
+            std::slice::from_ref(&first_output),
+            Some(&annotation),
+            &budget,
+            &mut |_, _| unreachable!(),
+        )
+        .unwrap();
+        assert_eq!(
+            second_trace
+                .result_type(&budget, &mut |_, _| unreachable!())
+                .unwrap(),
+            annotation
+        );
+        second_trace.validate_replayed(&replay, &budget).unwrap();
+
+        let state = CallInferenceState::new(None, &budget).unwrap();
+        let mut changed = (*replay).clone();
+        changed.result_schema = state
+            .node(InferKind::Ref(
+                ir::BorrowKind::Mut,
+                state.node(InferKind::Slot(0)).unwrap(),
+            ))
+            .unwrap();
+        assert!(second_trace.validate_replayed(&changed, &budget).is_err());
+        let mut changed = (*replay).clone();
+        changed.expected = None;
+        assert!(second_trace.validate_replayed(&changed, &budget).is_err());
+        let mut changed = (*replay).clone();
+        let foreign = param(&env(1), 0);
+        changed.expected = Some(
+            state
+                .type_term(
+                    &reference(
+                        ir::BorrowKind::Shared,
+                        reference(ir::BorrowKind::Shared, foreign),
+                    ),
+                    None,
+                    0,
+                )
+                .unwrap(),
+        );
+        assert!(second_trace.validate_replayed(&changed, &budget).is_err());
+        let mut changed = (*replay).clone();
+        changed.actuals = Arc::from([reference(ir::BorrowKind::Shared, ir::Ty::Bool)]);
+        assert!(second_trace.validate_replayed(&changed, &budget).is_err());
+        let mut changed = (*replay).clone();
+        changed.slots = Arc::from([state.type_term(&ir::Ty::Bool, None, 0).unwrap()]);
+        assert!(second_trace.validate_replayed(&changed, &budget).is_err());
+        let tiny = ir::PlanBudget::new(ir::PlanLimits {
+            work: 0,
+            ..Default::default()
+        });
+        assert!(
+            second_trace
+                .result_type(&tiny, &mut |_, _| unreachable!())
+                .unwrap_err()
+                .is_resource()
+        );
+    }
+
+    #[test]
+    fn zero_input_nested_result_rejects_forged_context_schema_and_actuals() {
+        let budget = ir::PlanBudget::default();
+        let own = env(1);
+        let caller = env(1);
+        let nested = |ty| {
+            reference(
+                ir::BorrowKind::Shared,
+                ir::Ty::Tuple(Arc::from([
+                    reference(ir::BorrowKind::Shared, ty),
+                    ir::Ty::Bool,
+                ])),
+            )
+        };
+        let result = nested(param(&own, 0));
+        let expected = nested(param(&caller, 0));
+        let trace = infer_input_schema_trace_with_context(
+            Some(own.clone()),
+            &[],
+            &result,
+            &[],
+            Some(&expected),
+            &budget,
+            &mut |_, _| unreachable!(),
+        )
+        .unwrap();
+        assert_eq!(
+            trace
+                .result_type(&budget, &mut |_, _| unreachable!())
+                .unwrap(),
+            expected
+        );
+        assert!(
+            infer_input_schema_trace(
+                Some(own.clone()),
+                &[],
+                &result,
+                &[],
+                &budget,
+                &mut |_, _| unreachable!()
+            )
+            .is_err()
+        );
+        let replay = infer_input_schema_trace_with_context(
+            Some(own),
+            &[],
+            &result,
+            &[],
+            Some(&expected),
+            &budget,
+            &mut |_, _| unreachable!(),
+        )
+        .unwrap();
+        trace.validate_replayed(&replay, &budget).unwrap();
+        let state = CallInferenceState::new(None, &budget).unwrap();
+        let mut changed = (*replay).clone();
+        changed.result_schema = state.node(InferKind::Slot(9)).unwrap();
+        assert!(trace.validate_replayed(&changed, &budget).is_err());
+        assert!(
+            changed
+                .result_type(&budget, &mut |_, _| unreachable!())
+                .is_err()
+        );
+        let mut changed = (*replay).clone();
+        changed.expected = Some(state.type_term(&nested(ir::Ty::Char), None, 0).unwrap());
+        assert!(trace.validate_replayed(&changed, &budget).is_err());
+        let mut changed = (*replay).clone();
+        changed.actuals = Arc::from([ir::Ty::Char]);
+        assert!(trace.validate_replayed(&changed, &budget).is_err());
+        let mut changed = (*replay).clone();
+        changed.slots = Arc::from([]);
+        assert!(
+            changed
+                .result_type(&budget, &mut |_, _| unreachable!())
+                .is_err()
+        );
+        assert!(trace.validate_replayed(&changed, &budget).is_err());
+    }
+
+    #[test]
     fn expected_result_infers_zero_input_nominal_output() {
         let budget = ir::PlanBudget::default();
         let own = env(1);
@@ -2061,6 +2444,14 @@ mod call_input_trace_tests {
         )
         .unwrap();
         assert_eq!(trace.actuals(), &[inferred]);
+        let reconstructed = trace
+            .result_type(&budget, &mut |actual_declaration, actuals| {
+                assert_eq!(actual_declaration, declaration);
+                assert_eq!(actuals.len(), 1);
+                Ok(option(actuals[0].clone(), 1))
+            })
+            .unwrap();
+        assert!(replay_types_equal(&reconstructed, &expected, &budget).unwrap());
         let replay = infer_input_schema_trace_with_context(
             Some(own.clone()),
             &[],

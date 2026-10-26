@@ -2,6 +2,28 @@
 use super::*;
 
 #[test]
+fn blanket_method_propagates_nested_nominal_receiver_and_result_constraints() {
+    for (payload, expected) in [
+        ("&x", "&u64"),
+        ("(&x,true)", "(&u64,bool)"),
+        ("[&x,&x]", "[&u64;2]"),
+    ] {
+        let source = format!(
+            "trait Id{{fn id(self)->Self;}}impl<T> Id for T{{fn id(self)->Self{{self}}}}struct Wrap<T>{{value:T}}fn probe(){{let x=5;let result=Wrap{{value:{payload}}}.id();let expected:Wrap<{expected}>=result;}}fn main(){{}}"
+        );
+        let (pending, types) = inspect(&source, false).unwrap();
+        assert_eq!(pending, 0, "{source}");
+        assert!(types.contains(&ir::Ty::Int(ir::IntTy::U64)), "{source}");
+        assert!(
+            types.iter().any(|ty| matches!(ty, ir::Ty::Struct(_))),
+            "blanket result must retain its nominal owner: {source}"
+        );
+    }
+    let incompatible = "trait Id{fn id(self)->Self;}impl<T> Id for T{fn id(self)->Self{self}}struct Wrap<T>{value:T}fn probe(){let x=5;let result=Wrap{value:&x}.id();let wrong:Wrap<bool>=result;}fn main(){}";
+    assert!(inspect(incompatible, false).is_err());
+}
+
+#[test]
 fn opaque_callable_output_hint_keeps_unresolved_owner_terms() {
     for mode in ["Fn", "FnMut", "FnOnce"] {
         let source = format!(

@@ -133,9 +133,10 @@ impl Solver<'_, '_, '_> {
         Ok(true)
     }
 
-    /// A closure-bearing nominal cannot yet be interned. A unique source impl
-    /// can still contribute equations, never a proof or executable selection.
-    /// Restrict this path to unspecialized nominal heads so probing cannot bind
+    /// An unmaterialized nominal can still contribute equations through a
+    /// unique unspecialized nominal or blanket implementation. These equations
+    /// do not select an implementation: checked lowering must prove it later.
+    /// Competing or specialized heads leave inference pending rather than bind
     /// an unknown actual merely to make one implementation applicable.
     fn structural_impl(
         &self,
@@ -154,8 +155,14 @@ impl Solver<'_, '_, '_> {
                 continue;
             }
             let Some((owner, patterns)) = nominal_parts(&header.trait_ref.self_ty) else {
-                if matches!(header.trait_ref.self_ty, ir::Ty::Param(_)) {
-                    return Ok(None);
+                if let ir::Ty::Param(parameter) = header.trait_ref.self_ty {
+                    if !header.schema_env.contains(parameter) {
+                        return Ok(None);
+                    }
+                    self.checker.infer_storage(1)?;
+                    if selected.replace(header.clone()).is_some() {
+                        return Ok(None);
+                    }
                 }
                 continue;
             };

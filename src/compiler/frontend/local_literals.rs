@@ -1366,7 +1366,7 @@ impl<'s> Solver<'_, '_, 's> {
                     continue;
                 }
                 if (self.contains_callable(receiver, 0)?
-                    || self.numeric_nominal_actuals(receiver)?)
+                    || matches!(self.domain(receiver), Domain::Nominal(..)))
                     && let Some(result) = self.structural_trait_method_constraints(
                         receiver,
                         method.name,
