@@ -30,6 +30,18 @@ const FORWARDED_ENV: &[&str] = &[
     "JUSTRUST_RELEASE_BUILD",
     "RUSTFLAGS",
     "CARGO_ENCODED_RUSTFLAGS",
+    "CARGO_INCREMENTAL",
+    "CARGO_PROFILE_RELEASE_OPT_LEVEL",
+    "CARGO_PROFILE_RELEASE_DEBUG",
+    "CARGO_PROFILE_RELEASE_SPLIT_DEBUGINFO",
+    "CARGO_PROFILE_RELEASE_STRIP",
+    "CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS",
+    "CARGO_PROFILE_RELEASE_OVERFLOW_CHECKS",
+    "CARGO_PROFILE_RELEASE_LTO",
+    "CARGO_PROFILE_RELEASE_PANIC",
+    "CARGO_PROFILE_RELEASE_INCREMENTAL",
+    "CARGO_PROFILE_RELEASE_CODEGEN_UNITS",
+    "CARGO_PROFILE_RELEASE_RPATH",
     "RUSTUP_TOOLCHAIN",
     "JCODE_DESKTOP_VERSION",
     "JCODE_DESKTOP_BUILD_METADATA",
@@ -65,6 +77,23 @@ const FORWARDED_ENV: &[&str] = &[
     "JUSTRUST_EARLY",
     "JUSTRUST_EARLY_EXPERIMENTAL",
 ];
+
+/// Keep the allowlist explicit. In particular, a wrapper executable on the
+/// caller's machine is not a portable hosted build control. An empty Cargo
+/// config override is portable: it disables a configured wrapper without
+/// overriding justrust's own RUSTC_WRAPPER instrumentation.
+fn forwarded_env(mut lookup: impl FnMut(&str) -> Option<String>) -> Vec<(String, String)> {
+    let mut env = Vec::new();
+    for &name in FORWARDED_ENV {
+        if let Some(value) = lookup(name) {
+            env.push((name.to_owned(), value));
+        }
+    }
+    if lookup("CARGO_BUILD_RUSTC_WRAPPER").as_deref() == Some("") {
+        env.push(("CARGO_BUILD_RUSTC_WRAPPER".into(), String::new()));
+    }
+    env
+}
 
 /// Every directory the machine must mirror for a build started in `cwd`.
 pub fn source_roots(cwd: &Path) -> Result<Vec<PathBuf>> {
@@ -762,11 +791,7 @@ fn run_remote_inner(
     };
     let mut env = Vec::new();
     env.push((crate::remote_proto::CLIENT_LIVE_CPU.into(), "1".into()));
-    for var in FORWARDED_ENV {
-        if let Ok(v) = std::env::var(var) {
-            env.push((var.to_string(), v));
-        }
-    }
+    env.extend(forwarded_env(|name| std::env::var(name).ok()));
     // SSH login defaults can differ from the caller (Ubuntu: 0002 versus
     // local 0022), changing permissions and even security-sensitive tests.
     // This metadata is consumed before exec and never passed to Cargo.
@@ -1424,6 +1449,95 @@ mod tests {
         assert!(super::fallback_safe(false, submitted));
     }
     use super::*;
+
+    #[test]
+    fn hosted_release_env_preserves_exact_values_over_transport() {
+        let controls = [
+            ("CARGO_INCREMENTAL", "0"),
+            ("CARGO_PROFILE_RELEASE_OPT_LEVEL", "3"),
+            ("CARGO_PROFILE_RELEASE_DEBUG", "line-tables-only"),
+            ("CARGO_PROFILE_RELEASE_SPLIT_DEBUGINFO", "packed"),
+            ("CARGO_PROFILE_RELEASE_STRIP", "symbols"),
+            ("CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS", "false"),
+            ("CARGO_PROFILE_RELEASE_OVERFLOW_CHECKS", "true"),
+            ("CARGO_PROFILE_RELEASE_LTO", "thin"),
+            ("CARGO_PROFILE_RELEASE_PANIC", "abort"),
+            ("CARGO_PROFILE_RELEASE_INCREMENTAL", "false"),
+            ("CARGO_PROFILE_RELEASE_CODEGEN_UNITS", "1"),
+            ("CARGO_PROFILE_RELEASE_RPATH", "false"),
+            ("CARGO_BUILD_RUSTC_WRAPPER", ""),
+        ];
+        let expected: Vec<_> = controls
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        let env = forwarded_env(|name| {
+            controls
+                .iter()
+                .find(|(k, _)| *k == name)
+                .map(|(_, v)| v.to_string())
+        });
+        assert_eq!(env, expected);
+        for msg in [
+            Msg::Run {
+                id: 1,
+                cwd: "/project".into(),
+                args: vec!["build".into(), "--release".into()],
+                env: env.clone(),
+                roots: vec![],
+                start: false,
+                run_id: "release-env".into(),
+            },
+            Msg::RunSync {
+                id: 1,
+                cwd: "/project".into(),
+                args: vec!["build".into(), "--release".into()],
+                env: env.clone(),
+                roots: vec![],
+                start: false,
+                run_id: "release-env".into(),
+            },
+        ] {
+            let mut wire = Vec::new();
+            write_frame(&mut wire, &msg, &[]).unwrap();
+            let (decoded, _) = read_frame(&mut std::io::Cursor::new(wire))
+                .unwrap()
+                .unwrap();
+            assert_eq!(decoded, msg);
+        }
+    }
+
+    #[test]
+    fn hosted_env_omits_missing_controls_secrets_and_nonempty_wrappers() {
+        assert!(forwarded_env(|_| None).is_empty());
+        for wrapper in ["/home/user/bin/sccache", "sccache", " "] {
+            let input = [
+                ("CARGO_BUILD_RUSTC_WRAPPER", wrapper),
+                ("RUSTC_WRAPPER", wrapper),
+                ("RUSTC_WORKSPACE_WRAPPER", wrapper),
+                ("CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER", wrapper),
+                ("CARGO_PROFILE_RELEASE_UNKNOWN", "secret"),
+                ("CARGO_REGISTRIES_PRIVATE_TOKEN", "secret"),
+                ("AWS_SECRET_ACCESS_KEY", "secret"),
+            ];
+            assert!(
+                forwarded_env(|name| {
+                    input
+                        .iter()
+                        .find(|(k, _)| *k == name)
+                        .map(|(_, v)| v.to_string())
+                })
+                .is_empty()
+            );
+        }
+        // False, zero, and empty values must not be mistaken for absent values.
+        for value in ["0", "false", "", "fat", "z"] {
+            assert_eq!(
+                forwarded_env(|name| (name == "CARGO_PROFILE_RELEASE_LTO").then(|| value.into())),
+                vec![("CARGO_PROFILE_RELEASE_LTO".into(), value.into())],
+            );
+        }
+    }
 
     #[test]
     fn hosted_forwards_explicit_optimization_controls_not_secrets_or_local_paths() {
