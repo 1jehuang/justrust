@@ -1,9 +1,15 @@
 # Managed GNU/Linux ARM64 releases
 
-The managed target is exactly `aarch64-unknown-linux-gnu`. Linux x86_64 can
-cross-compile it using the same checksum-verified Zig 0.13.0 and
-cargo-zigbuild 0.20.1 installation as the managed musl release path. This is
-not a target substitution: GNU/Linux output remains GNU/Linux output.
+The managed target is exactly `aarch64-unknown-linux-gnu`. Linux x86_64 hosts
+use checksum-pinned Ubuntu Noble GCC 13.2, GNU binutils 2.42, and an ARM64
+glibc 2.39 development sysroot, extracted rootlessly into the account toolchain
+store. Host glibc 2.38 or newer, `ar`, and `tar` with xz/zstd support are
+required. Package scripts are never executed. No system packages are installed
+and no root access is used. The target sysroot is glibc 2.39, not a promise of
+GLIBC_2.17 compatibility.
+This is not a target substitution: GNU/Linux output remains GNU/Linux output.
+The GNU linker preserves Rust's Cortex-A53 erratum mitigation, which the
+previous Zig path could not accept.
 
 ## Official Jcode TLS contract
 
@@ -27,12 +33,12 @@ An invocation after selecting that managed nightly is:
 ```sh
 CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS='-Ztls-model=emulated' \
   JUSTRUST_TOOLCHAIN=nightly-2026-10-08 \
-  justrust zigbuild --release --target aarch64-unknown-linux-gnu \
+  justrust build --release --target aarch64-unknown-linux-gnu \
   -Zbuild-std=std,panic_abort
 ```
 
 Preserve any other necessary target flags when setting this variable. Do not
-carry a native `-fuse-ld=mold` setting into the Zig cross linker. Compiler
+carry a native `-fuse-ld=mold` setting into the GNU cross linker. Compiler
 selection and remote routing belong to the calling command orchestration,
 not to `arm64_tools`.
 
@@ -42,7 +48,13 @@ not to `arm64_tools`.
   the calling host. `configure` separately requires a Linux build host.
 - `configure(&mut Command, &[String])` requires that explicit target and the
   full build-std list, injects target-only emulated TLS when absent, rejects
-  conflicting TLS/global flags, and applies pinned release tools.
+  conflicting TLS/global flags, and applies pinned GCC tools.
+- `ensure()` provisions the pinned compiler and sysroot; `apply(cmd, root)`
+  selects GCC, G++, ar, and the explicit sysroot for the ARM target only. Host
+  `CC`, `CXX`, and `AR` remain unchanged. The pinned host helper libraries are
+  added to the child library search path. `-Clinker-flavor=gcc` plus a final
+  `-Clink-arg=-fuse-ld=bfd` prevents Rust's self-contained lld preference from
+  bypassing the pinned GNU binutils.
 - `validate_artifact(bytes)` structurally checks little-endian ELF64,
   AArch64, executable/shared-object type, segment bounds, and an executable
   load segment. It does not certify TLS provenance or runtime behavior.
@@ -73,9 +85,21 @@ passes to preserve its Cortex-A53 erratum mitigation. The run was
 `20261026-150729007-588313` (21.6 seconds). The same failure occurred with
 the managed jr compiler (`20261026-150653255-584130`). `-Xlinker` forwarding
 also failed. Do not silently strip this mitigation or change the Rust target.
-A corrected managed Zig/linker path is required before promoting this path
-as release-ready. No executable or runtime acceptance was obtained from
-these runs. This machine has no `qemu-aarch64` executable.
+These failures motivated replacing Zig with the managed GNU cross linker,
+not removing the mitigation. No executable or runtime acceptance was obtained
+from those Zig runs. This machine has no `qemu-aarch64` executable.
+
+The replacement was exercised locally on Linux x86_64. The opt-in
+`managed_gcc_download_smoke` test downloaded and checksum-verified all pins,
+then linked an AArch64 C executable with `--fix-cortex-a53-843419` intact
+(run `20261026-151459496-641309`). A real Rust fixture using thread-local
+`Cell` state and `std::thread::spawn` rebuilt `std` and `panic_abort` with
+`nightly-2026-10-08` and emulated TLS. Its final explicitly BFD-linked build
+passed in 23.4 seconds (run `20261026-151646341-652003`). ELF inspection found
+AArch64 ELF64, interpreter `/lib/ld-linux-aarch64.so.1`, application and std
+`__emutls_v` symbols plus `__emutls_get_address`, and no `PT_TLS` segment.
+GNU BFD reported version 2.42. These are build/structure checks, not execution
+or full Jcode/Termux acceptance. Runtime remains untested on this machine.
 
 ## Acceptance checks
 
