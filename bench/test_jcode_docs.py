@@ -58,6 +58,9 @@ class DocsBenchmarkTests(unittest.TestCase):
             with patch.dict(driver.os.environ, {"JUSTRUST_BENCH_WORK": str(root / "staging")}), \
                  patch.object(driver, "git", return_value=(driver.PIN + "\n").encode()), \
                  patch.object(driver.suite, "WORK", root / "work"), \
+                 patch.object(driver.suite, "SNAPSHOTS", dict(driver.suite.SNAPSHOTS)), \
+                 patch.object(driver.suite, "REMOTE", driver.suite.REMOTE), \
+                 patch.object(driver.suite, "TOOLCHAIN", driver.suite.TOOLCHAIN), \
                  patch.object(driver.suite, "prepare", return_value=root), \
                  patch.object(driver.suite, "env_info", return_value=info), \
                  patch.object(driver.suite, "run_scenario", side_effect=run), \
