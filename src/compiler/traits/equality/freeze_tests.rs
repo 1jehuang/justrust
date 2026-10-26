@@ -30,6 +30,60 @@ fn fixture() -> (ValidatedTraitWorld, DeclId, PlanBudget) {
 }
 
 #[test]
+fn projection_formation_reuse_exact_short_poison_and_payload_preservation() {
+    for control in 0..5 {
+        let (world, declaration, budget) = fixture();
+        let world = Arc::new(world);
+        let facts = world.callable_facts(declaration).unwrap();
+        let projection = facts
+            .predicates
+            .predicates
+            .iter()
+            .find_map(|row| {
+                if let Predicate::ProjectionEq { projection, .. } = row {
+                    Some(projection.clone())
+                } else {
+                    None
+                }
+            })
+            .expect("fixture has an original declared equality");
+        let mut proof = world
+            .normalize_projection_equality(&projection, &facts)
+            .unwrap();
+        let before = budget.usage_snapshot();
+        let mut held = None;
+        match control {
+            0 => {}
+            1 => {
+                let remaining = budget.limits().bytes - before.bytes;
+                held = Some(budget.reserve_bytes(remaining).unwrap());
+            }
+            2 => assert!(budget.retain_bytes(budget.limits().bytes).is_err()),
+            3 => {
+                // Identical content in another allocation must use full formation.
+                Arc::make_mut(&mut proof.0).rows = facts.predicates.predicates.to_vec().into();
+            }
+            4 => Arc::make_mut(&mut proof.0).rhs = Ty::Bool,
+            _ => unreachable!(),
+        }
+        let result = proof.validate_for(&projection, &facts);
+        if matches!(control, 0 | 3) {
+            result.unwrap();
+        } else {
+            assert!(result.is_err(), "control {control}");
+        }
+        drop(held);
+        // The proof and all original payloads remain reachable throughout.
+        // Reuse cannot turn their permanent admission into a refundable lease.
+        let after = budget.usage_snapshot();
+        assert!(after.bytes >= before.bytes, "control {control}");
+        assert!(after.reservations.retentions >= before.reservations.retentions);
+        assert_eq!(proof.0.world, world.id);
+        assert_eq!(proof.0.validated_registry, world.registry);
+    }
+}
+
+#[test]
 fn declared_reductions_final_replay_rejects_foreign_stale_owner_rhs_and_rows() {
     for variant in 0..6 {
         let (mut world, declaration, _) = fixture();

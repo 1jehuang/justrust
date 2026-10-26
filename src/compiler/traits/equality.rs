@@ -89,6 +89,18 @@ impl DeclaredCallableNormalization {
     }
 }
 
+fn projection_formation_limits(budget: &PlanBudget) -> [usize; 6] {
+    let limits = budget.limits();
+    [
+        limits.params,
+        limits.applications,
+        limits.depth,
+        limits.nodes,
+        limits.work,
+        limits.bytes,
+    ]
+}
+
 #[derive(Clone, Debug)]
 struct ProjectionEqualityEvidence {
     world: WorldId,
@@ -99,6 +111,11 @@ struct ProjectionEqualityEvidence {
     rhs: Ty,
     rows: Arc<[Predicate]>,
     membership: ProofEvidence,
+    validated_env: Arc<GenericEnv>,
+    validated_registry: SnapshotId,
+    validated_ready: bool,
+    validated_finalized: bool,
+    validated_limits: [usize; 6],
 }
 
 #[derive(Clone, Debug)]
@@ -135,11 +152,29 @@ impl NormalizedProjectionEquality {
             &mut ProofScratch::default(),
         )?;
         world.compare_predicate_rows(&evidence.rows, &facts.predicates.predicates)?;
-        let actual = world
-            .declared_equality_rhs(projection, &facts.predicates.predicates, facts.env())?
-            .ok_or_else(|| {
-                FactsError::invalid(facts.budget(), "projection equality lost its declared row")
-            })?;
+        // Only the private producer below can seal these exact immutable rows.
+        // A foreign allocation or changed formation context retains the full
+        // validation path. Domain, membership, poison and caller checks above
+        // and below remain mandatory even on this narrow formation reuse hit.
+        let reuse_formation = Arc::ptr_eq(&evidence.rows, &facts.predicates.predicates)
+            && evidence.validated_registry == world.registry
+            && evidence.validated_ready == world.owner_normalization_ready
+            && evidence.validated_finalized == world.owner_normalization_finalized
+            && evidence.validated_limits == projection_formation_limits(&world.budget)
+            && Arc::ptr_eq(&evidence.validated_env, &facts.predicates.env);
+        let actual = if reuse_formation {
+            world.reduce_declared_equality_rhs(
+                projection,
+                &facts.predicates.predicates,
+                facts.env(),
+                &mut Vec::new(),
+            )?
+        } else {
+            world.declared_equality_rhs(projection, &facts.predicates.predicates, facts.env())?
+        }
+        .ok_or_else(|| {
+            FactsError::invalid(facts.budget(), "projection equality lost its declared row")
+        })?;
         if !world.eq_ty(&actual, &evidence.rhs, 0)?
             || evidence.membership.0.world != world.id
             || evidence.membership.0.environment != facts.predicates.index
@@ -1132,6 +1167,11 @@ impl ValidatedTraitWorld {
             rhs,
             rows: facts.predicates.predicates.clone(),
             membership,
+            validated_env: facts.predicates.env.clone(),
+            validated_registry: self.registry,
+            validated_ready: self.owner_normalization_ready,
+            validated_finalized: self.owner_normalization_finalized,
+            validated_limits: projection_formation_limits(&self.budget),
         }));
         proof.validate_for(projection, facts)?;
         Ok(proof)
