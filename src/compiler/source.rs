@@ -38,6 +38,8 @@ const MAX_ORIGINS: usize = 1024 * 1024;
 /// Native x86_64 Linux configuration plus bounded user predicates.
 /// The default pins abort and enables debug assertions, not complete Rust panic semantics.
 pub struct SourceOptions {
+    /// Frozen native project-discovery inputs, when invoked by the project driver.
+    pub project_inputs: Option<Arc<crate::project::inputs::DiscoveryInputs>>,
     /// Explicit language input. Unsupported editions reject before source IO.
     pub edition: Edition,
     /// Native ELF object emission/link inputs, frozen before graph execution.
@@ -91,6 +93,7 @@ impl TestFilter {
 impl Default for SourceOptions {
     fn default() -> Self {
         Self {
+            project_inputs: None,
             edition: Edition::E2024,
             native_link: super::c_abi::elf::LinkOptions::default(),
             cfg: CfgSet::native_x86_64_linux(),

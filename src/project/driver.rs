@@ -257,15 +257,26 @@ fn kind_label(unit: &Unit) -> &'static str {
 impl Driver {
     pub fn new(manifest_path: &Path, sel: Selection) -> Result<Self, ManifestError> {
         let ws = manifest::load(manifest_path)?;
-        let target_dir = std::env::var_os("CARGO_TARGET_DIR")
+        Ok(Self::from_workspace(ws, sel))
+    }
+
+    pub fn from_directory(start: &Path, sel: Selection) -> Result<Self, ManifestError> {
+        let ws = manifest::load_from_directory(start)?;
+        Ok(Self::from_workspace(ws, sel))
+    }
+
+    fn from_workspace(ws: Workspace, sel: Selection) -> Self {
+        let target_dir = ws
+            .inputs
+            .environment("CARGO_TARGET_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(|| ws.root.join("target"))
             .join("jr");
-        Ok(Self {
+        Self {
             ws,
             sel,
             target_dir,
-        })
+        }
     }
 
     fn profile_name(&self, command: Command) -> String {
@@ -336,6 +347,7 @@ impl Driver {
                 );
             }
             let mut options = SourceOptions {
+                project_inputs: Some(self.ws.inputs.clone()),
                 edition: Edition::parse(&package.edition).map_err(err)?,
                 cfg: cfg_for(package, &resolved.enabled[unit.package])?,
                 externs: externs_for(&self.ws, unit, &resolved)?,

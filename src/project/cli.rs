@@ -2,7 +2,6 @@
 //! surface over the native project driver.
 
 use super::driver::{Command, Driver, Selection};
-use super::manifest;
 use std::path::PathBuf;
 
 pub const USAGE: &str = "jr-rust (check|build|test|run) [--manifest-path PATH] [-p NAME]... [--workspace]\n  [--lib] [--bin NAME] [--bins] [--test NAME] [--tests] [--example NAME] [--all-targets]\n  [--release] [--profile NAME] [-F/--features LIST] [--all-features] [--no-default-features]\n  [--no-run] [-j N] [-- ARGS...]\n";
@@ -100,10 +99,9 @@ fn run(command: &str, args: &[String]) -> Result<i32, Box<dyn std::error::Error>
     if sel.release && sel.profile.is_some() {
         return Err("--release and --profile cannot be used together".into());
     }
-    let manifest = match manifest_path {
-        Some(path) => path,
-        None => manifest::find_manifest(&std::env::current_dir()?)?,
+    let driver = match manifest_path {
+        Some(path) => Driver::new(&path, sel)?,
+        None => Driver::from_directory(&std::env::current_dir()?, sel)?,
     };
-    let driver = Driver::new(&manifest, sel)?;
     Ok(driver.run(command)?)
 }

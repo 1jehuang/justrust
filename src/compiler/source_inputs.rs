@@ -1,8 +1,9 @@
 //! Per-source-node external observations. These are evidence, not cache permission.
 //!
 //! No ambient environment is consumed by source preparation: cfg, optimization,
-//! link snapshots and filters are supplied explicitly. Project discovery, the
-//! compiler/tool identity, build scripts and proc macros are NOT covered here.
+//! link snapshots and filters are supplied explicitly. The project driver may
+//! attach frozen discovery evidence. Tool identity, scripts and proc macros
+//! still require separate coverage.
 use super::{CfgSet, SourceOptions, SourceReader};
 use std::io;
 use std::path::{Path, PathBuf};
@@ -31,14 +32,19 @@ struct Observation {
 /// Private fields prevent callers from asserting observation completeness.
 #[derive(Clone, Debug)]
 pub struct SourceInputs {
+    project: Option<std::sync::Arc<crate::project::inputs::DiscoveryInputs>>,
     observations: Vec<Observation>,
     options: Option<[u8; 32]>,
     complete: bool,
 }
 impl crate::engine::Fact for SourceInputs {}
 impl SourceInputs {
+    pub fn project_inputs(&self) -> Option<&crate::project::inputs::DiscoveryInputs> {
+        self.project.as_deref()
+    }
     pub(super) fn untracked() -> Self {
         Self {
+            project: None,
             observations: Vec::new(),
             options: None,
             complete: false,
@@ -56,6 +62,13 @@ impl SourceInputs {
     /// not protect against concurrent mutation. A future cache must pin a snapshot.
     pub fn matches_current_source(&self, options: &SourceOptions) -> bool {
         if !self.complete || self.options.is_none() || self.options != option_identity(options) {
+            return false;
+        }
+        if self
+            .project
+            .as_ref()
+            .is_some_and(|project| !project.matches_current())
+        {
             return false;
         }
         let mut reader = super::FsReader;
@@ -79,7 +92,7 @@ impl SourceInputs {
     /// In particular no arbitrary build-script/proc-macro execution is tracked.
     pub fn shareability_blockers(&self) -> &'static [&'static str] {
         &[
-            "source-only evidence: project discovery, environment and configuration files are not tracked",
+            "project discovery evidence, if supplied, excludes later planning IO and unsupported configuration sources",
             "compiler, embedded libraries and external tool identity are not sealed",
             "reviewed source-probe lock and provider inputs are not covered",
             "build scripts and procedural macros require controlled input tracking",
@@ -102,6 +115,7 @@ impl<'a> TrackingReader<'a> {
         Self {
             inner,
             inputs: SourceInputs {
+                project: options.project_inputs.clone(),
                 observations: Vec::new(),
                 options: option_identity(options),
                 complete,
@@ -233,6 +247,7 @@ impl Identity {
 fn option_identity(options: &SourceOptions) -> Option<[u8; 32]> {
     // Exhaustive destructuring makes new public configuration require a decision.
     let SourceOptions {
+        project_inputs,
         edition,
         native_link,
         cfg,
@@ -249,7 +264,14 @@ fn option_identity(options: &SourceOptions) -> Option<[u8; 32]> {
         remaining: MAX_IDENTITY_BYTES,
         valid: true,
     };
-    id.bytes(b"justrust-source-input-v1");
+    id.bytes(b"justrust-source-input-v2");
+    match project_inputs {
+        Some(project) => {
+            id.flag(true);
+            id.bytes(project.identity()?);
+        }
+        None => id.flag(false),
+    }
     id.bytes(&[match edition {
         super::Edition::E2015 => 0,
         super::Edition::E2018 => 1,
@@ -546,6 +568,54 @@ mod tests {
                             .unwrap()
                             .success()
                     );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn discovery_evidence_reaches_source_facts_and_manifest_changes_invalidate() {
+        use crate::engine::Engine;
+        let f = Fixture::new();
+        f.file("main.rs", "fn main() {}");
+        let manifest = "[package]\nname='tracked'\nversion='0.1.0'\nedition='2024'\n[[bin]]\nname='tracked'\npath='main.rs'\n";
+        f.file("Cargo.toml", manifest);
+        for workers in [1, 8] {
+            for check_only in [true, false] {
+                let workspace = crate::project::manifest::load(&f.0.join("Cargo.toml")).unwrap();
+                assert!(workspace.inputs.matches_current());
+                let options = SourceOptions {
+                    prelude: false,
+                    project_inputs: Some(workspace.inputs.clone()),
+                    ..Default::default()
+                };
+                let snapshot = Arc::new(compiler::Snapshot {
+                    input: compiler::Input::File(f.0.join("main.rs")),
+                    source_options: options.clone(),
+                    budget: compiler::ir::PlanBudget::default(),
+                });
+                let engine = Engine::new(compiler::CompilerProvider(snapshot));
+                let check = engine.request(compiler::keys::CheckRoot.key());
+                let build = (!check_only).then(|| engine.request(compiler::keys::BuildRoot.key()));
+                engine.run(workers).unwrap();
+                check.completion().unwrap();
+                let fact = engine
+                    .fact_of::<source::UnitResult>(&compiler::keys::SourceFile::input().key(), 0)
+                    .unwrap();
+                let unit = fact.as_ref().as_ref().unwrap();
+                let project = unit
+                    .inputs
+                    .project_inputs()
+                    .expect("missing project receipt in source fact");
+                assert_eq!(project.identity(), workspace.inputs.identity());
+                assert!(unit.inputs.matches_current_source(&options));
+                f.file("Cargo.toml", &manifest.replace("0.1.0", "0.1.1"));
+                assert!(!unit.inputs.matches_current_source(&options));
+                f.file("Cargo.toml", manifest);
+                assert!(unit.inputs.matches_current_source(&options));
+                if let Some(build) = build {
+                    build.completion().unwrap();
+                    assert!(!build.fact::<Vec<u8>>(0).unwrap().is_empty());
                 }
             }
         }

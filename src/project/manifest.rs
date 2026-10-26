@@ -7,9 +7,11 @@
 //! enabled features. Registry and git dependencies have no native source
 //! and are reported as unsupported rather than silently dropped.
 
+use super::inputs::{DiscoveryInputs, Recorder};
 use super::toml::{self, Spanned, Table, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum TargetKind {
@@ -152,6 +154,8 @@ pub fn resolve_profile(
 
 #[derive(Clone, Debug)]
 pub struct Workspace {
+    /// Immutable external observations captured while this workspace was loaded.
+    pub inputs: Arc<DiscoveryInputs>,
     pub root: PathBuf,
     /// Every loaded package, workspace members first.
     pub packages: Vec<Package>,
@@ -195,8 +199,9 @@ fn err<T>(message: impl Into<String>) -> Result<T, ManifestError> {
     Err(ManifestError(message.into()))
 }
 
-fn read_manifest(path: &Path) -> Result<Table, ManifestError> {
-    let text = std::fs::read_to_string(path)
+fn read_manifest(path: &Path, inputs: &mut Recorder) -> Result<Table, ManifestError> {
+    let text = inputs
+        .read_to_string(path)
         .map_err(|e| ManifestError(format!("failed to read `{}`: {e}", path.display())))?;
     toml::parse(&text).map_err(|e| {
         ManifestError(format!(
@@ -206,8 +211,9 @@ fn read_manifest(path: &Path) -> Result<Table, ManifestError> {
     })
 }
 
-fn read_toml(path: &Path, kind: &str) -> Result<Table, ManifestError> {
-    let text = std::fs::read_to_string(path)
+fn read_toml(path: &Path, kind: &str, inputs: &mut Recorder) -> Result<Table, ManifestError> {
+    let text = inputs
+        .read_to_string(path)
         .map_err(|e| ManifestError(format!("failed to read `{}`: {e}", path.display())))?;
     toml::parse(&text).map_err(|e| {
         ManifestError(format!(
@@ -217,11 +223,11 @@ fn read_toml(path: &Path, kind: &str) -> Result<Table, ManifestError> {
     })
 }
 
-fn read_lockfile(path: &Path) -> Result<Lockfile, ManifestError> {
-    if !path.is_file() {
+fn read_lockfile(path: &Path, inputs: &mut Recorder) -> Result<Lockfile, ManifestError> {
+    if !inputs.is_file(path) {
         return Ok(Lockfile::default());
     }
-    let table = read_toml(path, "lockfile")?;
+    let table = read_toml(path, "lockfile", inputs)?;
     if !matches!(get(&table, "version"), Some(Value::Integer(3 | 4))) {
         return err("unsupported Cargo.lock format version (expected 3 or 4)");
     }
@@ -342,17 +348,21 @@ fn strings(value: &[Spanned], what: &str) -> Result<Vec<String>, ManifestError> 
 
 /// Find the manifest governing `start`: the nearest `Cargo.toml` upward.
 pub fn find_manifest(start: &Path) -> Result<PathBuf, ManifestError> {
-    let start = start
-        .canonicalize()
+    find_manifest_observed(start, &mut Recorder::new())
+}
+
+fn find_manifest_observed(start: &Path, inputs: &mut Recorder) -> Result<PathBuf, ManifestError> {
+    let start = inputs
+        .canonicalize(start)
         .map_err(|e| ManifestError(format!("{}: {e}", start.display())))?;
-    let mut dir = if start.is_file() {
+    let mut dir = if inputs.is_file(&start) {
         start.parent().map(Path::to_path_buf).unwrap_or(start)
     } else {
         start
     };
     loop {
         let candidate = dir.join("Cargo.toml");
-        if candidate.is_file() {
+        if inputs.is_file(&candidate) {
             return Ok(candidate);
         }
         if !dir.pop() {
@@ -366,20 +376,44 @@ pub fn find_manifest(start: &Path) -> Result<PathBuf, ManifestError> {
 
 /// Load the workspace containing `manifest`.
 pub fn load(manifest: &Path) -> Result<Workspace, ManifestError> {
-    let manifest = manifest
-        .canonicalize()
+    load_request(manifest, false)
+}
+
+/// Discover the nearest manifest and retain the negative ancestor probes too.
+pub fn load_from_directory(start: &Path) -> Result<Workspace, ManifestError> {
+    load_request(start, true)
+}
+
+fn load_request(path: &Path, discover: bool) -> Result<Workspace, ManifestError> {
+    let mut inputs = Recorder::new();
+    for name in ["CARGO_TARGET_DIR", "CARGO_HOME", "HOME"] {
+        inputs.env(name);
+    }
+    let manifest = if discover {
+        find_manifest_observed(path, &mut inputs)?
+    } else {
+        path.to_owned()
+    };
+    let mut workspace = load_observed(&manifest, &mut inputs)?;
+    workspace.inputs = inputs.finish();
+    Ok(workspace)
+}
+
+fn load_observed(manifest: &Path, inputs: &mut Recorder) -> Result<Workspace, ManifestError> {
+    let manifest = inputs
+        .canonicalize(manifest)
         .map_err(|e| ManifestError(format!("{}: {e}", manifest.display())))?;
     // A package manifest may belong to a workspace rooted higher up.
     let mut root_manifest = manifest.clone();
-    let own = read_manifest(&manifest)?;
+    let own = read_manifest(&manifest, inputs)?;
     if get(&own, "workspace").is_none() {
         let mut dir = manifest.parent().unwrap().to_path_buf();
         while dir.pop() {
             let candidate = dir.join("Cargo.toml");
-            if candidate.is_file()
-                && let Ok(table) = read_manifest(&candidate)
+            if inputs.is_file(&candidate)
+                && let Ok(table) = read_manifest(&candidate, inputs)
                 && let Some(Value::Table(ws)) = get(&table, "workspace")
-                && workspace_includes(ws, &dir, manifest.parent().unwrap())?
+                && workspace_includes(ws, &dir, manifest.parent().unwrap(), inputs)?
             {
                 root_manifest = candidate;
                 break;
@@ -387,12 +421,13 @@ pub fn load(manifest: &Path) -> Result<Workspace, ManifestError> {
         }
     }
     let root_dir = root_manifest.parent().unwrap().to_path_buf();
-    let root_table = read_manifest(&root_manifest)?;
+    let root_table = read_manifest(&root_manifest, inputs)?;
     if get(&root_table, "patch").is_some() || get(&root_table, "replace").is_some() {
         return err("manifest patch/replace source overrides are unsupported");
     }
-    let lockfile = read_lockfile(&root_dir.join("Cargo.lock"))?;
+    let lockfile = read_lockfile(&root_dir.join("Cargo.lock"), inputs)?;
     let mut loader = Loader {
+        inputs,
         packages: Vec::new(),
         by_dir: BTreeMap::new(),
         workspace_deps: Table::new(),
@@ -421,7 +456,7 @@ pub fn load(manifest: &Path) -> Result<Workspace, ManifestError> {
         }
         if let Some(Value::Array(a)) = get(ws, "members") {
             for pattern in strings(a, "workspace.members")? {
-                for dir in expand_member(&root_dir, &pattern)? {
+                for dir in expand_member(&root_dir, &pattern, loader.inputs)? {
                     if !excluded.iter().any(|e| dir.starts_with(e)) && !dirs.contains(&dir) {
                         dirs.push(dir);
                     }
@@ -433,7 +468,7 @@ pub fn load(manifest: &Path) -> Result<Workspace, ManifestError> {
         }
         if let Some(Value::Array(a)) = get(ws, "default-members") {
             for pattern in strings(a, "workspace.default-members")? {
-                for dir in expand_member(&root_dir, &pattern)? {
+                for dir in expand_member(&root_dir, &pattern, loader.inputs)? {
                     default_members.push(loader.package(&dir)?);
                 }
             }
@@ -465,6 +500,7 @@ pub fn load(manifest: &Path) -> Result<Workspace, ManifestError> {
                     }
                 }
                 DependencySource::Registry(registry) => {
+                    loader.inputs.uncontrolled();
                     // An optional source is not required until its feature is
                     // activated. Keep the locked identity in the manifest;
                     // visible_dependencies still authenticates an active edge
@@ -599,6 +635,7 @@ pub fn load(manifest: &Path) -> Result<Workspace, ManifestError> {
         resolve_profile(&profiles, name)?;
     }
     Ok(Workspace {
+        inputs: DiscoveryInputs::untracked(),
         root: root_dir,
         packages: loader.packages,
         members,
@@ -608,7 +645,12 @@ pub fn load(manifest: &Path) -> Result<Workspace, ManifestError> {
     })
 }
 
-fn workspace_includes(ws: &Table, root: &Path, package: &Path) -> Result<bool, ManifestError> {
+fn workspace_includes(
+    ws: &Table,
+    root: &Path,
+    package: &Path,
+    inputs: &mut Recorder,
+) -> Result<bool, ManifestError> {
     if let Some(Value::Array(a)) = get(ws, "exclude") {
         for e in strings(a, "workspace.exclude")? {
             if package.starts_with(root.join(e)) {
@@ -618,7 +660,10 @@ fn workspace_includes(ws: &Table, root: &Path, package: &Path) -> Result<bool, M
     }
     if let Some(Value::Array(a)) = get(ws, "members") {
         for pattern in strings(a, "workspace.members")? {
-            if expand_member(root, &pattern)?.iter().any(|d| d == package) {
+            if expand_member(root, &pattern, inputs)?
+                .iter()
+                .any(|d| d == package)
+            {
                 return Ok(true);
             }
         }
@@ -627,16 +672,20 @@ fn workspace_includes(ws: &Table, root: &Path, package: &Path) -> Result<bool, M
 }
 
 /// Expand a member path; a trailing `*` path component globs directories.
-fn expand_member(root: &Path, pattern: &str) -> Result<Vec<PathBuf>, ManifestError> {
+fn expand_member(
+    root: &Path,
+    pattern: &str,
+    inputs: &mut Recorder,
+) -> Result<Vec<PathBuf>, ManifestError> {
     if let Some(prefix) = pattern.strip_suffix("/*") {
         let dir = root.join(prefix);
         let mut out = Vec::new();
-        let entries = std::fs::read_dir(&dir)
+        let entries = inputs
+            .read_dir(&dir)
             .map_err(|e| ManifestError(format!("{}: {e}", dir.display())))?;
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.join("Cargo.toml").is_file() {
-                out.push(path.canonicalize().unwrap_or(path));
+        for path in entries {
+            if inputs.is_file(&path.join("Cargo.toml")) {
+                out.push(inputs.canonicalize(&path).unwrap_or(path));
             }
         }
         out.sort();
@@ -646,7 +695,7 @@ fn expand_member(root: &Path, pattern: &str) -> Result<Vec<PathBuf>, ManifestErr
         return err(format!("unsupported workspace member glob `{pattern}`"));
     }
     let path = root.join(pattern);
-    Ok(vec![path.canonicalize().map_err(|e| {
+    Ok(vec![inputs.canonicalize(&path).map_err(|e| {
         ManifestError(format!(
             "failed to load workspace member `{}`: {e}",
             path.display()
@@ -654,7 +703,8 @@ fn expand_member(root: &Path, pattern: &str) -> Result<Vec<PathBuf>, ManifestErr
     })?])
 }
 
-struct Loader {
+struct Loader<'a> {
+    inputs: &'a mut Recorder,
     packages: Vec<Package>,
     by_dir: BTreeMap<PathBuf, usize>,
     workspace_deps: Table,
@@ -662,7 +712,7 @@ struct Loader {
     lockfile: Lockfile,
 }
 
-impl Loader {
+impl Loader<'_> {
     fn package(&mut self, dir: &Path) -> Result<usize, ManifestError> {
         self.package_with_lock(dir, None)
     }
@@ -672,14 +722,15 @@ impl Loader {
         dir: &Path,
         locked: Option<usize>,
     ) -> Result<usize, ManifestError> {
-        let dir = dir
-            .canonicalize()
+        let dir = self
+            .inputs
+            .canonicalize(dir)
             .map_err(|e| ManifestError(format!("{}: {e}", dir.display())))?;
         if let Some(index) = self.by_dir.get(&dir) {
             return Ok(*index);
         }
         let path = dir.join("Cargo.toml");
-        let table = read_manifest(&path)?;
+        let table = read_manifest(&path, self.inputs)?;
         let Some(Value::Table(package)) = get(&table, "package") else {
             return err(format!(
                 "manifest at `{}` has no [package] section (virtual manifest used as a package)",
@@ -776,7 +827,7 @@ impl Loader {
             Some(Value::Boolean(true)) => true,
             Some(Value::String(_)) => true,
             Some(v) => return err(format!("package.build: unexpected {}", v.type_name())),
-            None => dir.join("build.rs").is_file(),
+            None => self.inputs.is_file(&dir.join("build.rs")),
         };
         if build_script {
             return err(format!(
@@ -793,7 +844,7 @@ impl Loader {
                 features.insert(feature.clone(), strings(list, "features")?);
             }
         }
-        let targets = discover_targets(&dir, &name, &table)?;
+        let targets = discover_targets(&dir, &name, &table, self.inputs)?;
         let index = self.packages.len();
         self.by_dir.insert(dir.clone(), index);
         self.packages.push(Package {
@@ -814,6 +865,7 @@ impl Loader {
         &mut self,
         package: &LockedRegistryPackage,
     ) -> Result<usize, ManifestError> {
+        self.inputs.uncontrolled();
         let root = registry_source_root(package)?;
         let index = self
             .find_lock_package(&package.name, &package.version, Some(&package.source))
@@ -833,9 +885,9 @@ impl Loader {
             return err("registry package path dependencies are unsupported");
         }
         for target in &cached.targets {
-            let target_path = target
-                .path
-                .canonicalize()
+            let target_path = self
+                .inputs
+                .canonicalize(&target.path)
                 .map_err(|e| ManifestError(e.to_string()))?;
             if !target_path.starts_with(&cached.root) {
                 return err("registry target escapes authenticated package source");
@@ -872,7 +924,7 @@ impl Loader {
     }
 
     fn dependency(
-        &self,
+        &mut self,
         dir: &Path,
         locked: Option<usize>,
         key: &str,
@@ -922,8 +974,8 @@ impl Loader {
             // Workspace dependency paths are relative to the workspace root,
             // which `load` resolves; the root is an ancestor of `dir`.
             let mut root = dir.to_path_buf();
-            while !root.join("Cargo.toml").is_file()
-                || read_manifest(&root.join("Cargo.toml"))
+            while !self.inputs.is_file(&root.join("Cargo.toml"))
+                || read_manifest(&root.join("Cargo.toml"), self.inputs)
                     .ok()
                     .and_then(|t| t.get("workspace").cloned())
                     .is_none()
@@ -1051,6 +1103,7 @@ fn discover_targets(
     dir: &Path,
     package: &str,
     table: &Table,
+    inputs: &mut Recorder,
 ) -> Result<Vec<Target>, ManifestError> {
     let crate_name = package.replace('-', "_");
     let mut targets = Vec::new();
@@ -1067,7 +1120,7 @@ fn discover_targets(
         Some(_) => return err("lib: expected a table"),
     };
     let lib_default = dir.join("src/lib.rs");
-    if lib_table.is_some() || (auto("autolib") && lib_default.is_file()) {
+    if lib_table.is_some() || (auto("autolib") && inputs.is_file(&lib_default)) {
         let t = lib_table.unwrap_or_default();
         if let Some(Value::Boolean(true)) = get(&t, "proc-macro") {
             return err("proc-macro crates are unsupported");
@@ -1107,7 +1160,7 @@ fn discover_targets(
                     None if kind == TargetKind::Bin && name == package => dir.join("src/main.rs"),
                     None => {
                         let flat = dir.join(default_dir).join(format!("{name}.rs"));
-                        if flat.is_file() {
+                        if inputs.is_file(&flat) {
                             flat
                         } else {
                             dir.join(default_dir).join(&name).join("main.rs")
@@ -1126,17 +1179,15 @@ fn discover_targets(
         }
         let mut found = Vec::new();
         if auto(auto_key) {
-            if kind == TargetKind::Bin && dir.join("src/main.rs").is_file() {
+            if kind == TargetKind::Bin && inputs.is_file(&dir.join("src/main.rs")) {
                 found.push((package.to_string(), dir.join("src/main.rs")));
             }
-            if let Ok(entries) = std::fs::read_dir(dir.join(default_dir)) {
-                let mut list: Vec<_> = entries.flatten().map(|e| e.path()).collect();
-                list.sort();
-                for path in list {
-                    if path.extension().is_some_and(|e| e == "rs") && path.is_file() {
+            if let Ok(entries) = inputs.read_dir(&dir.join(default_dir)) {
+                for path in entries {
+                    if path.extension().is_some_and(|e| e == "rs") && inputs.is_file(&path) {
                         let name = path.file_stem().unwrap().to_string_lossy().into_owned();
                         found.push((name, path));
-                    } else if path.join("main.rs").is_file() {
+                    } else if inputs.is_file(&path.join("main.rs")) {
                         let name = path.file_name().unwrap().to_string_lossy().into_owned();
                         found.push((name, path.join("main.rs")));
                     }

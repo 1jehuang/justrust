@@ -1937,10 +1937,17 @@ PlanCtx/interner/source-context debt and wide adapter activation remain held.
       identity of supplied `SourceOptions`. `justrust test --lib source_inputs`
       covers mutation, negative lookup, symlink retargeting, configuration, limits
       and real CHECK/BUILD/run at workers 1/8. Revalidation is not an atomic
-      snapshot or cache authorization. Project discovery, ambient environment,
-      config files, probe locks, embedded/tool identity and uncontrolled build
-      scripts/proc macros remain explicit shareability blockers. No persistent
-      or global private cache is enabled by this foundation.
+      snapshot or cache authorization. Native project loading additionally
+      records manifest/lock bytes, canonical and negative path probes, sorted
+      directory listings, initial manifest search, and supplied `CARGO_TARGET_DIR`,
+      `CARGO_HOME` and `HOME` values/absence. Its immutable discovery receipt is
+      supplied through `SourceOptions` into the existing per-file graph fact
+      (`justrust test --lib project::inputs` and `--lib source_inputs`). The
+      existing project loader is not yet graph-scheduled. Subsequent planning
+      IO, unsupported configuration sources, probe locks, embedded/tool identity,
+      registry inspection tools and uncontrolled build scripts/proc macros remain
+      explicit gaps. Exhaustion or uncontrolled discovery cannot issue an input
+      identity. No persistent or global private cache is enabled by this foundation.
 - [ ] Add bounded asynchronous persistence, atomic manifests, durable checkpoint
       contracts, recovery, eviction and corruption/crash/cancellation tests.
 - [ ] Specify authenticated provenance, artifact integrity and authorization for
