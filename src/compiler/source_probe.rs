@@ -33,6 +33,14 @@ pub struct SourceProbeRecord {
     pub license: String,
     pub attribution: String,
     pub lock_path: PathBuf,
+    inputs: super::source_inputs::SourceInputs,
+}
+impl SourceProbeRecord {
+    /// Bounded observations of the lock and complete provider bytes consumed.
+    /// Revalidation is not atomic and confers no semantic or cache authority.
+    pub fn inputs(&self) -> &super::source_inputs::SourceInputs {
+        &self.inputs
+    }
 }
 
 /// Opaque and snapshot-bound. There is deliberately no public constructor.
@@ -56,6 +64,7 @@ impl VerifiedIdentityContext {
     }
 }
 struct VerifiedProvider {
+    inputs: super::source_inputs::SourceInputs,
     path: PathBuf,
     full_text: Arc<str>,
     context: VerifiedIdentityContext,
@@ -68,9 +77,18 @@ fn error(message: impl Into<String>) -> SourceError {
         format!("source lock: {}", message.into()),
     )
 }
-fn read(path: &Path, limit: usize) -> Result<Vec<u8>, SourceError> {
-    use super::SourceReader;
-    let mut reader = super::FsReader;
+fn read(
+    reader: &mut dyn super::SourceReader,
+    path: &Path,
+    limit: usize,
+) -> Result<Vec<u8>, SourceError> {
+    reader.canonicalize(path).map_err(|e| {
+        super::Loader::error(
+            SourceErrorKind::Io,
+            None,
+            format!("{}: {e}", path.display()),
+        )
+    })?;
     if !reader.is_file(path).map_err(|e| {
         super::Loader::error(
             SourceErrorKind::Io,
@@ -105,7 +123,7 @@ pub fn prepare_probe_file(
     request: &SourceProbeRequest,
 ) -> Result<super::PreparedSource, SourceError> {
     options.cfg.validate_native().map_err(error)?;
-    let verified = verify(request)?;
+    let verified = verify(request, options)?;
     let lexical_budget = crate::compiler::expansion_budget::ExpansionBudget::default();
     let prepared = super::prepare_file_with_budget(client, options, &lexical_budget)?;
     attach_verified(prepared, options, request, verified, lexical_budget)
@@ -119,7 +137,7 @@ pub fn attach_probe(
     request: &SourceProbeRequest,
 ) -> Result<super::PreparedSource, SourceError> {
     options.cfg.validate_native().map_err(error)?;
-    let verified = verify(request)?;
+    let verified = verify(request, options)?;
     attach_verified(
         prepared,
         options,
@@ -229,6 +247,7 @@ fn attach_verified(
             )?;
         }
         prepared.probes.push(SourceProbeRecord {
+            inputs: verified.inputs,
             item: ITEM.into(),
             source_revision: REVISION.into(),
             source_sha256: SOURCE_HASH.into(),
@@ -251,11 +270,16 @@ fn attach_verified(
     Ok(prepared)
 }
 
-fn verify(request: &SourceProbeRequest) -> Result<VerifiedProvider, SourceError> {
+fn verify(
+    request: &SourceProbeRequest,
+    options: &SourceOptions,
+) -> Result<VerifiedProvider, SourceError> {
+    let mut filesystem = super::FsReader;
+    let mut reader = super::source_inputs::TrackingReader::new(&mut filesystem, options);
     if request.item != ITEM {
         return Err(error("unregistered reviewed probe item"));
     }
-    let bytes = read(&request.lock_path, MAX_LOCK)?;
+    let bytes = read(&mut reader, &request.lock_path, MAX_LOCK)?;
     let text = std::str::from_utf8(&bytes).map_err(|_| error("lock is not UTF-8"))?;
     let mut root = Parser::parse(text)?.object()?;
     if take_number(&mut root, "version")? != 1 {
@@ -329,7 +353,7 @@ fn verify(request: &SourceProbeRequest) -> Result<VerifiedProvider, SourceError>
         }
     }
     let path = selected.ok_or_else(|| error("requested item absent from lock"))?;
-    let full = read(&path, super::MAX_BYTES)?;
+    let full = read(&mut reader, &path, super::MAX_BYTES)?;
     if sha256(&full) != SOURCE_HASH {
         return Err(error("provider source SHA-256 mismatch"));
     }
@@ -347,6 +371,7 @@ fn verify(request: &SourceProbeRequest) -> Result<VerifiedProvider, SourceError>
         std::str::from_utf8(&full).map_err(|_| error("provider source is not UTF-8"))?,
     );
     Ok(VerifiedProvider {
+        inputs: reader.finish(),
         path,
         full_text,
         context: VerifiedIdentityContext { selected },
@@ -731,6 +756,143 @@ mod tests {
     }
 
     #[test]
+    fn probe_receipt_tracks_lock_bytes_provider_bytes_and_canonical_targets() {
+        let fixture = Fixture::new();
+        let options = SourceOptions::default();
+        let prepared = fixture.prepare().unwrap();
+        let inputs = prepared.probes[0].inputs();
+        assert_eq!(inputs.observation_count(), 6);
+        assert!(inputs.matches_current_source(&options));
+        let lock = fixture.root.join("lock.json");
+        let original_lock = std::fs::read(&lock).unwrap();
+        let mut whitespace = original_lock.clone();
+        whitespace.push(b'\n');
+        std::fs::write(&lock, &whitespace).unwrap();
+        assert!(!inputs.matches_current_source(&options));
+        assert!(fixture.prepare().is_ok());
+        std::fs::write(&lock, &original_lock).unwrap();
+        assert!(inputs.matches_current_source(&options));
+        let provider = fixture.root.join("probes/identity/convert.rs");
+        let original_provider = std::fs::read(&provider).unwrap();
+        let mut altered = original_provider.clone();
+        altered[0] ^= 1;
+        std::fs::write(&provider, altered).unwrap();
+        assert!(!inputs.matches_current_source(&options));
+        assert!(fixture.prepare().is_err());
+        std::fs::write(&provider, &original_provider).unwrap();
+        assert!(inputs.matches_current_source(&options));
+        for path in [&lock, &provider] {
+            let alternate = path.with_extension("alternate");
+            std::fs::rename(path, &alternate).unwrap();
+            assert!(!inputs.matches_current_source(&options));
+            assert!(fixture.prepare().is_err());
+            // Identical bytes at a different canonical identity still invalidate.
+            std::os::unix::fs::symlink(&alternate, path).unwrap();
+            assert!(!inputs.matches_current_source(&options));
+            assert!(fixture.prepare().is_ok());
+            std::fs::remove_file(path).unwrap();
+            std::fs::rename(alternate, path).unwrap();
+            assert!(inputs.matches_current_source(&options));
+        }
+        std::fs::write(&lock, vec![b' '; MAX_LOCK + 1]).unwrap();
+        assert_eq!(fixture.prepare().unwrap_err().kind, SourceErrorKind::Limit);
+        assert!(!inputs.matches_current_source(&options));
+        std::fs::write(&lock, &original_lock).unwrap();
+        assert!(inputs.matches_current_source(&options));
+        let mut changed = options.clone();
+        changed.overflow_checks = !changed.overflow_checks;
+        assert!(!inputs.matches_current_source(&changed));
+    }
+
+    #[test]
+    fn probe_receipts_reach_graph_facts_and_missing_inputs_never_publish_success() {
+        use crate::{compiler, engine::Engine};
+        let fixture = Fixture::new();
+        std::fs::write(
+            fixture.root.join("client.rs"),
+            "fn main(){if identity::<i32>(7)==7{println!(\"probe tracked\");}}",
+        )
+        .unwrap();
+        let options = SourceOptions::default();
+        for workers in [1, 8] {
+            for check_only in [true, false] {
+                let snapshot = Arc::new(compiler::Snapshot {
+                    input: compiler::Input::ProbeFile(
+                        fixture.root.join("client.rs"),
+                        fixture.request(),
+                    ),
+                    source_options: options.clone(),
+                    budget: compiler::ir::PlanBudget::default(),
+                });
+                let engine = Engine::new(compiler::CompilerProvider(snapshot));
+                let check = engine.request(compiler::keys::CheckRoot.key());
+                let build = (!check_only).then(|| engine.request(compiler::keys::BuildRoot.key()));
+                engine.run(workers).unwrap();
+                check.completion().unwrap();
+                let prepared = engine
+                    .fact_of::<super::super::PreparedSource>(
+                        &compiler::keys::ParseDebtRoot.key(),
+                        compiler::PREPARED_SOURCE_OUTPUT,
+                    )
+                    .unwrap();
+                let inputs = prepared.probes[0].inputs();
+                assert_eq!(inputs.observation_count(), 6);
+                assert!(inputs.matches_current_source(&options));
+                let lock = fixture.root.join("lock.json");
+                let bytes = std::fs::read(&lock).unwrap();
+                std::fs::remove_file(&lock).unwrap();
+                assert!(!inputs.matches_current_source(&options));
+                std::fs::write(&lock, bytes).unwrap();
+                assert!(inputs.matches_current_source(&options));
+                if let Some(build) = build {
+                    build.completion().unwrap();
+                    let executable = fixture.root.join(format!("program-{workers}"));
+                    std::fs::write(&executable, build.fact::<Vec<u8>>(0).unwrap().as_slice())
+                        .unwrap();
+                    use std::os::unix::fs::PermissionsExt;
+                    std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755))
+                        .unwrap();
+                    let output = std::process::Command::new(executable).output().unwrap();
+                    assert!(output.status.success());
+                    assert_eq!(output.stdout, b"probe tracked\n");
+                }
+            }
+            for path in [
+                fixture.root.join("lock.json"),
+                fixture.root.join("probes/identity/convert.rs"),
+            ] {
+                let bytes = std::fs::read(&path).unwrap();
+                std::fs::remove_file(&path).unwrap();
+                let snapshot = Arc::new(compiler::Snapshot {
+                    input: compiler::Input::ProbeFile(
+                        fixture.root.join("client.rs"),
+                        fixture.request(),
+                    ),
+                    source_options: options.clone(),
+                    budget: compiler::ir::PlanBudget::default(),
+                });
+                let engine = Engine::new(compiler::CompilerProvider(snapshot));
+                let check = engine.request(compiler::keys::CheckRoot.key());
+                let build = engine.request(compiler::keys::BuildRoot.key());
+                // A completed scheduler run can contain failed graph nodes.
+                engine.run(workers).unwrap();
+                assert!(check.completion().is_err());
+                assert!(build.completion().is_err());
+                assert!(
+                    engine
+                        .fact_of::<super::super::PreparedSource>(
+                            &compiler::keys::ParseDebtRoot.key(),
+                            compiler::PREPARED_SOURCE_OUTPUT
+                        )
+                        .is_none()
+                );
+                assert!(build.fact::<Vec<u8>>(0).is_err());
+                std::fs::write(&path, bytes).unwrap();
+            }
+        }
+    }
+
+    #[test]
     fn verified_probe_extends_sealed_prelude_without_reauthorizing_mutations() {
         use crate::compiler::source::{
             AssemblyStep, PreparedLexInput, SourceAssembler, prepare_child_unit,
@@ -840,7 +1002,7 @@ mod tests {
     #[test]
     fn verified_context_cannot_be_reused_for_client_or_modified_snapshot_or_owner() {
         let fixture = Fixture::new();
-        let verified = verify(&fixture.request()).unwrap();
+        let verified = verify(&fixture.request(), &SourceOptions::default()).unwrap();
         let selected = verified.context.selected.as_ref();
         assert!(
             verified

@@ -94,7 +94,7 @@ impl SourceInputs {
         &[
             "project discovery evidence, if supplied, excludes registry planning IO and unsupported configuration sources",
             "compiler, embedded libraries and external tool identity are not sealed",
-            "reviewed source-probe lock and provider inputs are not covered",
+            "attached reviewed source-probe receipts require separate validation",
             "build scripts and procedural macros require controlled input tracking",
             "filesystem observations are not an atomic immutable snapshot",
             "global private artifact sharing is disabled",

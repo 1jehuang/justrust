@@ -1946,8 +1946,11 @@ PlanCtx/interner/source-context debt and wide adapter activation remain held.
       existing project loader is not yet graph-scheduled. Native path dependency
       identities are frozen from observed loading, so feature and visibility
       planning no longer reopen or redirect those paths (regression:
-      `path_planning_uses_observed_identity_after_symlink_mutation`). Registry
-      planning IO, unsupported configuration sources, probe locks, embedded/tool
+      `path_planning_uses_observed_identity_after_symlink_mutation`). Reviewed identity
+      probe records also retain bounded lock/provider path and byte observations in
+      the existing prepared-source fact (`justrust test --lib source_probe` and
+      `--test core_identity_graph`), independently revalidated from client inputs.
+      Registry planning IO, unsupported configuration sources, embedded/tool
       identity, registry inspection tools and uncontrolled build scripts/proc macros
       remain explicit gaps. Exhaustion or uncontrolled discovery cannot issue an input
       identity. No persistent or global private cache is enabled by this foundation.
