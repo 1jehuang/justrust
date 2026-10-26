@@ -67,15 +67,46 @@ The run summaries are exported under `data/runs/`:
 These are correctness/feasibility checks, not before/after performance evidence.
 No speedup or general cross-platform compatibility claim is made.
 
-## Required before enabling hosted targets
+## Remaining platform gates
+
+The native CLI and hosted artifact handoff are implemented. Windows GNU is an
+explicit additional target, with managed account-local tools and PE x86-64
+validation. It does not replace MSVC release artifacts or enable macOS.
+
+Verified hosted runs:
+
+- `20261026-020244906-366218`: Windows GNU compile-only test build with exact
+  Rust 1.90.0, two selected PE x86-64 executables downloaded. Native packaging
+  succeeded; Linux refused execution with status 2 and no results file.
+- `20261026-020342575-373348`: Windows GNU release executable built with a C
+  dependency using Windows headers and the managed MinGW tools, downloaded
+  and identified as PE x86-64. Not executed.
+- `20261026-020310924-369516`: initial release fixture failed because its binary
+  called a C symbol without referencing the library carrying that native
+  dependency. Correcting the fixture's library linkage produced the successful
+  run above. The compiler/linker error was shown and exit 101 preserved.
+- `20261026-020542447-387710` and `20261026-020546307-387709`: final installed
+  hardened client repeated the Windows test download (two delta artifacts)
+  and warm release build successfully. Native packaging preserved `not-tested`.
+- `20261026-020408891-376375`: final Windows-aware library regression passed
+  733 tests, three ignored, using a single test thread to avoid existing
+  lock-test interference.
+- `20261026-020436454-376373`: final native bundle, remote artifact and required
+  routing integration tests passed all 13 tests.
+- `20261026-020038375-350457`: PE-enabled all-target clippy passed with warnings
+  denied.
+
+For commands and prerequisites, see [managed-windows-gnu.md](managed-windows-gnu.md).
+Remaining work for other platform support:
 
 1. **Provision versioned target toolchains on the Linux worker.** Rust target
    libraries must match the selected compiler. Windows MSVC needs a reviewed
    SDK/CRT and compatible C/C++/assembler/linker setup. macOS needs its SDK,
    compatible linker and framework/native build support. A read-only inspection
    of the active hosted machine found clang and lld-link, but not MinGW or SDKs
-   at the common locations checked. This inspection is not an exhaustive SDK
-   inventory or permission to acquire licensed SDKs.
+   at the common locations checked. The new Windows GNU path provisions its
+   pinned MinGW tools without root. MSVC/macOS SDK acquisition is still separate
+   and must respect applicable licensing.
 2. **Extend the native hosted build path.** Retain explicit target admission,
    tenant isolation, exact toolchain selection, target-aware artifact
    validation and cache separation. Do not remove the existing unsupported

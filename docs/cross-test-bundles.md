@@ -9,10 +9,12 @@ semantics are unchanged. The standalone Python 3.9+ standard-library helper
 manifest and result schemas. Its `bundle` operation corresponds to native
 `pack` (also accepted as native `bundle`).
 
-This does **not** enable hosted Windows or macOS builds today. A Linux builder
-must already have a working cross compiler, target standard library, linker,
-SDK and any native dependencies required by the project. This helper only
-packages the resulting executables. It also works for same-target builds.
+Hosted native Linux `test --no-run` returns the selected executables and rewrites
+Cargo JSON to downloaded local paths. Explicit Windows GNU builds and
+compile-only tests are also supported on x86_64 Linux workers through the
+[managed cross-toolchain path](managed-windows-gnu.md). This is not hosted macOS
+or Windows MSVC support. Bundling alone neither provisions tools nor proves
+runtime compatibility.
 
 ## Build, bundle, transfer, run
 
@@ -145,6 +147,8 @@ and both native-pack/Python-run and Python-pack/native-run interoperability.
 The CI fixture compiles a real Rust libtest executable from Cargo JSON, runs
 one successful and one deliberately failing selection using the native CLI,
 and checks manifest and result status independently. These checks establish
-same-host execution, not Windows/macOS cross compilation or hosted artifact
-delivery. Python helper unit tests retain mocked-execution trust-boundary
+same-host execution. Separate hosted acceptance runs documented in
+[cross-compilation-rollout.md](cross-compilation-rollout.md) verify Linux and
+Windows GNU compilation/download, not Windows or macOS runtime execution.
+Python helper unit tests retain mocked-execution trust-boundary
 coverage without accidentally executing cross-built code.
