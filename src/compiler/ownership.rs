@@ -1225,6 +1225,33 @@ impl Budget {
         self.reserved_bytes = next;
         Ok(())
     }
+    /// Fixed-point transfer scratch cannot outlive one synchronous operation.
+    /// Retained CFG/loan/state storage remains paid by `self`; the child uses
+    /// that same byte ceiling, existing usage and planning authority. Only
+    /// child reservations are released. Work is cumulative even on failure.
+    /// Copy-only results keep owned target vectors out of the return channel.
+    /// Callers must not capture and retain scratch allocations in outer state.
+    fn with_temporary_storage<T: Copy>(
+        &mut self,
+        operation: impl FnOnce(&mut Self) -> Result<T, Exhausted>,
+    ) -> Result<T, Exhausted> {
+        let mut temporary = Self {
+            remaining: self.remaining,
+            work_limit: self.work_limit,
+            plan: self.plan.clone(),
+            reservations: Vec::new(),
+            peak_scratch: 0,
+            reserved_bytes: self.reserved_bytes,
+            state_limit: self.state_limit,
+        };
+        let result = operation(&mut temporary);
+        self.remaining = temporary.remaining;
+        self.peak_scratch = self.peak_scratch.max(temporary.peak_scratch);
+        // The operation's targets, cover vectors and other temporary payloads
+        // have been dropped before their reservation storage is released here.
+        drop(temporary);
+        result
+    }
     #[track_caller]
     pub(super) fn nodes(&mut self, count: usize) -> Result<(), Exhausted> {
         if let Some(plan) = &self.plan {
@@ -3762,21 +3789,26 @@ fn analyze_with_context(
             let input = entries[block.0].as_ref().expect("queued reachable block");
             budget.spend(input.words())?;
             let mut output = input.clone();
-            Transfer {
-                facts,
-                f,
-                paths: &paths,
-                budget: &mut budget,
-                report: None,
-                block,
-                statement: None,
-                origin: None,
-                diagnostic_limit: limits.diagnostics,
-                loans: loans.as_ref(),
-                phase: Phase::Read,
-                const_context,
-            }
-            .block(&mut output)?;
+            // No diagnostics or newly owned state payloads escape this pass.
+            // State capacities were admitted before the worklist. Per-visit
+            // loan resolution targets are gone when the transfer returns.
+            budget.with_temporary_storage(|budget| {
+                Transfer {
+                    facts,
+                    f,
+                    paths: &paths,
+                    budget,
+                    report: None,
+                    block,
+                    statement: None,
+                    origin: None,
+                    diagnostic_limit: limits.diagnostics,
+                    loans: loans.as_ref(),
+                    phase: Phase::Read,
+                    const_context,
+                }
+                .block(&mut output)
+            })?;
             for target in successors(&f.blocks[block.0].terminator.value)
                 .into_iter()
                 .enumerate()
@@ -3789,13 +3821,15 @@ fn analyze_with_context(
                         &f.blocks[block.0].terminator.value
                     {
                         budget.spend(place.projection.len() + 1)?;
-                        switch_node(&paths, loans.as_ref(), place, block, &mut budget)?.map(
-                            |node| {
+                        budget
+                            .with_temporary_storage(|budget| {
+                                switch_node(&paths, loans.as_ref(), place, block, budget)
+                            })?
+                            .map(|node| {
                                 let old = output.selected[node];
                                 output.selected.set(node, variant.index);
                                 (node, old)
-                            },
-                        )
+                            })
                     } else {
                         None
                     }
@@ -4043,6 +4077,210 @@ mod tests {
         .unwrap();
         (names.freeze().unwrap(), modules)
     }
+    #[test]
+    fn fixedpoint_temporary_storage_refunds_only_child_leases() {
+        use super::super::ir::{PlanBudget, PlanReservation};
+        let plan = PlanBudget::default();
+        let mut budget = Budget::for_plan(100_000, Some(&plan));
+        budget.reserve_bytes(1024).unwrap();
+        let bytes = budget.reserved_bytes();
+        let overhead = 4 * std::mem::size_of::<PlanReservation>();
+        budget.state_limit = bytes + overhead + 32;
+        let parent = plan.usage_snapshot().reservations;
+        for _ in 0..128 {
+            let before = budget.remaining;
+            budget
+                .with_temporary_storage(|temporary| {
+                    assert!(temporary.plan_budget().unwrap().same_authority(&plan));
+                    temporary.reserve_bytes(32)?;
+                    assert_eq!(temporary.reserved_bytes(), bytes + overhead + 32);
+                    assert_eq!(plan.usage_snapshot().bytes, bytes + overhead + 32);
+                    temporary.spend(2)?;
+                    Ok(())
+                })
+                .unwrap();
+            // One reservation-vector growth unit plus the two explicit units.
+            assert_eq!(budget.remaining, before - 3);
+            assert_eq!(budget.reserved_bytes(), bytes);
+            let after = plan.usage_snapshot().reservations;
+            assert_eq!(after.current_bytes, parent.current_bytes);
+            assert_eq!(after.current_reservations, parent.current_reservations);
+        }
+        assert!(plan.first_resource_failure().is_none());
+        drop(budget);
+        assert_eq!(plan.usage_snapshot().bytes, 0);
+    }
+
+    #[test]
+    fn fixedpoint_temporary_denial_preserves_parent_caps_work_and_firstfailure() {
+        use super::super::ir::{PlanBudget, PlanReservation, ResourceBudgetKind};
+        let plan = PlanBudget::default();
+        let mut budget = Budget::for_plan(100, Some(&plan));
+        budget.reserve_bytes(1024).unwrap();
+        let bytes = budget.reserved_bytes();
+        let overhead = 4 * std::mem::size_of::<PlanReservation>();
+        budget.state_limit = bytes + overhead + 31;
+        let before = budget.remaining;
+        assert!(
+            budget
+                .with_temporary_storage(|temporary| {
+                    temporary.spend(2)?;
+                    temporary.reserve_bytes(32)
+                })
+                .is_err()
+        );
+        assert_eq!(budget.remaining, before - 2);
+        assert_eq!(budget.reserved_bytes(), bytes);
+        assert_eq!(plan.usage_snapshot().bytes, bytes);
+        let first = plan.first_resource_failure().unwrap();
+        assert_eq!(first.kind, ResourceBudgetKind::OwnershipStateBytes);
+        assert_eq!(
+            (first.requested, first.used, first.limit),
+            (overhead + 32, bytes, bytes + overhead + 31)
+        );
+        let remaining = budget.remaining;
+        assert!(
+            budget
+                .with_temporary_storage(|temporary| { temporary.spend(remaining + 1) })
+                .is_err()
+        );
+        assert_eq!(budget.remaining, remaining);
+        assert_eq!(plan.first_resource_failure(), Some(first));
+        // A reservation admitted before a later error is also released.
+        assert!(
+            budget
+                .with_temporary_storage(|temporary| {
+                    temporary.reserve_bytes(1)?;
+                    Err::<(), _>(Exhausted)
+                })
+                .is_err()
+        );
+        assert_eq!(plan.usage_snapshot().bytes, bytes);
+        assert_eq!(plan.first_resource_failure(), Some(first));
+    }
+
+    #[test]
+    fn fixedpoint_temporary_poison_preserves_authority_failure_and_parent_charges() {
+        use super::super::ir::PlanBudget;
+        let plan = PlanBudget::default();
+        let mut budget = Budget::for_plan(100_000, Some(&plan));
+        budget.reserve_bytes(1024).unwrap();
+        let parent_bytes = budget.reserved_bytes();
+        let parent_reservations = plan.usage_snapshot().reservations;
+        let mut poisoned_bytes = 0;
+        let mut poisoned_reservations = None;
+        let mut first = None;
+        let result = budget.with_temporary_storage(|temporary| {
+            assert!(temporary.plan_budget().unwrap().same_authority(&plan));
+            temporary.reserve_bytes(32)?;
+            assert!(plan.check_depth(plan.limits().depth + 1).is_err());
+            first = plan.first_resource_failure();
+            assert!(first.is_some());
+            plan.poison_ledger_for_tests();
+            let snapshot = plan.usage_snapshot();
+            assert!(snapshot.poisoned);
+            poisoned_bytes = snapshot.bytes;
+            poisoned_reservations = Some(snapshot.reservations);
+            assert!(poisoned_bytes > parent_bytes);
+            assert!(
+                snapshot.reservations.current_reservations
+                    > parent_reservations.current_reservations
+            );
+            // Poison prevents even zero further work, hence no successful
+            // transfer result can escape this child.
+            temporary.spend(0)
+        });
+        assert!(result.is_err());
+        assert!(budget.plan_budget().unwrap().same_authority(&plan));
+        assert_eq!(budget.reserved_bytes(), parent_bytes);
+        assert_eq!(plan.first_resource_failure(), first);
+        assert!(plan.has_resource_failure());
+        let after = plan.usage_snapshot();
+        assert!(after.poisoned);
+        assert_eq!(after.bytes, poisoned_bytes);
+        assert_eq!(Some(after.reservations), poisoned_reservations);
+        // Poisoned drops preserve conservative evidence for child and parent
+        // leases alike, rather than refunding retained parent storage.
+        drop(budget);
+        let after_parent_drop = plan.usage_snapshot();
+        assert_eq!(after_parent_drop.bytes, poisoned_bytes);
+        assert_eq!(Some(after_parent_drop.reservations), poisoned_reservations);
+        assert_eq!(plan.first_resource_failure(), first);
+        assert!(plan.charge_work(0).is_err());
+    }
+
+    #[test]
+    fn fixedpoint_temporary_storage_preserves_original_plan_byte_limit() {
+        use super::super::ir::{PlanBudget, PlanLimits, PlanReservation, ResourceBudgetKind};
+        let overhead = 4 * std::mem::size_of::<PlanReservation>();
+        let limit = 1024 + 2 * overhead + 31;
+        let plan = PlanBudget::new(PlanLimits {
+            bytes: limit,
+            ..Default::default()
+        });
+        let mut budget = Budget::for_plan(100, Some(&plan));
+        budget.reserve_bytes(1024).unwrap();
+        let parent_bytes = plan.usage_snapshot().bytes;
+        assert!(
+            budget
+                .with_temporary_storage(|temporary| temporary.reserve_bytes(32))
+                .is_err()
+        );
+        assert_eq!(budget.reserved_bytes(), parent_bytes);
+        assert_eq!(plan.usage_snapshot().bytes, parent_bytes);
+        let first = plan.first_resource_failure().unwrap();
+        assert_eq!(first.kind, ResourceBudgetKind::Bytes);
+        assert_eq!(
+            (first.requested, first.used, first.limit),
+            (overhead + 32, parent_bytes, limit)
+        );
+        drop(budget);
+        assert_eq!(plan.usage_snapshot().bytes, 0);
+        assert_eq!(plan.first_resource_failure(), Some(first));
+    }
+
+    #[test]
+    fn fixedpoint_temporary_reference_resolution_keeps_targets_and_parent_storage() {
+        use super::super::ir::PlanBudget;
+        let f = borrowed_source("fn f<'a,'b>(p:&'a &'b i32)->&'a &'b i32{p}");
+        let mut construction = Budget::new(Limits::default().work);
+        let loans =
+            borrow::Plan::build(&f, &mut construction, Limits::default().state_bytes).unwrap();
+        let block = BlockId(
+            f.blocks
+                .iter()
+                .position(|block| matches!(block.terminator.value, Terminator::Return))
+                .unwrap(),
+        );
+        let place = Place {
+            local: f.return_local,
+            projection: vec![Projection::Deref, Projection::Deref],
+        };
+        let expected = loans
+            .resolve(&place, block, None, Phase::Read, &mut construction)
+            .unwrap()
+            .unwrap();
+        assert!(!expected.is_empty());
+        let plan = PlanBudget::default();
+        let mut budget = Budget::for_plan(Limits::default().work, Some(&plan));
+        // The immutable loan payload remains live across every resolution.
+        budget.reserve_bytes(loans.bytes).unwrap();
+        let parent_bytes = plan.usage_snapshot().bytes;
+        for _ in 0..128 {
+            budget
+                .with_temporary_storage(|temporary| {
+                    let targets = loans
+                        .resolve(&place, block, None, Phase::Read, temporary)?
+                        .unwrap();
+                    assert_eq!(targets, expected);
+                    Ok(())
+                })
+                .unwrap();
+            assert_eq!(plan.usage_snapshot().bytes, parent_bytes);
+        }
+        assert!(plan.first_resource_failure().is_none());
+    }
+
     #[test]
     fn budget_telemetry_local_work_rejection_preserves_plan_and_callsite() {
         use super::super::ir::{PlanBudget, ResourceBudgetKind};
