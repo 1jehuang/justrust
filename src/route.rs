@@ -101,9 +101,7 @@ fn routable(sub: &str) -> bool {
 
 /// Cross execution is never allowed. Additional platform paths are build-only.
 fn extra_zig_target(target: &str) -> bool {
-    crate::remote_artifacts::glibc_target(target)
-        || crate::darwin_tools::supported(target)
-        || crate::arm64_tools::supported(target)
+    crate::remote_artifacts::glibc_target(target) || crate::darwin_tools::supported(target)
 }
 
 fn unsupported_hosted_target(args: &[OsString], env_target: Option<OsString>) -> bool {
@@ -126,7 +124,9 @@ fn unsupported_hosted_target(args: &[OsString], env_target: Option<OsString>) ->
                 && !(args.first().is_some_and(|a| a == "zigbuild")
                     && target.to_str().is_some_and(extra_zig_target))
                 && !(args.first().is_some_and(|a| a == "build")
-                    && target.to_str().is_some_and(crate::msvc_tools::supported)
+                    && target.to_str().is_some_and(|t| {
+                        crate::msvc_tools::supported(t) || crate::arm64_tools::supported(t)
+                    })
                     && routable_build(&strings))
                 && !(windows_compile && target == crate::cross_tools::WINDOWS_GNU)
                 && !(musl_build
@@ -136,10 +136,9 @@ fn unsupported_hosted_target(args: &[OsString], env_target: Option<OsString>) ->
         })
 }
 
-/// A `build` whose outputs come back cheaply enough to be worth building
-/// remotely (FINDINGS 45): an optimized profile for the host, so the
-/// binary is small and a delta of it comes back in under a second. Debug
-/// binaries (100 MB, mostly debug info) and cross builds stay local.
+/// A `build` whose outputs can be returned efficiently: optimized native
+/// builds and explicitly managed cross-release targets. Unmanaged cross builds
+/// and debug binaries stay local, except the explicit Windows GNU path.
 fn routable_build(args: &[String]) -> bool {
     let zig = args.first().map(String::as_str) == Some("zigbuild");
     if !zig && args.first().map(String::as_str) != Some("build") {
@@ -156,7 +155,7 @@ fn routable_build(args: &[String]) -> bool {
             return false;
         }
     } else if let Some(target) = crate::remote_artifacts::build_target(args) {
-        if crate::msvc_tools::supported(target) {
+        if crate::msvc_tools::supported(target) || crate::arm64_tools::supported(target) {
             let os: Vec<OsString> = args.iter().map(OsString::from).collect();
             return crate::slots::profile_dir(&os).file_name()
                 != Some(std::ffi::OsStr::new("debug"));
@@ -794,7 +793,6 @@ mod tests {
             crate::remote_artifacts::GLIBC_217_TARGET,
             "x86_64-apple-darwin",
             "aarch64-apple-darwin",
-            "aarch64-unknown-linux-gnu",
         ] {
             let args = vec![
                 "zigbuild".into(),
@@ -822,6 +820,7 @@ mod tests {
             "x86_64-unknown-linux-gnu.2.17/../../escape",
             "aarch64-unknown-linux-gnu.2.17",
             "aarch64-apple-ios",
+            "aarch64-unknown-linux-gnu",
             "x86_64-pc-windows-msvc",
             "custom.json",
             "",
@@ -842,14 +841,22 @@ mod tests {
     }
 
     #[test]
-    fn msvc_release_is_build_only() {
-        for target in ["x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc"] {
+    fn managed_cross_release_is_build_only() {
+        for target in [
+            "x86_64-pc-windows-msvc",
+            "aarch64-pc-windows-msvc",
+            "aarch64-unknown-linux-gnu",
+        ] {
             let build = vec![
                 "build".into(),
                 "--release".into(),
                 format!("--target={target}"),
             ];
             assert!(routable_build(&build));
+            assert!(!routable_build(&[
+                "build".into(),
+                format!("--target={target}"),
+            ]));
             assert!(!unsupported_hosted_target(
                 &build.iter().map(OsString::from).collect::<Vec<_>>(),
                 None

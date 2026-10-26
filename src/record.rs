@@ -484,6 +484,11 @@ pub(crate) fn requested_targets(args: &[OsString], env_target: Option<OsString>)
 }
 
 fn apply_platform_tools(cmd: &mut Command, args: &mut Vec<OsString>) -> Result<()> {
+    // These are Linux-hosted cross tools. Native platform builds keep their
+    // existing SDK/compiler selection, including explicit MSVC targets.
+    if !cfg!(target_os = "linux") {
+        return Ok(());
+    }
     let targets = requested_targets(args, None);
     let [target] = targets.as_slice() else {
         return Ok(());
@@ -507,7 +512,7 @@ fn apply_platform_tools(cmd: &mut Command, args: &mut Vec<OsString>) -> Result<(
             )?;
             crate::darwin_tools::apply(cmd, target, &id)?;
         }
-        Some("zigbuild") if crate::arm64_tools::supported(target) => {
+        Some("build") if cfg!(target_arch = "x86_64") && crate::arm64_tools::supported(target) => {
             let text: Vec<String> = args
                 .iter()
                 .map(|arg| arg.to_string_lossy().into_owned())
