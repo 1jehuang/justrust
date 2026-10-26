@@ -108,6 +108,7 @@ mod status;
 mod summary;
 mod sys;
 mod telemetry;
+mod test_bundle;
 mod test_pool;
 mod test_runner;
 mod toolchain;
@@ -152,6 +153,11 @@ struct Passthrough {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Pack or execute portable, trusted test executable bundles.
+    TestBundle {
+        #[command(subcommand)]
+        cmd: test_bundle::BundleCmd,
+    },
     /// `cargo check` with compact agent output and a timing profile.
     #[command(disable_help_flag = true)]
     Check(Passthrough),
@@ -770,6 +776,7 @@ fn command_name(c: &Command) -> Option<&'static str> {
         | Command::Cargo(_)
         | Command::Feedback { .. }
         | Command::Telemetry { .. } => return None,
+        Command::TestBundle { .. } => "test-bundle",
         Command::Log { .. } => "log",
         Command::Runs { .. } => "runs",
         Command::Status { watch: Some(_), .. } => return None,
@@ -808,6 +815,7 @@ fn command_name(c: &Command) -> Option<&'static str> {
 
 fn dispatch(command: Command) -> anyhow::Result<()> {
     match command {
+        Command::TestBundle { cmd } => test_bundle::main(cmd),
         Command::Check(p) => agent("check", p.args),
         Command::Test(p) => agent("test", p.args),
         Command::Build(p) => agent("build", p.args),

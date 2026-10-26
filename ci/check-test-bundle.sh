@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # Native acceptance for the portable bundle contract, using an isolated fixture.
 set -euo pipefail
-repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
 bin=${1:?usage: check-test-bundle.sh /absolute/path/to/justrust}
 python=${PYTHON:-python3}
 scratch=$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/justrust-test-bundle.XXXXXX")
@@ -27,13 +26,13 @@ cd "$scratch"
 JUSTRUST_TOOLCHAIN=system JUSTRUST_TOOLCHAIN_AUTO_INSTALL=0 \
   "$bin" test --local --offline --no-run --target "$host" \
   --target-dir "$scratch/target" --message-format=json > messages.jsonl
-"$python" "$repo/scripts/cross-test-bundle.py" bundle \
+"$bin" test-bundle pack \
   --target "$host" --messages messages.jsonl --artifact-root target --out bundle
-"$python" "$repo/scripts/cross-test-bundle.py" run \
+"$bin" test-bundle run \
   --bundle bundle --results passed.json -- passing --exact
 # The failing invocation must preserve failure, not merely produce a result file.
 set +e
-"$python" "$repo/scripts/cross-test-bundle.py" run \
+"$bin" test-bundle run \
   --bundle bundle --results failed.json -- deliberate_failure --exact --ignored
 code=$?
 set -e

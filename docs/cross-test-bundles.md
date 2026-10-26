@@ -1,9 +1,13 @@
 # Cross-target test bundles
 
-`scripts/cross-test-bundle.py` is a standalone Python 3.9+ standard-library
-helper. It separates **compiled, not tested** artifacts from a later local test
-run. It neither builds code nor selects a cross toolchain, downloads libraries,
-starts a hosted build, or executes anything during `bundle`.
+`justrust test-bundle pack` and `justrust test-bundle run` are native commands
+that separate **compiled, not tested** artifacts from a later local test run.
+They neither build code nor select a cross toolchain, download libraries,
+start a hosted build, or execute anything during `pack`. Normal `justrust test`
+semantics are unchanged. The standalone Python 3.9+ standard-library helper
+`scripts/cross-test-bundle.py` remains interoperable with the native version-1
+manifest and result schemas. Its `bundle` operation corresponds to native
+`pack` (also accepted as native `bundle`).
 
 This does **not** enable hosted Windows or macOS builds today. A Linux builder
 must already have a working cross compiler, target standard library, linker,
@@ -19,7 +23,7 @@ For example, where the build runner preserves Cargo JSON on stdout:
 justrust test --no-run --target x86_64-unknown-linux-gnu \
   --message-format=json > cargo-messages.jsonl
 # Check the build command's exit status before continuing.
-python3 scripts/cross-test-bundle.py bundle \
+justrust test-bundle pack \
   --target x86_64-unknown-linux-gnu \
   --messages cargo-messages.jsonl \
   --artifact-root "$PWD/target" \
@@ -39,16 +43,17 @@ absolute. Each must be a regular non-symlink file under the resolved explicit
 `--artifact-root`. Symlink path components are rejected. No unrelated Cargo
 filenames, library artifacts, source files or environment files are copied.
 The output directory must not exist. Copy the directory intact using your
-trusted transfer mechanism, together with the helper, to the target machine.
+trusted transfer mechanism, together with the justrust binary for the target
+host (or the Python helper), to the target machine.
 No archive extraction is implemented or needed.
 
 On the matching target machine:
 
 ```sh
-python3 scripts/cross-test-bundle.py run \
+justrust test-bundle run \
   --bundle test-bundle --results test-results.json
 # Or forward arguments verbatim to every libtest executable:
-python3 scripts/cross-test-bundle.py run \
+justrust test-bundle run \
   --bundle test-bundle --results filtered-results.json \
   --cwd /path/to/project -- my_test --exact --nocapture
 ```
@@ -64,11 +69,17 @@ between validation and execution.
 
 The allowlist covers `x86_64` and `aarch64` for Linux GNU and musl, Windows
 MSVC, and Apple Darwin, plus `x86_64-pc-windows-gnu`. `run` requires the
-allowlisted target's OS and CPU architecture to match `sys.platform` and
-`platform.machine()` exactly after
-normalizing `AMD64` to `x86_64` and `arm64` to `aarch64`. It does not silently
-use emulation or Rosetta. This check does not prove libc, OS version, CPU
+allowlisted target's OS and CPU architecture to match the native runner's
+OS and architecture (`std::env::consts::OS` and `ARCH`). The Python helper
+checks `sys.platform` and `platform.machine()`, normalizing `AMD64` to
+`x86_64` and `arm64` to `aarch64`. Neither path silently
+uses emulation or Rosetta. This check does not prove libc, OS version, CPU
 features, SDK or dynamic-loader compatibility.
+
+Native paths additionally reject parent (`..`) components in all caller paths,
+even when they would resolve inside the intended root. Use normalized paths.
+The native runner checks the architecture of its own binary, not the physical
+CPU underneath an emulator. Use a native justrust binary on the execution host.
 
 Only self-contained **test executable bundles** are supported initially:
 
@@ -102,7 +113,8 @@ schema version 1 records the manifest hash, target, each executable's exit code
 (or spawn error), and aggregate `test_status: passed|failed`. A result means
 only that the requested invocations succeeded or failed. Non-test harness
 modes `--list`, `--help`, `-h` and `--bench` are rejected before execution with
-status 2 and no result file, rather than being mislabeled passed. Filtered
+status 2 and no result file, rather than being mislabeled passed. Combined
+short help flags such as `-qh` are also rejected by the native runner. Filtered
 runs, ignored tests and other harness-specific arguments still do not prove
 that every project test passed. Full harness output remains on the
 inherited console streams.
@@ -110,31 +122,29 @@ inherited console streams.
 Exit status is 0 for successful bundling or all-zero test executable exits,
 1 for any failed test executable or spawn error, and 2 for invalid input,
 platform mismatch or ordinary filesystem errors. All executables are attempted
-after an ordinary test failure. Interrupted runs leave a failed partial result
-when Python can finish its cleanup, but hard termination may leave an incomplete
-result file. A compile-only bundle never receives a tests-passed label.
+after an ordinary test failure. The native runner writes an initial failed
+record before execution, then replaces that same newly reserved record with
+the completed result. Interrupted runs can leave this conservative partial
+record. The Python helper writes its partial result when cleanup runs. Hard
+termination during a write may leave an incomplete result file. A compile-only
+bundle never receives a tests-passed label.
 
-## Helper regression tests
+## Regression and acceptance tests
 
 ```sh
+justrust test --test test_bundle
 python3 -m unittest discover -s tests -p test_cross_test_bundle.py -v
+# This fixture needs local artifacts, hence its explicit --local build.
+bash ci/check-test-bundle.sh "$PWD/target/debug/justrust"
 ```
 
-These use fake executable bytes and mocked subprocess calls to exercise the
-trust boundary without accidentally executing cross-built code. Real compatible
-binaries can be exercised through the explicit `run` workflow above.
-
-A local Linux x86_64 smoke workflow was also exercised with a small Rust crate:
-`justrust test --local --no-run --target x86_64-unknown-linux-gnu
---message-format=json` supplied real Cargo events and local artifacts, then the
-helper bundled and ran the harness. A selected passing test returned helper
-status 0, and an explicitly selected failing test returned helper status 1
-with the harness's exit code 101 recorded. This verifies same-target local
-execution, not a Windows/macOS cross compilation or hosted artifact delivery.
-Local mode was required here to keep fixture artifacts available for bundling.
-
-A separately supplied real `x86_64-pc-windows-gnu` Cargo JSON stream was also
-bundled successfully as one `.exe`, retaining `test_status: not-tested`.
-Running that bundle on Linux was refused with exit status 2 before execution
-or result-file creation. This validates packaging and platform rejection,
-not successful Windows execution or hosted Windows support.
+The Rust CLI tests verify strict schemas, paths, symlinks, size bounds,
+all-artifact validation, host rejection, immutable manifests, result overwrite
+refusal, forwarded arguments, successful and deliberately failing execution,
+and both native-pack/Python-run and Python-pack/native-run interoperability.
+The CI fixture compiles a real Rust libtest executable from Cargo JSON, runs
+one successful and one deliberately failing selection using the native CLI,
+and checks manifest and result status independently. These checks establish
+same-host execution, not Windows/macOS cross compilation or hosted artifact
+delivery. Python helper unit tests retain mocked-execution trust-boundary
+coverage without accidentally executing cross-built code.
