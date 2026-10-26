@@ -923,7 +923,12 @@ impl ValidatedTraitWorld {
                     self.validate_raw_associated_ty_with(argument, env, depth + 1, replays)?;
                 }
             }
-            _ => self.validate_ty(ty, env, None, true, depth)?,
+            // Reuse only a completed full raw formation under the original
+            // environment, root role, unsized policy and remaining depth.
+            // Metadata-only and caller-authorized successes cannot issue it.
+            _ => replays
+                .raw_formations
+                .check(self, ty, env, TypeUse::Root, None, depth)?,
         }
         Ok(())
     }
@@ -3372,6 +3377,161 @@ mod tests {
                 .validate_raw_associated_ty_with(&ty, facts.env(), usize::MAX, &mut replays,)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn raw_associated_leaf_reuses_only_complete_source_formation() {
+        let source = frontend::parse(
+            "struct Wrap<T>{value:T}fn inspect<T>(value:Wrap<T>){}fn other<U>(value:Wrap<U>){}fn main(){}",
+        ).unwrap();
+        let plan = PlanCtx::from_program(&source, &PlanBudget::default()).unwrap();
+        let world = plan.trait_world().unwrap();
+        let owner = plan.function_decl(0).unwrap();
+        let other = plan.function_decl(1).unwrap();
+        let facts = world.callable_facts(owner).unwrap();
+        let other_facts = world.callable_facts(other).unwrap();
+        let ty = world
+            .schema
+            .declaration_schema(owner)
+            .unwrap()
+            .signature
+            .params[0]
+            .clone();
+        let mut replays = NominalReplays::default();
+        world
+            .validate_ty_metadata_with(&ty, facts.env(), 0, &mut replays)
+            .unwrap();
+        assert_eq!(replays.raw_formations.retained_roots(), 0);
+        world
+            .validate_raw_associated_ty_with(&ty, facts.env(), 0, &mut replays)
+            .unwrap();
+        let roots = replays.raw_formations.retained_roots();
+        assert!(roots > 0);
+        for _ in 0..3 {
+            world
+                .validate_raw_associated_ty_with(&ty, facts.env(), 0, &mut replays)
+                .unwrap();
+            assert_eq!(replays.raw_formations.retained_roots(), roots);
+        }
+        let Ty::Struct(original) = &ty else {
+            panic!("source nominal")
+        };
+        assert!(!original.def().fields.is_empty());
+        let mut forged = original.def().clone();
+        forged.fields = Arc::<[ir::FieldDef]>::from([]).into();
+        let forged = Ty::Struct(ir::StructTy::new(forged));
+        for _ in 0..2 {
+            assert!(matches!(world.validate_raw_associated_ty_with(
+                &forged, facts.env(), 0, &mut replays,
+            ), Err(error) if error.kind() == FactsErrorKind::InvalidMetadata));
+            assert_eq!(replays.raw_formations.retained_roots(), roots);
+        }
+        assert!(matches!(world.validate_raw_associated_ty_with(
+            &ty, other_facts.env(), 0, &mut replays,
+        ), Err(error) if error.kind() == FactsErrorKind::InvalidMetadata));
+        let foreign_plan = PlanCtx::from_program(&source, &PlanBudget::default()).unwrap();
+        let foreign = foreign_plan.trait_world().unwrap();
+        let mut forged_module = original.def().clone();
+        forged_module.module = foreign.catalog.modules().core_root();
+        forged_module.visibility = ir::Visibility::Public;
+        let forged_module = Ty::Struct(ir::StructTy::new(forged_module));
+        assert!(matches!(world.validate_raw_associated_ty_with(
+            &forged_module, facts.env(), 0, &mut replays,
+        ), Err(error) if error.kind() == FactsErrorKind::InvalidMetadata));
+        assert!(matches!(foreign.validate_raw_associated_ty_with(
+            &ty, facts.env(), 0, &mut replays,
+        ), Err(error) if error.kind() == FactsErrorKind::InvalidMetadata));
+        // The raw entry point must not weaken the existing role/unsized keys.
+        let slice = Ty::Slice {
+            element: Arc::new(Ty::Int(ir::IntTy::I32)),
+        };
+        replays
+            .raw_formations
+            .check(&world, &slice, facts.env(), TypeUse::Root, None, 0)
+            .unwrap();
+        assert!(matches!(replays.raw_formations.check(
+            &world, &slice, facts.env(), TypeUse::Aggregate, None, 0,
+        ), Err(error) if error.kind() == FactsErrorKind::Unsupported));
+        let parameter = facts.env().ordered_params().next().unwrap();
+        assert!(matches!(replays.raw_formations.check(
+            &world, &ty, facts.env(), TypeUse::Root, Some(parameter), 0,
+        ), Err(error) if error.kind() == FactsErrorKind::Unsupported));
+        assert!(matches!(world.validate_raw_associated_ty_with(
+            &ty, facts.env(), facts.budget().limits().depth, &mut replays,
+        ), Err(error) if error.kind() == FactsErrorKind::Resource));
+        let failure = facts.budget().first_resource_failure();
+        facts.budget().poison_ledger_for_tests();
+        assert!(matches!(world.validate_raw_associated_ty_with(
+            &ty, facts.env(), 0, &mut replays,
+        ), Err(error) if error.kind() == FactsErrorKind::Resource));
+        assert_eq!(facts.budget().first_resource_failure(), failure);
+    }
+
+    #[test]
+    fn raw_associated_leaf_warm_exact_short_and_poison() {
+        for guard in 0..4 {
+            let source =
+                frontend::parse("struct Leaf;fn inspect(value:Leaf){}fn main(){}").unwrap();
+            let plan = PlanCtx::from_program(&source, &PlanBudget::default()).unwrap();
+            let world = plan.trait_world().unwrap();
+            let owner = plan.function_decl(0).unwrap();
+            let facts = world.callable_facts(owner).unwrap();
+            let ty = world
+                .schema
+                .declaration_schema(owner)
+                .unwrap()
+                .signature
+                .params[0]
+                .clone();
+            let mut replays = NominalReplays::default();
+            world
+                .validate_raw_associated_ty_with(&ty, facts.env(), 0, &mut replays)
+                .unwrap();
+            let before = facts.budget().usage_snapshot();
+            world
+                .validate_raw_associated_ty_with(&ty, facts.env(), 0, &mut replays)
+                .unwrap();
+            let after = facts.budget().usage_snapshot();
+            let work = after.work - before.work;
+            assert!(work > 0);
+            assert_eq!(after.bytes, before.bytes);
+            let roots = replays.raw_formations.retained_roots();
+            facts
+                .budget()
+                .charge_work(
+                    facts.budget().limits().work - after.work - work + usize::from(guard == 1),
+                )
+                .unwrap();
+            if guard == 2 {
+                facts.budget().poison_ledger_for_tests();
+            }
+            if guard == 3 {
+                assert!(
+                    world
+                        .catalog
+                        .modules()
+                        .budget()
+                        .charge(crate::compiler::expansion_budget::Counter::Work, u64::MAX,)
+                        .is_err()
+                );
+            }
+            let issuer_failure = world.catalog.modules().budget().snapshot().failure;
+            let result = world.validate_raw_associated_ty_with(&ty, facts.env(), 0, &mut replays);
+            if guard == 0 {
+                result.unwrap();
+                assert_eq!(
+                    facts.budget().usage_snapshot().work,
+                    facts.budget().limits().work
+                );
+            } else {
+                assert!(matches!(result, Err(error) if error.kind() == FactsErrorKind::Resource));
+            }
+            assert_eq!(replays.raw_formations.retained_roots(), roots);
+            assert_eq!(
+                world.catalog.modules().budget().snapshot().failure,
+                issuer_failure
+            );
+        }
     }
 
     #[test]
