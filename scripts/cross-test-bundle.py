@@ -19,6 +19,7 @@ TARGETS = {
     "aarch64-unknown-linux-gnu": ("linux", "aarch64"),
     "x86_64-unknown-linux-musl": ("linux", "x86_64"),
     "aarch64-unknown-linux-musl": ("linux", "aarch64"),
+    "x86_64-pc-windows-gnu": ("win32", "x86_64"),
     "x86_64-pc-windows-msvc": ("win32", "x86_64"),
     "aarch64-pc-windows-msvc": ("win32", "aarch64"),
     "x86_64-apple-darwin": ("darwin", "x86_64"),
@@ -159,6 +160,11 @@ def load_manifest(directory):
 
 
 def run(args):
+    forwarded = args.test_args
+    if forwarded[:1] == ["--"]:
+        forwarded = forwarded[1:]
+    if any(arg.split("=", 1)[0] in {"--list", "--help", "-h", "--bench"} for arg in forwarded):
+        fail("non-test invocation (--list/--help/-h/--bench) is not permitted")
     directory = Path(os.path.abspath(args.bundle))
     manifest = load_manifest(directory)  # Validate EVERY executable before running ANY.
     machine = platform.machine().lower()
@@ -175,9 +181,6 @@ def run(args):
     with result_path.open("x", encoding="utf-8") as output:
         result = {"schema_version": 1, "target": manifest["target"], "manifest_sha256": digest(directory / "manifest.json"), "test_status": "failed", "tests": []}
         print("WARNING: executing trusted bundle code. Never run an untrusted bundle.", file=sys.stderr)
-        forwarded = args.test_args
-        if forwarded[:1] == ["--"]:
-            forwarded = forwarded[1:]
         try:
             for test in manifest["tests"]:
                 entry = {"path": test["path"]}

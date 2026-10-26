@@ -215,6 +215,25 @@ class BundleTests(unittest.TestCase):
         self.assertEqual(self.pack(), 0)
         self.assertEqual(len(self.manifest()["tests"]), 1)
 
+    def test_windows_gnu_bundle_and_platform_check(self):
+        self.messages.write_text("".join(json.dumps(e) + "\n" for e in self.events))
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(helper.main(["bundle", "--messages", str(self.messages), "--artifact-root", str(self.artifacts), "--target", "x86_64-pc-windows-gnu", "--out", str(self.out)]), 0)
+        self.assertEqual(self.manifest()["tests"][0]["path"], "bin/test-0000.exe")
+        with patch.object(helper.subprocess, "run") as execute:
+            self.assertEqual(self.run_bundle(), 2)
+            execute.assert_not_called()
+        with patch.object(helper.sys, "platform", "win32"), patch.object(helper.platform, "machine", return_value="AMD64"), patch.object(helper.subprocess, "run", return_value=types.SimpleNamespace(returncode=0)), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(helper.main(["run", "--bundle", str(self.out), "--results", str(self.results)]), 0)
+
+    def test_non_test_modes_rejected_without_execution(self):
+        self.pack()
+        for argument in ("--list", "--help", "-h", "--bench", "--list=true", "--bench=true"):
+            with self.subTest(argument=argument), patch.object(helper.subprocess, "run") as execute:
+                self.assertEqual(self.run_bundle("--", argument), 2)
+                execute.assert_not_called()
+                self.assertFalse(self.results.exists())
+
     def test_results_refuse_overwrite_and_bundle_path(self):
         self.pack()
         with patch.object(helper.subprocess, "run") as execute:

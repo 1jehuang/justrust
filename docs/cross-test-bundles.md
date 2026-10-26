@@ -63,8 +63,9 @@ between validation and execution.
 ## Compatibility and runtime limits
 
 The allowlist covers `x86_64` and `aarch64` for Linux GNU and musl, Windows
-MSVC, and Apple Darwin. `run` requires the allowlisted target's OS and CPU
-architecture to match `sys.platform` and `platform.machine()` exactly after
+MSVC, and Apple Darwin, plus `x86_64-pc-windows-gnu`. `run` requires the
+allowlisted target's OS and CPU architecture to match `sys.platform` and
+`platform.machine()` exactly after
 normalizing `AMD64` to `x86_64` and `arm64` to `aarch64`. It does not silently
 use emulation or Rosetta. This check does not prove libc, OS version, CPU
 features, SDK or dynamic-loader compatibility.
@@ -99,9 +100,11 @@ to 4 MiB. All sizes and hashes are validated **before any execution**.
 the bundle and must not already exist or use symlink components. Its separate
 schema version 1 records the manifest hash, target, each executable's exit code
 (or spawn error), and aggregate `test_status: passed|failed`. A result means
-only that the requested invocations succeeded or failed. In particular,
-filtered runs, `--list`, ignored tests and harness-specific arguments do not
-prove that every project test passed. Full harness output remains on the
+only that the requested invocations succeeded or failed. Non-test harness
+modes `--list`, `--help`, `-h` and `--bench` are rejected before execution with
+status 2 and no result file, rather than being mislabeled passed. Filtered
+runs, ignored tests and other harness-specific arguments still do not prove
+that every project test passed. Full harness output remains on the
 inherited console streams.
 
 Exit status is 0 for successful bundling or all-zero test executable exits,
@@ -129,3 +132,9 @@ status 0, and an explicitly selected failing test returned helper status 1
 with the harness's exit code 101 recorded. This verifies same-target local
 execution, not a Windows/macOS cross compilation or hosted artifact delivery.
 Local mode was required here to keep fixture artifacts available for bundling.
+
+A separately supplied real `x86_64-pc-windows-gnu` Cargo JSON stream was also
+bundled successfully as one `.exe`, retaining `test_status: not-tested`.
+Running that bundle on Linux was refused with exit status 2 before execution
+or result-file creation. This validates packaging and platform rejection,
+not successful Windows execution or hosted Windows support.
