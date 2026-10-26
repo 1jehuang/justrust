@@ -29,6 +29,17 @@ that every compiler source edit or the full suite becomes 26% faster. The
 session-weighted synthetic gate was not run and no global client default is
 being promoted. Switching profiles incurs a one-time artifact rebuild.
 
+Correctness checks on the pinned snapshot with the actual changed manifest
+passed: check, five physical-carrier tests, 17 graph-integrity tests (one
+ignored), and 23 canonical-source-replay tests. The active checkout check
+hit in-progress frontend E0425/E0308 errors and was not repaired by this
+manifest-only change. A longer-suite runtime screen observed 49.07s with
+LTO off versus 43.75s with default local ThinLTO, but both runs had heavy
+external CPU contention (8.5-10 other cores, about 10s CPU pressure), so this
+is not a controlled regression estimate. Compile latency and execution
+speed remain a tradeoff, not a universal speedup. For compute-heavy full
+suites, `--config profile.test.lto=false` restores the previous setting.
+
 An earlier debug=1 experiment regressed from 11.43s to 16.79s median and was
 rejected. Those first comparisons had noisy samples and are retained as
 exploratory evidence, not controlled speedup claims. Hosted pinned-suite
