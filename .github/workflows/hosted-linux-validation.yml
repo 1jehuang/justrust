@@ -1,0 +1,71 @@
+# Registered on the default branch so GitHub permits manual dispatch on stable.
+# This is release infrastructure only, not a merge of the compiler branches.
+name: Validate hosted Linux releases
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Trusted ref to build without publishing"
+        default: stable
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: justrust-hosted-linux
+  cancel-in-progress: false
+
+env:
+  HOSTED_CLIENT_REV: d0c35300773df0103e3beeb090a5a1a5c6681185
+  JUSTRUST_TOOLCHAIN: 1.99.0
+  JUSTRUST_TOOLCHAIN_REQUIRED: "1"
+  JUSTRUST_REMOTE_REQUIRED: "1"
+  JUSTRUST_RELEASE_BUILD: "1"
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - name: Require hosted credentials
+        env:
+          JCODE_API_KEY: ${{ secrets.JCODE_API_KEY }}
+        run: ': "${JCODE_API_KEY:?Configure a durable JCODE_API_KEY repository secret first}"'
+      - name: Install runner prerequisites
+        run: |
+          rustup toolchain install 1.99.0 --profile minimal
+          rustup default 1.99.0
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends rsync zstd binutils qemu-user
+      - name: Install reviewed hosted client
+        run: |
+          git fetch --quiet --no-tags --depth=1 origin "$HOSTED_CLIENT_REV"
+          git show "$HOSTED_CLIENT_REV:ci/install-hosted-client.sh" > "$RUNNER_TEMP/install-hosted-client.sh"
+          git show "$HOSTED_CLIENT_REV:ci/check-linux-release.sh" > "$RUNNER_TEMP/check-linux-release.sh"
+          bash "$RUNNER_TEMP/install-hosted-client.sh" "$HOSTED_CLIENT_REV"
+      - name: Build and verify both static musl releases
+        env:
+          JCODE_API_KEY: ${{ secrets.JCODE_API_KEY }}
+        run: |
+          : "${JCODE_API_KEY:?Configure a durable JCODE_API_KEY repository secret first}"
+          justrust remote use hosted
+          version=$(cargo +1.99.0 metadata --no-deps --format-version=1 | jq -r '.packages[] | select(.name == "justrust") | .version')
+          for target in x86_64-unknown-linux-musl aarch64-unknown-linux-musl; do
+            justrust build --remote --release --locked --target "$target" --bin justrust \
+              --config 'profile.release.lto="thin"' \
+              --config profile.release.codegen-units=1 --config profile.release.strip=true
+            bash "$RUNNER_TEMP/check-linux-release.sh" "target/$target/release/justrust" "$target" "$version"
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hosted-linux-validation
+          retention-days: 7
+          path: |
+            target/x86_64-unknown-linux-musl/release/justrust
+            target/aarch64-unknown-linux-musl/release/justrust
