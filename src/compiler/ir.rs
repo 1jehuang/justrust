@@ -10655,6 +10655,18 @@ impl CheckedFunction {
                     for &id in elements {
                         expr(id)?;
                     }
+                    // Closure environments use this constructor too. Their
+                    // canonical capture schema was authenticated above with
+                    // the other expression type metadata. Nominal owners must
+                    // retain their own constructor or unsizing operation.
+                    let arity = match &value.ty {
+                        Ty::Tuple(fields) => fields.len(),
+                        Ty::Closure(closure) => closure.captures().len(),
+                        _ => return Err("tuple expression requires product type".into()),
+                    };
+                    if elements.len() != arity {
+                        return Err("tuple expression arity mismatch".into());
+                    }
                 }
                 ExprKind::Struct { ty, fields } => {
                     facts.validate_ty(&Ty::Struct(ty.clone()))?;
@@ -16192,6 +16204,22 @@ mod tests {
         });
         // Structural validation intentionally does not redo projection typing.
         value.validate().unwrap();
+        let mut wrong_product = value.clone();
+        wrong_product.exprs[1].ty = Ty::Int(IntTy::I32);
+        assert!(
+            wrong_product
+                .validate()
+                .unwrap_err()
+                .contains("tuple expression requires product type")
+        );
+        let mut wrong_arity = value.clone();
+        wrong_arity.exprs[1].kind = ExprKind::Tuple(vec![]);
+        assert!(
+            wrong_arity
+                .validate()
+                .unwrap_err()
+                .contains("tuple expression arity mismatch")
+        );
         value.exprs[2].kind = ExprKind::Field {
             base: ExprId(99),
             index: 0,

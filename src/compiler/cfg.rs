@@ -885,6 +885,19 @@ fn require_facts(
     }
     Ok(())
 }
+fn requires_owning_lowering_proof(
+    function: &Function,
+    facts: &super::traits::ValidatedFacts,
+    budget: &ir::PlanBudget,
+) -> Result<bool, String> {
+    for local in &function.locals {
+        budget.charge_work(1)?;
+        if drop_normal::descriptor(&local.ty, ir::FactsCtx::from_validated(facts))?.is_some() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
 pub fn close(
     function: std::sync::Arc<Function>,
     facts: std::sync::Arc<super::traits::ValidatedFacts>,
@@ -917,7 +930,10 @@ pub fn lower_template(
             ir::ExprKind::RawSlice { .. } | ir::ExprKind::SliceDataPointer { .. }
         )
     });
-    if !lowered.call_evidence.is_empty() || has_raw_slice {
+    if !lowered.call_evidence.is_empty()
+        || has_raw_slice
+        || requires_owning_lowering_proof(&lowered, &authority, budget)?
+    {
         lowered.lowering_proof = Some(std::sync::Arc::new(GeneratedCfgShape::capture(
             &lowered, &authority, budget,
         )?));
@@ -1351,14 +1367,8 @@ impl Function {
                 "reference-valued instance requires its exact verified-template body proof".into(),
             );
         }
-        if self.lowering_proof.is_none() {
-            for local in &self.locals {
-                if drop_normal::descriptor(&local.ty, ir::FactsCtx::from_validated(facts))?
-                    .is_some()
-                {
-                    return Err("owning Drop CFG requires exact canonical lowering proof".into());
-                }
-            }
+        if self.lowering_proof.is_none() && requires_owning_lowering_proof(self, facts, budget)? {
+            return Err("owning Drop CFG requires exact canonical lowering proof".into());
         }
         for block in &self.blocks {
             for statement in &block.statements {
@@ -5439,7 +5449,11 @@ pub fn lower_with_facts(
     } else {
         false
     };
-    if source.body_substitution.is_some() || !source.call_evidence.is_empty() || has_raw_slice {
+    if source.body_substitution.is_some()
+        || !source.call_evidence.is_empty()
+        || has_raw_slice
+        || requires_owning_lowering_proof(&function, facts, budget)?
+    {
         function.lowering_proof = Some(std::sync::Arc::new(GeneratedCfgShape::capture(
             &function, facts, budget,
         )?));
@@ -6187,6 +6201,59 @@ mod original_replay_transport_tests {
             panic!("canonical source publication required")
         };
         publication
+    }
+
+    #[test]
+    fn zero_call_owning_cfg_keeps_exact_lowering_snapshot() {
+        let budget = ir::PlanBudget::default();
+        let prepared = crate::compiler::source::prepare_text_with_prelude(
+            "owning-cfg.rs",
+            "use std::rc::Rc;fn f(x:Rc<N>)->Rc<N>{x}fn g(x:Rc<N>)->Rc<N>{x}struct N;fn main(){}",
+            &crate::compiler::source::SourceOptions::default(),
+        )
+        .unwrap();
+        let parsed = frontend::parse_prepared(&prepared).unwrap();
+        let program = frontend::resolve(&parsed).unwrap();
+        let plan = frontend::PlanCtx::from_program(&program, &budget).unwrap();
+        let publication = published(&plan, 0, &budget);
+        let facts = publication.facts();
+        let raw = lower_with_facts(publication.source(), facts, &budget).unwrap();
+        assert!(raw.call_evidence.is_empty());
+        let shape = raw.lowering_proof.as_ref().unwrap();
+        assert!(shape.original_publication.is_none());
+        raw.validate_with_facts(ir::FactsCtx::from_validated(facts))
+            .unwrap();
+        raw.validate_provenance(facts, &budget).unwrap();
+        assert!(
+            raw.validate_source_publication(&publication, &budget)
+                .is_err()
+        );
+        let universal = plan.callable_facts(plan.function_decl(0).unwrap()).unwrap();
+        let template =
+            lower_template(publication.source().clone(), universal.clone(), &budget).unwrap();
+        assert!(template.function().lowering_proof.is_some());
+        assert!(template.function().call_evidence.is_empty());
+        template
+            .function()
+            .validate_provenance(&universal, &budget)
+            .unwrap();
+        let mut detached = raw.clone();
+        detached.lowering_proof = None;
+        assert!(
+            detached
+                .validate_with_facts(ir::FactsCtx::from_validated(facts))
+                .is_err()
+        );
+        assert!(detached.validate_provenance(facts, &budget).is_err());
+        let other = published(&plan, 1, &budget);
+        let other_raw = lower_with_facts(other.source(), other.facts(), &budget).unwrap();
+        let mut transplanted = raw.clone();
+        transplanted.lowering_proof = other_raw.lowering_proof.clone();
+        assert!(transplanted.validate_provenance(facts, &budget).is_err());
+        assert!(
+            raw.validate_provenance(facts, &ir::PlanBudget::default())
+                .is_err()
+        );
     }
 
     #[test]
