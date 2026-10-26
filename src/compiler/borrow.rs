@@ -5065,7 +5065,30 @@ impl CarrierBuilder<'_, '_> {
             } else {
                 false
             };
-            if (family_admitted || identity_admitted) && self.problems.is_empty() {
+            // Raw-pointer stores currently have no physical SAME cell. An
+            // empty computed row is not evidence that such a store preserves
+            // the entry value. Keep the existing declaration-envelope fallback
+            // until the exact raw storage object is modeled. No must-overwrite
+            // or replacement summary may be published from this incomplete view.
+            let mut unmodeled_raw_write = false;
+            for block in &f.blocks {
+                self.budget.spend(block.statements.len() + 1)?;
+                for statement in &block.statements {
+                    if let Statement::Assign { destination, .. } = &statement.value {
+                        unmodeled_raw_write |= ir::raw_deref_index_optional(
+                            &f.locals[destination.local.0].ty,
+                            &destination.projection,
+                            Some(&self.ledger),
+                        )
+                        .map_err(|_| Exhausted)?
+                        .is_some();
+                    }
+                }
+            }
+            if (family_admitted || identity_admitted)
+                && self.problems.is_empty()
+                && !unmodeled_raw_write
+            {
                 checked_arc_transfer::<ir::CarrierWriteEnvelope>(writes.len(), self.budget)?;
                 checked_arc_transfer::<InputCarrier>(must_overwrite.len(), self.budget)?;
                 checked_arc_transfer::<CallCarrierBinding>(self.bindings.len(), self.budget)?;

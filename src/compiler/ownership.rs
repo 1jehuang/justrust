@@ -4650,6 +4650,19 @@ mod tests {
     }
 
     #[test]
+    fn generic_carriers_unmodeled_raw_writes_never_publish_effect_proofs() {
+        for source in [
+            "fn f<T>(destination:*mut T,value:T){unsafe{*destination=value;}}",
+            "fn f<T>(owner:&mut T,destination:*mut T,value:T){unsafe{*destination=value;}}",
+        ] {
+            let proof = verify_template(carrier_reference_template(source))
+                .unwrap_or_else(|analysis| panic!("{source}: {:?}", analysis.diagnostics));
+            assert!(proof.analysis().passed(), "{source}");
+            assert!(proof.carrier_effects().is_none(), "{source}");
+        }
+    }
+
+    #[test]
     fn generic_carriers_rigid_extent_dead_calls_and_mutable_parent_lifetimes() {
         for source in [
             "fn id<T>(x:T)->T{x} fn f<'a>(){let x=1;id::<&'a i32>(&x);}",
