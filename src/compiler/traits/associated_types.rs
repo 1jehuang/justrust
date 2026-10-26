@@ -9,8 +9,7 @@ impl ValidatedFacts {
         match callee {
             Callee::Direct(target) => {
                 for argument in target.type_args.iter() {
-                    self.world
-                        .validate_ty_metadata_in(argument, self.env(), 0)?;
+                    self.validate_ty_metadata(argument)?;
                 }
                 let info = self.world.info(target.declaration)?;
                 let header = self.world.callable_header(target.declaration)?;
@@ -26,11 +25,9 @@ impl ValidatedFacts {
             Callee::TraitItem(call)
             | Callee::Virtual(ir::VirtualCall { call })
             | Callee::Untupled(call) => {
-                self.world
-                    .validate_ty_metadata_in(&call.trait_ref.self_ty, self.env(), 0)?;
+                self.validate_ty_metadata(&call.trait_ref.self_ty)?;
                 for argument in call.trait_ref.args.iter().chain(call.method_args.iter()) {
-                    self.world
-                        .validate_ty_metadata_in(argument, self.env(), 0)?;
+                    self.validate_ty_metadata(argument)?;
                 }
                 let owner = self.world.trait_header(call.trait_ref.declaration)?;
                 let item = self.world.item_header(call.item)?;
@@ -249,6 +246,48 @@ impl ValidatedTraitWorld {
         depth: usize,
         replays: &mut NominalReplays,
     ) -> Result<()> {
+        self.validate_ty_metadata_with_facts(ty, env, depth, replays, None)
+    }
+
+    pub(super) fn validate_ty_metadata_with_facts(
+        &self,
+        ty: &Ty,
+        env: &GenericEnv,
+        depth: usize,
+        replays: &mut NominalReplays,
+        facts: Option<&ValidatedFacts>,
+    ) -> Result<()> {
+        if let Some(facts) = facts {
+            self.check_facts(facts, false)?;
+            if !facts.budget().same_authority(&self.budget) || !self.same_env(env, facts.env())? {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "metadata caller changed environment or budget authority",
+                ));
+            }
+        }
+        if !replays.bind_metadata_caller(self.id, facts) {
+            // Repeated raw roots share only their own exact-world/environment
+            // answers. They never see or retag the enclosing caller's rows.
+            if facts.is_none()
+                && replays
+                    .metadata_context
+                    .as_ref()
+                    .is_some_and(|(world, _)| *world == self.id)
+                && let Some(raw) = replays.raw_metadata_child(self, env)?
+            {
+                return self.validate_ty_metadata_with_facts(ty, env, depth, raw, None);
+            }
+            // A different world/environment or caller still owns a whole
+            // isolated operation, leaving every enclosing success untouched.
+            return self.validate_ty_metadata_with_facts(
+                ty,
+                env,
+                depth,
+                &mut NominalReplays::default(),
+                facts,
+            );
+        }
         charged(&self.budget, self.budget.check_depth(depth))?;
         charged(&self.budget, self.budget.charge_work(1))?;
         if let Some(height) = replays.validated_type(self, ty, env)? {
@@ -257,10 +296,11 @@ impl ValidatedTraitWorld {
                 self.budget.check_depth(depth.saturating_add(height)),
             );
         }
-        self.validate_ty_metadata_walk(ty, env, depth, &mut TypeWalk::default(), replays)
+        self.validate_ty_metadata_walk(ty, env, depth, &mut TypeWalk::default(), replays, facts)
             .map(|_| ())
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn validate_ty_metadata_walk(
         &self,
         ty: &Ty,
@@ -268,10 +308,32 @@ impl ValidatedTraitWorld {
         depth: usize,
         walk: &mut TypeWalk,
         replays: &mut NominalReplays,
+        facts: Option<&ValidatedFacts>,
     ) -> Result<usize> {
         charged(&self.budget, self.budget.check_depth(depth))?;
         charged(&self.budget, self.budget.charge_work(1))?;
         charged(&self.budget, self.budget.charge_nodes(1))?;
+        // Insert before the back-edge/cache paths in validate_ty_metadata_walk.
+        // This shortcut is authorized only by a completed component proof replay.
+        let component = match ty {
+            Ty::Struct(n) => n.realization(),
+            Ty::Enum(n) => n.realization(),
+            _ => None,
+        };
+        if let Some(capability) = component
+            && let Some(height) = capability.component_metadata_height()
+        {
+            capability
+                .replay_with(ty, self, replays)
+                .map_err(|error| FactsError::from_message(&self.budget, &error.to_string()))?;
+            charged(
+                &self.budget,
+                self.budget.check_depth(depth.saturating_add(height)),
+            )?;
+            replays.record_type(ty, env, height, &self.budget)?;
+            return Ok(height);
+        }
+
         if ty.is_nominal_back_edge() {
             return Ok(0);
         }
@@ -286,7 +348,7 @@ impl ValidatedTraitWorld {
         }
         let key = TypeWalk::key(ty).map(|node| (node, TypeUse::Root));
         if let Some(key) = key
-            && let Some(height) = walk.lookup(key, &self.budget)?
+            && let Some(height) = walk.lookup(key, ty, &self.budget)?
         {
             charged(
                 &self.budget,
@@ -297,7 +359,7 @@ impl ValidatedTraitWorld {
         let mut height = 0usize;
         let mut child = |value: &Ty, replays: &mut NominalReplays| -> Result<()> {
             height = height.max(
-                self.validate_ty_metadata_walk(value, env, depth + 1, walk, replays)?
+                self.validate_ty_metadata_walk(value, env, depth + 1, walk, replays, facts)?
                     .saturating_add(1),
             );
             Ok(())
@@ -436,7 +498,12 @@ impl ValidatedTraitWorld {
                     ));
                 }
                 validate_nominal_modules(ty, self.catalog.modules(), &self.budget)?;
-                self.schema.validate_nominal(ty, env, &self.budget)?;
+                if let Some(facts) = facts {
+                    self.schema
+                        .validate_nominal_with_facts(ty, facts, &self.budget)?;
+                } else {
+                    self.schema.validate_nominal(ty, env, &self.budget)?;
+                }
                 if let Some(capability) = value.realization() {
                     capability.replay_with(ty, self, replays).map_err(|error| {
                         FactsError::from_message(&self.budget, &error.to_string())
@@ -445,7 +512,7 @@ impl ValidatedTraitWorld {
                 for argument in value.def().type_args.iter() {
                     child(argument, replays)?;
                 }
-                for field in value.def().fields.iter() {
+                for field in nominal_fields(&value.def().fields, &self.budget)?.iter() {
                     child(&field.ty, replays)?;
                 }
             }
@@ -459,7 +526,12 @@ impl ValidatedTraitWorld {
                     ));
                 }
                 validate_nominal_modules(ty, self.catalog.modules(), &self.budget)?;
-                self.schema.validate_nominal(ty, env, &self.budget)?;
+                if let Some(facts) = facts {
+                    self.schema
+                        .validate_nominal_with_facts(ty, facts, &self.budget)?;
+                } else {
+                    self.schema.validate_nominal(ty, env, &self.budget)?;
+                }
                 if let Some(capability) = value.realization() {
                     capability.replay_with(ty, self, replays).map_err(|error| {
                         FactsError::from_message(&self.budget, &error.to_string())
@@ -469,7 +541,7 @@ impl ValidatedTraitWorld {
                     child(argument, replays)?;
                 }
                 for variant in value.def().variants.iter() {
-                    for field in variant.fields.iter() {
+                    for field in nominal_fields(&variant.fields, &self.budget)?.iter() {
                         child(&field.ty, replays)?;
                     }
                 }
@@ -477,7 +549,7 @@ impl ValidatedTraitWorld {
             Ty::Int(_) | Ty::Float(_) | Ty::Char | Ty::Str | Ty::Bool | Ty::Unit | Ty::Never => {}
         }
         if let Some(key) = key {
-            walk.insert(key, height, &self.budget)?;
+            walk.insert(key, height, ty, &self.budget)?;
         }
         replays.record_type(ty, env, height, &self.budget)?;
         Ok(height)
@@ -651,13 +723,23 @@ impl ValidatedTraitWorld {
         evidence: &NormalizedAssociatedType,
         proof: ProofContext<'_>,
     ) -> Result<()> {
+        self.validate_projected_dependency_with(evidence, proof, &mut ProofScratch::default())
+    }
+
+    pub(super) fn validate_projected_dependency_with(
+        &self,
+        evidence: &NormalizedAssociatedType,
+        proof: ProofContext<'_>,
+        active: &mut ProofScratch,
+    ) -> Result<()> {
         self.check_context(proof)?;
-        self.validate_normalization_evidence(
+        self.validate_normalization_evidence_with(
             &evidence.0,
             NormalizationContext {
                 proof,
                 staged: false,
             },
+            active,
         )
     }
 
@@ -1060,6 +1142,7 @@ impl ValidatedTraitWorld {
         // The stage is separate from public facts and from public projection memo keys.
         let context = NormalizationContext {
             proof: ProofContext {
+                original: None,
                 predicates: &self.empty,
                 phase: FactsPhase::Schema,
             },
@@ -1499,6 +1582,7 @@ impl ValidatedTraitWorld {
         // genuine caller environment, retaining that context in its evidence.
         let selection_context = if closed_goal {
             ProofContext {
+                original: None,
                 predicates: &self.empty,
                 phase: FactsPhase::Closed,
             }
@@ -2313,6 +2397,7 @@ impl ValidatedTraitWorld {
                 context.proof
             } else {
                 ProofContext {
+                    original: None,
                     predicates: &self.empty,
                     phase: FactsPhase::Closed,
                 }
@@ -2534,6 +2619,12 @@ mod tests {
             .unwrap();
         assert_eq!(budget.usage_snapshot().work - before, 1);
         assert_eq!(proofs.normalization_validations.len(), entries);
+        for _ in 0..3 {
+            world
+                .validate_projected_dependency_with(&normalized, context.proof, &mut proofs)
+                .unwrap();
+            assert_eq!(proofs.normalization_validations.len(), entries);
+        }
         // The same allocation is not proof under a changed caller or stage.
         let mut wrong_context = context;
         wrong_context.staged = true;
@@ -2585,11 +2676,29 @@ mod tests {
             );
             assert_eq!(proofs.normalization_validations.len(), entries);
             assert!(
+                world
+                    .validate_projected_dependency_with(
+                        &NormalizedAssociatedType(forged.clone()),
+                        context.proof,
+                        &mut proofs,
+                    )
+                    .is_err()
+            );
+            assert_eq!(proofs.normalization_validations.len(), entries);
+            assert!(
                 NormalizedAssociatedType(forged)
                     .validate_for(&projection, &facts)
                     .is_err()
             );
         }
+        assert!(budget.charge_work(usize::MAX).is_err());
+        let failure = budget.first_resource_failure();
+        budget.poison_ledger_for_tests();
+        assert!(matches!(
+            world.validate_projected_dependency_with(&normalized, context.proof, &mut proofs),
+            Err(error) if error.kind() == FactsErrorKind::Resource
+        ));
+        assert_eq!(budget.first_resource_failure(), failure);
     }
 
     #[test]

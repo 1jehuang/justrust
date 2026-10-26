@@ -4689,8 +4689,35 @@ pub fn prepare_resolution_owned(parsed: Arc<ParsedProgram>) -> Result<Resolution
 
 pub fn finish_resolution(
     namespace: &ResolutionNamespace,
-    mut items: Vec<ResolvedModuleItems>,
+    items: Vec<ResolvedModuleItems>,
 ) -> Result<Program, String> {
+    finish_resolution_with(namespace, items, |program| {
+        program.validate_name_handles()?;
+        Ok(program)
+    })
+}
+
+/// Seal the exact final allocation that the graph publishes. The Arc returned
+/// alongside the capability is only another immutable reference to that same
+/// allocation, never a caller-provided AST paired with an unrelated token.
+pub(in crate::compiler) fn finish_resolution_sealed(
+    namespace: &ResolutionNamespace,
+    items: Vec<ResolvedModuleItems>,
+) -> Result<(Arc<Program>, ValidatedProgram), String> {
+    finish_resolution_with(namespace, items, |program| {
+        let program = Arc::new(program);
+        let validated = ValidatedProgram::new(program.clone())?;
+        Ok((program, validated))
+    })
+}
+
+// Mutable construction scratch reaches either validating finalizer only after
+// all canonical rewrites finish. Input validation cannot authorize this output.
+fn finish_resolution_with<T>(
+    namespace: &ResolutionNamespace,
+    mut items: Vec<ResolvedModuleItems>,
+    seal: impl FnOnce(Program) -> Result<T, String>,
+) -> Result<T, String> {
     let parsed = namespace.parsed.as_ref();
     for item in &items {
         if !Arc::ptr_eq(&item.namespace_token, &namespace.token) {
@@ -4870,16 +4897,19 @@ pub fn finish_resolution(
     // The input program was checked against parser-issued source certificates
     // before resolution. Only this canonical rewrite can publish resolved heads.
     program.generated_owners = generated_owners::capture(&program)?;
-    program.validate_name_handles()?;
+    program.associated_bound_sources = associated_bound_sources.into();
+    // Finalize before borrowing the immutable snapshot, but defer this error:
+    // existing name-contract and source-boundary diagnostics take precedence.
+    let c_source_seal = program.seal_resolved_c_source();
+    let sealed = seal(program)?;
     if let Some(error) = associated_boundary {
         return Err(error);
     }
     if let Some(error) = equality_boundary {
         return Err(error);
     }
-    program.associated_bound_sources = associated_bound_sources.into();
-    program.seal_resolved_c_source()?;
-    Ok(program)
+    c_source_seal?;
+    Ok(sealed)
 }
 
 #[cfg(test)]

@@ -168,8 +168,15 @@ impl Checker<'_> {
         }
         let (mut body, flow) = checked?;
         let result = result_hint.unwrap_or(flow.ty.clone());
-        let result_receipt =
-            child.restricted_closure_result(owner, provider, syntax.site, &body, &result)?;
+        let result_receipt = child.restricted_closure_result(
+            owner,
+            provider,
+            syntax.site,
+            &body,
+            &result,
+            &prefix,
+            arguments,
+        )?;
         child.require(&flow, &result)?;
         prefix.append(&mut body.statements);
         body.statements = prefix;
@@ -214,7 +221,11 @@ impl Checker<'_> {
                 };
                 let original = child
                     .facts()
-                    .projected_ty(&child.locals[local.0].ty, &capture.place.projection)?
+                    .projected_ty(
+                        &child.locals[local.0].ty,
+                        &capture.place.projection,
+                        &child.signatures.plan()?.budget,
+                    )?
                     .clone();
                 let ty = match mode {
                     ir::CaptureKind::Value => original,

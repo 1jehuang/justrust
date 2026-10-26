@@ -443,6 +443,26 @@ fn stock_all() {
 fn shared_reference_elements_stock_native_workers1_8() {
     let cases = [
         (
+            "shared_tuple_elements_keep_original_borrow",
+            r###"fn first<T:Copy>(s:&[T])->T{s[0]}fn main(){let text=String::from("ok");let row;{let rows=[(text.as_str(),3usize)];row=first(&rows);}if row.1==3usize{println!("{}",row.0);}}"###,
+            true,
+        ),
+        (
+            "declared_tuple_element_lifetime",
+            r###"fn first<'a>(s:&[(&'a str,usize)])->(&'a str,usize){s[0]}fn main(){let text=String::from("ok");let row;{let rows=[(text.as_str(),3usize)];row=first(&rows);}if row.1==3usize{println!("{}",row.0);}}"###,
+            true,
+        ),
+        (
+            "tuple_element_lifetimes_cannot_swap",
+            r###"fn unused<'a,'b>(s:&[(&'a str,&'b str)])->(&'b str,&'a str){s[0]}fn main(){}"###,
+            false,
+        ),
+        (
+            "shared_tuple_element_cannot_escape_owner",
+            r###"fn first<T:Copy>(s:&[T])->T{s[0]}fn unused()->&'static str{let text=String::from("cat");let rows=[(text.as_str(),3usize)];first(&rows).0}fn main(){}"###,
+            false,
+        ),
+        (
             "reference_elements",
             "fn read(s:&[&i32])->i32{*s[0]}fn main(){let x=42;let a=[&x];if read(&a)==42{println!(\"ok\");}}",
             true,

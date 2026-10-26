@@ -61,6 +61,7 @@ impl ValidatedTraitWorld {
                 .raw_associated_ty_is_closed(&Ty::AssociatedType(Arc::new(projection.clone())), 0)?
             {
                 let context = ProofContext {
+                    original: None,
                     predicates: &self.empty,
                     phase: FactsPhase::Schema,
                 };
@@ -209,6 +210,7 @@ impl ValidatedTraitWorld {
                 ) if a == b && ap == bp => {}
                 (Membership::Closed(a), Membership::Closed(b)) if a.len() == b.len() => {
                     let context = ProofContext {
+                        original: None,
                         predicates: &self.empty,
                         phase: FactsPhase::Schema,
                     };

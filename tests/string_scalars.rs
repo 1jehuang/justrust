@@ -158,6 +158,39 @@ fn string_implementation_helpers_remain_private() {
 #[path = "support/closure_oracle.rs"]
 mod closure_oracle;
 
+#[test]
+fn str_ordering_and_tuple_comparator_match_stock() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "str-ordering",
+        &[
+            Case {
+                name: "bytewise_empty_prefix_unicode_and_nul",
+                source: r#"fn main() {
+    println!("{:?} {:?} {:?}", "".cmp(""), "".cmp("a"), "a".cmp(""));
+    println!("{:?} {:?} {:?}", "a".cmp("aa"), "aa".cmp("a"), "abc".cmp("abc"));
+    println!("{:?} {:?} {:?}", "é".cmp("日"), "日".cmp("🦀"), "é".cmp("e"));
+    println!("{:?} {:?}", "a\0b".cmp("a\0c"), "a\0".cmp("a"));
+    println!("{:?}", "日".partial_cmp("é"));
+    let mut words: Vec<(&str, usize)> = Vec::new();
+    words.push(("z", 1)); words.push(("é", 2));
+    words.push(("a", 1)); words.push(("a", 3));
+    words.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
+    for (word, count) in words { println!("{}: {}", word, count); }
+}"#,
+                expect: Expect::Run(
+                    "Equal Less Greater\nLess Greater Equal\nLess Less Greater\nLess Greater\nSome(Greater)\na: 3\né: 2\na: 1\nz: 1\n",
+                ),
+            },
+            Case {
+                name: "unused_string_order_wrong_operand",
+                source: "fn unused() { let _ = \"a\".cmp(&1u32); } fn main() {}",
+                expect: Expect::Invalid("E0308"),
+            },
+        ],
+    );
+}
+
 /// `str::chars` decodes UTF-8 (1-4 byte scalars) through the prelude `Chars`
 /// iterator: `next`, `count`, empty input. CHECK/BUILD at workers 1 and 8.
 #[test]

@@ -98,7 +98,7 @@ impl Checker<'_> {
                     ("Some", ir::VariantShape::Tuple, 1) => {
                         self.require(
                             &Flow {
-                                ty: variant.fields[0].ty.clone(),
+                                ty: variant.fields.read(&plan.budget)?[0].ty.clone(),
                                 completes: true,
                             },
                             &item_ty,

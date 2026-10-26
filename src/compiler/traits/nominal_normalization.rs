@@ -177,12 +177,15 @@ mod tests {
                 .is_err()
         );
         let mut rewritten = value.def().clone();
-        rewritten.fields = Arc::from([ir::FieldDef {
+        rewritten.fields = Arc::<[ir::FieldDef]>::from([ir::FieldDef {
             name: "0".into(),
             ty: Ty::Int(ir::IntTy::I32),
-            visibility: rewritten.fields[0].visibility.clone(),
+            visibility: nominal_fields(&rewritten.fields, &world.budget).unwrap()[0]
+                .visibility
+                .clone(),
             lifetime_bound: false,
-        }]);
+        }])
+        .into();
         let forged = Ty::Struct(ir::StructTy::new(rewritten));
         assert!(
             world

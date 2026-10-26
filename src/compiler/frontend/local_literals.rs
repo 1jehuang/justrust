@@ -1065,6 +1065,100 @@ impl<'s> Solver<'_, '_, 's> {
         }
         Ok(found)
     }
+    // An unresolved method argument can itself be the only reason a later
+    // receiver has no nominal actuals yet (`zip` stores `U::IntoIter`). This
+    // local cycle is not a missing producer. Never include delayed producer
+    // results, closure parameters, numeric defaults or absent graph reads.
+    fn lazy_input_frontier(
+        &self,
+        term: Term,
+        targets: &[Term],
+        depth: usize,
+    ) -> Result<bool, String> {
+        self.checker.infer_work(depth)?;
+        Ok(match self.domain(term) {
+            Domain::Unknown => {
+                for target in targets {
+                    self.checker.infer_work(depth)?;
+                    if self.root(*target) == self.root(term) {
+                        return Ok(true);
+                    }
+                }
+                false
+            }
+            Domain::Integer | Domain::Float | Domain::Callable(_) => false,
+            Domain::Nominal(_, children)
+            | Domain::Tuple(children)
+            | Domain::Opaque(_, children) => {
+                for child in children {
+                    if !self.lazy_input_frontier(child, targets, depth + 1)? {
+                        return Ok(false);
+                    }
+                }
+                true
+            }
+            Domain::Ref(_, child)
+            | Domain::RawPtr(_, child)
+            | Domain::Array(child, _)
+            | Domain::Slice(child) => self.lazy_input_frontier(child, targets, depth + 1)?,
+            Domain::AssociatedProjection(projection) => {
+                if !self.lazy_input_frontier(projection.receiver, targets, depth + 1)? {
+                    return Ok(false);
+                }
+                for argument in projection.arguments {
+                    if !self.lazy_input_frontier(argument, targets, depth + 1)? {
+                        return Ok(false);
+                    }
+                }
+                true
+            }
+            Domain::Fixed(_) => true,
+        })
+    }
+
+    fn local_lazy_inputs_ready(&self, methods: &[Method]) -> Result<bool, String> {
+        if self.lazy_coercions.is_empty()
+            || self.trait_application_pending
+            || self.missing_source_schemas.get()
+            || !self.missing_nominals.borrow().is_empty()
+            || !self.missing_declarations.borrow().is_empty()
+            || !self.operators.is_empty()
+            || !self.iterator_items.is_empty()
+            || !self.associated_equalities.is_empty()
+            || !self.patterns.is_empty()
+            || !self.pending_referents.is_empty()
+            || !self.tries.is_empty()
+        {
+            return Ok(false);
+        }
+        self.checker.infer_storage(self.lazy_coercions.len())?;
+        let mut targets = Vec::new();
+        for (actual, expected) in &self.lazy_coercions {
+            self.checker.infer_work(0)?;
+            if !matches!(self.domain(*expected), Domain::Unknown)
+                || self.deferred_coercion(*expected)?
+                || !self.lazy_input_frontier(*actual, &[], 0)?
+                || self.resolve(*actual, 0)?.is_none()
+            {
+                return Ok(false);
+            }
+            targets.push(*expected);
+        }
+        for method in methods {
+            for input in std::iter::once(&method.receiver)
+                .chain(&method.args)
+                .chain(&method.actuals)
+            {
+                if !self.lazy_input_frontier(*input, &targets, 0)? {
+                    return Ok(false);
+                }
+            }
+        }
+        Ok(!self.missing_source_schemas.get()
+            && self.missing_nominals.borrow().is_empty()
+            && self.missing_declarations.borrow().is_empty())
+    }
+
     fn solve(&mut self) -> Result<(), String> {
         let mut methods = std::mem::take(&mut self.methods);
         let mut projections = std::mem::take(&mut self.projections);
@@ -1440,6 +1534,27 @@ impl<'s> Solver<'_, '_, 's> {
                     progress = true;
                 }
             }
+            if !progress
+                && self.preparation.is_some()
+                && projections.is_empty()
+                && self.local_lazy_inputs_ready(&methods)?
+            {
+                for (actual, expected) in std::mem::take(&mut self.lazy_coercions) {
+                    self.unify(actual, expected)?;
+                }
+                continue;
+            }
+            // Missing graph inputs are not inference quiescence. A pending
+            // method producer may still reveal a nominal owner, so neither
+            // referent nor lazy-coercion fallback may overwrite that owner.
+            if !progress
+                && self.preparation.is_some()
+                && (self.preparation_needs_actuals.get()
+                    || self.missing_source_schemas.get()
+                    || !self.missing_nominals.borrow().is_empty())
+            {
+                break;
+            }
             if !progress && !self.pending_referents.is_empty() {
                 for (actual, expected) in std::mem::take(&mut self.pending_referents) {
                     if let (Domain::Ref(_, a), Domain::Ref(_, b)) =
@@ -1459,16 +1574,6 @@ impl<'s> Solver<'_, '_, 's> {
                 continue;
             }
             if !progress {
-                if self.preparation.is_some()
-                    && (self.preparation_needs_actuals.get()
-                        || self.missing_source_schemas.get()
-                        || !self.missing_nominals.borrow().is_empty())
-                {
-                    // A missing graph input is not inference quiescence. In
-                    // particular it cannot authorize an i32/f64 fallback that
-                    // would choose an early nominal realization identity.
-                    break;
-                }
                 if !self.projection_defaults {
                     self.projection_defaults = true;
                     continue;
@@ -1548,7 +1653,8 @@ impl<'s> Solver<'_, '_, 's> {
                     FieldSelector::Named(name) => self.checker.member_index(decl, None, *name)?,
                     _ => return Ok(None),
                 };
-                let Some(field) = schema.def().fields.get(index) else {
+                let definitions = schema.def().fields.read(&plan.budget)?;
+                let Some(field) = definitions.get(index) else {
                     return Ok(None);
                 };
                 let params = args
@@ -1638,6 +1744,7 @@ impl<'s> Solver<'_, '_, 's> {
             (ir::Ty::Enum(e), Some(v)) => &e.def().variants[v].fields,
             _ => return self.fresh(),
         };
+        let definitions = definitions.read(&plan.budget)?;
         for (selector, value) in fields {
             let index = match selector {
                 FieldSelector::Tuple(i) => *i,
@@ -1897,6 +2004,7 @@ impl<'s> Solver<'_, '_, 's> {
             (ir::Ty::Enum(e), Some(v)) => &e.def().variants[v].fields,
             _ => return Ok(()),
         };
+        let definitions = definitions.read(&plan.budget)?;
         for (selector, pattern) in fields {
             let index = match selector {
                 FieldSelector::Tuple(i) => *i,

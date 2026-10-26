@@ -154,7 +154,7 @@ fn parses_slice_and_array_types() {
 fn ty_helpers_are_exact() {
     let slice = ir::Ty::shared_byte_slice_ty();
     assert!(slice.shared_byte_slice());
-    assert!(slice.contains_slice());
+    assert!(slice.contains_slice(&ir::PlanBudget::default()).unwrap());
     assert!(slice.is_copy());
     let array = ir::Ty::Ref {
         kind: ir::BorrowKind::Shared,

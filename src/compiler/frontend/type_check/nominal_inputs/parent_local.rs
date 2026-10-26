@@ -110,7 +110,7 @@ impl Checker<'_> {
                 let mut def = n.def().clone();
                 def.id = id;
                 def.type_args = actuals.clone();
-                def.fields = substitute_fields(&def.fields, &subst)?;
+                def.fields = substitute_fields(&def.fields.read(budget)?, &subst)?.into();
                 ir::Ty::Struct(ir::StructTy::new_parent_local(def))
             }
             ir::Ty::Enum(n) => {
@@ -120,7 +120,8 @@ impl Checker<'_> {
                 let mut variants = Vec::with_capacity(def.variants.len());
                 for variant in def.variants.iter() {
                     let mut variant = variant.clone();
-                    variant.fields = substitute_fields(&variant.fields, &subst)?;
+                    variant.fields =
+                        substitute_fields(&variant.fields.read(budget)?, &subst)?.into();
                     variants.push(variant);
                 }
                 def.variants = variants.into();

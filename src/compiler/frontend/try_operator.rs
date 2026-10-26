@@ -88,7 +88,11 @@ impl Checker<'_> {
         };
         let success_index = variant(&input, success)?;
         let failure_index = variant(&input, failure)?;
-        let payload = input.def().variants[success_index].fields[0].ty.clone();
+        let payload = input.def().variants[success_index]
+            .fields
+            .read(&self.signatures.plan()?.budget)?[0]
+            .ty
+            .clone();
         let value = self.temporary("$try_value", payload.clone(), false)?;
         let read = self.try_expr(
             payload.clone(),
@@ -118,8 +122,16 @@ impl Checker<'_> {
         let (bindings, fields) = match kind {
             Carrier::Option => (Vec::new(), Vec::new()),
             Carrier::Result => {
-                let error_ty = input.def().variants[failure_index].fields[0].ty.clone();
-                let target_ty = output.def().variants[out_failure].fields[0].ty.clone();
+                let error_ty = input.def().variants[failure_index]
+                    .fields
+                    .read(&self.signatures.plan()?.budget)?[0]
+                    .ty
+                    .clone();
+                let target_ty = output.def().variants[out_failure]
+                    .fields
+                    .read(&self.signatures.plan()?.budget)?[0]
+                    .ty
+                    .clone();
                 let error = self.temporary("$try_error", error_ty.clone(), false)?;
                 let read = self.try_expr(
                     error_ty.clone(),

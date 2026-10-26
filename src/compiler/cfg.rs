@@ -634,8 +634,9 @@ pub enum Rvalue {
     RefToDyn {
         reference: Operand,
         object: std::sync::Arc<ir::DynTy>,
-        /// `Some(Box<dyn P>)` when the operand is an owning `Box<T>`: the
-        /// same (data, vtable) carrier, owned. Checked against `object`.
+        /// Exact owning destination for Box or Rc unsizing. The source and
+        /// destination must share the canonical ownership protocol; Rc also
+        /// transports its unchanged strong-count allocation pointer.
         boxed: Option<std::sync::Arc<Ty>>,
     },
     /// Builtin length of exactly shared `&[u8]`, result `usize`. Grants no
@@ -1051,7 +1052,14 @@ fn concrete_carrier_count(ty: &Ty, facts: ir::FactsCtx<'_>) -> Result<usize, Str
 }
 
 fn validate_type(ty: &Ty, depth: usize) -> Result<(), String> {
-    let mut pending = vec![(ty, depth)];
+    validate_type_with_budget(ty, depth, None)
+}
+fn validate_type_with_budget(
+    ty: &Ty,
+    depth: usize,
+    budget: Option<&ir::PlanBudget>,
+) -> Result<(), String> {
+    let mut pending = vec![(ty.clone(), depth)];
     let mut work = 0usize;
     let mut unresolved_associated_type = false;
     let mut nominals = std::collections::HashSet::new();
@@ -1065,17 +1073,23 @@ fn validate_type(ty: &Ty, depth: usize) -> Result<(), String> {
         if depth > 128 {
             return Err("CFG type nesting exceeds limit 128".into());
         }
-        match ty {
+        match &ty {
             Ty::AssociatedType(projection) => {
                 unresolved_associated_type = true;
-                pending.push((&projection.trait_ref.self_ty, depth + 1));
-                pending.extend(projection.trait_ref.args.iter().map(|ty| (ty, depth + 1)));
+                pending.push((projection.trait_ref.self_ty.clone(), depth + 1));
+                pending.extend(
+                    projection
+                        .trait_ref
+                        .args
+                        .iter()
+                        .map(|ty| (ty.clone(), depth + 1)),
+                );
             }
             Ty::Ref { referent, .. } => {
                 if depth != 0 {
                     return Err("unsupported: nested or aggregate references".into());
                 }
-                let layers = ir::reference_layers(ty)?;
+                let layers = ir::reference_layers(&ty)?;
                 let mut inner = referent.as_ref();
                 for _ in 1..layers {
                     let Ty::Ref { referent, .. } = inner else {
@@ -1084,7 +1098,7 @@ fn validate_type(ty: &Ty, depth: usize) -> Result<(), String> {
                     inner = referent;
                     work += 1;
                 }
-                pending.push((inner, depth + layers));
+                pending.push((inner.clone(), depth + layers));
             }
             Ty::Array { element, len } => {
                 if *len > ir::MAX_ARRAY_TYPE_LEN {
@@ -1092,20 +1106,32 @@ fn validate_type(ty: &Ty, depth: usize) -> Result<(), String> {
                 }
                 if arrays.insert(std::sync::Arc::as_ptr(element)) {
                     // Validate element metadata even for an empty array.
-                    pending.push((element, depth + 1));
+                    pending.push((element.as_ref().clone(), depth + 1));
                 }
             }
             Ty::Enum(ty) if nominals.insert((true, ty.def().id)) => {
                 ty.validate()?;
                 for variant in ty.def().variants.iter() {
-                    pending.extend(variant.fields.iter().map(|field| (&field.ty, depth + 1)));
+                    pending.extend(
+                        variant
+                            .fields
+                            .read_optional(budget)?
+                            .iter()
+                            .map(|field| (field.ty.clone(), depth + 1)),
+                    );
                 }
             }
             Ty::Struct(ty) if nominals.insert((false, ty.def().id)) => {
                 // A zero-field nominal remains an owned, non-Copy nominal.
                 // Source shape admission belongs to the checked source schema,
                 // not the field count of this runtime carrier.
-                pending.extend(ty.def().fields.iter().map(|field| (&field.ty, depth + 1)));
+                pending.extend(
+                    ty.def()
+                        .fields
+                        .read_optional(budget)?
+                        .iter()
+                        .map(|field| (field.ty.clone(), depth + 1)),
+                );
             }
             Ty::Tuple(fields) if tuples.insert(fields.as_ptr()) => {
                 if fields.is_empty() {
@@ -1116,7 +1142,7 @@ fn validate_type(ty: &Ty, depth: usize) -> Result<(), String> {
                 if fields.len() > ir::MAX_PATTERN_PROJECTION_WORK {
                     return Err("CFG type work limit exceeded".into());
                 }
-                pending.extend(fields.iter().map(|field| (field, depth + 1)));
+                pending.extend(fields.iter().map(|field| (field.clone(), depth + 1)));
             }
             _ => {}
         }
@@ -1489,6 +1515,7 @@ impl Function {
         Ok(())
     }
     fn validate_loan_timing(&self, facts: ir::FactsCtx<'_>) -> Result<(), String> {
+        let budget = self.query_budget(facts);
         let mut work = 0usize;
         let mut spend = |amount: usize| -> Result<(), String> {
             work = work
@@ -1534,17 +1561,17 @@ impl Function {
             else {
                 return Err("two-phase activation requires mutable reference formal".into());
             };
-            let site_ty = self.place_ty(&site.place)?;
+            let site_ty = self.place_ty_with_budget(&site.place, budget)?;
             let agrees = if let Some(authority) = facts.validated() {
                 authority
                     .world()
                     .types_equal(
-                        std::slice::from_ref(site_ty),
+                        std::slice::from_ref(&site_ty),
                         std::slice::from_ref(referent.as_ref()),
                     )
                     .map_err(|error| error.into_legacy_diagnostic(authority.budget()))?
             } else {
-                site_ty == referent.as_ref()
+                &site_ty == referent.as_ref()
             };
             if !agrees {
                 return Err("two-phase referent/formal mismatch".into());
@@ -1968,7 +1995,23 @@ impl Function {
         }
         Ok(())
     }
-    pub fn place_ty(&self, place: &Place) -> Result<&Ty, String> {
+    fn query_budget<'a>(&'a self, facts: ir::FactsCtx<'a>) -> Option<&'a ir::PlanBudget> {
+        facts
+            .validated()
+            .map(|facts| facts.budget())
+            .or_else(|| self.lowering_proof.as_ref().map(|proof| &proof.budget))
+    }
+    pub fn place_ty(&self, place: &Place) -> Result<Ty, String> {
+        self.place_ty_with_budget(
+            place,
+            self.lowering_proof.as_ref().map(|proof| &proof.budget),
+        )
+    }
+    pub(super) fn place_ty_with_budget(
+        &self,
+        place: &Place,
+        budget: Option<&ir::PlanBudget>,
+    ) -> Result<Ty, String> {
         let ty = &self
             .locals
             .get(place.local.0)
@@ -1981,7 +2024,7 @@ impl Function {
                 return Err("runtime place index requires a valid usize local".into());
             }
         }
-        ir::projected_ty(ty, &place.projection)
+        ir::projected_ty_optional(ty, &place.projection, budget)
     }
 
     fn validate_operand_facts(
@@ -2006,6 +2049,7 @@ impl Function {
         facts: ir::FactsCtx<'_>,
         scratch: &mut TraitScratch,
     ) -> Result<Ty, String> {
+        let budget = self.query_budget(facts);
         match operand {
             Operand::Constant(Constant::AssociatedConst(operand)) => Ok(operand.ty().clone()),
             Operand::Constant(Constant::Int(value)) => {
@@ -2033,20 +2077,24 @@ impl Function {
                 Ok(Ty::Enum(ty.clone()))
             }
             Operand::Copy(place) => {
-                let ty = self.place_ty(place)?;
-                if !facts.must_copy_scratch(ty, scratch)? {
+                let ty = self.place_ty_with_budget(place, budget)?;
+                if !facts.must_copy_scratch(&ty, scratch)? {
                     return Err("CFG Copy operand requires a Copy type".into());
                 }
                 Ok(ty.clone())
             }
             Operand::Move(place) => {
-                let ty = self.place_ty(place)?;
+                let ty = self.place_ty_with_budget(place, budget)?;
                 // A move out of storage reached through a raw pointer is the
                 // unsafe `ptr::read` contract: the programmer owns validity.
-                let raw = ir::raw_deref_index(&self.locals[place.local.0].ty, &place.projection)
-                    .is_some();
+                let raw = ir::raw_deref_index_optional(
+                    &self.locals[place.local.0].ty,
+                    &place.projection,
+                    budget,
+                )?
+                .is_some();
                 if !raw
-                    && !facts.must_copy_scratch(ty, scratch)?
+                    && !facts.must_copy_scratch(&ty, scratch)?
                     && place.projection.iter().any(|part| {
                         matches!(part, Projection::ConstantIndex(_) | Projection::Deref)
                     })
@@ -2057,7 +2105,7 @@ impl Function {
                 }
                 if !raw
                     && !place.projection.is_empty()
-                    && !facts.must_copy_scratch(ty, scratch)?
+                    && !facts.must_copy_scratch(&ty, scratch)?
                     && let Some(validated) = facts.validated()
                     && validated.has_normal_drop_impls()
                 {
@@ -2068,12 +2116,13 @@ impl Function {
                         {
                             continue;
                         }
-                        let base = ir::projected_ty(
+                        let base = ir::projected_ty_optional(
                             &self.locals[place.local.0].ty,
                             &place.projection[..end],
+                            budget,
                         )?;
                         if let crate::compiler::traits::NormalDropPlan::Destructor(d) = validated
-                            .normal_drop_plan(base)
+                            .normal_drop_plan(&base)
                             .map_err(|e| e.into_legacy_diagnostic(validated.budget()))?
                             && d.own_target().is_some()
                         {
@@ -2094,7 +2143,7 @@ impl Function {
         scratch: &mut TraitScratch,
     ) -> Result<(), String> {
         let got = self.operand_ty_with_facts(value, facts, scratch)?;
-        if coerces(&got, want) {
+        if coerces(&got, &want) {
             Ok(())
         } else {
             Err("CFG operand type mismatch".into())
@@ -2147,39 +2196,54 @@ impl Function {
         index: &Operand,
         facts: ir::FactsCtx<'_>,
         scratch: &mut TraitScratch,
-    ) -> Result<&Ty, String> {
+    ) -> Result<Ty, String> {
+        let budget = self.query_budget(facts);
         self.require_operand_with_facts(index, &Ty::Int(IntTy::Usize), facts, scratch)?;
-        let array_ty = self.indexed_array_place_ty(array)?;
+        let array_ty = self.indexed_array_place_ty_with_budget(array, budget)?;
         if let Ty::Slice { element } = array_ty {
             // `*s` of a slice carrier (MUTABLE-SLICES.md): only the exact
             // carrier dereference names unsized slice storage.
             if array.projection.last() != Some(&Projection::Deref) {
                 return Err("runtime slice index requires a dereferenced slice carrier".into());
             }
-            ir::validate_shared_slice_element_with_facts(element, facts)?;
-            return Ok(element);
+            ir::validate_shared_slice_element_with_facts(&element, facts)?;
+            return Ok(element.as_ref().clone());
         }
         if facts.validated().is_none() {
-            validate_type(array_ty, 0)?;
+            validate_type_with_budget(&array_ty, 0, budget)?;
         }
-        facts.validate_ty_scratch(array_ty, scratch)?;
+        facts.validate_ty_scratch(&array_ty, scratch)?;
         let Ty::Array { element, .. } = array_ty else {
             return Err("dynamic indexing requires array place".into());
         };
-        Ok(element)
+        Ok(element.as_ref().clone())
     }
 
-    fn indexed_mutation_ty(&self, array: &Place) -> Result<&Ty, String> {
+    fn indexed_mutation_ty(
+        &self,
+        array: &Place,
+        budget: Option<&ir::PlanBudget>,
+    ) -> Result<Ty, String> {
         let local = self.locals.get(array.local.0).ok_or("invalid CFG local")?;
         if !array.projection.contains(&Projection::Deref) && !local.mutable {
             return Err("compound indexed mutation requires mutable binding".into());
         }
-        ir::indexed_array_ty(&local.ty, &array.projection, true)
+        ir::indexed_array_ty_optional(&local.ty, &array.projection, true, budget)
     }
 
     /// Array operand type of a runtime index statement, whose trailing
     /// runtime row is an interior step indexed again (NESTED-INDEX.md).
-    pub fn indexed_array_place_ty(&self, place: &Place) -> Result<&Ty, String> {
+    pub fn indexed_array_place_ty(&self, place: &Place) -> Result<Ty, String> {
+        self.indexed_array_place_ty_with_budget(
+            place,
+            self.lowering_proof.as_ref().map(|proof| &proof.budget),
+        )
+    }
+    fn indexed_array_place_ty_with_budget(
+        &self,
+        place: &Place,
+        budget: Option<&ir::PlanBudget>,
+    ) -> Result<Ty, String> {
         let ty = &self
             .locals
             .get(place.local.0)
@@ -2192,7 +2256,7 @@ impl Function {
                 return Err("runtime place index requires a valid usize local".into());
             }
         }
-        ir::indexed_array_ty(ty, &place.projection, false)
+        ir::indexed_array_ty_optional(ty, &place.projection, false, budget)
     }
 
     fn binary_ty(op: BinaryOp, left: Ty, right: Ty, count: Option<IntValue>) -> Result<Ty, String> {
@@ -2301,6 +2365,7 @@ impl Function {
         facts: ir::FactsCtx<'_>,
         scratch: &mut TraitScratch,
     ) -> Result<Ty, String> {
+        let budget = self.query_budget(facts);
         match value {
             Rvalue::Intrinsic { intrinsic, args } => {
                 let signature = intrinsic
@@ -2363,7 +2428,7 @@ impl Function {
             }
             Rvalue::Borrow(id) => {
                 let site = self.loan_sites.get(id.0).ok_or("invalid CFG loan site")?;
-                let referent = self.place_ty(&site.place)?;
+                let referent = self.place_ty_with_budget(&site.place, budget)?;
                 let ty = Ty::Ref {
                     kind: site.kind,
                     referent: std::sync::Arc::new(referent.clone()),
@@ -2376,21 +2441,21 @@ impl Function {
             }
             Rvalue::IndexCopy { array, index } => {
                 let element = self.indexed_element_ty(array, index, facts, scratch)?;
-                if !facts.must_copy_scratch(element, scratch)? {
+                if !facts.must_copy_scratch(&element, scratch)? {
                     return Err("unsupported: non-Copy dynamic array element extraction".into());
                 }
                 Ok(element.clone())
             }
             Rvalue::Repeat { ty, value } => {
                 if facts.validated().is_none() {
-                    validate_type(ty, 0)?;
+                    validate_type_with_budget(ty, 0, budget)?;
                 }
                 facts.validate_ty_scratch(ty, scratch)?;
                 let Ty::Array { element, len } = ty else {
                     return Err("CFG repeat requires array type".into());
                 };
-                self.require_operand_with_facts(value, element, facts, scratch)?;
-                if *len > 1 && !facts.must_copy_scratch(element, scratch)? {
+                self.require_operand_with_facts(value, &element, facts, scratch)?;
+                if *len > 1 && !facts.must_copy_scratch(&element, scratch)? {
                     return Err(
                         "CFG array repeat requires Copy element for length greater than one".into(),
                     );
@@ -2403,7 +2468,7 @@ impl Function {
                 fields,
             } => {
                 if facts.validated().is_none() {
-                    validate_type(&Ty::Enum(ty.clone()), 0)?;
+                    validate_type_with_budget(&Ty::Enum(ty.clone()), 0, budget)?;
                 }
                 facts.validate_ty_scratch(&Ty::Enum(ty.clone()), scratch)?;
                 let def = ty
@@ -2411,16 +2476,17 @@ impl Function {
                     .variants
                     .get(*variant)
                     .ok_or("invalid CFG enum variant")?;
-                if fields.len() != def.fields.len() {
+                let declarations = def.fields.read_optional(budget)?;
+                if fields.len() != declarations.len() {
                     return Err("CFG enum initializer arity mismatch".into());
                 }
-                for (field, declaration) in fields.iter().zip(def.fields.iter()) {
+                for (field, declaration) in fields.iter().zip(declarations.iter()) {
                     self.require_operand_with_facts(field, &declaration.ty, facts, scratch)?;
                 }
                 Ok(Ty::Enum(ty.clone()))
             }
             Rvalue::Discriminant(place) => {
-                let Ty::Enum(ty) = self.place_ty(place)? else {
+                let Ty::Enum(ty) = self.place_ty_with_budget(place, budget)? else {
                     return Err("CFG discriminant requires enum place".into());
                 };
                 ty.validate()?;
@@ -2466,13 +2532,15 @@ impl Function {
                 boxed: Some(boxed),
             } => {
                 let source = self.operand_ty_with_facts(reference, facts, scratch)?;
-                let Some(referent) = source.owned_box_pointee() else {
-                    return Err("CFG box unsizing requires an owning Box operand".into());
+                let Some((source_kind, referent)) = source.owned_pointer_pointee() else {
+                    return Err("CFG owning unsizing requires an exact owning carrier".into());
                 };
                 if matches!(referent, Ty::Dyn(_) | Ty::Slice { .. } | Ty::Str)
-                    || boxed.owned_box_object() != Some(object.as_ref())
+                    || boxed.owned_pointer_object() != Some((source_kind, object.as_ref()))
                 {
-                    return Err("CFG box unsizing requires a sized pointee and exact object".into());
+                    return Err(
+                        "CFG owning unsizing requires a sized pointee and exact object".into(),
+                    );
                 }
                 Ok(boxed.as_ref().clone())
             }
@@ -2608,7 +2676,7 @@ impl Function {
             }
             Rvalue::Aggregate { ty, fields } => {
                 if facts.validated().is_none() {
-                    validate_type(ty, 0)?;
+                    validate_type_with_budget(ty, 0, budget)?;
                 }
                 facts.validate_ty_scratch(ty, scratch)?;
                 if let Ty::Array { element, len } = ty {
@@ -2629,7 +2697,8 @@ impl Function {
                 for (index, value) in fields.iter().enumerate() {
                     self.require_operand_with_facts(
                         value,
-                        ty.field_ty(index).ok_or("invalid CFG aggregate field")?,
+                        &ty.field_ty_optional(index, budget)?
+                            .ok_or("invalid CFG aggregate field")?,
                         facts,
                         scratch,
                     )?;
@@ -2703,6 +2772,7 @@ impl Function {
         facts: ir::FactsCtx<'_>,
         physical: Option<&super::opaque_physical::PhysicalValidation<'_>>,
     ) -> Result<(), String> {
+        let budget = self.query_budget(facts);
         // Proof/type memo local to this validation pass only.
         let scratch = &mut TraitScratch::default();
         if let Some(authority) = facts.validated()
@@ -2735,9 +2805,9 @@ impl Function {
             }
         } else {
             for local in &self.locals {
-                validate_type(&local.ty, 0)?;
+                validate_type_with_budget(&local.ty, 0, budget)?;
             }
-            validate_type(&self.result, 0)?;
+            validate_type_with_budget(&self.result, 0, budget)?;
         }
         if self.params.len() >= ir::MAX_PATTERN_PROJECTION_WORK {
             return Err("reference contract parameter resource limit exceeded".into());
@@ -2745,7 +2815,7 @@ impl Function {
         let parameter_types = self
             .params
             .iter()
-            .map(|param| self.place_ty(&place(*param)).cloned())
+            .map(|param| self.place_ty_with_budget(&place(*param), budget))
             .collect::<Result<Vec<_>, _>>()?;
         if facts.validated().is_none() {
             self.ref_contract.validate(&parameter_types, &self.result)?;
@@ -2772,7 +2842,7 @@ impl Function {
         for param in &self.params {
             origins = origins
                 .checked_add(concrete_carrier_count(
-                    self.place_ty(&place(*param))?,
+                    &self.place_ty_with_budget(&place(*param), budget)?,
                     facts,
                 )?)
                 .ok_or("reference origin overflow")?;
@@ -2823,14 +2893,14 @@ impl Function {
         }
         let mut loan_uses = vec![0usize; self.loan_sites.len()];
         for site in &self.loan_sites {
-            self.place_ty(&site.place)?;
+            self.place_ty_with_budget(&site.place, budget)?;
         }
-        if self.place_ty(&place(self.return_local))? != &self.result {
+        if self.place_ty_with_budget(&place(self.return_local), budget)? != self.result {
             return Err("CFG return local type mismatch".into());
         }
         let mut params = std::collections::HashSet::new();
         for &param in &self.params {
-            self.place_ty(&place(param))?;
+            self.place_ty_with_budget(&place(param), budget)?;
             if !params.insert(param) {
                 return Err("duplicate CFG parameter".into());
             }
@@ -2855,36 +2925,41 @@ impl Function {
                         value,
                         op,
                     } => {
-                        self.indexed_mutation_ty(array)?;
+                        self.indexed_mutation_ty(array, budget)?;
                         let element = self.indexed_element_ty(array, index, facts, scratch)?;
-                        self.compound_ty(*op, element, value, facts, scratch)?;
+                        self.compound_ty(*op, &element, value, facts, scratch)?;
                     }
                     Statement::IndexAssign {
                         array,
                         index,
                         value,
                     } => {
-                        if matches!(self.indexed_array_place_ty(array)?, Ty::Slice { .. }) {
-                            self.indexed_mutation_ty(array)?;
+                        if matches!(
+                            self.indexed_array_place_ty_with_budget(array, budget)?,
+                            Ty::Slice { .. }
+                        ) {
+                            self.indexed_mutation_ty(array, budget)?;
                         }
                         let element = self.indexed_element_ty(array, index, facts, scratch)?;
-                        if matches!(self.indexed_array_place_ty(array)?, Ty::Slice { .. })
-                            && !facts.must_copy_scratch(element, scratch)?
+                        if matches!(
+                            self.indexed_array_place_ty_with_budget(array, budget)?,
+                            Ty::Slice { .. }
+                        ) && !facts.must_copy_scratch(&element, scratch)?
                         {
                             return Err(
                                 "unsupported: mutable slice assignment of non-Copy elements".into(),
                             );
                         }
-                        self.require_operand_with_facts(value, element, facts, scratch)?;
+                        self.require_operand_with_facts(value, &element, facts, scratch)?;
                     }
                     Statement::IndexInspect { array, index } => {
                         self.indexed_element_ty(array, index, facts, scratch)?;
                     }
                     Statement::Inspect(place) => {
-                        self.place_ty(place)?;
+                        self.place_ty_with_budget(place, budget)?;
                     }
                     Statement::StorageLive(local) | Statement::StorageDead(local) => {
-                        self.place_ty(&place(*local))?;
+                        self.place_ty_with_budget(&place(*local), budget)?;
                     }
                     Statement::Assign { destination, value } => {
                         if matches!(value, Rvalue::SliceDataPointer { .. })
@@ -2904,8 +2979,8 @@ impl Function {
                         }
                         let got = self.rvalue_ty_with_facts(value, facts, scratch)?;
                         facts.validate_ty_scratch(&got, scratch)?;
-                        let want = self.place_ty(destination)?;
-                        if !coerces(&got, want) {
+                        let want = self.place_ty_with_budget(destination, budget)?;
+                        if !coerces(&got, &want) {
                             return Err("CFG assignment type mismatch".into());
                         }
                     }
@@ -2925,7 +3000,7 @@ impl Function {
                     then_block,
                     else_block,
                 } => {
-                    let Ty::Enum(ty) = self.place_ty(place)? else {
+                    let Ty::Enum(ty) = self.place_ty_with_budget(place, budget)? else {
                         return Err("CFG variant switch requires enum place".into());
                     };
                     ty.validate()?;
@@ -2990,12 +3065,12 @@ impl Function {
                     }
                     for ty in &signature.params {
                         if facts.validated().is_none() {
-                            validate_type(ty, 0)?;
+                            validate_type_with_budget(ty, 0, budget)?;
                         }
                         facts.validate_ty_scratch(ty, scratch)?;
                     }
                     if facts.validated().is_none() {
-                        validate_type(&signature.result, 0)?;
+                        validate_type_with_budget(&signature.result, 0, budget)?;
                     }
                     facts.validate_ty_scratch(&signature.result, scratch)?;
                     if facts.validated().is_none() {
@@ -3006,8 +3081,8 @@ impl Function {
                     for (arg, ty) in args.iter().zip(&signature.params) {
                         self.require_operand_with_facts(arg, ty, facts, scratch)?;
                     }
-                    let want = self.place_ty(destination)?;
-                    if !coerces(&signature.result, want) {
+                    let want = self.place_ty_with_budget(destination, budget)?;
+                    if !coerces(&signature.result, &want) {
                         return Err("CFG call destination type mismatch".into());
                     }
                     block(*next)?;
@@ -3970,7 +4045,7 @@ impl Lowerer<'_> {
 
     fn consume(&self, place: Place) -> Result<Operand, String> {
         if self.facts.must_copy_scratch(
-            self.result.place_ty(&place)?,
+            &self.result.place_ty_with_budget(&place, self.budget)?,
             &mut self.scratch.borrow_mut(),
         )? {
             Ok(Operand::Copy(place))
@@ -4004,7 +4079,8 @@ impl Lowerer<'_> {
         }
         let array = self.pattern_source(base)?;
         if !matches!(
-            self.result.indexed_array_place_ty(&array)?,
+            self.result
+                .indexed_array_place_ty_with_budget(&array, self.budget)?,
             Ty::Array { .. } | Ty::Slice { .. }
         ) {
             return Err("dynamic indexing requires array or slice place".into());
@@ -4104,20 +4180,24 @@ impl Lowerer<'_> {
                     // bounds-checked by that level's IndexInspect.
                     if matches!(part, Projection::ConstantIndex(_)) && !ends_in_runtime_row(&source)
                     {
-                        self.result.place_ty(&source)?;
+                        self.result.place_ty_with_budget(&source, self.budget)?;
                         self.statement(Statement::Inspect(source.clone()), Some(id));
                     }
                     part
                 }
                 PendingProjection::Dynamic(index, occurrence) => {
                     if !ends_in_runtime_row(&source)
-                        && !matches!(self.result.place_ty(&source)?, Ty::Array { .. })
+                        && !matches!(
+                            self.result.place_ty_with_budget(&source, self.budget)?,
+                            Ty::Array { .. }
+                        )
                     {
                         return Err("dynamic indexing requires array place".into());
                     }
                     let value = self.materialize_expression(index)?;
                     if !value.projection.is_empty()
-                        || self.result.place_ty(&value)? != &Ty::Int(IntTy::Usize)
+                        || self.result.place_ty_with_budget(&value, self.budget)?
+                            != Ty::Int(IntTy::Usize)
                     {
                         return Err("runtime place index requires a usize local".into());
                     }
@@ -4135,7 +4215,7 @@ impl Lowerer<'_> {
         }
         // Final structural metadata validation is not an additional value read.
         // Field-only pattern places remain addressable after partial moves.
-        self.result.place_ty(&source)?;
+        self.result.place_ty_with_budget(&source, self.budget)?;
         Ok(source)
     }
 
@@ -4144,7 +4224,7 @@ impl Lowerer<'_> {
         destination: &Place,
         origin: Option<ExprId>,
     ) -> Result<(), String> {
-        self.result.place_ty(destination)?;
+        self.result.place_ty_with_budget(destination, self.budget)?;
         self.inspect_prefix_parts(destination, origin)
     }
 
@@ -4155,7 +4235,8 @@ impl Lowerer<'_> {
         array: &Place,
         origin: Option<ExprId>,
     ) -> Result<(), String> {
-        self.result.indexed_array_place_ty(array)?;
+        self.result
+            .indexed_array_place_ty_with_budget(array, self.budget)?;
         self.inspect_prefix_parts(array, origin)
     }
 
@@ -4263,7 +4344,8 @@ impl Lowerer<'_> {
                     );
                 }
                 ir::TypedStmt::Declare { local } => {
-                    self.result.place_ty(&place(*local))?;
+                    self.result
+                        .place_ty_with_budget(&place(*local), self.budget)?;
                     if self.parameters.contains(local) {
                         return Err("declaration local aliases parameter".into());
                     }
@@ -4433,7 +4515,11 @@ impl Lowerer<'_> {
             // A non-unit destination with no source tail is on a structurally
             // dead continuation after return/break/continue. Do not manufacture
             // a unit value of a different semantic type there.
-            if self.result.place_ty(&destination)? == &Ty::Unit {
+            if self
+                .result
+                .place_ty_with_budget(&destination, self.budget)?
+                == Ty::Unit
+            {
                 self.assign(
                     destination,
                     Rvalue::Use(Operand::Constant(Constant::Unit)),
@@ -4608,7 +4694,9 @@ impl Lowerer<'_> {
                 );
             }
             ir::ExprKind::RefToDyn { reference } => {
-                let (object, boxed) = if let Some(object) = expression.ty.owned_box_object() {
+                let (object, boxed) = if let Some((_, object)) =
+                    expression.ty.owned_pointer_object()
+                {
                     (object, Some(std::sync::Arc::new(expression.ty.clone())))
                 } else {
                     let Ty::Ref { referent, .. } = &expression.ty else {
@@ -4809,7 +4897,16 @@ impl Lowerer<'_> {
                 if expression.ty != Ty::Enum(ty.clone()) || *variant >= ty.def().variants.len() {
                     return Err("invalid checked enum variant expression".into());
                 }
-                let mut operands = vec![None; ty.def().variants[*variant].fields.len()];
+                let mut operands = vec![
+                    None;
+                    ty.def().variants[*variant]
+                        .fields
+                        .read(
+                            self.budget
+                                .ok_or("enum field lowering requires its task budget")?
+                        )?
+                        .len()
+                ];
                 for &(index, value) in fields {
                     if index >= operands.len() || operands[index].is_some() {
                         return Err("invalid checked enum initializer field".into());
@@ -4949,7 +5046,16 @@ impl Lowerer<'_> {
                 if expression.ty != Ty::Struct(ty.clone()) {
                     return Err("checked struct expression type mismatch".into());
                 }
-                let mut operands = vec![None; ty.def().fields.len()];
+                let mut operands = vec![
+                    None;
+                    ty.def()
+                        .fields
+                        .read(
+                            self.budget
+                                .ok_or("struct field lowering requires its task budget")?
+                        )?
+                        .len()
+                ];
                 for &(index, value) in fields {
                     if index >= operands.len() || operands[index].is_some() {
                         return Err("invalid checked struct initializer field".into());
@@ -5478,7 +5584,7 @@ enum SourceLowering<'a> {
 // Slice descriptors may appear inside value aggregates. Their element and
 // mutability constraints are revalidated at each lowering boundary.
 fn validate_slice_position(ty: &Ty, facts: ir::FactsCtx<'_>) -> Result<(), String> {
-    if ty.contains_slice() {
+    if ty.contains_slice_optional(facts.validated().map(|authority| authority.budget()))? {
         ir::validate_slice_carrier_with_facts(ty, facts)?;
     }
     Ok(())
@@ -6630,7 +6736,7 @@ mod tests {
                     projection: vec![Projection::Deref]
                 })
                 .unwrap(),
-            &inner
+            inner
         );
         assert_eq!(
             function
@@ -6639,7 +6745,7 @@ mod tests {
                     projection: vec![Projection::Deref, Projection::Deref]
                 })
                 .unwrap(),
-            &scalar
+            scalar
         );
         let mut oversized = source;
         oversized.params = vec![LocalId(0); ir::MAX_LOAN_SITES / 2 + 1];
@@ -6904,7 +7010,7 @@ mod tests {
                 variants: vec![ir::VariantDef {
                     name: "A".into(),
                     shape: ir::VariantShape::Unit,
-                    fields: std::sync::Arc::from([]),
+                    fields: ir::NominalFields::from([]),
                 }]
                 .into(),
             })
@@ -7813,7 +7919,7 @@ mod tests {
                 projection: projection.clone(),
             };
             assert_eq!(
-                function.indexed_mutation_ty(&target).is_ok(),
+                function.indexed_mutation_ty(&target, None).is_ok(),
                 accepted,
                 "metadata {projection:?}"
             );
@@ -11584,7 +11690,7 @@ mod tests {
                 ir::VariantDef {
                     name: "B".into(),
                     shape: ir::VariantShape::Unit,
-                    fields: std::sync::Arc::from([]),
+                    fields: ir::NominalFields::from([]),
                 },
             ]
             .into(),

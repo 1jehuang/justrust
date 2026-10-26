@@ -42,9 +42,7 @@ pub(in crate::compiler) fn conversion_rows(
             if a.len() != b.len() {
                 return Err("closed signature conversion arity changed".into());
             }
-            if original != instantiated
-                || matches!(original.index, ir::NominalIndex::GraphRealization(_))
-            {
+            if original != instantiated || original.index.is_graph() {
                 budget.retain_bytes(std::mem::size_of::<ir::NominalCarrierMapping>())?;
                 rows.try_reserve(1)
                     .map_err(|_| "closed conversion inventory allocation failed")?;
@@ -323,10 +321,10 @@ mod tests {
         let authority = engine.authority();
         assert!(!reject_changed_rows(&body, authority, Some(rows.clone())));
         assert!(
-            rows.iter().all(
-                |row| row.conversions.iter().all(|c| c.original != c.instantiated
-                    || matches!(c.original.index, ir::NominalIndex::GraphRealization(_)))
-            ),
+            rows.iter().all(|row| row
+                .conversions
+                .iter()
+                .all(|c| c.original != c.instantiated || c.original.index.is_graph())),
             "issued conversions are only real changes or graph realizations"
         );
 

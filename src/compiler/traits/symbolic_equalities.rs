@@ -76,7 +76,7 @@ impl ValidatedTraitWorld {
             Ty::Ref { .. } | Ty::RawPtr { .. } => Ok(true),
             Ty::Slice { .. } | Ty::Str | Ty::Dyn(_) => Ok(false),
             Ty::Struct(nominal) => {
-                for field in nominal.def().fields.iter() {
+                for field in nominal_fields(&nominal.def().fields, &self.budget)?.iter() {
                     if !self.declared_rhs_proves_sized(&field.ty, rows, env, depth + 1)? {
                         return Ok(false);
                     }
@@ -85,7 +85,7 @@ impl ValidatedTraitWorld {
             }
             Ty::Enum(nominal) => {
                 for variant in nominal.def().variants.iter() {
-                    for field in variant.fields.iter() {
+                    for field in nominal_fields(&variant.fields, &self.budget)?.iter() {
                         if !self.declared_rhs_proves_sized(&field.ty, rows, env, depth + 1)? {
                             return Ok(false);
                         }
@@ -109,6 +109,7 @@ impl ValidatedTraitWorld {
                         args: Arc::from([]),
                     }),
                     ProofContext {
+                        original: None,
                         predicates: &self.empty,
                         phase: FactsPhase::Closed
                     },

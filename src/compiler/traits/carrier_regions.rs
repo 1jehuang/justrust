@@ -54,7 +54,7 @@ impl ValidatedTraitWorld {
         )?;
         Ok(
             descriptor.shared_slice_element() == Some(&Ty::Param(parameter))
-                && element == &Ty::Param(parameter),
+                && element == Ty::Param(parameter),
         )
     }
 
@@ -444,7 +444,7 @@ impl ValidatedTraitWorld {
                         && charged(
                             &self.budget,
                             ir::carrier_at(original, &row.location, &self.budget),
-                        )? == &Ty::Param(parameter) => {}
+                        )? == Ty::Param(parameter) => {}
                 _ => {
                     return Err(FactsError::invalid(
                         &self.budget,
@@ -476,45 +476,52 @@ impl ValidatedTraitWorld {
     fn rebase_source_location(
         &self,
         location: &ir::CarrierLocation,
-        mut original: &Ty,
-        mut actual: &Ty,
+        original: &Ty,
+        actual: &Ty,
     ) -> Result<ir::CarrierLocation> {
+        let mut original = original.clone();
+        let mut actual = actual.clone();
         let mut path = Vec::new();
         for step in location.path.0.iter() {
             charged(&self.budget, self.budget.charge_work(1))?;
             let mut rebased = step.clone();
-            fn descend(ty: &Ty, step: ir::CarrierStep) -> Option<&Ty> {
-                match (step, ty) {
-                    (ir::CarrierStep::Referent, Ty::Ref { referent, .. }) => Some(referent),
-                    (ir::CarrierStep::Field(index), _) => ty.field_ty(index),
+            fn descend(ty: &Ty, step: ir::CarrierStep, budget: &PlanBudget) -> Result<Option<Ty>> {
+                Ok(match (step, ty) {
+                    (ir::CarrierStep::Referent, Ty::Ref { referent, .. }) => {
+                        Some(referent.as_ref().clone())
+                    }
+                    (ir::CarrierStep::Field(index), _) => {
+                        charged(budget, ty.field_ty(index, budget))?
+                    }
                     (ir::CarrierStep::ConstantIndex(index), Ty::Array { element, len })
                         if index < *len =>
                     {
-                        Some(element)
+                        Some(element.as_ref().clone())
                     }
-                    (ir::CarrierStep::SliceElement, Ty::Slice { element }) => Some(element),
+                    (ir::CarrierStep::SliceElement, Ty::Slice { element }) => {
+                        Some(element.as_ref().clone())
+                    }
                     (ir::CarrierStep::VariantField { variant, field }, Ty::Enum(value))
                         if variant.owner == value.def().id =>
                     {
-                        value
-                            .def()
-                            .variants
-                            .get(variant.index)?
-                            .fields
-                            .get(field)
-                            .map(|f| &f.ty)
+                        match value.def().variants.get(variant.index) {
+                            Some(row) => nominal_fields(&row.fields, budget)?
+                                .get(field)
+                                .map(|f| f.ty.clone()),
+                            None => None,
+                        }
                     }
                     _ => None,
-                }
+                })
             }
-            let Some(next_original) = descend(original, step.clone()) else {
+            let Some(next_original) = descend(&original, step.clone(), &self.budget)? else {
                 return Err(FactsError::invalid(
                     &self.budget,
                     "source carrier path has foreign nominal identity",
                 ));
             };
             if let (ir::CarrierStep::VariantField { variant, field }, Ty::Enum(value)) =
-                (step.clone(), actual)
+                (step.clone(), &actual)
             {
                 rebased = ir::CarrierStep::VariantField {
                     variant: ir::VariantId {
@@ -524,7 +531,7 @@ impl ValidatedTraitWorld {
                     field,
                 };
             }
-            let Some(next_actual) = descend(actual, rebased.clone()) else {
+            let Some(next_actual) = descend(&actual, rebased.clone(), &self.budget)? else {
                 return Err(FactsError::invalid(
                     &self.budget,
                     "source carrier path does not normalize structurally",
@@ -541,7 +548,7 @@ impl ValidatedTraitWorld {
         charged(
             &self.budget,
             ir::carrier_at(
-                actual,
+                &actual,
                 &ir::CarrierLocation {
                     path: ir::CarrierPath(Arc::from([])),
                     channel: result.channel.clone(),

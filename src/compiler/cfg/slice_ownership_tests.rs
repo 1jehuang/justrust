@@ -316,7 +316,7 @@ fn typed_slice_index_returns_exact_independent_copy_element_values() {
             } = &statement.value
             {
                 reads += 1;
-                assert_eq!(function.place_ty(destination).unwrap(), expected);
+                assert_eq!(function.place_ty(destination).unwrap(), expected.clone());
                 assert_eq!(function.operand_ty(index).unwrap(), Ty::Int(IntTy::Usize));
                 let (Operand::Copy(handle), Operand::Copy(subscript)) = (slice, index) else {
                     panic!("whole copied snapshots required")

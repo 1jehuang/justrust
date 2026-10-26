@@ -46,6 +46,16 @@ fn iterator_zip_matches_stock() {
         "zip",
         &[
             Case {
+                name: "copied_zip_lazy_actual",
+                source: r#"fn main(){let values=vec![1i32,2,3];let pairs:Vec<(i32,char)>=values.iter().copied().zip("abc".chars()).collect();println!("{:?}",pairs);}"#,
+                expect: Expect::Run("[(1, 'a'), (2, 'b'), (3, 'c')]\n"),
+            },
+            Case {
+                name: "copied_zip_wrong_projected_item",
+                source: r#"fn main(){let values=vec![1i32,2,3];let _:Vec<(i32,bool)>=values.iter().copied().zip("abc".chars()).collect();}"#,
+                expect: Expect::Invalid("E0277"),
+            },
+            Case {
                 name: "conversion_at_construction",
                 source: r#"struct Bag; impl IntoIterator for Bag {type Item=i32;type IntoIter=std::ops::Range<i32>;fn into_iter(self)->Self::IntoIter{println!("converted");1i32..3i32}} fn main(){let z=(5i32..8i32).zip(Bag);println!("created");let v:Vec<(i32,i32)>=z.collect();println!("{:?}",v);}"#,
                 expect: Expect::Run("converted\ncreated\n[(5, 1), (6, 2)]\n"),

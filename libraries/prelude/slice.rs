@@ -76,6 +76,7 @@ impl<T> SliceMethods for [T] {
     fn is_empty(&self) -> bool {
         self.len() == 0usize
     }
+
     /// Both indices are bounds-checked (stock's index panic) before any write.
     fn swap(&mut self, a: usize, b: usize) {
         let pa = &mut self[a] as *mut T;
@@ -84,6 +85,27 @@ impl<T> SliceMethods for [T] {
             let value = *pa;
             *pa = *pb;
             *pb = value;
+        }
+    }
+}
+
+/// Mutable element-returning methods retain the receiver's exact lifetime
+/// without an associated-type projection in the returned slice carriers.
+pub trait SliceMutRefMethods<'a, T> {
+    fn split_at_mut(self, mid: usize) -> (&'a mut [T], &'a mut [T]);
+}
+
+impl<'a, T> SliceMutRefMethods<'a, T> for &'a mut [T] {
+    fn split_at_mut(self, mid: usize) -> (&'a mut [T], &'a mut [T]) {
+        let len = self.len();
+        assert!(mid <= len);
+        let data = __justrust_slice_as_mut_ptr!(self);
+        // The checked midpoint partitions one allocation into adjacent,
+        // nonoverlapping ranges. Both returned loans retain the receiver's
+        // lifetime, including when either range is empty.
+        unsafe {
+            let right = <*mut T as super::ptr::MutPtr<T>>::add(data, mid);
+            (from_raw_parts_mut(data, mid), from_raw_parts_mut(right, len - mid))
         }
     }
 }

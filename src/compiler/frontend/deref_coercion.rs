@@ -1,6 +1,7 @@
 //! Deref coercion at expected-type sites: `&S` where `S: Deref<Target = T>`
 //! coerces to `&T`, repeatedly (`&Box<Box<T>>` -> `&T`), exactly like stock
-//! rustc. Each step is an ordinary proven `Deref::deref` trait call.
+//! rustc. Each step is an ordinary proven `Deref::deref` or
+//! `DerefMut::deref_mut` trait call, according to the required carrier.
 use super::*;
 
 /// Steps per occurrence; each has its own inventoried source site.
@@ -25,7 +26,7 @@ pub(super) fn site(pointer: usize, step: usize) -> usize {
 }
 
 impl type_check::Checker<'_> {
-    /// Coerce checked `value: &S` to `expected: &T` through Deref, or `None`
+    /// Coerce a checked reference through Deref or DerefMut, or `None`
     /// when no Deref chain reaches the expected referent.
     pub(super) fn deref_coercion(
         &mut self,
@@ -34,7 +35,7 @@ impl type_check::Checker<'_> {
         expected: &ir::Ty,
     ) -> Result<Option<ir::ExprId>, String> {
         let ir::Ty::Ref {
-            kind: ir::BorrowKind::Shared,
+            kind,
             referent: want,
         } = expected
         else {
@@ -44,7 +45,11 @@ impl type_check::Checker<'_> {
         // not a fresh borrow of its pointee. The ordinary Deref expression
         // carries the original nested provenance into CFG ownership analysis.
         let mut builtin = value;
-        for _ in 0..MAX_DEREF_STEPS {
+        for _ in 0..if *kind == ir::BorrowKind::Shared {
+            MAX_DEREF_STEPS
+        } else {
+            0
+        } {
             let ir::Ty::Ref {
                 kind: ir::BorrowKind::Shared,
                 referent,
@@ -83,9 +88,16 @@ impl type_check::Checker<'_> {
             });
             builtin = id;
         }
-        let ir::Ty::Ref { referent: have, .. } = &self.exprs[value.0].ty else {
+        let ir::Ty::Ref {
+            kind: actual_kind,
+            referent: have,
+        } = &self.exprs[value.0].ty
+        else {
             return Ok(None);
         };
+        if *kind == ir::BorrowKind::Mut && *actual_kind != ir::BorrowKind::Mut {
+            return Ok(None);
+        }
         if !candidate(source)
             || have == want
             || !matches!(have.as_ref(), ir::Ty::Struct(_) | ir::Ty::Enum(_))
@@ -97,17 +109,29 @@ impl type_check::Checker<'_> {
             .plan
             .clone()
             .ok_or("deref coercion requires registry")?;
-        let Ok((declaration, ident)) = self.operator_trait("ops", "Deref", "deref") else {
+        let (trait_name, method_name) = if *kind == ir::BorrowKind::Mut {
+            ("DerefMut", "deref_mut")
+        } else {
+            ("Deref", "deref")
+        };
+        let Ok((declaration, ident)) = self.operator_trait("ops", trait_name, method_name) else {
             return Ok(None);
         };
         let mut current = value;
         for step in 1..=MAX_DEREF_STEPS + 1 {
             plan.budget.charge_work(1)?;
-            let ir::Ty::Ref { referent, .. } = &self.exprs[current.0].ty else {
+            let ir::Ty::Ref {
+                kind: current_kind,
+                referent,
+            } = &self.exprs[current.0].ty
+            else {
                 return Ok(None);
             };
+            if *kind == ir::BorrowKind::Mut && *current_kind != ir::BorrowKind::Mut {
+                return Ok(None);
+            }
             if referent == want {
-                return Ok(Some(current));
+                return Ok((*current_kind == *kind).then_some(current));
             }
             if step > MAX_DEREF_STEPS
                 || !matches!(referent.as_ref(), ir::Ty::Struct(_) | ir::Ty::Enum(_))

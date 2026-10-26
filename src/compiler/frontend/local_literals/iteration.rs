@@ -80,16 +80,36 @@ impl<'s> Solver<'_, '_, 's> {
     }
 
     fn iterator_item(&mut self, source: Term) -> Result<Term, String> {
-        if let Some(ty) = self.resolve(source, 0)? {
-            let plan = self.checker.signatures.plan()?;
-            if let Some(item) = plan.iterator_item_type(&ty, self.checker.facts())? {
-                return self.fixed(item);
-            }
+        if let Some(item) = self.resolved_iterator_item(source)? {
+            return self.fixed(item);
         }
         let result = self.fresh()?;
         self.delayed_results.push(result);
         self.iterator_items.push(Pending::Ordinary(source, result));
         Ok(result)
+    }
+
+    fn resolved_iterator_item(&self, source: Term) -> Result<Option<ir::Ty>, String> {
+        let Some(ty) = self.resolve(source, 0)? else {
+            return Ok(None);
+        };
+        let plan = self.checker.signatures.plan()?;
+        let item = plan.iterator_item_type(&ty, self.checker.facts())?;
+        // A resolved, non-closure source with finalized numeric choices has
+        // all its graph inputs. The canonical lookup's None is then an exact
+        // failed IntoIterator obligation, not an inference dependency.
+        // Unknown terms, provisional defaults, closure-owned metadata and an
+        // absent native trait remain pending rather than being reclassified.
+        if item.is_none()
+            && !self.contains_callable(source, 0)?
+            && self.manifest_ready(&[source], 0)?
+            && plan.into_iterator_trait_id()?.is_some()
+        {
+            return Err(self.user_error(
+                "E0277: loop source does not satisfy the IntoIterator implementation bounds",
+            ));
+        }
+        Ok(item)
     }
 
     pub(super) fn solve_iterator_items(&mut self) -> Result<bool, String> {
@@ -99,14 +119,7 @@ impl<'s> Solver<'_, '_, 's> {
             self.checker.infer_work(0)?;
             let (item, result) = match &pending {
                 Pending::Ordinary(source, result) => {
-                    let item = match self.resolve(*source, 0)? {
-                        Some(ty) => self
-                            .checker
-                            .signatures
-                            .plan()?
-                            .iterator_item_type(&ty, self.checker.facts())?,
-                        None => None,
-                    };
+                    let item = self.resolved_iterator_item(*source)?;
                     (item, *result)
                 }
                 Pending::ArrayMethod {

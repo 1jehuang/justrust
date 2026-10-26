@@ -1,5 +1,137 @@
 use super::*;
 
+const ARGUMENT_STR_SOURCE: &str = "struct Item{name:String}fn inspect(items:Vec<&Item>){let _names:Vec<&str>=items.iter().map(|i|i.name.as_str()).collect();}fn main(){}";
+
+#[test]
+fn shared_argument_result_replays_exact_tuple_channel_for_all_modes() {
+    let (plan, checked, _) = fixture_graph_source(ARGUMENT_STR_SOURCE);
+    let world = plan.trait_world().unwrap();
+    let receipt = checked.ty.result_receipt().unwrap();
+    let input = receipt.argument_origin().unwrap();
+    assert_eq!(input.argument, 0);
+    assert_eq!(
+        input.depth, 1,
+        "&&Item must return through inner &Item, not temporary outer reference"
+    );
+    for mode in [
+        ir::ClosureKind::Fn,
+        ir::ClosureKind::FnMut,
+        ir::ClosureKind::FnOnce,
+    ] {
+        let facts = world
+            .closure_callable_facts_for(checked.ty.clone(), mode)
+            .unwrap();
+        let body = checked.body_for(mode).unwrap();
+        validate_source(receipt, &body, &facts).unwrap();
+        let view = facts.carrier_contract(ir::SignatureSubject::Body).unwrap();
+        view.validate_for(&facts).unwrap();
+        assert_eq!(view.contract().results.len(), 1);
+        let sources = &view.contract().results[0].sources;
+        assert_eq!(sources.len(), 1);
+        assert_eq!(sources[0].param, 1);
+        assert_eq!(
+            sources[0].location.path.0.as_ref(),
+            &[ir::CarrierStep::Field(0)]
+        );
+        assert_eq!(
+            sources[0].location.channel,
+            ir::CarrierChannel::Fixed(ir::ReferencePosition { depth: 1 })
+        );
+        for mutation in 0..5 {
+            let mut forged = body.as_ref().clone();
+            match mutation {
+                0 => {
+                    let ir::ExprKind::Borrow { kind, .. } = &mut forged.exprs[input.borrow.0].kind
+                    else {
+                        panic!("borrow")
+                    };
+                    *kind = ir::BorrowKind::Mut;
+                }
+                1 => {
+                    let ir::ExprKind::Borrow { place, .. } = &mut forged.exprs[input.borrow.0].kind
+                    else {
+                        panic!("borrow")
+                    };
+                    place.projection.remove(0);
+                }
+                2 => {
+                    let ir::TypedStmt::Let { local, .. } = &mut forged.body.statements[0] else {
+                        panic!("entry")
+                    };
+                    *local = forged.params[0];
+                }
+                3 => {
+                    let ir::ExprKind::Call { args, .. } = &mut forged.exprs[receipt.tail().0].kind
+                    else {
+                        panic!("call")
+                    };
+                    args[0] = receipt.tail();
+                }
+                4 => forged.call_evidence = Arc::from([]),
+                _ => unreachable!(),
+            }
+            assert!(
+                validate_source(receipt, &forged, &facts).is_err(),
+                "mode={mode:?} mutation={mutation}"
+            );
+            assert!(
+                facts
+                    .validate_closure_body_source(&checked.ty, mode, &forged)
+                    .is_err()
+            );
+        }
+    }
+    let (foreign_plan, foreign_closure, _) = fixture_graph_source(ARGUMENT_STR_SOURCE);
+    let foreign = foreign_plan
+        .trait_world()
+        .unwrap()
+        .closure_callable_facts_for(foreign_closure.ty.clone(), ir::ClosureKind::Fn)
+        .unwrap();
+    assert!(
+        validate_source(
+            receipt,
+            &checked.body_for(ir::ClosureKind::Fn).unwrap(),
+            &foreign
+        )
+        .is_err()
+    );
+}
+
+fn fixture_graph_source(
+    text: &str,
+) -> (PlanCtx, super::super::check::CheckedClosure, ir::PlanBudget) {
+    use crate::compiler::{
+        ClosureBodiesFact, CompilerProvider, Input, Snapshot, TemplateBodyFact, keys,
+    };
+    use crate::engine::Engine;
+    let budget = ir::PlanBudget::default();
+    let snapshot = Arc::new(Snapshot {
+        input: Input::Text(text.into()),
+        source_options: crate::compiler::source::SourceOptions::default(),
+        budget: budget.clone(),
+    });
+    let engine = Engine::new(CompilerProvider(snapshot));
+    let signatures = engine.request(keys::SignaturesDebtRoot.key());
+    let parent = engine.request(keys::item(crate::compiler::TEMPLATE_BODY, 0));
+    engine.run(1).unwrap();
+    let plan = signatures.fact::<PlanCtx>(0).unwrap();
+    parent.completion().unwrap();
+    let template = parent.fact::<TemplateBodyFact>(0).unwrap();
+    let closures = parent.fact::<ClosureBodiesFact>(1).unwrap();
+    let checked = closures
+        .publication
+        .as_ref()
+        .unwrap()
+        .restore_closure(
+            &plan,
+            template.publication.as_ref().unwrap(),
+            closures.bodies.first().unwrap(),
+            &budget,
+        )
+        .unwrap();
+    (plan.as_ref().clone(), checked, budget)
+}
+
 fn fixture() -> (PlanCtx, super::super::check::CheckedClosure, ir::PlanBudget) {
     fixture_source(
         "fn compose<A,B,C>(f:impl Fn(A)->B,g:impl Fn(B)->C){let composed=move |x:A|g(f(x));}fn main(){}",

@@ -382,7 +382,7 @@ fn generic_carrier_internal_nominal_transport_does_not_relax_source_actuals() {
     );
     let caller =
         type_callable_with_plan(&p, plan.function_decl(1).unwrap(), &plan, &budget).unwrap();
-    assert!(caller.exprs.iter().any(|expr| matches!(&expr.ty, ir::Ty::Enum(ty) if matches!(ty.def().variants[0].fields[0].ty, ir::Ty::Ref { .. }))));
+    assert!(caller.exprs.iter().any(|expr| matches!(&expr.ty, ir::Ty::Enum(ty) if matches!(ty.def().variants[0].fields.read(&budget).unwrap()[0].ty, ir::Ty::Ref { .. }))));
     for source in [
         "struct Wrap<T>{value:T}fn main(){let x=1;let w=Wrap::<&i32>{value:&x};}",
         "fn id<T>(x:T)->T{x}fn main(){let x=1i32;let r=id::<&i32>(&x);}",

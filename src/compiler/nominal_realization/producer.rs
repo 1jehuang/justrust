@@ -2,6 +2,7 @@
 //! child reads. Recursive source schemas are explicitly unsupported before a
 //! closed node can wait on itself, never hidden behind an interner lookup.
 use super::*;
+mod recursive_route;
 use coordinates::Term;
 use std::future::Future;
 use std::pin::Pin;
@@ -63,7 +64,7 @@ pub(super) fn key(
     RealizationKey::encode(world, declaration, &encoded, words)
 }
 
-fn decode(key: &Key, b: &ir::PlanBudget) -> Result<(u64, ir::DeclId, Vec<Term>), Error> {
+pub(super) fn decode(key: &Key, b: &ir::PlanBudget) -> Result<(u64, ir::DeclId, Vec<Term>), Error> {
     if key.kind != KIND
         || key.params.len() < 6
         || key.params[0] != VERSION
@@ -110,13 +111,31 @@ fn decode(key: &Key, b: &ir::PlanBudget) -> Result<(u64, ir::DeclId, Vec<Term>),
     Ok((key.params[2], declaration, actuals))
 }
 
-fn source_fields(source: &ir::Ty) -> Result<Vec<(FieldCoordinate, ir::Ty)>, Error> {
+pub(super) fn source_fields(
+    source: &ir::Ty,
+    b: &ir::PlanBudget,
+) -> Result<Vec<(FieldCoordinate, ir::Ty)>, Error> {
     let mut out = Vec::new();
     match source {
         ir::Ty::Struct(n) => {
+            b.retain_bytes(
+                n.def()
+                    .fields
+                    .len()
+                    .checked_mul(std::mem::size_of::<(FieldCoordinate, ir::Ty)>())
+                    .ok_or_else(|| Error::new("source field inventory size overflow"))?,
+            )
+            .map_err(Error::new)?;
             out.try_reserve_exact(n.def().fields.len())
                 .map_err(|_| Error::new("nominal field inventory allocation failed"))?;
-            for (field, f) in n.def().fields.iter().enumerate() {
+            for (field, f) in n
+                .def()
+                .fields
+                .read(b)
+                .map_err(Error::new)?
+                .iter()
+                .enumerate()
+            {
                 out.push((
                     FieldCoordinate {
                         variant: None,
@@ -128,9 +147,16 @@ fn source_fields(source: &ir::Ty) -> Result<Vec<(FieldCoordinate, ir::Ty)>, Erro
         }
         ir::Ty::Enum(n) => {
             for (variant, v) in n.def().variants.iter().enumerate() {
+                b.retain_bytes(
+                    v.fields
+                        .len()
+                        .checked_mul(std::mem::size_of::<(FieldCoordinate, ir::Ty)>())
+                        .ok_or_else(|| Error::new("source field inventory size overflow"))?,
+                )
+                .map_err(Error::new)?;
                 out.try_reserve_exact(v.fields.len())
                     .map_err(|_| Error::new("nominal field inventory allocation failed"))?;
-                for (field, f) in v.fields.iter().enumerate() {
+                for (field, f) in v.fields.read(b).map_err(Error::new)?.iter().enumerate() {
                     out.push((
                         FieldCoordinate {
                             variant: Some(variant),
@@ -200,36 +226,6 @@ fn declarations(
     Ok(())
 }
 
-/// A local dependency-path check over exact typed source schemas. No closed
-/// child is requested until this walk excludes an unsupported source cycle.
-fn acyclic<'a>(
-    cx: &'a Context,
-    source: ReadSource,
-    mut path: Vec<ir::DeclId>,
-    b: &'a ir::PlanBudget,
-) -> Pending<'a, ()> {
-    Box::pin(async move {
-        b.check_depth(path.len()).map_err(Error::new)?;
-        if path.contains(&source.declaration()) {
-            return Err(Error::new(
-                "unsupported: recursive nominal field realization requires an explicit recursive layout protocol",
-            ));
-        }
-        path.push(source.declaration());
-        let mut needed = Vec::new();
-        for (_, field) in source_fields(source.template())? {
-            declarations(&field, &mut needed, b, 0)?;
-        }
-        let sources = read_sources(cx, &needed).await?;
-        let branches = sources
-            .into_iter()
-            .map(|s| acyclic(cx, s, path.clone(), b))
-            .collect();
-        all(branches).await?;
-        Ok(())
-    })
-}
-
 fn resolve<'a>(
     cx: &'a Context,
     term: Term,
@@ -295,7 +291,7 @@ fn resolve<'a>(
             }
             Term::Nominal(declaration, args) => {
                 let key = key(world, declaration, &args, b)?;
-                let mut read = read_manifest(cx, &[key]).await?;
+                let mut read = read_manifest(cx, &[key], b).await?;
                 read.pop()
                     .ok_or_else(|| Error::new("nominal child read omitted its output"))?
                     .definition()?
@@ -451,7 +447,10 @@ pub(super) async fn run(cx: &Context, key_words: Key) -> Result<(), Error> {
     let source = sources
         .pop()
         .ok_or_else(|| Error::new("nominal source read omitted its output"))?;
-    acyclic(cx, source.clone(), Vec::new(), b).await?;
+    if recursive_route::needs_symbolic(cx, source.clone(), &terms, b).await? {
+        return recursive_route::publish_component_alias(cx, RealizationKey(key_words), &world)
+            .await;
+    }
     let actuals: Arc<[ir::Ty]> = all(terms
         .into_iter()
         .map(|t| resolve(cx, t, world_key, b, 0))
@@ -461,7 +460,7 @@ pub(super) async fn run(cx: &Context, key_words: Key) -> Result<(), Error> {
     let input = world
         .close_nominal_input(declaration, source.proof(), &actuals)
         .map_err(|e| Error::new(e.into_legacy_diagnostic(b)))?;
-    let inventory = source_fields(source.template())?;
+    let inventory = source_fields(source.template(), b)?;
     let normalized = all(inventory
         .iter()
         .map(|(_, t)| field(cx, t.clone(), &input, &world, 0))
@@ -487,7 +486,7 @@ pub(super) async fn run(cx: &Context, key_words: Key) -> Result<(), Error> {
     };
     cx.publish_fact(
         0,
-        RealizedNominal {
+        NominalPublication::Acyclic(Arc::new(RealizedNominal {
             key: RealizationKey(key_words),
             identity,
             declaration,
@@ -499,6 +498,6 @@ pub(super) async fn run(cx: &Context, key_words: Key) -> Result<(), Error> {
             fields: rows.into(),
             normalization: dependencies.into(),
             input,
-        },
+        })),
     )
 }

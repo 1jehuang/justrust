@@ -59,6 +59,7 @@ impl Fixture {
                 name: "dep".into(),
                 root: input,
                 cfg: source::CfgSet::native_x86_64_linux(),
+                cap_lints_allow: false,
             });
             extern_args.extend(["--extern".into(), format!("dep={}", output.display())]);
         }

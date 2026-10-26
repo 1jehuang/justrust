@@ -99,7 +99,7 @@ impl ValidatedTraitWorld {
         Ok(Some(Arc::new(view)))
     }
 
-    fn closure_result_carrier_parts(
+    pub(super) fn closure_result_carrier_parts(
         &self,
         closure: Arc<ir::ClosureTy>,
         mode: ir::ClosureKind,
@@ -125,30 +125,122 @@ impl ValidatedTraitWorld {
                 "closure result lacks its parent-sealed source receipt",
             )
         })?;
-        let (required_call, _) = self.realize_closure_result_witness(&closure, receipt)?;
-        let required_signature = self.instantiate_trait_signature(&required_call, facts)?;
-        let original_call = Callee::TraitItem(required_call);
-        let original_view = self.carrier_contract(SignatureSubject::Call(&original_call), facts)?;
-        let locations = charged(
-            &self.budget,
-            ir::carrier_locations(&signature.result, &self.budget),
-        )?;
-        if locations.len() != 1 || !matches!(signature.result, Ty::Param(_)) {
-            return Err(FactsError::unsupported(
+        if receipt.argument_origin().is_none() {
+            let (required_call, _) = self.realize_closure_result_witness(&closure, receipt)?;
+            let required_signature = self.instantiate_trait_signature(&required_call, facts)?;
+            let original_call = Callee::TraitItem(required_call);
+            let original_view =
+                self.carrier_contract(SignatureSubject::Call(&original_call), facts)?;
+            let locations = charged(
                 &self.budget,
-                "closure restricted result needs one rigid root equality-dependent family",
-            ));
-        }
-        for location in locations.iter() {
-            original_view.validate_restricted_result(
-                facts,
-                SignatureSubject::Call(&original_call),
-                &required_signature,
-                location,
+                ir::carrier_locations(&signature.result, &self.budget),
             )?;
+            if locations.len() != 1 || !matches!(signature.result, Ty::Param(_)) {
+                return Err(FactsError::unsupported(
+                    &self.budget,
+                    "closure restricted result needs one rigid root equality-dependent family",
+                ));
+            }
+            for location in locations.iter() {
+                original_view.validate_restricted_result(
+                    facts,
+                    SignatureSubject::Call(&original_call),
+                    &required_signature,
+                    location,
+                )?;
+            }
         }
         let source_regions = self.validate_source_regions(closure.provider(), &signature)?;
-        let (contract, regions) = self.derive_carriers(&signature, &source_regions)?;
+        let (mut contract, regions) = self.derive_carriers(&signature, &source_regions)?;
+        if let Some(input) = receipt.argument_origin() {
+            let source_ty = closure.params().get(input.argument).ok_or_else(|| {
+                FactsError::invalid(
+                    &self.budget,
+                    "closure argument result names a foreign parameter",
+                )
+            })?;
+            let mut ty = source_ty;
+            for _ in 0..=input.depth {
+                charged(&self.budget, self.budget.charge_work(1))?;
+                let Ty::Ref {
+                    kind: ir::BorrowKind::Shared,
+                    referent,
+                } = ty
+                else {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "closure argument result changed its shared reference channel",
+                    ));
+                };
+                ty = referent.as_ref();
+            }
+            retain::<ir::CarrierStep>(&self.budget, 1)?;
+            charged(
+                &self.budget,
+                self.budget.retain_bytes(2 * std::mem::size_of::<usize>()),
+            )?;
+            let source = ir::InputCarrier {
+                param: 1,
+                location: ir::CarrierLocation {
+                    path: ir::CarrierPath(Arc::from([ir::CarrierStep::Field(input.argument)])),
+                    channel: ir::CarrierChannel::Fixed(ir::ReferencePosition {
+                        depth: input.depth,
+                    }),
+                },
+            };
+            charged(&self.budget, self.budget.charge_work(contract.inputs.len()))?;
+            if !contract.inputs.contains(&source) {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "closure argument result is outside the actual tuple carrier domain",
+                ));
+            }
+            let callee =
+                charged(&self.budget, receipt.argument_callee(&self.budget))?.ok_or_else(|| {
+                    FactsError::invalid(
+                        &self.budget,
+                        "closure argument result lacks checked source callee",
+                    )
+                })?;
+            let Callee::Direct(target) = &callee else {
+                unreachable!()
+            };
+            let proof = self.discharge_direct(target, facts)?;
+            let view = self.carrier_contract(SignatureSubject::Call(&callee), facts)?;
+            view.validate_for(facts)?;
+            charged(
+                &self.budget,
+                self.budget.retain_bytes(2 * std::mem::size_of::<usize>()),
+            )?;
+            let root = ir::CarrierLocation {
+                path: ir::CarrierPath(Arc::from([])),
+                channel: ir::CarrierChannel::Fixed(ir::ReferencePosition { depth: 0 }),
+            };
+            let incoming = ir::InputCarrier {
+                param: 0,
+                location: root.clone(),
+            };
+            if !self.eq_ty(&proof.signature.result, &signature.result, 0)?
+                || view.contract().results.len() != 1
+                || view.contract().results[0].location != root
+                || view.contract().results[0].sources.as_ref() != [incoming]
+            {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "closure argument result changed canonical callee return authority",
+                ));
+            }
+            retain::<ir::CarrierReturn>(&self.budget, 1)?;
+            retain::<ir::InputCarrier>(&self.budget, 1)?;
+            charged(
+                &self.budget,
+                self.budget.retain_bytes(4 * std::mem::size_of::<usize>()),
+            )?;
+            contract.results = Arc::from([ir::CarrierReturn {
+                location: root,
+                sources: Arc::from([source]),
+            }]);
+        }
         let origin = charged(
             &self.budget,
             ir::derive_signature_origin_schema(&signature, facts.env(), &self.budget),

@@ -155,6 +155,7 @@ impl ValidatedTraitWorld {
             ));
         }
         let context = ProofContext {
+            original: None,
             predicates: &facts.predicates,
             phase: facts.phase(),
         };
@@ -214,6 +215,7 @@ impl ValidatedTraitWorld {
         }
         self.validate_ref_in(application, facts.env(), None)?;
         let context = ProofContext {
+            original: None,
             predicates: &self.empty,
             phase: FactsPhase::Closed,
         };

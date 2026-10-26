@@ -325,7 +325,10 @@ impl Collector<'_> {
                         }
                     }
                     (Type::Slice(field), ir::Ty::Slice { element })
-                        if matches!(element.as_ref(), ir::Ty::Ref { .. } | ir::Ty::Param(_)) =>
+                        if matches!(
+                            element.as_ref(),
+                            ir::Ty::Ref { .. } | ir::Ty::Param(_) | ir::Ty::Tuple(_)
+                        ) =>
                     {
                         path.push(ir::CarrierStep::SliceElement);
                         self.walk(field, element, parameter, path, 0, depth + 1)?;
@@ -372,7 +375,7 @@ impl Collector<'_> {
         let (type_params, region_params, fields): (
             _,
             _,
-            Vec<(ir::CarrierStep, &FieldDecl, &ir::Ty)>,
+            Vec<(ir::CarrierStep, &FieldDecl, ir::Ty)>,
         ) = match semantic {
             ir::Ty::Struct(value) => {
                 let declaration = &self.registry.program.structs[info.source_index];
@@ -382,46 +385,43 @@ impl Collector<'_> {
                     declaration
                         .fields
                         .iter()
-                        .zip(value.def().fields.iter())
+                        .zip(value.def().fields.read(self.budget)?.iter())
                         .enumerate()
                         .map(|(index, (source, actual))| {
-                            (ir::CarrierStep::Field(index), source, &actual.ty)
+                            (ir::CarrierStep::Field(index), source, actual.ty.clone())
                         })
                         .collect(),
                 )
             }
             ir::Ty::Enum(value) => {
                 let declaration = &self.registry.program.enums[info.source_index];
-                (
-                    &declaration.type_params,
-                    &declaration.region_params,
-                    declaration
-                        .variants
+                let mut fields = Vec::new();
+                for (index, (source, actual)) in declaration
+                    .variants
+                    .iter()
+                    .zip(value.def().variants.iter())
+                    .enumerate()
+                {
+                    for (field, (source, ty)) in source
+                        .fields
                         .iter()
-                        .zip(value.def().variants.iter())
+                        .zip(actual.fields.read(self.budget)?.iter())
                         .enumerate()
-                        .flat_map(|(index, (source, actual))| {
-                            source
-                                .fields
-                                .iter()
-                                .zip(actual.fields.iter())
-                                .enumerate()
-                                .map(move |(field, (source, ty))| {
-                                    (
-                                        ir::CarrierStep::VariantField {
-                                            variant: ir::VariantId {
-                                                owner: value.def().id,
-                                                index,
-                                            },
-                                            field,
-                                        },
-                                        source,
-                                        &ty.ty,
-                                    )
-                                })
-                        })
-                        .collect(),
-                )
+                    {
+                        fields.push((
+                            ir::CarrierStep::VariantField {
+                                variant: ir::VariantId {
+                                    owner: value.def().id,
+                                    index,
+                                },
+                                field,
+                            },
+                            source,
+                            ty.ty.clone(),
+                        ));
+                    }
+                }
+                (&declaration.type_params, &declaration.region_params, fields)
             }
             _ => return Ok(()),
         };
@@ -465,7 +465,7 @@ impl Collector<'_> {
                 depth + 1,
             )?;
             path.push(step);
-            self.walk(&field, actual, parameter, path, 0, depth + 1)?;
+            self.walk(&field, &actual, parameter, path, 0, depth + 1)?;
             path.pop();
         }
         // Preserve first-visit source validation. Only a complete traversal

@@ -7,6 +7,40 @@ mod oracle;
 use oracle::{Case, Expect};
 
 #[test]
+fn closure_shared_argument_results_match_stock() {
+    oracle::check(
+        "closure_shared_argument_result",
+        &[
+            Case {
+                name: "inventory_reference_tuple_to_string_field",
+                source: "struct Item{name:String}fn main(){let a=Item{name:String::from(\"apple\")};let b=Item{name:String::from(\"pear\")};let items=vec![&a,&b];let names:Vec<&str>=items.iter().map(|i|i.name.as_str()).collect();println!(\"{} {}\",names[0],names[1]);}",
+                expect: Expect::Run("apple pear\n"),
+            },
+            Case {
+                name: "temporary_outer_iterator_borrow_does_not_shorten_inner_input",
+                source: "struct Item{name:String}fn main(){let item=Item{name:String::from(\"apple\")};let names:Vec<&str>;{let refs=vec![&item];names=refs.iter().map(|i|i.name.as_str()).collect();}println!(\"{}\",names[0]);}",
+                expect: Expect::Run("apple\n"),
+            },
+            Case {
+                name: "borrowed_field_cannot_escape_owned_iteration_argument",
+                source: "struct Item{name:String}fn main(){let items=vec![Item{name:String::from(\"apple\")}];let names:Vec<&str>=items.into_iter().map(|i|i.name.as_str()).collect();println!(\"{}\",names[0]);}",
+                expect: Expect::Invalid("E0515"),
+            },
+            Case {
+                name: "argument_origin_cannot_be_replaced_with_local_temporary",
+                source: "struct Item{name:String}fn main(){let item=Item{name:String::from(\"apple\")};let items=vec![&item];let names:Vec<&str>=items.iter().map(|i|{let local=String::from(\"pear\");local.as_str()}).collect();println!(\"{}\",names[0]);}",
+                expect: Expect::Invalid("E0515"),
+            },
+            Case {
+                name: "result_keeps_original_argument_field_borrow_live",
+                source: "struct Item{name:String}fn main(){let mut items=vec![Item{name:String::from(\"apple\")}];let names:Vec<&str>=items.iter().map(|i|i.name.as_str()).collect();items.clear();println!(\"{}\",names[0]);}",
+                expect: Expect::Invalid("E0502"),
+            },
+        ],
+    );
+}
+
+#[test]
 fn nested_scalar_closures_use_outer_source_publication() {
     oracle::check(
         "nested_scalar_publication",

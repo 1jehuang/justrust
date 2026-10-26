@@ -1206,6 +1206,14 @@ impl<'a, T: Clone, I: Iterator<Item = &'a T>> Iterator for Cloned<I> {
     }
 }
 
+impl<'a, T: Clone, I: Iterator<Item = &'a T>> IntoIterator for Cloned<I> {
+    type Item = T;
+    type IntoIter = Self;
+    fn into_iter(self) -> Self {
+        self
+    }
+}
+
 pub struct Map<I, F> {
     iterator: I,
     f: F,

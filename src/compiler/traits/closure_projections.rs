@@ -30,6 +30,7 @@ impl ValidatedTraitWorld {
             })?;
             let caller = self.predicate_env(scope.binder().declaration)?;
             let context = ProofContext {
+                original: None,
                 predicates: &caller,
                 phase: FactsPhase::Schema,
             };

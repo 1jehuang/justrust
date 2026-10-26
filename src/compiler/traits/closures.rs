@@ -138,14 +138,26 @@ impl ValidatedTraitWorld {
             self.validate_ty_metadata_with(ty, env, 0, &mut replays)?;
         }
         if let Some(receipt) = closure.result_receipt() {
+            let expected_result = if receipt.argument_origin().is_some() {
+                charged(
+                    &self.budget,
+                    receipt.realize_result(
+                        &|_| {
+                            Err(
+                                "fixed closure argument result cannot contain owner parameters"
+                                    .into(),
+                            )
+                        },
+                        &self.budget,
+                    ),
+                )?
+            } else {
+                self.realize_closure_result_witness(closure, receipt)?.1
+            };
             if receipt.owner() != closure.owner()
                 || receipt.provider() != closure.provider()
                 || receipt.site() != closure.site()
-                || !self.eq_ty(
-                    &self.realize_closure_result_witness(closure, receipt)?.1,
-                    closure.result(),
-                    0,
-                )?
+                || !self.eq_ty(&expected_result, closure.result(), 0)?
             {
                 return Err(FactsError::invalid(
                     &self.budget,
@@ -156,7 +168,10 @@ impl ValidatedTraitWorld {
                 &self.budget,
                 ir::carrier_locations(closure.result(), &self.budget),
             )?;
-            if !result_channels.is_empty() && !matches!(closure.result(), Ty::Param(_)) {
+            if !result_channels.is_empty()
+                && !matches!(closure.result(), Ty::Param(_))
+                && receipt.argument_origin().is_none()
+            {
                 return Err(FactsError::unsupported(
                     &self.budget,
                     "closure restricted result cannot admit reference-bearing executable substitution",

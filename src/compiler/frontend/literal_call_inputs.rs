@@ -2,6 +2,23 @@
 //! No locals, calls, casts, projections or mutable borrows enter this path.
 use super::*;
 
+pub(super) fn copy_arguments(
+    arguments: &[Expr],
+    budget: &ir::PlanBudget,
+) -> Result<Option<Vec<Expr>>, FactsError> {
+    if arguments.is_empty() {
+        return Ok(None);
+    }
+    let mut copied = Vec::new();
+    for argument in arguments {
+        let Some(literal) = copy_literal(argument, budget, 0)? else {
+            return Ok(None);
+        };
+        sr::push(&mut copied, literal, budget)?;
+    }
+    Ok(Some(copied))
+}
+
 pub(super) fn copy_literal(
     source: &Expr,
     budget: &ir::PlanBudget,
@@ -16,6 +33,8 @@ pub(super) fn copy_literal(
             Expr::Str(text.clone())
         }
         Expr::Bool(value) => Expr::Bool(*value),
+        // A written suffix fixes the scalar input without expected-type help.
+        Expr::Integer(literal) if literal.suffix.is_some() => Expr::Integer(literal.clone()),
         Expr::Char(value) => Expr::Char(*value),
         Expr::BorrowValue {
             kind: ir::BorrowKind::Shared,
@@ -127,6 +146,9 @@ fn compare(
             a == b
         }
         (Expr::Bool(a), ir::ExprKind::Bool(b)) => a == b,
+        (Expr::Integer(literal), ir::ExprKind::Int(value)) => {
+            resolve_integer(literal, false, None).map_err(|e| source_error(budget, &e))? == *value
+        }
         (Expr::Char(a), ir::ExprKind::Char(b)) => u32::from(*a) == b.value,
         (Expr::Struct { fields: af, .. }, ir::ExprKind::Struct { ty: b, fields: bf }) => {
             if !source_type_equal(ty, &ir::Ty::Struct(b.clone()), facts, budget)?
@@ -214,9 +236,9 @@ fn compare(
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn validate(
-    source: &Expr,
+    sources: &[Expr],
     actual: &ir::CheckedFunction,
-    argument: ir::ExprId,
+    arguments: &[ir::ExprId],
     target: &ir::CallTarget,
     signature: &ir::Signature,
     view: &tr::OriginalCallableView,
@@ -226,22 +248,45 @@ pub(super) fn validate(
     temporaries: &HashMap<ir::ExprId, ir::LocalId>,
     budget: &ir::PlanBudget,
 ) -> Result<(), FactsError> {
-    if signature.params.len() != 1
-        || !ir::carrier_locations(&signature.result, budget)
-            .map_err(|e| source_error(budget, &e))?
-            .is_empty()
+    if sources.is_empty()
+        || signature.params.len() != sources.len()
+        || arguments.len() != sources.len()
+        || view.signature().params.len() != sources.len()
+    {
+        return Err(FactsError::invalid(
+            budget,
+            "closed literal input arity changed",
+        ));
+    }
+    // Returned references are admitted only from static strings and closed
+    // reference-free scalars, never from borrowed temporaries or constructors.
+    // Their values and all generic actuals are independently replayed below.
+    if !ir::carrier_locations(&signature.result, budget)
+        .map_err(|e| source_error(budget, &e))?
+        .is_empty()
+        && !sources.iter().all(|source| {
+            matches!(
+                source,
+                Expr::Str(_) | Expr::Bool(_) | Expr::Char(_) | Expr::Integer(_)
+            )
+        })
     {
         return Err(FactsError::unsupported(
             budget,
-            "closed literal inference requires one input and a reference-free result",
+            "returned literal references require static string inputs",
         ));
     }
     let checker = Checker::new(signatures, ir::Ty::Unit, module);
+    let scopes = view.generic_env().scopes();
+    if scopes.len() != 1 {
+        return Err(FactsError::unsupported(
+            budget,
+            "closed literal inference requires one generic scope",
+        ));
+    }
+    let mut state = sr::CallInferenceState::new(Some(scopes[0].clone()), budget)?;
     // Obtain source constructor constraints without solving through the legacy
     // checker. The ordinary canonical-source restriction remains unchanged.
-    let evidence = checker
-        .inference_evidence(source, 0)
-        .map_err(|e| source_error(budget, &e))?;
     let mut materialize = |decl, args: &[ir::Ty]| {
         signatures
             .plan
@@ -250,37 +295,38 @@ pub(super) fn validate(
             .intern_nominal(decl, args, ir::FactsCtx::Validated(facts), budget)
             .map_err(|e| source_error(budget, &e))
     };
-    let resolver = sr::CallInferenceState::new(None, budget)?;
-    let input = resolver
-        .resolve(&evidence, false, 0, &mut materialize)?
-        .ok_or_else(|| FactsError::unsupported(budget, "literal source type remains unresolved"))?;
-    if !compare(
-        source,
-        &input,
-        actual,
-        argument,
-        &checker,
-        facts,
-        temporaries,
-        budget,
-        0,
-    )? || !source_type_equal(&input, &signature.params[0], facts, budget)?
-    {
-        return Err(FactsError::invalid(
+    for (index, (source, argument)) in sources.iter().zip(arguments).enumerate() {
+        sr::work(budget, 1)?;
+        // Source evidence supplies no expected result or checked-argument type.
+        let evidence = checker
+            .inference_evidence(source, 0)
+            .map_err(|e| source_error(budget, &e))?;
+        let resolver = sr::CallInferenceState::new(None, budget)?;
+        let input = resolver
+            .resolve(&evidence, false, 0, &mut materialize)?
+            .ok_or_else(|| {
+                FactsError::unsupported(budget, "literal source type remains unresolved")
+            })?;
+        if !compare(
+            source,
+            &input,
+            actual,
+            *argument,
+            &checker,
+            facts,
+            temporaries,
             budget,
-            "closed literal argument changed source value, storage or type",
-        ));
+            0,
+        )? || !source_type_equal(&input, &signature.params[index], facts, budget)?
+        {
+            return Err(FactsError::invalid(
+                budget,
+                "closed literal argument changed source value, storage or type",
+            ));
+        }
+        let schema = state.schema(&view.signature().params[index], 0)?;
+        state.constrain(&schema, &evidence, 0)?;
     }
-    let scopes = view.generic_env().scopes();
-    if scopes.len() != 1 || view.signature().params.len() != 1 {
-        return Err(FactsError::unsupported(
-            budget,
-            "closed literal inference requires one generic scope and input",
-        ));
-    }
-    let mut state = sr::CallInferenceState::new(Some(scopes[0].clone()), budget)?;
-    let schema = state.schema(&view.signature().params[0], 0)?;
-    state.constrain(&schema, &evidence, 0)?;
     let actuals = state.finish(false, &mut materialize)?.ok_or_else(|| {
         FactsError::unsupported(
             budget,

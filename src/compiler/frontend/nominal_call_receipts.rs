@@ -11,7 +11,7 @@ fn graph_type(ty: &ir::Ty, budget: &ir::PlanBudget, depth: usize) -> Result<bool
     let child = |ty: &ir::Ty| graph_type(ty, budget, depth + 1);
     match ty {
         ir::Ty::Struct(n) => {
-            if matches!(n.id().index, ir::NominalIndex::GraphRealization(_)) {
+            if n.id().index.is_graph() {
                 return Ok(true);
             }
             if n.is_back_edge() {
@@ -22,14 +22,20 @@ fn graph_type(ty: &ir::Ty, budget: &ir::PlanBudget, depth: usize) -> Result<bool
                     return Ok(true);
                 }
             }
-            for field in n.def().fields.iter() {
+            for field in n
+                .def()
+                .fields
+                .read(budget)
+                .map_err(|e| source_error(budget, &e))?
+                .iter()
+            {
                 if child(&field.ty)? {
                     return Ok(true);
                 }
             }
         }
         ir::Ty::Enum(n) => {
-            if matches!(n.id().index, ir::NominalIndex::GraphRealization(_)) {
+            if n.id().index.is_graph() {
                 return Ok(true);
             }
             if n.is_back_edge() {
@@ -41,7 +47,12 @@ fn graph_type(ty: &ir::Ty, budget: &ir::PlanBudget, depth: usize) -> Result<bool
                 }
             }
             for variant in n.def().variants.iter() {
-                for field in variant.fields.iter() {
+                for field in variant
+                    .fields
+                    .read(budget)
+                    .map_err(|e| source_error(budget, &e))?
+                    .iter()
+                {
                     if child(&field.ty)? {
                         return Ok(true);
                     }

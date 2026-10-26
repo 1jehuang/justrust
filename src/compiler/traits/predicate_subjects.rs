@@ -134,10 +134,20 @@ impl ValidatedTraitWorld {
         maybe_unsized: Option<ParamId>,
         replays: &mut NominalReplays,
     ) -> Result<()> {
+        self.validate_predicate_ref_with_facts(goal, env, maybe_unsized, replays, None)
+    }
+    pub(super) fn validate_predicate_ref_with_facts(
+        &self,
+        goal: &TraitRef,
+        env: &GenericEnv,
+        maybe_unsized: Option<ParamId>,
+        replays: &mut NominalReplays,
+        caller: Option<&ValidatedFacts>,
+    ) -> Result<()> {
         if !matches!(goal.self_ty, Ty::AssociatedType(_)) {
-            return self.validate_ref_with(goal, env, maybe_unsized, replays);
+            return self.validate_ref_with_facts(goal, env, maybe_unsized, replays, caller);
         }
-        self.validate_ty_metadata_with(&goal.self_ty, env, 0, replays)?;
+        self.validate_ty_metadata_with_facts(&goal.self_ty, env, 0, replays, caller)?;
         let info = self.info(goal.declaration)?;
         let header = self.trait_header(goal.declaration)?;
         if info.kind != DeclKind::Trait
@@ -149,8 +159,21 @@ impl ValidatedTraitWorld {
             ));
         }
         for argument in goal.args.iter() {
-            self.validate_ty_metadata_with(argument, env, 0, replays)?;
-            self.validate_actual(argument, env)?;
+            self.validate_ty_metadata_with_facts(argument, env, 0, replays, caller)?;
+            if caller.is_none() {
+                self.validate_actual(argument, env)?;
+            } else if matches!(argument, Ty::Str) {
+                charged(&self.budget, self.budget.charge_work(1))?;
+            } else {
+                self.validate_predicate_formation(
+                    argument,
+                    env,
+                    TypeUse::Actual,
+                    None,
+                    replays,
+                    caller,
+                )?;
+            }
             charged(&self.budget, ir::reject_references(argument, &self.budget))?;
         }
         Ok(())

@@ -326,6 +326,7 @@ mod tests {
         );
         let before = scratch.instantiations.entries.len();
         let phased = ProofContext {
+            original: None,
             predicates: context.predicates,
             phase: FactsPhase::Schema,
         };
@@ -383,6 +384,7 @@ mod tests {
                     &schema,
                     &[Ty::Bool],
                     ProofContext {
+                        original: None,
                         predicates: &forged_context,
                         phase: context.phase
                     },
@@ -405,7 +407,9 @@ mod tests {
             )
             .unwrap();
         let mut definition = nominal.def().clone();
-        let mut fields = definition.fields.to_vec();
+        let mut fields = nominal_fields(&definition.fields, &world.budget)
+            .unwrap()
+            .to_vec();
         fields[0].ty = Ty::Int(ir::IntTy::I32);
         definition.fields = fields.into();
         let forged = Ty::Struct(ir::StructTy::new(definition));

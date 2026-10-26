@@ -42,7 +42,7 @@ impl Provider for IngressProvider {
             let world = plan.trait_world().map_err(crate::engine::Error::new)?;
             let key =
                 RealizationKey::encode(world.nominal_realization_world(), declaration, &[], 32)?;
-            let mut capabilities = read_manifest(&cx, &[key]).await?;
+            let mut capabilities = read_manifest(&cx, &[key], world.budget()).await?;
             cx.publish_fact(
                 0,
                 (plan.as_ref().clone(), declaration, capabilities.remove(0)),
@@ -256,4 +256,53 @@ fn constructor_ingress_replays_source_application_snapshot_and_actuals() {
             .realize_constructor_source(&ir::Ty::Struct(other_source))
             .is_err()
     );
+}
+
+#[test]
+fn raw_projection_inventory_uses_exact_closed_component_without_admitting_it() {
+    for workers in [1, 8] {
+        let budget = ir::PlanBudget::default();
+        let snapshot = Arc::new(Snapshot {
+            input: Input::Text("struct Ingress{next:Option<Box<Ingress>>}fn main(){}".into()),
+            source_options: crate::compiler::source::SourceOptions::default(),
+            budget: budget.clone(),
+        });
+        let engine = Engine::new(IngressProvider {
+            snapshot,
+            signatures: None,
+        });
+        let demand = engine.request(crate::compiler::keys::test_key(997, vec![]));
+        engine.run(workers).unwrap();
+        demand.completion().unwrap();
+        let fixture = demand
+            .fact::<(PlanCtx, ir::DeclId, ReadNominal)>(0)
+            .unwrap();
+        let (_, declaration, capability) = fixture.as_ref();
+        assert!(capability.is_component());
+        let realized = capability.definition().unwrap();
+        assert!(!raw_type_has_projection(&realized, &budget, 0).unwrap());
+        // Projection inventory is not executable admission under raw facts.
+        assert!(validate_argument(&realized, ir::FactsCtx::Concrete, &budget, 0).is_err());
+        let ir::Ty::Struct(original) = &realized else {
+            panic!("expected Ingress struct")
+        };
+        let mut changed = original.def().clone();
+        changed.fields = Arc::<[ir::FieldDef]>::from([]).into();
+        let forged =
+            ir::Ty::Struct(ir::StructTy::new(changed).with_realization(capability.clone()));
+        assert!(raw_type_has_projection(&forged, &budget, 0).is_err());
+        let projection = ir::Ty::AssociatedType(Arc::new(ir::AssociatedTypeProjection {
+            trait_ref: ir::TraitRef {
+                declaration: *declaration,
+                self_ty: realized.clone(),
+                args: Arc::from([]),
+            },
+            item: *declaration,
+        }));
+        let wrapped = ir::Ty::Tuple(Arc::from([realized.clone(), projection]));
+        assert!(raw_type_has_projection(&wrapped, &budget, 0).unwrap());
+        // The finite height remains subject to the caller's unchanged depth limit.
+        assert!(capability.component_metadata_height().unwrap() > 0);
+        assert!(raw_type_has_projection(&realized, &budget, budget.limits().depth).is_err());
+    }
 }

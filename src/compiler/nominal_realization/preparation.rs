@@ -55,12 +55,13 @@ impl Capabilities {
                 "nominal source recipe binder is not its exact declaration",
             ));
         }
-        let shapes = |fields: &[ir::FieldDef]| -> Result<Arc<[Shape]>, Error> {
+        let shapes = |fields: &ir::NominalFields| -> Result<Arc<[Shape]>, Error> {
+            let fields = fields.read(budget).map_err(Error::new)?;
             let mut values = Vec::new();
             values
                 .try_reserve_exact(fields.len())
                 .map_err(|_| Error::new("nominal field recipe allocation failed"))?;
-            for field in fields {
+            for field in fields.iter() {
                 values.push(shape(&field.ty, budget, 0)?);
             }
             Ok(values.into())
@@ -99,7 +100,7 @@ impl Capabilities {
         let Some(key) = self.demand_key(demand, world, caller, budget)? else {
             return Ok(None);
         };
-        let Some(capability) = self.nominals.iter().find(|n| n.fact.key == key) else {
+        let Some(capability) = self.nominals.iter().find(|n| n.application_key() == &key) else {
             return Ok(None);
         };
         let definition = capability.definition()?;
@@ -182,7 +183,11 @@ impl Capabilities {
                 else {
                     return Ok(None);
                 };
-                let Some(cap) = self.nominals.iter().find(|cap| cap.fact.key == key) else {
+                let Some(cap) = self
+                    .nominals
+                    .iter()
+                    .find(|cap| cap.application_key() == &key)
+                else {
                     if !missing.contains(&key) {
                         missing.push(key);
                     }
@@ -331,7 +336,7 @@ impl Capabilities {
             cx.request(key.0.clone());
         }
         let sources = read_sources(cx, &sources).await?;
-        let nominals = read_manifest(cx, &keys).await?;
+        let nominals = read_manifest(cx, &keys, budget).await?;
         budget
             .retain_bytes(
                 sources
@@ -368,7 +373,7 @@ impl Capabilities {
         for demand in demands {
             if let Some(key) =
                 self.key_with_missing(demand, world, caller, budget, &mut missing, 0)?
-                && !self.nominals.iter().any(|n| n.fact.key == key)
+                && !self.nominals.iter().any(|n| n.application_key() == &key)
                 && !missing.contains(&key)
             {
                 missing.push(key)

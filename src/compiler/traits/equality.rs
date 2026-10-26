@@ -229,11 +229,26 @@ impl ValidatedTraitWorld {
         env: &GenericEnv,
         replays: &mut NominalReplays,
     ) -> Result<()> {
+        self.validate_predicate_metadata_with_facts(predicate, env, replays, None)
+    }
+    pub(super) fn validate_predicate_metadata_with_facts(
+        &self,
+        predicate: &Predicate,
+        env: &GenericEnv,
+        replays: &mut NominalReplays,
+        caller: Option<&ValidatedFacts>,
+    ) -> Result<()> {
         for ty in predicate.metadata_types() {
-            self.validate_ty_metadata_with(ty, env, 0, replays)?;
+            self.validate_ty_metadata_with_facts(ty, env, 0, replays, caller)?;
         }
         if let Predicate::ProjectionEq { projection, .. } = predicate {
-            self.validate_ty_metadata_with(&self.projection_type(projection)?, env, 0, replays)?;
+            self.validate_ty_metadata_with_facts(
+                &self.projection_type(projection)?,
+                env,
+                0,
+                replays,
+                caller,
+            )?;
         }
         Ok(())
     }
@@ -563,9 +578,25 @@ impl ValidatedTraitWorld {
         env: &GenericEnv,
         replays: &mut NominalReplays,
     ) -> Result<()> {
+        self.validate_equality_domain_with_facts(projection, rhs, env, replays, None)
+    }
+    pub(super) fn validate_equality_domain_with_facts(
+        &self,
+        projection: &ir::AssociatedTypeProjection,
+        rhs: &Ty,
+        env: &GenericEnv,
+        replays: &mut NominalReplays,
+        caller: Option<&ValidatedFacts>,
+    ) -> Result<()> {
         self.check_normalization_budget()?;
-        self.validate_ty_metadata_with(&self.projection_type(projection)?, env, 0, replays)?;
-        self.validate_ty_metadata_with(rhs, env, 0, replays)?;
+        self.validate_ty_metadata_with_facts(
+            &self.projection_type(projection)?,
+            env,
+            0,
+            replays,
+            caller,
+        )?;
+        self.validate_ty_metadata_with_facts(rhs, env, 0, replays, caller)?;
         // Raw admission is solver-free. Metadata, including rejected children,
         // has already been validated above.
         if matches!(rhs, Ty::Param(_)) {
@@ -595,7 +626,11 @@ impl ValidatedTraitWorld {
             // any closed projection that never normalizes.
             return Ok(());
         }
-        self.validate_ty(rhs, env, None, true, 0)
+        if caller.is_none() {
+            self.validate_ty(rhs, env, None, true, 0)
+        } else {
+            self.validate_predicate_formation(rhs, env, TypeUse::Root, None, replays, caller)
+        }
     }
 
     // Equality rows describe types, not loans. In particular a shared reference
@@ -627,7 +662,7 @@ impl ValidatedTraitWorld {
                 self.validate_equality_reference_domain(element, depth + 1)
             }
             Ty::Struct(value) => {
-                for field in value.def().fields.iter() {
+                for field in nominal_fields(&value.def().fields, &self.budget)?.iter() {
                     self.validate_equality_reference_domain(&field.ty, depth + 1)?;
                 }
                 for argument in type_arguments(ty) {
@@ -637,7 +672,7 @@ impl ValidatedTraitWorld {
             }
             Ty::Enum(value) => {
                 for variant in value.def().variants.iter() {
-                    for field in variant.fields.iter() {
+                    for field in nominal_fields(&variant.fields, &self.budget)?.iter() {
                         self.validate_equality_reference_domain(&field.ty, depth + 1)?;
                     }
                 }
@@ -738,26 +773,42 @@ impl ValidatedTraitWorld {
         rhs: &Ty,
         env: &GenericEnv,
     ) -> Result<bool> {
-        let Ty::Ref {
-            kind: ir::BorrowKind::Shared,
-            referent: inner,
-        } = rhs
-        else {
-            return Ok(false);
-        };
-        let Ty::Ref {
-            kind: ir::BorrowKind::Shared,
-            referent: leaf,
-        } = inner.as_ref()
-        else {
-            return Ok(false);
-        };
-        // Exactly one substituted shared layer, with no nested slice or
-        // reference hidden in its payload. The generic guard remains intact.
-        match self.reject_projected_references(leaf, 0) {
-            Ok(()) => {}
-            Err(error) if error.kind() == FactsErrorKind::Unsupported => return Ok(false),
-            Err(error) => return Err(error),
+        let tuple = matches!(rhs, Ty::Tuple(fields) if !fields.is_empty());
+        if tuple {
+            if !self.shared_assignment_payload(rhs, 0)? {
+                return Ok(false);
+            }
+        } else {
+            let Ty::Ref {
+                kind: ir::BorrowKind::Shared,
+                referent: inner,
+            } = rhs
+            else {
+                return Ok(false);
+            };
+            if matches!(
+                inner.as_ref(),
+                Ty::Tuple(_) | Ty::Struct(_) | Ty::Enum(_) | Ty::Array { .. }
+            ) {
+                if !self.shared_assignment_payload(inner, 0)? {
+                    return Ok(false);
+                }
+            } else {
+                let Ty::Ref {
+                    kind: ir::BorrowKind::Shared,
+                    referent: leaf,
+                } = inner.as_ref()
+                else {
+                    return Ok(false);
+                };
+                // Keep the original deeper-root boundary. A shared aggregate
+                // actual above instead replays the same original &'a T tail.
+                match self.reject_projected_references(leaf, 0) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == FactsErrorKind::Unsupported => return Ok(false),
+                    Err(error) => return Err(error),
+                }
+            }
         }
         let mut selected = false;
         let Some(candidates) = self.trait_impl_index.get(&projection.trait_ref.declaration) else {
@@ -808,17 +859,40 @@ impl ValidatedTraitWorld {
             }
             let value = self.associated_value(header.declaration, projection.item)?;
             let source = self.checked_assignment_source(value)?;
-            let Some(parameter) = source.parameter_tail else {
-                return Ok(false);
-            };
-            if source.references.len() != 1
-                || !matches!(
-                    source.references[0],
-                    (ir::BorrowKind::Shared, AssociatedSourceRegion::Named(_))
-                )
-                || !matches!(&value.rhs, Ty::Ref { kind: ir::BorrowKind::Shared, referent } if referent.as_ref() == &Ty::Param(parameter))
-            {
-                return Ok(false);
+            if tuple {
+                // A source tuple of shared parameter tails retains its original
+                // declaration and every ordered substitution. This is metadata
+                // admission only, never a return-origin or executable loan proof.
+                let Ty::Tuple(fields) = &value.rhs else {
+                    return Ok(false);
+                };
+                if fields.is_empty()
+                    || !source.references.is_empty()
+                    || source.parameter_tail.is_some()
+                {
+                    return Ok(false);
+                }
+                for field in fields.iter() {
+                    charged(&self.budget, self.budget.charge_work(1))?;
+                    if !matches!(field, Ty::Ref { kind: ir::BorrowKind::Shared, referent }
+                        if matches!(referent.as_ref(), Ty::Param(p) if header.schema_env.contains(*p)))
+                    {
+                        return Ok(false);
+                    }
+                }
+            } else {
+                let Some(parameter) = source.parameter_tail else {
+                    return Ok(false);
+                };
+                if source.references.len() != 1
+                    || !matches!(
+                        source.references[0],
+                        (ir::BorrowKind::Shared, AssociatedSourceRegion::Named(_))
+                    )
+                    || !matches!(&value.rhs, Ty::Ref { kind: ir::BorrowKind::Shared, referent } if referent.as_ref() == &Ty::Param(parameter))
+                {
+                    return Ok(false);
+                }
             }
             let mut args = Vec::new();
             for slot in slots {
@@ -870,6 +944,64 @@ impl ValidatedTraitWorld {
         Ok(selected)
     }
 
+    /// Closed shared payloads carried by a source-owned tuple substitution.
+    /// Mutable/slice and unresolved carriers keep their existing boundaries.
+    /// The enclosing metadata replay authenticates the full nominal definitions.
+    fn shared_assignment_payload(&self, ty: &Ty, depth: usize) -> Result<bool> {
+        charged(&self.budget, self.budget.check_depth(depth))?;
+        charged(&self.budget, self.budget.charge_work(1))?;
+        match ty {
+            Ty::Ref {
+                kind: ir::BorrowKind::Shared,
+                referent,
+            } => self.shared_assignment_payload(referent, depth + 1),
+            Ty::Ref { .. }
+            | Ty::Slice { .. }
+            | Ty::Param(_)
+            | Ty::AssociatedType(_)
+            | Ty::Closure(_)
+            | Ty::Dyn(_)
+            | Ty::Opaque(_) => Ok(false),
+            Ty::Array { element, .. } => self.shared_assignment_payload(element, depth + 1),
+            Ty::Struct(value) => {
+                for field in nominal_fields(&value.def().fields, &self.budget)?.iter() {
+                    if !self.shared_assignment_payload(&field.ty, depth + 1)? {
+                        return Ok(false);
+                    }
+                }
+                for argument in type_arguments(ty) {
+                    if !self.shared_assignment_payload(argument, depth + 1)? {
+                        return Ok(false);
+                    }
+                }
+                Ok(true)
+            }
+            Ty::Enum(value) => {
+                for variant in value.def().variants.iter() {
+                    for field in nominal_fields(&variant.fields, &self.budget)?.iter() {
+                        if !self.shared_assignment_payload(&field.ty, depth + 1)? {
+                            return Ok(false);
+                        }
+                    }
+                }
+                for argument in type_arguments(ty) {
+                    if !self.shared_assignment_payload(argument, depth + 1)? {
+                        return Ok(false);
+                    }
+                }
+                Ok(true)
+            }
+            _ => {
+                for argument in type_arguments(ty) {
+                    if !self.shared_assignment_payload(argument, depth + 1)? {
+                        return Ok(false);
+                    }
+                }
+                Ok(true)
+            }
+        }
+    }
+
     pub(super) fn validate_equality_domain_in(
         &self,
         projection: &ir::AssociatedTypeProjection,
@@ -918,6 +1050,7 @@ impl ValidatedTraitWorld {
                 self.require_equality_rhs_sized(
                     ty,
                     ProofContext {
+                        original: None,
                         predicates: &self.empty,
                         phase: FactsPhase::Closed,
                     },
@@ -1055,7 +1188,7 @@ impl ValidatedTraitWorld {
             || self
                 .opaque_associated_binding(projection, context.env())?
                 .is_some()
-            || self.goal_is_closed(&projection.trait_ref, context.env())?
+            || self.goal_is_closed_with(&projection.trait_ref, context.env(), active)?
             || matches!(projection.trait_ref.self_ty, Ty::Struct(_) | Ty::Enum(_))
         {
             let normalization =
@@ -1112,7 +1245,7 @@ impl ValidatedTraitWorld {
         if !matches!(
             projection.trait_ref.self_ty,
             Ty::Struct(_) | Ty::Enum(_) | Ty::Ref { .. }
-        ) || self.goal_is_closed(&projection.trait_ref, context.env())?
+        ) || self.goal_is_closed_with(&projection.trait_ref, context.env(), active)?
             || self.type_contains_projection(&projection.trait_ref.self_ty, 0)?
         {
             return Ok(None);
@@ -1408,6 +1541,7 @@ impl ValidatedTraitWorld {
                 self.normalize_closed_projected_type(
                     &self.projection_type(projection)?,
                     ProofContext {
+                        original: None,
                         predicates: &self.empty,
                         phase: FactsPhase::Schema,
                     },
@@ -1656,6 +1790,136 @@ mod tests {
     }
 
     #[test]
+    fn shared_parameter_assignment_replays_aggregate_actual() {
+        let source = frontend::parse(
+            "trait Has{type Out;}struct Wrap<T>{value:T}impl<'a,T> Has for &'a Wrap<T>{type Out=&'a T;}fn probe(x:&Wrap<(&str,usize)>){}fn main(){}",
+        ).unwrap();
+        let budget = PlanBudget::default();
+        let plan = PlanCtx::from_program(&source, &budget).unwrap();
+        let world = plan.trait_world().unwrap();
+        let owner = world
+            .headers
+            .impls
+            .iter()
+            .find(|owner| !owner.associated_types.is_empty())
+            .unwrap();
+        let probe = world
+            .schema
+            .declaration_schema(plan.function_decl(0).unwrap())
+            .unwrap();
+        let projection = ir::AssociatedTypeProjection {
+            trait_ref: TraitRef {
+                declaration: owner.trait_ref.declaration,
+                self_ty: probe.signature.params[0].clone(),
+                args: Arc::from([]),
+            },
+            item: owner.associated_types[0].associated,
+        };
+        let leaf = Ty::Ref {
+            kind: ir::BorrowKind::Shared,
+            referent: Arc::new(Ty::Str),
+        };
+        let rhs = Ty::Ref {
+            kind: ir::BorrowKind::Shared,
+            referent: Arc::new(Ty::Tuple(Arc::from([
+                leaf.clone(),
+                Ty::Int(ir::IntTy::Usize),
+            ]))),
+        };
+        assert!(
+            world
+                .shared_assignment_metadata(&projection, &rhs, &probe.env)
+                .unwrap()
+        );
+        world
+            .validate_equality_domain(&projection, &rhs, &probe.env)
+            .unwrap();
+        let forged = Ty::Ref {
+            kind: ir::BorrowKind::Shared,
+            referent: Arc::new(Ty::Tuple(Arc::from([Ty::Int(ir::IntTy::Usize), leaf]))),
+        };
+        assert!(
+            !world
+                .shared_assignment_metadata(&projection, &forged, &probe.env)
+                .unwrap()
+        );
+        assert!(world.reject_projected_references(&rhs, 0).is_err());
+    }
+
+    #[test]
+    fn shared_tuple_assignment_replays_ordered_generic_payloads() {
+        let source = frontend::parse(
+            "trait Has{type Out;}struct Pair<K,V>{a:K,b:V}impl<'a,K,V> Has for &'a Pair<K,V>{type Out=(&'a K,&'a V);}fn probe(x:&Pair<u32,&str>){}fn main(){}",
+        ).unwrap();
+        let budget = PlanBudget::default();
+        let plan = PlanCtx::from_program(&source, &budget).unwrap();
+        let world = plan.trait_world().unwrap();
+        let owner = world
+            .headers
+            .impls
+            .iter()
+            .find(|owner| !owner.associated_types.is_empty())
+            .unwrap();
+        let value = &owner.associated_types[0];
+        let probe = world
+            .schema
+            .declaration_schema(plan.function_decl(0).unwrap())
+            .unwrap();
+        let projection = ir::AssociatedTypeProjection {
+            trait_ref: TraitRef {
+                declaration: owner.trait_ref.declaration,
+                self_ty: probe.signature.params[0].clone(),
+                args: Arc::from([]),
+            },
+            item: value.associated,
+        };
+        let shared = |ty| Ty::Ref {
+            kind: ir::BorrowKind::Shared,
+            referent: Arc::new(ty),
+        };
+        let first = shared(Ty::Int(ir::IntTy::U32));
+        let second = shared(shared(Ty::Str));
+        let rhs = Ty::Tuple(Arc::from([first.clone(), second.clone()]));
+        assert!(
+            world
+                .shared_assignment_metadata(&projection, &rhs, &probe.env)
+                .unwrap()
+        );
+        world
+            .validate_equality_domain(&projection, &rhs, &probe.env)
+            .unwrap();
+        for forged in [
+            Ty::Tuple(Arc::from([second.clone(), first.clone()])),
+            Ty::Tuple(Arc::from([first.clone()])),
+            Ty::Tuple(Arc::from([first.clone(), shared(Ty::Int(ir::IntTy::U32))])),
+            Ty::Tuple(Arc::from([
+                first,
+                shared(Ty::Ref {
+                    kind: ir::BorrowKind::Mut,
+                    referent: Arc::new(Ty::Str),
+                }),
+            ])),
+        ] {
+            assert!(
+                !world
+                    .shared_assignment_metadata(&projection, &forged, &probe.env)
+                    .unwrap()
+            );
+        }
+        for mode in 0..3 {
+            let mut forged = value.clone();
+            let row = Arc::make_mut(&mut forged.source);
+            match mode {
+                0 => row.associated = value.implementation,
+                1 => row.implementation = value.associated,
+                _ => row.region_count = 0,
+            }
+            assert!(world.checked_assignment_source(&forged).is_err());
+        }
+        assert!(world.reject_projected_references(&rhs, 0).is_err());
+    }
+
+    #[test]
     fn associated_assignment_rejects_undeclared_source_lifetime() {
         let source = frontend::parse("trait Has{type Out;}struct Hold<'a,T>{r:&'a T}impl<'a,T> Has for Hold<'a,T>{type Out=&'missing T;}fn main(){}").unwrap();
         let budget = PlanBudget::default();
@@ -1725,6 +1989,7 @@ mod tests {
                     projection,
                     &rhs,
                     ProofContext {
+                        original: None,
                         predicates: &world.empty,
                         phase: FactsPhase::Closed
                     },

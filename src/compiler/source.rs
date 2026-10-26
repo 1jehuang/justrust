@@ -59,6 +59,9 @@ pub struct SourceOptions {
     pub library: bool,
     /// Libtest selection applied when synthesizing the `cfg(test)` harness.
     pub test_filter: TestFilter,
+    /// Lints capped at allow (Cargo's `--cap-lints allow` for registry
+    /// dependencies): lint levels never change acceptance.
+    pub cap_lints_allow: bool,
 }
 /// Libtest command-line selection: name filters (substring, or exact with
 /// `--exact`), `--skip`, `--ignored` and `--include-ignored`.
@@ -95,6 +98,7 @@ impl Default for SourceOptions {
             externs: Vec::new(),
             library: false,
             test_filter: TestFilter::default(),
+            cap_lints_allow: false,
         }
     }
 }
@@ -104,6 +108,8 @@ pub struct ExternCrate {
     pub name: String,
     pub root: PathBuf,
     pub cfg: CfgSet,
+    /// Registry dependency: compiled with lints capped at allow.
+    pub cap_lints_allow: bool,
 }
 /// Hidden root module prefix of a mounted dependency crate.
 pub const EXTERN_PREFIX: &str = "__justrust_extern_";
@@ -121,6 +127,7 @@ impl SourceOptions {
                         .set_debug_assertions(self.cfg.debug_assertions());
                     options.cfg.names.remove("test");
                     options.library = true;
+                    options.cap_lints_allow = krate.cap_lints_allow;
                     std::borrow::Cow::Owned(options)
                 }
                 None => std::borrow::Cow::Borrowed(self),
@@ -1515,7 +1522,12 @@ impl<'a> Loader<'a> {
         let id = self.id;
         let original = self.contents.clone();
         self.validate_original(&original, 0)?;
-        let filtered = source_attrs::prepare(&original, &self.options.cfg).map_err(|e| {
+        let filtered = source_attrs::prepare_capped(
+            &original,
+            &self.options.cfg,
+            self.options.cap_lints_allow,
+        )
+        .map_err(|e| {
             Self::error(
                 match e.kind {
                     source_attrs::AttributeErrorKind::Syntax => SourceErrorKind::Syntax,
@@ -1547,6 +1559,15 @@ impl<'a> Loader<'a> {
                 SourceErrorKind::Unsupported,
                 None,
                 "forbid(unsafe_code) is currently supported only at a crate root",
+            ));
+        }
+        if filtered.unsafe_code_relaxed && !self.root && !self.options.cap_lints_allow {
+            // Its interaction with a crate-root deny/forbid spans files; keep
+            // it explicit until lint levels are modeled across module files.
+            return Err(Self::error(
+                SourceErrorKind::Unsupported,
+                None,
+                "an `unsafe_code` lint level outside the crate root file is unsupported",
             ));
         }
         self.forbid_unsafe_code = filtered.forbid_unsafe_code;

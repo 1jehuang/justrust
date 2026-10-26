@@ -46,6 +46,13 @@ fn canonical_operator_calls_reject_foreign_world_rhs_order_and_output_substituti
 }
 
 #[test]
+fn indexed_method_autoref_retains_exact_index_call_authority() {
+    reject_forged_call(
+        "use std::ops::Index;struct Item{v:i32}impl Item{fn get(&self)->i32{self.v}}struct A{item:Item}impl Index<usize> for A{type Output=Item;fn index(&self,_i:usize)->&Item{&self.item}}fn compute(a:A)->i32{a[0].get()}fn main(){}",
+    );
+}
+
+#[test]
 fn inferred_narrow_rhs_does_not_grant_forged_call_authority() {
     reject_forged_call(
         "use std::ops::Mul;struct A{v:i32}impl Mul<u8> for A{type Output=i32;fn mul(self,n:u8)->i32{self.v*n as i32}}fn compute(a:A)->i32{a*2}fn main(){}",

@@ -50,6 +50,8 @@ pub struct InactiveItem {
 #[derive(Clone, Debug)]
 pub struct AttributeOutput {
     pub forbid_unsafe_code: bool,
+    /// This file lowers the `unsafe_code` lint level (`allow`/`warn`/`expect`).
+    pub unsafe_code_relaxed: bool,
     pub text: String,
     /// `#[test]` functions found under `cfg(test)`, in source order.
     pub tests: Vec<TestItem>,
@@ -122,7 +124,16 @@ enum Owner {
 }
 
 pub fn prepare(text: &str, cfg: &CfgSet) -> Result<AttributeOutput, AttributeError> {
-    prepare_with_context(text, cfg, None)
+    prepare_with_context(text, cfg, None, false)
+}
+
+/// `prepare` for a crate compiled with lints capped at allow.
+pub fn prepare_capped(
+    text: &str,
+    cfg: &CfgSet,
+    cap_lints_allow: bool,
+) -> Result<AttributeOutput, AttributeError> {
+    prepare_with_context(text, cfg, None, cap_lints_allow)
 }
 
 /// A verified source snapshot may retain these specific inert metadata forms.
@@ -133,13 +144,14 @@ pub(super) fn prepare_verified_identity(
     cfg: &CfgSet,
     context: &VerifiedIdentityContext,
 ) -> Result<AttributeOutput, AttributeError> {
-    prepare_with_context(text, cfg, Some(context))
+    prepare_with_context(text, cfg, Some(context), false)
 }
 
 fn prepare_with_context(
     text: &str,
     cfg: &CfgSet,
     identity_metadata: Option<&VerifiedIdentityContext>,
+    cap_lints_allow: bool,
 ) -> Result<AttributeOutput, AttributeError> {
     if text.len() > 8 * 1024 * 1024 {
         return Err(error(
@@ -165,10 +177,34 @@ fn prepare_with_context(
         tests: Vec::new(),
         test_main: None,
         forbid_unsafe_code: false,
+        deny_unsafe_code: false,
+        unsafe_code_relaxed: false,
+        cap_lints_allow,
     };
     filter.scope(0, filter.tokens.len(), 0..text.len(), Owner::Crate, 0)?;
+    if filter.unsafe_code_relaxed && filter.forbid_unsafe_code {
+        // E0453: a lower level cannot override `forbid`.
+        return Err(error(
+            AttributeErrorKind::Syntax,
+            0..0,
+            "allow(unsafe_code) incompatible with previous forbid",
+        ));
+    }
+    if filter.deny_unsafe_code {
+        if filter.unsafe_code_relaxed {
+            // A nested override would need scoped lint levels.
+            return Err(error(
+                AttributeErrorKind::Unsupported,
+                0..0,
+                "overriding crate-root deny(unsafe_code) with a lower lint level is unsupported",
+            ));
+        }
+        // Without any override, deny and forbid reject exactly the same code.
+        filter.forbid_unsafe_code = true;
+    }
     Ok(AttributeOutput {
         forbid_unsafe_code: filter.forbid_unsafe_code,
+        unsafe_code_relaxed: filter.unsafe_code_relaxed,
         text: String::from_utf8(filter.bytes).expect("masking preserves UTF-8"),
         attributes: filter.records,
         inactive_items: filter.inactive_items,
@@ -179,6 +215,12 @@ fn prepare_with_context(
 }
 struct Filter<'a> {
     forbid_unsafe_code: bool,
+    deny_unsafe_code: bool,
+    /// Some `allow`/`warn`/`expect(unsafe_code)` appears in the crate.
+    unsafe_code_relaxed: bool,
+    /// Lints are capped at allow (registry dependency), so lint levels never
+    /// change acceptance.
+    cap_lints_allow: bool,
     text: &'a str,
     cfg: &'a CfgSet,
     identity_metadata: Option<&'a VerifiedIdentityContext>,
@@ -198,6 +240,81 @@ struct Filter<'a> {
     test_main: Option<Range<usize>>,
 }
 impl Filter<'_> {
+    /// Lint-level attributes. The native compiler emits no warnings, so
+    /// `allow`/`warn`/`expect` never change acceptance and are validated and
+    /// recorded only. `deny`/`forbid` turn a lint into an error, so they are
+    /// admitted only when the native compiler enforces the lint exactly
+    /// (crate-root `unsafe_code`), when rustc itself never checks the lint
+    /// (tool lints such as `clippy::` and `rustdoc::`), or when the crate is
+    /// compiled with lints capped at allow (registry dependencies, like
+    /// Cargo's `--cap-lints allow`). Anything else is explicitly unsupported.
+    fn lint_level(&mut self, meta: &Meta, root_inner: bool) -> Result<(), AttributeError> {
+        let malformed = || {
+            error(
+                AttributeErrorKind::Syntax,
+                meta.range.clone(),
+                &format!("malformed `{}` attribute input", meta.name),
+            )
+        };
+        let MetaValue::List(items) = &meta.value else {
+            return Err(malformed());
+        };
+        let mut lints = Vec::new();
+        for (index, item) in items.iter().enumerate() {
+            match &item.value {
+                MetaValue::Word => lints.push(item.name.as_str()),
+                MetaValue::String(_) if item.name == "reason" && index + 1 == items.len() => {}
+                _ => return Err(malformed()),
+            }
+        }
+        let level = meta.name.as_str();
+        for lint in lints {
+            let tool = lint.contains("::");
+            if tool {
+                let (tool_name, rest) = lint.split_once("::").unwrap();
+                if !matches!(tool_name, "clippy" | "rustdoc") || rest.is_empty() {
+                    return Err(error(
+                        AttributeErrorKind::Syntax,
+                        meta.range.clone(),
+                        &format!("unknown tool name `{tool_name}` found in scoped lint: `{lint}`"),
+                    ));
+                }
+                continue;
+            }
+            if lint == "unsafe_code" {
+                match level {
+                    // Capped crates never report lints, like `--cap-lints allow`.
+                    _ if self.cap_lints_allow => {}
+                    "forbid" | "deny" if root_inner => {
+                        if level == "forbid" {
+                            self.forbid_unsafe_code = true;
+                        } else {
+                            self.deny_unsafe_code = true;
+                        }
+                    }
+                    "forbid" | "deny" => {
+                        return Err(error(
+                            AttributeErrorKind::Unsupported,
+                            meta.range.clone(),
+                            "only crate-root deny/forbid(unsafe_code) is supported",
+                        ));
+                    }
+                    _ => self.unsafe_code_relaxed = true,
+                }
+                continue;
+            }
+            if matches!(level, "deny" | "forbid") && !self.cap_lints_allow {
+                return Err(error(
+                    AttributeErrorKind::Unsupported,
+                    meta.range.clone(),
+                    &format!(
+                        "`{level}({lint})` is unsupported: the native compiler does not check lint `{lint}`"
+                    ),
+                ));
+            }
+        }
+        Ok(())
+    }
     fn mask(&mut self, range: Range<usize>) {
         for byte in &mut self.bytes[range] {
             if !matches!(*byte, b'\n' | b'\r') {
@@ -442,6 +559,11 @@ impl Filter<'_> {
             Owner::AssociatedFunction | Owner::AssociatedDeclaration
         ) {
             for attr in attrs {
+                // Lint levels are admitted on every associated owner; their
+                // meaning is decided by `lint_level` like at any other owner.
+                if lint_level_attribute(&self.text[attr.content.clone()]) {
+                    continue;
+                }
                 if attr.path == AttributePath::Other
                     || (owner == Owner::AssociatedDeclaration && attr.path != AttributePath::Doc)
                 {
@@ -538,7 +660,16 @@ impl Filter<'_> {
             }
             let meta = if matches!(
                 raw.name.as_str(),
-                "doc" | "inline" | "repr" | "unsafe" | "no_std" | "forbid" | "warn" | "allow"
+                "doc"
+                    | "inline"
+                    | "repr"
+                    | "unsafe"
+                    | "no_std"
+                    | "forbid"
+                    | "deny"
+                    | "warn"
+                    | "allow"
+                    | "expect"
             ) {
                 parse_meta(&self.text[raw.range.clone()], raw.range.start).map_err(|e| {
                     if raw.name == "doc" && !e.limit {
@@ -555,25 +686,14 @@ impl Filter<'_> {
                 raw
             };
             match meta.name.as_str() {
-                "forbid" => {
+                "forbid" | "deny" | "allow" | "warn" | "expect" => {
                     let root_inner = owner == Owner::Crate
                         && attrs.iter().any(|attr| {
                             attr.inner
                                 && attr.content.start <= meta.range.start
                                 && meta.range.end <= attr.content.end
                         });
-                    if !root_inner
-                        || !matches!(&meta.value, MetaValue::List(items)
-                            if items.len() == 1 && items[0].name == "unsafe_code"
-                                && matches!(items[0].value, MetaValue::Word))
-                    {
-                        return Err(error(
-                            AttributeErrorKind::Unsupported,
-                            meta.range,
-                            "only crate-root forbid(unsafe_code) is supported",
-                        ));
-                    }
-                    self.forbid_unsafe_code = true;
+                    self.lint_level(&meta, root_inner)?;
                 }
                 "repr" | "unsafe" => {
                     let valid = match (&*meta.name, &meta.value) {
@@ -629,22 +749,6 @@ impl Filter<'_> {
                     }
                 }
                 "no_std" if owner == Owner::Crate && matches!(meta.value, MetaValue::Word) => {}
-                // `warn`/`allow` of a lint whose only effect is a warning never
-                // change acceptance. Only crate-root levels of lints listed in
-                // WARNING_ONLY_LINTS are admitted; the native compiler does
-                // not emit warnings yet. `deny`/`forbid` of them would change
-                // acceptance and stay unsupported.
-                "warn" | "allow"
-                    if owner == Owner::Crate
-                        && attrs.iter().any(|attr| {
-                            attr.inner
-                                && attr.content.start <= meta.range.start
-                                && meta.range.end <= attr.content.end
-                        })
-                        && matches!(&meta.value, MetaValue::List(items)
-                            if !items.is_empty() && items.iter().all(|item|
-                                matches!(item.value, MetaValue::Word)
-                                    && WARNING_ONLY_LINTS.contains(&item.name.as_str()))) => {}
                 "test" | "ignore" | "should_panic" if owner == Owner::Function => {
                     self.test_attribute(&meta)?;
                     // Outside `cfg(test)` a test function is configured out.
@@ -1169,10 +1273,15 @@ fn valid_identity_metadata(meta: &Meta) -> bool {
     }
 }
 
-/// Lints admitted at `warn`/`allow` level on the crate root. Each is
-/// allow-by-default or warn-by-default in stock rustc, has no deny-by-default
-/// group membership, and only ever produces warnings at these levels.
-const WARNING_ONLY_LINTS: &[&str] = &["missing_debug_implementations"];
+/// Lint-level attribute names (`#[allow(..)]` and friends).
+fn lint_level_attribute(content: &str) -> bool {
+    let name = content
+        .trim_start()
+        .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+        .next()
+        .unwrap_or("");
+    matches!(name, "allow" | "warn" | "expect" | "deny" | "forbid")
+}
 
 fn known_semantic_attribute(name: &str) -> bool {
     name.starts_with("rustc_")
@@ -1728,6 +1837,29 @@ mod tests {
         ] {
             assert!(prep(source).is_err(), "accepted {source}");
         }
+    }
+
+    #[test]
+    fn lint_levels_are_validated_and_capped() {
+        for source in [
+            "#![allow(dead_code, unused)] fn main(){}",
+            "#![warn(missing_docs)] #[allow(clippy::all, reason = \"x\")] fn main(){}",
+            "#![expect(rustdoc::broken_intra_doc_links)] fn main(){}",
+            "#![deny(unsafe_code)] fn main(){}",
+        ] {
+            assert!(prep(source).is_ok(), "rejected {source}");
+        }
+        for source in [
+            "#![allow(foo::bar)] fn main(){}",
+            "#![allow(dead_code reason)] fn main(){}",
+            "#![deny(missing_docs)] fn main(){}",
+            "#![forbid(unsafe_code)] #[allow(unsafe_code)] fn main(){}",
+        ] {
+            assert!(prep(source).is_err(), "accepted {source}");
+        }
+        let capped = |s| prepare_capped(s, &CfgSet::default(), true);
+        assert!(capped("#![deny(missing_docs)] fn main(){}").is_ok());
+        assert!(capped("#![allow(foo::bar)] fn main(){}").is_err());
     }
 
     fn prep(s: &str) -> Result<AttributeOutput, AttributeError> {

@@ -204,6 +204,51 @@ fn index_assignment_through_shared_vec_reference_is_rejected() {
 mod range_receiver_oracle;
 
 #[test]
+fn vec_element_method_receivers_match_stock() {
+    use range_receiver_oracle::{Case, Expect};
+    range_receiver_oracle::check(
+        "vec-element-method-receiver",
+        &[
+            Case {
+                name: "noncopy_clone_and_mutable_receiver_index_once",
+                source: "#[derive(Clone)]struct Item{value:String}impl Item{fn size(&self)->usize{self.value.len()}fn clear(&mut self){self.value.clear();}}fn next(n:&mut usize)->usize{*n+=1;0}fn main(){let mut items=vec![Item{value:String::from(\"abc\")}];let mut n=0usize;let copy=items[next(&mut n)].clone();println!(\"{} {} {}\",copy.size(),items[0].size(),n);items[next(&mut n)].clear();println!(\"{} {} {}\",copy.size(),items[0].size(),n);}",
+                expect: Expect::Run("3 3 1\n3 0 2\n"),
+            },
+            Case {
+                name: "custom_index_and_index_mut_receivers_evaluate_once",
+                source: "use std::ops::{Index,IndexMut};struct Item{v:i32}impl Item{fn get(&self)->i32{self.v}fn bump(&mut self){self.v+=1;}}struct Items{item:Item}impl Index<usize> for Items{type Output=Item;fn index(&self,i:usize)->&Item{assert_eq!(i,0);&self.item}}impl IndexMut<usize> for Items{fn index_mut(&mut self,i:usize)->&mut Item{assert_eq!(i,0);&mut self.item}}fn next(n:&mut usize)->usize{*n+=1;0}fn main(){let mut items=Items{item:Item{v:4}};let mut n=0usize;let a=items[next(&mut n)].get();items[next(&mut n)].bump();println!(\"{} {} {}\",a,items[0].get(),n);}",
+                expect: Expect::Run("4 5 2\n"),
+            },
+            Case {
+                name: "builtin_array_and_source_slice_receiver_fallbacks",
+                source: "struct Item{v:i32}impl Item{fn get(&self)->i32{self.v}fn bump(&mut self){self.v+=1;}}fn main(){let mut items=[Item{v:4}];items[0].bump();let a=items[0].get();let s:&[Item]=&items;let b=s.len();println!(\"{} {}\",a,b);}",
+                expect: Expect::Run("5 1\n"),
+            },
+            Case {
+                name: "noncopy_index_value_still_cannot_move",
+                source: "struct Item{v:String}fn main(){let items=vec![Item{v:String::from(\"a\")}];let item=items[0];println!(\"{}\",item.v);}",
+                expect: Expect::Invalid("E0507"),
+            },
+            Case {
+                name: "immutable_owner_cannot_acquire_index_mut_receiver",
+                source: "struct Item{v:i32}impl Item{fn bump(&mut self){self.v+=1;}}fn main(){let items=vec![Item{v:1}];items[0].bump();}",
+                expect: Expect::Invalid("E0596"),
+            },
+            Case {
+                name: "index_mut_carrier_borrow_precedes_method_arguments",
+                source: "struct Item{v:usize}impl Item{fn set(&mut self,n:usize){self.v=n;}}fn main(){let mut items=vec![Item{v:0}];items[0].set(items.len());}",
+                expect: Expect::Invalid("E0502"),
+            },
+            Case {
+                name: "indexed_receiver_reference_retains_owner_borrow",
+                source: "struct Item{v:i32}impl Item{fn value(&self)->&i32{&self.v}}fn main(){let mut items=vec![Item{v:1}];let r=items[0].value();items.push(Item{v:2});println!(\"{}\",r);}",
+                expect: Expect::Invalid("E0502"),
+            },
+        ],
+    );
+}
+
+#[test]
 fn vec_range_index_method_receivers_match_stock() {
     use range_receiver_oracle::{Case, Expect};
     range_receiver_oracle::check(

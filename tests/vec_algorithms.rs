@@ -8,6 +8,93 @@ use std::process::Command;
 mod iterator_oracle;
 
 #[test]
+fn static_string_vector_seed_replays_all_closed_inputs() {
+    for source in [
+        "fn main(){let values=vec![\"ccc\",\"a\",\"bb\"];println!(\"{:?}\",values);}",
+        "fn main(){let values=vec![\"éx\"];println!(\"{}\",values[0]);}",
+        "struct Holder<T>{value:T}fn keep<T>(value:T,_capacity:usize)->Holder<T>{println!(\"called\");Holder{value}}fn main(){let held=keep(\"abc\",2usize);println!(\"{}\",held.value);}",
+    ] {
+        iterator_oracle::stock_native(source);
+    }
+    for source in [
+        "fn main(){let _:Vec<bool>=vec![\"a\",\"b\"];}",
+        "fn main(){let _=vec![\"a\",true];}",
+        "fn main(){let escaped;{let value=String::from(\"local\");escaped=vec![value.as_str()];}println!(\"{}\",escaped[0]);}",
+        "fn main(){let escaped;{let mut value=1i32;escaped=vec![&mut value];}println!(\"{}\",*escaped[0]);}",
+    ] {
+        iterator_oracle::stock_and_native_reject_observed(source, |workers, check, failure| {
+            assert!(
+                failure.resource_usage.first_failure.is_none(),
+                "workers={workers} check={check}: {}",
+                failure.error
+            );
+            assert!(
+                !failure.error.to_string().contains("unsupported"),
+                "workers={workers} check={check}: {}",
+                failure.error
+            );
+        });
+    }
+}
+
+#[test]
+fn nested_shared_str_len_preserves_builtin_and_method_authority() {
+    for source in [
+        "fn main(){let mut values=vec![\"ccc\",\"a\",\"bb\"];values.sort_by_key(|s|s.len());println!(\"{:?}\",values);}",
+        "fn main(){let text=\"éx\";let a=&text;let b=&a;println!(\"{} {} {}\",text.len(),a.len(),b.len());}",
+        "trait Custom{fn len(&self)->usize;}impl Custom for &&str{fn len(&self)->usize{99}}fn main(){let text=\"abc\";let nested=&text;println!(\"{} {}\",text.len(),nested.len());}",
+        "fn observe<'a>(value:&'a &'static str)->&'a &'static str{println!(\"receiver\");value}fn main(){let text=\"éx\";println!(\"len {}\",observe(&text).len());}",
+    ] {
+        iterator_oracle::stock_native(source);
+    }
+    for source in [
+        "fn main(){let text=\"abc\";let nested=&text;let _=nested.len(0);}",
+        "fn main(){let text=\"abc\";let nested=&text;let _=nested.len::<i32>();}",
+        "fn main(){let text=\"abc\";let nested=&text;let _:bool=nested.len();}",
+    ] {
+        iterator_oracle::stock_and_native_reject_observed(source, |workers, check, failure| {
+            assert!(
+                failure.resource_usage.first_failure.is_none(),
+                "workers={workers} check={check}: {}",
+                failure.error
+            );
+            assert!(
+                !failure.error.to_string().contains("unsupported"),
+                "workers={workers} check={check}: {}",
+                failure.error
+            );
+        });
+    }
+}
+
+#[test]
+fn cloned_vec_owner_survives_slice_coercion_before_equality() {
+    for source in [
+        "fn slice(v:&mut[i32]){v[0]=7;}fn main(){let data=vec![3i32,1];let mut a=data.clone();slice(&mut a);let b=data.clone();println!(\"{}\",a==b);a.push(9);println!(\"{} {}\",a.len(),a.pop().unwrap());}",
+        "fn slice(v:&mut[i32]){v[0]=7;}fn main(){let data:Vec<i32>=(0..3).map(|i|i).collect();let mut a=data.clone();slice(&mut a);let b=data.clone();println!(\"{}\",a==b);a.push(9);println!(\"{} {}\",a.len(),a.pop().unwrap());}",
+    ] {
+        iterator_oracle::stock_native(source);
+    }
+    for source in [
+        "fn slice(_: &mut[bool]){}fn main(){let data=vec![3i32,1];let mut a=data.clone();slice(&mut a);a.push(9);}",
+        "fn slice(_: &mut[i32]){}fn main(){let data=vec![3i32,1];let a=data.clone();slice(&mut a);println!(\"{}\",a==data);}",
+    ] {
+        iterator_oracle::stock_and_native_reject_observed(source, |workers, check, failure| {
+            assert!(
+                failure.resource_usage.first_failure.is_none(),
+                "workers={workers} check={check}: {}",
+                failure.error
+            );
+            assert!(
+                !failure.error.to_string().contains("unsupported"),
+                "workers={workers} check={check}: {}",
+                failure.error
+            );
+        });
+    }
+}
+
+#[test]
 fn vec_equality_preserves_elements_order_and_trait_bounds() {
     for source in [
         "fn require_eq<T:Eq>(_:&T){}fn main(){let a=vec![1i32,2];let b=vec![1i32,2];let short=vec![1i32];let empty:Vec<i32>=Vec::new();require_eq(&a);println!(\"{} {} {} {}\",a==b,a!=short,empty==Vec::<i32>::new(),a.len());}",
@@ -29,6 +116,42 @@ fn vec_equality_preserves_elements_order_and_trait_bounds() {
             assert!(
                 !failure.error.to_string().contains("unsupported"),
                 "workers={workers} check={check}: {}",
+                failure.error
+            );
+        });
+    }
+}
+
+#[test]
+fn cloned_iterator_for_loop_matches_stock() {
+    for source in [
+        "fn main(){let values=vec![1i32,2i32];for value in values.iter().cloned(){println!(\"{}\",value);}}",
+        "#[derive(Clone)]struct Item{n:u32,text:String}fn main(){let values=vec![Item{n:1,text:String::from(\"a\")},Item{n:2,text:String::from(\"b\")}];for value in values.iter().cloned(){println!(\"{} {}\",value.n,value.text);}for value in values.iter(){println!(\"{} {}\",value.n,value.text);}}",
+        "#[derive(Clone)]struct Item{n:u32}impl Drop for Item{fn drop(&mut self){println!(\"drop {}\",self.n);}}fn main(){let values=vec![Item{n:1},Item{n:2}];for value in values.iter().cloned(){println!(\"item {}\",value.n);break;}println!(\"after\");}",
+        "#[derive(Clone)]struct Z;impl Drop for Z{fn drop(&mut self){println!(\"drop\");}}fn main(){let empty:Vec<Z>=Vec::new();for _ in empty.iter().cloned(){panic!();}let values=vec![Z,Z];for _ in values.iter().cloned(){println!(\"item\");}}",
+    ] {
+        iterator_oracle::stock_native(source);
+    }
+}
+
+#[test]
+fn cloned_iterator_for_loop_preserves_bounds_moves_and_loans() {
+    for source in [
+        "struct Item;fn unused(values:Vec<Item>){for _ in values.iter().cloned(){}}fn main(){}",
+        "fn unused(values:Vec<i32>){for _ in values.into_iter().cloned(){}}fn main(){}",
+        "fn main(){let mut values=vec![1i32,2];for value in values.iter().cloned(){values.push(value);}}",
+        "fn main(){let values=vec![1i32,2];let iter=values.iter().cloned();for _ in iter{}for _ in iter{}}",
+        "#[derive(Clone)]struct Item<'a>{value:&'a i32}fn main(){let escaped;{let value=1i32;let values=vec![Item{value:&value}];let mut result=None;for item in values.iter().cloned(){result=Some(item);}escaped=result.unwrap();}println!(\"{}\",escaped.value);}",
+    ] {
+        iterator_oracle::stock_and_native_reject_observed(source, |workers, check, failure| {
+            assert!(
+                failure.resource_usage.first_failure.is_none(),
+                "resource failure for source={source:?}, workers={workers}, check={check}: {}",
+                failure.error
+            );
+            assert!(
+                !failure.error.to_string().contains("unsupported"),
+                "unsupported rejection for source={source:?}, workers={workers}, check={check}: {}",
                 failure.error
             );
         });
@@ -267,6 +390,105 @@ fn mutable_method_autoderef_through_box_matches_stock() {
 let r=std::rc::Rc::new(vec![4u32,5]);println!(\"{}\",r.len());}\n",
         "3 Some(3)\n2\n",
         "box-autoderef-mut",
+    );
+}
+
+#[test]
+fn rc_dyn_coercion_preserves_aliases_counts_and_last_owner_drop() {
+    compare(
+        r#"
+use std::rc::Rc;
+use std::cell::RefCell;
+trait Observer { fn notify(&self, delta:u32)->u32; }
+struct Tail { id:u32 }
+impl Drop for Tail { fn drop(&mut self){println!("tail {}",self.id);} }
+struct Log { value:RefCell<u32>, tail:Tail }
+impl Observer for Log {
+    fn notify(&self,delta:u32)->u32 {let mut value=self.value.borrow_mut();*value+=delta;*value}
+}
+impl Drop for Log {fn drop(&mut self){println!("log {}",self.value.borrow());}}
+fn attempt(owner:Rc<dyn Observer>,fail:bool)->Result<u32,u32> {
+    if fail {return Err(owner.notify(3));}
+    Ok(owner.notify(1))
+}
+fn erase(owner:Rc<Log>)->Rc<dyn Observer>{owner}
+fn main(){
+    let typed=Rc::new(Log{value:RefCell::new(4),tail:Tail{id:7}});
+    let object:Rc<dyn Observer>=typed.clone();
+    let alias=object.clone();
+    println!("{} {} {}",Rc::strong_count(&typed),Rc::strong_count(&object),Rc::ptr_eq(&object,&alias));
+    println!("{} {}",object.notify(2),typed.value.borrow());
+    println!("{:?} {:?}",attempt(alias,true),attempt(object.clone(),false));
+    println!("{} {}",Rc::strong_count(&typed),typed.value.borrow());
+    drop(typed);
+    println!("{}",Rc::strong_count(&object));
+    drop(object);
+    let typed=Rc::new(Log{value:RefCell::new(11),tail:Tail{id:8}});
+    {let object=erase(typed.clone());println!("{}",object.notify(1));}
+    println!("{}",Rc::strong_count(&typed));
+}
+"#,
+        "3 3 true\n6 6\nErr(9) Ok(10)\n2 10\n1\nlog 10\ntail 7\n12\n1\nlog 12\ntail 8\n",
+        "rc-dyn-alias-drop",
+    );
+}
+
+#[test]
+fn rc_dyn_zero_sized_pointee_drops_once_per_allocation() {
+    compare(
+        r#"
+use std::rc::Rc;
+trait Read {fn read(&self)->u32;}
+struct Z;
+impl Read for Z {fn read(&self)->u32{42}}
+impl Drop for Z {fn drop(&mut self){println!("drop Z");}}
+fn main(){
+    let typed=Rc::new(Z);
+    let object:Rc<dyn Read>=typed.clone();
+    let alias=object.clone();
+    let other:Rc<dyn Read>=Rc::new(Z);
+    println!("{} {} {}",object.read(),Rc::ptr_eq(&object,&alias),Rc::ptr_eq(&object,&other));
+    drop(object);drop(typed);
+    println!("{}",Rc::strong_count(&alias));
+    drop(alias);drop(other);
+}
+"#,
+        "42 true false\n1\ndrop Z\ndrop Z\n",
+        "rc-dyn-zst-drop",
+    );
+}
+
+#[test]
+fn rc_drop_preserves_original_pointee_address_for_both_last_owner_kinds() {
+    compare(
+        r#"
+use std::rc::Rc;
+use std::cell::RefCell;
+trait Read{fn read(&self)->u32;}
+struct N{address:RefCell<usize>}
+impl Read for N{fn read(&self)->u32{7}}
+impl Drop for N{
+    fn drop(&mut self){
+        let recorded=*self.address.borrow();
+        let here=self as *const N as usize;
+        println!("{}",recorded==here);
+    }
+}
+fn main(){
+    let typed=Rc::new(N{address:RefCell::new(0)});
+    let address=&*typed as *const N as usize;
+    *typed.address.borrow_mut()=address;
+    let object:Rc<dyn Read>=typed.clone();
+    drop(object);drop(typed);
+    let typed=Rc::new(N{address:RefCell::new(0)});
+    let address=&*typed as *const N as usize;
+    *typed.address.borrow_mut()=address;
+    let object:Rc<dyn Read>=typed.clone();
+    drop(typed);drop(object);
+}
+"#,
+        "true\ntrue\n",
+        "rc-drop-address",
     );
 }
 

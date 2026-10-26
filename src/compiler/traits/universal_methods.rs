@@ -1037,6 +1037,7 @@ mod tests {
                         normal,
                         facts.env(),
                         ProofContext {
+                            original: None,
                             predicates: &facts.predicates,
                             phase
                         },

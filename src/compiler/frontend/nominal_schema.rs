@@ -407,7 +407,17 @@ impl PlanState {
                     false,
                     transport,
                 )?;
-                ir::validate_shared_slice_element(&element, caller, budget)?;
+                if matches!(caller, ir::FactsCtx::Universal(_))
+                    && matches!(&element, ir::Ty::AssociatedType(_))
+                {
+                    // Raw trait headers retain binder-owned projections before
+                    // a world exists. This proves metadata only, not a Sized
+                    // element or executable carrier. Validated admission must
+                    // normalize and recheck the actual element later.
+                    caller.validate_ty_metadata_with_budget(&element, budget)?;
+                } else {
+                    ir::validate_shared_slice_element(&element, caller, budget)?;
+                }
                 ir::Ty::Ref {
                     kind: *kind,
                     referent: Arc::new(ir::Ty::Slice {
@@ -849,7 +859,7 @@ impl PlanState {
                                 name,
                                 module: d.module,
                                 visibility: d.visibility.clone(),
-                                fields,
+                                fields: fields.into(),
                             }))
                         }
                         NominalSchema::Enum(d) => {
@@ -901,7 +911,7 @@ impl PlanState {
                                         budget,
                                     )?,
                                     shape: v.shape,
-                                    fields: make_fields(self, &v.fields, d.module)?,
+                                    fields: make_fields(self, &v.fields, d.module)?.into(),
                                 });
                             }
                             let name = self.schema_path_text(registry, &d.name, budget)?;
@@ -968,7 +978,7 @@ impl PlanState {
             if let Some(error) = failure {
                 return Err(error);
             }
-            if ir::by_value_contains(&ty, id, 0)? {
+            if ir::by_value_contains(&ty, id, 0, budget)? {
                 return Err(format!(
                     "recursive type `{}` has infinite size (insert some indirection, e.g. Box)",
                     info.name
@@ -1184,9 +1194,12 @@ mod tests {
         assert_eq!(first.def().type_args.as_ref(), &args);
         assert_eq!(first.def().id, again.def().id);
         assert_ne!(first.def().id, other.def().id);
-        assert_eq!(first.def().fields[0].ty, ir::Ty::Bool);
         assert_eq!(
-            first.def().fields[1].ty,
+            first.def().fields.read(&budget).unwrap()[0].ty,
+            ir::Ty::Bool
+        );
+        assert_eq!(
+            first.def().fields.read(&budget).unwrap()[1].ty,
             ir::Ty::Tuple(Arc::from([ir::Ty::Unit, ir::Ty::Bool]))
         );
         assert!(

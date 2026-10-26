@@ -1,67 +1,71 @@
-// Rc<T> and RefCell<T> / Cell<T> as ordinary Rust source. Single-threaded
-// shared ownership: one heap block holds the strong count and the value.
+// Rc owns separate typed value and count allocations. Pointee unsizing preserves
+// both allocations, without unsized inline-header layout or base reconstruction.
 use super::mem::{raw_alloc, raw_free, storage_stride};
 
-struct RcBox<T> {
-    strong: usize,
-    value: T,
-}
-
-pub struct Rc<T> {
-    ptr: *mut RcBox<T>,
+pub struct Rc<T: ?Sized> {
+    ptr: *mut T,
+    strong: *mut usize,
 }
 
 impl<T> Rc<T> {
     pub fn new(value: T) -> Rc<T> {
-        let bytes = storage_stride::<RcBox<T>>();
-        let p = raw_alloc(if bytes == 0usize { 8usize } else { bytes }) as *mut RcBox<T>;
+        let bytes = storage_stride::<T>();
+        let bytes = if bytes == 0usize { 8usize } else { bytes };
+        let p = raw_alloc(bytes) as *mut T;
         if p as usize == 0usize {
             panic!("memory allocation failed");
         }
-        unsafe {
-            *p = RcBox { strong: 1usize, value };
+        let strong = raw_alloc(storage_stride::<usize>()) as *mut usize;
+        if strong as usize == 0usize {
+            raw_free(p as usize, bytes);
+            panic!("memory allocation failed");
         }
-        Rc { ptr: p }
+        unsafe {
+            *p = value;
+            *strong = 1usize;
+        }
+        Rc { ptr: p, strong }
     }
+}
 
+impl<T: ?Sized> Rc<T> {
     pub fn strong_count(this: &Rc<T>) -> usize {
-        unsafe { (*this.ptr).strong }
+        unsafe { *this.strong }
     }
 
     pub fn ptr_eq(this: &Rc<T>, other: &Rc<T>) -> bool {
-        this.ptr as usize == other.ptr as usize
+        // Each live value allocation has exactly one control allocation.
+        // Compare those thin identities, not an erased fat-pointer cast.
+        this.strong as usize == other.strong as usize
     }
 }
 
-impl<T> Clone for Rc<T> {
+impl<T: ?Sized> Clone for Rc<T> {
     fn clone(&self) -> Rc<T> {
-        let p = self.ptr;
+        let strong = self.strong;
         unsafe {
-            (*p).strong += 1usize;
+            if *strong == 18446744073709551615usize {
+                super::process::abort();
+            }
+            *strong += 1usize;
         }
-        Rc { ptr: p }
+        Rc { ptr: self.ptr, strong }
     }
 }
 
-impl<T> Drop for Rc<T> {
+impl<T: ?Sized> Drop for Rc<T> {
     fn drop(&mut self) {
-        let p = self.ptr;
-        let remaining = unsafe {
-            (*p).strong -= 1usize;
-            (*p).strong
-        };
-        if remaining == 0usize {
-            let _inner = unsafe { *p };
-            let bytes = storage_stride::<RcBox<T>>();
-            raw_free(p as usize, if bytes == 0usize { 8usize } else { bytes });
-        }
+        // Exact reserved-carrier cleanup is sealed by normal_drop_plan. It
+        // decrements strong, drops T in its original allocation at zero,
+        // and releases both allocations. Moving T into a local here would
+        // change the address observed by its destructor.
     }
 }
 
-impl<T> super::ops::Deref for Rc<T> {
+impl<T: ?Sized> super::ops::Deref for Rc<T> {
     type Target = T;
     fn deref(&self) -> &T {
-        unsafe { &(*self.ptr).value }
+        unsafe { &*self.ptr }
     }
 }
 

@@ -127,7 +127,7 @@ impl Checker<'_> {
             ir::Ty::Enum(value) => value.id(),
             _ => return Err("invalid metadata: constructor source is not nominal".into()),
         };
-        if matches!(source_identity.index, ir::NominalIndex::GraphRealization(_)) {
+        if source_identity.index.is_graph() {
             // An existing graph read is not a raw source template. Preserve its
             // exact typed identity, including engine, rather than laundering it
             // through declaration/argument lookup into a different engine's read.

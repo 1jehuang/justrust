@@ -23,7 +23,7 @@ pub(super) fn query_value(
         return Ok(None);
     }
     budget.charge_work(1)?;
-    usize::try_from(super::backend::value_size(query.queried_type())?)
+    usize::try_from(super::backend::value_size(query.queried_type(), budget)?)
         .map(Some)
         .map_err(|_| "private storage stride is negative".into())
 }
@@ -66,7 +66,12 @@ fn walk_alignment(
         ir::Ty::Array { element, .. } => walk_alignment(element, budget, depth + 1),
         ir::Ty::Tuple(fields) => field_alignment(fields.iter(), budget, depth + 1),
         ir::Ty::Struct(structure) => field_alignment(
-            structure.def().fields.iter().map(|field| &field.ty),
+            structure
+                .def()
+                .fields
+                .read(budget)?
+                .iter()
+                .map(|field| &field.ty),
             budget,
             depth + 1,
         ),
@@ -81,7 +86,11 @@ fn walk_alignment(
         ir::Ty::Enum(enumeration) => {
             let mut alignment = Some(8);
             for variant in enumeration.def().variants.iter() {
-                match field_alignment(variant.fields.iter().map(|f| &f.ty), budget, depth + 1)? {
+                match field_alignment(
+                    variant.fields.read(budget)?.iter().map(|f| &f.ty),
+                    budget,
+                    depth + 1,
+                )? {
                     Some(value) => alignment = alignment.map(|a: usize| a.max(value)),
                     None => alignment = None,
                 }

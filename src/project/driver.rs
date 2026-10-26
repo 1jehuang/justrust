@@ -220,6 +220,7 @@ fn externs_for(
             name,
             root: lib.path.clone(),
             cfg: cfg_for(package, &resolved.enabled[index])?,
+            cap_lints_allow: package.registry,
         });
         for dep in manifest::visible_dependencies(
             ws,

@@ -72,6 +72,63 @@ pub(super) enum First<'e> {
 }
 
 impl type_check::Checker<'_> {
+    /// A method autoref borrows the indexed place without copying its element.
+    /// Retain the checked Index/IndexMut reference once before reborrowing.
+    pub(super) fn indexed_method_receiver(
+        &mut self,
+        receiver: &Expr,
+        kind: ir::BorrowKind,
+        selected: &MethodSelection,
+    ) -> Result<Option<(ir::ExprId, Option<ir::ImplicitBorrowKind>)>, String> {
+        let Some(carrier) =
+            self.overloaded_index_reference(kind, receiver, receiver as *const Expr as usize)?
+        else {
+            return Ok(None);
+        };
+        let carrier_ty = self.exprs[carrier.0].ty.clone();
+        if !matches!(carrier_ty, ir::Ty::Ref { .. }) {
+            return Err("overloaded index must return a reference".into());
+        }
+        let projection_count = selected
+            .depth
+            .checked_add(usize::from(matches!(
+                selected.adjustment,
+                ReceiverAdjustment::Identity
+            )))
+            .and_then(|depth| depth.checked_add(1))
+            .ok_or_else(|| {
+                "resource limit: indexed receiver projection depth overflow".to_string()
+            })?;
+        let allocation = projection_count
+            .checked_mul(std::mem::size_of::<ir::Projection>())
+            .and_then(|bytes| bytes.checked_add(128))
+            .ok_or_else(|| "resource limit: indexed receiver allocation overflow".to_string())?;
+        self.charge_node(allocation)?;
+        let local = self.temporary("$index_receiver", carrier_ty, false)?;
+        self.borrow_temporaries.push((local, false));
+        let projection = std::iter::repeat_n(ir::Projection::Deref, projection_count).collect();
+        let borrowed = self.borrow_expression(kind, ir::Place { local, projection })?;
+        let ty = self.exprs[borrowed.0].ty.clone();
+        let completion = self.exprs[carrier.0].completion;
+        let id = ir::ExprId(self.exprs.len());
+        self.exprs.push(ir::TypedExpr {
+            ty,
+            completion,
+            kind: ir::ExprKind::Block(ir::TypedBlock {
+                statements: vec![ir::TypedStmt::Assign {
+                    local,
+                    value: carrier,
+                }],
+                tail: Some(borrowed),
+            }),
+        });
+        // IndexMut already acquired the mutable carrier while evaluating the
+        // indexed place. Its reborrow stays immediate, like an overloaded
+        // DerefMut call receiver. The argument is this block, not the nested
+        // Borrow expression required by a direct two-phase receiver marker.
+        Ok(Some((id, None)))
+    }
+
     /// Find the immutable Index signature without evaluating an operand. This
     /// supplies the same element type to formatting and generic inference that
     /// the eventual checked operator call supplies to expression lowering.

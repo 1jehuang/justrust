@@ -98,10 +98,10 @@ fn pair(
         for (a, b) in source_args.iter().zip(mapped_args) {
             recurse(a, b)?;
         }
-        if matches!(mapped_id.index, ir::NominalIndex::GraphRealization(_)) {
+        if mapped_id.index.is_graph() {
             let capability = capability.ok_or("closed call realization omitted typed read")?;
             capability.retain_for_substitution(mapped, engine, caller, budget)?;
-            if matches!(source_id.index, ir::NominalIndex::GraphRealization(_)) {
+            if source_id.index.is_graph() {
                 if source_id != mapped_id {
                     return Err("closed call realization changed existing graph identity".into());
                 }
@@ -138,7 +138,9 @@ fn pair(
             // only one side, even though the declaration and actuals agree.
             if matches!(
                 source_id.index,
-                ir::NominalIndex::GraphRealization(_) | ir::NominalIndex::SourceSlot(_)
+                ir::NominalIndex::GraphRealization(_)
+                    | ir::NominalIndex::GraphComponentMember(..)
+                    | ir::NominalIndex::SourceSlot(_)
             ) && matches!(mapped_id.index, ir::NominalIndex::SourceSlot(_))
                 && source_id.snapshot == mapped_id.snapshot
             {

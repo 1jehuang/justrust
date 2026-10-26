@@ -65,7 +65,7 @@ fn projected_normal_form_requires_graph_read_and_preserves_missing() {
         panic!("struct source")
     };
     let mut definition = original.def().clone();
-    let mut fields = definition.fields.to_vec();
+    let mut fields = definition.fields.read(&plan.budget).unwrap().to_vec();
     fields[0].ty = ir::Ty::Bool;
     definition.fields = fields.into();
     let forged = ir::Ty::Struct(ir::StructTy::new(definition));

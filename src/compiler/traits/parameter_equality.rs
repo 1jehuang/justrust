@@ -1094,7 +1094,7 @@ mod tests {
             let universal = world.callable_facts(keep).unwrap();
             (world, closed, universal)
         }
-        let (_world, facts, universal) = fixture();
+        let (world, facts, universal) = fixture();
         let view = body_view(&facts);
         assert!(view.equality_results.is_some());
         view.validate_for(&facts).unwrap();
@@ -1122,6 +1122,58 @@ mod tests {
             let origins = Arc::make_mut(&mut authority.origins);
             origins[0].occurrence = origins[0].occurrence.wrapping_add(1);
         });
+        // Exercise the equality producer directly, not its outer proof memo:
+        // closedness formation must share this exact local proof arena.
+        let context = ProofContext::from_facts(&facts);
+        let mut active = ProofScratch::default();
+        // Source occurrence rows deliberately retain nested actual projections.
+        // Match replay_validated_equality_rows: normalize their closed nested
+        // actuals with complete dependency replay before proving the root row.
+        let rows = world
+            .normalize_instantiated_projection_predicates(
+                &view.equality_results.as_ref().unwrap().actual_rows,
+                context,
+                &mut active,
+            )
+            .unwrap();
+        let Predicate::ProjectionEq { projection, ty } = &rows[0] else {
+            panic!("missing normalized source-backed equality row")
+        };
+        let first = world.prove_projection_equality(projection, ty, context, &mut active);
+        assert!(matches!(&first, Ok(ProofOutcome::Proved(_))), "{first:?}");
+        let roots = active.closedness.len();
+        assert!(roots > 0);
+        for _ in 0..3 {
+            assert!(matches!(
+                world.prove_projection_equality(projection, ty, context, &mut active),
+                Ok(ProofOutcome::Proved(_))
+            ));
+            assert_eq!(active.closedness.len(), roots);
+        }
+        assert!(!matches!(ty, Ty::Unit));
+        assert!(matches!(
+            world.prove_projection_equality(projection, &Ty::Unit, context, &mut active),
+            Ok(ProofOutcome::NotProven)
+        ));
+        let mut forged = projection.clone();
+        forged.item.index = u64::MAX;
+        assert!(
+            matches!(world.prove_projection_equality(&forged, ty, context, &mut active),
+            Err(error) if error.kind() == FactsErrorKind::InvalidMetadata)
+        );
+        assert!(
+            matches!(world.prove_projection_equality(projection, ty, ProofContext::from_facts(&foreign), &mut active),
+            Err(error) if error.kind() == FactsErrorKind::InvalidMetadata)
+        );
+        assert_eq!(active.closedness.len(), roots);
+        assert!(facts.budget().charge_work(usize::MAX).is_err());
+        let failure = facts.budget().first_resource_failure();
+        facts.budget().poison_ledger_for_tests();
+        assert!(
+            matches!(world.prove_projection_equality(projection, ty, context, &mut active),
+            Err(error) if error.kind() == FactsErrorKind::Resource)
+        );
+        assert_eq!(facts.budget().first_resource_failure(), failure);
     }
 
     #[test]

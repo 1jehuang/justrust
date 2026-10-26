@@ -83,6 +83,7 @@ impl SnapshotId {
 pub enum NominalIndex {
     SourceSlot(usize),
     GraphRealization(crate::engine::OutputIdentity),
+    GraphComponentMember(crate::engine::OutputIdentity, u32),
     /// Realized inside one parent checking node from its own finalized
     /// closure actuals (frontend nominal_inputs/parent_local.rs). Never a
     /// graph key and never valid outside the owning parent's facts.
@@ -112,11 +113,17 @@ impl Ty {
     }
 }
 impl NominalIndex {
+    pub fn is_graph(self) -> bool {
+        matches!(
+            self,
+            Self::GraphRealization(_) | Self::GraphComponentMember(..)
+        )
+    }
     /// Source-schema consumers cannot use graph coordinates as interner slots.
     pub fn source_slot(self) -> Result<usize, String> {
         match self {
             Self::SourceSlot(index) => Ok(index),
-            Self::GraphRealization(_) => {
+            Self::GraphRealization(_) | Self::GraphComponentMember(..) => {
                 Err("graph nominal requires an explicit typed realization capability".into())
             }
             Self::ParentLocal { .. } => {
@@ -687,10 +694,9 @@ pub fn carrier_locations(ty: &Ty, budget: &PlanBudget) -> Result<Arc<[CarrierLoc
             Ty::Str => {}
             Ty::Slice { element } => {
                 child(element)?;
-                // A declared element parameter retains its symbolic family at
-                // SliceElement. Concrete substitution must validate the bounded
-                // shared-reference shape before expanding this same family.
-                has = matches!(element.as_ref(), Ty::Ref { .. } | Ty::Param(_));
+                // Preserve every structurally discovered element channel.
+                // Generic parameters retain SliceElement; tuple substitution
+                // expands that same family through ordered Field steps.
             }
             Ty::Tuple(fields) => {
                 for ty in fields.iter() {
@@ -698,13 +704,13 @@ pub fn carrier_locations(ty: &Ty, budget: &PlanBudget) -> Result<Arc<[CarrierLoc
                 }
             }
             Ty::Struct(value) => {
-                for field in value.def().fields.iter() {
+                for field in value.def().fields.read(budget)?.iter() {
                     child(&field.ty)?;
                 }
             }
             Ty::Enum(value) => {
                 for variant in value.def().variants.iter() {
-                    for field in variant.fields.iter() {
+                    for field in variant.fields.read(budget)?.iter() {
                         child(&field.ty)?;
                     }
                 }
@@ -871,13 +877,13 @@ pub fn carrier_locations(ty: &Ty, budget: &PlanBudget) -> Result<Arc<[CarrierLoc
                         child(CarrierStep::SliceElement, element)?;
                     }
                     Ty::Struct(value) => {
-                        for (index, field) in value.def().fields.iter().enumerate() {
+                        for (index, field) in value.def().fields.read(budget)?.iter().enumerate() {
                             child(CarrierStep::Field(index), &field.ty)?;
                         }
                     }
                     Ty::Enum(value) => {
                         for (variant, definition) in value.def().variants.iter().enumerate() {
-                            for (field, ty) in definition.fields.iter().enumerate() {
+                            for (field, ty) in definition.fields.read(budget)?.iter().enumerate() {
                                 child(
                                     CarrierStep::VariantField {
                                         variant: VariantId {
@@ -918,32 +924,37 @@ pub fn carrier_locations(ty: &Ty, budget: &PlanBudget) -> Result<Arc<[CarrierLoc
     Ok(output.into())
 }
 
-pub fn carrier_at<'a>(
-    mut ty: &'a Ty,
+pub fn carrier_at(
+    root: &Ty,
     location: &CarrierLocation,
     budget: &PlanBudget,
-) -> Result<&'a Ty, String> {
+) -> Result<Ty, String> {
+    let mut ty = root.clone();
     for step in location.path.0.iter() {
         budget.charge_work(1)?;
-        ty = match (step, ty) {
-            (CarrierStep::Referent, Ty::Ref { referent, .. }) => referent,
-            (CarrierStep::Field(index), _) => {
-                ty.field_ty(*index).ok_or("carrier field outside type")?
-            }
+        ty = match (step, &ty) {
+            (CarrierStep::Referent, Ty::Ref { referent, .. }) => referent.as_ref().clone(),
+            (CarrierStep::Field(index), _) => ty
+                .field_ty(*index, budget)?
+                .ok_or("carrier field outside type")?,
             (CarrierStep::ConstantIndex(index), Ty::Array { element, len }) if index < len => {
-                element
+                element.as_ref().clone()
             }
-            (CarrierStep::SliceElement, Ty::Slice { element }) => element,
+            (CarrierStep::SliceElement, Ty::Slice { element }) => element.as_ref().clone(),
             (CarrierStep::VariantField { variant, field }, Ty::Enum(value))
                 if variant.owner == value.def().id =>
             {
-                &value
+                value
                     .def()
                     .variants
                     .get(variant.index)
-                    .and_then(|v| v.fields.get(*field))
                     .ok_or("carrier variant outside type")?
+                    .fields
+                    .read(budget)?
+                    .get(*field)
+                    .ok_or("carrier variant field outside type")?
                     .ty
+                    .clone()
             }
             _ => return Err("carrier value path does not match type".into()),
         };
@@ -956,12 +967,12 @@ pub fn carrier_at<'a>(
     };
     for _ in 0..count {
         budget.charge_work(1)?;
-        let Ty::Ref { referent, .. } = ty else {
+        let Ty::Ref { referent, .. } = &ty else {
             return Err("carrier prefix outside type".into());
         };
-        ty = referent;
+        ty = referent.as_ref().clone();
     }
-    match (&location.channel, ty) {
+    match (&location.channel, &ty) {
         (CarrierChannel::Fixed(_), Ty::Ref { .. }) => Ok(ty),
         (CarrierChannel::ProjectionTail { projection, .. }, Ty::AssociatedType(actual))
             if projection == actual =>
@@ -1278,6 +1289,22 @@ fn validate_call_evidence_with_policy(
     budget: &PlanBudget,
     policy: CallEvidencePolicy<'_>,
 ) -> Result<(), String> {
+    validate_call_evidence_with_policy_scratch(
+        source,
+        facts,
+        budget,
+        policy,
+        &mut super::traits::TraitScratch::default(),
+    )
+}
+
+fn validate_call_evidence_with_policy_scratch(
+    source: &CheckedFunction,
+    facts: &super::traits::ValidatedFacts,
+    budget: &PlanBudget,
+    policy: CallEvidencePolicy<'_>,
+    trait_scratch: &mut super::traits::TraitScratch,
+) -> Result<(), String> {
     if let Some(proof) = &source.body_substitution {
         return proof.validate(source, facts, budget);
     }
@@ -1289,7 +1316,6 @@ fn validate_call_evidence_with_policy(
             .ok_or("call evidence index overflow")?,
     )?;
     let mut seen = vec![false; source.exprs.len()];
-    let mut trait_scratch = super::traits::TraitScratch::default();
     for evidence in source.call_evidence.iter() {
         budget.charge_work(1)?;
         let slot = seen
@@ -1309,11 +1335,7 @@ fn validate_call_evidence_with_policy(
             return Err("call evidence does not name a call".into());
         };
         facts
-            .validate_signature_with(
-                SignatureSubject::Call(target),
-                signature,
-                &mut trait_scratch,
-            )
+            .validate_signature_with(SignatureSubject::Call(target), signature, trait_scratch)
             .map_err(|error| error.into_legacy_diagnostic(budget))?;
         if evidence.arguments.len() != args.len() || args.len() != signature.params.len() {
             return Err("call evidence argument arity mismatch".into());
@@ -1799,7 +1821,6 @@ impl GeneratedBodyShape {
         budget: &PlanBudget,
     ) -> Result<Self, String> {
         source.preflight_plan(FactsCtx::from_validated(facts), budget)?;
-        source.preflight_plan(FactsCtx::from_validated(facts), budget)?;
         budget.retain_bytes(std::mem::size_of::<Self>() + 8 * std::mem::size_of::<usize>())?;
         Ok(Self {
             runtime_sites: source.runtime_sites.clone(),
@@ -2046,7 +2067,7 @@ impl BodySubstitutionProof {
                     Ok(true)
                 }
                 Ty::Struct(value) => {
-                    for field in value.def().fields.iter() {
+                    for field in value.def().fields.read(budget)?.iter() {
                         if !shared_shape(&field.ty, budget, depth + 1)? {
                             return Ok(false);
                         }
@@ -2127,7 +2148,12 @@ impl BodySubstitutionProof {
                         && before.def().fields.len() == after.def().fields.len() =>
                 {
                     let mut changed = false;
-                    for (before, after) in before.def().fields.iter().zip(after.def().fields.iter())
+                    for (before, after) in before
+                        .def()
+                        .fields
+                        .read(budget)?
+                        .iter()
+                        .zip(after.def().fields.read(budget)?.iter())
                     {
                         if before.name != after.name {
                             return Err(
@@ -3090,8 +3116,9 @@ impl NominalSubstitutionRequest<'_> {
 }
 
 /// Shape admission only, never an executable family capability. Source and
-/// Recipe actuals use the same root-chain rule. Nominal/aggregate reference
-/// actuals are not admitted by this function.
+/// Recipe actuals use the same root-chain rule. Unsized str/slice shapes are
+/// admitted here, but the authoritative binder's implicit Sized obligations
+/// still reject them unless the parameter is declared `?Sized`.
 pub fn validate_root_reference_actual(ty: &Ty, budget: &PlanBudget) -> Result<(), String> {
     let mut inner = ty;
     let mut depth = 0;
@@ -3104,7 +3131,8 @@ pub fn validate_root_reference_actual(ty: &Ty, budget: &PlanBudget) -> Result<()
     budget.check_depth(depth)?;
     // Unsized referents behind at least one reference (`&str`, `&[T]`,
     // `&dyn Tr`) are sized actuals, matching the nested-reference rule in
-    // `reject_references`. Bare `str`/`[T]` actuals stay rejected.
+    // `reject_references`. Bare str/slice actuals are admitted only by shape;
+    // this helper does not discharge the binder's Sized obligations.
     match inner {
         Ty::Str | Ty::Dyn(_) if depth > 0 => Ok(()),
         // A bare `str` actual is admitted only by shape here. Its implicit
@@ -3433,7 +3461,7 @@ fn substitute_ty_walk(
             }
         }
         Ty::Struct(value) => {
-            if matches!(value.def().id.index, NominalIndex::GraphRealization(_)) {
+            if value.def().id.index.is_graph() {
                 return cx.retain_realized_nominal(ty, caller, budget);
             }
             if matches!(value.def().id.index, NominalIndex::ParentLocal { .. }) {
@@ -3470,7 +3498,7 @@ fn substitute_ty_walk(
             )?
         }
         Ty::Enum(value) => {
-            if matches!(value.def().id.index, NominalIndex::GraphRealization(_)) {
+            if value.def().id.index.is_graph() {
                 return cx.retain_realized_nominal(ty, caller, budget);
             }
             if matches!(value.def().id.index, NominalIndex::ParentLocal { .. }) {
@@ -3605,6 +3633,7 @@ pub(in crate::compiler) fn instantiate_checked_with_constants(
         cx: &mut recording,
         budget,
         owners: std::collections::HashMap::new(),
+        component_owners_seen: std::collections::HashSet::new(),
     };
     output.result = visitor.ty(&output.result)?;
     for local in &mut output.locals {
@@ -4159,12 +4188,13 @@ fn canonicalize_call_metadata(
     budget: &PlanBudget,
 ) -> Result<CheckedFunction, super::traits::FactsError> {
     use super::traits::FactsError;
+    // A single node-local proof scratch spans source preflight and canonical
+    // call replay. All cache entries retain their exact facts/world authority.
+    let mut scratch = super::traits::TraitScratch::default();
     source
-        .preflight_plan(FactsCtx::from_validated(facts), budget)
+        .preflight_plan_with_scratch(FactsCtx::from_validated(facts), budget, &mut scratch)
         .map_err(|e| FactsError::from_message(budget, &e))?;
     let mut output = source.clone();
-    // One proof scratch for every call in this body: node-local memo only.
-    let mut scratch = super::traits::TraitScratch::default();
     for (expression_index, expression) in output.exprs.iter_mut().enumerate() {
         budget
             .charge_work(1)
@@ -4301,26 +4331,45 @@ pub fn close_checked_calls(
 }
 
 pub(super) fn reject_references(root: &Ty, budget: &PlanBudget) -> Result<(), String> {
-    fn walk(ty: &Ty, budget: &PlanBudget, depth: usize) -> Result<(), String> {
+    fn walk(
+        ty: &Ty,
+        budget: &PlanBudget,
+        depth: usize,
+        seen: &mut std::collections::HashSet<NominalAppId>,
+    ) -> Result<(), String> {
         budget.check_depth(depth)?;
         if ty.is_nominal_back_edge() {
             return Ok(());
         }
         budget.charge_work(1)?;
+        let component = match ty {
+            Ty::Struct(v) => v.realization().map(|cap| (v.id(), cap)),
+            Ty::Enum(v) => v.realization().map(|cap| (v.id(), cap)),
+            _ => None,
+        };
+        if let Some((id, cap)) = component.filter(|(_, cap)| cap.is_component()) {
+            cap.check_definition(ty).map_err(|e| e.to_string())?;
+            budget.retain_bytes(std::mem::size_of::<NominalAppId>())?;
+            seen.try_reserve(1)
+                .map_err(|_| "reference traversal allocation failed")?;
+            if !seen.insert(id) {
+                return Ok(());
+            }
+        }
         match ty {
             Ty::Opaque(opaque) => {
                 for ty in opaque.types() {
-                    walk(ty, budget, depth + 1)?;
+                    walk(ty, budget, depth + 1, seen)?;
                 }
             }
             Ty::Closure(closure) => {
                 for ty in closure.types() {
-                    walk(ty, budget, depth + 1)?;
+                    walk(ty, budget, depth + 1, seen)?;
                 }
             }
             Ty::FnItem(item) => {
                 for ty in item.type_args.iter() {
-                    walk(ty, budget, depth + 1)?;
+                    walk(ty, budget, depth + 1, seen)?;
                 }
             }
             Ty::AssociatedType(_) => {}
@@ -4329,38 +4378,38 @@ pub(super) fn reject_references(root: &Ty, budget: &PlanBudget) -> Result<(), St
             // behind a reference are fine; bare slices are not actuals.
             Ty::Ref { referent, .. } => match referent.as_ref() {
                 Ty::Str | Ty::Slice { .. } | Ty::Dyn(_) => {}
-                other => walk(other, budget, depth + 1)?,
+                other => walk(other, budget, depth + 1, seen)?,
             },
             // Unsized actuals for `?Sized` parameters (`Borrow<str>`,
             // `Deref<Target = [T]>`) carry no loans of their own. Sized
             // parameters reject them through their implicit Sized rows.
             Ty::Str => {}
-            Ty::Slice { element } => walk(element, budget, depth + 1)?,
+            Ty::Slice { element } => walk(element, budget, depth + 1, seen)?,
             Ty::Tuple(fields) => {
                 for field in fields.iter() {
-                    walk(field, budget, depth + 1)?;
+                    walk(field, budget, depth + 1, seen)?;
                 }
             }
             Ty::Array { element, .. }
             | Ty::RawPtr {
                 pointee: element, ..
-            } => walk(element, budget, depth + 1)?,
+            } => walk(element, budget, depth + 1, seen)?,
             Ty::Struct(value) => {
                 for argument in value.def().type_args.iter() {
-                    walk(argument, budget, depth + 1)?;
+                    walk(argument, budget, depth + 1, seen)?;
                 }
-                for field in value.def().fields.iter() {
-                    walk(&field.ty, budget, depth + 1)?;
+                for field in value.def().fields.read(budget)?.iter() {
+                    walk(&field.ty, budget, depth + 1, seen)?;
                 }
             }
             Ty::Enum(value) => {
                 for argument in value.def().type_args.iter() {
-                    walk(argument, budget, depth + 1)?;
+                    walk(argument, budget, depth + 1, seen)?;
                 }
                 for variant in value.def().variants.iter() {
                     budget.charge_work(1)?;
-                    for field in variant.fields.iter() {
-                        walk(&field.ty, budget, depth + 1)?;
+                    for field in variant.fields.read(budget)?.iter() {
+                        walk(&field.ty, budget, depth + 1, seen)?;
                     }
                 }
             }
@@ -4375,7 +4424,7 @@ pub(super) fn reject_references(root: &Ty, budget: &PlanBudget) -> Result<(), St
         }
         Ok(())
     }
-    walk(root, budget, 0)
+    walk(root, budget, 0, &mut std::collections::HashSet::new())
 }
 struct Instantiate<'a, C> {
     facts: FactsCtx<'a>,
@@ -4386,10 +4435,28 @@ struct Instantiate<'a, C> {
     /// Node-local: enum applications seen in this body's source types, so a
     /// downcast owner resolves from its own definition, not a shared table.
     owners: std::collections::HashMap<NominalAppId, NominalAppInfo>,
+    component_owners_seen: std::collections::HashSet<NominalAppId>,
 }
 impl<C: SubstitutionCx> Instantiate<'_, C> {
     fn note_owners(&mut self, ty: &Ty, depth: usize) -> Result<(), String> {
         self.budget.check_depth(depth)?;
+        let component = match ty {
+            Ty::Struct(v) => v.realization().map(|cap| (v.id(), cap)),
+            Ty::Enum(v) => v.realization().map(|cap| (v.id(), cap)),
+            _ => None,
+        };
+        if let Some((id, cap)) = component.filter(|(_, cap)| cap.is_component()) {
+            cap.check_definition(ty).map_err(|e| e.to_string())?;
+            self.budget.charge_work(1)?;
+            self.budget
+                .retain_bytes(std::mem::size_of::<NominalAppId>())?;
+            self.component_owners_seen
+                .try_reserve(1)
+                .map_err(|_| "nominal owner discovery allocation failed")?;
+            if !self.component_owners_seen.insert(id) {
+                return Ok(());
+            }
+        }
         match ty {
             Ty::Enum(value) if !value.is_back_edge() => {
                 let def = value.def();
@@ -4403,7 +4470,7 @@ impl<C: SubstitutionCx> Instantiate<'_, C> {
                         },
                     );
                     for variant in def.variants.iter() {
-                        for field in variant.fields.iter() {
+                        for field in variant.fields.read(self.budget)?.iter() {
                             self.note_owners(&field.ty, depth + 1)?;
                         }
                     }
@@ -4413,7 +4480,7 @@ impl<C: SubstitutionCx> Instantiate<'_, C> {
                 }
             }
             Ty::Struct(value) if !value.is_back_edge() => {
-                for field in value.def().fields.iter() {
+                for field in value.def().fields.read(self.budget)?.iter() {
                     self.note_owners(&field.ty, depth + 1)?;
                 }
                 for arg in value.def().type_args.iter() {
@@ -5038,7 +5105,7 @@ impl StructDef {
             name: String::new(),
             module,
             visibility: Visibility::Public,
-            fields: Arc::from(Vec::new()),
+            fields: Vec::<FieldDef>::new().into(),
         }
     }
 }
@@ -5057,14 +5124,24 @@ impl Ty {
 
 /// True when `ty` stores application `id` by value (not behind a pointer):
 /// such a recursive type has infinite size.
-pub fn by_value_contains(ty: &Ty, id: NominalAppId, depth: usize) -> Result<bool, String> {
+pub fn by_value_contains(
+    ty: &Ty,
+    id: NominalAppId,
+    depth: usize,
+    budget: &PlanBudget,
+) -> Result<bool, String> {
     fn walk(
         ty: &Ty,
         id: NominalAppId,
         depth: usize,
         memo: &mut std::collections::HashMap<usize, usize>,
         work: &mut usize,
+        budget: &PlanBudget,
     ) -> Result<(bool, usize), String> {
+        budget
+            .check_depth(depth)
+            .map_err(|error| format!("type nesting resource limit exceeded: {error}"))?;
+        budget.charge_work(1)?;
         if depth > 256 {
             return Err("type nesting resource limit exceeded".into());
         }
@@ -5099,13 +5176,13 @@ pub fn by_value_contains(ty: &Ty, id: NominalAppId, depth: usize) -> Result<bool
         }
         let mut height = 0;
         let mut child = |ty: &Ty| -> Result<bool, String> {
-            let (contains, child_height) = walk(ty, id, depth + 1, memo, work)?;
+            let (contains, child_height) = walk(ty, id, depth + 1, memo, work, budget)?;
             height = height.max(child_height + 1);
             Ok(contains)
         };
         match ty {
             Ty::Struct(value) => {
-                for field in value.def().fields.iter() {
+                for field in value.def().fields.read(budget)?.iter() {
                     if child(&field.ty)? {
                         return Ok((true, height));
                     }
@@ -5113,7 +5190,7 @@ pub fn by_value_contains(ty: &Ty, id: NominalAppId, depth: usize) -> Result<bool
             }
             Ty::Enum(value) => {
                 for variant in value.def().variants.iter() {
-                    for field in variant.fields.iter() {
+                    for field in variant.fields.read(budget)?.iter() {
                         if child(&field.ty)? {
                             return Ok((true, height));
                         }
@@ -5139,7 +5216,15 @@ pub fn by_value_contains(ty: &Ty, id: NominalAppId, depth: usize) -> Result<bool
         memo.insert(key, height);
         Ok((false, height))
     }
-    walk(ty, id, depth, &mut std::collections::HashMap::new(), &mut 0).map(|(contains, _)| contains)
+    walk(
+        ty,
+        id,
+        depth,
+        &mut std::collections::HashMap::new(),
+        &mut 0,
+        budget,
+    )
+    .map(|(contains, _)| contains)
 }
 
 #[derive(Clone, Debug)]
@@ -5164,7 +5249,7 @@ pub enum VariantShape {
 pub struct VariantDef {
     pub name: String,
     pub shape: VariantShape,
-    pub fields: Arc<[FieldDef]>,
+    pub fields: NominalFields,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -5193,44 +5278,77 @@ pub enum BorrowKind {
 /// Index of the first `Deref` in `path` whose base has raw pointer type.
 /// Storage reached through a raw pointer is outside every tracked canonical
 /// root: analyses check the pointer prefix and treat the rest as untracked.
-pub fn raw_deref_index(root: &Ty, path: &[Projection]) -> Option<usize> {
-    let mut ty = root;
+pub fn raw_deref_index(
+    root: &Ty,
+    path: &[Projection],
+    budget: &PlanBudget,
+) -> Result<Option<usize>, String> {
+    raw_deref_index_optional(root, path, Some(budget))
+}
+
+pub(super) fn raw_deref_index_optional(
+    root: &Ty,
+    path: &[Projection],
+    budget: Option<&PlanBudget>,
+) -> Result<Option<usize>, String> {
+    if path.len() > MAX_PATTERN_PROJECTION_DEPTH {
+        return Err("projection depth exceeds limit 128".into());
+    }
+    if let Some(budget) = budget {
+        budget.check_depth(path.len())?;
+    }
+    let mut ty = root.clone();
     let mut steps = path.iter().enumerate();
     while let Some((index, step)) = steps.next() {
+        if let Some(budget) = budget {
+            budget.charge_work(1)?;
+        }
         ty = match step {
-            Projection::Deref => match ty {
-                Ty::RawPtr { .. } => return Some(index),
-                Ty::Ref { referent, .. } => referent,
-                _ => return None,
+            Projection::Deref => match &ty {
+                Ty::RawPtr { .. } => return Ok(Some(index)),
+                Ty::Ref { referent, .. } => referent.as_ref().clone(),
+                _ => return Ok(None),
             },
-            Projection::Field(field) => ty.field_ty(*field)?,
-            Projection::ConstantIndex(_) | Projection::DynamicIndex(_) => match ty {
-                Ty::Array { element, .. } => element,
-                _ => return None,
+            Projection::Field(field) => match ty.field_ty_optional(*field, budget)? {
+                Some(ty) => ty,
+                None => return Ok(None),
+            },
+            Projection::ConstantIndex(_) | Projection::DynamicIndex(_) => match &ty {
+                Ty::Array { element, .. } => element.as_ref().clone(),
+                _ => return Ok(None),
             },
             Projection::Downcast(variant) => {
-                let Ty::Enum(owner) = ty else {
-                    return None;
+                let Ty::Enum(owner) = &ty else {
+                    return Ok(None);
                 };
                 let Some((_, Projection::Field(field))) = steps.next() else {
-                    return None;
+                    return Ok(None);
                 };
-                &owner
-                    .def()
-                    .variants
-                    .get(variant.index)?
-                    .fields
-                    .get(*field)?
-                    .ty
+                let Some(variant) = owner.def().variants.get(variant.index) else {
+                    return Ok(None);
+                };
+                let fields = variant.fields.read_optional(budget)?;
+                let Some(field) = fields.get(*field) else {
+                    return Ok(None);
+                };
+                field.ty.clone()
             }
         };
     }
-    None
+    Ok(None)
 }
 
 /// Checks structural typing, not the runtime proof needed to read a payload.
-pub fn projected_ty<'a>(root: &'a Ty, path: &[Projection]) -> Result<&'a Ty, String> {
-    projected_ty_inner(root, path, false)
+pub fn projected_ty(root: &Ty, path: &[Projection], budget: &PlanBudget) -> Result<Ty, String> {
+    projected_ty_inner(root, path, false, Some(budget))
+}
+
+pub(super) fn projected_ty_optional(
+    root: &Ty,
+    path: &[Projection],
+    budget: Option<&PlanBudget>,
+) -> Result<Ty, String> {
+    projected_ty_inner(root, path, false, budget)
 }
 
 /// Array operand of a runtime index statement (`AssignIndex{Op}`,
@@ -5239,82 +5357,91 @@ pub fn projected_ty<'a>(root: &'a Ty, path: &[Projection]) -> Result<&'a Ty, Str
 /// With `mutable`, also checks static mutation authority, including
 /// unreachable metadata; binding lifetime, initialization and exclusive loan
 /// access remain ownership-analysis duties.
-pub(super) fn indexed_array_ty<'a>(
-    root: &'a Ty,
+pub(super) fn indexed_array_ty(
+    root: &Ty,
     path: &[Projection],
     mutable: bool,
-) -> Result<&'a Ty, String> {
+    budget: &PlanBudget,
+) -> Result<Ty, String> {
+    indexed_array_ty_optional(root, path, mutable, Some(budget))
+}
+
+pub(super) fn indexed_array_ty_optional(
+    root: &Ty,
+    path: &[Projection],
+    mutable: bool,
+    budget: Option<&PlanBudget>,
+) -> Result<Ty, String> {
+    if let Some(budget) = budget {
+        budget.check_depth(path.len())?;
+    }
     if let Some((Projection::DynamicIndex(_), prefix)) = path.split_last() {
-        // The prefix is itself followed by this index step, so a trailing
-        // runtime row in the prefix is interior too.
-        let ty = indexed_array_ty(root, prefix, mutable)?;
+        let ty = indexed_array_ty_optional(root, prefix, mutable, budget)?;
         return match ty {
             Ty::Array { element, len }
-                if *len <= MAX_ARRAY_LEN && matches!(element.as_ref(), Ty::Array { .. }) =>
+                if len <= MAX_ARRAY_LEN && matches!(element.as_ref(), Ty::Array { .. }) =>
             {
-                Ok(element)
+                Ok(element.as_ref().clone())
             }
             _ => Err("runtime place index requires array or slice type".into()),
         };
     }
-    projected_ty_inner(root, path, mutable)
+    projected_ty_inner(root, path, mutable, budget)
 }
 
-fn projected_ty_inner<'a>(
-    root: &'a Ty,
+fn projected_ty_inner(
+    root: &Ty,
     path: &[Projection],
     mutable: bool,
-) -> Result<&'a Ty, String> {
+    budget: Option<&PlanBudget>,
+) -> Result<Ty, String> {
+    if let Some(budget) = budget {
+        budget.check_depth(path.len())?;
+    }
     if path.len() > MAX_PATTERN_PROJECTION_DEPTH {
         return Err("projection depth exceeds limit 128".into());
     }
-    let mut ty = root;
+    let mut ty = root.clone();
     let mut path = path.iter();
     while let Some(projection) = path.next() {
+        if let Some(budget) = budget {
+            budget.charge_work(1)?;
+        }
         ty = match *projection {
-            Projection::Deref => {
-                if let Ty::RawPtr { kind, pointee } = ty {
+            Projection::Deref => match &ty {
+                Ty::RawPtr { kind, pointee } => {
                     if mutable && *kind != BorrowKind::Mut {
                         return Err("mutation through a *const raw pointer".into());
                     }
-                    ty = pointee;
-                    continue;
+                    pointee.as_ref().clone()
                 }
-                let Ty::Ref { kind, referent } = ty else {
-                    return Err("dereference requires reference type".into());
-                };
-                if mutable && *kind != BorrowKind::Mut {
-                    return Err(
-                        "compound indexed mutation requires mutable reference at every dereference"
-                            .into(),
-                    );
+                Ty::Ref { kind, referent } => {
+                    if mutable && *kind != BorrowKind::Mut {
+                        return Err("compound indexed mutation requires mutable reference at every dereference".into());
+                    }
+                    referent.as_ref().clone()
                 }
-                referent
-            }
+                _ => return Err("dereference requires reference type".into()),
+            },
             Projection::ConstantIndex(index) => {
-                let Ty::Array { element, len } = ty else {
+                let Ty::Array { element, len } = &ty else {
                     return Err("constant index requires array type".into());
                 };
                 if *len > MAX_ARRAY_LEN || index >= *len {
                     return Err("array index out of bounds".into());
                 }
-                element
+                element.as_ref().clone()
             }
-            Projection::DynamicIndex(_) => {
-                let element = match ty {
-                    Ty::Array { element, len } if *len <= MAX_ARRAY_LEN => element,
-                    Ty::Slice { element } => element,
-                    _ => return Err("runtime place index requires array or slice type".into()),
-                };
-                // Any element type may be a runtime element loan or the base
-                // of a further projection (`&v[i]`, `&v[i].x`, `m[i][j]`).
-                // Analyses treat a runtime element's footprint as the whole
-                // array and never prove disjointness by index value.
-                element
-            }
-            Projection::Field(index) => ty.field_ty(index).ok_or("invalid field projection")?,
+            Projection::DynamicIndex(_) => match &ty {
+                Ty::Array { element, len } if *len <= MAX_ARRAY_LEN => element.as_ref().clone(),
+                Ty::Slice { element } => element.as_ref().clone(),
+                _ => return Err("runtime place index requires array or slice type".into()),
+            },
+            Projection::Field(index) => ty
+                .field_ty_optional(index, budget)?
+                .ok_or("invalid field projection")?,
             Projection::Downcast(variant) => {
-                let Ty::Enum(owner) = ty else {
+                let Ty::Enum(owner) = &ty else {
                     return Err("downcast requires enum type".into());
                 };
                 if owner.def().id != variant.owner {
@@ -5328,10 +5455,12 @@ fn projected_ty_inner<'a>(
                 let Some(Projection::Field(index)) = path.next() else {
                     return Err("downcast must be immediately followed by field projection".into());
                 };
-                &def.fields
+                def.fields
+                    .read_optional(budget)?
                     .get(*index)
                     .ok_or("invalid variant field projection")?
                     .ty
+                    .clone()
             }
         };
     }
@@ -5417,11 +5546,15 @@ impl StructTy {
         self.1.as_ref()
     }
 
-    pub fn field_index(&self, name: &str) -> Option<usize> {
-        self.def()
-            .fields
-            .iter()
-            .position(|field| field.name == name)
+    pub fn field_index(&self, name: &str, budget: &PlanBudget) -> Result<Option<usize>, String> {
+        let fields = self.def().fields.read(budget)?;
+        for (index, field) in fields.iter().enumerate() {
+            budget.charge_work(1)?;
+            if field.name == name {
+                return Ok(Some(index));
+            }
+        }
+        Ok(None)
     }
 }
 
@@ -5450,7 +5583,80 @@ pub struct StructDef {
     pub module: super::module_identity::ModuleId,
     pub visibility: Visibility,
     /// Declaration order. No layout offsets or implicit Copy permission.
-    pub fields: Arc<[FieldDef]>,
+    pub fields: NominalFields,
+}
+
+/// Nominal field storage is either already concrete or a sealed symbolic
+/// projection of a successful typed component read. There is deliberately no
+/// Deref, AsRef, iterator or indexing implementation: callers must explicitly
+/// materialize immediate fields with their own task budget and handle failure.
+#[derive(Clone, Debug)]
+pub struct NominalFields(NominalFieldStorage);
+#[derive(Clone, Debug)]
+enum NominalFieldStorage {
+    Direct(Arc<[FieldDef]>),
+    Symbolic(super::nominal_realization::SymbolicFields),
+}
+impl NominalFields {
+    pub fn len(&self) -> usize {
+        match &self.0 {
+            NominalFieldStorage::Direct(fields) => fields.len(),
+            NominalFieldStorage::Symbolic(fields) => fields.len(),
+        }
+    }
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+    // Only ownership-protocol recognition within this IR module may inspect
+    // concrete source storage without materialization. Symbolic ownership uses
+    // the completely validated component pointer summary instead.
+    fn concrete_ownership_fields(&self) -> Option<&[FieldDef]> {
+        match &self.0 {
+            NominalFieldStorage::Direct(fields) => Some(fields),
+            NominalFieldStorage::Symbolic(_) => None,
+        }
+    }
+    pub(super) fn read_optional(
+        &self,
+        budget: Option<&PlanBudget>,
+    ) -> Result<Arc<[FieldDef]>, String> {
+        match budget {
+            Some(budget) => self.read(budget),
+            None => match &self.0 {
+                NominalFieldStorage::Direct(fields) => Ok(fields.clone()),
+                NominalFieldStorage::Symbolic(_) => {
+                    Err("symbolic nominal fields require an explicit materialization budget".into())
+                }
+            },
+        }
+    }
+    pub fn read(&self, budget: &PlanBudget) -> Result<Arc<[FieldDef]>, String> {
+        budget.charge_work(1)?;
+        match &self.0 {
+            NominalFieldStorage::Direct(fields) => Ok(fields.clone()),
+            NominalFieldStorage::Symbolic(fields) => fields.read(budget),
+        }
+    }
+    pub(in crate::compiler) fn symbolic(
+        fields: super::nominal_realization::SymbolicFields,
+    ) -> Self {
+        Self(NominalFieldStorage::Symbolic(fields))
+    }
+}
+impl From<Arc<[FieldDef]>> for NominalFields {
+    fn from(fields: Arc<[FieldDef]>) -> Self {
+        Self(NominalFieldStorage::Direct(fields))
+    }
+}
+impl From<Vec<FieldDef>> for NominalFields {
+    fn from(fields: Vec<FieldDef>) -> Self {
+        Self::from(Arc::<[FieldDef]>::from(fields))
+    }
+}
+impl<const N: usize> From<[FieldDef; N]> for NominalFields {
+    fn from(fields: [FieldDef; N]) -> Self {
+        Self::from(Arc::<[FieldDef]>::from(fields))
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -5742,6 +5948,26 @@ fn type_metadata_walk(
         if let Some(budget) = budget {
             budget.check_depth(depth)?;
         }
+        let capability = match ty {
+            Ty::Struct(value) => value.realization(),
+            Ty::Enum(value) => value.realization(),
+            _ => None,
+        };
+        if let Some(capability) = capability {
+            if let Some(height) = capability.component_metadata_height() {
+                capability.check_definition(ty).map_err(|e| e.to_string())?;
+                let deepest = depth
+                    .checked_add(height)
+                    .ok_or("associated type traversal depth overflow")?;
+                if deepest > MAX_PATTERN_PROJECTION_DEPTH {
+                    return Err("associated type traversal depth limit exceeded".into());
+                }
+                if let Some(budget) = budget {
+                    budget.check_depth(deepest)?;
+                }
+                return Ok((false, height));
+            }
+        }
         let key = match ty {
             Ty::Opaque(opaque) => (9, Arc::as_ptr(opaque) as usize),
             Ty::Closure(closure) => (8, Arc::as_ptr(closure) as usize),
@@ -5875,7 +6101,7 @@ fn type_metadata_walk(
                 for argument in value.def().type_args.iter() {
                     child(argument)?;
                 }
-                for field in value.def().fields.iter() {
+                for field in value.def().fields.read_optional(budget)?.iter() {
                     child(&field.ty)?;
                 }
             }
@@ -5889,7 +6115,7 @@ fn type_metadata_walk(
                     child(argument)?;
                 }
                 for variant in value.def().variants.iter() {
-                    for field in variant.fields.iter() {
+                    for field in variant.fields.read_optional(budget)?.iter() {
                         child(&field.ty)?;
                     }
                 }
@@ -5914,7 +6140,59 @@ fn type_metadata_walk(
     walk(root, budget, 0, &mut 0, &mut Memo::default(), facts).map(|(found, _)| found)
 }
 
+/// Canonical ownership protocol, not a physical pointer layout permission.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OwnedPointerKind {
+    Box,
+    Rc,
+}
+
 impl Ty {
+    /// Exact reserved owning-pointer carrier. The kind is part of unsizing
+    /// authority: a Box share cannot become an Rc share or vice versa.
+    pub fn owned_pointer_pointee(&self) -> Option<(OwnedPointerKind, &Ty)> {
+        let Self::Struct(value) = self else {
+            return None;
+        };
+        let def = value.def();
+        let [pointee] = def.type_args.as_ref() else {
+            return None;
+        };
+        if let Some(capability) = value.realization()
+            && capability.is_component()
+        {
+            capability.check_definition(self).ok()?;
+            return capability
+                .component_pointer_kind()
+                .map(|kind| (kind, pointee));
+        }
+        let pointer_matches = |field: &FieldDef| {
+            field.name == "ptr"
+                && matches!(&field.ty, Ty::RawPtr { kind: BorrowKind::Mut, pointee: actual } if actual.as_ref() == pointee)
+        };
+        match (def.name.as_str(), def.fields.concrete_ownership_fields()?) {
+            ("crate::__justrust_std::boxed::Box", [pointer]) if pointer_matches(pointer) => {
+                Some((OwnedPointerKind::Box, pointee))
+            }
+            ("crate::__justrust_std::rc::Rc", [pointer, count])
+                if pointer_matches(pointer)
+                    && count.name == "strong"
+                    && matches!(&count.ty, Ty::RawPtr { kind: BorrowKind::Mut, pointee } if **pointee == Ty::Int(IntTy::Usize)) =>
+            {
+                Some((OwnedPointerKind::Rc, pointee))
+            }
+            _ => None,
+        }
+    }
+
+    pub fn owned_pointer_object(&self) -> Option<(OwnedPointerKind, &DynTy)> {
+        let (kind, pointee) = self.owned_pointer_pointee()?;
+        match pointee {
+            Ty::Dyn(object) => Some((kind, object)),
+            _ => None,
+        }
+    }
+
     /// Kind and element of a root slice reference `&[T]` or `&mut [T]`
     /// (MUTABLE-SLICES.md). Grants no element admission or layout.
     pub fn slice_ref_element(&self) -> Option<(BorrowKind, &Ty)> {
@@ -5931,24 +6209,9 @@ impl Ty {
     /// field). The prelude module path is reserved, so no user nominal can
     /// carry this canonical name.
     pub fn owned_box_pointee(&self) -> Option<&Ty> {
-        let Self::Struct(value) = self else {
-            return None;
-        };
-        let def = value.def();
-        match (def.type_args.as_ref(), def.fields.as_ref()) {
-            ([pointee], [field])
-                if def.name == "crate::__justrust_std::boxed::Box"
-                    && matches!(
-                        &field.ty,
-                        Ty::RawPtr {
-                            kind: BorrowKind::Mut,
-                            ..
-                        }
-                    ) =>
-            {
-                Some(pointee)
-            }
-            _ => None,
+        match self.owned_pointer_pointee()? {
+            (OwnedPointerKind::Box, pointee) => Some(pointee),
+            (OwnedPointerKind::Rc, _) => None,
         }
     }
 
@@ -6087,58 +6350,141 @@ impl Ty {
     /// Whether any slice type occurs anywhere inside this type. Shared type
     /// structure (nominal definitions, tuple/array/reference Arcs) is visited
     /// once, so exponentially large expanded layouts stay linear in the DAG.
-    pub fn contains_slice(&self) -> bool {
-        let mut pending = vec![self];
+    pub fn contains_slice(&self, budget: &PlanBudget) -> Result<bool, String> {
+        self.contains_slice_optional(Some(budget))
+    }
+    pub(super) fn contains_slice_optional(
+        &self,
+        budget: Option<&PlanBudget>,
+    ) -> Result<bool, String> {
+        let mut pending = Vec::new();
+        let mut work = 0usize;
         let mut seen = std::collections::HashSet::new();
+        let mut retained = Vec::new();
+        let mut components = std::collections::HashSet::new();
+        let push = |pending: &mut Vec<Ty>, ty: &Ty| -> Result<(), String> {
+            if let Some(budget) = budget {
+                budget.retain_bytes(std::mem::size_of::<Ty>())?;
+            }
+            pending
+                .try_reserve(1)
+                .map_err(|_| "slice traversal allocation failed")?;
+            pending.push(ty.clone());
+            Ok(())
+        };
+        push(&mut pending, self)?;
         while let Some(ty) = pending.pop() {
-            match ty {
-                Self::Opaque(opaque) => {
-                    if seen.insert(Arc::as_ptr(opaque) as usize) {
-                        pending.extend(opaque.types());
+            work += 1;
+            if work > MAX_PATTERN_PROJECTION_WORK {
+                return Err("slice traversal work limit exceeded".into());
+            }
+            if let Some(budget) = budget {
+                budget.charge_work(1)?;
+            }
+            let allocation = match &ty {
+                Self::Opaque(v) => Some((0u8, Arc::as_ptr(v) as usize)),
+                Self::Closure(v) => Some((1, Arc::as_ptr(v) as usize)),
+                Self::AssociatedType(v) => Some((2, Arc::as_ptr(v) as usize)),
+                Self::Ref { referent: v, .. }
+                | Self::RawPtr { pointee: v, .. }
+                | Self::Array { element: v, .. } => Some((3, Arc::as_ptr(v) as usize)),
+                Self::Tuple(v) => Some((4, v.as_ptr() as usize)),
+                Self::Struct(v) => Some((5, std::ptr::from_ref(v.def()) as usize)),
+                Self::Enum(v) => Some((6, std::ptr::from_ref(v.def()) as usize)),
+                _ => None,
+            };
+            if let Some(key) = allocation {
+                if let Some(budget) = budget {
+                    budget.retain_bytes(
+                        std::mem::size_of::<Ty>() + std::mem::size_of::<(u8, usize)>(),
+                    )?;
+                }
+                seen.try_reserve(1)
+                    .map_err(|_| "slice memo allocation failed")?;
+                if !seen.insert(key) {
+                    continue;
+                }
+                retained
+                    .try_reserve(1)
+                    .map_err(|_| "slice memo retention allocation failed")?;
+                retained.push(ty.clone());
+            }
+            let capability = match &ty {
+                Self::Struct(value) => value.realization(),
+                Self::Enum(value) => value.realization(),
+                _ => None,
+            };
+            if let Some(capability) = capability.filter(|c| c.is_component()) {
+                capability
+                    .check_definition(&ty)
+                    .map_err(|e| e.to_string())?;
+                if let Some(budget) = budget {
+                    budget.retain_bytes(std::mem::size_of::<NominalAppId>())?;
+                }
+                components
+                    .try_reserve(1)
+                    .map_err(|_| "slice nominal traversal allocation failed")?;
+                let id = match &ty {
+                    Self::Struct(v) => v.id(),
+                    Self::Enum(v) => v.id(),
+                    _ => unreachable!(),
+                };
+                if !components.insert(id) {
+                    continue;
+                }
+            }
+            match &ty {
+                Self::Opaque(v) => {
+                    for child in v.types() {
+                        push(&mut pending, child)?;
                     }
                 }
-                Self::Closure(closure) => {
-                    if seen.insert(Arc::as_ptr(closure) as usize) {
-                        pending.extend(closure.captures());
+                Self::Closure(v) => {
+                    for child in v.captures() {
+                        push(&mut pending, child)?;
                     }
                 }
-                Self::FnItem(_) => {}
-                Self::AssociatedType(projection) => {
-                    if seen.insert(Arc::as_ptr(projection) as usize) {
-                        pending.push(&projection.trait_ref.self_ty);
-                        pending.extend(projection.trait_ref.args.iter());
+                Self::AssociatedType(v) => {
+                    push(&mut pending, &v.trait_ref.self_ty)?;
+                    for child in v.trait_ref.args.iter() {
+                        push(&mut pending, child)?;
                     }
                 }
-                Self::Slice { .. } => return true,
+                Self::Slice { .. } => return Ok(true),
                 Self::Ref {
                     referent: inner, ..
                 }
                 | Self::RawPtr { pointee: inner, .. }
-                | Self::Array { element: inner, .. } => {
-                    if seen.insert(Arc::as_ptr(inner) as usize) {
-                        pending.push(inner);
-                    }
-                }
+                | Self::Array { element: inner, .. } => push(&mut pending, inner)?,
                 Self::Tuple(fields) => {
-                    if seen.insert(fields.as_ptr() as usize) {
-                        pending.extend(fields.iter());
+                    for child in fields.iter() {
+                        push(&mut pending, child)?;
                     }
                 }
-                Self::Struct(value) => {
-                    if seen.insert(std::ptr::from_ref(value.def()) as usize) {
-                        pending.extend(value.def().type_args.iter());
-                        pending.extend(value.def().fields.iter().map(|f| &f.ty));
-                    }
-                }
-                Self::Enum(value) => {
-                    if seen.insert(std::ptr::from_ref(value.def()) as usize) {
-                        pending.extend(value.def().type_args.iter());
-                        for variant in value.def().variants.iter() {
-                            pending.extend(variant.fields.iter().map(|f| &f.ty));
+                Self::Struct(v) => {
+                    if !v.is_back_edge() {
+                        for child in v.def().type_args.iter() {
+                            push(&mut pending, child)?;
+                        }
+                        for field in v.def().fields.read_optional(budget)?.iter() {
+                            push(&mut pending, &field.ty)?;
                         }
                     }
                 }
-                Self::Param(_)
+                Self::Enum(v) => {
+                    if !v.is_back_edge() {
+                        for child in v.def().type_args.iter() {
+                            push(&mut pending, child)?;
+                        }
+                        for variant in v.def().variants.iter() {
+                            for field in variant.fields.read_optional(budget)?.iter() {
+                                push(&mut pending, &field.ty)?;
+                            }
+                        }
+                    }
+                }
+                Self::FnItem(_)
+                | Self::Param(_)
                 | Self::Int(_)
                 | Self::Float(_)
                 | Self::Char
@@ -6149,7 +6495,7 @@ impl Ty {
                 | Self::Never => {}
             }
         }
-        false
+        Ok(false)
     }
 
     pub fn field_count(&self) -> Option<usize> {
@@ -6162,13 +6508,28 @@ impl Ty {
         }
     }
 
-    pub fn field_ty(&self, index: usize) -> Option<&Ty> {
-        match self {
-            Self::Closure(closure) => closure.captures().get(index),
-            Self::Tuple(fields) => fields.get(index),
-            Self::Struct(ty) => ty.def().fields.get(index).map(|field| &field.ty),
-            _ => None,
+    pub fn field_ty(&self, index: usize, budget: &PlanBudget) -> Result<Option<Ty>, String> {
+        self.field_ty_optional(index, Some(budget))
+    }
+    pub(super) fn field_ty_optional(
+        &self,
+        index: usize,
+        budget: Option<&PlanBudget>,
+    ) -> Result<Option<Ty>, String> {
+        if let Some(budget) = budget {
+            budget.charge_work(1)?;
         }
+        Ok(match self {
+            Self::Closure(closure) => closure.captures().get(index).cloned(),
+            Self::Tuple(fields) => fields.get(index).cloned(),
+            Self::Struct(ty) => ty
+                .def()
+                .fields
+                .read_optional(budget)?
+                .get(index)
+                .map(|field| field.ty.clone()),
+            _ => None,
+        })
     }
 
     pub fn is_copy(&self) -> bool {
@@ -6234,9 +6595,56 @@ impl Ty {
 /// Sealed universal facts may retain an opaque projection family here. Its
 /// concrete slice/reference shape is rechecked after monomorphization. Raw
 /// structural and closed executable callers must never enable that permission.
+#[derive(Clone, Copy)]
+enum SliceBoundaryMode {
+    Carriers,
+    ReferenceFree,
+    SharedTupleElements,
+}
+
 fn slice_boundary_walk(
     ty: &Ty,
     allow_references: bool,
+    allow_universal_projections: bool,
+    budget: Option<&PlanBudget>,
+    depth: usize,
+    work: &mut usize,
+) -> Result<usize, String> {
+    slice_boundary_walk_inner(
+        ty,
+        if allow_references {
+            SliceBoundaryMode::Carriers
+        } else {
+            SliceBoundaryMode::ReferenceFree
+        },
+        allow_universal_projections,
+        budget,
+        depth,
+        work,
+    )
+}
+
+pub(in crate::compiler) fn slice_boundary_height(
+    ty: &Ty,
+    allow_references: bool,
+    allow_universal_projections: bool,
+    budget: &PlanBudget,
+    depth: usize,
+    work: &mut usize,
+) -> Result<usize, String> {
+    slice_boundary_walk(
+        ty,
+        allow_references,
+        allow_universal_projections,
+        Some(budget),
+        depth,
+        work,
+    )
+}
+
+fn slice_boundary_walk_inner(
+    ty: &Ty,
+    mode: SliceBoundaryMode,
     allow_universal_projections: bool,
     budget: Option<&PlanBudget>,
     depth: usize,
@@ -6290,9 +6698,9 @@ fn slice_boundary_walk(
         }
     }
     #[derive(Clone, Copy, PartialEq, Eq)]
-    struct Key(u8, usize);
-    enum Frame<'a> {
-        Enter(&'a Ty, usize),
+    struct Key(u8, usize, bool);
+    enum Frame {
+        Enter(Ty, usize, bool),
         Finish(Key, usize, usize),
     }
     fn charge(budget: Option<&PlanBudget>, work: &mut usize) -> Result<(), String> {
@@ -6309,11 +6717,20 @@ fn slice_boundary_walk(
         Ok(())
     }
     let mut pending = Scratch::new();
+    // Keep allocations referenced by completed memo keys alive for this walk.
+    let mut retained: Scratch<Ty> = Scratch::new();
     // None is a currently visiting allocation, Some(height) a complete subtree.
     let mut memo: Scratch<(Key, Option<usize>)> = Scratch::new();
     let mut heights: Scratch<usize> = Scratch::new();
     charge(budget, work)?;
-    pending.push(Frame::Enter(ty, depth), budget)?;
+    pending.push(
+        Frame::Enter(
+            ty.clone(),
+            depth,
+            matches!(mode, SliceBoundaryMode::SharedTupleElements),
+        ),
+        budget,
+    )?;
     while let Some(frame) = pending.values.pop() {
         charge(budget, work)?;
         match frame {
@@ -6347,7 +6764,9 @@ fn slice_boundary_walk(
                 }
                 heights.push(height, budget)?;
             }
-            Frame::Enter(node, at) => {
+            Frame::Enter(owned_node, at, tuple_components) => {
+                retained.push(owned_node.clone(), budget)?;
+                let node = &owned_node;
                 if let Some(b) = budget {
                     b.check_depth(at)?;
                 }
@@ -6355,7 +6774,51 @@ fn slice_boundary_walk(
                     heights.push(0usize, budget)?;
                     continue;
                 }
-                if allow_references && let Some((kind, element)) = node.slice_ref_element() {
+                let capability = match node {
+                    Ty::Struct(value) => value.realization(),
+                    Ty::Enum(value) => value.realization(),
+                    _ => None,
+                };
+                if let Some(b) = budget
+                    && let Some(capability) = capability.filter(|read| read.is_component())
+                {
+                    capability
+                        .check_definition(node)
+                        .map_err(|error| error.to_string())?;
+                    if let Some(height) = capability.component_slice_boundary_height(
+                        matches!(mode, SliceBoundaryMode::Carriers),
+                        allow_universal_projections,
+                        b,
+                        at,
+                        work,
+                    ) {
+                        heights.push(height.map_err(|error| error.to_string())?, budget)?;
+                        continue;
+                    }
+                }
+                if tuple_components
+                    && let Ty::Ref {
+                        kind: BorrowKind::Shared,
+                        referent,
+                    } = node
+                {
+                    let height = slice_boundary_walk(
+                        referent,
+                        false,
+                        allow_universal_projections,
+                        budget,
+                        at.checked_add(1).ok_or("slice type depth overflow")?,
+                        work,
+                    )?;
+                    heights.push(
+                        height.checked_add(1).ok_or("slice type depth overflow")?,
+                        budget,
+                    )?;
+                    continue;
+                }
+                if matches!(mode, SliceBoundaryMode::Carriers)
+                    && let Some((kind, element)) = node.slice_ref_element()
+                {
                     let direct_mutable_pair = matches!(ty, Ty::Tuple(fields)
                         if fields.len() == 2
                             && fields.iter().all(|field| field.mut_slice_element().is_some()))
@@ -6368,21 +6831,25 @@ fn slice_boundary_walk(
                             "unsupported: mutable slice elements containing references".into()
                         );
                     }
-                    let (element, layers) = match element {
-                        Ty::Ref {
-                            kind: BorrowKind::Shared,
-                            referent,
-                        } => (referent.as_ref(), 3usize),
-                        _ => (element, 2usize),
+                    let height = if kind == BorrowKind::Shared {
+                        shared_slice_tuple_walk(
+                            element,
+                            allow_universal_projections,
+                            budget,
+                            at.checked_add(2).ok_or("slice type depth overflow")?,
+                            work,
+                        )?
+                    } else {
+                        slice_boundary_walk(
+                            element,
+                            false,
+                            allow_universal_projections,
+                            budget,
+                            at.checked_add(2).ok_or("slice type depth overflow")?,
+                            work,
+                        )?
                     };
-                    let height = slice_boundary_walk(
-                        element,
-                        false,
-                        allow_universal_projections,
-                        budget,
-                        at.checked_add(layers).ok_or("slice type depth overflow")?,
-                        work,
-                    )?;
+                    let layers = 2usize;
                     heights.push(
                         height
                             .checked_add(layers)
@@ -6392,18 +6859,18 @@ fn slice_boundary_walk(
                     continue;
                 }
                 let key = match node {
-                    Ty::RawPtr { pointee, .. } if pointee.contains_slice() => {
+                    Ty::RawPtr { pointee, .. } if pointee.contains_slice_optional(budget)? => {
                         return Err("unsupported: raw storage of slice carriers requires heap lifetime retention".into());
                     }
                     Ty::AssociatedType(_) if allow_universal_projections => None,
                     Ty::AssociatedType(_) => return Err("unsupported: residual associated type projection at slice boundary".into()),
-                    Ty::Ref { .. } if !allow_references => return Err("unsupported: slice elements containing references or slices, or nested slice carriers".into()),
+                    Ty::Ref { .. } if !matches!(mode, SliceBoundaryMode::Carriers) => return Err("unsupported: slice elements containing references or slices, or nested slice carriers".into()),
                     Ty::Slice { .. } => return Err("unsupported: slice elements containing references or slices, or nested slice carriers".into()),
-                    Ty::Ref { referent, .. } => Some(Key(0, Arc::as_ptr(referent) as usize)),
-                    Ty::Array { element, .. } => Some(Key(1, Arc::as_ptr(element) as usize)),
-                    Ty::Tuple(fields) => Some(Key(2, fields.as_ptr() as usize)),
-                    Ty::Struct(value) => Some(Key(3, value.def() as *const StructDef as usize)),
-                    Ty::Enum(value) => Some(Key(4, value.def() as *const EnumDef as usize)),
+                    Ty::Ref { referent, .. } => Some(Key(0, Arc::as_ptr(referent) as usize, tuple_components)),
+                    Ty::Array { element, .. } => Some(Key(1, Arc::as_ptr(element) as usize, tuple_components)),
+                    Ty::Tuple(fields) => Some(Key(2, fields.as_ptr() as usize, tuple_components)),
+                    Ty::Struct(value) => Some(Key(3, value.def() as *const StructDef as usize, tuple_components)),
+                    Ty::Enum(value) => Some(Key(4, value.def() as *const EnumDef as usize, tuple_components)),
                     _ => None,
                 };
                 let Some(key) = key else {
@@ -6431,10 +6898,17 @@ fn slice_boundary_walk(
                 pending.push(Frame::Finish(key, at, 0), budget)?;
                 let next = at.checked_add(1).ok_or("slice type depth overflow")?;
                 let mut count = 0usize;
-                let mut child = |ty| -> Result<(), String> {
+                let mut child = |ty: &Ty| -> Result<(), String> {
                     charge(budget, work)?;
                     count = count.checked_add(1).ok_or("slice DAG edge overflow")?;
-                    pending.push(Frame::Enter(ty, next), budget)
+                    pending.push(
+                        Frame::Enter(
+                            ty.clone(),
+                            next,
+                            tuple_components && matches!(node, Ty::Tuple(_)),
+                        ),
+                        budget,
+                    )
                 };
                 match node {
                     Ty::Ref { referent, .. }
@@ -6455,7 +6929,7 @@ fn slice_boundary_walk(
                         for argument in value.def().type_args.iter() {
                             child(argument)?;
                         }
-                        for field in value.def().fields.iter() {
+                        for field in value.def().fields.read_optional(budget)?.iter() {
                             child(&field.ty)?;
                         }
                     }
@@ -6464,7 +6938,7 @@ fn slice_boundary_walk(
                             child(argument)?;
                         }
                         for variant in value.def().variants.iter() {
-                            for field in variant.fields.iter() {
+                            for field in variant.fields.read_optional(budget)?.iter() {
                                 child(&field.ty)?;
                             }
                         }
@@ -6481,6 +6955,27 @@ fn slice_boundary_walk(
     Ok(heights.values[0])
 }
 
+/// Expand a shared slice element through ordered tuple components only. Each
+/// shared leaf still uses the reference-free boundary validator for its referent.
+/// This mirrors SliceElement/Field carrier expansion without accepting mutable
+/// references, nested reference leaves, or reference-bearing nominal storage.
+fn shared_slice_tuple_walk(
+    element: &Ty,
+    allow_universal_projections: bool,
+    budget: Option<&PlanBudget>,
+    depth: usize,
+    work: &mut usize,
+) -> Result<usize, String> {
+    slice_boundary_walk_inner(
+        element,
+        SliceBoundaryMode::SharedTupleElements,
+        allow_universal_projections,
+        budget,
+        depth,
+        work,
+    )
+}
+
 fn validate_shared_slice_element_inner(
     element: &Ty,
     facts: FactsCtx<'_>,
@@ -6494,16 +6989,8 @@ fn validate_shared_slice_element_inner(
     } else {
         facts.validate_value_ty(element)?;
     }
-    let inner = match element {
-        Ty::Ref {
-            kind: BorrowKind::Shared,
-            referent,
-        } => referent.as_ref(),
-        _ => element,
-    };
-    slice_boundary_walk(
-        inner,
-        false,
+    shared_slice_tuple_walk(
+        element,
         facts
             .validated()
             .is_some_and(|f| f.phase() == super::traits::FactsPhase::Universal),
@@ -6515,8 +7002,9 @@ fn validate_shared_slice_element_inner(
 }
 
 /// Validate exact element metadata and Sized obligations. Admit reference-free
-/// values or one shared reference to a reference-free value (including str).
-/// Nested references and reference-bearing aggregates remain unsupported.
+/// values, shared references to reference-free values (including str), or tuples
+/// of those elements. Nested reference leaves and reference-bearing nominal
+/// aggregates remain unsupported. Tuple loans retain SliceElement/Field paths.
 /// Re-run after every concrete substitution.
 pub fn validate_shared_slice_element(
     element: &Ty,
@@ -6543,7 +7031,22 @@ pub(super) fn validate_slice_carrier_with_facts(
         if kind == BorrowKind::Mut && matches!(element, Ty::Ref { .. }) {
             return Err("unsupported: mutable slices with reference-carrying elements".into());
         }
-        validate_shared_slice_element_with_facts(element, facts)
+        validate_shared_slice_element_with_facts(element, facts)?;
+        if kind == BorrowKind::Mut {
+            slice_boundary_walk(
+                element,
+                false,
+                facts
+                    .validated()
+                    .is_some_and(|f| f.phase() == super::traits::FactsPhase::Universal),
+                facts.validated().map(|f| f.budget()),
+                0,
+                &mut 0,
+            )
+            .map(|_| ())
+        } else {
+            Ok(())
+        }
     } else {
         slice_boundary_walk(
             ty,
@@ -6707,14 +7210,19 @@ impl<'f> FactsCtx<'f> {
         self.validate_ty(ty)?;
         Ok(ty.is_copy())
     }
-    pub fn projected_ty<'a>(self, root: &'a Ty, path: &[Projection]) -> Result<&'a Ty, String> {
+    pub fn projected_ty(
+        self,
+        root: &Ty,
+        path: &[Projection],
+        budget: &PlanBudget,
+    ) -> Result<Ty, String> {
         if let Self::Validated(facts) = self {
             return facts
                 .projected_ty(root, path)
                 .map_err(|e| e.into_legacy_diagnostic(facts.budget()));
         }
         self.validate_ty(root)?;
-        projected_ty(root, path)
+        projected_ty(root, path, budget)
     }
 }
 
@@ -7220,6 +7728,15 @@ fn ref_type_walk(
     depth: usize,
     visits: &mut usize,
 ) -> Result<bool, String> {
+    reference_type_summary(ty, root, budget, depth, visits).map(|(opaque, _)| opaque)
+}
+pub(in crate::compiler) fn reference_type_summary(
+    ty: &Ty,
+    root: bool,
+    budget: &PlanBudget,
+    depth: usize,
+    visits: &mut usize,
+) -> Result<(bool, usize), String> {
     fn walk(
         ty: &Ty,
         root: bool,
@@ -7236,6 +7753,23 @@ fn ref_type_walk(
         *visits += 1;
         if *visits > MAX_PATTERN_PROJECTION_WORK {
             return Err("reference type work limit exceeded".into());
+        }
+        let capability = match ty {
+            Ty::Struct(value) => value.realization(),
+            Ty::Enum(value) => value.realization(),
+            _ => None,
+        };
+        if let Some(capability) = capability
+            && capability.is_component()
+        {
+            capability
+                .check_definition(ty)
+                .map_err(|error| error.to_string())?;
+            if let Some(summary) =
+                capability.component_reference_type_summary(budget, depth, visits)
+            {
+                return summary.map_err(|error| error.to_string());
+            }
         }
         let key = (std::ptr::from_ref(ty) as usize, root);
         if let Some(&(opaque, height)) = memo.get(&key) {
@@ -7304,7 +7838,7 @@ fn ref_type_walk(
                 for argument in value.def().type_args.iter() {
                     child(argument)?;
                 }
-                for field in value.def().fields.iter() {
+                for field in value.def().fields.read(budget)?.iter() {
                     child(&field.ty)?;
                 }
             }
@@ -7314,7 +7848,7 @@ fn ref_type_walk(
                 }
                 for variant in value.def().variants.iter() {
                     budget.charge_work(1)?;
-                    for field in variant.fields.iter() {
+                    for field in variant.fields.read(budget)?.iter() {
                         child(&field.ty)?;
                     }
                 }
@@ -7342,7 +7876,6 @@ fn ref_type_walk(
         visits,
         &mut std::collections::HashMap::new(),
     )
-    .map(|(opaque, _)| opaque)
 }
 
 fn ref_types_equal(
@@ -7704,15 +8237,15 @@ fn collect_input_paths(
             return Err("input path depth resource limit exceeded".into());
         }
         let (step, child) = if let Ty::Array { element, .. } = ty {
-            (Projection::ConstantIndex(index), element.as_ref())
+            (Projection::ConstantIndex(index), element.as_ref().clone())
         } else {
             (
                 Projection::Field(index),
-                ty.field_ty(index).ok_or("invalid input field")?,
+                ty.field_ty(index, budget)?.ok_or("invalid input field")?,
             )
         };
         path.push(step);
-        collect_input_paths(child, output, input, path, out, counts, budget)?;
+        collect_input_paths(&child, output, input, path, out, counts, budget)?;
         path.pop();
     }
     Ok(())
@@ -7761,8 +8294,8 @@ pub(super) fn validate_stored_ref_contract(
                     return Err("reference return kind mismatch".into());
                 }
                 for path in paths.iter() {
-                    let selected = projected_ty(eligible(path.input)?, &path.projection)?;
-                    if !ref_types_equal(selected, output, budget, 0)? {
+                    let selected = projected_ty(eligible(path.input)?, &path.projection, budget)?;
+                    if !ref_types_equal(&selected, output, budget, 0)? {
                         return Err("return input path type mismatch".into());
                     }
                 }
@@ -8395,12 +8928,12 @@ fn validate_alternative_rows(
                     return Err("or-pattern repeats a tested source path".into());
                 }
             }
-            let actual = projected_ty(ty, &test.projection)?;
+            let actual = projected_ty_inner(ty, &test.projection, false, budget)?;
             let valid = match &test.kind {
-                PatternTestKind::Bool(_) => *actual == Ty::Bool,
+                PatternTestKind::Bool(_) => actual == Ty::Bool,
                 PatternTestKind::Int(_) | PatternTestKind::Char(_) => {
                     test.kind.scalar_interval()?;
-                    test.kind.scalar_ty().as_ref() == Some(actual)
+                    test.kind.scalar_ty().as_ref() == Some(&actual)
                 }
                 _ => false,
             };
@@ -8957,6 +9490,18 @@ impl CheckedFunction {
         facts: FactsCtx<'_>,
         budget: Option<&PlanBudget>,
     ) -> Result<(), String> {
+        self.validate_all_type_metadata_with_scratch(
+            facts,
+            budget,
+            &mut super::traits::TraitScratch::default(),
+        )
+    }
+    fn validate_all_type_metadata_with_scratch(
+        &self,
+        facts: FactsCtx<'_>,
+        budget: Option<&PlanBudget>,
+        metadata_scratch: &mut super::traits::TraitScratch,
+    ) -> Result<(), String> {
         fn rows(count: usize, budget: Option<&PlanBudget>, work: &mut usize) -> Result<(), String> {
             *work = work.checked_add(count).ok_or("metadata work overflow")?;
             if *work > MAX_PATTERN_PROJECTION_WORK {
@@ -9057,7 +9602,7 @@ impl CheckedFunction {
             if let Some(authority) = facts.validated() {
                 let ledger = budget.unwrap_or(authority.budget());
                 authority
-                    .validate_ty_metadata_with_budget(ty, ledger)
+                    .validate_ty_metadata_scratch(ty, ledger, metadata_scratch)
                     .map_err(|e| e.into_legacy_diagnostic(ledger))?;
                 let has_projection = type_metadata_walk(ty, Some(ledger), None)?;
                 if has_projection && authority.phase() == super::traits::FactsPhase::Universal {
@@ -9130,9 +9675,15 @@ impl CheckedFunction {
         Ok(())
     }
     pub fn preflight_plan(&self, facts: FactsCtx<'_>, budget: &PlanBudget) -> Result<(), String> {
-        // Proof/type memo local to this preflight only.
-        let scratch = &mut super::traits::TraitScratch::default();
-        self.validate_all_type_metadata(facts, Some(budget))?;
+        self.preflight_plan_with_scratch(facts, budget, &mut super::traits::TraitScratch::default())
+    }
+    fn preflight_plan_with_scratch(
+        &self,
+        facts: FactsCtx<'_>,
+        budget: &PlanBudget,
+        scratch: &mut super::traits::TraitScratch,
+    ) -> Result<(), String> {
+        self.validate_all_type_metadata_with_scratch(facts, Some(budget), scratch)?;
         fn storage(budget: &PlanBudget, count: usize, width: usize) -> Result<(), String> {
             budget.charge_work(count)?;
             budget.retain_bytes(
@@ -9656,6 +10207,7 @@ impl CheckedFunction {
         path: &[Projection],
         earlier: &[PatternTest],
         work: &mut usize,
+        budget: Option<&PlanBudget>,
     ) -> Result<(), String> {
         if path.len() > MAX_PATTERN_PROJECTION_DEPTH {
             return Err("pattern decision projection depth exceeds limit 128".into());
@@ -9691,7 +10243,7 @@ impl CheckedFunction {
         }
         // This independently checks owner, shape and physical bounds at every
         // step, including paths that will never execute at runtime.
-        projected_ty(domain, path)?;
+        projected_ty_inner(domain, path, false, budget)?;
         Ok(())
     }
 
@@ -9723,7 +10275,13 @@ impl CheckedFunction {
         let mut work = tests.len();
         Self::decision_work(&mut work, bindings.len())?;
         for (index, test) in tests.iter().enumerate() {
-            Self::validate_decision_path(domain, &test.projection, &tests[..index], &mut work)?;
+            Self::validate_decision_path(
+                domain,
+                &test.projection,
+                &tests[..index],
+                &mut work,
+                facts.validated().map(|authority| authority.budget()),
+            )?;
             for previous in &tests[..index] {
                 Self::decision_work(
                     &mut work,
@@ -9733,21 +10291,26 @@ impl CheckedFunction {
                     return Err("pattern decision repeats a tested source path".into());
                 }
             }
-            let actual = projected_ty(domain, &test.projection)?;
+            let actual = projected_ty_inner(
+                domain,
+                &test.projection,
+                false,
+                facts.validated().map(|authority| authority.budget()),
+            )?;
             let valid = match &test.kind {
-                PatternTestKind::Bool(_) => *actual == Ty::Bool,
+                PatternTestKind::Bool(_) => actual == Ty::Bool,
                 PatternTestKind::Int(_)
                 | PatternTestKind::Char(_)
                 | PatternTestKind::IntRange { .. }
                 | PatternTestKind::CharRange { .. } => {
                     test.kind.scalar_interval()?;
-                    test.kind.scalar_ty().as_ref() == Some(actual)
+                    test.kind.scalar_ty().as_ref() == Some(&actual)
                 }
                 PatternTestKind::EnumVariant { ty, variant } => {
                     ty.validate()?;
                     *variant < ty.def().variants.len()
                         && pattern_types_equal_with_facts(
-                            actual,
+                            &actual,
                             &Ty::Enum(ty.clone()),
                             &mut work,
                             facts,
@@ -9760,7 +10323,13 @@ impl CheckedFunction {
         }
         self.validate_pattern_bindings_with_work(domain, bindings, parameters, &mut work, facts)?;
         for binding in bindings {
-            Self::validate_decision_path(domain, &binding.projection, tests, &mut work)?;
+            Self::validate_decision_path(
+                domain,
+                &binding.projection,
+                tests,
+                &mut work,
+                facts.validated().map(|authority| authority.budget()),
+            )?;
         }
         Ok(())
     }
@@ -9876,7 +10445,12 @@ impl CheckedFunction {
             if !locals.insert(binding.local) || parameters.contains(&binding.local) {
                 return Err("pattern binding locals must be distinct fresh locals".into());
             }
-            let projected = binding.local_ty(projected_ty(ty, &binding.projection)?);
+            let projected = binding.local_ty(&projected_ty_inner(
+                ty,
+                &binding.projection,
+                false,
+                facts.validated().map(|authority| authority.budget()),
+            )?);
             if !pattern_types_equal_with_facts(&local.ty, &projected, work, facts)? {
                 return Err("pattern binding local type mismatch".into());
             }
@@ -9885,7 +10459,15 @@ impl CheckedFunction {
             let exclusive = match binding.borrow {
                 Some(BorrowKind::Shared) => false,
                 Some(_) => true,
-                None => !structurally_copy(projected_ty(ty, &binding.projection)?, 0),
+                None => !structurally_copy(
+                    &projected_ty_inner(
+                        ty,
+                        &binding.projection,
+                        false,
+                        facts.validated().map(|authority| authority.budget()),
+                    )?,
+                    0,
+                ),
             };
             paths.push((binding.projection.as_slice(), exclusive));
         }
@@ -9923,14 +10505,24 @@ impl CheckedFunction {
         facts: FactsCtx<'_>,
         policy: CallEvidencePolicy<'_>,
     ) -> Result<(), String> {
-        self.validate_all_type_metadata(facts, facts.validated().map(|f| f.budget()))?;
         // Proof/type memo local to this validation only.
         let scratch = &mut super::traits::TraitScratch::default();
+        self.validate_all_type_metadata_with_scratch(
+            facts,
+            facts.validated().map(|f| f.budget()),
+            scratch,
+        )?;
         if let Some(authority) = facts.validated() {
             if let Some(proof) = &self.body_substitution {
                 proof.validate(self, authority, authority.budget())?;
             } else {
-                validate_call_evidence_with_policy(self, authority, authority.budget(), policy)?;
+                validate_call_evidence_with_policy_scratch(
+                    self,
+                    authority,
+                    authority.budget(),
+                    policy,
+                    scratch,
+                )?;
             }
         }
         let validate_value = |ty: &Ty, scratch: &mut super::traits::TraitScratch| {
@@ -10144,7 +10736,12 @@ impl CheckedFunction {
                             return Err("runtime borrow index requires a valid usize local".into());
                         }
                     }
-                    let referent = projected_ty(root, &place.projection)?;
+                    let referent = projected_ty_inner(
+                        root,
+                        &place.projection,
+                        false,
+                        Some(conditional_budget),
+                    )?;
                     let expected = Ty::Ref {
                         kind: *kind,
                         referent: Arc::new(referent.clone()),
@@ -10229,8 +10826,7 @@ impl CheckedFunction {
                                     .ok_or("mutable receiver requires canonical authority")?;
                                 if *argument != 0
                                     || authority
-                                        .service()
-                                        .callee_receiver(target, authority)
+                                        .callee_receiver_scratch(target, scratch)
                                         .map_err(|e| e.into_legacy_diagnostic(authority.budget()))?
                                         != (ReceiverMode::Borrowed {
                                             kind: BorrowKind::Mut,
@@ -10276,7 +10872,8 @@ impl CheckedFunction {
                                     || projected_ty(
                                         &self.locals[local.0].ty,
                                         &place.projection[..derefs],
-                                    )? != &carrier.ty
+                                        conditional_budget,
+                                    )? != carrier.ty
                                 {
                                     return Err(
                                         "implicit mutable reborrow carrier provenance mismatch"
@@ -10316,7 +10913,7 @@ impl CheckedFunction {
                         }
                     }
                     if !matches!(
-                        indexed_array_ty(root, &array.projection, false)?,
+                        indexed_array_ty(root, &array.projection, false, conditional_budget)?,
                         Ty::Array { .. } | Ty::Slice { .. }
                     ) {
                         return Err("bounds check requires array or slice storage".into());
@@ -10396,8 +10993,8 @@ impl CheckedFunction {
                             },
                         ) => (*from, concrete.clone(), *to, object.clone()),
                         (have, want) => {
-                            match (have.owned_box_pointee(), want.owned_box_pointee()) {
-                                (Some(concrete), Some(object)) => (
+                            match (have.owned_pointer_pointee(), want.owned_pointer_pointee()) {
+                                (Some((from, concrete)), Some((to, object))) if from == to => (
                                     BorrowKind::Mut,
                                     Arc::new(concrete.clone()),
                                     BorrowKind::Mut,
@@ -10543,7 +11140,12 @@ impl CheckedFunction {
                 }
                 ExprKind::Index { base, index } => {
                     expr(*base)?;
-                    projected_ty(&self.exprs[base.0].ty, &[Projection::ConstantIndex(*index)])?;
+                    projected_ty_inner(
+                        &self.exprs[base.0].ty,
+                        &[Projection::ConstantIndex(*index)],
+                        false,
+                        Some(conditional_budget),
+                    )?;
                 }
                 ExprKind::EnumVariant {
                     ty,
@@ -11069,6 +11671,35 @@ impl CheckedFunction {
                 }
             }
         }
+        let validate_owning_return = |ty: &Ty| -> Result<(), String> {
+            if *ty != Ty::Never
+                && (self.result.owned_pointer_pointee().is_some()
+                    || ty.owned_pointer_pointee().is_some())
+                && !pattern_types_equal_with_facts(ty, &self.result, &mut 0, facts)?
+            {
+                return Err("owning pointer return destination type mismatch".into());
+            }
+            Ok(())
+        };
+        let root_tail = self
+            .body
+            .tail
+            .map(|id| {
+                expr(id)?;
+                Ok::<_, String>(&self.exprs[id.0].ty)
+            })
+            .transpose()?;
+        if self.result.owned_pointer_pointee().is_some()
+            || root_tail.is_some_and(|ty| ty.owned_pointer_pointee().is_some())
+        {
+            let (types, _, possibly_completes) =
+                self.conditional_block_flow(&self.body, conditional_budget)?;
+            if possibly_completes {
+                for ty in types.into_iter().flatten() {
+                    validate_owning_return(ty)?;
+                }
+            }
+        }
         while let Some(block) = blocks.pop() {
             if let Some(id) = block.tail {
                 expr(id)?;
@@ -11078,9 +11709,13 @@ impl CheckedFunction {
                     TypedStmt::AssignOp { place, op, value } => {
                         local(place.local)?;
                         expr(*value)?;
-                        let target =
-                            projected_ty(&self.locals[place.local.0].ty, &place.projection)?;
-                        validate_compound_types(*op, target, &self.exprs[value.0])?;
+                        let target = projected_ty_inner(
+                            &self.locals[place.local.0].ty,
+                            &place.projection,
+                            false,
+                            Some(conditional_budget),
+                        )?;
+                        validate_compound_types(*op, &target, &self.exprs[value.0])?;
                     }
                     TypedStmt::AssignIndexOp {
                         array,
@@ -11100,8 +11735,9 @@ impl CheckedFunction {
                             &self.locals[array.local.0].ty,
                             &array.projection,
                             true,
+                            conditional_budget,
                         )?;
-                        let (Ty::Array { element, .. } | Ty::Slice { element }) = array_ty else {
+                        let (Ty::Array { element, .. } | Ty::Slice { element }) = &array_ty else {
                             return Err("compound indexed assignment requires array type".into());
                         };
                         if matches!(array_ty, Ty::Slice { .. }) && !facts.must_copy(element)? {
@@ -11126,8 +11762,9 @@ impl CheckedFunction {
                             &self.locals[array.local.0].ty,
                             &array.projection,
                             false,
+                            conditional_budget,
                         )?;
-                        if let Ty::Slice { element } = array_ty {
+                        if let Ty::Slice { element } = &array_ty {
                             if !facts.must_copy(element)? {
                                 return Err(
                                     "unsupported: mutable slice assignment of non-Copy elements"
@@ -11140,6 +11777,7 @@ impl CheckedFunction {
                                 &self.locals[array.local.0].ty,
                                 &array.projection,
                                 true,
+                                conditional_budget,
                             )?;
                         } else if !matches!(array_ty, Ty::Array { .. }) {
                             return Err("dynamic indexed assignment requires array type".into());
@@ -11214,8 +11852,12 @@ impl CheckedFunction {
                         local(place.local)?;
                         expr(*value)?;
                     }
-                    TypedStmt::Expr(id) | TypedStmt::Return(Some(id)) => expr(*id)?,
-                    TypedStmt::Return(None) => {}
+                    TypedStmt::Expr(id) => expr(*id)?,
+                    TypedStmt::Return(Some(id)) => {
+                        expr(*id)?;
+                        validate_owning_return(&self.exprs[id.0].ty)?;
+                    }
+                    TypedStmt::Return(None) => validate_owning_return(&Ty::Unit)?,
                     TypedStmt::While {
                         condition, body, ..
                     } => {
@@ -11312,6 +11954,66 @@ mod conditional_validation_tests {
         for other in [Ty::Int(IntTy::U32), Ty::Bool, Ty::Float(FloatTy::F32)] {
             assert!(!identical_type(&Ty::Char, &other, &PlanBudget::default()).unwrap());
         }
+    }
+
+    #[test]
+    fn shared_tuple_slice_elements_retain_exact_component_channels() {
+        let reference = |kind, ty| Ty::Ref {
+            kind,
+            referent: Arc::new(ty),
+        };
+        let leaf = reference(BorrowKind::Shared, Ty::Str);
+        let element = Ty::Tuple(Arc::from([leaf.clone(), Ty::Int(IntTy::Usize)]));
+        let descriptor = reference(
+            BorrowKind::Shared,
+            Ty::Slice {
+                element: Arc::new(element.clone()),
+            },
+        );
+        let budget = PlanBudget::default();
+        validate_shared_slice_element(&element, FactsCtx::Concrete, &budget).unwrap();
+        validate_slice_carrier_with_facts(&descriptor, FactsCtx::Concrete).unwrap();
+        let component = CarrierLocation {
+            path: CarrierPath(Arc::from([
+                CarrierStep::Referent,
+                CarrierStep::SliceElement,
+                CarrierStep::Field(0),
+            ])),
+            channel: CarrierChannel::Fixed(ReferencePosition { depth: 0 }),
+        };
+        let locations = carrier_locations(&descriptor, &budget).unwrap();
+        assert_eq!(locations.len(), 2);
+        assert!(locations.contains(&component));
+        assert_eq!(carrier_at(&descriptor, &component, &budget).unwrap(), leaf);
+        let mut forged = component.clone();
+        forged.path = CarrierPath(Arc::from([
+            CarrierStep::Referent,
+            CarrierStep::SliceElement,
+            CarrierStep::Field(1),
+        ]));
+        assert!(carrier_at(&descriptor, &forged, &budget).is_err());
+        for excluded in [
+            Ty::Tuple(Arc::from([reference(BorrowKind::Mut, Ty::Str)])),
+            Ty::Tuple(Arc::from([reference(BorrowKind::Shared, leaf)])),
+        ] {
+            assert!(validate_shared_slice_element(&excluded, FactsCtx::Concrete, &budget).is_err());
+        }
+        let mutable = reference(
+            BorrowKind::Mut,
+            Ty::Slice {
+                element: Arc::new(element),
+            },
+        );
+        assert!(validate_slice_carrier_with_facts(&mutable, FactsCtx::Concrete).is_err());
+        let mut shared_dag = Ty::Bool;
+        for _ in 0..40 {
+            shared_dag = Ty::Tuple(Arc::from([shared_dag.clone(), shared_dag]));
+        }
+        assert_eq!(
+            shared_slice_tuple_walk(&shared_dag, false, Some(&PlanBudget::default()), 0, &mut 0)
+                .unwrap(),
+            40,
+        );
     }
 
     #[test]
@@ -12392,7 +13094,7 @@ mod tests {
         );
         assert_eq!(
             carrier_at(&nested, &family, &budget).unwrap(),
-            &Ty::Param(parameter)
+            Ty::Param(parameter)
         );
         let components = Ty::Tuple(Arc::from([
             reference(BorrowKind::Shared, Ty::Bool),
@@ -12420,8 +13122,13 @@ mod tests {
         );
         let projected = Ty::Tuple(Arc::from([reference(BorrowKind::Shared, Ty::Bool)]));
         assert_eq!(
-            projected_ty(&projected, &[Projection::Field(0), Projection::Deref]).unwrap(),
-            &Ty::Bool
+            projected_ty(
+                &projected,
+                &[Projection::Field(0), Projection::Deref],
+                &PlanBudget::default()
+            )
+            .unwrap(),
+            Ty::Bool
         );
         let oversized = Ty::Tuple(Arc::from([
             Ty::Array {
@@ -12451,6 +13158,17 @@ mod tests {
             })
             .unwrap();
         validate_call_evidence(&source, &facts, &budget).unwrap();
+        let mut scratch = super::super::traits::TraitScratch::default();
+        for _ in 0..3 {
+            validate_call_evidence_with_policy_scratch(
+                &source,
+                &facts,
+                &budget,
+                CallEvidencePolicy::Legacy,
+                &mut scratch,
+            )
+            .unwrap();
+        }
         let call = source
             .call_evidence
             .iter()
@@ -12471,6 +13189,17 @@ mod tests {
         arguments[0].expectation = CallExpectation::NoFirmReference;
         row.arguments = arguments.into();
         forged.call_evidence = rows.into();
+        assert!(
+            validate_call_evidence_with_policy_scratch(
+                &forged,
+                &facts,
+                &budget,
+                CallEvidencePolicy::Legacy,
+                &mut scratch,
+            )
+            .unwrap_err()
+            .contains("firm argument")
+        );
         assert!(
             validate_call_evidence(&forged, &facts, &budget)
                 .unwrap_err()
@@ -12497,6 +13226,44 @@ mod tests {
             validate_call_evidence(&missing, &facts, &budget)
                 .unwrap_err()
                 .contains("missing original-stage")
+        );
+        let foreign_program = frontend::parse("fn main(){}").unwrap();
+        let foreign_plan = frontend::PlanCtx::from_program(&foreign_program, &budget).unwrap();
+        let foreign_facts = foreign_plan
+            .instance_facts(&CallTarget {
+                declaration: foreign_plan.function_decl(0).unwrap(),
+                type_args: Arc::from([]),
+            })
+            .unwrap();
+        assert!(
+            validate_call_evidence_with_policy_scratch(
+                &source,
+                &foreign_facts,
+                &budget,
+                CallEvidencePolicy::Legacy,
+                &mut scratch,
+            )
+            .is_err()
+        );
+        validate_call_evidence_with_policy_scratch(
+            &source,
+            &facts,
+            &budget,
+            CallEvidencePolicy::Legacy,
+            &mut scratch,
+        )
+        .unwrap();
+        budget.poison_ledger_for_tests();
+        assert!(budget.has_resource_failure());
+        assert!(
+            validate_call_evidence_with_policy_scratch(
+                &source,
+                &facts,
+                &budget,
+                CallEvidencePolicy::Legacy,
+                &mut scratch,
+            )
+            .is_err()
         );
     }
 
@@ -12559,8 +13326,13 @@ mod tests {
             &Ty::Int(IntTy::I32)
         );
         assert_eq!(
-            projected_ty(&params[0], &[Projection::Deref, Projection::Deref]).unwrap(),
-            &Ty::Int(IntTy::I32)
+            projected_ty(
+                &params[0],
+                &[Projection::Deref, Projection::Deref],
+                &PlanBudget::default()
+            )
+            .unwrap(),
+            Ty::Int(IntTy::I32)
         );
         for rows in [
             vec![contract.input_regions[0].clone()],
@@ -12961,15 +13733,15 @@ mod tests {
         assert!(carrier_locations(&nested, &budget).unwrap().is_empty());
         // Zero-length reference arrays are admitted but expose no carrier slots.
         validate_root_reference_actual(&nested, &budget).unwrap();
-        assert!(
-            validate_root_reference_actual(
-                &Ty::Slice {
-                    element: Arc::new(Ty::Bool)
-                },
-                &budget
-            )
-            .is_err()
-        );
+        // Unsized slices are valid shapes for ?Sized binders. They do not
+        // discharge the implicit Sized obligation of an ordinary parameter.
+        validate_root_reference_actual(
+            &Ty::Slice {
+                element: Arc::new(Ty::Bool),
+            },
+            &budget,
+        )
+        .unwrap();
         assert_eq!(
             fixture_derive_return_contract(
                 &[nested],
@@ -13441,7 +14213,7 @@ mod tests {
                 ))
             );
             assert!(reject_references(&ty, &budget).is_ok());
-            assert_eq!(projected_ty(&ty, &[]).unwrap(), &ty);
+            assert_eq!(projected_ty(&ty, &[], &PlanBudget::default()).unwrap(), ty);
             assert_eq!(root_reference_layers(&ty).unwrap(), 0);
             assert!(reference_layers(&ty).is_err());
             assert!(slice_boundary_walk(&ty, true, false, Some(&budget), 0, &mut 0).is_err());
@@ -14846,12 +15618,13 @@ mod tests {
             variants: Arc::from([VariantDef {
                 name: "V".into(),
                 shape: VariantShape::Tuple,
-                fields: Arc::from([FieldDef {
+                fields: [FieldDef {
                     name: "0".into(),
                     ty: Ty::Int(IntTy::I32),
                     visibility: crate::compiler::ir::Visibility::Restricted(modules.core_root()),
                     lifetime_bound: false,
-                }]),
+                }]
+                .into(),
             }]),
         });
         let root = Ty::Struct(nominal(
@@ -14994,6 +15767,8 @@ mod tests {
             root_type
                 .def()
                 .fields
+                .read(&PlanBudget::default())
+                .unwrap()
                 .iter()
                 .map(|field| field.ty.clone())
                 .collect(),
@@ -15418,11 +16193,30 @@ mod tests {
         assert!(shared.is_copy());
         assert!(!mutable.is_copy());
         assert_eq!(
-            projected_ty(&shared, &[Projection::Deref, Projection::Field(0)]).unwrap(),
-            &Ty::Int(IntTy::I32)
+            projected_ty(
+                &shared,
+                &[Projection::Deref, Projection::Field(0)],
+                &PlanBudget::default()
+            )
+            .unwrap(),
+            Ty::Int(IntTy::I32)
         );
-        assert!(projected_ty(&shared, &[Projection::Deref, Projection::Deref]).is_err());
-        assert!(projected_ty(&Ty::Int(IntTy::I32), &[Projection::Deref]).is_err());
+        assert!(
+            projected_ty(
+                &shared,
+                &[Projection::Deref, Projection::Deref],
+                &PlanBudget::default()
+            )
+            .is_err()
+        );
+        assert!(
+            projected_ty(
+                &Ty::Int(IntTy::I32),
+                &[Projection::Deref],
+                &PlanBudget::default()
+            )
+            .is_err()
+        );
         assert!(!Ty::Tuple(Arc::from([mutable])).is_copy());
     }
     use super::*;
@@ -15436,18 +16230,37 @@ mod tests {
         };
         assert!(scalar.is_copy());
         assert_eq!(scalar.field_count(), None);
-        assert_eq!(scalar.field_ty(0), None);
+        assert_eq!(scalar.field_ty(0, &PlanBudget::default()).unwrap(), None);
         assert_eq!(
-            projected_ty(&scalar, &[Projection::ConstantIndex(1)]).unwrap(),
-            &Ty::Int(IntTy::I32)
+            projected_ty(
+                &scalar,
+                &[Projection::ConstantIndex(1)],
+                &PlanBudget::default()
+            )
+            .unwrap(),
+            Ty::Int(IntTy::I32)
         );
-        assert!(projected_ty(&scalar, &[Projection::Field(0)]).is_err());
-        assert!(projected_ty(&scalar, &[Projection::ConstantIndex(2)]).is_err());
+        assert!(projected_ty(&scalar, &[Projection::Field(0)], &PlanBudget::default()).is_err());
+        assert!(
+            projected_ty(
+                &scalar,
+                &[Projection::ConstantIndex(2)],
+                &PlanBudget::default()
+            )
+            .is_err()
+        );
         let empty = Ty::Array {
             element: Arc::new(Ty::Int(IntTy::I32)),
             len: 0,
         };
-        assert!(projected_ty(&empty, &[Projection::ConstantIndex(0)]).is_err());
+        assert!(
+            projected_ty(
+                &empty,
+                &[Projection::ConstantIndex(0)],
+                &PlanBudget::default()
+            )
+            .is_err()
+        );
         let noncopy = Ty::Struct(nominal(
             &modules,
             NominalAppId {
@@ -15514,7 +16327,7 @@ mod tests {
         VariantDef {
             name: name.into(),
             shape: VariantShape::Unit,
-            fields: Arc::from([]),
+            fields: Vec::<FieldDef>::new().into(),
         }
     }
 
@@ -15561,10 +16374,11 @@ mod tests {
                     Projection::Downcast(variant),
                     Projection::Field(0),
                     Projection::Field(0)
-                ]
+                ],
+                &PlanBudget::default()
             )
             .unwrap(),
-            &Ty::Int(IntTy::I32)
+            Ty::Int(IntTy::I32)
         );
         for projection in [
             vec![Projection::Field(0)],
@@ -15588,7 +16402,10 @@ mod tests {
                 Projection::Field(0),
             ],
         ] {
-            assert!(projected_ty(&root, &projection).is_err(), "{projection:?}");
+            assert!(
+                projected_ty(&root, &projection, &PlanBudget::default()).is_err(),
+                "{projection:?}"
+            );
         }
         let empty_payload = EnumTy::new(EnumDef {
             source_decl: test_decl(),
@@ -15600,7 +16417,7 @@ mod tests {
             variants: vec![VariantDef {
                 name: "A".into(),
                 shape: VariantShape::Struct,
-                fields: Arc::from([]),
+                fields: Vec::<FieldDef>::new().into(),
             }]
             .into(),
         });
@@ -15663,7 +16480,7 @@ mod tests {
         assert!(!ty.is_copy());
         assert!(!Ty::Tuple(vec![ty.clone()].into()).is_copy());
         assert_eq!(ty.field_count(), None);
-        assert_eq!(ty.field_ty(0), None);
+        assert_eq!(ty.field_ty(0, &PlanBudget::default()).unwrap(), None);
         assert!(format!("{handle:?}").len() < 512);
         let mut function = fixture();
         function.exprs.push(TypedExpr {
@@ -15951,9 +16768,9 @@ mod tests {
         for index in 0..40 {
             ty = Ty::Struct(nominal(&modules, id(index), "Shared", vec![ty.clone(), ty]));
         }
-        assert!(!by_value_contains(&ty, id(39), 0).unwrap());
-        assert!(by_value_contains(&ty, id(39), 1).unwrap());
-        assert!(!by_value_contains(&ty, id(40), 0).unwrap());
+        assert!(!by_value_contains(&ty, id(39), 0, &PlanBudget::default()).unwrap());
+        assert!(by_value_contains(&ty, id(39), 1, &PlanBudget::default()).unwrap());
+        assert!(!by_value_contains(&ty, id(40), 0, &PlanBudget::default()).unwrap());
 
         // A shallow first visit must not hide a later over-depth path to
         // the same allocation. Both array elements and tuple rows are shared.
@@ -15973,12 +16790,29 @@ mod tests {
         }
         let root = Ty::Tuple(vec![shared, deep].into());
         assert!(
-            by_value_contains(&root, id(40), 0)
+            by_value_contains(&root, id(40), 0, &PlanBudget::default())
                 .unwrap_err()
                 .contains("nesting")
         );
-        assert!(by_value_contains(&Ty::Unit, id(40), 256).is_ok());
-        assert!(by_value_contains(&Ty::Unit, id(40), 257).is_err());
+        // The legacy traversal ceiling is 256, but the node budget has a
+        // tighter limit. PlanBudget::new also clamps larger requested limits.
+        let requested = PlanBudget::new(PlanLimits {
+            depth: 256,
+            ..PlanLimits::default()
+        });
+        assert_eq!(requested.limits().depth, PlanLimits::default().depth);
+        let boundary_budget = PlanBudget::default();
+        let boundary = 256.min(boundary_budget.limits().depth);
+        assert!(by_value_contains(&Ty::Unit, id(40), boundary, &boundary_budget).is_ok());
+        assert!(
+            by_value_contains(&Ty::Unit, id(40), boundary + 1, &PlanBudget::default()).is_err()
+        );
+        let default_budget = PlanBudget::default();
+        assert!(by_value_contains(&Ty::Unit, id(40), 256, &default_budget).is_err());
+        let failure = default_budget.first_resource_failure().unwrap();
+        assert_eq!(failure.kind, ResourceBudgetKind::Depth);
+        assert!(by_value_contains(&Ty::Unit, id(40), 256, &default_budget).is_err());
+        assert_eq!(default_budget.first_resource_failure(), Some(failure));
     }
 
     #[test]
@@ -16002,7 +16836,7 @@ mod tests {
             .unwrap()
         });
         let ty = Ty::Struct(StructTy::from_ref(NominalRef::Strong(definition)));
-        assert!(by_value_contains(&ty, id, 0).unwrap());
+        assert!(by_value_contains(&ty, id, 0, &PlanBudget::default()).unwrap());
         assert!(
             by_value_contains(
                 &Ty::Array {
@@ -16010,7 +16844,8 @@ mod tests {
                     len: 0
                 },
                 id,
-                0
+                0,
+                &PlanBudget::default()
             )
             .unwrap()
         );
@@ -16021,7 +16856,8 @@ mod tests {
                     pointee: Arc::new(ty.clone())
                 },
                 id,
-                0
+                0,
+                &PlanBudget::default()
             )
             .unwrap()
         );
@@ -16032,7 +16868,8 @@ mod tests {
                     referent: Arc::new(ty)
                 },
                 id,
-                0
+                0,
+                &PlanBudget::default()
             )
             .unwrap()
         );
@@ -16094,18 +16931,39 @@ mod tests {
                 Ty::Tuple(vec![Ty::Bool, Ty::Unit].into()),
             ],
         );
-        assert_eq!(handle.field_index("f1"), Some(1));
-        assert_eq!(handle.field_index("missing"), None);
+        assert_eq!(
+            handle.field_index("f1", &PlanBudget::default()).unwrap(),
+            Some(1)
+        );
+        assert_eq!(
+            handle
+                .field_index("missing", &PlanBudget::default())
+                .unwrap(),
+            None
+        );
         let ty = Ty::Struct(handle);
         assert_eq!(ty.field_count(), Some(2));
-        assert_eq!(ty.field_ty(0), Some(&Ty::Int(IntTy::I32)));
-        assert_eq!(ty.field_ty(2), None);
+        assert_eq!(
+            ty.field_ty(0, &PlanBudget::default()).unwrap(),
+            Some(Ty::Int(IntTy::I32))
+        );
+        assert_eq!(ty.field_ty(2, &PlanBudget::default()).unwrap(), None);
         assert!(!ty.is_copy());
-        assert!(ty.field_ty(1).unwrap().is_copy());
+        assert!(
+            ty.field_ty(1, &PlanBudget::default())
+                .unwrap()
+                .unwrap()
+                .is_copy()
+        );
         assert!(Ty::Tuple(vec![Ty::Bool, Ty::Unit].into()).is_copy());
         assert!(!Ty::Tuple(vec![Ty::Bool, ty].into()).is_copy());
         assert_eq!(Ty::Int(IntTy::I32).field_count(), None);
-        assert_eq!(Ty::Int(IntTy::I32).field_ty(0), None);
+        assert_eq!(
+            Ty::Int(IntTy::I32)
+                .field_ty(0, &PlanBudget::default())
+                .unwrap(),
+            None
+        );
     }
 
     #[test]
@@ -16762,6 +17620,7 @@ mod tests {
             cx: &mut context,
             budget: &budget,
             owners: std::collections::HashMap::new(),
+            component_owners_seen: std::collections::HashSet::new(),
         }
         .pattern(&mut pattern)
         .unwrap();

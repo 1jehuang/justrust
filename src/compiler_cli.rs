@@ -137,6 +137,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     name: name.into(),
                     root: path.into(),
                     cfg: compiler::source::CfgSet::native_x86_64_linux(),
+                    cap_lints_allow: false,
                 });
             }
             Some("--opt") => {

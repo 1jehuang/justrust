@@ -479,6 +479,7 @@ impl WorldDb {
                 ir::Ty::Struct(s) => vec![
                     s.def()
                         .fields
+                        .read(&plan.budget)?
                         .iter()
                         .map(|f| (f.name.clone(), f.ty.clone()))
                         .collect(),
@@ -488,12 +489,15 @@ impl WorldDb {
                     .variants
                     .iter()
                     .map(|v| {
-                        v.fields
-                            .iter()
-                            .map(|f| (f.name.clone(), f.ty.clone()))
-                            .collect()
+                        Ok::<_, String>(
+                            v.fields
+                                .read(&plan.budget)?
+                                .iter()
+                                .map(|f| (f.name.clone(), f.ty.clone()))
+                                .collect(),
+                        )
                     })
-                    .collect(),
+                    .collect::<Result<Vec<_>, String>>()?,
                 _ => continue,
             };
             db.add_adt(info.id, &env, variants);

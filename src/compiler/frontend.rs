@@ -58,6 +58,8 @@ mod literal_call_inputs;
 mod method_argument_selection;
 mod name_scope;
 mod name_validation;
+mod validation_snapshot;
+pub(in crate::compiler) use validation_snapshot::ValidatedProgram;
 mod pattern_usefulness;
 mod program_symbols;
 pub(crate) mod signature_graph;
@@ -131,6 +133,71 @@ pub(super) enum NominalCallablePublication {
 #[cfg(test)]
 mod canonical_source_replay_tests {
     use super::*;
+    #[test]
+    fn static_literal_inputs_reject_forged_multiple_argument_values() {
+        let (_, _, budget, publication) = published(
+            "struct Holder<T>{value:T}fn keep<T>(value:T,_capacity:usize)->Holder<T>{Holder{value}}fn main(){keep(\"abc\",2usize);}",
+            1,
+        );
+        let source = publication.source();
+        let original = publication.original().source_for_test();
+        publication
+            .validate_source(source, publication.facts(), &budget)
+            .unwrap();
+        for mode in 0..4 {
+            let mut changed = source.as_ref().clone();
+            match mode {
+                0 => {
+                    let expression = changed
+                        .exprs
+                        .iter_mut()
+                        .find(|e| matches!(e.kind, ir::ExprKind::Str(_)))
+                        .unwrap();
+                    expression.kind = ir::ExprKind::Str("forged".into());
+                }
+                1 => {
+                    let expression = changed
+                        .exprs
+                        .iter_mut()
+                        .find(|e| matches!(e.kind, ir::ExprKind::Int(_)))
+                        .unwrap();
+                    let ir::ExprKind::Int(value) = &mut expression.kind else {
+                        unreachable!()
+                    };
+                    value.bits += 1;
+                }
+                2 => {
+                    let expression = changed.exprs.iter_mut().find(|e| matches!(&e.kind, ir::ExprKind::Call { args, .. } if args.len() == 2)).unwrap();
+                    let ir::ExprKind::Call { args, .. } = &mut expression.kind else {
+                        unreachable!()
+                    };
+                    args.swap(0, 1);
+                }
+                _ => {
+                    let expression = changed.exprs.iter_mut().find(|e| matches!(&e.kind, ir::ExprKind::Call { args, .. } if args.len() == 2)).unwrap();
+                    let ir::ExprKind::Call {
+                        target: ir::Callee::Direct(target),
+                        ..
+                    } = &mut expression.kind
+                    else {
+                        unreachable!()
+                    };
+                    target.type_args = vec![ir::Ty::Bool].into();
+                }
+            }
+            assert_eq!(
+                kind_error(replay_source_body(
+                    &original,
+                    &Arc::new(changed),
+                    publication.facts(),
+                    &budget
+                )),
+                tr::FactsErrorKind::InvalidMetadata,
+                "static literal forgery {mode}"
+            );
+        }
+    }
+
     #[test]
     fn closed_literal_inputs_reject_forged_values_and_storage() {
         let (_, _, budget, publication) = published(
@@ -1186,7 +1253,7 @@ struct SourceInventory {
     owner: sr::OriginalBodyId,
     calls: Vec<SourceCallSite>,
     // Reconstructed from immutable source on each inventory walk, never published.
-    literal_arguments: HashMap<usize, Expr>,
+    literal_arguments: HashMap<usize, Vec<Expr>>,
     constants: Vec<(sr::SourceNode, PathKey)>,
     associated_constants: Vec<(sr::SourceNode, AssociatedConstUse)>,
     associated_constant_pointers: HashMap<usize, usize>,
@@ -2584,11 +2651,9 @@ impl SourceInventory {
                     },
                     budget,
                 )?;
-                if let [argument] = args.as_slice()
-                    && let Some(literal) = literal_call_inputs::copy_literal(argument, budget, 0)?
-                {
+                if let Some(literals) = literal_call_inputs::copy_arguments(args, budget)? {
                     reserve_source_map(&mut self.literal_arguments, budget)?;
-                    self.literal_arguments.insert(index, literal);
+                    self.literal_arguments.insert(index, literals);
                 }
                 insert_source_pointer(
                     &mut self.call_pointers,
@@ -3831,7 +3896,13 @@ fn require_reference_free(
             for ty in t.def().type_args.iter() {
                 require_reference_free(ty, budget, depth + 1)?;
             }
-            for f in t.def().fields.iter() {
+            for f in t
+                .def()
+                .fields
+                .read(budget)
+                .map_err(|e| source_error(budget, &e))?
+                .iter()
+            {
                 require_reference_free(&f.ty, budget, depth + 1)?;
             }
         }
@@ -3840,7 +3911,12 @@ fn require_reference_free(
                 require_reference_free(ty, budget, depth + 1)?;
             }
             for v in t.def().variants.iter() {
-                for f in v.fields.iter() {
+                for f in v
+                    .fields
+                    .read(budget)
+                    .map_err(|e| source_error(budget, &e))?
+                    .iter()
+                {
                     require_reference_free(&f.ty, budget, depth + 1)?;
                 }
             }
@@ -3918,7 +3994,13 @@ fn contains_source_ref(
             for t in t.def().type_args.iter() {
                 any |= contains_source_ref(t, budget, depth + 1)?;
             }
-            for f in t.def().fields.iter() {
+            for f in t
+                .def()
+                .fields
+                .read(budget)
+                .map_err(|e| source_error(budget, &e))?
+                .iter()
+            {
                 any |= contains_source_ref(&f.ty, budget, depth + 1)?;
             }
             any
@@ -3929,7 +4011,12 @@ fn contains_source_ref(
                 any |= contains_source_ref(t, budget, depth + 1)?;
             }
             for v in t.def().variants.iter() {
-                for f in v.fields.iter() {
+                for f in v
+                    .fields
+                    .read(budget)
+                    .map_err(|e| source_error(budget, &e))?
+                    .iter()
+                {
                     any |= contains_source_ref(&f.ty, budget, depth + 1)?;
                 }
             }
@@ -5630,13 +5717,11 @@ pub(super) fn replay_source_body(
             .map_err(|e| source_error(budget, &e))?;
             continue;
         }
-        if let Some(literal) = fresh.literal_arguments.get(&index)
-            && let [argument] = args.as_slice()
-        {
+        if let Some(literals) = fresh.literal_arguments.get(&index) {
             literal_call_inputs::validate(
-                literal,
+                literals,
                 checked,
-                *argument,
+                args,
                 target,
                 signature,
                 &view,
@@ -6137,15 +6222,16 @@ impl PlanCtx {
                             kind: ir::ExprKind::Call { args, .. },
                             ..
                         }) = checked.exprs.get(id.0)
-                        && let [argument] = args.as_slice()
                     {
-                        literal_call_inputs::capture_temporaries(
-                            &checked,
-                            *argument,
-                            &mut literal_temporaries,
-                            budget,
-                            0,
-                        )?;
+                        for argument in args {
+                            literal_call_inputs::capture_temporaries(
+                                &checked,
+                                *argument,
+                                &mut literal_temporaries,
+                                budget,
+                                0,
+                            )?;
+                        }
                     }
                 }
                 // Move precharged source-only records. Never clone the AST or output arena.
@@ -17058,6 +17144,7 @@ mod provider_source_context;
 mod provider_source_domain;
 mod root_resolution;
 pub mod sema_lower;
+pub(in crate::compiler) use root_resolution::finish_resolution_sealed;
 pub use root_resolution::{
     ResolutionNamespace, ResolvedModuleItems, finish_resolution, prepare_resolution,
     prepare_resolution_owned, resolution_module_indices, resolution_modules, resolve,
@@ -19315,8 +19402,36 @@ impl PlanCtx {
                 Output = Result<Vec<Arc<signature_graph::CallableSignatureOutput>>, String>,
             >,
     {
-        let program = shared.as_ref();
-        program.validate_name_handles()?;
+        let validated = ValidatedProgram::new(shared)?;
+        Self::from_validated_program_with_signatures(
+            &validated,
+            budget,
+            eager,
+            catalog_owner,
+            world_owner,
+            compute_signatures,
+        )
+        .await
+    }
+
+    /// Only the retained exact snapshot capability admits this path. There is
+    /// no separately supplied Program to confuse with the validated input.
+    pub(in crate::compiler) async fn from_validated_program_with_signatures<F, Fut>(
+        validated: &ValidatedProgram,
+        budget: &ir::PlanBudget,
+        eager: bool,
+        catalog_owner: super::owner_path::Issued,
+        world_owner: super::owner_path::Issued,
+        compute_signatures: F,
+    ) -> Result<Self, String>
+    where
+        F: FnOnce(Arc<signature_graph::CallableSignatureInputs>) -> Fut,
+        Fut: std::future::Future<
+                Output = Result<Vec<Arc<signature_graph::CallableSignatureOutput>>, String>,
+            >,
+    {
+        let shared = validated.shared();
+        let program = validated.program();
         program.validate_c_source()?;
         program.validate_associated_bound_sources(budget)?;
         // Source constructors retain nominal identity. Generic unit declarations
@@ -21436,26 +21551,21 @@ impl PlanCtx {
         budget: &ir::PlanBudget,
     ) -> Result<ir::Ty, String> {
         self.check_budget(budget)?;
-        let structural = match caller {
-            ir::FactsCtx::Validated(facts) => {
-                if !facts.budget().same_authority(budget)
-                    || !Arc::ptr_eq(facts.world(), &self.trait_world()?)
-                {
-                    return Err("nominal interning changed validated caller authority".into());
-                }
-                ir::FactsCtx::Universal(facts.env())
+        if let ir::FactsCtx::Validated(facts) = caller {
+            if !facts.budget().same_authority(budget)
+                || !Arc::ptr_eq(facts.world(), &self.trait_world()?)
+            {
+                return Err("nominal interning changed validated caller authority".into());
             }
-            other => other,
-        };
+        }
         for argument in args {
             caller.validate_ty_metadata_with_budget(argument, budget)?;
         }
-        // Metadata validation can ask SchemaAdapter to authenticate a nested
-        // nominal through this same state. Intern structurally while locked,
-        // then replay the original caller's authority after releasing the guard.
+        // Scratch is fresh per call, so nested schema replay cannot re-enter a
+        // shared state lock. Preserve the exact caller's validated authority.
         let out = {
             self.scratch()
-                .intern(&self.registry, decl, args, structural, budget, 0)?
+                .intern(&self.registry, decl, args, caller, budget, 0)?
         };
         caller.validate_ty_metadata_with_budget(&out, budget)?;
         Ok(out)
@@ -22071,26 +22181,38 @@ fn same_fields(a: &[ir::FieldDef], b: &[ir::FieldDef]) -> bool {
                 && a.lifetime_bound == b.lifetime_bound
         })
 }
-fn same_struct_def(a: &ir::StructDef, b: &ir::StructDef) -> bool {
-    a.id == b.id
+fn same_struct_def(
+    a: &ir::StructDef,
+    b: &ir::StructDef,
+    budget: &ir::PlanBudget,
+) -> Result<bool, String> {
+    Ok(a.id == b.id
         && a.source_decl == b.source_decl
         && a.type_args == b.type_args
         && a.name == b.name
         && a.module == b.module
         && a.visibility == b.visibility
-        && same_fields(&a.fields, &b.fields)
+        && same_fields(&a.fields.read(budget)?, &b.fields.read(budget)?))
 }
-fn same_enum_def(a: &ir::EnumDef, b: &ir::EnumDef) -> bool {
-    a.id == b.id
+fn same_enum_def(
+    a: &ir::EnumDef,
+    b: &ir::EnumDef,
+    budget: &ir::PlanBudget,
+) -> Result<bool, String> {
+    let mut equal_fields = true;
+    for (a, b) in a.variants.iter().zip(b.variants.iter()) {
+        equal_fields &= a.name == b.name
+            && a.shape == b.shape
+            && same_fields(&a.fields.read(budget)?, &b.fields.read(budget)?);
+    }
+    Ok(a.id == b.id
         && a.source_decl == b.source_decl
         && a.type_args == b.type_args
         && a.name == b.name
         && a.module == b.module
         && a.visibility == b.visibility
         && a.variants.len() == b.variants.len()
-        && a.variants.iter().zip(b.variants.iter()).all(|(a, b)| {
-            a.name == b.name && a.shape == b.shape && same_fields(&a.fields, &b.fields)
-        })
+        && equal_fields)
 }
 #[derive(Debug)]
 struct SchemaAdapter {
@@ -22478,7 +22600,23 @@ impl tr::SchemaCx for SchemaAdapter {
         env: &ir::GenericEnv,
         budget: &ir::PlanBudget,
     ) -> Result<(), tr::FactsError> {
-        self.validate_nominal_tree(ty, env, budget, true)
+        self.validate_nominal_tree(ty, env, budget, true, None)
+    }
+    fn validate_nominal_with_facts(
+        &self,
+        ty: &ir::Ty,
+        facts: &tr::ValidatedFacts,
+        budget: &ir::PlanBudget,
+    ) -> Result<(), tr::FactsError> {
+        if !facts.budget().same_authority(budget)
+            || facts.registry_snapshot() != self.registry.declarations[0].id.snapshot
+        {
+            return Err(tr::FactsError::invalid(
+                budget,
+                "nominal metadata caller authority mismatch",
+            ));
+        }
+        self.validate_nominal_tree(ty, facts.env(), budget, true, Some(facts))
     }
     fn validate_nominal_node(
         &self,
@@ -22486,7 +22624,23 @@ impl tr::SchemaCx for SchemaAdapter {
         env: &ir::GenericEnv,
         budget: &ir::PlanBudget,
     ) -> Result<(), tr::FactsError> {
-        self.validate_nominal_tree(ty, env, budget, false)
+        self.validate_nominal_tree(ty, env, budget, false, None)
+    }
+    fn validate_nominal_node_with_facts(
+        &self,
+        ty: &ir::Ty,
+        facts: &tr::ValidatedFacts,
+        budget: &ir::PlanBudget,
+    ) -> Result<(), tr::FactsError> {
+        if !facts.budget().same_authority(budget)
+            || facts.registry_snapshot() != self.registry.declarations[0].id.snapshot
+        {
+            return Err(tr::FactsError::invalid(
+                budget,
+                "nominal node caller authority mismatch",
+            ));
+        }
+        self.validate_nominal_tree(ty, facts.env(), budget, false, Some(facts))
     }
 }
 impl SchemaAdapter {
@@ -22496,6 +22650,7 @@ impl SchemaAdapter {
         env: &ir::GenericEnv,
         budget: &ir::PlanBudget,
         descend: bool,
+        facts: Option<&tr::ValidatedFacts>,
     ) -> Result<(), tr::FactsError> {
         if !budget.same_authority(&self.budget) {
             return Err(tr::FactsError::invalid(
@@ -22513,6 +22668,7 @@ impl SchemaAdapter {
             memo: &mut HashMap<(ir::NominalAppId, usize), usize>,
             state: &mut PlanState,
             descend: bool,
+            facts: Option<&tr::ValidatedFacts>,
         ) -> Result<usize, String> {
             b.check_depth(depth)?;
             b.charge_work(1)?;
@@ -22541,7 +22697,7 @@ impl SchemaAdapter {
                     {
                         return Err("foreign parent-local nominal".into());
                     }
-                } else if matches!(id.index, ir::NominalIndex::GraphRealization(_)) {
+                } else if id.index.is_graph() {
                     let capability = match ty {
                         ir::Ty::Struct(n) => n.realization(),
                         ir::Ty::Enum(n) => n.realization(),
@@ -22551,6 +22707,19 @@ impl SchemaAdapter {
                     capability.check_definition(ty).map_err(|e| e.to_string())?;
                     if id.snapshot != cx.registry.declarations[0].id.snapshot {
                         return Err("foreign graph nominal source snapshot".into());
+                    }
+                    if capability.is_component()
+                        && let Some(facts) = facts
+                    {
+                        // The strict argument check replays every closed-world
+                        // component obligation before using its finite height.
+                        return argument_height(
+                            ty,
+                            ir::FactsCtx::Validated(facts),
+                            b,
+                            depth,
+                            &mut HashMap::new(),
+                        );
                     }
                 } else {
                     // The slot is a canonical digest of the definition's own
@@ -22576,7 +22745,9 @@ impl SchemaAdapter {
                     let canonical = match cx.nominals.by_slot.get(&id.index.source_slot()?) {
                         Some(base) => base.clone(),
                         None => {
-                            let caller = if env.total_arity() == 0 {
+                            let caller = if let Some(facts) = facts {
+                                ir::FactsCtx::Validated(facts)
+                            } else if env.total_arity() == 0 {
                                 ir::FactsCtx::Concrete
                             } else {
                                 ir::FactsCtx::Universal(env)
@@ -22596,11 +22767,11 @@ impl SchemaAdapter {
                     let same = match (&canonical, ty) {
                         (ir::Ty::Struct(c), ir::Ty::Struct(t)) => {
                             c.def() as *const _ as usize == pointer
-                                || same_struct_def(c.def(), t.def())
+                                || same_struct_def(c.def(), t.def(), b)?
                         }
                         (ir::Ty::Enum(c), ir::Ty::Enum(t)) => {
                             c.def() as *const _ as usize == pointer
-                                || same_enum_def(c.def(), t.def())
+                                || same_enum_def(c.def(), t.def(), b)?
                         }
                         _ => false,
                     };
@@ -22614,7 +22785,7 @@ impl SchemaAdapter {
             }
             let mut height = 0usize;
             let mut child = |t: &ir::Ty| -> Result<(), String> {
-                height = height.max(walk(cx, t, env, b, depth + 1, memo, state, true)? + 1);
+                height = height.max(walk(cx, t, env, b, depth + 1, memo, state, true, facts)? + 1);
                 Ok(())
             };
             match ty {
@@ -22643,7 +22814,7 @@ impl SchemaAdapter {
                     for a in t.def().type_args.iter() {
                         child(a)?;
                     }
-                    for f in t.def().fields.iter() {
+                    for f in t.def().fields.read(b)?.iter() {
                         child(&f.ty)?;
                     }
                 }
@@ -22653,7 +22824,7 @@ impl SchemaAdapter {
                     }
                     for v in t.def().variants.iter() {
                         b.charge_work(1)?;
-                        for f in v.fields.iter() {
+                        for f in v.fields.read(b)?.iter() {
                             child(&f.ty)?;
                         }
                     }
@@ -22701,6 +22872,7 @@ impl SchemaAdapter {
             &mut HashMap::new(),
             &mut self.scratch(),
             descend,
+            facts,
         )
         .map(|_| ())
         .map_err(|e| self.error(e))
@@ -22716,6 +22888,23 @@ fn raw_type_has_projection(
         return Ok(false);
     }
     budget.charge_work(1)?;
+    let capability = match ty {
+        ir::Ty::Struct(value) => value.realization(),
+        ir::Ty::Enum(value) => value.realization(),
+        _ => None,
+    };
+    if let Some(capability) = capability
+        && let Some(height) = capability.component_metadata_height()
+    {
+        // This is projection inventory only, not executable admission. The
+        // authenticated closed component grammar contains no projected terms.
+        capability.check_definition(ty).map_err(|e| e.to_string())?;
+        let deepest = depth
+            .checked_add(height)
+            .ok_or("raw projection inventory depth overflow")?;
+        budget.check_depth(deepest)?;
+        return Ok(false);
+    }
     match ty {
         ir::Ty::AssociatedType(_) => Ok(true),
         ir::Ty::Tuple(fields) => {
@@ -22732,11 +22921,12 @@ fn raw_type_has_projection(
             referent: element, ..
         } => raw_type_has_projection(element, budget, depth + 1),
         ir::Ty::Struct(ty) => {
+            let fields = ty.def().fields.read(budget)?;
             for argument in ty
                 .def()
                 .type_args
                 .iter()
-                .chain(ty.def().fields.iter().map(|field| &field.ty))
+                .chain(fields.iter().map(|field| &field.ty))
             {
                 if raw_type_has_projection(argument, budget, depth + 1)? {
                     return Ok(true);
@@ -22745,14 +22935,16 @@ fn raw_type_has_projection(
             Ok(false)
         }
         ir::Ty::Enum(ty) => {
-            for argument in ty.def().type_args.iter().chain(
-                ty.def()
-                    .variants
-                    .iter()
-                    .flat_map(|variant| variant.fields.iter().map(|field| &field.ty)),
-            ) {
+            for argument in ty.def().type_args.iter() {
                 if raw_type_has_projection(argument, budget, depth + 1)? {
                     return Ok(true);
+                }
+            }
+            for variant in ty.def().variants.iter() {
+                for field in variant.fields.read(budget)?.iter() {
+                    if raw_type_has_projection(&field.ty, budget, depth + 1)? {
+                        return Ok(true);
+                    }
                 }
             }
             Ok(false)
@@ -23405,6 +23597,32 @@ fn argument_height(
         .check_depth(depth)
         .map_err(|e| format!("generic type nesting resource limit: {e}"))?;
     budget.charge_work(1)?;
+    let capability = match ty {
+        ir::Ty::Struct(value) => value.realization(),
+        ir::Ty::Enum(value) => value.realization(),
+        _ => None,
+    };
+    if let Some(capability) = capability.filter(|capability| capability.is_component()) {
+        capability.check_definition(ty).map_err(|e| e.to_string())?;
+        let ir::FactsCtx::Validated(facts) = caller else {
+            return Err("component argument requires validated facts".into());
+        };
+        if !facts.budget().same_authority(budget) {
+            return Err("component argument requires the same budget authority".into());
+        }
+        // Replay the complete closed-world proof before using its finite height.
+        caller.validate_ty_with_budget(ty, budget)?;
+        let height = capability
+            .component_metadata_height()
+            .ok_or("component argument lacks verified metadata height")?;
+        let deepest = depth
+            .checked_add(height)
+            .ok_or("generic type nesting depth overflow")?;
+        budget
+            .check_depth(deepest)
+            .map_err(|e| format!("generic type nesting resource limit: {e}"))?;
+        return Ok(height);
+    }
     if ty.is_nominal_back_edge() {
         return Ok(0);
     }
@@ -23450,7 +23668,7 @@ fn argument_height(
             for arg in t.def().type_args.iter() {
                 child(arg)?;
             }
-            for field in t.def().fields.iter() {
+            for field in t.def().fields.read(budget)?.iter() {
                 child(&field.ty)?;
             }
         }
@@ -23459,7 +23677,7 @@ fn argument_height(
                 child(arg)?;
             }
             for variant in t.def().variants.iter() {
-                for field in variant.fields.iter() {
+                for field in variant.fields.read(budget)?.iter() {
                     child(&field.ty)?;
                 }
             }

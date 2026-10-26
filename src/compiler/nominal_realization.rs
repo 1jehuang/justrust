@@ -3,8 +3,17 @@
 mod coordinates;
 mod preparation;
 pub(super) use preparation::shape as source_shape;
+mod component;
+mod component_key;
+mod materialization;
 mod producer;
+mod reads;
 pub(super) mod substitution;
+mod symbolic;
+mod topology;
+pub(super) use materialization::SymbolicFields;
+use reads::NominalPublication;
+pub(super) use reads::{ReadNominal, read_manifest};
 
 /// Real source checking suspends only on explicit typed input demands. The
 /// transient attempt keeps its original constant/source inventory across reads.
@@ -130,6 +139,7 @@ pub(super) async fn run(cx: &Context, key: Key) -> Result<(), Error> {
             )
         }
         Some(&CLOSED_REALIZATION) => producer::run(cx, key).await,
+        Some(&component_key::DOMAIN) => component::run(cx, key).await,
         _ => Err(Error::new("invalid nominal realization key domain")),
     }
 }
@@ -305,7 +315,8 @@ fn materialize_definition(
             let mut definition = source.def().clone();
             definition.id = nominal_id(definition.id);
             definition.type_args = actuals;
-            definition.fields = fields(&definition.fields, None)?;
+            definition.fields =
+                fields(&definition.fields.read(budget).map_err(Error::new)?, None)?.into();
             ir::Ty::Struct(ir::StructTy::new(definition))
         }
         ir::Ty::Enum(source) => {
@@ -328,7 +339,11 @@ fn materialize_definition(
                     .retain_bytes(original.name.len())
                     .map_err(Error::new)?;
                 let mut variant = original.clone();
-                variant.fields = fields(&original.fields, Some(ordinal))?;
+                variant.fields = fields(
+                    &original.fields.read(budget).map_err(Error::new)?,
+                    Some(ordinal),
+                )?
+                .into();
                 variants.push(variant);
             }
             definition.variants = variants.into();
@@ -349,10 +364,10 @@ fn materialize_definition(
 /// A typed read receipt, bound to the exact requested key and issuing graph node.
 /// This is NOT a StructDef/EnumDef and cannot silently enter executable IR.
 #[derive(Clone)]
-pub(super) struct ReadNominal {
+pub(super) struct AcyclicRead {
     fact: Arc<RealizedNominal>,
 }
-impl ReadNominal {
+impl AcyclicRead {
     pub(super) fn retain_for_substitution(
         &self,
         ty: &ir::Ty,
@@ -382,14 +397,17 @@ impl ReadNominal {
             let child = |ty: &ir::Ty| engines(ty, engine, budget, depth + 1);
             match ty {
                 ir::Ty::Struct(n) => {
-                    if matches!(n.id().index, ir::NominalIndex::GraphRealization(_)) {
+                    if n.id().index.is_graph() {
                         let cap = n
                             .realization()
                             .ok_or("nested graph nominal omitted typed read")?;
-                        if cap.fact.identity.0.authority() != engine {
+                        if cap.engine_authority() != engine {
                             return Err("foreign engine child nominal capability".into());
                         }
                         cap.check_definition(ty).map_err(|e| e.to_string())?;
+                        if cap.is_component() {
+                            return Ok(());
+                        }
                     }
                     if n.is_back_edge() {
                         return Err("unsupported: recursive nominal substitution provenance".into());
@@ -397,19 +415,22 @@ impl ReadNominal {
                     for ty in n.def().type_args.iter() {
                         child(ty)?;
                     }
-                    for field in n.def().fields.iter() {
+                    for field in n.def().fields.read(budget)?.iter() {
                         child(&field.ty)?;
                     }
                 }
                 ir::Ty::Enum(n) => {
-                    if matches!(n.id().index, ir::NominalIndex::GraphRealization(_)) {
+                    if n.id().index.is_graph() {
                         let cap = n
                             .realization()
                             .ok_or("nested graph nominal omitted typed read")?;
-                        if cap.fact.identity.0.authority() != engine {
+                        if cap.engine_authority() != engine {
                             return Err("foreign engine child nominal capability".into());
                         }
                         cap.check_definition(ty).map_err(|e| e.to_string())?;
+                        if cap.is_component() {
+                            return Ok(());
+                        }
                     }
                     if n.is_back_edge() {
                         return Err("unsupported: recursive nominal substitution provenance".into());
@@ -418,7 +439,7 @@ impl ReadNominal {
                         child(ty)?;
                     }
                     for variant in n.def().variants.iter() {
-                        for field in variant.fields.iter() {
+                        for field in variant.fields.read(budget)?.iter() {
                             child(&field.ty)?;
                         }
                     }
@@ -462,12 +483,16 @@ impl ReadNominal {
     pub(super) fn definition(&self) -> Result<ir::Ty, Error> {
         self.check_definition(&self.fact.definition)?;
         Ok(match &self.fact.definition {
-            ir::Ty::Struct(definition) => {
-                ir::Ty::Struct(definition.clone().with_realization(self.clone()))
-            }
-            ir::Ty::Enum(definition) => {
-                ir::Ty::Enum(definition.clone().with_realization(self.clone()))
-            }
+            ir::Ty::Struct(definition) => ir::Ty::Struct(
+                definition
+                    .clone()
+                    .with_realization(ReadNominal::Acyclic(self.clone())),
+            ),
+            ir::Ty::Enum(definition) => ir::Ty::Enum(
+                definition
+                    .clone()
+                    .with_realization(ReadNominal::Acyclic(self.clone())),
+            ),
             _ => {
                 return Err(Error::new(
                     "typed nominal realization has no nominal definition",
@@ -528,14 +553,7 @@ impl ReadNominal {
         world: &traits::ValidatedTraitWorld,
         replays: &mut traits::NominalReplays,
     ) -> Result<(), Error> {
-        self.check_definition(ty)?;
-        if replays.contains_fact(self) {
-            return Ok(());
-        }
-        self.replay_uncached(world, replays)?;
-        replays
-            .record_fact(self, world.budget())
-            .map_err(|e| Error::new(e.into_legacy_diagnostic(world.budget())))
+        ReadNominal::Acyclic(self.clone()).replay_with(ty, world, replays)
     }
 
     fn replay_uncached(
@@ -643,7 +661,11 @@ impl ReadNominal {
                 if a.name != b.name || a.module != b.module || a.visibility != b.visibility {
                     return Err(Error::new("realized struct source shell changed"));
                 }
-                fields(&a.fields, &b.fields, None)?;
+                fields(
+                    &a.fields.read(budget).map_err(Error::new)?,
+                    &b.fields.read(budget).map_err(Error::new)?,
+                    None,
+                )?;
             }
             (ir::Ty::Enum(source), ir::Ty::Enum(actual)) => {
                 let (a, b) = (source.def(), actual.def());
@@ -658,7 +680,11 @@ impl ReadNominal {
                     if a.name != b.name || a.shape != b.shape {
                         return Err(Error::new("realized enum variant order or shape changed"));
                     }
-                    fields(&a.fields, &b.fields, Some(variant))?;
+                    fields(
+                        &a.fields.read(budget).map_err(Error::new)?,
+                        &b.fields.read(budget).map_err(Error::new)?,
+                        Some(variant),
+                    )?;
                 }
             }
             _ => return Err(Error::new("realized nominal source representation changed")),
@@ -683,36 +709,6 @@ impl ReadNominal {
 /// All independent requests are issued before the first await. It reads only
 /// the caller-supplied per-item manifest, never a registry-wide application set.
 /// Facts remain keyed by exact ordered coordinate words even under collisions.
-pub(super) async fn read_manifest(
-    cx: &Context,
-    keys: &[RealizationKey],
-) -> Result<Vec<ReadNominal>, Error> {
-    let mut pending = Vec::new();
-    pending
-        .try_reserve_exact(keys.len())
-        .map_err(|_| Error::new("nominal realization read allocation failed"))?;
-    for key in keys {
-        let outputs = cx.request(key.0.clone());
-        let handle = outputs.get(0);
-        let identity = handle.identity()?;
-        pending.push((key, identity, handle));
-    }
-    let mut capabilities = Vec::new();
-    capabilities
-        .try_reserve_exact(pending.len())
-        .map_err(|_| Error::new("nominal realization capability allocation failed"))?;
-    for (key, identity, handle) in pending {
-        let fact: Arc<RealizedNominal> = cx.read_fact(handle).await?;
-        let expected = RealizationIdentity(identity);
-        if &fact.key != key || fact.identity != expected {
-            return Err(Error::new(
-                "nominal realization typed read identity mismatch",
-            ));
-        }
-        capabilities.push(ReadNominal { fact });
-    }
-    Ok(capabilities)
-}
 
 #[cfg(test)]
 mod tests {
@@ -736,16 +732,18 @@ mod tests {
             let this = self.clone();
             Box::pin(async move {
                 if key.kind == 998 {
-                    let mut capabilities = read_manifest(&cx, &[this.key]).await?;
+                    let mut capabilities =
+                        read_manifest(&cx, &[this.key], &ir::PlanBudget::default()).await?;
                     return cx
                         .publish_fact(0, capabilities.pop().expect("one successful typed read"));
                 }
                 if key.kind == 999 {
-                    let capabilities = read_manifest(&cx, &[this.key]).await?;
+                    let capabilities =
+                        read_manifest(&cx, &[this.key], &ir::PlanBudget::default()).await?;
                     return cx.publish_fact(0, capabilities.len());
                 }
                 if let Some(stolen) = this.stolen {
-                    return cx.publish_fact(0, stolen.as_ref().clone());
+                    return cx.publish_fact(0, reads::NominalPublication::Acyclic(stolen));
                 }
                 let ir::Ty::Struct(source) = &this.source else {
                     return Err(Error::new("test requires a source struct"));
@@ -772,7 +770,7 @@ mod tests {
                     input: this.input,
                 };
                 (this.mutate)(&mut fact);
-                cx.publish_fact(0, fact)
+                cx.publish_fact(0, reads::NominalPublication::Acyclic(Arc::new(fact)))
             })
         }
     }
@@ -805,7 +803,13 @@ mod tests {
         let own = first.request(crate::compiler::keys::params(999, 0, vec![]));
         first.run(1).unwrap();
         own.completion().unwrap();
-        let successful = first.fact_of::<RealizedNominal>(&key.0, 0).unwrap();
+        let publication = first
+            .fact_of::<reads::NominalPublication>(&key.0, 0)
+            .unwrap();
+        let reads::NominalPublication::Acyclic(successful) = publication.as_ref() else {
+            panic!("expected acyclic fixture")
+        };
+        let successful = successful.clone();
         let foreign = crate::engine::Engine::new(FactProvider {
             stolen: Some(successful),
             ..provider
@@ -1068,14 +1072,17 @@ mod tests {
             .is_err(),
             "closed canonical contract adoption laundered invalid mapped contract"
         );
-        let mut changed_fact = capability.fact.as_ref().clone();
+        let ReadNominal::Acyclic(acyclic) = capability.as_ref() else {
+            panic!("expected acyclic fixture")
+        };
+        let mut changed_fact = acyclic.fact.as_ref().clone();
         let ir::NominalIndex::SourceSlot(index) = changed_fact.source_application.index else {
             panic!("source schema slot required")
         };
         changed_fact.source_application.index = ir::NominalIndex::SourceSlot(index + 1);
-        let changed = ReadNominal {
+        let changed = ReadNominal::Acyclic(AcyclicRead {
             fact: Arc::new(changed_fact),
-        };
+        });
         mapped.params[0] = changed.definition().unwrap();
         assert!(
             substitution::replay_closed_signature(
@@ -1177,7 +1184,9 @@ mod tests {
                 variant: None,
                 field: 0,
             },
-            source: source_parent.def().fields[0].ty.clone(),
+            source: source_parent.def().fields.read(&budget).unwrap()[0]
+                .ty
+                .clone(),
             normalized: child_capability.definition().unwrap(),
         }]);
         let current = crate::engine::Engine::new(parent_provider);

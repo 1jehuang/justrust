@@ -880,7 +880,8 @@ impl Provider for CompilerProvider {
             TEMPLATE_BODY => 3,
             SOURCE_ADMISSION => 4,
             PARSE => PARSE_OUTPUTS,
-            RESOLVE | SIGNATURES => 2,
+            RESOLVE => 3,
+            SIGNATURES => 2,
             _ => 1,
         }
     }
@@ -1173,10 +1174,15 @@ impl Provider for CompilerProvider {
                     cx.publish_fact(0, items)
                 }
                 RESOLVE => {
+                    this.retain(envelope::<frontend::ValidatedProgram>())?;
                     let program = match &this.0.input {
                         Input::Program(program) => {
                             cx.read(cx.request(keys::ParseDebtRoot.key()).get(0))
                                 .await?;
+                            scale_task_work_by_items(program);
+                            let sealed = frontend::ValidatedProgram::new(program.clone())
+                                .map_err(Error::new)?;
+                            cx.publish_fact(2, sealed)?;
                             cx.publish(1, 1)?;
                             program.clone()
                         }
@@ -1201,10 +1207,11 @@ impl Provider for CompilerProvider {
                                     cx.read_fact(handle).await?;
                                 items.push(item.as_ref().clone());
                             }
-                            Arc::new(
-                                frontend::finish_resolution(&namespace, items)
-                                    .map_err(Error::new)?,
-                            )
+                            let (program, sealed) =
+                                frontend::finish_resolution_sealed(&namespace, items)
+                                    .map_err(Error::new)?;
+                            cx.publish_fact(2, sealed)?;
+                            program
                         }
                     };
                     cx.publish_fact(0, program)
@@ -1228,11 +1235,12 @@ impl Provider for CompilerProvider {
                     cx.publish_fact(0, output)
                 }
                 SIGNATURES => {
-                    let program: Arc<Arc<frontend::Program>> =
-                        facts.get(keys::ResolveDebtRoot.key()).await?;
+                    let program: Arc<frontend::ValidatedProgram> = cx
+                        .read_fact(cx.request(keys::ResolveDebtRoot.key()).get(2))
+                        .await?;
                     // Debt: whole-program node. Its input is the whole program,
                     // so its per-task work limit scales with that input.
-                    scale_task_work_by_items(&program);
+                    scale_task_work_by_items(program.program());
                     // The catalog's declaration namespace and the trait world
                     // are owners issued by this node, never a global counter.
                     let owner_budget = expansion_budget::ExpansionBudget::default();
@@ -1245,8 +1253,8 @@ impl Provider for CompilerProvider {
                         .issue(owner_path::OwnerDomain::TraitWorld)
                         .map_err(|error| Error::new(format!("owner issuance failed: {error:?}")))?;
                     let signature_cx = &cx;
-                    let context = frontend::PlanCtx::from_shared_program_with_signatures(
-                        program.as_ref().clone(),
+                    let context = frontend::PlanCtx::from_validated_program_with_signatures(
+                        program.as_ref(),
                         &this.0.budget,
                         false,
                         catalog,
@@ -3713,6 +3721,46 @@ mod owner_route_tests {
                     .fact::<Result<frontend::ParsedProgram, ParseFileFailure>>(0)
                     .is_err()
             );
+        }
+    }
+
+    #[test]
+    fn signatures_consume_the_exact_resolve_snapshot_capability() {
+        for workers in [1, 8] {
+            let snapshot = Arc::new(Snapshot {
+                input: Input::Text("fn unused(){}fn main(){}".into()),
+                source_options: source::SourceOptions::default(),
+                budget: ir::PlanBudget::default(),
+            });
+            let engine = Engine::new(CompilerProvider(snapshot));
+            let signatures = engine.request(keys::SignaturesDebtRoot.key());
+            engine.run(workers).unwrap();
+            signatures.completion().unwrap();
+            let program = engine
+                .fact_of::<Arc<frontend::Program>>(&keys::ResolveDebtRoot.key(), 0)
+                .unwrap();
+            let sealed = engine
+                .fact_of::<frontend::ValidatedProgram>(&keys::ResolveDebtRoot.key(), 2)
+                .unwrap();
+            assert!(std::ptr::eq(program.as_ref().as_ref(), sealed.program()));
+        }
+    }
+
+    #[test]
+    fn graph_program_input_cannot_seal_same_owner_mutated_ast() {
+        for workers in [1, 8] {
+            let mut program = frontend::parse("fn unused(){}fn main(){}").unwrap();
+            program.functions[0].module = program.modules.core_root();
+            let snapshot = Arc::new(Snapshot {
+                input: Input::Program(Arc::new(program)),
+                source_options: source::SourceOptions::default(),
+                budget: ir::PlanBudget::default(),
+            });
+            let engine = Engine::new(CompilerProvider(snapshot));
+            let resolve = engine.request(keys::ResolveDebtRoot.key());
+            engine.run(workers).unwrap();
+            assert!(resolve.completion().is_err());
+            assert!(resolve.fact::<frontend::ValidatedProgram>(2).is_err());
         }
     }
 

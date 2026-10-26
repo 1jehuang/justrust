@@ -819,6 +819,30 @@ impl super::cmp::PartialEq for str {
 
 impl super::cmp::Eq for str {}
 
+impl super::cmp::PartialOrd for str {
+    fn partial_cmp(&self, other: &str) -> Option<super::cmp::Ordering> {
+        Option::Some(<str as super::cmp::Ord>::cmp(self, other))
+    }
+}
+
+impl super::cmp::Ord for str {
+    fn cmp(&self, other: &str) -> super::cmp::Ordering {
+        let (left_pointer, left_length) = str_parts(self);
+        let (right_pointer, right_length) = str_parts(other);
+        let mut index = 0usize;
+        while index < left_length && index < right_length {
+            let left = read_u8(left_pointer + index);
+            let right = read_u8(right_pointer + index);
+            if left < right { return super::cmp::Ordering::Less; }
+            if left > right { return super::cmp::Ordering::Greater; }
+            index += 1usize;
+        }
+        if left_length < right_length { super::cmp::Ordering::Less }
+        else if left_length > right_length { super::cmp::Ordering::Greater }
+        else { super::cmp::Ordering::Equal }
+    }
+}
+
 // std's str hashing: the bytes, then a 0xff terminator (same as String).
 impl super::hash::Hash for str {
     fn hash<H: super::hash::Hasher>(&self, state: &mut H) {

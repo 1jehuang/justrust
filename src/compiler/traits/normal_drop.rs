@@ -30,6 +30,11 @@ pub enum DropGlue {
     /// An owning `Box<dyn P>`: run the vtable's drop slot on the data
     /// pointer, then release the allocation by the vtable's size.
     BoxedObject,
+    /// A shared owning object: decrement its separate count, then dynamically
+    /// destroy and free both allocations exactly at the last strong share.
+    RcObject,
+    /// Sized Rc pointee glue at its original allocation, never a moved snapshot.
+    RcValue(Option<Arc<ValidatedDestructor>>),
 }
 
 /// Only canonical trait facts may construct this capability. Display names never participate.
@@ -93,7 +98,8 @@ impl ValidatedDestructor {
                 .for_each(|(_, f)| f.iter().for_each(|(_, d)| d.collect_targets(out))),
             DropGlue::Array { element, .. } => element.collect_targets(out),
             // Object destructors are demanded at each unsizing site.
-            DropGlue::BoxedObject => {}
+            DropGlue::BoxedObject | DropGlue::RcObject | DropGlue::RcValue(None) => {}
+            DropGlue::RcValue(Some(value)) => value.collect_targets(out),
         }
     }
     pub fn validate(&self, owner: &Ty, facts: &ValidatedFacts) -> Result<()> {
@@ -172,9 +178,14 @@ impl ValidatedFacts {
         if matches!(ty, Ty::Param(_) | Ty::AssociatedType(_)) {
             return Ok(NormalDropPlan::Unresolved);
         }
-        if ty.owned_box_object().is_some() {
-            // The prelude `impl<T> Drop for Box<T>` is Sized-only; the boxed
-            // object's concrete destructor and size come from its vtable.
+        if let Some((ir::OwnedPointerKind::Rc, pointee)) = ty.owned_pointer_pointee()
+            && !matches!(pointee, Ty::Dyn(_))
+        {
+            let value = match self.normal_drop_plan_inner(pointee, depth + 1)? {
+                NormalDropPlan::Unresolved => return Ok(NormalDropPlan::Unresolved),
+                NormalDropPlan::Trivial => None,
+                NormalDropPlan::Destructor(value) => Some(value),
+            };
             charged(
                 self.budget(),
                 self.budget()
@@ -184,7 +195,27 @@ impl ValidatedFacts {
                 owner: ty.clone(),
                 target: None,
                 signature: None,
-                glue: DropGlue::BoxedObject,
+                glue: DropGlue::RcValue(value),
+                world: self.world.clone(),
+                budget: self.budget().clone(),
+            })));
+        }
+        if let Some((owner_kind, _)) = ty.owned_pointer_object() {
+            // Erased pointee cleanup uses its exact vtable and the canonical
+            // ownership protocol, not the source Drop declaration body.
+            charged(
+                self.budget(),
+                self.budget()
+                    .retain_bytes(std::mem::size_of::<ValidatedDestructor>()),
+            )?;
+            return Ok(NormalDropPlan::Destructor(Arc::new(ValidatedDestructor {
+                owner: ty.clone(),
+                target: None,
+                signature: None,
+                glue: match owner_kind {
+                    ir::OwnedPointerKind::Box => DropGlue::BoxedObject,
+                    ir::OwnedPointerKind::Rc => DropGlue::RcObject,
+                },
                 world: self.world.clone(),
                 budget: self.budget().clone(),
             })));
@@ -285,7 +316,10 @@ impl ValidatedFacts {
             }
             Ty::Struct(s) => {
                 let mut fields = Vec::new();
-                for (i, f) in s.def().fields.iter().enumerate() {
+                for (i, f) in nominal_fields(&s.def().fields, self.budget())?
+                    .iter()
+                    .enumerate()
+                {
                     if let Some(d) = child(&f.ty)? {
                         fields.push((i, d));
                     }
@@ -300,7 +334,7 @@ impl ValidatedFacts {
                 let mut variants = Vec::new();
                 for (vi, v) in e.def().variants.iter().enumerate() {
                     let mut fields = Vec::new();
-                    for (i, f) in v.fields.iter().enumerate() {
+                    for (i, f) in nominal_fields(&v.fields, self.budget())?.iter().enumerate() {
                         if let Some(d) = child(&f.ty)? {
                             fields.push((i, d));
                         }
@@ -379,3 +413,60 @@ impl ValidatedFacts {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod owning_rc_authority_tests {
+    use super::*;
+    use crate::compiler::{frontend, source};
+
+    #[test]
+    fn rc_cleanup_cannot_change_owner_protocol_or_erase_pointee_destructor() {
+        let prepared = source::prepare_text_with_prelude(
+            "rc-authority.rs",
+            "use std::rc::Rc;fn f(x:Rc<dyn Read>,y:Rc<N>,z:Box<dyn Read>){}struct N;trait Read{fn read(&self)->u32;}impl Read for N{fn read(&self)->u32{7}}impl Drop for N{fn drop(&mut self){}}fn main(){}",
+            &source::SourceOptions::default(),
+        ).unwrap();
+        let parsed = frontend::parse_prepared(&prepared).unwrap();
+        let program = frontend::resolve(&parsed).unwrap();
+        let budget = PlanBudget::default();
+        let context = frontend::PlanCtx::from_program(&program, &budget).unwrap();
+        let frontend::PublishedCallableBody::Source(publication) = context
+            .publish_callable_body(context.function_decl(0).unwrap(), &budget)
+            .unwrap()
+        else {
+            panic!("source body required")
+        };
+        let facts = publication.facts();
+        let checked = publication.source();
+        let owners = checked
+            .params
+            .iter()
+            .map(|p| checked.locals[p.0].ty.clone())
+            .collect::<Vec<_>>();
+        let NormalDropPlan::Destructor(dynamic) = facts.normal_drop_plan(&owners[0]).unwrap()
+        else {
+            panic!("RcObject required")
+        };
+        let NormalDropPlan::Destructor(typed) = facts.normal_drop_plan(&owners[1]).unwrap() else {
+            panic!("RcValue required")
+        };
+        assert!(matches!(dynamic.glue(), DropGlue::RcObject));
+        assert!(matches!(typed.glue(), DropGlue::RcValue(Some(_))));
+        for (valid, owner) in [(&dynamic, &owners[0]), (&typed, &owners[1])] {
+            valid.validate(owner, facts).unwrap();
+            for glue in [
+                DropGlue::BoxedObject,
+                DropGlue::None,
+                DropGlue::RcValue(None),
+            ] {
+                let mut forged = valid.as_ref().clone();
+                forged.glue = glue;
+                assert!(forged.validate(owner, facts).is_err());
+            }
+            assert!(valid.validate(&owners[2], facts).is_err());
+            let mut forged = valid.as_ref().clone();
+            forged.budget = PlanBudget::default();
+            assert!(forged.validate(owner, facts).is_err());
+        }
+    }
+}

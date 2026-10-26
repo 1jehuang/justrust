@@ -99,6 +99,25 @@ fn main() {
                 ),
             },
             Case {
+                name: "btreemap_borrowed_string_vectors",
+                source: r#"use std::collections::BTreeMap;
+fn main() {
+    let text = String::from("the cat on the mat cat");
+    let mut by_len: BTreeMap<usize, Vec<&str>> = BTreeMap::new();
+    for word in text.split_whitespace() {
+        let entry = by_len.entry(word.len()).or_default();
+        if !entry.contains(&word) { entry.push(word); }
+    }
+    for (length, words) in &by_len { println!("{}: {:?}", length, words); }
+}"#,
+                expect: Expect::Run("2: [\"on\"]\n3: [\"the\", \"cat\", \"mat\"]\n"),
+            },
+            Case {
+                name: "borrowed_map_value_cannot_escape_owner",
+                source: "use std::collections::BTreeMap; fn unused() -> &'static str { let text = String::from(\"temporary\"); let mut map: BTreeMap<usize, Vec<&str>> = BTreeMap::new(); map.entry(1).or_default().push(text.as_str()); for (_, values) in &map { return values[0]; } \"\" } fn main() {}",
+                expect: Expect::Invalid("E0515"),
+            },
+            Case {
                 name: "btreemap_key_without_ord_in_unused_fn",
                 source: "use std::collections::BTreeMap; struct K; fn unused(){ let mut m: BTreeMap<K,u32> = BTreeMap::new(); m.insert(K,1); } fn main(){}",
                 expect: Expect::Invalid("E0277"),

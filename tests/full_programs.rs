@@ -4,7 +4,8 @@
 //! manifest is a ratchet: `pass` programs must keep passing, `fail` programs
 //! must be rejected with an explicit diagnostic (never miscompiled), and an
 //! unexpected pass fails until the manifest is flipped to `pass`.
-//! Stock rustc is never invoked by this test.
+//! Corpus matrix uses stored stock output. Focused recursive-layout regressions
+//! additionally invoke stock rustc for live valid/invalid differential checks.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
 
 use std::fs::{self, OpenOptions};
@@ -12,6 +13,114 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+#[test]
+fn recursive_linked_list_actual_program() {
+    let scratch = Scratch::new();
+    let actual = run_program("12_linked_list", &scratch);
+    assert_eq!(actual, Outcome::Pass);
+    let stock_output = scratch.path("linked-list-stock");
+    let stock = capture(
+        Command::new("rustc")
+            .args(["--edition", "2024"])
+            .arg(fixtures().join("12_linked_list.rs"))
+            .arg("-o")
+            .arg(&stock_output),
+        &scratch,
+        Duration::from_secs(60),
+    );
+    assert!(
+        stock.success,
+        "stock compile: {}",
+        String::from_utf8_lossy(&stock.stderr)
+    );
+    let stock = capture(
+        &mut Command::new(stock_output),
+        &scratch,
+        Duration::from_secs(60),
+    );
+    assert!(stock.success);
+    assert_eq!(
+        stock.stdout,
+        fs::read(fixtures().join("12_linked_list.stdout")).unwrap()
+    );
+    let source = include_str!("fixtures/full_programs/12_linked_list.rs");
+    for workers in [1, 8] {
+        let checked = justrust_engine::compiler::compile(source.into(), workers, true)
+            .unwrap_or_else(|error| panic!("workers={workers} linked-list CHECK: {error}"));
+        assert!(checked.executable.is_none());
+        assert!(checked.report.capture_complete);
+        assert!(!checked.report.published_kind(103));
+        assert!(checked.analyses.iter().all(|analysis| analysis.passed()));
+        let components: Vec<_> = checked
+            .report
+            .node_evaluations
+            .iter()
+            .filter(|(key, _)| key.kind == 139 && key.params.get(1) == Some(&2))
+            .collect();
+        assert!(
+            !components.is_empty(),
+            "CHECK did not read actual recursive components"
+        );
+        for (key, evaluations) in components {
+            assert_eq!(*evaluations, 1);
+            assert_eq!(key.params.first(), Some(&1));
+            assert!(key.params.len() > 4);
+            assert!(key.params[3] > 0);
+        }
+    }
+}
+
+#[test]
+fn recursive_unused_by_value_layouts_reject_check_and_build() {
+    let scratch = Scratch::new();
+    for (index, source) in [
+        "struct A { a: A } fn main() {}",
+        "struct A { b: B } struct B { a: A } fn main() {}",
+        "struct A { b: B } enum B { Value(A), Empty } fn main() {}",
+        "struct A { a: (u8, [A; 1]) } fn main() {}",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let path = scratch.path(&format!("invalid-{index}.rs"));
+        fs::write(&path, source).unwrap();
+        let stock = capture(
+            Command::new("rustc")
+                .args(["--edition", "2024"])
+                .arg(&path)
+                .arg("-o")
+                .arg(scratch.path(&format!("invalid-stock-{index}"))),
+            &scratch,
+            Duration::from_secs(60),
+        );
+        assert!(!stock.success, "invalid stock fixture accepted: {source}");
+        for workers in [1, 8] {
+            for check in [true, false] {
+                let failure = match justrust_engine::compiler::compile_observed(
+                    (*source).into(),
+                    workers,
+                    check,
+                ) {
+                    Ok(_) => panic!(
+                        "accepted unused infinite layout workers={workers} check={check}: {source}"
+                    ),
+                    Err(failure) => failure,
+                };
+                let diagnostic = failure.error.to_string();
+                assert!(
+                    failure.resource_usage.first_failure.is_none()
+                        && !diagnostic.contains("unsupported")
+                        && !diagnostic.contains("resource")
+                        && !diagnostic.contains("limit exceeded")
+                        && (diagnostic.contains("infinite size")
+                            || diagnostic.contains("infinite by-value layout")),
+                    "expected semantic infinite-layout rejection workers={workers} check={check}: {diagnostic}"
+                );
+            }
+        }
+    }
+}
 
 const MANIFEST: &str = include_str!("fixtures/full_programs/manifest.tsv");
 static NEXT_ID: AtomicU64 = AtomicU64::new(0);
@@ -258,6 +367,23 @@ fn manifest() -> Vec<Entry> {
             }
         })
         .collect()
+}
+
+#[test]
+fn hashmap_word_count_matches_stored_stock_stdout() {
+    assert_eq!(
+        run_program("17_hashmap_word_count", &Scratch::new()),
+        Outcome::Pass
+    );
+    let source = include_str!("fixtures/full_programs/17_hashmap_word_count.rs");
+    for workers in [1, 8] {
+        let checked = justrust_engine::compiler::compile(source.into(), workers, true)
+            .unwrap_or_else(|error| panic!("workers={workers} CHECK graph: {error}"));
+        assert!(checked.executable.is_none());
+        assert!(checked.report.capture_complete);
+        assert!(!checked.report.published_kind(103));
+        assert!(checked.analyses.iter().all(|analysis| analysis.passed()));
+    }
 }
 
 #[test]

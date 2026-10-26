@@ -259,6 +259,7 @@ pub(super) fn validate_for_alternatives(
     builtin_lens: &[bool],
     budget: &ir::PlanBudget,
 ) -> Result<(), FactsError> {
+    let mut scratch = tr::TraitScratch::default();
     for (index, site) in original.calls.iter().enumerate() {
         sr::work(budget, 1)?;
         if !site.for_iterable {
@@ -323,10 +324,11 @@ pub(super) fn validate_for_alternatives(
                         item: method,
                         method_args: Arc::from([]),
                     };
-                    let resolved = original
-                        .facts
-                        .service()
-                        .resolve_trait_call(&call, &original.facts)?;
+                    let resolved = original.facts.service().resolve_trait_call_with(
+                        &call,
+                        &original.facts,
+                        &mut scratch,
+                    )?;
                     validate_original_callee(
                         resolved.callee(),
                         &original.call_mapping[position].2,

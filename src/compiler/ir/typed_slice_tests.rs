@@ -28,7 +28,7 @@ fn generic_slice_family_keeps_exact_path_and_bounded_substitution() {
     );
     assert_eq!(
         carrier_at(&slice, tail, &budget).unwrap(),
-        &Ty::Param(parameter)
+        Ty::Param(parameter)
     );
     let mut forged = tail.clone();
     forged.channel = CarrierChannel::ParamTail {
@@ -309,10 +309,7 @@ fn shared_slice_carrier_domain_is_typed_and_cannot_be_forged_into_an_array() {
         locations[1].path.0.as_ref(),
         &[CarrierStep::Referent, CarrierStep::SliceElement]
     );
-    assert_eq!(
-        carrier_at(&slice, &locations[1], &budget).unwrap(),
-        &element
-    );
+    assert_eq!(carrier_at(&slice, &locations[1], &budget).unwrap(), element);
     let array = shared(Ty::Array {
         element: Arc::new(element),
         len: 1,
@@ -369,13 +366,27 @@ fn universal_element_permission_is_rechecked_at_the_shared_reference_boundary() 
     validate_shared_slice_element(&parameter, FactsCtx::from_validated(&facts), &budget).unwrap();
     assert!(validate_shared_slice_element(&parameter, FactsCtx::Concrete, &budget).is_err());
     validate_shared_slice_element(&shared(Ty::Bool), FactsCtx::Concrete, &budget).unwrap();
+    // Shared tuple leaves retain their distinct SliceElement/Field channels.
+    validate_shared_slice_element(
+        &Ty::Tuple(vec![shared(Ty::Bool)].into()),
+        FactsCtx::Concrete,
+        &budget,
+    )
+    .unwrap();
     for concrete in [
         Ty::Ref {
             kind: BorrowKind::Mut,
             referent: Arc::new(Ty::Bool),
         },
         shared(shared(Ty::Bool)),
-        Ty::Tuple(vec![shared(Ty::Bool)].into()),
+        Ty::Tuple(
+            vec![Ty::Ref {
+                kind: BorrowKind::Mut,
+                referent: Arc::new(Ty::Bool),
+            }]
+            .into(),
+        ),
+        Ty::Tuple(vec![shared(shared(Ty::Bool))].into()),
     ] {
         let error =
             validate_shared_slice_element(&concrete, FactsCtx::Concrete, &budget).unwrap_err();

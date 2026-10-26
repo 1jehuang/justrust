@@ -864,7 +864,7 @@ pub(super) fn direct_demands(
         // --- trait objects (snail): each unsizing site demands every
         // vtable slot implementation for its exact substituted referent.
         if let ir::ExprKind::RefToDyn { reference } = &expression.kind {
-            let object = if let Some(object) = expression.ty.owned_box_object() {
+            let object = if let Some((_, object)) = expression.ty.owned_pointer_object() {
                 object
             } else {
                 let ir::Ty::Ref { referent, .. } = &expression.ty else {
@@ -888,8 +888,8 @@ pub(super) fn direct_demands(
                 budget,
                 engine,
             )?;
-            let referent = match (&concrete, concrete.owned_box_pointee()) {
-                (_, Some(pointee)) => pointee,
+            let referent = match (&concrete, concrete.owned_pointer_pointee()) {
+                (_, Some((_, pointee))) => pointee,
                 (ir::Ty::Ref { referent, .. }, None) => referent.as_ref(),
                 _ => return Err("trait object unsizing operand must be a reference".into()),
             };

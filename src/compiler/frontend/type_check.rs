@@ -1183,7 +1183,23 @@ impl<'s> Checker<'s> {
                 self.infer_node(InferKind::Ref(*kind, inner))?
             }
             Expr::BorrowValue { kind, value } => {
-                let inner = self.inference_evidence(value, depth + 1)?;
+                let inner = if matches!(value.as_ref(), Expr::RangeIndex { .. }) {
+                    // Range receiver hints name the lowered shared slice handle.
+                    // A source borrow instead borrows its unsized slice place,
+                    // with the kind requested by this expression. This is only
+                    // type evidence: active checking still proves the range,
+                    // mutability and loan, and evaluates every operand once.
+                    match self.scalar_hint(value)? {
+                        Some(ir::Ty::Ref { referent, .. })
+                            if matches!(referent.as_ref(), ir::Ty::Slice { .. }) =>
+                        {
+                            self.infer_type_term(&referent, None, depth + 1)?
+                        }
+                        _ => self.inference_evidence(value, depth + 1)?,
+                    }
+                } else {
+                    self.inference_evidence(value, depth + 1)?
+                };
                 self.infer_node(InferKind::Ref(*kind, inner))?
             }
             Expr::Deref { value } => {
@@ -1547,7 +1563,23 @@ impl<'s> Checker<'s> {
                     InferKind::Rigid(ir::Ty::Slice { element }) => {
                         Some(self.infer_type_term(element, None, 1)?)
                     }
-                    _ => None,
+                    _ => {
+                        // A borrowed owner can coerce to a slice through its
+                        // selected Deref implementation (for example Vec<T>).
+                        // Infer only the proven target element here. Active
+                        // call checking still proves the actual borrow/coercion.
+                        match Inference::empty(self)?.resolve(&evidence, false, 0)? {
+                            Some(ir::Ty::Ref { referent, .. }) => {
+                                match self.deref_target_hint(&referent)? {
+                                    Some(ir::Ty::Slice { element }) => {
+                                        Some(self.infer_type_term(&element, None, 1)?)
+                                    }
+                                    _ => None,
+                                }
+                            }
+                            _ => None,
+                        }
+                    }
                 };
                 if let Some(actual) = actual {
                     projected_constraints.push((element, actual));
@@ -1616,10 +1648,10 @@ impl<'s> Checker<'s> {
                 {
                     continue;
                 }
-                // `Box<T>` argument into a `Box<dyn P>` target (unsized later).
+                // Owning pointer argument into a matching dyn target (unsized later).
                 if target
                     .as_ref()
-                    .is_some_and(|t| t.owned_box_object().is_some())
+                    .is_some_and(|t| t.owned_pointer_object().is_some())
                     && matches!(evidence.as_ref(), InferKind::Nominal(..))
                 {
                     continue;
@@ -1787,6 +1819,7 @@ impl<'s> Checker<'s> {
             }
             _ => return Err("constructor declaration kind mismatch".into()),
         };
+        let definitions = definitions.read(&plan.budget)?;
         for (selector, expr) in fields {
             let index = match selector {
                 InferField::Tuple(index) => *index,
@@ -2719,25 +2752,30 @@ pub(super) fn checked_ty_at(ty: &Type, env: &TypeEnv, allow_ref: bool) -> Result
         Type::Infer => Err("signature types cannot be inferred".into()),
     }
 }
-pub(super) fn inhabited(ty: &ir::Ty) -> bool {
-    let mut work = vec![ty];
+pub(super) fn inhabited(ty: &ir::Ty, budget: &ir::PlanBudget) -> Result<bool, String> {
+    let mut work = vec![ty.clone()];
     let mut seen = std::collections::HashSet::new();
     while let Some(ty) = work.pop() {
+        budget.charge_work(1)?;
         match ty {
             ir::Ty::Array { element, len } => {
-                if *len > 0 {
-                    work.push(element);
+                if len > 0 {
+                    work.push(element.as_ref().clone());
                 }
             }
-            ir::Ty::Never => return false,
-            ir::Ty::Tuple(fields) => work.extend(fields.iter()),
-            ir::Ty::Struct(ty) if seen.insert(ty.def().id) => {
-                work.extend(ty.def().fields.iter().map(|field| &field.ty))
-            }
+            ir::Ty::Never => return Ok(false),
+            ir::Ty::Tuple(fields) => work.extend(fields.iter().cloned()),
+            ir::Ty::Struct(ty) if seen.insert(ty.def().id) => work.extend(
+                ty.def()
+                    .fields
+                    .read(budget)?
+                    .iter()
+                    .map(|field| field.ty.clone()),
+            ),
             _ => {}
         }
     }
-    true
+    Ok(true)
 }
 pub(super) fn coerces(got: &ir::Ty, want: &ir::Ty) -> bool {
     if *got == ir::Ty::Never || got == want {
@@ -2979,7 +3017,7 @@ impl<'a> Checker<'a> {
                 if !self.visible(&ty.def().visibility)? {
                     return Err("private tuple struct rest constructor".into());
                 }
-                for field in ty.def().fields.iter() {
+                for field in ty.def().fields.read(&plan.budget)?.iter() {
                     self.infer_work(0)?;
                     if !self.visible(&field.visibility)? {
                         return Err("private tuple struct rest constructor field".into());
@@ -3194,7 +3232,7 @@ impl<'a> Checker<'a> {
                 for (index, (_, pattern)) in fields.iter().enumerate() {
                     self.validate_aggregate_pattern(
                         pattern,
-                        &tuple.def().fields[index].ty,
+                        &tuple.def().fields.read(&self.signatures.plan()?.budget)?[index].ty,
                         depth + 1,
                         work,
                         binders,
@@ -3604,7 +3642,10 @@ impl<'a> Checker<'a> {
                         path.push(ir::Projection::Field(index));
                         self.collect_decision(
                             pattern,
-                            &enumeration.def().variants[variant].fields[index].ty,
+                            &enumeration.def().variants[variant]
+                                .fields
+                                .read(&self.signatures.plan()?.budget)?[index]
+                                .ty,
                             path,
                             pending,
                             depth + 1,
@@ -4155,7 +4196,12 @@ impl<'a> Checker<'a> {
     }
     pub(super) fn checked_type_actual(&self, source: &Type) -> Result<ir::Ty, String> {
         let ty = self.source_type_actual(source)?;
-        if ty.contains_slice() {
+        if matches!(&ty, ir::Ty::Slice { .. }) {
+            // Type-only unsized actuals do not themselves store a slice carrier.
+            // Validate their exact caller metadata and Sized element instead.
+            self.facts()
+                .validate_ty_with_budget(&ty, &self.signatures.plan()?.budget)?;
+        } else if ty.contains_slice(&self.signatures.plan()?.budget)? {
             ir::validate_slice_carrier_with_facts(&ty, self.facts())?;
         }
         let plan = self
@@ -4463,7 +4509,7 @@ impl<'a> Checker<'a> {
     }
     fn admit_slice_value(&self, ty: &ir::Ty) -> Result<(), String> {
         admit_slice_value_shape(ty)?;
-        if ty.contains_slice() {
+        if ty.contains_slice(&self.signatures.plan()?.budget)? {
             ir::validate_slice_carrier_with_facts(ty, self.facts())?;
         }
         Ok(())
@@ -4886,6 +4932,7 @@ impl<'a> Checker<'a> {
                     && (matches!(receiver.as_ref(), Expr::Array(_) | Expr::Repeat { .. })
                         || self.method_receiver_hint(receiver)?.is_some_and(|ty| {
                             ty.descriptor_element().is_some()
+                                || Self::shared_str_len_target(&ty).is_some()
                                 || array_len_receiver::receiver_is_array(&ty)
                         }))
                     && !self.array_len_shadowed_by_method(e)? =>
@@ -5082,6 +5129,7 @@ impl<'a> Checker<'a> {
                     Some(ty) => {
                         if let Some(element) = ty
                             .shared_slice_element()
+                            .or_else(|| ty.mut_slice_element())
                             .or_else(|| ty.shared_array_element_len().map(|(element, _)| element))
                         {
                             ir::validate_shared_slice_element(
@@ -5247,7 +5295,8 @@ impl<'a> Checker<'a> {
                     .get(&ty.def().id)
                     .and_then(|fields| fields.get(&key))
                     .ok_or("unknown nominal field")?;
-                let field = &ty.def().fields[index];
+                let definitions = ty.def().fields.read(&self.signatures.plan()?.budget)?;
+                let field = &definitions[index];
                 if !self.visible(&field.visibility)? {
                     return Err(format!("private field {name:?} in {}", ty.def().name));
                 }
@@ -5260,7 +5309,9 @@ impl<'a> Checker<'a> {
                 let field = ty
                     .def()
                     .fields
+                    .read(&self.signatures.plan()?.budget)?
                     .get(*index)
+                    .cloned()
                     .ok_or("tuple struct field out of bounds")?;
                 if !self.visible(&field.visibility)? {
                     return Err("private tuple struct field".into());
@@ -5870,7 +5921,8 @@ impl<'a> Checker<'a> {
                             path.push(ir::Projection::Field(index));
                             self.pattern_locals(
                                 pattern,
-                                &tuple.def().fields[index].ty,
+                                &tuple.def().fields.read(&self.signatures.plan()?.budget)?[index]
+                                    .ty,
                                 path,
                                 names,
                                 pending,
@@ -5887,7 +5939,7 @@ impl<'a> Checker<'a> {
                         path.push(ir::Projection::Field(index));
                         self.pattern_locals(
                             pattern,
-                            &tuple.def().fields[index].ty,
+                            &tuple.def().fields.read(&self.signatures.plan()?.budget)?[index].ty,
                             path,
                             names,
                             pending,
@@ -5909,7 +5961,10 @@ impl<'a> Checker<'a> {
                     path.push(ir::Projection::Field(index));
                     self.pattern_locals(
                         pattern,
-                        &enumeration.def().variants[variant].fields[index].ty,
+                        &enumeration.def().variants[variant]
+                            .fields
+                            .read(&self.signatures.plan()?.budget)?[index]
+                            .ty,
                         path,
                         names,
                         pending,
@@ -6137,7 +6192,7 @@ impl<'a> Checker<'a> {
         )
         .map_err(|error| super::super::source::SourceError::from_token(error).to_string())?;
         for (index, pattern) in projection.iter() {
-            self.accessible(&definition.fields[index].ty)?;
+            self.accessible(&definition.fields.read(&self.signatures.plan()?.budget)?[index].ty)?;
             selected.push((index, pattern)).map_err(|error| {
                 super::super::source::SourceError::from_token(error).to_string()
             })?;
@@ -6203,7 +6258,9 @@ impl<'a> Checker<'a> {
             };
             let field = definition
                 .fields
+                .read(&self.signatures.plan()?.budget)?
                 .get(index)
+                .cloned()
                 .ok_or("variant pattern arity mismatch")?;
             if !seen.insert(index) {
                 return Err("duplicate variant pattern field".into());
@@ -6836,7 +6893,7 @@ impl<'a> Checker<'a> {
                         index: *index,
                     },
                     current_ty
-                        .field_ty(*index)
+                        .field_ty(*index, &self.signatures.plan()?.budget)?
                         .ok_or("invalid field projection")?
                         .clone(),
                 ),
@@ -7693,11 +7750,11 @@ impl<'a> Checker<'a> {
             }
         }
         if let Some(expected) = expectation.coercion()
-            && expected.owned_box_object().is_some()
+            && expected.owned_pointer_object().is_some()
             && !matches!(e, Expr::Var(_))
         {
-            // A `Box<dyn P>` coercion site: the source infers its own sized
-            // pointee (`Box::new(x)`) and then unsizes, as stock does.
+            // An owning dyn coercion site: infer the source sized pointee
+            // independently, then unsize with the exact ownership protocol.
             let expected = expected.clone();
             let value = self.expr_with_expectation(e, Expectation::None)?;
             return self.coerce_ref_to_dyn(value, &expected);
@@ -7744,7 +7801,7 @@ impl<'a> Checker<'a> {
             Some(expected) if trait_object_target(expected).is_some() => {
                 self.coerce_ref_to_dyn(result, expected)
             }
-            Some(expected) if expected.owned_box_object().is_some() => {
+            Some(expected) if expected.owned_pointer_object().is_some() => {
                 self.coerce_ref_to_dyn(result, expected)
             }
             Some(expected) => Ok(self.deref_coercion(e, result, expected)?.unwrap_or(result)),
@@ -7760,14 +7817,18 @@ impl<'a> Checker<'a> {
         expected: &ir::Ty,
     ) -> Result<ir::ExprId, String> {
         let source = &self.exprs[value.0];
-        // `Box<T> -> Box<dyn P>`: the owning carrier unsizes like `&mut T`.
+        // Box/Rc owning coercions transfer exactly one handle without
+        // changing the ownership protocol or constructing a temporary loan.
         let boxed = expected
-            .owned_box_object()
-            .map(|object| Arc::new(object.clone()));
-        let (want_kind, object, have_kind, referent) = if let Some(object) = boxed {
-            let Some(pointee) = source.ty.owned_box_pointee() else {
+            .owned_pointer_object()
+            .map(|(kind, object)| (kind, Arc::new(object.clone())));
+        let (want_kind, object, have_kind, referent) = if let Some((want_owner, object)) = boxed {
+            let Some((have_owner, pointee)) = source.ty.owned_pointer_pointee() else {
                 return Ok(value);
             };
+            if have_owner != want_owner {
+                return Ok(value);
+            }
             (
                 ir::BorrowKind::Mut,
                 object,
@@ -8117,6 +8178,25 @@ impl<'a> Checker<'a> {
         Ok(Some(id))
     }
 
+    /// Builtin str length may copy shared reference layers to reach `&str`.
+    /// Mutable carriers and nominal Deref are not authorized by this hint.
+    fn shared_str_len_target(mut ty: &ir::Ty) -> Option<&ir::Ty> {
+        for _ in 0..MAX_INTRINSIC_AUTODEREF {
+            if ty.is_shared_str() {
+                return Some(ty);
+            }
+            let ir::Ty::Ref {
+                kind: ir::BorrowKind::Shared,
+                referent,
+            } = ty
+            else {
+                return None;
+            };
+            ty = referent;
+        }
+        None
+    }
+
     /// Resolve genuine array/reference method candidates before the slice
     /// unsizing fallback. An in-scope array trait method can shadow slice len.
     fn array_len_shadowed_by_method(&self, e: &Expr) -> Result<bool, String> {
@@ -8132,7 +8212,9 @@ impl<'a> Checker<'a> {
         let Some(ty) = self.method_receiver_hint(receiver)? else {
             return Ok(false);
         };
-        if !array_len_receiver::receiver_is_array(&ty) {
+        if !array_len_receiver::receiver_is_array(&ty)
+            && (ty.is_shared_str() || Self::shared_str_len_target(&ty).is_none())
+        {
             return Ok(false);
         }
         let (selection, deferred) =
@@ -8148,7 +8230,9 @@ impl<'a> Checker<'a> {
         if !slice_len_candidate(e, self.names()?)?
             || !(matches!(receiver.as_ref(), Expr::Array(_) | Expr::Repeat { .. })
                 || self.method_receiver_hint(receiver)?.is_some_and(|ty| {
-                    ty.descriptor_element().is_some() || array_len_receiver::receiver_is_array(&ty)
+                    ty.descriptor_element().is_some()
+                        || Self::shared_str_len_target(&ty).is_some()
+                        || array_len_receiver::receiver_is_array(&ty)
                 }))
             || self.array_len_shadowed_by_method(e)?
         {
@@ -8184,6 +8268,33 @@ impl<'a> Checker<'a> {
             } => self.subslice(base, start.as_deref(), end.as_deref(), *inclusive)?,
             receiver => self.expr(receiver)?,
         };
+        // Evaluate once, then copy only authenticated shared reference layers.
+        // The final SliceLen receipt records the actual checked `&str` value.
+        let mut slice = slice;
+        if let Some(target) = Self::shared_str_len_target(&self.exprs[slice.0].ty).cloned() {
+            for _ in 0..MAX_INTRINSIC_AUTODEREF {
+                if self.exprs[slice.0].ty == target {
+                    break;
+                }
+                let ir::Ty::Ref {
+                    kind: ir::BorrowKind::Shared,
+                    referent,
+                } = &self.exprs[slice.0].ty
+                else {
+                    return Err("builtin str length lost its shared reference carrier".into());
+                };
+                let ty = referent.as_ref().clone();
+                let completion = self.exprs[slice.0].completion;
+                self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
+                let id = ir::ExprId(self.exprs.len());
+                self.exprs.push(ir::TypedExpr {
+                    ty,
+                    kind: ir::ExprKind::Deref { value: slice },
+                    completion,
+                });
+                slice = id;
+            }
+        }
         let slice = self.array_reference_as_slice(slice)?;
         let flow = self.flow(slice);
         if !flow.ty.is_shared_str() {
@@ -8415,7 +8526,7 @@ impl<'a> Checker<'a> {
                 &self.signatures.plan()?.budget,
             );
         }
-        if referent.contains_slice() {
+        if referent.contains_slice(&self.signatures.plan()?.budget)? {
             ir::validate_slice_carrier_with_facts(referent, self.facts())?;
         }
         self.validate_value_carriers(referent)
@@ -8425,7 +8536,12 @@ impl<'a> Checker<'a> {
         kind: ir::BorrowKind,
         place: ir::Place,
     ) -> Result<ir::ExprId, String> {
-        let referent = ir::projected_ty(&self.locals[place.local.0].ty, &place.projection)?.clone();
+        let referent = ir::projected_ty(
+            &self.locals[place.local.0].ty,
+            &place.projection,
+            &self.signatures.plan()?.budget,
+        )?
+        .clone();
         if matches!(referent, ir::Ty::Dyn(_) | ir::Ty::Slice { .. }) {
             // Only a whole-object reborrow `&*d` / `&mut *d` of a local
             // carrier is admitted; it copies the vtable or length word with
@@ -8489,7 +8605,12 @@ impl<'a> Checker<'a> {
                 let local = self.lookup(name)?;
                 let mut projection = self.retained_pattern_vec::<ir::Projection>(derefs + 1)?;
                 projection.resize(derefs, ir::Projection::Deref);
-                let source_ty = ir::projected_ty(&self.locals[local.0].ty, &projection)?.clone();
+                let source_ty = ir::projected_ty(
+                    &self.locals[local.0].ty,
+                    &projection,
+                    &self.signatures.plan()?.budget,
+                )?
+                .clone();
                 if let ir::Ty::Ref {
                     kind: ir::BorrowKind::Mut,
                     referent: actual,
@@ -8586,7 +8707,11 @@ impl<'a> Checker<'a> {
                     .ok_or("resolved call evidence metadata allocation overflow")?,
             )?;
             facts
-                .validate_signature(ir::SignatureSubject::Call(resolved.callee()), signature)
+                .validate_signature_with(
+                    ir::SignatureSubject::Call(resolved.callee()),
+                    signature,
+                    &mut self.trait_scratch.borrow_mut(),
+                )
                 .map_err(|e| e.into_legacy_diagnostic(&plan.budget))?;
             (resolved.callee().clone(), signature.clone())
         } else {
@@ -8605,7 +8730,14 @@ impl<'a> Checker<'a> {
             };
         let actuals = target.type_arguments();
         for actual in actuals {
-            if actual.contains_slice() {
+            if matches!(actual, ir::Ty::Slice { .. }) {
+                // A bare slice here is a type argument, not runtime storage.
+                // Recheck its authenticated metadata and Sized element under
+                // this exact caller. The callee's implicit Sized obligations
+                // were discharged above, and every substituted runtime value
+                // still goes through the ordinary slice-carrier validators.
+                self.facts().validate_ty_with_budget(actual, &plan.budget)?;
+            } else if actual.contains_slice(&plan.budget)? {
                 ir::validate_slice_carrier_with_facts(actual, self.facts())?;
             }
         }
@@ -8886,6 +9018,18 @@ impl<'a> Checker<'a> {
                 Some((borrowed, None)),
             );
         }
+        // An overloaded index is a place even when its index is dynamic and
+        // static_source_place cannot represent it. Obtain its checked reference
+        // before the owned-rvalue path can attempt to move a non-Copy element.
+        let indexed_receiver = if matches!(
+            selected.adjustment,
+            ReceiverAdjustment::SharedAutoref | ReceiverAdjustment::MutAutoref
+        ) && let ReceiverKind::Borrowed { kind } = selected.mode
+        {
+            self.indexed_method_receiver(receiver, kind, &selected)?
+        } else {
+            None
+        };
         // Autoref of an owned rvalue borrows a full-expression temporary.
         // Keep its storage outside the receiver block so a destructor runs
         // after the entire statement, not immediately after this method call.
@@ -8895,6 +9039,7 @@ impl<'a> Checker<'a> {
                 ReceiverAdjustment::SharedAutoref | ReceiverAdjustment::MutAutoref
             )
             && !matches!(ty, ir::Ty::Ref { .. })
+            && indexed_receiver.is_none()
             && static_source_place(receiver).is_err()
         {
             let mutable = matches!(selected.adjustment, ReceiverAdjustment::MutAutoref);
@@ -9036,7 +9181,11 @@ impl<'a> Checker<'a> {
                             "unsupported: autoref of a reference-return call temporary".into()
                         );
                     }
-                    if let Some(adjusted) = self.deref_field_receiver(receiver, kind, &selected)? {
+                    if let Some(adjusted) = indexed_receiver {
+                        adjusted
+                    } else if let Some(adjusted) =
+                        self.deref_field_receiver(receiver, kind, &selected)?
+                    {
                         adjusted
                     } else {
                         let source = static_source_place(receiver)?;
@@ -11154,7 +11303,9 @@ impl<'a> Checker<'a> {
                     };
                     let field = definition
                         .fields
+                        .read(&self.signatures.plan()?.budget)?
                         .get(index)
+                        .cloned()
                         .ok_or("variant constructor arity mismatch")?;
                     if !seen.insert(index) {
                         return Err("duplicate variant constructor field".into());
@@ -11519,7 +11670,7 @@ impl<'a> Checker<'a> {
                 (
                     ir::ExprKind::Local(local),
                     Flow {
-                        completes: inhabited(&ty),
+                        completes: inhabited(&ty, &self.signatures.plan()?.budget)?,
                         ty,
                     },
                 )

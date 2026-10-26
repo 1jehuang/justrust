@@ -1443,11 +1443,14 @@ fn preflight_with_plan(
         let Some(local) = f.locals.get(place.local.0) else {
             return Ok(());
         };
-        let mut ty = &local.ty;
+        let mut ty = local.ty.clone();
         let mut projection = place.projection.iter();
         while let Some(step) = projection.next() {
             ty = match step {
-                Projection::Field(index) => match ty.field_ty(*index) {
+                Projection::Field(index) => match ty
+                    .field_ty_optional(*index, budget.plan_budget())
+                    .map_err(|_| Exhausted)?
+                {
                     Some(field) => field,
                     None => return Ok(()),
                 },
@@ -1455,19 +1458,19 @@ fn preflight_with_plan(
                     let Ty::Ref { referent, .. } = ty else {
                         return Ok(());
                     };
-                    referent
+                    referent.as_ref().clone()
                 }
                 Projection::ConstantIndex(index) => {
                     let Ty::Array { element, len } = ty else {
                         return Ok(());
                     };
-                    if *index >= *len {
+                    if *index >= len {
                         return Ok(());
                     }
-                    element
+                    element.as_ref().clone()
                 }
                 Projection::DynamicIndex(_) => match ty {
-                    Ty::Array { element, .. } | Ty::Slice { element } => element,
+                    Ty::Array { element, .. } | Ty::Slice { element } => element.as_ref().clone(),
                     _ => return Ok(()),
                 },
                 Projection::Downcast(variant) => {
@@ -1483,14 +1486,18 @@ fn preflight_with_plan(
                     let Some(Projection::Field(index)) = projection.next() else {
                         return Ok(());
                     };
-                    let Some(field) = def.fields.get(*index) else {
+                    let fields = def
+                        .fields
+                        .read_optional(budget.plan_budget())
+                        .map_err(|_| Exhausted)?;
+                    let Some(field) = fields.get(*index) else {
                         return Ok(());
                     };
-                    &field.ty
+                    field.ty.clone()
                 }
             };
         }
-        preflight_ty(ty, 0, budget)
+        preflight_ty(&ty, 0, budget)
     }
     let before_types = budget.remaining;
     for local in &f.locals {
@@ -1754,6 +1761,18 @@ fn preflight_with_plan(
     }
     Ok(budget.peak_scratch)
 }
+#[cfg(test)]
+pub(super) fn component_preflight_for_tests(
+    ty: &Ty,
+    plan: Option<&super::ir::PlanBudget>,
+    work: usize,
+    depth: usize,
+) -> Result<usize, Exhausted> {
+    let mut budget = Budget::for_plan(work, plan);
+    preflight_ty(ty, depth, &mut budget)?;
+    Ok(budget.work_limit - budget.remaining)
+}
+
 fn preflight_ty(ty: &Ty, depth: usize, budget: &mut Budget) -> Result<(), Exhausted> {
     // Recursive coercion verification can compare each enclosing subtree
     // before descending. Weight by depth to conservatively cover that repeated
@@ -1764,6 +1783,30 @@ fn preflight_ty(ty: &Ty, depth: usize, budget: &mut Budget) -> Result<(), Exhaus
     }
     if ty.is_nominal_back_edge() {
         return Ok(());
+    }
+    let capability = match ty {
+        Ty::Struct(value) => value.realization(),
+        Ty::Enum(value) => value.realization(),
+        _ => None,
+    };
+    if let Some(capability) = capability.filter(|read| read.is_component()) {
+        capability.check_definition(ty).map_err(|_| Exhausted)?;
+        // Raw no-budget APIs cannot manufacture a symbolic traversal budget.
+        let plan = budget.plan_budget().cloned().ok_or(Exhausted)?;
+        return capability
+            .component_ownership_preflight(&plan, depth, &mut |weight, external| {
+                budget
+                    .spend(weight)
+                    .map_err(|_| crate::engine::Error::new("ownership preflight work exhausted"))?;
+                if let Some((ty, depth)) = external {
+                    preflight_ty(ty, depth, budget).map_err(|_| {
+                        crate::engine::Error::new("ownership external preflight exhausted")
+                    })?;
+                }
+                Ok(())
+            })
+            .ok_or(Exhausted)?
+            .map_err(|_| Exhausted);
     }
     if let Ty::Ref { referent, .. } = ty {
         preflight_ty(referent, depth + 1, budget)?;
@@ -1794,7 +1837,12 @@ fn preflight_ty(ty: &Ty, depth: usize, budget: &mut Budget) -> Result<(), Exhaus
         }
         budget.spend(ty.def().variants.len())?;
         for variant in ty.def().variants.iter() {
-            for field in variant.fields.iter() {
+            for field in variant
+                .fields
+                .read_optional(budget.plan_budget())
+                .map_err(|_| Exhausted)?
+                .iter()
+            {
                 preflight_ty(&field.ty, depth + 1, budget)?;
             }
         }
@@ -1806,7 +1854,11 @@ fn preflight_ty(ty: &Ty, depth: usize, budget: &mut Budget) -> Result<(), Exhaus
     }
     if let Some(count) = ty.field_count() {
         for index in 0..count {
-            preflight_ty(ty.field_ty(index).ok_or(Exhausted)?, depth + 1, budget)?;
+            let field = ty
+                .field_ty_optional(index, budget.plan_budget())
+                .map_err(|_| Exhausted)?
+                .ok_or(Exhausted)?;
+            preflight_ty(&field, depth + 1, budget)?;
         }
     }
     Ok(())
@@ -1972,7 +2024,9 @@ impl Paths {
                 MoveShape::Product { ty, fields } => {
                     for index in 0..fields {
                         count(
-                            ty.field_ty(index).ok_or(Exhausted)?,
+                            &ty.field_ty_optional(index, budget.plan_budget())
+                                .map_err(|_| Exhausted)?
+                                .ok_or(Exhausted)?,
                             facts,
                             budget,
                             limit,
@@ -1996,7 +2050,12 @@ impl Paths {
                         .ok_or(Exhausted)?;
                     for variant in definition.variants.iter() {
                         budget.spend(1)?;
-                        for field in variant.fields.iter() {
+                        for field in variant
+                            .fields
+                            .read_optional(budget.plan_budget())
+                            .map_err(|_| Exhausted)?
+                            .iter()
+                        {
                             count(&field.ty, facts, budget, limit, depth + 1, counts)?;
                         }
                     }
@@ -2025,7 +2084,7 @@ impl Paths {
                     super::ir::carrier_at(&f.locals[local.0].ty, location, &ledger)
                         .map_err(|_| Exhausted)?
                 {
-                    count(referent, facts, budget, limit, 0, &mut counts)?;
+                    count(&referent, facts, budget, limit, 0, &mut counts)?;
                 }
             }
         }
@@ -2058,7 +2117,9 @@ impl Paths {
                     for index in 0..fields {
                         let child = add(
                             paths,
-                            ty.field_ty(index).ok_or(Exhausted)?,
+                            &ty.field_ty_optional(index, budget.plan_budget())
+                                .map_err(|_| Exhausted)?
+                                .ok_or(Exhausted)?,
                             Some(id),
                             limit,
                             facts,
@@ -2081,7 +2142,12 @@ impl Paths {
                         budget.spend(1)?;
                         let offset = paths.nodes[id].children.len();
                         paths.nodes[id].variant_offsets.push(offset);
-                        for field in variant.fields.iter() {
+                        for field in variant
+                            .fields
+                            .read_optional(budget.plan_budget())
+                            .map_err(|_| Exhausted)?
+                            .iter()
+                        {
                             let child = add(paths, &field.ty, Some(id), limit, facts, budget)?;
                             paths.nodes[id].children.push(child);
                         }
@@ -2110,7 +2176,7 @@ impl Paths {
                     super::ir::carrier_at(&f.locals[local.0].ty, location, &ledger)
                         .map_err(|_| Exhausted)?
                 {
-                    let root = add(&mut result, referent, None, limit, facts, budget)?;
+                    let root = add(&mut result, &referent, None, limit, facts, budget)?;
                     budget.reserve_bytes(4 * size_of::<(super::ir::CarrierLocation, usize)>())?;
                     result.external[local.0].push((location.clone(), root));
                 }
@@ -2398,11 +2464,16 @@ impl Transfer<'_> {
     }
     /// Storage reached through a raw pointer dereference is untracked by
     /// initialization, move and loan analysis (Rust leaves it to `unsafe`).
-    fn raw_deref(&self, place: &Place) -> Option<usize> {
-        super::ir::raw_deref_index(&self.f.locals[place.local.0].ty, &place.projection)
+    fn raw_deref(&self, place: &Place) -> Result<Option<usize>, Exhausted> {
+        super::ir::raw_deref_index_optional(
+            &self.f.locals[place.local.0].ty,
+            &place.projection,
+            self.budget.plan_budget(),
+        )
+        .map_err(|_| Exhausted)
     }
     fn targets(&mut self, place: &Place) -> Result<Vec<Target>, Exhausted> {
-        if self.raw_deref(place).is_some() {
+        if self.raw_deref(place)?.is_some() {
             return Ok(vec![]);
         }
         if let Some(loans) = self.loans {
@@ -2453,7 +2524,7 @@ impl Transfer<'_> {
             }
         }
         let limit = self
-            .raw_deref(place)
+            .raw_deref(place)?
             .map_or(place.projection.len(), |index| index + 1);
         for (index, projection) in place.projection[..limit].iter().enumerate() {
             if *projection != Projection::Deref {
@@ -2465,7 +2536,7 @@ impl Transfer<'_> {
                 projection: place.projection[..index].to_vec(),
             };
             if self.loans.is_none() {
-                if index + 1 == limit && self.raw_deref(place).is_some() {
+                if index + 1 == limit && self.raw_deref(place)?.is_some() {
                     self.read_raw(state, &carrier)?;
                 }
                 continue;
@@ -2477,30 +2548,32 @@ impl Transfer<'_> {
         }
         Ok(())
     }
-    fn mut_authority(&mut self, place: &Place) {
+    fn mut_authority(&mut self, place: &Place) -> Result<(), Exhausted> {
         for (index, projection) in place.projection.iter().enumerate() {
             if *projection != Projection::Deref {
                 continue;
             }
-            let base = super::ir::projected_ty(
+            let base = super::ir::projected_ty_optional(
                 &self.f.locals[place.local.0].ty,
                 &place.projection[..index],
-            );
-            if let Ok(Ty::RawPtr { kind, .. }) = base {
-                if *kind != super::ir::BorrowKind::Mut {
+                self.budget.plan_budget(),
+            )
+            .map_err(|_| Exhausted)?;
+            if let Ty::RawPtr { kind, .. } = base {
+                if kind != super::ir::BorrowKind::Mut {
                     self.problem(
                         Problem::Invalid("mutation through a *const raw pointer".into()),
                         place.clone(),
                     );
                 }
-                return;
+                return Ok(());
             }
             if !matches!(
                 base,
-                Ok(Ty::Ref {
+                Ty::Ref {
                     kind: super::ir::BorrowKind::Mut,
                     ..
-                })
+                }
             ) {
                 self.problem(
                     Problem::Invalid(
@@ -2509,9 +2582,10 @@ impl Transfer<'_> {
                     ),
                     place.clone(),
                 );
-                return;
+                return Ok(());
             }
         }
+        Ok(())
     }
     fn read_mode(
         &mut self,
@@ -2519,7 +2593,7 @@ impl Transfer<'_> {
         place: &Place,
         access: Access,
     ) -> Result<(), Exhausted> {
-        if self.raw_deref(place).is_some() {
+        if self.raw_deref(place)?.is_some() {
             return self.carrier_read(state, place);
         }
         if self.loans.is_none() {
@@ -2536,8 +2610,8 @@ impl Transfer<'_> {
         self.read_mode(state, place, Access::Read)
     }
     fn write(&mut self, state: &mut State, place: &Place) -> Result<(), Exhausted> {
-        if self.raw_deref(place).is_some() {
-            self.mut_authority(place);
+        if self.raw_deref(place)?.is_some() {
+            self.mut_authority(place)?;
             return self.carrier_read(state, place);
         }
         if self.loans.is_none() {
@@ -2546,7 +2620,7 @@ impl Transfer<'_> {
         let deref = place.projection.contains(&Projection::Deref);
         self.carrier_read(state, place)?;
         if deref {
-            self.mut_authority(place);
+            self.mut_authority(place)?;
         }
         if deref {
             self.budget.spend(1)?;
@@ -2705,10 +2779,13 @@ impl Transfer<'_> {
         Ok(())
     }
     fn copy_permission(&mut self, place: &Place) -> Result<Option<bool>, Exhausted> {
-        let ty = self.f.place_ty(place).expect("structurally verified place");
-        preflight_ty(ty, 0, self.budget)?;
+        let ty = self
+            .f
+            .place_ty_with_budget(place, self.budget.plan_budget())
+            .map_err(|_| Exhausted)?;
+        preflight_ty(&ty, 0, self.budget)?;
         if let FactsCtx::Validated(authority) = self.facts {
-            return match authority.must_copy(ty) {
+            return match authority.must_copy(&ty) {
                 Ok(permission) => Ok(Some(permission)),
                 Err(error) if error.is_resource() => Err(Exhausted),
                 Err(error) => {
@@ -2720,7 +2797,7 @@ impl Transfer<'_> {
         }
         // Structural-only bootstrap and fixture contexts cannot mint a native
         // capability. Production always queries the exact retained authority.
-        self.facts.must_copy(ty).map(Some).map_err(|_| Exhausted)
+        self.facts.must_copy(&ty).map(Some).map_err(|_| Exhausted)
     }
     fn deny_copy(&mut self, place: &Place, message: &'static str) -> Result<(), Exhausted> {
         let message = if let FactsCtx::Validated(authority) = self.facts {
@@ -2793,7 +2870,7 @@ impl Transfer<'_> {
                     self.problem(problem, place.clone());
                 }
                 if place.projection.contains(&Projection::Deref) {
-                    self.mut_authority(place);
+                    self.mut_authority(place)?;
                 }
                 self.read_mode(state, place, Access::Move)?;
             } else {
@@ -2871,7 +2948,7 @@ impl Transfer<'_> {
         self.carrier_read(state, array)?;
         let deref = array.projection.contains(&Projection::Deref);
         if deref {
-            self.mut_authority(array);
+            self.mut_authority(array)?;
         }
         for target in self.targets(array)? {
             self.check_access(&target, Access::Write)?;
@@ -2898,7 +2975,7 @@ impl Transfer<'_> {
                 self.carrier_read(state, &source)?;
                 if kind == super::ir::BorrowKind::Mut {
                     if source.projection.first() == Some(&Projection::Deref) {
-                        self.mut_authority(&source);
+                        self.mut_authority(&source)?;
                     } else if !self.f.locals[source.local.0].mutable {
                         self.diagnostic(ErrorKind::ImmutableReassignment, source.clone());
                     }
@@ -2909,10 +2986,12 @@ impl Transfer<'_> {
                     vec![]
                 };
                 if targets.is_empty()
-                    && super::ir::raw_deref_index(
+                    && super::ir::raw_deref_index_optional(
                         &self.f.locals[source.local.0].ty,
                         &source.projection,
+                        self.budget.plan_budget(),
                     )
+                    .map_err(|_| Exhausted)?
                     .is_none()
                     // A reborrow through a reference whose provenance is
                     // unbounded (derived from a raw pointer) has no tracked
@@ -3084,7 +3163,9 @@ impl Transfer<'_> {
                     if self.const_drop_node(
                         state,
                         child,
-                        ty.field_ty(index).ok_or(Exhausted)?,
+                        &ty.field_ty_optional(index, self.budget.plan_budget())
+                            .map_err(|_| Exhausted)?
+                            .ok_or(Exhausted)?,
                         depth + 1,
                     )? {
                         return Ok(true);
@@ -3108,7 +3189,13 @@ impl Transfer<'_> {
                         continue;
                     }
                     let offset = self.paths.nodes[node].variant_offsets[variant];
-                    for (index, field) in fields.fields.iter().enumerate() {
+                    for (index, field) in fields
+                        .fields
+                        .read_optional(self.budget.plan_budget())
+                        .map_err(|_| Exhausted)?
+                        .iter()
+                        .enumerate()
+                    {
                         let child = self.paths.nodes[node].children[offset + index];
                         if self.const_drop_node(state, child, &field.ty, depth + 1)? {
                             return Ok(true);
@@ -3124,9 +3211,12 @@ impl Transfer<'_> {
         if !self.const_context || self.report.is_none() {
             return Ok(());
         }
-        let ty = self.f.place_ty(place).map_err(|_| Exhausted)?;
+        let ty = self
+            .f
+            .place_ty_with_budget(place, self.budget.plan_budget())
+            .map_err(|_| Exhausted)?;
         let node = self.paths.resolve(place);
-        if self.const_drop_node(state, node, ty, 0)? {
+        if self.const_drop_node(state, node, &ty, 0)? {
             self.diagnostic(
                 ErrorKind::InvalidCfg(
                     "E0493: destructor cannot be evaluated in constant context".into(),
@@ -3255,8 +3345,8 @@ impl Transfer<'_> {
             Terminator::SwitchVariant { place, .. } => {
                 self.budget.spend(place.projection.len() + 1)?;
                 let singleton = matches!(
-                    self.f.place_ty(place),
-                    Ok(Ty::Enum(enumeration)) if enumeration.def().variants.len() == 1
+                    self.f.place_ty_with_budget(place, self.budget.plan_budget()).map_err(|_| Exhausted)?,
+                    Ty::Enum(enumeration) if enumeration.def().variants.len() == 1
                 );
                 if singleton && place.projection.contains(&Projection::Deref) {
                     // The referent's variant is known from its type. Reading

@@ -136,6 +136,7 @@ impl ValidatedTraitWorld {
                 self.prove_in(
                     &expected,
                     ProofContext {
+                        original: None,
                         predicates: &caller,
                         phase: FactsPhase::Schema,
                     },
@@ -174,6 +175,7 @@ impl ValidatedTraitWorld {
                             .normalize_closed_projected_type(
                                 ty,
                                 ProofContext {
+                                    original: None,
                                     predicates: &world.empty,
                                     phase: FactsPhase::Schema,
                                 },

@@ -409,6 +409,7 @@ fn read_cell_cover(
                 if let Ty::Enum(value) = ty {
                     budget.spend(value.def().variants.len())?;
                 }
+                let field_budget = budget.plan_budget().cloned();
                 let mut child = |steps: &[Projection], ty: &Ty| -> Result<bool, Exhausted> {
                     let saved = storage.projection.len();
                     let length = add(saved, steps.len())?;
@@ -456,7 +457,14 @@ fn read_cell_cover(
                         }
                     }
                     Ty::Struct(value) => {
-                        for (index, field) in value.def().fields.iter().enumerate() {
+                        for (index, field) in value
+                            .def()
+                            .fields
+                            .read_optional(field_budget.as_ref())
+                            .map_err(|_| Exhausted)?
+                            .iter()
+                            .enumerate()
+                        {
                             if !child(&[Projection::Field(index)], &field.ty)? {
                                 return Ok(false);
                             }
@@ -464,7 +472,13 @@ fn read_cell_cover(
                     }
                     Ty::Enum(value) => {
                         for (variant, definition) in value.def().variants.iter().enumerate() {
-                            for (field, ty) in definition.fields.iter().enumerate() {
+                            for (field, ty) in definition
+                                .fields
+                                .read_optional(field_budget.as_ref())
+                                .map_err(|_| Exhausted)?
+                                .iter()
+                                .enumerate()
+                            {
                                 let variant = ir::VariantId {
                                     owner: value.def().id,
                                     index: variant,
@@ -505,9 +519,10 @@ fn read_cell_cover(
         CanonicalRoot::Owned(local) => (*local, None),
         CanonicalRoot::ParameterReferent(local, location) => (*local, Some(location)),
     };
-    let Some(mut ty) = original_locals.get(local.0) else {
+    let Some(ty) = original_locals.get(local.0) else {
         return Ok(None);
     };
+    let mut ty = ty.clone();
     if let Some(location) = location {
         let depth = match location.channel {
             CarrierChannel::Fixed(position) => position.depth,
@@ -519,18 +534,19 @@ fn read_cell_cover(
         budget.reserve_bytes(mul(length, size_of::<Projection>())?)?;
         budget.spend(add(length, 1)?)?;
         let path = value_projection(location);
-        let Ok(Ty::Ref { referent, .. }) = ir::projected_ty(ty, &path) else {
+        let Ty::Ref { referent, .. } =
+            ir::projected_ty_optional(&ty, &path, budget.plan_budget()).map_err(|_| Exhausted)?
+        else {
             return Ok(None);
         };
-        ty = referent;
+        ty = referent.as_ref().clone();
     }
     // A canonical object's physical coordinates never traverse another pointer.
     if target.place.projection.contains(&Projection::Deref) {
         return Ok(None);
     }
-    let Ok(ty) = ir::projected_ty(ty, &target.place.projection) else {
-        return Ok(None);
-    };
+    let ty = ir::projected_ty_optional(&ty, &target.place.projection, budget.plan_budget())
+        .map_err(|_| Exhausted)?;
     // A slice root can conservatively designate any of its elements. Only
     // its issued summary cell supplies a cover, never a matching layout or
     // a fabricated element origin. Other exact targets remain exact.
@@ -540,7 +556,7 @@ fn read_cell_cover(
     budget.reserve_bytes(mul(target.place.projection.len(), size_of::<Projection>())?)?;
     let mut storage = target.place.clone();
     let mut output = Vec::new();
-    if !walk(ty, &mut storage, cell_index, &mut output, 0, budget)?
+    if !walk(&ty, &mut storage, cell_index, &mut output, 0, budget)?
         || (target.precision == TargetPrecision::Exact && output.is_empty())
     {
         return Ok(None);
@@ -583,7 +599,9 @@ fn resolve_cells<'a>(
     budget.spend(place.projection.len() + 1)?;
     // Storage behind a raw pointer has no canonical object or loan cells.
     if let Some(local) = original_locals.get(place.local.0)
-        && ir::raw_deref_index(local, &place.projection).is_some()
+        && ir::raw_deref_index_optional(local, &place.projection, budget.plan_budget())
+            .map_err(|_| Exhausted)?
+            .is_some()
     {
         return Ok((vec![], vec![], None));
     }
@@ -635,9 +653,10 @@ fn resolve_cells<'a>(
                 } else {
                     original_locals
                 };
-                let Some(mut ty) = locals.get(local.0) else {
+                let Some(ty) = locals.get(local.0) else {
                     return Err(Exhausted);
                 };
+                let mut ty = ty.clone();
                 if let Some(location) = location {
                     budget.spend(location.path.0.len() + 1)?;
                     budget.reserve_bytes(
@@ -649,13 +668,20 @@ fn resolve_cells<'a>(
                             .ok_or(Exhausted)?,
                     )?;
                     let path = value_projection(location);
-                    ty = match ir::projected_ty(ty, &path) {
-                        Ok(Ty::Ref { referent, .. }) => referent,
+                    ty = match ir::projected_ty_optional(&ty, &path, budget.plan_budget())
+                        .map_err(|_| Exhausted)?
+                    {
+                        Ty::Ref { referent, .. } => referent.as_ref().clone(),
                         _ => return Err(Exhausted),
                     };
                 }
-                ty = ir::projected_ty(ty, &candidate.place.projection).map_err(|_| Exhausted)?;
-                if matches!(ty, Ty::Array { element, .. } if !matches!(element.as_ref(), Ty::Ref { kind: BorrowKind::Shared, .. }))
+                ty = ir::projected_ty_optional(
+                    &ty,
+                    &candidate.place.projection,
+                    budget.plan_budget(),
+                )
+                .map_err(|_| Exhausted)?;
+                if matches!(&ty, Ty::Array { element, .. } if !matches!(element.as_ref(), Ty::Ref { kind: BorrowKind::Shared, .. }))
                     && *step != Projection::DynamicIndex(LocalId(usize::MAX))
                 {
                     let mut selected = candidate;
@@ -665,7 +691,7 @@ fn resolve_cells<'a>(
                     continue;
                 }
                 let count = match ty {
-                    Ty::Array { len, .. } => *len,
+                    Ty::Array { len, .. } => len,
                     Ty::Slice { .. } => 1,
                     _ if *step == Projection::DynamicIndex(LocalId(usize::MAX)) => {
                         // A declared slice may borrow opaque backing storage
@@ -900,16 +926,17 @@ fn physical_result_flow_problem(
     }
 }
 
-/// A root generic result instantiated to one reference retains the element's
-/// declared family lifetime, not the lifetime of the slice descriptor. This is
-/// shape selection for the existing authenticated result-flow and origin checks.
+/// A root generic result instantiated to shared tuple components retains each
+/// element's declared family lifetime, not the lifetime of the slice descriptor.
+/// Selection replays both input and result component mappings before the existing
+/// authenticated result-flow and origin checks, never synthesizing a source loan.
 fn borrowed_slice_family_result(
     view: &super::traits::CarrierContractView,
     location: &CarrierLocation,
     budget: &mut Budget,
 ) -> Result<bool, Exhausted> {
     let fixed = CarrierChannel::Fixed(ReferencePosition { depth: 0 });
-    if !location.path.0.is_empty() || location.channel != fixed {
+    if location.channel != fixed {
         return Ok(false);
     }
     for original in view.original_contract().results.iter() {
@@ -952,10 +979,22 @@ fn borrowed_slice_family_result(
                 let mut exact = true;
                 for (source, original_source) in result.sources.iter().zip(original.sources.iter())
                 {
-                    budget.spend(1)?;
+                    budget.spend(view.contract().inputs.len() + 1)?;
+                    let original_path = original_source.location.path.0.as_ref();
+                    let actual_path = source.location.path.0.as_ref();
                     exact &= source.param == original_source.param
-                        && source.location.path == original_source.location.path
-                        && source.location.channel == fixed;
+                        && actual_path.strip_prefix(original_path)
+                            == Some(location.path.0.as_ref())
+                        && source.location.channel == fixed
+                        && view.contract().inputs.contains(source);
+                    let mut input_mapping = false;
+                    for input in view.component_mappings() {
+                        budget.spend(1)?;
+                        input_mapping |= input.original_family == family
+                            && input.original == original_source.location
+                            && input.substituted == source.location;
+                    }
+                    exact &= input_mapping;
                 }
                 if exact {
                     return Ok(true);
@@ -1447,11 +1486,16 @@ impl CarrierBuilder<'_, '_> {
             for (depth, step) in prefix.iter().enumerate() {
                 if *step == Projection::Deref
                     && matches!(
-                        ir::projected_ty(&signature.params[input.input.param], &prefix[..depth]),
-                        Ok(Ty::Ref {
+                        ir::projected_ty(
+                            &signature.params[input.input.param],
+                            &prefix[..depth],
+                            &self.ledger
+                        )
+                        .map_err(|_| Exhausted)?,
+                        Ty::Ref {
                             kind: BorrowKind::Mut,
                             ..
-                        })
+                        }
                     )
                 {
                     invariant = true;
@@ -1549,11 +1593,16 @@ impl CarrierBuilder<'_, '_> {
                 for (index, step) in prefix.iter().enumerate() {
                     if *step == Projection::Deref
                         && matches!(
-                            ir::projected_ty(&signature.params[original.param], &prefix[..index]),
-                            Ok(Ty::Ref {
+                            ir::projected_ty(
+                                &signature.params[original.param],
+                                &prefix[..index],
+                                &self.ledger
+                            )
+                            .map_err(|_| Exhausted)?,
+                            Ty::Ref {
                                 kind: BorrowKind::Mut,
                                 ..
-                            })
+                            }
                         )
                     {
                         invariant = true;
@@ -2262,7 +2311,14 @@ impl CarrierBuilder<'_, '_> {
     ) -> Result<Vec<(CarrierLocation, CarrierOrigins)>, Exhausted> {
         let locations = ir::carrier_locations(ty, &self.ledger).map_err(|_| Exhausted)?;
         let mut output = Vec::new();
-        if ir::raw_deref_index(&self.f.locals[place.local.0].ty, &place.projection).is_some() {
+        if ir::raw_deref_index(
+            &self.f.locals[place.local.0].ty,
+            &place.projection,
+            &self.ledger,
+        )
+        .map_err(|_| Exhausted)?
+        .is_some()
+        {
             // A raw pointer read has no tracked provenance (an unbounded
             // lifetime in Rust). Reference components gain no origins here.
             return Ok(output);
@@ -2278,7 +2334,7 @@ impl CarrierBuilder<'_, '_> {
             component.projection.extend_from_slice(&path);
             let (targets, _, mut failure) = self.lens(state, &component)?;
             let semantic = ir::carrier_at(ty, location, &self.ledger).map_err(|_| Exhausted)?;
-            let Some(channel) = key_channel(semantic) else {
+            let Some(channel) = key_channel(&semantic) else {
                 continue;
             };
             self.retain(
@@ -2328,8 +2384,9 @@ impl CarrierBuilder<'_, '_> {
         }
         Ok(output)
     }
-    fn place_ty<'a>(&self, f: &'a cfg::Function, place: &Place) -> Result<&'a Ty, Exhausted> {
-        ir::projected_ty(&f.locals[place.local.0].ty, &place.projection).map_err(|_| Exhausted)
+    fn place_ty(&self, f: &cfg::Function, place: &Place) -> Result<Ty, Exhausted> {
+        ir::projected_ty(&f.locals[place.local.0].ty, &place.projection, &self.ledger)
+            .map_err(|_| Exhausted)
     }
     fn consume(&mut self, state: &mut FlowState, operand: &Operand) -> Result<(), Exhausted> {
         if let Operand::Move(place) = operand {
@@ -2366,7 +2423,7 @@ impl CarrierBuilder<'_, '_> {
                 for target in targets {
                     let semantic =
                         ir::carrier_at(&ty, &location, &self.ledger).map_err(|_| Exhausted)?;
-                    if let Some(channel) = key_channel(semantic)
+                    if let Some(channel) = key_channel(&semantic)
                         && let Some(cell) = self.cell(&CellKey {
                             storage: target.place,
                             channel,
@@ -2508,7 +2565,7 @@ impl<'a, 'b> CarrierBuilder<'a, 'b> {
                             .retain_bytes(4 * (size_of::<InputCarrier>() + size_of::<BorrowKind>()))
                             .map_err(|_| Exhausted)?;
                         reference_inputs.push((input, ReferenceOriginId(kinds.len())));
-                        kinds.push(*kind);
+                        kinds.push(kind);
                     }
                     CarrierChannel::ParamTail { .. }
                     | CarrierChannel::ProjectionTail { .. }
@@ -2598,7 +2655,7 @@ impl<'a, 'b> CarrierBuilder<'a, 'b> {
                         )
                         .map_err(|_| Exhausted)?;
                     rows.push((location.clone(), ReferenceOriginId(kinds.len())));
-                    kinds.push(*kind);
+                    kinds.push(kind);
                 }
             }
             call_rows.push(rows);
@@ -2694,7 +2751,7 @@ impl<'a, 'b> CarrierBuilder<'a, 'b> {
                 }
                 let ty = ir::carrier_at(&f.locals[local].ty, location, &builder.ledger)
                     .map_err(|_| Exhausted)?;
-                let channel = key_channel(ty).ok_or(Exhausted)?;
+                let channel = key_channel(&ty).ok_or(Exhausted)?;
                 builder.add_cell(
                     CellKey {
                         storage: CanonicalPlace {
@@ -2703,7 +2760,7 @@ impl<'a, 'b> CarrierBuilder<'a, 'b> {
                         },
                         channel,
                     },
-                    ty,
+                    &ty,
                 )?;
             }
         }
@@ -2733,9 +2790,9 @@ impl<'a, 'b> CarrierBuilder<'a, 'b> {
                 let cell = builder.add_cell(
                     CellKey {
                         storage: targets[0].place.clone(),
-                        channel: key_channel(semantic).ok_or(Exhausted)?,
+                        channel: key_channel(&semantic).ok_or(Exhausted)?,
                     },
-                    semantic,
+                    &semantic,
                 )?;
                 let input = InputCarrier {
                     param,
@@ -3045,7 +3102,9 @@ impl CarrierBuilder<'_, '_> {
         if ir::raw_deref_index(
             &self.f.locals[destination.local.0].ty,
             &destination.projection,
+            &self.ledger,
         )
+        .map_err(|_| Exhausted)?
         .is_some()
         {
             return Ok(());
@@ -3261,17 +3320,24 @@ impl CarrierBuilder<'_, '_> {
                     // `&'static str`. Other reference fields belong to a
                     // lifetime-parameterized nominal and carry their loans.
                     let static_field = match value {
-                        Rvalue::EnumVariant { ty, variant, .. } => ty
-                            .def()
-                            .variants
-                            .get(*variant)
-                            .and_then(|v| v.fields.get(index))
-                            .is_some_and(|f| f.ty.is_shared_str() && !f.lifetime_bound),
+                        Rvalue::EnumVariant { ty, variant, .. } => {
+                            match ty.def().variants.get(*variant) {
+                                Some(variant) => variant
+                                    .fields
+                                    .read(&self.ledger)
+                                    .map_err(|_| Exhausted)?
+                                    .get(index)
+                                    .is_some_and(|f| f.ty.is_shared_str() && !f.lifetime_bound),
+                                None => false,
+                            }
+                        }
                         Rvalue::Aggregate {
                             ty: Ty::Struct(ty), ..
                         } => ty
                             .def()
                             .fields
+                            .read(&self.ledger)
+                            .map_err(|_| Exhausted)?
                             .get(index)
                             .is_some_and(|f| f.ty.is_shared_str() && !f.lifetime_bound),
                         _ => false,
@@ -3371,7 +3437,6 @@ impl CarrierBuilder<'_, '_> {
                 let Ty::Array { len, .. } = self.place_ty(self.f, array)? else {
                     return Err(Exhausted);
                 };
-                let len = *len;
                 let mut output: Vec<(CarrierLocation, CarrierOrigins)> = Vec::new();
                 let known = match index {
                     Operand::Constant(cfg::Constant::Int(value)) => {
@@ -3453,9 +3518,11 @@ impl CarrierBuilder<'_, '_> {
                     ir::indexed_array_ty(
                         &self.f.locals[array.local.0].ty,
                         &array.projection,
-                        false
-                    ),
-                    Ok(Ty::Slice { .. })
+                        false,
+                        &self.ledger,
+                    )
+                    .map_err(|_| Exhausted)?,
+                    Ty::Slice { .. }
                 ) {
                     self.consume(state, value)?;
                     return Ok(());
@@ -3473,6 +3540,7 @@ impl CarrierBuilder<'_, '_> {
                         &self.f.locals[array.local.0].ty,
                         &array.projection,
                         false,
+                        &self.ledger,
                     )
                     .map_err(|_| Exhausted)?
                     else {
@@ -3491,7 +3559,6 @@ impl CarrierBuilder<'_, '_> {
                 let Ty::Array { len: count, .. } = self.place_ty(self.f, array)? else {
                     return Err(Exhausted);
                 };
-                let count = *count;
                 let selected = match subscript {
                     Operand::Constant(cfg::Constant::Int(value)) => usize::try_from(value.bits)
                         .ok()
@@ -3914,26 +3981,25 @@ impl CarrierBuilder<'_, '_> {
                 if diagnose && (indices.len() != targets.len() || (!copy && indices.len() != 1)) {
                     self.problem(block, None, Problem::Unsupported("call carrier effect lacks one affine target or a complete typed copy-cell cover".into()))?;
                 }
-                let mutable = destination
+                let mutable = match destination
                     .projection
                     .iter()
                     .rposition(|step| *step == Projection::Deref)
-                    .and_then(|depth| {
+                {
+                    Some(depth) => matches!(
                         ir::projected_ty(
                             &self.f.locals[destination.local.0].ty,
                             &destination.projection[..depth],
+                            &self.ledger,
                         )
-                        .ok()
-                    })
-                    .is_some_and(|ty| {
-                        matches!(
-                            ty,
-                            Ty::Ref {
-                                kind: BorrowKind::Mut,
-                                ..
-                            }
-                        )
-                    });
+                        .map_err(|_| Exhausted)?,
+                        Ty::Ref {
+                            kind: BorrowKind::Mut,
+                            ..
+                        }
+                    ),
+                    None => false,
+                };
                 let strong = must
                     && mutable
                     && indices.len() == 1
@@ -4236,7 +4302,7 @@ impl CarrierBuilder<'_, '_> {
             }
             result_channels = add(result_channels, 1)?;
             let Some(semantic) =
-                self.metadata_value(ir::carrier_at(result, location, &self.ledger).cloned())?
+                self.metadata_value(ir::carrier_at(result, location, &self.ledger))?
             else {
                 return Ok(false);
             };
@@ -4265,9 +4331,11 @@ impl CarrierBuilder<'_, '_> {
                     )?;
                     return Ok(false);
                 };
-                let Some(semantic) = self.metadata_value(
-                    ir::carrier_at(parameter, &destination.location, &self.ledger).cloned(),
-                )?
+                let Some(semantic) = self.metadata_value(ir::carrier_at(
+                    parameter,
+                    &destination.location,
+                    &self.ledger,
+                ))?
                 else {
                     return Ok(false);
                 };
@@ -5099,13 +5167,17 @@ fn dynamic_target_covered(
         };
         ty = referent;
     }
+    let mut ty = ty.clone();
     // Lengths of each runtime step, and the total concretization count.
     let mut lens = Vec::new();
     let mut total: usize = 1;
     for step in target {
         budget.spend(1)?;
         ty = match step {
-            Projection::Field(index) => match ty.field_ty(*index) {
+            Projection::Field(index) => match ty
+                .field_ty_optional(*index, budget.plan_budget())
+                .map_err(|_| Exhausted)?
+            {
                 Some(ty) => ty,
                 None => return Ok(false),
             },
@@ -5113,7 +5185,6 @@ fn dynamic_target_covered(
                 let Ty::Array { element, len } = ty else {
                     return Ok(false);
                 };
-                let len = *len;
                 if matches!(step, Projection::DynamicIndex(_)) {
                     lens.push(len);
                     total = match total.checked_mul(len) {
@@ -5121,7 +5192,7 @@ fn dynamic_target_covered(
                         _ => return Ok(false),
                     };
                 }
-                element
+                element.as_ref().clone()
             }
             _ => return Ok(false),
         };
@@ -6539,14 +6610,14 @@ impl Plan {
                 Ok(false)
             };
         }
-        let anchor = match authority.projected_ty(input, &target.place.projection) {
+        let anchor = match authority.projected_ty(&input, &target.place.projection) {
             Ok(anchor) => anchor,
             Err(error) if error.is_resource() => return Err(Exhausted),
             Err(_) => return Ok(false),
         };
         Ok(match (anchor, output) {
-            (Ty::Int(a), Ty::Int(b)) => a == b,
-            (Ty::Float(a), Ty::Float(b)) => a == b,
+            (Ty::Int(a), Ty::Int(b)) => a == *b,
+            (Ty::Float(a), Ty::Float(b)) => a == *b,
             (Ty::Char, Ty::Char) | (Ty::Bool, Ty::Bool) => true,
             _ => false,
         })

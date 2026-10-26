@@ -23,6 +23,7 @@ impl Checker<'_> {
             }
             _ => return Err("constructor source schema kind mismatch".into()),
         };
+        let fields = fields.read(&plan.budget)?;
         let field_index = field;
         let field = fields
             .get(field_index)
@@ -43,6 +44,7 @@ impl Checker<'_> {
                 }
                 _ => return Err("realized constructor source kind mismatch".into()),
             };
+            let concrete_fields = concrete_fields.read(&plan.budget)?;
             if concrete_fields.len() != fields.len() {
                 return Err("invalid metadata: realized constructor field topology drift".into());
             }

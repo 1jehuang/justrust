@@ -97,7 +97,7 @@ fn packed_query_authority_genuine_loader_and_facts_replay() {
         .validate(ir::FactsCtx::Validated(&closed), &plan.budget)
         .unwrap();
     assert_eq!(
-        crate::compiler::backend::value_size(&ir::Ty::Int(ir::IntTy::U8)).unwrap(),
+        crate::compiler::backend::value_size(&ir::Ty::Int(ir::IntTy::U8), &plan.budget).unwrap(),
         8
     );
     assert!(

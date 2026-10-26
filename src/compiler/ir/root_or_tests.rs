@@ -59,9 +59,11 @@ fn root_or_row_work_counts_pairs_projections_and_headers_cumulatively() {
     let rows = rows();
     let budget = PlanBudget::default();
     validate_alternative_rows(&ty, &rows, Some(&budget)).unwrap();
-    assert_eq!(budget.usage_snapshot().work, 23);
+    // Original row/header/pair accounting (23), plus four budgeted projection
+    // steps and four fallible field lookups. Production caps are unchanged.
+    assert_eq!(budget.usage_snapshot().work, 31);
     let tiny = PlanBudget::new(PlanLimits {
-        work: 22,
+        work: 30,
         ..PlanLimits::default()
     });
     assert!(validate_alternative_rows(&ty, &rows, Some(&tiny)).is_err());

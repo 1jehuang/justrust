@@ -93,9 +93,9 @@ pub(super) const DROP_THUNK_PREFIX: &str = "__jr_drop_glue_";
 /// Words 0..2 of every two-word fat carrier (slice data/len, object data/vtable).
 const FAT_LAYOUT: SliceLayout = SHARED_BYTE_SLICE_LAYOUT;
 
-fn shared_slice_layout(element: &ir::Ty) -> Result<SliceLayout, String> {
+fn shared_slice_layout(element: &ir::Ty, budget: &ir::PlanBudget) -> Result<SliceLayout, String> {
     Ok(SliceLayout {
-        element_stride: u32::try_from(value_size(element)?)
+        element_stride: u32::try_from(value_size(element, budget)?)
             .map_err(|_| "slice element exceeds private layout limit")?,
         ..SHARED_BYTE_SLICE_LAYOUT
     })
@@ -107,25 +107,25 @@ fn shared_slice_layout(element: &ir::Ty) -> Result<SliceLayout, String> {
 /// transport classification does.
 /// Exactly shared `&[T]` is true two-word transport (data, len); it is
 /// checked BEFORE `indirect`. Bare `Slice` has no by-value ABI and errors.
-fn argument_words(ty: &ir::Ty) -> Result<usize, String> {
+fn argument_words(ty: &ir::Ty, budget: &ir::PlanBudget) -> Result<usize, String> {
     if let Some(element) = ty.descriptor_element() {
-        shared_slice_layout(element)?;
+        shared_slice_layout(element, budget)?;
         return Ok(2);
     }
     if trait_object_ref(ty).is_some() {
         return Ok(2);
     }
-    indirect(ty)?;
+    indirect(ty, budget)?;
     Ok(1)
 }
 
 /// Expanded words of a signature's parameters, checked against both the
 /// logical MAX_ARGS limit and the expanded MAX_ARG_WORDS limit.
-fn parameter_words(params: &[ir::Ty]) -> Result<Vec<usize>, String> {
+fn parameter_words(params: &[ir::Ty], budget: &ir::PlanBudget) -> Result<Vec<usize>, String> {
     if params.len() > MAX_ARGS {
         return Err(format!("at most {MAX_ARGS} parameters are supported"));
     }
-    params.iter().map(argument_words).collect()
+    params.iter().map(|ty| argument_words(ty, budget)).collect()
 }
 
 fn total_argument_words(words: &[usize], sret: bool) -> Result<usize, String> {
@@ -170,18 +170,18 @@ const SLICE_UNSUPPORTED: &str =
 /// Root slice results use the existing indirect result convention. The
 /// carrier is copied into caller-owned result storage, never returned as
 /// the address of callee-local descriptor storage.
-fn result_indirect(ty: &ir::Ty) -> Result<bool, String> {
-    indirect(ty)
+fn result_indirect(ty: &ir::Ty, budget: &ir::PlanBudget) -> Result<bool, String> {
+    indirect(ty, budget)
 }
 
 /// Storage transport class. Exactly shared `&[T]` is a 16-byte frame carrier
 /// whose operand convention is its snapshot ADDRESS in rax, exactly like
 /// aggregates, so local copies move both words. It never crosses a call
 /// boundary as a pointer: calls use `argument_words` == 2 and push both words.
-pub(super) fn indirect(ty: &ir::Ty) -> Result<bool, String> {
-    ir::reject_associated_types(ty, None)?;
+pub(super) fn indirect(ty: &ir::Ty, budget: &ir::PlanBudget) -> Result<bool, String> {
+    ir::reject_associated_types(ty, Some(budget))?;
     if let Some(element) = ty.descriptor_element() {
-        shared_slice_layout(element)?;
+        shared_slice_layout(element, budget)?;
         return Ok(true);
     }
     if trait_object_ref(ty).is_some() {
@@ -215,8 +215,8 @@ pub(super) fn indirect(ty: &ir::Ty) -> Result<bool, String> {
     }
 }
 
-pub(super) fn value_size(ty: &ir::Ty) -> Result<i32, String> {
-    ir::reject_associated_types(ty, None)?;
+pub(super) fn value_size(ty: &ir::Ty, budget: &ir::PlanBudget) -> Result<i32, String> {
+    ir::reject_associated_types(ty, Some(budget))?;
     if wide_integer(ty) {
         // PRIVATE layout: low limb at 0, high limb at 8, eight-byte alignment.
         return Ok(16);
@@ -225,7 +225,7 @@ pub(super) fn value_size(ty: &ir::Ty) -> Result<i32, String> {
         return Err("unresolved type has no native layout".into());
     }
     if let Some(element) = ty.descriptor_element() {
-        shared_slice_layout(element)?;
+        shared_slice_layout(element, budget)?;
         return Ok(2 * i32::from(SHARED_BYTE_SLICE_LAYOUT.word_bytes));
     }
     if trait_object_ref(ty).is_some() {
@@ -258,7 +258,7 @@ pub(super) fn value_size(ty: &ir::Ty) -> Result<i32, String> {
         }
         // Empty arrays still own an initialized dummy word. This rule also
         // determines the stride of arrays whose elements are empty arrays.
-        let stride = value_size(element)?;
+        let stride = value_size(element, budget)?;
         let len = i32::try_from(*len).map_err(|_| "array length exceeds private frame limit")?;
         return stride
             .checked_mul(len)
@@ -272,8 +272,9 @@ pub(super) fn value_size(ty: &ir::Ty) -> Result<i32, String> {
             .variants
             .iter()
             .try_fold(0_i32, |largest, variant| {
-                let size = variant.fields.iter().try_fold(0_i32, |size, field| {
-                    size.checked_add(value_size(&field.ty)?)
+                let fields = variant.fields.read(budget)?;
+                let size = fields.iter().try_fold(0_i32, |size, field| {
+                    size.checked_add(value_size(&field.ty, budget)?)
                         .filter(|size| *size <= MAX_FRAME_BYTES - 8)
                         .ok_or_else(|| "enum payload exceeds private frame limit".to_string())
                 })?;
@@ -284,9 +285,9 @@ pub(super) fn value_size(ty: &ir::Ty) -> Result<i32, String> {
     match ty.field_count() {
         Some(fields) => (0..fields).try_fold(0_i32, |size, index| {
             let field = ty
-                .field_ty(index)
+                .field_ty(index, budget)?
                 .ok_or("invalid checked aggregate field")?;
-            size.checked_add(value_size(field)?)
+            size.checked_add(value_size(&field, budget)?)
                 .filter(|size| *size <= MAX_FRAME_BYTES)
                 .ok_or_else(|| "aggregate exceeds private frame limit".to_string())
         }),
@@ -313,38 +314,46 @@ fn scalar_memory_bytes(ty: &ir::Ty) -> u32 {
     }
 }
 
-fn field_offset(ty: &ir::Ty, index: usize) -> Result<(i32, &ir::Ty), String> {
+fn field_offset(
+    ty: &ir::Ty,
+    index: usize,
+    budget: &ir::PlanBudget,
+) -> Result<(i32, ir::Ty), String> {
     let field = ty
-        .field_ty(index)
+        .field_ty(index, budget)?
         .ok_or("invalid checked aggregate field")?;
     let offset = (0..index).try_fold(0_i32, |offset, index| {
         let ty = ty
-            .field_ty(index)
+            .field_ty(index, budget)?
             .ok_or("invalid checked aggregate field")?;
         offset
-            .checked_add(value_size(ty)?)
+            .checked_add(value_size(&ty, budget)?)
             .ok_or_else(|| "aggregate layout too large".to_string())
     })?;
     Ok((offset, field))
 }
 
-fn array_offset(ty: &ir::Ty, index: usize) -> Result<(i32, &ir::Ty), String> {
+fn array_offset(
+    ty: &ir::Ty,
+    index: usize,
+    budget: &ir::PlanBudget,
+) -> Result<(i32, ir::Ty), String> {
     let ir::Ty::Array { element, len } = ty else {
         return Err("constant index requires array storage".into());
     };
     if index >= *len {
         return Err("constant array index out of bounds".into());
     }
-    let offset = value_size(element)?
+    let offset = value_size(element, budget)?
         .checked_mul(i32::try_from(index).map_err(|_| "array index exceeds private frame limit")?)
         .filter(|offset| *offset < MAX_FRAME_BYTES)
         .ok_or("array index offset exceeds private frame limit")?;
-    Ok((offset, element))
+    Ok((offset, element.as_ref().clone()))
 }
 
-fn allocate_value(frame: &mut i32, ty: &ir::Ty) -> Result<i32, String> {
+fn allocate_value(frame: &mut i32, ty: &ir::Ty, budget: &ir::PlanBudget) -> Result<i32, String> {
     *frame = frame
-        .checked_add(value_size(ty)?)
+        .checked_add(value_size(ty, budget)?)
         .filter(|size| *size <= MAX_FRAME_BYTES)
         .ok_or("function exceeds private frame limit")?;
     Ok(-*frame)
@@ -594,16 +603,16 @@ impl<'a> Emitter<'a> {
     // referent for a carrier that may have been reassigned at runtime.
     // Runtime index projections also use r10/r11 for descriptor metadata/base,
     // preserving the store RHS in r9 and the caller's index scratch in r8.
-    fn place_address(&mut self, place: &ir::Place) -> Result<&'a ir::Ty, String> {
+    fn place_address(&mut self, place: &ir::Place) -> Result<ir::Ty, String> {
         self.place_address_parts(place.local, &place.projection)
     }
     fn place_address_parts(
         &mut self,
         local: LocalId,
         projection: &[ir::Projection],
-    ) -> Result<&'a ir::Ty, String> {
+    ) -> Result<ir::Ty, String> {
         let mut offset = self.local_offset(local)?;
-        let mut ty: &'a ir::Ty = &self.function().locals[local.0].ty;
+        let mut ty = self.function().locals[local.0].ty.clone();
         let mut indirect_base = false;
         let mut slice_metadata = false;
         let mut projections = projection.iter();
@@ -613,7 +622,7 @@ impl<'a> Emitter<'a> {
                     let (ir::Ty::Ref { referent, .. }
                     | ir::Ty::RawPtr {
                         pointee: referent, ..
-                    }) = ty
+                    }) = &ty
                     else {
                         return Err("dereference requires reference storage".into());
                     };
@@ -638,13 +647,17 @@ impl<'a> Emitter<'a> {
                     self.bytes(&[0x48, 0x8b, 0x00]);
                     indirect_base = true;
                     offset = 0;
-                    ty = referent;
+                    ty = referent.as_ref().clone();
                     continue;
                 }
-                ir::Projection::Field(index) => field_offset(ty, *index)?,
-                ir::Projection::ConstantIndex(index) => array_offset(ty, *index)?,
+                ir::Projection::Field(index) => {
+                    field_offset(&ty, *index, self.concrete.facts().budget())?
+                }
+                ir::Projection::ConstantIndex(index) => {
+                    array_offset(&ty, *index, self.concrete.facts().budget())?
+                }
                 ir::Projection::DynamicIndex(index) => {
-                    let (element, len) = match ty {
+                    let (element, len) = match &ty {
                         ir::Ty::Array { element, len } => (element, Some(*len)),
                         ir::Ty::Slice { element } if slice_metadata => (element, None),
                         _ => {
@@ -675,17 +688,17 @@ impl<'a> Emitter<'a> {
                     }
                     self.trap_if(0x83); // jae, before scaling/address formation
                     self.bytes(&[0x48, 0x69, 0xc0]);
-                    self.i32(value_size(element)?);
+                    self.i32(value_size(element, self.concrete.facts().budget())?);
                     self.bytes(&[0x4c, 0x01, 0xd8]); // rax += r11
                     // The reference stores this address, not a recipe that
                     // reads the cursor again when the reference is used.
                     indirect_base = true;
                     offset = 0;
-                    ty = element;
+                    ty = element.as_ref().clone();
                     continue;
                 }
                 ir::Projection::Downcast(variant) => {
-                    let ir::Ty::Enum(enum_ty) = ty else {
+                    let ir::Ty::Enum(enum_ty) = &ty else {
                         return Err("downcast requires enum storage".into());
                     };
                     if variant.owner != enum_ty.def().id {
@@ -699,19 +712,14 @@ impl<'a> Emitter<'a> {
                     let Some(ir::Projection::Field(index)) = projections.next() else {
                         return Err("downcast must be followed by payload field".into());
                     };
-                    let field = definition
-                        .fields
-                        .get(*index)
-                        .ok_or("invalid downcast payload field")?;
-                    let offset =
-                        definition.fields[..*index]
-                            .iter()
-                            .try_fold(8_i32, |offset, field| {
-                                offset
-                                    .checked_add(value_size(&field.ty)?)
-                                    .ok_or_else(|| "enum projection offset too large".to_string())
-                            })?;
-                    (offset, &field.ty)
+                    let fields = definition.fields.read(self.concrete.facts().budget())?;
+                    let field = fields.get(*index).ok_or("invalid downcast payload field")?;
+                    let offset = fields[..*index].iter().try_fold(8_i32, |offset, field| {
+                        offset
+                            .checked_add(value_size(&field.ty, self.concrete.facts().budget())?)
+                            .ok_or_else(|| "enum projection offset too large".to_string())
+                    })?;
+                    (offset, field.ty.clone())
                 }
             };
             offset = offset
@@ -752,10 +760,10 @@ impl<'a> Emitter<'a> {
         }
     }
     fn store_value(&mut self, offset: i32, ty: &ir::Ty) -> Result<(), String> {
-        if indirect(ty)? {
+        if indirect(ty, self.concrete.facts().budget())? {
             self.bytes(&[0x48, 0x89, 0xc6, 0x48, 0x8d, 0xbd]);
             self.i32(offset);
-            self.copy_pointer_value(value_size(ty)?);
+            self.copy_pointer_value(value_size(ty, self.concrete.facts().budget())?);
             self.address(offset);
         } else {
             if let ir::Ty::Int(integer) = ty {
@@ -768,9 +776,9 @@ impl<'a> Emitter<'a> {
     }
     // rax holds the value/snapshot pointer and rdi the destination address.
     fn store_address_value(&mut self, ty: &ir::Ty) -> Result<(), String> {
-        if indirect(ty)? {
+        if indirect(ty, self.concrete.facts().budget())? {
             self.bytes(&[0x48, 0x89, 0xc6]);
-            self.copy_pointer_value(value_size(ty)?);
+            self.copy_pointer_value(value_size(ty, self.concrete.facts().budget())?);
             self.bytes(&[0x48, 0x89, 0xf8]);
         } else {
             if let ir::Ty::Int(integer) = ty {
@@ -894,7 +902,7 @@ impl<'a> Emitter<'a> {
     ) -> Result<(), String> {
         let stride = i32::try_from(layout.element_stride)
             .map_err(|_| "slice stride exceeds private layout limit")?;
-        if stride != value_size(element)? {
+        if stride != value_size(element, self.concrete.facts().budget())? {
             return Err("slice stride disagrees with exact array element layout".into());
         }
         self.bytes(&[0x48, 0x39, 0xd0]); // cmp rax, rdx
@@ -911,7 +919,7 @@ impl<'a> Emitter<'a> {
         self.trap_if(0x82);
         self.bytes(&[0x48, 0x01, 0xf0]); // rax += data
         self.trap_if(0x82); // jc: pointer element overflow
-        if indirect(element)? {
+        if indirect(element, self.concrete.facts().budget())? {
             // No borrowed element address escapes as a value: materialize an
             // independent full wide/aggregate snapshot before assignment.
             self.store_value(self.aggregate_scratch, element)?;
@@ -967,7 +975,8 @@ impl<'a> Emitter<'a> {
         } else {
             None
         };
-        let size = u64::try_from(value_size(concrete)?).map_err(|_| "vtable size")?;
+        let size = u64::try_from(value_size(concrete, self.concrete.facts().budget())?)
+            .map_err(|_| "vtable size")?;
         Ok(Vtable {
             identity: (concrete.clone(), object.clone()),
             drop,
@@ -1007,7 +1016,7 @@ impl<'a> Emitter<'a> {
             return Err("trait object operand requires a local carrier".into());
         };
         if !place.projection.is_empty()
-            || trait_object_ref(self.function().place_ty(place)?).is_none()
+            || trait_object_ref(&self.function().place_ty(place)?).is_none()
         {
             return Err("trait object operand requires a whole `&dyn` local".into());
         }
@@ -1044,7 +1053,7 @@ impl<'a> Emitter<'a> {
             DropGlue::None => {}
             DropGlue::Fields(fields) => {
                 for (index, field) in fields {
-                    let (offset, _) = field_offset(&owner, *index)?;
+                    let (offset, _) = field_offset(&owner, *index, self.concrete.facts().budget())?;
                     self.drop_at_offset(offset, field)?;
                 }
             }
@@ -1059,9 +1068,11 @@ impl<'a> Emitter<'a> {
                     let skip = self.jump(&[0x0f, 0x85]);
                     let definition = &enum_ty.def().variants[*variant];
                     for (index, field) in fields {
+                        let field_definitions =
+                            definition.fields.read(self.concrete.facts().budget())?;
                         let offset =
-                            definition.fields[..*index].iter().try_fold(8_i32, |o, f| {
-                                o.checked_add(value_size(&f.ty)?)
+                            field_definitions[..*index].iter().try_fold(8_i32, |o, f| {
+                                o.checked_add(value_size(&f.ty, self.concrete.facts().budget())?)
                                     .ok_or_else(|| "enum payload too large".to_string())
                             })?;
                         self.drop_at_offset(offset, field)?;
@@ -1070,7 +1081,61 @@ impl<'a> Emitter<'a> {
                     self.patch(skip, here)?;
                 }
             }
-            DropGlue::BoxedObject => {
+            DropGlue::RcValue(value) => {
+                let Some((ir::OwnedPointerKind::Rc, pointee)) = owner.owned_pointer_pointee()
+                else {
+                    return Err("Rc value cleanup requires exact owning carrier".into());
+                };
+                let bytes = value_size(pointee, self.concrete.facts().budget())?.max(8);
+                let data_offset = field_offset(&owner, 0, self.concrete.facts().budget())?.0;
+                let count_offset = field_offset(&owner, 1, self.concrete.facts().budget())?.0;
+                self.bytes(&[0x48, 0x8b, 0x04, 0x24]); // rax = owner carrier
+                self.bytes(&[0x48, 0x8b, 0x88]); // rcx = exact count allocation
+                self.i32(count_offset);
+                self.bytes(&[0x48, 0xff, 0x09]); // dec qword [rcx]
+                let shared = self.jump(&[0x0f, 0x85]);
+                if let Some(value) = value {
+                    self.bytes(&[0x48, 0x8b, 0x80]); // rax = original T allocation
+                    self.i32(data_offset);
+                    self.bytes(&[0x50]);
+                    self.drop_glue(value)?;
+                    self.bytes(&[0x48, 0x83, 0xc4, 8]);
+                }
+                for (offset, extent) in [
+                    (data_offset, bytes),
+                    (
+                        count_offset,
+                        value_size(
+                            &ir::Ty::Int(ir::IntTy::Usize),
+                            self.concrete.facts().budget(),
+                        )?,
+                    ),
+                ] {
+                    self.bytes(&[0x48, 0x8b, 0x04, 0x24]);
+                    self.bytes(&[0x48, 0x8b, 0xb8]); // rdi = exact allocation
+                    self.i32(offset);
+                    self.bytes(&[0xbe]); // esi = exact typed storage extent
+                    self.i32(extent);
+                    self.bytes(&[0xb8, 11, 0, 0, 0, 0x0f, 0x05]);
+                }
+                self.patch(shared, self.position())?;
+            }
+            DropGlue::BoxedObject | DropGlue::RcObject => {
+                let count_offset = if matches!(destructor.glue(), DropGlue::RcObject) {
+                    Some(field_offset(&owner, 1, self.concrete.facts().budget())?.0)
+                } else {
+                    None
+                };
+                // Shared owners release their value only at the last share.
+                let shared = if let Some(offset) = count_offset {
+                    self.bytes(&[0x48, 0x8b, 0x04, 0x24]); // rax = owner carrier
+                    self.bytes(&[0x48, 0x8b, 0x88]); // rcx = control allocation
+                    self.i32(offset);
+                    self.bytes(&[0x48, 0xff, 0x09]); // dec qword [rcx]
+                    Some(self.jump(&[0x0f, 0x85])) // remaining shares skip all cleanup
+                } else {
+                    None
+                };
                 // [rsp] = address of the owning (data, vtable) carrier.
                 self.bytes(&[0x48, 0x8b, 0x04, 0x24]); // mov rax, [rsp]
                 self.bytes(&[0x48, 0x8b, 0x48, 0x08]); // mov rcx, [rax+8] (vtable)
@@ -1095,9 +1160,23 @@ impl<'a> Emitter<'a> {
                 self.bytes(&[0x74, 0x07]); // jz +7 (null: moved out)
                 self.bytes(&[0xb8, 11, 0, 0, 0]); // mov eax, 11 (munmap)
                 self.bytes(&[0x0f, 0x05]); // syscall
+                if let Some(offset) = count_offset {
+                    self.bytes(&[0x48, 0x8b, 0x04, 0x24]); // reload live owner carrier
+                    self.bytes(&[0x48, 0x8b, 0xb8]); // rdi = exact count allocation
+                    self.i32(offset);
+                    self.bytes(&[0xbe]); // esi = typed usize storage stride
+                    self.i32(value_size(
+                        &ir::Ty::Int(ir::IntTy::Usize),
+                        self.concrete.facts().budget(),
+                    )?);
+                    self.bytes(&[0xb8, 11, 0, 0, 0, 0x0f, 0x05]); // munmap
+                }
+                if let Some(shared) = shared {
+                    self.patch(shared, self.position())?;
+                }
             }
             DropGlue::Array { len, element } => {
-                let stride = value_size(element.owner())?;
+                let stride = value_size(element.owner(), self.concrete.facts().budget())?;
                 self.bytes(&[0x6a, 0x00]); // push 0 (index)
                 let top = self.position();
                 self.bytes(&[0x48, 0x8b, 0x04, 0x24, 0x48, 0x3d]); // rax=idx; cmp rax, len
@@ -1207,7 +1286,8 @@ impl<'a> Emitter<'a> {
             match destructor.glue() {
                 super::traits::DropGlue::Fields(fields) => {
                     for (index, field) in fields {
-                        let (offset, _) = field_offset(&owner, *index)?;
+                        let (offset, _) =
+                            field_offset(&owner, *index, self.concrete.facts().budget())?;
                         self.bytes(&[0x48, 0x8b, 0x04, 0x24]);
                         if offset != 0 {
                             self.bytes(&[0x48, 0x05]);
@@ -1234,12 +1314,17 @@ impl<'a> Emitter<'a> {
                             owner: enum_ty.def().id,
                             index: *variant,
                         }));
+                        let field_definitions =
+                            definition.fields.read(self.concrete.facts().budget())?;
                         for (index, field) in fields {
-                            let offset = definition.fields[..*index].iter().try_fold(
+                            let offset = field_definitions[..*index].iter().try_fold(
                                 8_i32,
                                 |offset, field| {
                                     offset
-                                        .checked_add(value_size(&field.ty)?)
+                                        .checked_add(value_size(
+                                            &field.ty,
+                                            self.concrete.facts().budget(),
+                                        )?)
                                         .ok_or_else(|| "enum payload too large".to_string())
                                 },
                             )?;
@@ -1270,8 +1355,11 @@ impl<'a> Emitter<'a> {
         // dereference's CURRENT carrier only after that evaluation/snapshot.
         self.bytes(&[0x49, 0x89, 0xc1]); // r9 = RHS
         let ty = self.place_address(place)?;
+        let ty = &ty;
         self.bytes(&[0x48, 0x89, 0xc7, 0x4c, 0x89, 0xc8]);
-        if place.projection.contains(&ir::Projection::Deref) && !indirect(ty)? {
+        if place.projection.contains(&ir::Projection::Deref)
+            && !indirect(ty, self.concrete.facts().budget())?
+        {
             // Heap storage is byte-addressed, unlike private eight-byte local
             // carriers. Never overwrite adjacent bytes or a mapping boundary.
             match scalar_memory_bytes(ty) {
@@ -1341,7 +1429,8 @@ impl<'a> Emitter<'a> {
     // so returning a non-Copy aggregate must not invent a Copy operand.
     fn load_place(&mut self, place: &ir::Place) -> Result<(), String> {
         let ty = self.place_address(place)?;
-        if !indirect(ty)? {
+        let ty = &ty;
+        if !indirect(ty, self.concrete.facts().budget())? {
             let dereferenced = place.projection.contains(&ir::Projection::Deref);
             match if dereferenced {
                 scalar_memory_bytes(ty)
@@ -1359,11 +1448,7 @@ impl<'a> Emitter<'a> {
         }
         Ok(())
     }
-    fn index_address(
-        &mut self,
-        array: &ir::Place,
-        index: &cfg::Operand,
-    ) -> Result<&'a ir::Ty, String> {
+    fn index_address(&mut self, array: &ir::Place, index: &cfg::Operand) -> Result<ir::Ty, String> {
         let ty = self.function().indexed_array_place_ty(array)?;
         if let ir::Ty::Slice { element } = ty {
             return self.slice_place_index_address(array, index, element);
@@ -1378,17 +1463,17 @@ impl<'a> Emitter<'a> {
         // Read the full unsigned index and reject it before scaling or forming
         // any element address. The array length cap is not an index range cap.
         self.bytes(&[0x48, 0xba]); // preserve exact length for a cold bounds diagnostic
-        self.bytes(&(*len as u64).to_le_bytes());
+        self.bytes(&(len as u64).to_le_bytes());
         self.bytes(&[0x48, 0x39, 0xd0]);
         self.bounds_trap();
-        if *len != 0 {
+        if len != 0 {
             self.bytes(&[0x48, 0x69, 0xc0]); // rax *= physical element stride
-            self.i32(value_size(element)?);
+            self.i32(value_size(&element, self.concrete.facts().budget())?);
             self.bytes(&[0x49, 0x89, 0xc0]); // r8 = checked byte offset
             self.place_address(array)?;
             self.bytes(&[0x4c, 0x01, 0xc0]);
         }
-        Ok(element)
+        Ok(element.as_ref().clone())
     }
     /// Element address of `(*s)[index]` for a slice carrier place `*s`
     /// (MUTABLE-SLICES.md). Snapshots the carrier's data and len words once,
@@ -1399,15 +1484,15 @@ impl<'a> Emitter<'a> {
         &mut self,
         array: &ir::Place,
         index: &cfg::Operand,
-        element: &'a ir::Ty,
-    ) -> Result<&'a ir::Ty, String> {
+        element: std::sync::Arc<ir::Ty>,
+    ) -> Result<ir::Ty, String> {
         let Some((ir::Projection::Deref, carrier)) = array.projection.split_last() else {
             return Err("runtime slice index requires a dereferenced slice carrier".into());
         };
         if self.function().operand_ty(index)? != ir::Ty::Int(ir::IntTy::Usize) {
             return Err("runtime index requires genuine usize operand".into());
         }
-        let stride = value_size(element)?;
+        let stride = value_size(&element, self.concrete.facts().budget())?;
         self.operand(index)?;
         self.bytes(&[0x49, 0x89, 0xc0]); // r8 = index
         // rax = address of the two-word carrier (data at +0, len at +8).
@@ -1421,7 +1506,7 @@ impl<'a> Emitter<'a> {
         self.bytes(&[0x48, 0x69, 0xc0]);
         self.i32(stride); // rax *= stride
         self.bytes(&[0x4c, 0x01, 0xd8]); // rax += r11
-        Ok(element)
+        Ok(element.as_ref().clone())
     }
     fn enum_variant(
         &mut self,
@@ -1447,7 +1532,7 @@ impl<'a> Emitter<'a> {
         // before any operand is stored. CFG lowering snapshots operands before
         // construction, so this scratch cannot alias a constructor input.
         let scratch = self.aggregate_scratch;
-        let size = value_size(&ir::Ty::Enum(ty.clone()))?;
+        let size = value_size(&ir::Ty::Enum(ty.clone()), self.concrete.facts().budget())?;
         self.immediate(0);
         for field in (0..size).step_by(8) {
             self.bytes(&[0x48, 0x89, 0x85]);
@@ -1462,11 +1547,12 @@ impl<'a> Emitter<'a> {
         let mut offset = scratch
             .checked_add(8)
             .ok_or("enum payload offset too large")?;
-        for (operand, field) in fields.iter().zip(definition.fields.iter()) {
+        let field_definitions = definition.fields.read(self.concrete.facts().budget())?;
+        for (operand, field) in fields.iter().zip(field_definitions.iter()) {
             self.operand(operand)?;
             self.store_value(offset, &field.ty)?;
             offset = offset
-                .checked_add(value_size(&field.ty)?)
+                .checked_add(value_size(&field.ty, self.concrete.facts().budget())?)
                 .ok_or("enum payload offset too large")?;
         }
         self.address(scratch);
@@ -1476,7 +1562,7 @@ impl<'a> Emitter<'a> {
         let ir::Ty::Array { element, len } = ty else {
             return Err("repeat requires array storage".into());
         };
-        value_size(ty)?;
+        value_size(ty, self.concrete.facts().budget())?;
         // The CFG operand is a stable source snapshot. Transport it once even
         // for a zero-length repeat, without inventing another semantic Copy.
         self.operand(value)?;
@@ -1486,12 +1572,12 @@ impl<'a> Emitter<'a> {
         } else {
             self.bytes(&[0x48, 0x8d, 0xbd]); // rdi = backing destination
             self.i32(self.aggregate_scratch);
-            if indirect(element)? {
+            if indirect(element, self.concrete.facts().budget())? {
                 self.bytes(&[0x48, 0x89, 0xc2, 0x41, 0xb8]); // rdx = source, r8d = len
                 self.i32(i32::try_from(*len).map_err(|_| "repeat length exceeds limit")?);
                 let again = self.position();
                 self.bytes(&[0x48, 0x89, 0xd6, 0xb9]); // rsi = source, ecx = stride words
-                self.i32(value_size(element)? / 8);
+                self.i32(value_size(element, self.concrete.facts().budget())? / 8);
                 self.bytes(&[0xfc, 0xf3, 0x48, 0xa5]); // cld; rep movsq
                 self.bytes(&[0x49, 0xff, 0xc8]); // dec r8
                 let more = self.jump(&[0x0f, 0x85]);
@@ -1913,8 +1999,11 @@ impl<'a> Emitter<'a> {
     /// Exact thin `&'static [u8; N]` pointer into immutable program data.
     fn byte_string_literal(&mut self, data: &[u8]) -> Result<(), String> {
         let budget = self.concrete.facts().budget().clone();
-        let stride = usize::try_from(value_size(&ir::Ty::Int(ir::IntTy::U8))?)
-            .map_err(|_| "invalid byte element layout")?;
+        let stride = usize::try_from(value_size(
+            &ir::Ty::Int(ir::IntTy::U8),
+            self.concrete.facts().budget(),
+        )?)
+        .map_err(|_| "invalid byte element layout")?;
         let size = data
             .len()
             .checked_mul(stride)
@@ -1941,8 +2030,11 @@ impl<'a> Emitter<'a> {
     /// layout as byte string literals. Only the backend materializes storage.
     fn byte_repeat_literal(&mut self, byte: u8, len: usize) -> Result<(), String> {
         let budget = self.concrete.facts().budget().clone();
-        let stride = usize::try_from(value_size(&ir::Ty::Int(ir::IntTy::U8))?)
-            .map_err(|_| "invalid byte element layout")?;
+        let stride = usize::try_from(value_size(
+            &ir::Ty::Int(ir::IntTy::U8),
+            self.concrete.facts().budget(),
+        )?)
+        .map_err(|_| "invalid byte element layout")?;
         if len > ir::MAX_ARRAY_TYPE_LEN {
             return Err("byte repeat exceeds static data limit".into());
         }
@@ -2636,7 +2728,7 @@ impl Emitter<'_> {
                 }
                 let ty = ir::raw_slice_ty(*kind, &self.function().operand_ty(&args[0])?)?;
                 let (_, element) = ty.slice_ref_element().ok_or("raw slice result invariant")?;
-                let _ = shared_slice_layout(element)?;
+                let _ = shared_slice_layout(element, self.concrete.facts().budget())?;
                 if self.function().operand_ty(&args[1])? != ir::Ty::Int(ir::IntTy::Usize) {
                     return Err("raw slice length must be usize".into());
                 }
@@ -2752,7 +2844,7 @@ impl Emitter<'_> {
                             local: site.place.local,
                             projection: carrier.to_vec(),
                         })?;
-                        trait_object_ref(carrier).is_some()
+                        trait_object_ref(&carrier).is_some()
                             || carrier.slice_ref_element().is_some()
                             || carrier.is_shared_str()
                     }
@@ -2769,7 +2861,8 @@ impl Emitter<'_> {
             }
             cfg::Rvalue::IndexCopy { array, index } => {
                 let element = self.index_address(array, index)?;
-                if !indirect(element)? {
+                let element = &element;
+                if !indirect(element, self.concrete.facts().budget())? {
                     self.bytes(&[0x48, 0x8b, 0x00]);
                     if let ir::Ty::Int(integer) = element {
                         self.normalize_integer(*integer);
@@ -2873,16 +2966,16 @@ impl Emitter<'_> {
                 }
                 for (index, operand) in fields.iter().enumerate() {
                     let (field, field_ty) = if matches!(ty, ir::Ty::Array { .. }) {
-                        array_offset(ty, index)?
+                        array_offset(ty, index, self.concrete.facts().budget())?
                     } else {
-                        field_offset(ty, index)?
+                        field_offset(ty, index, self.concrete.facts().budget())?
                     };
                     self.operand(operand)?;
                     let offset = self
                         .aggregate_scratch
                         .checked_add(field)
                         .ok_or("aggregate offset too large")?;
-                    self.store_value(offset, field_ty)?;
+                    self.store_value(offset, &field_ty)?;
                 }
                 self.address(self.aggregate_scratch);
             }
@@ -2907,26 +3000,41 @@ impl Emitter<'_> {
                 object,
                 boxed,
             } => {
-                // The operand is a thin `&T`/`&mut T` (rax = data pointer), or
-                // an owning `Box<T>` (rax = address of its one pointer word).
+                // A borrowed operand is a thin data pointer. An owning operand
+                // addresses its exact carrier, including an Rc control pointer.
                 let source = self.function().operand_ty(reference)?;
+                let owner_kind = source.owned_pointer_pointee().map(|(kind, _)| kind);
                 let referent = if boxed.is_some() {
                     source
-                        .owned_box_pointee()
-                        .cloned()
-                        .ok_or("box unsizing requires an owning Box operand")?
+                        .owned_pointer_pointee()
+                        .map(|(_, pointee)| pointee.clone())
+                        .ok_or("owning unsizing requires an exact owning operand")?
                 } else {
-                    let ir::Ty::Ref { referent, .. } = source else {
+                    let ir::Ty::Ref { referent, .. } = &source else {
                         return Err("trait object unsizing requires a reference operand".into());
                     };
                     referent.as_ref().clone()
                 };
                 let vtable = self.vtable(&referent, object)?;
                 self.operand(reference)?;
-                if boxed.is_some() {
-                    self.bytes(&[0x48, 0x8b, 0x00]); // rax = box data pointer
-                }
                 let base = self.aggregate_scratch;
+                if owner_kind == Some(ir::OwnedPointerKind::Rc) && boxed.is_some() {
+                    let target = boxed.as_deref().ok_or("Rc unsize target")?;
+                    let (source_count, _) =
+                        field_offset(&source, 1, self.concrete.facts().budget())?;
+                    let (target_count, _) =
+                        field_offset(target, 1, self.concrete.facts().budget())?;
+                    self.bytes(&[0x48, 0x8b, 0x88]); // rcx = source count allocation
+                    self.i32(source_count);
+                    self.bytes(&[0x48, 0x89, 0x8d]); // retain exact control pointer
+                    self.i32(base.checked_add(target_count).ok_or("Rc carrier offset")?);
+                }
+                if boxed.is_some() {
+                    let (data_offset, _) =
+                        field_offset(&source, 0, self.concrete.facts().budget())?;
+                    self.bytes(&[0x48, 0x8b, 0x80]); // rax = source data pointer
+                    self.i32(data_offset);
+                }
                 self.bytes(&[0x48, 0x89, 0x85]); // mov [rbp+base], rax (data)
                 self.i32(base);
                 self.bytes(&[0x48, 0xb8]); // movabs rax, vtable
@@ -2944,7 +3052,7 @@ impl Emitter<'_> {
                 let (_, element, len) = source
                     .array_ref_element_len()
                     .ok_or("array-to-slice requires &[T; N] or &mut [T; N]")?;
-                let layout = shared_slice_layout(element)?;
+                let layout = shared_slice_layout(element, self.concrete.facts().budget())?;
                 self.operand(reference)?;
                 self.array_to_slice(layout, self.aggregate_scratch, len)?;
             }
@@ -2954,7 +3062,7 @@ impl Emitter<'_> {
                 let element = source
                     .mut_slice_element()
                     .ok_or("slice pointer input invariant")?;
-                let layout = shared_slice_layout(element)?;
+                let layout = shared_slice_layout(element, self.concrete.facts().budget())?;
                 self.slice_operand(slice)?;
                 self.load_word(0, 0, layout.data_offset);
             }
@@ -2972,7 +3080,7 @@ impl Emitter<'_> {
                 let (_, element) = slice_ty
                     .slice_ref_element()
                     .ok_or("subslice requires a slice reference")?;
-                let layout = shared_slice_layout(element)?;
+                let layout = shared_slice_layout(element, self.concrete.facts().budget())?;
                 for bound in std::iter::once(start).chain(end.iter()) {
                     if self.function().operand_ty(bound)? != ir::Ty::Int(ir::IntTy::Usize) {
                         return Err("subslice bound requires genuine usize operand".into());
@@ -3006,7 +3114,7 @@ impl Emitter<'_> {
                 self.trap_if(0x82); // jb: end < start
                 let stride = i32::try_from(layout.element_stride)
                     .map_err(|_| "slice stride exceeds private layout limit")?;
-                if stride != value_size(element)? {
+                if stride != value_size(element, self.concrete.facts().budget())? {
                     return Err("slice stride disagrees with exact array element layout".into());
                 }
                 self.bytes(&[0x4c, 0x29, 0xc1]); // sub rcx, r8 -> new len
@@ -3040,7 +3148,7 @@ impl Emitter<'_> {
                 let element = slice_ty
                     .shared_slice_element()
                     .ok_or("slice index requires exactly shared &[T]")?;
-                let layout = shared_slice_layout(element)?;
+                let layout = shared_slice_layout(element, self.concrete.facts().budget())?;
                 self.slice_operand(slice)?;
                 self.snapshot_slice(layout);
                 // Index transport clobbers only rax: a constant immediate or a
@@ -3071,6 +3179,7 @@ impl Emitter<'_> {
                 value,
             } => {
                 let element = self.index_address(array, index)?;
+                let element = &element;
                 self.bytes(&[0x49, 0x89, 0xc1]); // r9 = checked destination
                 self.operand(value)?;
                 self.bytes(&[0x4c, 0x89, 0xcf]);
@@ -3083,6 +3192,7 @@ impl Emitter<'_> {
                 op,
             } => {
                 let element = self.index_address(array, index)?;
+                let element = &element;
                 if let (ir::Ty::Int(integer), ir::Ty::Int(rhs)) =
                     (element, self.function().operand_ty(value)?)
                     && (integer.bits() == 128 || rhs.bits() == 128)
@@ -3315,12 +3425,12 @@ impl Emitter<'_> {
                 if args.len() != signature.params.len() {
                     return Err("call argument count does not match signature".into());
                 }
-                let mut words = parameter_words(&signature.params)?;
+                let mut words = parameter_words(&signature.params, self.concrete.facts().budget())?;
                 if virtual_slot.is_some() {
                     // The callee's receiver is a thin `&Self`: one word.
                     words[0] = 1;
                 }
-                let aggregate = result_indirect(&signature.result)?;
+                let aggregate = result_indirect(&signature.result, self.concrete.facts().budget())?;
                 let cleanup = call_cleanup_bytes(&words, aggregate)?;
                 // Left-to-right evaluation. A two-word shared slice
                 // operand leaves its carrier address in rax; both words are
@@ -3474,6 +3584,7 @@ fn emit_native_cfg(
     overflow_checks: bool,
 ) -> Result<Object, String> {
     let function = concrete.function().as_ref();
+    let budget = concrete.facts().budget();
     let validate_slice = |ty: &ir::Ty| -> Result<(), String> {
         if let Some((_, element)) = ty.slice_ref_element() {
             // Admission includes the exact borrow kind and carrier boundary.
@@ -3485,7 +3596,7 @@ fn emit_native_cfg(
                 ir::FactsCtx::Validated(concrete.facts()),
                 concrete.facts().budget(),
             )?;
-            shared_slice_layout(element)?;
+            shared_slice_layout(element, budget)?;
         }
         Ok(())
     };
@@ -3516,7 +3627,7 @@ fn emit_native_cfg(
                 .ok_or_else(|| "invalid CFG parameter local".to_string())
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let param_words = parameter_words(&param_tys)?;
+    let param_words = parameter_words(&param_tys, budget)?;
     let mut needs_wide = function.locals.iter().any(|local| wide_integer(&local.ty));
     let mut max_wide_arguments = 0_i32;
     for block in &function.blocks {
@@ -3526,7 +3637,7 @@ fn emit_native_cfg(
             // not a second proof with the weaker FactsCtx::Concrete fallback.
             needs_wide |= match operand {
                 cfg::Operand::Copy(place) | cfg::Operand::Move(place) => {
-                    wide_integer(function.place_ty(place)?)
+                    wide_integer(&function.place_ty(place)?)
                 }
                 cfg::Operand::Constant(_) => wide_integer(&function.operand_ty(operand)?),
             };
@@ -3540,7 +3651,7 @@ fn emit_native_cfg(
         // its only operand is narrow. Do not rely on a lowering temporary.
         for statement in &block.statements {
             if let cfg::Statement::Assign { destination, .. } = &statement.value {
-                needs_wide |= wide_integer(function.place_ty(destination)?);
+                needs_wide |= wide_integer(&function.place_ty(destination)?);
             }
         }
         if let cfg::Terminator::Call { signature, .. } = &block.terminator.value {
@@ -3557,7 +3668,7 @@ fn emit_native_cfg(
     let locals = function
         .locals
         .iter()
-        .map(|local| allocate_value(&mut frame_bytes, &local.ty))
+        .map(|local| allocate_value(&mut frame_bytes, &local.ty, budget))
         .collect::<Result<Vec<_>, _>>()?;
     let mut drop_flags = Vec::with_capacity(function.locals.len());
     for local in &function.locals {
@@ -3570,7 +3681,7 @@ fn emit_native_cfg(
                 super::traits::NormalDropPlan::Destructor(_)
             );
         drop_flags.push(if needs_drop {
-            Some(allocate_value(&mut frame_bytes, &ir::Ty::Bool)?)
+            Some(allocate_value(&mut frame_bytes, &ir::Ty::Bool, budget)?)
         } else {
             None
         });
@@ -3595,12 +3706,12 @@ fn emit_native_cfg(
                 let needs = matches!(
                     concrete
                         .facts()
-                        .normal_drop_plan(ty)
+                        .normal_drop_plan(&ty)
                         .map_err(|e| e.into_legacy_diagnostic(concrete.facts().budget()))?,
                     super::traits::NormalDropPlan::Destructor(_)
                 );
                 if needs {
-                    let at = allocate_value(&mut frame_bytes, &ir::Ty::Bool)?;
+                    let at = allocate_value(&mut frame_bytes, &ir::Ty::Bool, budget)?;
                     path_flags.push((place.local, place.projection.clone(), at));
                 }
             }
@@ -3619,9 +3730,11 @@ fn emit_native_cfg(
             if let cfg::Statement::Assign { value, .. } = &statement.value {
                 let size = match value {
                     cfg::Rvalue::Aggregate { ty, .. } | cfg::Rvalue::Repeat { ty, .. } => {
-                        value_size(ty)?
+                        value_size(ty, budget)?
                     }
-                    cfg::Rvalue::EnumVariant { ty, .. } => value_size(&ir::Ty::Enum(ty.clone()))?,
+                    cfg::Rvalue::EnumVariant { ty, .. } => {
+                        value_size(&ir::Ty::Enum(ty.clone()), budget)?
+                    }
                     cfg::Rvalue::ArrayToSlice { .. }
                     | cfg::Rvalue::RawSlice { .. }
                     | cfg::Rvalue::Subslice { .. }
@@ -3633,8 +3746,8 @@ fn emit_native_cfg(
                         let element = slice_ty
                             .shared_slice_element()
                             .ok_or("slice index requires exactly shared &[T]")?;
-                        if indirect(element)? {
-                            value_size(element)?
+                        if indirect(element, budget)? {
+                            value_size(element, budget)?
                         } else {
                             0
                         }
@@ -3666,8 +3779,8 @@ fn emit_native_cfg(
         .filter(|size| *size <= MAX_FRAME_BYTES)
         .ok_or("function exceeds private frame limit")?;
     let vtable_scratch = -frame_bytes;
-    let aggregate_result = result_indirect(&function.result)?;
-    let result_size = value_size(&function.result)?;
+    let aggregate_result = result_indirect(&function.result, budget)?;
+    let result_size = value_size(&function.result, budget)?;
     let param_offsets = argument_slot_offsets(&param_words, aggregate_result)?;
     let mut emitter = Emitter {
         overflow_checks,
@@ -4616,16 +4729,30 @@ mod tests {
 
     #[test]
     fn char_private_layout_transport_and_unsigned_comparison_encoding() {
-        assert_eq!(value_size(&ir::Ty::Char), Ok(8));
-        assert_eq!(indirect(&ir::Ty::Char), Ok(false));
-        assert_eq!(result_indirect(&ir::Ty::Char), Ok(false));
-        assert_eq!(argument_words(&ir::Ty::Char), Ok(1));
+        assert_eq!(value_size(&ir::Ty::Char, &ir::PlanBudget::default()), Ok(8));
+        assert_eq!(
+            indirect(&ir::Ty::Char, &ir::PlanBudget::default()),
+            Ok(false)
+        );
+        assert_eq!(
+            result_indirect(&ir::Ty::Char, &ir::PlanBudget::default()),
+            Ok(false)
+        );
+        assert_eq!(
+            argument_words(&ir::Ty::Char, &ir::PlanBudget::default()),
+            Ok(1)
+        );
         let array = ir::Ty::Array {
             element: std::sync::Arc::new(ir::Ty::Char),
             len: 3,
         };
-        assert_eq!(value_size(&array), Ok(24));
-        assert_eq!(array_offset(&array, 2).unwrap().0, 16);
+        assert_eq!(value_size(&array, &ir::PlanBudget::default()), Ok(24));
+        assert_eq!(
+            array_offset(&array, 2, &ir::PlanBudget::default())
+                .unwrap()
+                .0,
+            16
+        );
         let concrete = unit_concrete_fixture();
         let resolve = |_: &ir::CallTarget| -> Result<String, String> { Err("no calls".into()) };
         let mut emitter = Emitter {
@@ -5006,29 +5133,47 @@ mod tests {
     fn wide_integer_private_layout_uses_indirect_scalar_storage() {
         for integer in [ir::IntTy::I128, ir::IntTy::U128] {
             let ty = ir::Ty::Int(integer);
-            assert_eq!(value_size(&ty), Ok(16));
-            assert_eq!(indirect(&ty), Ok(true));
-            assert_eq!(result_indirect(&ty), Ok(true));
-            assert_eq!(argument_words(&ty), Ok(1));
+            assert_eq!(value_size(&ty, &ir::PlanBudget::default()), Ok(16));
+            assert_eq!(indirect(&ty, &ir::PlanBudget::default()), Ok(true));
+            assert_eq!(result_indirect(&ty, &ir::PlanBudget::default()), Ok(true));
+            assert_eq!(argument_words(&ty, &ir::PlanBudget::default()), Ok(1));
             let reference = ir::Ty::Ref {
                 kind: ir::BorrowKind::Shared,
                 referent: std::sync::Arc::new(ty.clone()),
             };
-            assert_eq!(value_size(&reference), Ok(8));
-            assert_eq!(indirect(&reference), Ok(false));
+            assert_eq!(value_size(&reference, &ir::PlanBudget::default()), Ok(8));
+            assert_eq!(indirect(&reference, &ir::PlanBudget::default()), Ok(false));
             let tuple =
                 ir::Ty::Tuple(vec![ir::Ty::Int(ir::IntTy::U8), ty.clone(), ir::Ty::Bool].into());
-            assert_eq!(value_size(&tuple), Ok(32));
-            assert_eq!(field_offset(&tuple, 1).unwrap().0, 8);
-            assert_eq!(field_offset(&tuple, 2).unwrap().0, 24);
+            assert_eq!(value_size(&tuple, &ir::PlanBudget::default()), Ok(32));
+            assert_eq!(
+                field_offset(&tuple, 1, &ir::PlanBudget::default())
+                    .unwrap()
+                    .0,
+                8
+            );
+            assert_eq!(
+                field_offset(&tuple, 2, &ir::PlanBudget::default())
+                    .unwrap()
+                    .0,
+                24
+            );
             let array = ir::Ty::Array {
                 element: std::sync::Arc::new(ty),
                 len: 3,
             };
-            assert_eq!(value_size(&array), Ok(48));
-            assert_eq!(array_offset(&array, 2).unwrap().0, 32);
+            assert_eq!(value_size(&array, &ir::PlanBudget::default()), Ok(48));
+            assert_eq!(
+                array_offset(&array, 2, &ir::PlanBudget::default())
+                    .unwrap()
+                    .0,
+                32
+            );
             let mut frame = 8;
-            assert_eq!(allocate_value(&mut frame, &array), Ok(-56));
+            assert_eq!(
+                allocate_value(&mut frame, &array, &ir::PlanBudget::default()),
+                Ok(-56)
+            );
         }
     }
 
@@ -5193,7 +5338,11 @@ mod tests {
             u8_array.clone(),
             ir::Ty::Tuple(vec![ir::Ty::Bool, ir::Ty::Unit].into()),
         ] {
-            assert_eq!(argument_words(&ty), Ok(1), "{ty:?}");
+            assert_eq!(
+                argument_words(&ty, &ir::PlanBudget::default()),
+                Ok(1),
+                "{ty:?}"
+            );
         }
         // Exactly the legacy one-word-per-parameter formula for every arity.
         for sret in [false, true] {
@@ -5223,8 +5372,17 @@ mod tests {
         );
         assert!(call_cleanup_bytes(&[2; MAX_ARGS + 1], false).is_err());
         assert!(argument_slot_offsets(&[usize::MAX, 1], false).is_err());
-        assert!(parameter_words(&vec![ir::Ty::Bool; MAX_ARGS + 1]).is_err());
-        assert_eq!(parameter_words(&[ir::Ty::Bool, u8_array]), Ok(vec![1, 1]));
+        assert!(
+            parameter_words(
+                &vec![ir::Ty::Bool; MAX_ARGS + 1],
+                &ir::PlanBudget::default()
+            )
+            .is_err()
+        );
+        assert_eq!(
+            parameter_words(&[ir::Ty::Bool, u8_array], &ir::PlanBudget::default()),
+            Ok(vec![1, 1])
+        );
     }
 
     /// Run hand-emitted helper code as `main`, exiting with eax.
@@ -5326,25 +5484,33 @@ mod tests {
                 len: 0,
             },
         ] {
-            let layout = shared_slice_layout(&element).unwrap();
-            assert_eq!(layout.element_stride as i32, value_size(&element).unwrap());
+            let layout = shared_slice_layout(&element, &ir::PlanBudget::default()).unwrap();
+            assert_eq!(
+                layout.element_stride as i32,
+                value_size(&element, &ir::PlanBudget::default()).unwrap()
+            );
             let slice = ir::Ty::Ref {
                 kind: ir::BorrowKind::Shared,
                 referent: std::sync::Arc::new(ir::Ty::Slice {
                     element: std::sync::Arc::new(element.clone()),
                 }),
             };
-            assert_eq!(argument_words(&slice), Ok(2));
-            assert_eq!(value_size(&slice), Ok(16));
-            assert_eq!(indirect(&slice), Ok(true));
-            assert_eq!(result_indirect(&slice), Ok(true));
+            assert_eq!(argument_words(&slice, &ir::PlanBudget::default()), Ok(2));
+            assert_eq!(value_size(&slice, &ir::PlanBudget::default()), Ok(16));
+            assert_eq!(indirect(&slice, &ir::PlanBudget::default()), Ok(true));
+            assert_eq!(
+                result_indirect(&slice, &ir::PlanBudget::default()),
+                Ok(true)
+            );
             assert!(!slice.shared_byte_slice());
             let array = ir::Ty::Array {
                 element: std::sync::Arc::new(element),
                 len: 2,
             };
             assert_eq!(
-                array_offset(&array, 1).unwrap().0,
+                array_offset(&array, 1, &ir::PlanBudget::default())
+                    .unwrap()
+                    .0,
                 layout.element_stride as i32
             );
         }
@@ -5352,7 +5518,12 @@ mod tests {
             element: std::sync::Arc::new(ir::Ty::Int(ir::IntTy::U64)),
             len: 40,
         };
-        assert_eq!(shared_slice_layout(&large).unwrap().element_stride, 320);
+        assert_eq!(
+            shared_slice_layout(&large, &ir::PlanBudget::default())
+                .unwrap()
+                .element_stride,
+            320
+        );
         let parameter = ir::Ty::Param(ir::ParamId {
             owner: ir::BinderId {
                 declaration: ir::DeclId {
@@ -5362,7 +5533,7 @@ mod tests {
             },
             index: 0,
         });
-        assert!(shared_slice_layout(&parameter).is_err());
+        assert!(shared_slice_layout(&parameter, &ir::PlanBudget::default()).is_err());
     }
 
     // Physical helper control only, not a substitute for sealed source/CFG
@@ -5415,7 +5586,7 @@ mod tests {
         } else {
             e.address(-1024);
         }
-        let layout = shared_slice_layout(element).unwrap();
+        let layout = shared_slice_layout(element, &ir::PlanBudget::default()).unwrap();
         e.array_to_slice(layout, -32, usize::try_from(len).unwrap())
             .unwrap();
         e.snapshot_slice(layout);
@@ -5429,7 +5600,7 @@ mod tests {
             e.bytes(&[0x48, 0x89, 0x85]);
             e.i32(-1024 + i32::try_from(word).unwrap() * 8);
         }
-        if indirect(element).unwrap() {
+        if indirect(element, &ir::PlanBudget::default()).unwrap() {
             for (word, value) in expected.iter().enumerate() {
                 e.word(*value);
                 e.bytes(&[0x49, 0x39, 0x81]); // cmp [r9+disp32], rax
@@ -6073,8 +6244,16 @@ mod tests {
             },
             ir::Ty::Tuple(std::sync::Arc::from([ir::Ty::Bool, projection])),
         ] {
-            assert!(indirect(&ty).unwrap_err().contains("associated type"));
-            assert!(value_size(&ty).unwrap_err().contains("associated type"));
+            assert!(
+                indirect(&ty, &ir::PlanBudget::default())
+                    .unwrap_err()
+                    .contains("associated type")
+            );
+            assert!(
+                value_size(&ty, &ir::PlanBudget::default())
+                    .unwrap_err()
+                    .contains("associated type")
+            );
         }
     }
 
@@ -6087,9 +6266,13 @@ mod tests {
             },
             index: 0,
         });
-        assert!(indirect(&parameter).unwrap_err().contains("no native ABI"));
         assert!(
-            value_size(&parameter)
+            indirect(&parameter, &ir::PlanBudget::default())
+                .unwrap_err()
+                .contains("no native ABI")
+        );
+        assert!(
+            value_size(&parameter, &ir::PlanBudget::default())
                 .unwrap_err()
                 .contains("no native layout")
         );
@@ -7803,15 +7986,20 @@ mod tests {
             element: std::sync::Arc::new(ir::Ty::Int(ir::IntTy::I32)),
             len: 0,
         };
-        assert!(indirect(&empty).unwrap());
-        assert_eq!(value_size(&empty).unwrap(), 8);
-        assert!(array_offset(&empty, 0).is_err());
+        assert!(indirect(&empty, &ir::PlanBudget::default()).unwrap());
+        assert_eq!(value_size(&empty, &ir::PlanBudget::default()).unwrap(), 8);
+        assert!(array_offset(&empty, 0, &ir::PlanBudget::default()).is_err());
         let nested = ir::Ty::Array {
             element: std::sync::Arc::new(empty),
             len: 3,
         };
-        assert_eq!(value_size(&nested).unwrap(), 24);
-        assert_eq!(array_offset(&nested, 2).unwrap().0, 16);
+        assert_eq!(value_size(&nested, &ir::PlanBudget::default()).unwrap(), 24);
+        assert_eq!(
+            array_offset(&nested, 2, &ir::PlanBudget::default())
+                .unwrap()
+                .0,
+            16
+        );
     }
 
     #[test]
@@ -7847,7 +8035,11 @@ mod tests {
             }),
             len: 4096,
         };
-        assert!(value_size(&enormous).unwrap_err().contains("frame limit"));
+        assert!(
+            value_size(&enormous, &ir::PlanBudget::default())
+                .unwrap_err()
+                .contains("frame limit")
+        );
     }
 
     #[test]
@@ -8012,7 +8204,8 @@ mod tests {
             let object = emit_test_cfg(std::sync::Arc::clone(&modules), &function).unwrap();
             // The root follows the eight-byte unit return slot in the frame.
             // Aggregate moves address it but must never load its tag into eax.
-            let root_offset = -(8 + value_size(&ir::Ty::Enum(ty.clone())).unwrap());
+            let root_offset =
+                -(8 + value_size(&ir::Ty::Enum(ty.clone()), &ir::PlanBudget::default()).unwrap());
             let mut tag_load = vec![0x8b, 0x85];
             tag_load.extend_from_slice(&root_offset.to_le_bytes());
             assert!(
@@ -8070,8 +8263,11 @@ mod tests {
             ]
             .into(),
         });
-        assert!(indirect(&ir::Ty::Enum(ty.clone())).unwrap());
-        assert_eq!(value_size(&ir::Ty::Enum(ty.clone())).unwrap(), 32);
+        assert!(indirect(&ir::Ty::Enum(ty.clone()), &ir::PlanBudget::default()).unwrap());
+        assert_eq!(
+            value_size(&ir::Ty::Enum(ty.clone()), &ir::PlanBudget::default()).unwrap(),
+            32
+        );
         let concrete = unit_concrete_fixture();
         // This test exercises the private constructor emitter directly so it
         // can inspect inactive physical storage, which source Rust cannot read.
@@ -8953,18 +9149,23 @@ mod tests {
             ir::Ty::Bool,
             ir::Ty::Tuple(Arc::from([ir::Ty::Unit, ir::Ty::Int(ir::IntTy::I32)])),
         ]));
-        assert_eq!(value_size(&mixed).unwrap(), 24);
-        assert_eq!(field_offset(&mixed, 1).unwrap().0, 8);
+        assert_eq!(value_size(&mixed, &ir::PlanBudget::default()).unwrap(), 24);
+        assert_eq!(
+            field_offset(&mixed, 1, &ir::PlanBudget::default())
+                .unwrap()
+                .0,
+            8
+        );
         let mut frame = MAX_FRAME_BYTES - 8;
         assert_eq!(
-            allocate_value(&mut frame, &ir::Ty::Unit).unwrap(),
+            allocate_value(&mut frame, &ir::Ty::Unit, &ir::PlanBudget::default()).unwrap(),
             -MAX_FRAME_BYTES
         );
-        assert!(allocate_value(&mut frame, &ir::Ty::Bool).is_err());
+        assert!(allocate_value(&mut frame, &ir::Ty::Bool, &ir::PlanBudget::default()).is_err());
         let too_large = ir::Ty::Tuple(
             vec![ir::Ty::Int(ir::IntTy::I32); MAX_FRAME_BYTES as usize / 8 + 1].into(),
         );
-        assert!(value_size(&too_large).is_err());
+        assert!(value_size(&too_large, &ir::PlanBudget::default()).is_err());
         let checked = ir::CheckedFunction {
             runtime_sites: Default::default(),
             body_substitution: None,
@@ -9162,28 +9363,52 @@ mod tests {
         assert_ne!(ty, ir::Ty::Unit);
         assert!(!ty.is_copy());
         assert_eq!(ty.field_count(), Some(0));
-        assert_eq!(value_size(&ty), Ok(8));
-        assert_eq!(indirect(&ty), Ok(true));
-        assert_eq!(result_indirect(&ty), Ok(true));
-        assert_eq!(argument_words(&ty), Ok(1));
-        let words =
-            parameter_words(&[ty.clone(), ir::Ty::Int(ir::IntTy::I32), ty.clone()]).unwrap();
+        assert_eq!(value_size(&ty, &ir::PlanBudget::default()), Ok(8));
+        assert_eq!(indirect(&ty, &ir::PlanBudget::default()), Ok(true));
+        assert_eq!(result_indirect(&ty, &ir::PlanBudget::default()), Ok(true));
+        assert_eq!(argument_words(&ty, &ir::PlanBudget::default()), Ok(1));
+        let words = parameter_words(
+            &[ty.clone(), ir::Ty::Int(ir::IntTy::I32), ty.clone()],
+            &ir::PlanBudget::default(),
+        )
+        .unwrap();
         assert_eq!(words, vec![1, 1, 1]);
         assert_eq!(argument_slot_offsets(&words, true), Ok(vec![40, 32, 24]));
         assert_eq!(call_cleanup_bytes(&words, true), Ok(32));
         let mut frame = 8;
-        assert_eq!(allocate_value(&mut frame, &ty), Ok(-16));
-        assert_eq!(allocate_value(&mut frame, &ty), Ok(-24));
+        assert_eq!(
+            allocate_value(&mut frame, &ty, &ir::PlanBudget::default()),
+            Ok(-16)
+        );
+        assert_eq!(
+            allocate_value(&mut frame, &ty, &ir::PlanBudget::default()),
+            Ok(-24)
+        );
         let tuple = ir::Ty::Tuple(vec![ty.clone(), ir::Ty::Int(ir::IntTy::I32), ty.clone()].into());
-        assert_eq!(value_size(&tuple), Ok(24));
-        assert_eq!(field_offset(&tuple, 1).unwrap().0, 8);
-        assert_eq!(field_offset(&tuple, 2).unwrap().0, 16);
+        assert_eq!(value_size(&tuple, &ir::PlanBudget::default()), Ok(24));
+        assert_eq!(
+            field_offset(&tuple, 1, &ir::PlanBudget::default())
+                .unwrap()
+                .0,
+            8
+        );
+        assert_eq!(
+            field_offset(&tuple, 2, &ir::PlanBudget::default())
+                .unwrap()
+                .0,
+            16
+        );
         let array = ir::Ty::Array {
             element: std::sync::Arc::new(ty),
             len: 3,
         };
-        assert_eq!(value_size(&array), Ok(24));
-        assert_eq!(array_offset(&array, 2).unwrap().0, 16);
+        assert_eq!(value_size(&array, &ir::PlanBudget::default()), Ok(24));
+        assert_eq!(
+            array_offset(&array, 2, &ir::PlanBudget::default())
+                .unwrap()
+                .0,
+            16
+        );
         let object = emit_checked_fixture(&checked, &signatures, index).unwrap();
         assert!(
             object
@@ -9282,7 +9507,10 @@ mod tests {
         let index = authored_function(&p, "one");
         let checked = frontend::type_function_with_signatures(&p, index, &env).unwrap();
         assert_eq!(checked.result.field_count(), Some(1));
-        assert_eq!(value_size(&checked.result).unwrap(), 8);
+        assert_eq!(
+            value_size(&checked.result, &ir::PlanBudget::default()).unwrap(),
+            8
+        );
         let object = emit_checked_fixture(&checked, &env, index).unwrap();
         assert!(
             object

@@ -88,6 +88,7 @@ impl ValidatedTraitWorld {
             let substituted =
                 self.substitute_projected_schema(&schema, arguments, &self.empty.env)?;
             let context = ProofContext {
+                original: None,
                 predicates: &self.empty,
                 phase: FactsPhase::Closed,
             };
@@ -177,6 +178,7 @@ impl ValidatedTraitWorld {
             }
         }
         let context = ProofContext {
+            original: None,
             predicates: &self.empty,
             phase: FactsPhase::Schema,
         };
@@ -230,6 +232,7 @@ impl ValidatedTraitWorld {
             }
         }
         let context = ProofContext {
+            original: None,
             predicates: &self.empty,
             phase: FactsPhase::Schema,
         };
@@ -473,6 +476,7 @@ impl ValidatedTraitWorld {
                         world.validate_projected_dependency(
                             actual,
                             ProofContext {
+                                original: None,
                                 predicates: &world.empty,
                                 phase: FactsPhase::Schema,
                             },
@@ -561,7 +565,7 @@ impl ValidatedTraitWorld {
         let mut cursor = 0;
         match source {
             Ty::Struct(nominal) => {
-                for field in nominal.def().fields.iter() {
+                for field in nominal_fields(&nominal.def().fields, &self.budget)?.iter() {
                     walk(
                         self,
                         replays,
@@ -575,7 +579,7 @@ impl ValidatedTraitWorld {
             }
             Ty::Enum(nominal) => {
                 for variant in nominal.def().variants.iter() {
-                    for field in variant.fields.iter() {
+                    for field in nominal_fields(&variant.fields, &self.budget)?.iter() {
                         walk(
                             self,
                             replays,
@@ -649,6 +653,7 @@ impl ValidatedTraitWorld {
             item: original.item,
         };
         let context = ProofContext {
+            original: None,
             predicates: &self.empty,
             phase: FactsPhase::Schema,
         };
@@ -666,6 +671,7 @@ impl ValidatedTraitWorld {
             self.validate_projected_dependency(
                 dependency,
                 ProofContext {
+                    original: None,
                     predicates: &self.empty,
                     phase: FactsPhase::Schema,
                 },
@@ -991,5 +997,135 @@ mod tests {
                 .normalize_nominal_field_projection(&input, &absent)
                 .is_err()
         );
+    }
+}
+
+// Candidate-scoped source proof replay. This returns obligations, not a
+// successful recursive type or a provisional nominal read capability.
+impl ValidatedTraitWorld {
+    /// A completed closed component proves finite metadata without unfolding
+    /// recursive pointer fields. Its term language excludes unsized, open and
+    /// projected terms, so every admitted nominal is valid in each TypeUse.
+    pub(super) fn closed_component_type_height(&self, ty: &Ty) -> Result<Option<usize>> {
+        let (capability, id, declaration) = match ty {
+            Ty::Struct(n) => (n.realization(), n.def().id, n.def().source_decl),
+            Ty::Enum(n) => (n.realization(), n.def().id, n.def().source_decl),
+            _ => return Ok(None),
+        };
+        let Some(capability) = capability else {
+            return Ok(None);
+        };
+        let Some(height) = capability.component_metadata_height() else {
+            return Ok(None);
+        };
+        capability
+            .check_definition(ty)
+            .map_err(|error| FactsError::from_message(&self.budget, &error.to_string()))?;
+        if id.snapshot != self.registry || declaration.snapshot != self.registry {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "foreign nominal identity",
+            ));
+        }
+        validate_nominal_modules(ty, self.catalog.modules(), &self.budget)?;
+        capability
+            .replay(ty, self)
+            .map_err(|error| FactsError::from_message(&self.budget, &error.to_string()))?;
+        Ok(Some(height))
+    }
+
+    pub(in crate::compiler) fn symbolic_nominal_requirements(
+        &self,
+        declaration: DeclId,
+        proof: &NominalDeclarationProof,
+        source: &Ty,
+    ) -> Result<Vec<Ty>> {
+        self.replay_nominal_declaration(declaration, proof)?;
+        let index = match source {
+            Ty::Struct(n) => n.def().id.index,
+            Ty::Enum(n) => n.def().id.index,
+            _ => {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "symbolic source is not nominal",
+                ));
+            }
+        };
+        if !matches!(index, ir::NominalIndex::SourceSlot(_)) {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "symbolic source is not a source template",
+            ));
+        }
+        // Authenticate the source allocation/shape in its own exact binder.
+        // No closed recursive nominal is invented to make this validation pass.
+        self.schema
+            .validate_nominal(source, &proof.schema().env, &self.budget)?;
+        let (source_declaration, actuals) = match source {
+            Ty::Struct(n) => (n.def().source_decl, &n.def().type_args),
+            Ty::Enum(n) => (n.def().source_decl, &n.def().type_args),
+            _ => {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "symbolic source is not nominal",
+                ));
+            }
+        };
+        if source_declaration != declaration || actuals.len() != proof.schema().env.total_arity() {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "symbolic source declaration or binder changed",
+            ));
+        }
+        for (actual, parameter) in actuals.iter().zip(proof.schema().env.ordered_params()) {
+            if actual != &Ty::Param(parameter) {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "symbolic source binder order changed",
+                ));
+            }
+        }
+        if !proof.schema().projections.is_empty() {
+            return Err(FactsError::unsupported(
+                &self.budget,
+                "recursive symbolic projection obligations",
+            ));
+        }
+        let mut requirements = Vec::new();
+        for predicate in proof.schema().predicates.iter() {
+            charged(&self.budget, self.budget.charge_work(1))?;
+            let Predicate::Implements(goal) = predicate else {
+                return Err(FactsError::unsupported(
+                    &self.budget,
+                    "recursive symbolic equality obligation",
+                ));
+            };
+            if goal.declaration != self.catalog.id(CatalogItem::Sized) || !goal.args.is_empty() {
+                return Err(FactsError::unsupported(
+                    &self.budget,
+                    "recursive symbolic non-Sized obligation",
+                ));
+            }
+            push(&self.budget, &mut requirements, goal.self_ty.clone())?;
+        }
+        Ok(requirements)
+    }
+
+    pub(in crate::compiler) fn require_symbolic_external_sized(&self, ty: &Ty) -> Result<()> {
+        let predicate = Predicate::Implements(TraitRef {
+            declaration: self.catalog.id(CatalogItem::Sized),
+            self_ty: ty.clone(),
+            args: Arc::from([]),
+        });
+        self.require_in(
+            &predicate,
+            ProofContext {
+                original: None,
+                predicates: &self.empty,
+                phase: FactsPhase::Closed,
+            },
+            &mut ProofScratch::default(),
+        )
+        .map(|_| ())
     }
 }

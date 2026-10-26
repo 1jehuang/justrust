@@ -23,13 +23,15 @@ impl type_check::Checker<'_> {
             } => (array, index, value, Some(op)),
             other => return Ok(other),
         };
-        let element =
-            match ir::indexed_array_ty(&self.locals[array.local.0].ty, &array.projection, false)? {
-                ir::Ty::Array { element, .. } | ir::Ty::Slice { element } => {
-                    element.as_ref().clone()
-                }
-                _ => return Err("indexed assignment probe requires array or slice".into()),
-            };
+        let element = match ir::indexed_array_ty(
+            &self.locals[array.local.0].ty,
+            &array.projection,
+            false,
+            &self.signatures.plan()?.budget,
+        )? {
+            ir::Ty::Array { element, .. } | ir::Ty::Slice { element } => element.as_ref().clone(),
+            _ => return Err("indexed assignment probe requires array or slice".into()),
+        };
         // The RHS is an independent value. In particular, a compound shift
         // count need not have the element's integer type, so its owning
         // snapshot and reload must retain the checked RHS type.

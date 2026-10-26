@@ -238,7 +238,7 @@ impl ValidatedTraitWorld {
         charged(&self.budget, self.budget.charge_work(1))?;
         let key = TypeWalk::key(ty).map(|key| (key, TypeUse::Root));
         if let Some(key) = key
-            && let Some(height) = walk.lookup(key, &self.budget)?
+            && let Some(height) = walk.lookup(key, ty, &self.budget)?
         {
             charged(
                 &self.budget,
@@ -264,13 +264,13 @@ impl ValidatedTraitWorld {
             Ty::AssociatedType(_) => return Ok(0),
             Ty::Array { element, .. } => child(element)?,
             Ty::Struct(value) => {
-                for field in value.def().fields.iter() {
+                for field in nominal_fields(&value.def().fields, &self.budget)?.iter() {
                     child(&field.ty)?;
                 }
             }
             Ty::Enum(value) => {
                 for variant in value.def().variants.iter() {
-                    for field in variant.fields.iter() {
+                    for field in nominal_fields(&variant.fields, &self.budget)?.iter() {
                         child(&field.ty)?;
                     }
                 }
@@ -281,7 +281,7 @@ impl ValidatedTraitWorld {
             child(argument)?;
         }
         if let Some(key) = key {
-            walk.insert(key, height, &self.budget)?;
+            walk.insert(key, height, ty, &self.budget)?;
         }
         Ok(height)
     }
@@ -411,6 +411,7 @@ impl ValidatedTraitWorld {
             ));
         }
         self.check_context(ProofContext {
+            original: None,
             predicates: &owner.predicates,
             phase: FactsPhase::Universal,
         })
@@ -581,6 +582,7 @@ impl ValidatedTraitWorld {
                         &normal,
                         &owner.implementation.schema_env,
                         ProofContext {
+                            original: None,
                             predicates: &owner.predicates,
                             phase: FactsPhase::Universal,
                         },
@@ -595,6 +597,7 @@ impl ValidatedTraitWorld {
                     != owner.implementation.trait_ref.declaration
                 {
                     let context = ProofContext {
+                        original: None,
                         predicates: &owner.predicates,
                         phase: FactsPhase::Universal,
                     };
@@ -684,6 +687,7 @@ impl ValidatedTraitWorld {
                     // predicates prove membership (e.g. `I::Item` under `I: Iterator`).
                     // Otherwise only the ordinary closed selector may normalize it.
                     let context = ProofContext {
+                        original: None,
                         predicates: &owner.predicates,
                         phase: FactsPhase::Universal,
                     };
@@ -696,6 +700,7 @@ impl ValidatedTraitWorld {
                     self.normalize_closed_projected_type(
                         ty,
                         ProofContext {
+                            original: None,
                             predicates: &owner.predicates,
                             phase: FactsPhase::Universal,
                         },
@@ -793,6 +798,7 @@ impl ValidatedTraitWorld {
                     &implementation.trait_ref,
                     &normal,
                     ProofContext {
+                        original: None,
                         predicates: &owner.predicates,
                         phase: FactsPhase::Universal,
                     },
@@ -1028,18 +1034,20 @@ impl ValidatedTraitWorld {
                 },
                 predicates: Arc::from([]),
             };
-            let head = self.substitute_projected_schema(&head, &owner_arguments, context.env())?;
+            let head =
+                self.substitute_projected_schema_with(&head, &owner_arguments, context, active)?;
             let goal = TraitRef {
                 declaration: implementation.trait_ref.declaration,
                 self_ty: head.signature.result,
                 args: head.signature.params.into(),
             };
             self.validate_ref_with(&goal, context.env(), None, &mut active.replays)?;
-            let closed = self.goal_is_closed(&goal, context.env())?;
+            let closed = self.goal_is_closed_with(&goal, context.env(), active)?;
             if closed {
                 let selection = self.require_in(
                     &Predicate::Implements(goal),
                     ProofContext {
+                        original: None,
                         predicates: &self.empty,
                         phase: FactsPhase::Closed,
                     },
@@ -1257,17 +1265,19 @@ impl ValidatedTraitWorld {
                 "unsupported: rigid caller projected method application",
             ));
         }
+        let mut active = ProofScratch::default();
         let selection = self.require_in(
             &Predicate::Implements(goal.clone()),
             if matches!(&goal.self_ty, Ty::Dyn(_) | Ty::Opaque(_)) || opaque_reference {
                 context
             } else {
                 ProofContext {
+                    original: None,
                     predicates: &self.empty,
                     phase: FactsPhase::Closed,
                 }
             },
-            &mut ProofScratch::default(),
+            &mut active,
         )?;
         if !matches!(
             &selection.0.origin,
@@ -1316,11 +1326,27 @@ impl ValidatedTraitWorld {
             instantiated.predicates = self.normalize_instantiated_projection_predicates(
                 &instantiated.predicates,
                 context,
-                &mut ProofScratch::default(),
+                &mut active,
             )?;
             for predicate in instantiated.predicates.iter() {
-                self.require_in(predicate, context, &mut ProofScratch::default())?;
+                self.require_in(predicate, context, &mut active)?;
             }
+        }
+        if let Some(adapter) = self.closed_closure_argument_result_signature(
+            item,
+            goal,
+            &instantiated.signature,
+            &selection,
+            context,
+            &mut active,
+        )? {
+            if !method_args.is_empty() {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "closure argument result has method type arguments",
+                ));
+            }
+            instantiated.signature.ref_contract = adapter.ref_contract;
         }
         self.complete_projected_contract(&mut instantiated.signature)?;
         self.validate_schema_signature(
@@ -1477,6 +1503,64 @@ impl ValidatedTraitWorld {
                 },
             });
         }
+        if let ProofOrigin::Closure { kind } = &evidence.selection.0.origin {
+            let mut active = ProofScratch::default();
+            if let Some(adapter) = self.closed_closure_argument_result_signature(
+                self.item_header(evidence.item)?,
+                &evidence.goal,
+                &evidence.signature,
+                &evidence.selection,
+                ProofContext::from_facts(facts),
+                &mut active,
+            )? {
+                let Ty::Closure(closure) = &evidence.goal.self_ty else {
+                    unreachable!()
+                };
+                if *kind != ir::ClosureKind::FnOnce {
+                    retain::<Ty>(&self.budget, 1)?;
+                }
+                let target = self.closure_target(closure, *kind)?;
+                let callee = Callee::Direct(target);
+                let checked = self.closure_result_carrier_parts(
+                    closure.clone(),
+                    *kind,
+                    adapter,
+                    SignatureSubject::Call(&callee),
+                    facts,
+                )?;
+                charged(
+                    &self.budget,
+                    self.budget.retain_bytes(4 * std::mem::size_of::<usize>()),
+                )?;
+                retain::<Ty>(&self.budget, evidence.signature.params.len())?;
+                let schema = GenericSchema {
+                    env: self.empty.env.clone(),
+                    signature: evidence.signature.clone(),
+                    predicates: Arc::from([]),
+                };
+                let source_regions =
+                    self.validate_source_regions(evidence.item, &schema.signature)?;
+                let origin = charged(
+                    &self.budget,
+                    ir::derive_signature_origin_schema(
+                        &schema.signature,
+                        &schema.env,
+                        &self.budget,
+                    ),
+                )?;
+                return Ok(ProjectedCarrierBase {
+                    schema,
+                    arguments: Arc::from([]),
+                    origin,
+                    retained: DeclarationCarriers {
+                        declaration: evidence.item,
+                        contract: checked.contract,
+                        regions: checked.regions,
+                        source_regions,
+                    },
+                });
+            }
+        }
         if matches!(
             &evidence.selection.0.origin,
             ProofOrigin::Closure { .. }
@@ -1545,6 +1629,7 @@ impl ValidatedTraitWorld {
             self.item_header(evidence.item)?,
             implementation,
             ProofContext {
+                original: None,
                 predicates: &owner,
                 phase: FactsPhase::Universal,
             },
@@ -1929,6 +2014,7 @@ mod tests {
             "struct Wrap<T>{value:T}trait Has{type Out;fn get(value:Self::Out)->Self::Out;}impl<T> Has for Wrap<T>{type Out=T;fn get(value:Self::Out)->Self::Out{value}}fn main(){}",
         );
         let declaration = owners(&world)[0].items[0].1;
+        let mut scratch = TraitScratch::default();
         for actual in [
             Ty::Int(ir::IntTy::I32),
             Ty::Int(ir::IntTy::I128),
@@ -1939,8 +2025,36 @@ mod tests {
                 type_args: Arc::from([actual.clone()]),
             };
             let facts = world.instance_facts(&target).unwrap();
-            let proof = world.discharge_direct(&target, &facts).unwrap();
+            let proof = world
+                .discharge_direct_with(&target, &facts, &mut scratch)
+                .unwrap();
             assert!(world.eq_ty(&proof.signature.result, &actual, 0).unwrap());
+            for _ in 0..3 {
+                let replay = world
+                    .discharge_direct_with(&target, &facts, &mut scratch)
+                    .unwrap();
+                assert!(
+                    world
+                        .eq_signature(&replay.signature, &proof.signature)
+                        .unwrap()
+                );
+            }
+            let callee = Callee::Direct(target.clone());
+            let mut forged = proof.signature.clone();
+            forged.result = Ty::Never;
+            assert!(matches!(
+                facts.validate_signature_with(SignatureSubject::Call(&callee), &forged, &mut scratch),
+                Err(error) if error.kind() == FactsErrorKind::InvalidMetadata
+            ));
+            let universal = world.callable_facts(declaration).unwrap();
+            let replay = world
+                .discharge_direct_with(&target, &universal, &mut scratch)
+                .unwrap();
+            assert!(
+                world
+                    .eq_signature(&replay.signature, &proof.signature)
+                    .unwrap()
+            );
         }
         for actual in [
             shared(Ty::Int(ir::IntTy::I32)),
@@ -1957,6 +2071,7 @@ mod tests {
                     &world.callable_schema(declaration).unwrap(),
                     &target.type_args,
                     ProofContext {
+                        original: None,
                         predicates: &world.empty,
                         phase: FactsPhase::Closed,
                     },
@@ -2001,6 +2116,7 @@ mod tests {
                     &world.callable_schema(declaration).unwrap(),
                     &target.type_args,
                     ProofContext {
+                        original: None,
                         predicates: &world.empty,
                         phase: FactsPhase::Closed,
                     },

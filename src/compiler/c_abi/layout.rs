@@ -80,9 +80,9 @@ fn build(
 ) -> Result<Layout, String> {
     budget.check_depth(depth)?;
     budget.charge_work(1)?;
-    let private_size =
-        usize::try_from(backend::value_size(ty)?).map_err(|_| "invalid private carrier size")?;
-    let indirect = backend::indirect(ty)?;
+    let private_size = usize::try_from(backend::value_size(ty, budget)?)
+        .map_err(|_| "invalid private carrier size")?;
+    let indirect = backend::indirect(ty, budget)?;
     if let Some((size, align)) = scalar_size_align(ty) {
         // References are not admitted across this frozen C boundary. In particular
         // a pointer to a private aggregate is not a pointer to repr(C) storage.
@@ -129,7 +129,7 @@ fn build(
                 return Err("unsupported: empty nominal structs have only a private carrier, not a C ABI layout".into());
             }
             budget.retain_bytes(s.def().fields.len() * std::mem::size_of::<Layout>())?;
-            for field in s.def().fields.iter() {
+            for field in s.def().fields.read(budget)?.iter() {
                 parts.push(build(&field.ty, repr_c, budget, depth + 1)?);
             }
         }

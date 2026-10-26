@@ -31,8 +31,17 @@ impl ValidatedCleanupCall {
         }) {
             return Err("unsupported: indexed normal Drop replacement".into());
         }
+        let owner = ir::projected_ty(
+            &function
+                .locals
+                .get(self.owner.local.0)
+                .ok_or("invalid cleanup owner local")?
+                .ty,
+            &self.owner.projection,
+            facts.budget(),
+        )?;
         self.destructor
-            .validate(function.place_ty(&self.owner)?, facts)
+            .validate(&owner, facts)
             .map_err(|e| e.into_legacy_diagnostic(facts.budget()))
     }
 }
@@ -149,9 +158,10 @@ pub(super) fn admit(source: &ir::CheckedFunction, facts: ir::FactsCtx<'_>) -> Re
                                 Some(ir::Projection::Downcast(_))
                             )
                             && !binding.projection.contains(&ir::Projection::Deref)
-                            && !facts.must_copy(facts.projected_ty(
+                            && !facts.must_copy(&facts.projected_ty(
                                 &source.exprs[scrutinee.0].ty,
                                 &binding.projection,
+                                authority.budget(),
                             )?)?
                         {
                             return Err("E0509: cannot move out of a type which implements the `Drop` trait".into());
@@ -218,12 +228,21 @@ impl Lowerer<'_> {
             // Stores through a raw pointer have `ptr::write` semantics in this
             // draft: the library writes into uninitialized heap slots this way.
             // (Rust would drop the old pointee; documented deviation.)
-            if ir::raw_deref_index(&self.result.locals[owner.local.0].ty, &owner.projection)
-                .is_some()
+            let budget = self.budget;
+            if ir::raw_deref_index_optional(
+                &self.result.locals[owner.local.0].ty,
+                &owner.projection,
+                budget,
+            )?
+            .is_some()
             {
                 return Ok(());
             }
-            let ty = self.result.place_ty(&owner)?.clone();
+            let ty = ir::projected_ty_optional(
+                &self.result.locals[owner.local.0].ty,
+                &owner.projection,
+                budget,
+            )?;
             let Some(destructor) = descriptor(&ty, self.facts)? else {
                 return Ok(());
             };

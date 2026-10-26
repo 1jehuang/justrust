@@ -73,6 +73,9 @@ pub struct Package {
     pub dependencies: Vec<Dependency>,
     pub features: BTreeMap<String, Vec<String>>,
     pub locked: Option<usize>,
+    /// Authenticated registry source (crates.io cache): compiled with lints
+    /// capped at allow, like Cargo does for non-path dependencies.
+    pub registry: bool,
 }
 
 impl Package {
@@ -802,6 +805,7 @@ impl Loader {
             dependencies,
             features,
             locked,
+            registry: false,
         });
         Ok(index)
     }
@@ -842,6 +846,7 @@ impl Loader {
         {
             return err("cached registry manifest does not match locked package identity");
         }
+        self.packages[loaded].registry = true;
         Ok(loaded)
     }
 

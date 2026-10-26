@@ -36,6 +36,7 @@ fn generic_projected_signature_does_not_invent_an_implementation() {
             &goal,
             &[Ty::Int(ir::IntTy::U8)],
             ProofContext {
+                original: None,
                 predicates: &world.empty,
                 phase: FactsPhase::Closed,
             },

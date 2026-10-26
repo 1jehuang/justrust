@@ -103,8 +103,8 @@ impl Frame<'_> {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct TypeIdentity(u8, usize);
-enum DomainEvent<'a> {
-    Enter(&'a Ty, usize),
+enum DomainEvent {
+    Enter(Ty, usize),
     Leave,
 }
 
@@ -160,7 +160,7 @@ impl<'facts> CoverageMatrix<'facts> {
     fn applicable(&self) -> Result<bool, String> {
         let mut pending = temporary(&self.expansion)?;
         let mut active = temporary(&self.expansion)?;
-        push(&mut pending, DomainEvent::Enter(&self.domain, 0))?;
+        push(&mut pending, DomainEvent::Enter(self.domain.clone(), 0))?;
         let mut applicable = true;
         while let Some(event) = pending.pop() {
             self.work(1)?;
@@ -169,7 +169,7 @@ impl<'facts> CoverageMatrix<'facts> {
                 continue;
             };
             self.plan.check_depth(depth)?;
-            let identity = match ty {
+            let identity = match &ty {
                 Ty::Struct(value) => Some(TypeIdentity(0, value.def() as *const _ as usize)),
                 Ty::Enum(value) => Some(TypeIdentity(1, value.def() as *const _ as usize)),
                 Ty::Tuple(fields) => Some(TypeIdentity(2, fields.as_ptr() as usize)),
@@ -194,7 +194,7 @@ impl<'facts> CoverageMatrix<'facts> {
                 push(&mut pending, DomainEvent::Leave)?;
             }
             let next = depth.checked_add(1).ok_or_else(overflow)?;
-            match ty {
+            match &ty {
                 Ty::Opaque(_)
                 | Ty::Closure(_)
                 | Ty::FnItem(_)
@@ -209,7 +209,7 @@ impl<'facts> CoverageMatrix<'facts> {
                     }
                     for child in fields.iter().rev() {
                         self.work(1)?;
-                        push(&mut pending, DomainEvent::Enter(child, next))?;
+                        push(&mut pending, DomainEvent::Enter(child.clone(), next))?;
                     }
                 }
                 Ty::Array { element, len } => {
@@ -218,13 +218,16 @@ impl<'facts> CoverageMatrix<'facts> {
                     }
                     if *len != 0 {
                         self.work(1)?;
-                        push(&mut pending, DomainEvent::Enter(element, next))?;
+                        push(
+                            &mut pending,
+                            DomainEvent::Enter(element.as_ref().clone(), next),
+                        )?;
                     }
                 }
                 Ty::Struct(value) => {
-                    for field in value.def().fields.iter().rev() {
+                    for field in value.def().fields.read(&self.plan)?.iter().rev() {
                         self.work(1)?;
-                        push(&mut pending, DomainEvent::Enter(&field.ty, next))?;
+                        push(&mut pending, DomainEvent::Enter(field.ty.clone(), next))?;
                     }
                 }
                 Ty::Enum(value) => {
@@ -243,9 +246,9 @@ impl<'facts> CoverageMatrix<'facts> {
                     }
                     for variant in value.def().variants.iter().rev() {
                         self.work(1)?;
-                        for field in variant.fields.iter().rev() {
+                        for field in variant.fields.read(&self.plan)?.iter().rev() {
                             self.work(1)?;
-                            push(&mut pending, DomainEvent::Enter(&field.ty, next))?;
+                            push(&mut pending, DomainEvent::Enter(field.ty.clone(), next))?;
                         }
                     }
                 }
@@ -291,21 +294,21 @@ impl<'facts> CoverageMatrix<'facts> {
                 }
             }
             self.validate_path(source.projection, row.tests.as_slice())?;
-            let actual = ir::projected_ty(&self.domain, source.projection)?;
+            let actual = ir::projected_ty(&self.domain, source.projection, &self.plan)?;
             match source.kind {
                 PatternTestKind::Bool(_) if matches!(actual, Ty::Bool) => {}
                 PatternTestKind::Int(_)
                 | PatternTestKind::Char(_)
                 | PatternTestKind::IntRange { .. }
                 | PatternTestKind::CharRange { .. }
-                    if source.kind.scalar_ty().as_ref() == Some(actual) =>
+                    if source.kind.scalar_ty().as_ref() == Some(&actual) =>
                 {
                     source.kind.scalar_interval()?;
                 }
                 PatternTestKind::EnumVariant { ty, variant } => {
                     self.work(ty.def().variants.len())?;
                     if *variant >= ty.def().variants.len()
-                        || !ir::identical_type(actual, &Ty::Enum(ty.clone()), &self.plan)?
+                        || !ir::identical_type(&actual, &Ty::Enum(ty.clone()), &self.plan)?
                     {
                         return Err("coverage tag type, allocation or variant mismatch".into());
                     }
@@ -887,12 +890,13 @@ mod tests {
                 .map(|name| ir::VariantDef {
                     name: name.into(),
                     shape: ir::VariantShape::Tuple,
-                    fields: Arc::from([ir::FieldDef {
+                    fields: [ir::FieldDef {
                         name: "0".into(),
                         ty: Ty::Bool,
                         visibility: ir::Visibility::Public,
                         lifetime_bound: false,
-                    }]),
+                    }]
+                    .into(),
                 })
                 .collect::<Vec<_>>()
                 .into(),
