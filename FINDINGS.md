@@ -8197,3 +8197,22 @@ target is on ext4 and its reflink probe fails. Commit `f07a3941c` explains the
 safe shared-target fallback instead of silently implying build-slot isolation.
 The installed diagnostic appeared in the two validation runs above. No storage
 migration, unsafe target copying, or change to cache isolation was made.
+
+### 2026-10-26: hosted Jcode now meets the glibc 2.17 baseline
+
+The explicit Zig target `x86_64-unknown-linux-gnu.2.17` built full-feature
+Jcode at `b411a7207` on hosted, with optimization level 3 and incremental off.
+Run `20261026-150025317-548870` took 142.88s build wall and 157.8s client
+including sync/transfer. The highest imported GLIBC version is 2.17, and the
+downloaded binary passed version plus four cloud handoff help commands in the
+pinned manylinux2014 container. The prior native-host artifact required 2.39
+and failed in the same container. This is a compatibility fix, not a speedup
+claim or a full release-matrix promotion.
+
+Warm run `20261026-150308875-562781` compiled no units (611 fresh), reused the
+same SHA-256 artifact, and completed in 3.4s client time. It passed the baseline
+runtime checks again. Native validation checks ELF GLIBC version requirements
+before atomic replacement and before advertising cached artifacts for reuse.
+Hosted regression `20261026-145854935-539475` passed 788 tests with 4 ignored.
+Commands, hashes, remaining platform gates and the reusable container check
+are in `docs/hosted-glibc217.md` and `ci/check-jcode-glibc217.sh`.

@@ -1,5 +1,10 @@
 # Actual Jcode hosted release trial, 2026-10-26
 
+Follow-up: the Linux x86-64 glibc 2.17 blocker identified here was fixed and
+verified later the same day. See [hosted glibc 2.17](hosted-glibc217.md) for the
+real application builds and baseline-container checks. Other platform gates
+below remain separate work.
+
 This trial used the real `~/jcode` workspace, not the small cross-toolchain
 fixture. Nothing was signed, tagged, uploaded to a public release, or installed
 over the Jcode executable serving the user's session. Existing MSVC, macOS,

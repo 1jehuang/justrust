@@ -6,6 +6,16 @@ admits a build through `build/runs`, obtains pinned SSH host keys through
 `build/host/connect`, mirrors source, runs Cargo, and downloads binaries over
 that same tenant SSH connection. No cloud protocol change is required.
 
+## Portable GNU/Linux baseline
+
+Native GNU builds use the hosted machine's glibc and are not automatically
+portable to older distributions. The explicit hosted command
+`justrust zigbuild --release --target x86_64-unknown-linux-gnu.2.17` now supports
+the glibc 2.17 baseline, with structured artifact validation before download
+publication and reuse. See [the verified Jcode rollout](hosted-glibc217.md) for
+the exact release environment, command and baseline runtime acceptance gate.
+This does not change native GNU builds, other target ABIs or signing policy.
+
 ## Command contract
 
 On a fresh Linux runner, `JCODE_API_KEY` selects hosted automatically. Existing
