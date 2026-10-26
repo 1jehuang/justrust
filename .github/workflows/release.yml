@@ -17,6 +17,9 @@ env:
   # Marks the binaries as release builds: they update themselves
   # (src/update.rs). Source builds never do.
   JUSTRUST_RELEASE_BUILD: "1"
+  # Enable JUSTRUST_HOSTED_RELEASES=1 only after the nonpublishing hosted
+  # Linux validation workflow passes with the repository's JCODE_API_KEY.
+  HOSTED_CLIENT_REV: d0c35300773df0103e3beeb090a5a1a5c6681185
   # Small, fast release binaries without editing Cargo.toml.
   DIST_FLAGS: >-
     --config profile.release.lto="thin"
@@ -27,6 +30,9 @@ jobs:
   build:
     name: build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
+    concurrency:
+      group: ${{ matrix.zig && vars.JUSTRUST_HOSTED_RELEASES == '1' && 'justrust-hosted-linux' || format('justrust-release-{0}-{1}', github.run_id, matrix.target) }}
+      cancel-in-progress: false
     strategy:
       fail-fast: false
       matrix:
@@ -52,17 +58,19 @@ jobs:
           ref: ${{ inputs.tag || github.ref }}
 
       - name: Install Rust
+        if: ${{ !matrix.zig || vars.JUSTRUST_HOSTED_RELEASES != '1' }}
         run: |
           rustup toolchain install stable --profile minimal --target "${{ matrix.target }}"
           rustup default stable
 
       - name: Install zig and cargo-zigbuild
-        if: matrix.zig
+        if: ${{ matrix.zig && vars.JUSTRUST_HOSTED_RELEASES != '1' }}
         run: |
           python3 -m pip install --user ziglang
           cargo install cargo-zigbuild --locked
 
       - name: Build
+        if: ${{ !matrix.zig || vars.JUSTRUST_HOSTED_RELEASES != '1' }}
         shell: bash
         run: |
           if [ "${{ matrix.zig }}" = "true" ]; then
@@ -73,11 +81,45 @@ jobs:
             cargo build --release --locked --target "${{ matrix.target }}" $DIST_FLAGS
           fi
 
+      - name: Require hosted Linux credentials
+        if: ${{ matrix.zig && vars.JUSTRUST_HOSTED_RELEASES == '1' }}
+        env:
+          JCODE_API_KEY: ${{ secrets.JCODE_API_KEY }}
+        run: ': "${JCODE_API_KEY:?Configure JCODE_API_KEY before enabling JUSTRUST_HOSTED_RELEASES}"'
+
+      - name: Install hosted Linux prerequisites
+        if: ${{ matrix.zig && vars.JUSTRUST_HOSTED_RELEASES == '1' }}
+        run: |
+          rustup toolchain install 1.99.0 --profile minimal
+          rustup default 1.99.0
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends rsync zstd binutils qemu-user
+          git fetch --quiet --no-tags --depth=1 origin "$HOSTED_CLIENT_REV"
+          git show "$HOSTED_CLIENT_REV:ci/install-hosted-client.sh" > "$RUNNER_TEMP/install-hosted-client.sh"
+          git show "$HOSTED_CLIENT_REV:ci/check-linux-release.sh" > "$RUNNER_TEMP/check-linux-release.sh"
+          bash "$RUNNER_TEMP/install-hosted-client.sh" "$HOSTED_CLIENT_REV"
+
+      - name: Build and verify hosted Linux release
+        if: ${{ matrix.zig && vars.JUSTRUST_HOSTED_RELEASES == '1' }}
+        env:
+          JCODE_API_KEY: ${{ secrets.JCODE_API_KEY }}
+          JUSTRUST_TOOLCHAIN: 1.99.0
+          JUSTRUST_TOOLCHAIN_REQUIRED: "1"
+          JUSTRUST_REMOTE_REQUIRED: "1"
+        run: |
+          justrust remote use hosted
+          # shellcheck disable=SC2086
+          justrust build --remote --release --locked --target "${{ matrix.target }}" --bin justrust $DIST_FLAGS
+          version=$(cargo +1.99.0 metadata --no-deps --format-version=1 | jq -r '.packages[] | select(.name == "justrust") | .version')
+          bash "$RUNNER_TEMP/check-linux-release.sh" "target/${{ matrix.target }}/release/justrust" "${{ matrix.target }}" "$version"
+
       - name: Package
         shell: bash
         run: |
           name="justrust-${{ matrix.target }}"
           mkdir -p "dist/$name"
+          # The matrix expands to a known literal during actionlint's shellcheck.
+          # shellcheck disable=SC2193
           cp "target/${{ matrix.target }}/release/justrust$( [[ "${{ matrix.target }}" == *windows* ]] && echo .exe )" "dist/$name/"
           cp README.md "dist/$name/" 2>/dev/null || true
           cp LICENSE* "dist/$name/" 2>/dev/null || true
