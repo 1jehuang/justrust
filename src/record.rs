@@ -248,6 +248,20 @@ pub fn exec_cargo(args: &[OsString]) -> ! {
             );
         }
     }
+    if subcommand(args).as_deref() == Some("zigbuild") && cfg!(target_os = "linux") {
+        let result = crate::release_tools::ensure()
+            .and_then(|tools| crate::release_tools::apply(&mut cmd, tools));
+        if let Err(error) = result {
+            eprintln!("justrust: release tools unavailable: {error:#}");
+            report_build_failure(args, "toolchain_required", false, Some(1));
+            std::process::exit(1);
+        }
+    }
+    if let Err(error) = apply_musl_linker(&mut cmd, pinned.as_ref(), args) {
+        eprintln!("justrust: {error:#}");
+        report_build_failure(args, "toolchain_required", false, Some(1));
+        std::process::exit(1);
+    }
     let cargo = PathBuf::from(cmd.get_program());
     let err = crate::sys::exec(cmd.args(args));
     eprintln!("justrust: failed to exec {}: {err}", cargo.display());
@@ -371,6 +385,50 @@ pub fn apply_toolchain_env(cmd: &mut Command, tc: &crate::toolchain::Toolchain) 
     cmd.env_remove("RUSTUP_TOOLCHAIN");
 }
 
+/// Use the selected compiler's self-contained ELF linker for static musl
+/// executables. Unlike Zig's driver this preserves rustc's Cortex-A53 fix.
+fn apply_musl_linker(
+    cmd: &mut Command,
+    pinned: Option<&crate::toolchain::Toolchain>,
+    args: &[OsString],
+) -> Result<()> {
+    if subcommand(args).as_deref() != Some("build") {
+        return Ok(());
+    }
+    let targets = requested_targets(args, None);
+    let [target] = targets.as_slice() else {
+        return Ok(());
+    };
+    let Some(target) = target
+        .to_str()
+        .filter(|t| crate::remote_artifacts::musl_target(t))
+    else {
+        return Ok(());
+    };
+    let tc = pinned.ok_or_else(|| {
+        ToolchainRequired("native musl builds require an explicit installed compiler pin".into())
+    })?;
+    let linker = tc
+        .dir
+        .join("lib/rustlib")
+        .join(crate::toolchain::TARGET)
+        .join("bin/rust-lld");
+    if !linker.is_file() {
+        return Err(
+            ToolchainRequired(format!("pinned musl linker missing: {}", linker.display())).into(),
+        );
+    }
+    cmd.env(
+        format!(
+            "CARGO_TARGET_{}_LINKER",
+            target.replace('-', "_").to_ascii_uppercase()
+        ),
+        linker,
+    )
+    .env("JUSTRUST_LINKER", "off");
+    Ok(())
+}
+
 /// Explicit cross targets must have libraries in the selected compiler's own
 /// sysroot. Never borrow a system libcore for a different compiler version.
 pub(crate) fn requested_targets(args: &[OsString], env_target: Option<OsString>) -> Vec<OsString> {
@@ -434,7 +492,7 @@ fn compatible_toolchain(
     // Custom JSON targets may use build-std. Leave their policy to Cargo.
     // Zig release builds use the selected compiler's own official target
     // libraries, never the host's default rustup toolchain or borrowed std.
-    if subcommand(args).as_deref() == Some("zigbuild")
+    if matches!(subcommand(args).as_deref(), Some("zigbuild" | "build"))
         && !matches!(
             std::env::var("JUSTRUST_TOOLCHAIN_AUTO_INSTALL").as_deref(),
             Ok("0" | "off" | "false")
@@ -663,6 +721,7 @@ fn record(
             }
         }
     }
+    apply_musl_linker(&mut cmd, pinned.as_ref(), &cargo_args)?;
     if meta.subcommand == "zigbuild" && cfg!(target_os = "linux") {
         let tools = crate::release_tools::ensure()
             .map_err(|error| ToolchainRequired(format!("release tools unavailable: {error:#}")))?;
@@ -1532,6 +1591,46 @@ fn unify_features(cmd: &mut Command) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn native_musl_uses_pinned_lld_and_requires_it() {
+        let dir =
+            std::env::temp_dir().join(format!("justrust-musl-linker-{}", super::new_run_id()));
+        let tc = crate::toolchain::Toolchain {
+            id: "1.99.0".into(),
+            dir: dir.clone(),
+            nightly: false,
+        };
+        let linker = dir
+            .join("lib/rustlib")
+            .join(crate::toolchain::TARGET)
+            .join("bin/rust-lld");
+        let args: Vec<std::ffi::OsString> = [
+            "build",
+            "--release",
+            "--target",
+            "aarch64-unknown-linux-musl",
+        ]
+        .into_iter()
+        .map(Into::into)
+        .collect();
+        let mut cmd = std::process::Command::new("cargo");
+        assert!(super::apply_musl_linker(&mut cmd, None, &args).is_err());
+        assert!(super::apply_musl_linker(&mut cmd, Some(&tc), &args).is_err());
+        std::fs::create_dir_all(linker.parent().unwrap()).unwrap();
+        std::fs::write(&linker, b"test linker").unwrap();
+        super::apply_musl_linker(&mut cmd, Some(&tc), &args).unwrap();
+        assert!(cmd.get_envs().any(|(key, value)| key
+            == "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER"
+            && value == Some(linker.as_os_str())));
+        assert!(
+            cmd.get_envs().any(|(key, value)| key == "JUSTRUST_LINKER"
+                && value == Some(std::ffi::OsStr::new("off")))
+        );
+        let mut native = std::process::Command::new("cargo");
+        super::apply_musl_linker(&mut native, None, &["build".into(), "--release".into()]).unwrap();
+        assert_eq!(native.get_envs().count(), 0);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
     #[test]
     fn cross_target_arguments_override_environment_and_stop_at_separator() {
         let args = [

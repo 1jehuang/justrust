@@ -99,16 +99,17 @@ fn routable(sub: &str) -> bool {
     matches!(sub, "check" | "clippy" | "test")
 }
 
-/// Ordinary builds use the native GNU sysroot. Zigbuild additionally installs
-/// exact-version musl libraries for the two supported Linux release targets.
+/// Optimized release builds support native GNU and explicit static musl targets.
 fn unsupported_hosted_target(args: &[OsString], env_target: Option<OsString>) -> bool {
     let native = format!("{}-unknown-linux-gnu", std::env::consts::ARCH);
-    let zig = args.first().is_some_and(|a| a == "zigbuild");
+    let musl_build = args
+        .first()
+        .is_some_and(|a| a == "zigbuild" || a == "build");
     crate::record::requested_targets(args, env_target)
         .iter()
         .any(|target| {
             target != native.as_str()
-                && !(zig
+                && !(musl_build
                     && target
                         .to_str()
                         .is_some_and(crate::remote_artifacts::musl_target))
@@ -136,7 +137,7 @@ fn routable_build(args: &[String]) -> bool {
         }
     } else if let Some(target) = crate::remote_artifacts::build_target(args) {
         let native = format!("{}-unknown-linux-gnu", std::env::consts::ARCH);
-        if target != native {
+        if target != native && !crate::remote_artifacts::musl_target(target) {
             return false;
         }
     }
@@ -705,7 +706,7 @@ mod tests {
             "build".into(),
             format!("--target={native}")
         ]));
-        assert!(!routable_build(&args("x86_64-unknown-linux-musl")));
+        assert!(routable_build(&args("x86_64-unknown-linux-musl")));
         assert!(!routable_build(&args("wasm32-unknown-unknown")));
         assert!(!routable_build(&args("../custom.json")));
         let mut multiple = args(&native);

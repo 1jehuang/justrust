@@ -450,9 +450,7 @@ pub fn fetch(args: &[String], start: f64) -> Result<String> {
     let t0 = Instant::now();
     let cwd = std::env::current_dir()?;
     let dir = profile_dir(&cwd, args)?;
-    let musl = (args.first().map(String::as_str) == Some("zigbuild"))
-        .then(|| build_target(args).filter(|target| musl_target(target)))
-        .flatten();
+    let musl = build_target(args).filter(|target| musl_target(target));
     let mut records = load_records();
     // A newer locally built file is not evidence that it is this hosted
     // release. Only reuse files with known remote provenance for musl.
