@@ -52,15 +52,6 @@
     },
     "coverage": "All 10 stock/native valid-run sources, 2 unsupported error-level lint sources at workers 1/8 and CHECK/BUILD, and 5 stock/native invalid sources retained."
   },
-  "shadowing_followup": {
-    "command_before_and_after": "justrust test --lib shadowing",
-    "before": {"run_id": "20261026-143510997-401126", "passed": 14, "test_run_seconds": 12.96, "summed_test_seconds": 50.5, "compile_seconds": 36.87},
-    "after": {"run_id": "20261026-143658921-412326", "passed": 20, "test_run_seconds": 6.55, "summed_test_seconds": 51.1, "compile_seconds": 18.82},
-    "coverage": "Same cases for print/eprint/eprintln and unreachable/todo/unimplemented lexical shadowing, plus unchanged assert parser, invalid-message, supported-formatting, inactive-source and runtime assertions. Split only independent cases, not compiler work.",
-    "acceptance_first_attempt": {"run_id": "20261026-143725195-415128", "passed": 2062, "failed": 1, "ignored": 1, "test_run_seconds": 27.98, "failure": "Unrelated iterator_loop::tests::blanket_into_iterator_for_calls_match_stock Command::output failed with ExecutableFileBusy at tests.rs:317. Full suite rerun requested, no test weakened."},
-    "acceptance_rerun": {"run_id": "20261026-143836907-421995", "passed": 2063, "ignored": 1, "test_run_seconds": 29.25, "after_seconds": 14.0, "hosted_seconds": 44.2, "caveat": "justrust passed after automatic isolated retry of projected_copy_record_keeps_graph_identity_at_runtime, which initially hit ExecutableFileBusy in stock_native_run. Not a clean first-pass suite result, no general full-suite speed claim."},
-    "graph_gate": {"run_id": "20261026-143754374-411624", "passed": 17, "ignored": 1}
-  },
   "validation": {
     "check_run_id": "20261026-142455203-317022",
     "graph_integrity_run_id": "20261026-142542987-316631",

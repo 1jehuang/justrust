@@ -992,37 +992,26 @@ fn literal_output_empty_and_unsupported_arguments_are_explicit() {
 }
 
 #[test]
-fn literal_output_lexical_shadowing_print() {
-    literal_output_lexical_shadowing_never_falls_back_to_builtin("print");
-}
-
-#[test]
-fn literal_output_lexical_shadowing_eprint() {
-    literal_output_lexical_shadowing_never_falls_back_to_builtin("eprint");
-}
-
-#[test]
-fn literal_output_lexical_shadowing_eprintln() {
-    literal_output_lexical_shadowing_never_falls_back_to_builtin("eprintln");
-}
-
-fn literal_output_lexical_shadowing_never_falls_back_to_builtin(name: &str) {
-    let source = format!("fn main(){{macro_rules! {name}{{()=>{{42}};}}{name}!()}}");
-    let program = parse(&source).unwrap();
-    assert!(matches!(
-        program.functions[0].body.tail.as_deref(),
-        Some(Expr::Integer(_))
-    ));
-    let source = format!("fn main(){{macro_rules! {name}{{(x)=>{{42}};}}{name}!(\"literal\")}}");
-    assert!(parse(&source).is_err(), "{source}");
-    // A module macro has the same authority as a local macro. The original
-    // tail-valued main is invalid because it returns i32, not because the
-    // expansion is unavailable.
-    let source = format!("macro_rules! {name}{{()=>{{42}};}}fn main(){{{name}!()}}");
-    stock_native_reject(&source);
-    stock_native_run(&format!(
-        "macro_rules! {name}{{()=>{{42}};}}fn main(){{assert!({name}!()==42);}}"
-    ));
+fn literal_output_lexical_shadowing_never_falls_back_to_builtin() {
+    for name in ["print", "eprint", "eprintln"] {
+        let source = format!("fn main(){{macro_rules! {name}{{()=>{{42}};}}{name}!()}}");
+        let program = parse(&source).unwrap();
+        assert!(matches!(
+            program.functions[0].body.tail.as_deref(),
+            Some(Expr::Integer(_))
+        ));
+        let source =
+            format!("fn main(){{macro_rules! {name}{{(x)=>{{42}};}}{name}!(\"literal\")}}");
+        assert!(parse(&source).is_err(), "{source}");
+        // A module macro has the same authority as a local macro. The original
+        // tail-valued main is invalid because it returns i32, not because the
+        // expansion is unavailable.
+        let source = format!("macro_rules! {name}{{()=>{{42}};}}fn main(){{{name}!()}}");
+        stock_native_reject(&source);
+        stock_native_run(&format!(
+            "macro_rules! {name}{{()=>{{42}};}}fn main(){{assert!({name}!()==42);}}"
+        ));
+    }
 }
 
 #[test]
@@ -2242,44 +2231,32 @@ fn bounded_panic_grammar_valid_and_parser_boundaries(name: &str) {
 }
 
 #[test]
-fn bounded_panic_family_shadowing_unreachable() {
-    bounded_panic_family_shadowing_never_falls_back("unreachable");
-}
-
-#[test]
-fn bounded_panic_family_shadowing_todo() {
-    bounded_panic_family_shadowing_never_falls_back("todo");
-}
-
-#[test]
-fn bounded_panic_family_shadowing_unimplemented() {
-    bounded_panic_family_shadowing_never_falls_back("unimplemented");
-}
-
-fn bounded_panic_family_shadowing_never_falls_back(name: &str) {
-    let program = parse(&format!(
-        "fn main(){{macro_rules! {name}{{()=>{{42}};}}{name}!()}}"
-    ))
-    .unwrap();
-    assert!(matches!(
-        program.functions[0].body.tail.as_deref(),
-        Some(Expr::Integer(_))
-    ));
-    stock_native_reject(&format!(
-        "macro_rules! {name}{{()=>{{42}};}}fn main(){{{name}!()}}"
-    ));
-    stock_native_run(&format!(
-        "macro_rules! {name}{{()=>{{42}};}}fn main(){{assert!({name}!()==42);}}"
-    ));
-    for source in [
-        format!("fn main(){{macro_rules! {name}{{(other)=>{{42}};}}{name}!()}}"),
-        format!("fn main(){{std::{name}!()}}"),
-    ] {
-        assert!(parse(&source).is_err(), "{source}");
+fn bounded_panic_family_shadowing_never_falls_back() {
+    for name in ["unreachable", "todo", "unimplemented"] {
+        let program = parse(&format!(
+            "fn main(){{macro_rules! {name}{{()=>{{42}};}}{name}!()}}"
+        ))
+        .unwrap();
+        assert!(matches!(
+            program.functions[0].body.tail.as_deref(),
+            Some(Expr::Integer(_))
+        ));
+        stock_native_reject(&format!(
+            "macro_rules! {name}{{()=>{{42}};}}fn main(){{{name}!()}}"
+        ));
+        stock_native_run(&format!(
+            "macro_rules! {name}{{()=>{{42}};}}fn main(){{assert!({name}!()==42);}}"
+        ));
+        for source in [
+            format!("fn main(){{macro_rules! {name}{{(other)=>{{42}};}}{name}!()}}"),
+            format!("fn main(){{std::{name}!()}}"),
+        ] {
+            assert!(parse(&source).is_err(), "{source}");
+        }
+        good(&format!(
+            "fn main(){{{name}!();{{macro_rules! {name}{{()=>{{42}};}}let x:i32={name}!();}}{name}!();}}"
+        ));
     }
-    good(&format!(
-        "fn main(){{{name}!();{{macro_rules! {name}{{()=>{{42}};}}let x:i32={name}!();}}{name}!();}}"
-    ));
 }
 
 #[test]
@@ -2570,7 +2547,7 @@ fn builtin_assert_requires_real_bool_and_retains_one_source_call() {
 }
 
 #[test]
-fn builtin_assert_does_not_reinterpret_shadowing() {
+fn builtin_assert_does_not_reinterpret_shadowing_or_unsupported_messages() {
     let program = parse("fn main(){macro_rules! assert{()=>{42};}assert!()}").unwrap();
     assert!(matches!(
         program.functions[0].body.tail.as_deref(),
@@ -2584,13 +2561,6 @@ fn builtin_assert_does_not_reinterpret_shadowing() {
     stock_native_run(
         "macro_rules! assert{()=>{42};}fn main(){let value=assert!();if value!=42{panic!();}}",
     );
-    // Inactive invocations stay syntax-only, including arguments that the
-    // active builtin subset deliberately does not support.
-    good("#[cfg(any())]fn absent(){assert!(true,unknown + 2);}fn main(){}");
-}
-
-#[test]
-fn builtin_assert_shadowing_parser_and_unsupported_message_boundaries() {
     for source in [
         "fn main(){macro_rules! assert{(other)=>{42};}assert!(true)}",
         "fn main(){assert!()}",
@@ -2610,11 +2580,10 @@ fn builtin_assert_shadowing_parser_and_unsupported_message_boundaries() {
     ] {
         stock_native_reject(source);
     }
-}
-
-#[test]
-fn builtin_assert_shadowing_supported_message_formatting() {
     stock_native_run("fn main(){assert!(true,\"{}\",42);}");
+    // Inactive invocations stay syntax-only, including arguments that the
+    // active builtin subset deliberately does not support.
+    good("#[cfg(any())]fn absent(){assert!(true,unknown + 2);}fn main(){}");
 }
 
 #[test]
