@@ -7,7 +7,7 @@ pub const TARGET: &str = "aarch64-unknown-linux-gnu";
 pub const TARGET_RUSTFLAGS: &str = "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS";
 
 pub fn supported(target: &str) -> bool {
-    cfg!(target_os = "linux") && target == TARGET
+    target == TARGET
 }
 
 fn environment(cmd: &Command, name: &str) -> Option<OsString> {
@@ -26,17 +26,26 @@ fn emulated(flags: &str) -> bool {
             .any(|pair| pair == ["-Z", "tls-model=emulated"])
 }
 
-/// Reject an emulated-TLS build which would silently reuse stock std. Global
-/// flags also affect host build scripts/proc macros and are never appropriate.
-/// This pure check is exposed for callers with configuration-file rustflags.
+/// Enforce the dedicated official ARM64 mode: rebuild std and use target-only
+/// emulated TLS. This pure check also accepts resolved configuration-file flags.
 pub fn validate(args: &[String], target_flags: &str, global_flags: &str) -> Result<()> {
-    if emulated(global_flags) {
+    if !global_flags.trim().is_empty() {
         bail!(
-            "ARM64 emulated TLS must use {TARGET_RUSTFLAGS}, not global RUSTFLAGS/CARGO_ENCODED_RUSTFLAGS (host build scripts must retain native TLS)"
+            "official ARM64 builds require target-only rustflags, not global RUSTFLAGS/CARGO_ENCODED_RUSTFLAGS (host build scripts must retain native TLS)"
         );
     }
-    if !emulated(target_flags) {
-        return Ok(());
+    let normalized = target_flags.replace('\u{1f}', " ");
+    let words: Vec<_> = normalized.split_whitespace().collect();
+    for (i, word) in words.iter().enumerate() {
+        let setting = word
+            .strip_prefix("-Z")
+            .filter(|value| !value.is_empty())
+            .or_else(|| (*word == "-Z").then(|| words.get(i + 1).copied()).flatten());
+        if let Some(model) = setting.and_then(|value| value.strip_prefix("tls-model="))
+            && model != "emulated"
+        {
+            bail!("official ARM64 builds require tls-model=emulated, not {model}");
+        }
     }
     let mut std = false;
     let mut panic_abort = false;
@@ -68,6 +77,14 @@ pub fn validate(args: &[String], target_flags: &str, global_flags: &str) -> Resu
 /// cargo-zigbuild tools. The caller dispatches `cargo zigbuild` and selects the
 /// nightly compiler. This helper never changes the requested Rust target.
 pub fn configure(cmd: &mut Command, args: &[String]) -> Result<()> {
+    configure_flags(cmd, args)?;
+    crate::release_tools::apply(cmd, crate::release_tools::ensure()?)
+}
+
+fn configure_flags(cmd: &mut Command, args: &[String]) -> Result<()> {
+    if !cfg!(target_os = "linux") {
+        bail!("managed ARM64 cross tools require a Linux build host");
+    }
     let target = args
         .iter()
         .enumerate()
@@ -93,12 +110,18 @@ pub fn configure(cmd: &mut Command, args: &[String]) -> Result<()> {
         })
         .join(" ");
     validate(args, &target_flags.to_string_lossy(), &global_flags)?;
-    if emulated(&target_flags.to_string_lossy()) && !global_flags.trim().is_empty() {
-        bail!(
-            "global RUSTFLAGS/CARGO_ENCODED_RUSTFLAGS override target rustflags; remove them for the official ARM64 emulated TLS build"
-        );
+    let mut target_flags = target_flags.to_string_lossy().into_owned();
+    if !emulated(&target_flags) {
+        if !target_flags.is_empty() {
+            target_flags.push(' ');
+        }
+        target_flags.push_str("-Ztls-model=emulated");
     }
-    crate::release_tools::apply(cmd, crate::release_tools::ensure()?)
+    cmd.env(TARGET_RUSTFLAGS, target_flags)
+        // Even an empty encoded/global value takes precedence over target flags.
+        .env_remove("RUSTFLAGS")
+        .env_remove("CARGO_ENCODED_RUSTFLAGS");
+    Ok(())
 }
 
 /// Structural target validation only. TLS provenance and runtime acceptance
@@ -138,6 +161,44 @@ mod tests {
     fn args(values: &[&str]) -> Vec<String> {
         values.iter().map(|s| (*s).into()).collect()
     }
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn default_mode_injects_target_tls_and_preserves_other_flags() {
+        let mut cmd = Command::new("cargo");
+        cmd.env_remove("RUSTFLAGS")
+            .env("CARGO_ENCODED_RUSTFLAGS", "")
+            .env(TARGET_RUSTFLAGS, "-C opt-level=2");
+        let args = args(&["--target", TARGET, "-Zbuild-std=std,panic_abort"]);
+        configure_flags(&mut cmd, &args).unwrap();
+        assert_eq!(
+            environment(&cmd, TARGET_RUSTFLAGS).unwrap(),
+            "-C opt-level=2 -Ztls-model=emulated"
+        );
+        assert!(environment(&cmd, "RUSTFLAGS").is_none());
+        assert!(environment(&cmd, "CARGO_ENCODED_RUSTFLAGS").is_none());
+        configure_flags(&mut cmd, &args).unwrap();
+        assert_eq!(
+            environment(&cmd, TARGET_RUSTFLAGS).unwrap(),
+            "-C opt-level=2 -Ztls-model=emulated"
+        );
+        assert!(configure_flags(&mut cmd, &args[..2]).is_err());
+    }
+
+    #[test]
+    fn default_mode_rejects_missing_std_and_conflicting_flags() {
+        let full = args(&["-Zbuild-std=std,panic_abort"]);
+        assert!(validate(&[], "", "").is_err());
+        assert!(validate(&full, "", "").is_ok());
+        for flags in [
+            "-Ztls-model=local-exec",
+            "-Z tls-model=global-dynamic",
+            "-Ztls-model=emulated -Ztls-model=local-exec",
+        ] {
+            assert!(validate(&full, flags, "").is_err());
+        }
+        assert!(validate(&full, "", "-Copt-level=2").is_err());
+    }
+
     #[test]
     fn artifact_requires_aarch64_executable_segments() {
         let mut elf = vec![0u8; 120];
@@ -199,7 +260,8 @@ mod tests {
             )
             .is_err()
         );
-        assert!(validate(&[], "-C opt-level=2", "").is_ok());
+        assert!(validate(&[], "-C opt-level=2", "").is_err());
+        assert!(supported(TARGET));
         assert!(!supported("x86_64-unknown-linux-gnu"));
         assert!(!supported("aarch64-unknown-linux-musl"));
     }

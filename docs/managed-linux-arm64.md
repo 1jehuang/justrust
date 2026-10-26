@@ -38,22 +38,25 @@ not to `arm64_tools`.
 
 ## Integration API
 
-- `supported(target)` recognizes the exact managed target on Linux.
-- `configure(&mut Command, &[String])` requires that explicit target, checks
-  command/inherited environment flags, and applies pinned release tools.
+- `supported(target)` recognizes the exact managed target independently of
+  the calling host. `configure` separately requires a Linux build host.
+- `configure(&mut Command, &[String])` requires that explicit target and the
+  full build-std list, injects target-only emulated TLS when absent, rejects
+  conflicting TLS/global flags, and applies pinned release tools.
 - `validate_artifact(bytes)` structurally checks little-endian ELF64,
   AArch64, executable/shared-object type, segment bounds, and an executable
   load segment. It does not certify TLS provenance or runtime behavior.
 - `validate(args, target_flags, global_flags)` checks already-resolved flags,
   including configuration-file flags supplied by command orchestration.
 
-When emulated TLS is requested, validation requires both `std` and
-`panic_abort` in the effective explicit build-std list. Arguments after `--`
-are not Cargo options. A later incomplete build-std list cannot be used to
-bypass validation. Global emulated-TLS flags are rejected. Global flags that
-would override an explicitly requested target TLS environment are rejected.
-A generic build without emulated TLS remains possible but is not labeled an
-official Jcode ARM64 release.
+This dedicated path always requires both `std` and `panic_abort` in the
+explicit build-std list, even when no TLS flags were supplied. Arguments after
+`--` are not Cargo options. A later incomplete build-std list cannot bypass
+validation. All nonempty global rustflags and all conflicting TLS models are
+rejected. Empty global variables are removed from the child command because
+even an empty encoded rustflags value overrides target flags. Existing target
+flags are preserved, and `-Ztls-model=emulated` is appended if absent. There is
+no generic ARM mode on this dedicated official-release path.
 
 `configure` cannot discover arbitrary Cargo configuration by itself. Callers
 must pass resolved `.cargo/config.toml`/`--config` rustflags through `validate`
