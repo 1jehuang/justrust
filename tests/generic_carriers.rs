@@ -1,5 +1,7 @@
 //! Frozen exact32 executable generic carrier acceptance corpus.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[path = "support/iterator_oracle.rs"]
+mod differential;
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -579,6 +581,14 @@ fn frozen_generic_carriers_invalid12() {
 #[test]
 fn frozen_generic_carriers_legal_excluded3() {
     for fixture in group("legal-excluded", 3) {
-        rejects(fixture.name, fixture.full_source, false);
+        // Preserve the frozen historical group and exact source bytes. Shared
+        // generic-call inference now admits X29, which must execute rather than
+        // merely avoid an unsupported diagnostic.
+        if fixture.id == "X29" {
+            differential::stock_native(fixture.full_source);
+            runs(fixture.full_source, fixture.expected_stdout);
+        } else {
+            rejects(fixture.name, fixture.full_source, false);
+        }
     }
 }

@@ -103,6 +103,12 @@ These are per-case observations, not conclusions drawn from aggregate counts.
 The contract's prefreeze X32 correction and original immutable stock diagnostics,
 including null-code lifetime errors, are not changed by this acceptance map.
 
+Subsequent generic-call inference promotes the unchanged X29 source from its
+historical boundary to execution. `frozen_generic_carriers_legal_excluded3`
+preserves the original fixture group and bytes, but now checks X29 against stock
+and requires native CHECK/BUILD/run at workers 1 and 8 with the recorded stdout.
+The remaining historical exclusions are not relaxed by that promotion.
+
 ## Integration, regression and resource requirements
 
 | Requirement | Concrete check and observed result |
