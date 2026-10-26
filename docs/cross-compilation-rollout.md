@@ -30,9 +30,16 @@ support.
   immutable build status. The script passed locally on Linux. Adding these
   jobs is not evidence that their macOS/Windows executions have passed yet.
 
-The installed client was rebuilt from committed sources, excluding concurrent
-uncommitted Linux release work. The helper is currently a repository Python
-script, not an installed `justrust test-bundle` subcommand.
+The installed client includes native `justrust test-bundle pack` and `run`
+subcommands. The Python helper remains available for interoperable transfer
+and execution on machines without the native client.
+
+A real hosted Linux compile-only build returned Cargo-selected test
+executables with paths rewritten to downloaded local files. The native pack
+command consumed that JSON directly. Two tests passed locally, a deliberate
+failure returned CLI status 1 with underlying libtest status 101, and the
+original manifest remained `not-tested`. The hosted run was
+`20261026-015620295-319789` (pinned Rust 1.90.0).
 
 ## Validation evidence
 
@@ -73,16 +80,13 @@ No speedup or general cross-platform compatibility claim is made.
    tenant isolation, exact toolchain selection, target-aware artifact
    validation and cache separation. Do not remove the existing unsupported
    target guard simply because the local compiler can emit a binary.
-3. **Return the selected test artifacts.** `test --no-run` must download Cargo's
-   selected executables and a portable manifest, not arbitrary stale files in
-   `target/`. Transport must rewrite remote paths safely. The current helper
-   consumes an existing Cargo JSON stream and local artifact tree; it does not
-   perform this hosted download.
-4. **Provide a first-class local runner.** Integrate the verified bundle
-   contract in the installed client, preserving exact exit status, full test
-   output, test selection and explicit untested state. Resource fixtures,
-   dynamic native libraries and working-directory requirements need an
-   explicit contract rather than assuming every test is self-contained.
+3. **Return the selected test artifacts.** Implemented for hosted native Linux
+   `test --no-run`: Cargo-selected executables are downloaded and JSON paths
+   are rewritten to local files. Additional targets require target-aware
+   admission and binary-format checks, not just a compiler flag.
+4. **Provide a first-class local runner.** Implemented in the installed client.
+   Resource fixtures, dynamic native libraries and working-directory
+   requirements remain explicitly caller-managed, not implicitly bundled.
 5. **Validate representative real projects before promotion.** Check native
    dependencies, build scripts, proc macros, target ABIs, incremental rebuilds,
    corruption/mismatched-target rejection and local failure reporting. Keep
