@@ -962,6 +962,31 @@ fn try_lock_probe(path: &Path) -> bool {
     }
 }
 
+/// Check the existing success marker or probe once. Do not cache failures:
+/// permissions, mount configuration, or the copy tool can change later.
+/// The injected probe keeps the diagnostic tests independent of filesystem type.
+fn reflink_available(
+    root: &Path,
+    probe: impl FnOnce(&Path) -> bool,
+    diagnostic: &mut impl std::io::Write,
+) -> bool {
+    let marker = root.join(".reflink-ok");
+    if marker.exists() {
+        return true;
+    }
+    if !probe(root) {
+        // Best effort only: diagnostics must not prevent the shared-dir fallback.
+        let _ = writeln!(
+            diagnostic,
+            "justrust: build slots disabled for this run: reflink probe failed. \
+             Using the shared target directory (concurrent builds may wait for Cargo's lock)"
+        );
+        return false;
+    }
+    let _ = std::fs::write(marker, b"");
+    true
+}
+
 /// Choose and lock a slot for this run. None means "run exactly as before".
 pub fn acquire(args: &[OsString]) -> Option<Slot> {
     if !eligible(args) {
@@ -977,11 +1002,8 @@ pub fn acquire(args: &[OsString]) -> Option<Slot> {
     }
     let root = target.join("justrust-slots");
     std::fs::create_dir_all(&root).ok()?;
-    if !root.join(".reflink-ok").exists() {
-        if !reflink_supported(&root) {
-            return None;
-        }
-        let _ = std::fs::write(root.join(".reflink-ok"), b"");
+    if !reflink_available(&root, reflink_supported, &mut std::io::stderr().lock()) {
+        return None;
     }
 
     let cap = capacity();
@@ -1485,6 +1507,50 @@ fn human_age(secs: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reflink_probe_failure_explains_fallback_without_caching_failure() {
+        let root = std::env::temp_dir().join(format!(
+            "justrust-slot-reflink-failure-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut diagnostic = Vec::new();
+        assert!(!reflink_available(&root, |_| false, &mut diagnostic));
+        let message = String::from_utf8(diagnostic).unwrap();
+        assert_eq!(message.lines().count(), 1);
+        assert!(message.len() < 200);
+        assert!(message.contains("reflink probe failed"));
+        assert!(message.contains("shared target directory"));
+        assert!(message.contains("Cargo's lock"));
+        assert!(!root.join(".reflink-ok").exists());
+
+        let mut diagnostic = Vec::new();
+        assert!(reflink_available(&root, |_| true, &mut diagnostic));
+        assert!(diagnostic.is_empty());
+        assert!(root.join(".reflink-ok").exists());
+        assert!(reflink_available(
+            &root,
+            |_| panic!("cached success must not probe again"),
+            &mut diagnostic
+        ));
+        assert!(diagnostic.is_empty());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn reflink_probe_failure_still_falls_back_if_diagnostic_write_fails() {
+        let root = std::env::temp_dir().join(format!(
+            "justrust-slot-reflink-write-failure-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        // A zero-capacity slice reports WriteZero instead of accepting output.
+        let mut diagnostic: &mut [u8] = &mut [];
+        assert!(!reflink_available(&root, |_| false, &mut diagnostic));
+        assert!(!root.join(".reflink-ok").exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     fn os(v: &[&str]) -> Vec<OsString> {
         v.iter().map(OsString::from).collect()
