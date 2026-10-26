@@ -99,8 +99,13 @@ fn forwarded_env(mut lookup: impl FnMut(&str) -> Option<String>) -> Vec<(String,
     {
         env.push(("JUSTRUST_DARWIN_SDK".into(), id));
     }
-    if lookup("JUSTRUST_ACCEPT_MICROSOFT_SDK_LICENSE").as_deref() == Some("1") {
-        env.push(("JUSTRUST_ACCEPT_MICROSOFT_SDK_LICENSE".into(), "1".into()));
+    for name in [
+        "JUSTRUST_ACCEPT_MICROSOFT_SDK_LICENSE",
+        "JUSTRUST_INSTALL_LLVM_TOOLS",
+    ] {
+        if lookup(name).as_deref() == Some("1") {
+            env.push((name.into(), "1".into()));
+        }
     }
     if lookup("CARGO_BUILD_RUSTC_WRAPPER").as_deref() == Some("") {
         env.push(("CARGO_BUILD_RUSTC_WRAPPER".into(), String::new()));
@@ -111,6 +116,20 @@ fn forwarded_env(mut lookup: impl FnMut(&str) -> Option<String>) -> Vec<(String,
 #[cfg(test)]
 mod platform_env_tests {
     use super::forwarded_env;
+    #[test]
+    fn llvm_provisioning_opt_in_is_not_sdk_license_consent() {
+        for value in ["yes", "true", "0", "1; unsafe", ""] {
+            assert!(
+                forwarded_env(|name| (name == "JUSTRUST_INSTALL_LLVM_TOOLS").then(|| value.into()))
+                    .is_empty()
+            );
+        }
+        assert_eq!(
+            forwarded_env(|name| (name == "JUSTRUST_INSTALL_LLVM_TOOLS").then(|| "1".into())),
+            vec![("JUSTRUST_INSTALL_LLVM_TOOLS".into(), "1".into())]
+        );
+    }
+
     #[test]
     fn sdk_selection_never_forwards_paths_or_signing_keys() {
         for value in ["/private/sdk", "../sdk", "secret", ""] {
