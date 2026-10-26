@@ -874,9 +874,17 @@ mod tests {
     }
 
     #[test]
-    fn multiple_complete_applications_never_infer_from_input_or_result() {
+    fn multiple_complete_result_applications_follow_expected_type() {
+        // Result-directed selection is supported. Keep the distinct input-only
+        // inference boundary below, rather than rejecting stock-valid results.
+        super::super::parser_tests::stock_native_run(
+            "struct Token;trait Convert<T>{fn convert(self)->T;}impl Convert<i32> for Token{fn convert(self)->i32{42}}impl Convert<bool> for Token{fn convert(self)->bool{true}}fn value()->i32{Token.convert()}fn flag()->bool{Token.convert()}fn main(){println!(\"{} {}\",value(),flag());}",
+        );
+    }
+
+    #[test]
+    fn multiple_complete_input_applications_require_explicit_ufcs() {
         for source in [
-            "struct Token;trait Convert<T>{fn convert(self)->T;}impl Convert<i32> for Token{fn convert(self)->i32{42}}impl Convert<bool> for Token{fn convert(self)->bool{true}}fn value()->i32{Token.convert()}fn main(){}",
             "struct Token;trait Take<T>{fn take(self,value:T)->i32;}impl Take<i32> for Token{fn take(self,value:i32)->i32{value}}impl Take<bool> for Token{fn take(self,value:bool)->i32{if value{42}else{0}}}fn value()->i32{Token.take(42)}fn main(){}",
         ] {
             let program = parse(source).unwrap();

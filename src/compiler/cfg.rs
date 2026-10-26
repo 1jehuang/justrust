@@ -7854,6 +7854,49 @@ mod tests {
         function
     }
 
+    // Synthetic IR fixtures retain their deliberately raw validation contract,
+    // but field materialization must still use an explicit test-owned budget.
+    fn nominal_lowered_with_budget(
+        source: &ir::CheckedFunction,
+        budget: &ir::PlanBudget,
+    ) -> Function {
+        source.validate().unwrap();
+        let function = lower_with_budget(source, budget).unwrap();
+        function.validate().unwrap();
+        function
+    }
+
+    // Source fixtures preserve the original plan, publication and task authority
+    // through lowering instead of reconstructing a budget after type checking.
+    fn source_nominal_lowered(text: &str, index: usize) -> Function {
+        let budget = ir::PlanBudget::default();
+        let program = super::super::frontend::parse(text).unwrap();
+        let plan = super::super::frontend::PlanCtx::from_program(&program, &budget).unwrap();
+        let super::super::frontend::PublishedCallableBody::Source(publication) = plan
+            .publish_callable_body(plan.function_decl(index).unwrap(), &budget)
+            .unwrap()
+        else {
+            panic!("canonical source publication required")
+        };
+        let function = match publication.facts().phase() {
+            super::super::traits::FactsPhase::Universal => {
+                lower_source_template(&publication, &budget)
+                    .unwrap()
+                    .function()
+                    .as_ref()
+                    .clone()
+            }
+            super::super::traits::FactsPhase::Closed => {
+                lower_source_closed(&publication, &budget).unwrap()
+            }
+            super::super::traits::FactsPhase::Schema => {
+                panic!("source fixture requires executable callable facts")
+            }
+        };
+        function.validate().unwrap();
+        function
+    }
+
     fn root_reads(function: &Function) -> Vec<&Operand> {
         function
             .blocks
@@ -10714,10 +10757,10 @@ mod tests {
 
     #[test]
     fn while_let_payload_bindings_move_only_on_success_and_die_before_continue() {
-        let function = nominal_lowered(&checked(
+        let function = source_nominal_lowered(
             "struct Cell{n:i32} enum E{A(Cell,i32),B} fn f(p:E){let mut state=p;while let E::A(cell,..)=state{let n=cell.n;state=E::B;continue;}} fn main(){}",
             0,
-        ));
+        );
         let root = LocalId(
             function
                 .locals
@@ -10804,11 +10847,10 @@ mod tests {
 
     #[test]
     fn while_let_dead_body_retains_exact_payload_projection_checks() {
-        let mut source = checked(
-            "enum E{A(i32),B} fn f(){while let E::A(n)=E::B{let x=n;}} fn main(){}",
-            0,
-        );
-        nominal_lowered(&source);
+        let text = "enum E{A(i32),B} fn f(){while let E::A(n)=E::B{let x=n;}} fn main(){}";
+        let mut source = checked(text, 0);
+        source.validate().unwrap();
+        source_nominal_lowered(text, 0);
         let binding = source
             .exprs
             .iter_mut()
@@ -10908,11 +10950,10 @@ mod tests {
 
     #[test]
     fn if_let_dead_selected_pattern_keeps_full_ir_projection_validation() {
-        let mut source = checked(
-            "enum E{A(i32),B} fn f()->i32{if let E::A(n)=E::B{n}else{0}} fn main(){}",
-            0,
-        );
-        nominal_lowered(&source);
+        let text = "enum E{A(i32),B} fn f()->i32{if let E::A(n)=E::B{n}else{0}} fn main(){}";
+        let mut source = checked(text, 0);
+        source.validate().unwrap();
+        source_nominal_lowered(text, 0);
         let binding = source
             .exprs
             .iter_mut()
@@ -11522,6 +11563,7 @@ mod tests {
 
     #[test]
     fn empty_nominal_aggregate_keeps_identity_and_has_no_projectable_fields() {
+        let budget = ir::PlanBudget::default();
         let (_module_names, modules) = fixture_modules();
         let nominal = nominal(&modules, vec![]);
         let ty = Ty::Struct(nominal.clone());
@@ -11539,7 +11581,7 @@ mod tests {
             )],
             vec![ir::TypedStmt::Expr(ExprId(0))],
         );
-        let function = nominal_lowered(&source);
+        let function = nominal_lowered_with_budget(&source, &budget);
         assert!(
             function
                 .blocks
@@ -11591,6 +11633,7 @@ mod tests {
 
     #[test]
     fn struct_initializer_evaluates_source_order_then_permutates_snapshots() {
+        let budget = ir::PlanBudget::default();
         let (_module_names, modules) = fixture_modules();
         let ty = nominal(&modules, vec![Ty::Int(IntTy::I32), Ty::Int(IntTy::I32)]);
         let call = |name: &str| {
@@ -11623,7 +11666,7 @@ mod tests {
             ],
             vec![ir::TypedStmt::Expr(ExprId(2))],
         );
-        let function = nominal_lowered(&source);
+        let function = nominal_lowered_with_budget(&source, &budget);
         let calls: Vec<_> = function
             .blocks
             .iter()
@@ -11656,6 +11699,7 @@ mod tests {
 
     #[test]
     fn payload_constructor_evaluates_source_order_then_permutates_snapshots() {
+        let budget = ir::PlanBudget::default();
         let (_module_names, modules) = fixture_modules();
         let ty = ir::EnumTy::new(ir::EnumDef {
             source_decl: test_decl(),
@@ -11727,7 +11771,7 @@ mod tests {
             vec![ir::TypedStmt::Expr(ExprId(2))],
         );
         source.validate().unwrap();
-        let function = nominal_lowered(&source);
+        let function = nominal_lowered_with_budget(&source, &budget);
         let calls: Vec<_> = function
             .blocks
             .iter()
@@ -12111,10 +12155,10 @@ mod tests {
 
     #[test]
     fn enum_match_tests_read_tags_but_only_selected_binding_moves() {
-        let function = nominal_lowered(&checked(
+        let function = source_nominal_lowered(
             "enum E{A,B} fn f(e:E)->E{match e{E::A=>E::B,other=>other}} fn main(){}",
             0,
-        ));
+        );
         assert_storage_paths(&function);
         let tags = function
             .blocks
@@ -12167,7 +12211,7 @@ mod tests {
     #[test]
     fn nested_place_projection_does_not_consume_non_copy_intermediate_field() {
         let source = "struct I{x:i32} struct S{child:I} fn main(){let s=S{child:I{x:1}};let a=s.child.x;let b=s.child.x;let child=s.child;}";
-        let function = nominal_lowered(&checked(source, 0));
+        let function = source_nominal_lowered(source, 0);
         assert!(super::super::ownership::analyze(&function).passed());
         let s = LocalId(
             function
@@ -12204,7 +12248,7 @@ mod tests {
     #[test]
     fn nominal_argument_moves_are_observed_before_later_arguments() {
         let source = "struct S{x:i32} fn take(s:S,n:i32){} fn main(){let s=S{x:1};take(s,s.x);}";
-        let function = nominal_lowered(&checked(source, 1));
+        let function = source_nominal_lowered(source, 1);
         assert!(!super::super::ownership::analyze(&function).passed());
     }
 
