@@ -644,6 +644,27 @@ impl ValidatedTraitWorld {
             closedness_storage,
             ..
         } = active;
+        self.validate_equality_domain_with_storage(
+            projection,
+            rhs,
+            env,
+            replays,
+            caller,
+            closedness,
+            closedness_storage,
+        )
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn validate_equality_domain_with_storage(
+        &self,
+        projection: &ir::AssociatedTypeProjection,
+        rhs: &Ty,
+        env: &GenericEnv,
+        replays: &mut NominalReplays,
+        caller: Option<&ValidatedFacts>,
+        closedness: &mut Vec<ClosednessValidation>,
+        closedness_storage: &mut Vec<ir::PlanReservation>,
+    ) -> Result<()> {
         self.validate_equality_domain_policy(projection, rhs, env, replays, caller, |goal, env| {
             self.goal_is_closed_with_storage(goal, env, closedness, closedness_storage)
         })
@@ -1813,6 +1834,451 @@ mod tests {
             projection,
             rhs,
             opaque,
+        }
+    }
+
+    // Substitute a genuine declaration into its original ordered caller binder.
+    // This is a predicate batch, not copied synthetic source metadata.
+    fn active_predicate_batch(case: &ActiveEqualityCase) -> Vec<Predicate> {
+        let schema = case
+            .world
+            .schema
+            .declaration_schema(case.facts.declaration())
+            .unwrap();
+        let args = case
+            .facts
+            .env()
+            .ordered_params()
+            .map(Ty::Param)
+            .collect::<Vec<_>>();
+        case.world
+            .schema
+            .instantiate_schema(&schema, &args, case.facts.env(), case.facts.budget())
+            .unwrap()
+            .predicates
+            .to_vec()
+    }
+
+    #[test]
+    fn active_predicate_batch_warm_context_metadata_and_conflicts() {
+        let case = active_equality_fixture();
+        let rows = active_predicate_batch(&case);
+        let mut active = ProofScratch::default();
+        for _ in 0..2 {
+            case.world
+                .validate_predicates_with_active(
+                    &rows,
+                    case.facts.env(),
+                    None,
+                    &mut active,
+                    Some(&case.facts),
+                )
+                .unwrap();
+        }
+        let completed = active.closedness.len();
+        assert!(completed > 0);
+        let schema = case
+            .world
+            .schema
+            .declaration_schema(case.facts.declaration())
+            .unwrap();
+        let arguments = case
+            .facts
+            .env()
+            .ordered_params()
+            .map(Ty::Param)
+            .collect::<Vec<_>>();
+        let mut instantiated = ProofScratch::default();
+        for _ in 0..2 {
+            case.world
+                .instantiate_scratch_with_facts(
+                    &schema,
+                    &arguments,
+                    ProofContext::from_facts(&case.facts),
+                    Some(case.facts.declaration()),
+                    &mut instantiated,
+                    Some(&case.facts),
+                )
+                .unwrap();
+        }
+        assert!(!instantiated.checked.as_ref().unwrap().closedness.is_empty());
+        let bound = active.replays.predicate_formations.caller_context;
+        let formations = active.replays.predicate_formations.complete.len();
+        // Raw admission cannot rebind the original caller-aware formation cache.
+        case.world
+            .validate_predicates_with_active(&rows, case.facts.env(), None, &mut active, None)
+            .unwrap();
+        assert_eq!(active.replays.predicate_formations.caller_context, bound);
+        assert_eq!(
+            active.replays.predicate_formations.complete.len(),
+            formations
+        );
+        let foreign = active_equality_fixture();
+        assert!(
+            foreign
+                .world
+                .validate_predicates_with_active(
+                    &rows,
+                    case.facts.env(),
+                    None,
+                    &mut active,
+                    Some(&case.facts)
+                )
+                .is_err()
+        );
+        assert!(
+            case.world
+                .validate_predicates_with_active(
+                    &rows,
+                    foreign.facts.env(),
+                    None,
+                    &mut active,
+                    Some(&case.facts)
+                )
+                .is_err()
+        );
+        let mut changed = case.facts.as_ref().clone();
+        changed.predicates = case.world.empty.clone();
+        assert!(
+            case.world
+                .validate_predicates_with_active(
+                    &rows,
+                    case.facts.env(),
+                    None,
+                    &mut active,
+                    Some(&changed)
+                )
+                .is_err()
+        );
+        assert_eq!(active.closedness.len(), completed);
+        // A valid early equality must not run its domain check before late metadata.
+        let mut invalid = rows.clone();
+        let mut forged = case.projection.clone();
+        forged.item = case.facts.declaration();
+        invalid.push(Predicate::ProjectionEq {
+            projection: forged,
+            ty: case.rhs.clone(),
+        });
+        let mut cold = ProofScratch::default();
+        assert!(
+            case.world
+                .validate_predicates_with_active(
+                    &invalid,
+                    case.facts.env(),
+                    None,
+                    &mut cold,
+                    Some(&case.facts)
+                )
+                .is_err()
+        );
+        assert!(cold.closedness.is_empty());
+        assert!(
+            case.world
+                .validate_predicates_with_active(
+                    &invalid,
+                    case.facts.env(),
+                    None,
+                    &mut active,
+                    Some(&case.facts)
+                )
+                .is_err()
+        );
+        assert_eq!(active.closedness.len(), completed);
+        // Duplicates keep canonical insertion policy. Contradictory RHS rows keep
+        // conflict rejection even after genuine successes have warmed the arena.
+        let mut duplicate = rows.clone();
+        duplicate.extend(rows.iter().cloned());
+        case.world
+            .validate_predicates_with_active(
+                &duplicate,
+                case.facts.env(),
+                None,
+                &mut active,
+                Some(&case.facts),
+            )
+            .unwrap();
+        let mut conflict = rows.clone();
+        conflict.push(Predicate::ProjectionEq {
+            projection: case.projection.clone(),
+            ty: Ty::Bool,
+        });
+        let fresh = case
+            .world
+            .validate_predicates_with_facts(
+                &conflict,
+                case.facts.env(),
+                None,
+                &mut NominalReplays::default(),
+                Some(&case.facts),
+            )
+            .unwrap_err();
+        let warm = case
+            .world
+            .validate_predicates_with_active(
+                &conflict,
+                case.facts.env(),
+                None,
+                &mut active,
+                Some(&case.facts),
+            )
+            .unwrap_err();
+        assert_eq!(fresh.kind(), warm.kind());
+        // Root cache entries do not collapse the distinct Actual usage key.
+        let prior = active.closedness.len();
+        case.world
+            .closedness_of_root_with_storage(
+                &case.projection.trait_ref.self_ty,
+                case.facts.env(),
+                TypeUse::Actual,
+                0,
+                &mut active.closedness,
+                &mut active.closedness_storage,
+            )
+            .unwrap();
+        assert_eq!(active.closedness.len(), prior + 1);
+    }
+
+    #[test]
+    fn active_predicate_batch_exact_warm_work_and_poison() {
+        for short in [false, true] {
+            let case = active_equality_fixture();
+            let rows = active_predicate_batch(&case);
+            let mut active = ProofScratch::default();
+            for _ in 0..2 {
+                case.world
+                    .validate_predicates_with_active(
+                        &rows,
+                        case.facts.env(),
+                        None,
+                        &mut active,
+                        Some(&case.facts),
+                    )
+                    .unwrap();
+            }
+            let count = active.closedness.len();
+            let before = case.facts.budget().usage_snapshot().work;
+            case.world
+                .validate_predicates_with_active(
+                    &rows,
+                    case.facts.env(),
+                    None,
+                    &mut active,
+                    Some(&case.facts),
+                )
+                .unwrap();
+            let cost = case
+                .facts
+                .budget()
+                .usage_snapshot()
+                .work
+                .checked_sub(before)
+                .unwrap();
+            assert!(cost > 0);
+            let filler = case
+                .facts
+                .budget()
+                .limits()
+                .work
+                .checked_sub(case.facts.budget().usage_snapshot().work)
+                .and_then(|remaining| remaining.checked_sub(cost))
+                .and_then(|remaining| remaining.checked_add(usize::from(short)))
+                .unwrap();
+            case.facts.budget().charge_work(filler).unwrap();
+            let result = case.world.validate_predicates_with_active(
+                &rows,
+                case.facts.env(),
+                None,
+                &mut active,
+                Some(&case.facts),
+            );
+            assert_eq!(result.is_err(), short);
+            assert_eq!(active.closedness.len(), count);
+            if short {
+                let failure = case.facts.budget().first_resource_failure();
+                assert_eq!(failure.unwrap().kind, ir::ResourceBudgetKind::Work);
+                assert!(
+                    case.world
+                        .validate_predicates_with_active(
+                            &rows,
+                            case.facts.env(),
+                            None,
+                            &mut active,
+                            Some(&case.facts)
+                        )
+                        .is_err()
+                );
+                assert_eq!(case.facts.budget().first_resource_failure(), failure);
+            }
+        }
+        for planner in [false, true] {
+            let case = active_equality_fixture();
+            let rows = active_predicate_batch(&case);
+            let mut active = ProofScratch::default();
+            case.world
+                .validate_predicates_with_active(
+                    &rows,
+                    case.facts.env(),
+                    None,
+                    &mut active,
+                    Some(&case.facts),
+                )
+                .unwrap();
+            let count = active.closedness.len();
+            if planner {
+                case.facts.budget().poison_ledger_for_tests();
+            } else {
+                assert!(
+                    case.world
+                        .catalog
+                        .modules()
+                        .budget()
+                        .charge(crate::compiler::expansion_budget::Counter::Work, u64::MAX)
+                        .is_err()
+                );
+            }
+            let failure = case.facts.budget().first_resource_failure();
+            for _ in 0..2 {
+                assert!(
+                    matches!(case.world.validate_predicates_with_active(&rows, case.facts.env(), None, &mut active, Some(&case.facts)), Err(error) if error.is_resource())
+                );
+                assert_eq!(active.closedness.len(), count);
+                assert_eq!(case.facts.budget().first_resource_failure(), failure);
+            }
+        }
+    }
+
+    #[test]
+    fn active_predicate_batch_actual_peak_exact_and_short() {
+        let case = active_equality_fixture();
+        let rows = active_predicate_batch(&case);
+        let before = case.facts.budget().usage_snapshot();
+        assert_eq!(before.bytes, before.reservations.current_bytes);
+        assert!(!before.reservations.counters_saturated);
+        let lift = case
+            .facts
+            .budget()
+            .reserve_bytes(
+                before
+                    .reservations
+                    .peak_bytes
+                    .checked_sub(before.bytes)
+                    .unwrap(),
+            )
+            .unwrap();
+        let window = case.facts.budget().usage_snapshot();
+        assert_eq!(window.bytes, window.reservations.peak_bytes);
+        let mut measured = ProofScratch::default();
+        case.world
+            .validate_predicates_with_active(
+                &rows,
+                case.facts.env(),
+                None,
+                &mut measured,
+                Some(&case.facts),
+            )
+            .unwrap();
+        let after = case.facts.budget().usage_snapshot();
+        assert_eq!(after.bytes, after.reservations.current_bytes);
+        assert!(!after.reservations.counters_saturated);
+        let peak = after
+            .reservations
+            .peak_bytes
+            .checked_sub(window.bytes)
+            .unwrap();
+        let net = after.bytes.checked_sub(window.bytes).unwrap();
+        assert!(peak >= net && net > 0);
+        drop(measured);
+        drop(lift);
+        for short in [false, true] {
+            let current = case.facts.budget().usage_snapshot().bytes;
+            let headroom = peak.checked_sub(usize::from(short)).unwrap();
+            let filler_bytes = case
+                .facts
+                .budget()
+                .limits()
+                .bytes
+                .checked_sub(current)
+                .and_then(|available| available.checked_sub(headroom))
+                .unwrap();
+            let filler = case.facts.budget().reserve_bytes(filler_bytes).unwrap();
+            let mut active = ProofScratch::default();
+            let result = case.world.validate_predicates_with_active(
+                &rows,
+                case.facts.env(),
+                None,
+                &mut active,
+                Some(&case.facts),
+            );
+            assert_eq!(result.is_err(), short);
+            if short {
+                assert_eq!(
+                    case.facts.budget().first_resource_failure().unwrap().kind,
+                    ir::ResourceBudgetKind::Bytes
+                );
+            }
+            let failure = case.facts.budget().first_resource_failure();
+            drop(active);
+            let owner_dropped = case.facts.budget().usage_snapshot().bytes;
+            drop(filler);
+            assert_eq!(
+                case.facts.budget().usage_snapshot().bytes,
+                owner_dropped - filler_bytes
+            );
+            assert_eq!(case.facts.budget().first_resource_failure(), failure);
+        }
+    }
+
+    #[test]
+    fn active_predicate_batch_owned_closedness_drop_and_explicit_poison() {
+        for poison in [false, true] {
+            let case = active_equality_fixture();
+            let rows = active_predicate_batch(&case);
+            let parent = case.facts.budget().reserve_bytes(17).unwrap();
+            let mut active = ProofScratch::default();
+            case.world
+                .validate_predicates_with_active(
+                    &rows,
+                    case.facts.env(),
+                    None,
+                    &mut active,
+                    Some(&case.facts),
+                )
+                .unwrap();
+            let count = active.closedness.len();
+            assert!(count > 0);
+            assert_eq!(active.closedness_storage.len(), count);
+            let paid = scratch_row_bytes::<ClosednessValidation>()
+                .unwrap()
+                .checked_mul(count)
+                .unwrap();
+            // Measure only these moved fields. The remaining arena fields are
+            // unchanged and drop at the end of their original scope.
+            let ProofScratch {
+                closedness,
+                closedness_storage,
+                ..
+            } = active;
+            let before = case.facts.budget().usage_snapshot().bytes;
+            if poison {
+                case.facts.budget().poison_ledger_for_tests();
+            }
+            drop(closedness);
+            assert_eq!(case.facts.budget().usage_snapshot().bytes, before);
+            drop(closedness_storage);
+            assert_eq!(
+                case.facts.budget().usage_snapshot().bytes,
+                if poison { before } else { before - paid }
+            );
+            let before_parent = case.facts.budget().usage_snapshot().bytes;
+            drop(parent);
+            assert_eq!(
+                case.facts.budget().usage_snapshot().bytes,
+                if poison {
+                    before_parent
+                } else {
+                    before_parent - 17
+                }
+            );
         }
     }
 

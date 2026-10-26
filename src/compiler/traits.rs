@@ -3326,6 +3326,63 @@ impl ValidatedTraitWorld {
         replays: &mut NominalReplays,
         caller: Option<&ValidatedFacts>,
     ) -> Result<()> {
+        self.validate_predicates_policy(
+            predicates,
+            env,
+            maybe_unsized,
+            replays,
+            caller,
+            |projection, ty, replays| {
+                self.validate_equality_domain_with_facts(projection, ty, env, replays, caller)
+            },
+        )
+    }
+    fn validate_predicates_with_active(
+        &self,
+        predicates: &[Predicate],
+        env: &GenericEnv,
+        maybe_unsized: Option<ParamId>,
+        active: &mut ProofScratch,
+        caller: Option<&ValidatedFacts>,
+    ) -> Result<()> {
+        let ProofScratch {
+            replays,
+            closedness,
+            closedness_storage,
+            ..
+        } = active;
+        self.validate_predicates_policy(
+            predicates,
+            env,
+            maybe_unsized,
+            replays,
+            caller,
+            |projection, ty, replays| {
+                self.validate_equality_domain_with_storage(
+                    projection,
+                    ty,
+                    env,
+                    replays,
+                    caller,
+                    closedness,
+                    closedness_storage,
+                )
+            },
+        )
+    }
+    fn validate_predicates_policy(
+        &self,
+        predicates: &[Predicate],
+        env: &GenericEnv,
+        maybe_unsized: Option<ParamId>,
+        replays: &mut NominalReplays,
+        caller: Option<&ValidatedFacts>,
+        mut equality_domain: impl FnMut(
+            &ir::AssociatedTypeProjection,
+            &Ty,
+            &mut NominalReplays,
+        ) -> Result<()>,
+    ) -> Result<()> {
         if let Some(caller) = caller {
             self.check_facts(caller, false)?;
             if !caller.budget().same_authority(&self.budget) || !self.same_env(env, caller.env())? {
@@ -3349,7 +3406,7 @@ impl ValidatedTraitWorld {
                     caller,
                 )?,
                 Predicate::ProjectionEq { projection, ty } => {
-                    self.validate_equality_domain_with_facts(projection, ty, env, replays, caller)?;
+                    equality_domain(projection, ty, replays)?;
                 }
             }
             self.append_predicate(&mut canonical, predicate)?;
@@ -7298,11 +7355,11 @@ impl ValidatedTraitWorld {
         result.predicates =
             self.normalize_instantiated_projection_predicates(&result.predicates, facts, active)?;
         self.validate_signature_shape_with_facts(&result.signature, facts.env(), None, caller)?;
-        self.validate_predicates_with_facts(
+        self.validate_predicates_with_active(
             &result.predicates,
             facts.env(),
             None,
-            &mut active.replays,
+            active,
             caller,
         )?;
         // The complete predicate batch, including ordinary membership rows,
