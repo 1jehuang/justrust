@@ -47,17 +47,24 @@ fn ready(root: &Path) -> bool {
 
 /// Install the reviewed cargo-xwin archive, never SDK payloads. License consent
 /// is required even for warm installations because cargo-xwin itself assumes it.
-/// The caller must separately provision clang/LLVM and the Rust target stdlib.
+/// LLVM aliases are provisioned from installed tools and validated without SDK
+/// access. The caller must separately provision the Rust target stdlib.
 pub fn prepare(target: &str) -> Result<PathBuf> {
     validate_target(target)?;
     require_license(std::env::var_os(ACCEPT_LICENSE_ENV).as_deref())?;
     if !cfg!(target_os = "linux") {
         bail!("managed Windows MSVC cross tools currently require a Linux host");
     }
+    let llvm = prepare_llvm()?;
     let arch = std::env::consts::ARCH;
     let hash = archive_hash(arch)?;
     let parent = crate::toolchain::root()?.join("msvc-tools");
-    let root = parent.join(format!("{REVISION}-{arch}"));
+    let root = parent.join(format!(
+        "{REVISION}-{arch}-{}",
+        llvm.file_name()
+            .context("missing LLVM identity")?
+            .to_string_lossy()
+    ));
     if ready(&root) {
         return Ok(root);
     }
@@ -122,6 +129,7 @@ pub fn prepare(target: &str) -> Result<PathBuf> {
             bail!("verified cargo-xwin does not report the pinned version");
         }
         std::fs::remove_file(archive)?;
+        link_tool(&llvm, &stage.join("llvm"))?;
         std::fs::write(stage.join(".complete"), REVISION)?;
         std::fs::rename(&stage, &root).context("publishing Windows MSVC tools")?;
         Ok(root.clone())
@@ -169,7 +177,7 @@ fn configure(cmd: &mut Command, root: &Path, target: &str) -> Result<()> {
         .find(|(key, _)| *key == "PATH")
         .map(|(_, value)| value.map(OsStr::to_os_string))
         .unwrap_or_else(|| std::env::var_os("PATH"));
-    let mut paths = vec![root.join("bin")];
+    let mut paths = vec![root.join("bin"), root.join("llvm/bin")];
     if let Some(existing) = existing {
         paths.extend(std::env::split_paths(&existing));
     }
@@ -177,9 +185,363 @@ fn configure(cmd: &mut Command, root: &Path, target: &str) -> Result<()> {
     Ok(())
 }
 
+#[cfg(unix)]
+fn link_tool(source: &Path, dest: &Path) -> Result<()> {
+    std::os::unix::fs::symlink(source, dest).context("creating LLVM compatibility alias")
+}
+
+#[cfg(not(unix))]
+fn link_tool(_source: &Path, _dest: &Path) -> Result<()> {
+    bail!("LLVM compatibility aliases require a Unix build host")
+}
+
+fn llvm_output(cmd: &mut Command) -> Result<std::process::Output> {
+    let output = cmd
+        .stdin(Stdio::null())
+        .output()
+        .with_context(|| format!("running LLVM prerequisite probe: {cmd:?}"))?;
+    if !output.status.success() {
+        bail!(
+            "LLVM prerequisite probe {cmd:?} failed: {}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    Ok(output)
+}
+
+fn find_llvm(names: &[&str], marker: &str) -> Result<PathBuf> {
+    let mut dirs: Vec<PathBuf> = std::env::var_os("PATH")
+        .map(|p| std::env::split_paths(&p).collect())
+        .unwrap_or_default();
+    // Distribution LLVM packages keep unsuffixed binaries here even when PATH
+    // exposes only clang-N. Never substitute GNU ar or Microsoft's tools.
+    for version in (18..=22).rev() {
+        dirs.push(PathBuf::from(format!("/usr/lib/llvm-{version}/bin")));
+    }
+    for dir in dirs {
+        for name in names {
+            let candidate = dir.join(name);
+            if !candidate.is_file() {
+                continue;
+            }
+            let Ok(output) = Command::new(&candidate)
+                .arg("--version")
+                .stdin(Stdio::null())
+                .output()
+            else {
+                continue;
+            };
+            let version = format!(
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            if output.status.success() && version.contains(marker) {
+                return candidate
+                    .canonicalize()
+                    .context("resolving LLVM executable");
+            }
+        }
+    }
+    bail!(
+        "missing genuine LLVM prerequisite {}: provision LLVM clang, llvm-ar and lld-link; GNU ar and unrelated linker drivers are not substitutes",
+        names[0]
+    )
+}
+
+/// Prepare LLVM tools without SDK access, license acceptance or target
+/// execution. Missing archive tools require explicit LLVM-only download opt-in.
+/// Aliases are content-addressed and tested for
+/// both MSVC architectures before publication. The caller may run this preflight
+/// without consenting to Microsoft's separate SDK terms.
+pub fn prepare_llvm() -> Result<PathBuf> {
+    prepare_llvm_with_install(std::env::var("JUSTRUST_INSTALL_LLVM_TOOLS").as_deref() == Ok("1"))
+}
+
+/// Explicitly authorize only the pinned LLVM package download. This flag is
+/// unrelated to Microsoft's SDK license and cannot authorize any SDK operation.
+pub fn prepare_llvm_with_install(install: bool) -> Result<PathBuf> {
+    if !cfg!(target_os = "linux") {
+        bail!("managed LLVM prerequisite aliases currently require Linux");
+    }
+    let clang = find_llvm(
+        &[
+            "clang", "clang-22", "clang-21", "clang-20", "clang-19", "clang-18",
+        ],
+        "clang version",
+    )?;
+    let ar = match find_llvm(
+        &[
+            "llvm-ar",
+            "llvm-ar-22",
+            "llvm-ar-21",
+            "llvm-ar-20",
+            "llvm-ar-19",
+            "llvm-ar-18",
+        ],
+        "LLVM",
+    ) {
+        Ok(path) => path,
+        Err(_) => install_llvm_ar(install)?,
+    };
+    let lld = find_llvm(
+        &[
+            "lld-link",
+            "lld-link-22",
+            "lld-link-21",
+            "lld-link-20",
+            "lld-link-19",
+            "lld-link-18",
+        ],
+        "LLD",
+    )?;
+    let parent = crate::toolchain::root()?.join("llvm-tools");
+    std::fs::create_dir_all(&parent)?;
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(parent.join(".install.lock"))?;
+    lock.lock().context("locking LLVM alias preparation")?;
+    let stage = parent.join(format!(".staging-{}", std::process::id()));
+    std::fs::create_dir(&stage).context("creating LLVM alias staging directory")?;
+    let result = (|| {
+        let mut manifest = String::from("LLVM-aliases-v1\n");
+        for path in [&clang, &ar, &lld] {
+            manifest.push_str(&format!(
+                "{} {}\n",
+                crate::toolchain::sha256(path)?,
+                path.display()
+            ));
+        }
+        let manifest_path = stage.join(".identity");
+        std::fs::write(&manifest_path, &manifest)?;
+        let identity = crate::toolchain::sha256(&manifest_path)?;
+        let root = parent.join(format!("llvm-v1-{identity}"));
+        if std::fs::read_to_string(root.join(".complete")).is_ok_and(|s| s == manifest)
+            && [
+                "clang",
+                "clang-cl",
+                "llvm-ar",
+                "llvm-lib",
+                "llvm-dlltool",
+                "lld-link",
+            ]
+            .iter()
+            .all(|name| root.join("bin").join(name).is_file())
+        {
+            return Ok(root);
+        }
+        if root.exists() {
+            bail!("incomplete LLVM alias installation: {}", root.display());
+        }
+        std::fs::create_dir(stage.join("bin"))?;
+        for (name, source) in [
+            ("clang", &clang),
+            ("clang-cl", &clang),
+            ("llvm-ar", &ar),
+            ("llvm-lib", &ar),
+            ("llvm-dlltool", &ar),
+            ("lld-link", &lld),
+        ] {
+            link_tool(source, &stage.join("bin").join(name))?;
+        }
+        probe_llvm(&stage)?;
+        std::fs::write(stage.join(".complete"), manifest)?;
+        std::fs::rename(&stage, &root).context("publishing probed LLVM aliases")?;
+        Ok(root)
+    })();
+    if stage.exists() {
+        let _ = std::fs::remove_dir_all(&stage);
+    }
+    result
+}
+
+fn llvm_package(arch: &str) -> Result<(&'static str, &'static str, &'static str)> {
+    match arch {
+        "x86_64" => Ok((
+            "https://archive.ubuntu.com/ubuntu",
+            "amd64",
+            "24c6a9d7b763c2b9ce3199012eca7366cada3e41978ecee022e9d44a110a9c6d",
+        )),
+        "aarch64" => Ok((
+            "https://ports.ubuntu.com/ubuntu-ports",
+            "arm64",
+            "e9dd1b2ae8187de6b138bcd8a8ab3bf04fb7639c68e90e30a1b86b266510e7e6",
+        )),
+        _ => bail!("no pinned LLVM package for host {arch}"),
+    }
+}
+
+fn install_llvm_ar(install: bool) -> Result<PathBuf> {
+    let (origin, arch, hash) = llvm_package(std::env::consts::ARCH)?;
+    let parent = crate::toolchain::root()?.join("llvm-packages");
+    let root = parent.join(format!("llvm-18.1.3-1-{arch}-{hash}"));
+    let binary = root.join("usr/lib/llvm-18/bin/llvm-ar");
+    let ready = || {
+        std::fs::read_to_string(root.join(".complete")).is_ok_and(|s| s == hash) && binary.is_file()
+    };
+    if ready() {
+        return Ok(binary);
+    }
+    if !install {
+        bail!(
+            "genuine llvm-ar is missing; explicitly set JUSTRUST_INSTALL_LLVM_TOOLS=1 to extract the checksum-pinned Ubuntu LLVM18 package without root. This does not accept Microsoft's SDK license"
+        );
+    }
+    if matches!(
+        std::env::var("JUSTRUST_TOOLCHAIN_AUTO_INSTALL").as_deref(),
+        Ok("0" | "off" | "false")
+    ) {
+        bail!("LLVM tools are missing and JUSTRUST_TOOLCHAIN_AUTO_INSTALL is disabled");
+    }
+    std::fs::create_dir_all(&parent)?;
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(parent.join(".install.lock"))?;
+    lock.lock().context("locking LLVM package installation")?;
+    if ready() {
+        return Ok(binary);
+    }
+    if root.exists() {
+        bail!("incomplete LLVM package at {}", root.display());
+    }
+    let stage = parent.join(format!(".staging-{}", std::process::id()));
+    std::fs::create_dir(&stage)?;
+    let result = (|| {
+        let archive = stage.join("llvm.deb");
+        crate::toolchain::curl(
+            &format!("{origin}/pool/universe/l/llvm-toolchain-18/llvm-18_18.1.3-1_{arch}.deb"),
+            &archive,
+        )?;
+        if crate::toolchain::sha256(&archive)? != hash {
+            bail!("LLVM package checksum mismatch");
+        }
+        llvm_output(
+            Command::new("dpkg-deb")
+                .arg("--extract")
+                .arg(&archive)
+                .arg(&stage),
+        )?;
+        let ar = stage.join("usr/lib/llvm-18/bin/llvm-ar");
+        // The host supplies libLLVM18 and its dependencies. Run the verified
+        // binary before publishing, so loader/version errors fail closed.
+        let output = llvm_output(Command::new(&ar).arg("--version"))
+            .context("pinned llvm-ar requires compatible host libLLVM18 and glibc >= 2.38")?;
+        if !String::from_utf8_lossy(&output.stdout).contains("LLVM version 18.1.3") {
+            bail!("pinned llvm-ar reports an unexpected version");
+        }
+        std::fs::remove_file(archive)?;
+        std::fs::write(stage.join(".complete"), hash)?;
+        std::fs::rename(&stage, &root)?;
+        Ok(binary)
+    })();
+    if stage.exists() {
+        let _ = std::fs::remove_dir_all(stage);
+    }
+    result
+}
+
+fn probe_llvm(root: &Path) -> Result<()> {
+    let work = root.join("probe");
+    std::fs::create_dir(&work)?;
+    let result = (|| {
+        let bin = root.join("bin");
+        let answer = work.join("answer.c");
+        let entry = work.join("entry.c");
+        std::fs::write(&answer, "int answer(void) { return 42; }\n")?;
+        std::fs::write(
+            &entry,
+            "extern int answer(void); int entry(void) { return answer(); }\n",
+        )?;
+        for (target, machine, pe_machine) in [
+            ("x86_64-pc-windows-msvc", "x64", 0x8664_u16),
+            ("aarch64-pc-windows-msvc", "arm64", 0xaa64_u16),
+        ] {
+            let object = work.join(format!("{machine}-answer.obj"));
+            let main = work.join(format!("{machine}-entry.obj"));
+            let library = work.join(format!("{machine}.lib"));
+            let executable = work.join(format!("{machine}.exe"));
+            for (source, dest) in [(&answer, &object), (&entry, &main)] {
+                llvm_output(
+                    Command::new(bin.join("clang-cl"))
+                        .args(["/nologo", "/c", "/GS-", "/Zl"])
+                        .arg(format!("--target={target}"))
+                        .arg(source)
+                        .arg(format!("/Fo{}", dest.display())),
+                )?;
+                let bytes = std::fs::read(dest)?;
+                if bytes.get(..2) != Some(pe_machine.to_le_bytes().as_slice()) {
+                    bail!("LLVM probe generated incorrect COFF machine for {target}");
+                }
+            }
+            llvm_output(
+                Command::new(bin.join("llvm-lib"))
+                    .arg(format!("/out:{}", library.display()))
+                    .arg(&object),
+            )?;
+            let table = llvm_output(Command::new(bin.join("llvm-ar")).arg("t").arg(&library))?;
+            if !String::from_utf8_lossy(&table.stdout).contains("answer.obj") {
+                bail!("LLVM librarian probe produced no expected archive member");
+            }
+            let definition = work.join(format!("{machine}.def"));
+            let imports = work.join(format!("{machine}-imports.lib"));
+            std::fs::write(&definition, "LIBRARY probe.dll\nEXPORTS\nanswer\n")?;
+            llvm_output(
+                Command::new(bin.join("llvm-dlltool"))
+                    .arg("-m")
+                    .arg(if machine == "x64" {
+                        "i386:x86-64"
+                    } else {
+                        "arm64"
+                    })
+                    .arg("-d")
+                    .arg(&definition)
+                    .arg("-l")
+                    .arg(&imports),
+            )?;
+            llvm_output(Command::new(bin.join("llvm-ar")).arg("t").arg(&imports))?;
+            llvm_output(
+                Command::new(bin.join("lld-link"))
+                    .args(["/entry:entry", "/subsystem:console", "/nodefaultlib"])
+                    .arg(format!("/machine:{machine}"))
+                    .arg(format!("/out:{}", executable.display()))
+                    .arg(&main)
+                    .arg(&library),
+            )?;
+            let bytes = std::fs::read(executable)?;
+            let offset = bytes
+                .get(0x3c..0x40)
+                .map(|b| u32::from_le_bytes(b.try_into().unwrap()) as usize)
+                .context("LLVM linker probe emitted truncated PE header")?;
+            if bytes.get(..2) != Some(b"MZ")
+                || bytes.get(offset..offset + 4) != Some(b"PE\0\0")
+                || bytes.get(offset + 4..offset + 6) != Some(pe_machine.to_le_bytes().as_slice())
+            {
+                bail!("LLVM linker probe emitted incorrect PE machine for {target}");
+            }
+        }
+        Ok(())
+    })();
+    let _ = std::fs::remove_dir_all(work);
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "explicitly downloads pinned LLVM tools if missing; no Microsoft SDK"]
+    fn installed_llvm_compiles_archives_and_links_both_targets_without_sdk() {
+        let root = prepare_llvm_with_install(true).unwrap();
+        assert!(root.join("bin/clang-cl").is_file());
+        assert!(root.join("bin/llvm-lib").is_file());
+        assert_eq!(prepare_llvm().unwrap(), root);
+    }
 
     #[test]
     fn only_reviewed_targets_and_archives() {
@@ -199,6 +561,14 @@ mod tests {
             assert!(hash.bytes().all(|b| b.is_ascii_hexdigit()));
         }
         assert!(archive_hash("../x86_64").is_err());
+        for arch in ["x86_64", "aarch64"] {
+            let (origin, package_arch, hash) = llvm_package(arch).unwrap();
+            assert!(origin.starts_with("https://"));
+            assert!(matches!(package_arch, "amd64" | "arm64"));
+            assert_eq!(hash.len(), 64);
+            assert!(hash.bytes().all(|b| b.is_ascii_hexdigit()));
+        }
+        assert!(llvm_package("../x86_64").is_err());
     }
 
     #[test]
@@ -259,7 +629,10 @@ mod tests {
                 ("CC", "/native/cc"),
                 ("CXX", "/native/c++"),
                 ("AR", "/native/ar"),
-                ("PATH", "/account/tools/bin:/pinned/rust/bin:/usr/bin"),
+                (
+                    "PATH",
+                    "/account/tools/bin:/account/tools/llvm/bin:/pinned/rust/bin:/usr/bin",
+                ),
                 ("XWIN_SDK_VERSION", SDK_VERSION),
                 ("XWIN_CRT_VERSION", CRT_VERSION),
             ] {

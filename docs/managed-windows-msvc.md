@@ -56,17 +56,78 @@ changes accompany pin changes so cargo-xwin's architecture-only `DONE` marker
 cannot reuse an SDK from another pin. Do not share this writable directory
 across tenants. Never accept an arbitrary caller-provided shared cache path.
 
-Clang and LLVM utilities, CMake/Ninja when required by dependencies, and the Rust
-target standard library must already be provisioned by the build host. This
-helper does not install or claim to pin host LLVM. Host-image provisioning must
-pin those inputs before claiming a fully reproducible managed build. It never
-replaces generic host `CC`, `CXX`, or `AR`. cargo-xwin configures target-scoped
-native compilation and needs its compatible LLVM tools available on PATH.
+Clang and LLVM utilities must already be provisioned by the build host. The
+license-independent `prepare_llvm()` helper discovers genuine `clang`,
+`llvm-ar`, and `lld-link` (including version-suffixed names and distribution
+`/usr/lib/llvm-N/bin` directories), then publishes
+account-local aliases, using an explicitly requested package fallback if needed:
+
+- `clang` and `clang-cl` point to the genuine Clang driver. Its executable name
+  selects the supported MSVC-compatible command-line mode.
+- `llvm-ar`, `llvm-lib`, and `llvm-dlltool` point to genuine LLVM archive tools.
+  LLVM's executable-name dispatch selects the Windows librarian/import-library
+  drivers. GNU `ar` is not a substitute.
+- `lld-link` points to the genuine LLVM COFF linker.
+
+Every new identity is functionally probed for both x86_64 and aarch64: compile
+freestanding C to COFF through `clang-cl`, create/read an archive through
+`llvm-lib`/`llvm-ar`, create an import library through `llvm-dlltool`, and link a
+PE executable with `lld-link /nodefaultlib`. The COFF and PE machine fields are
+checked. No target binary runs, and these probes use no SDK, system headers,
+Microsoft libraries, license opt-in, or signing keys.
+Missing tools and failing driver modes fail explicitly rather than falling
+back to unrelated tools. A bare `clang-cl` alias alone is not sufficient:
+LLVM's archive and COFF linker drivers must also pass the probes.
+
+The probes themselves never access the network. If genuine `llvm-ar` is missing,
+only an explicit `JUSTRUST_INSTALL_LLVM_TOOLS=1` or
+`prepare_llvm_with_install(true)` authorizes a rootless package fallback. The
+package is Ubuntu noble `llvm-18` version `1:18.1.3-1`, downloaded over HTTPS,
+SHA-256 verified before `dpkg-deb --extract`, with no maintainer scripts run.
+It provides genuine LLVM librarian/archive drivers, not replacements written
+by justrust. The host must supply compatible libLLVM18, glibc >= 2.38, and other
+shared-library dependencies. A loader/version probe fails before publication
+if they are absent. `JUSTRUST_TOOLCHAIN_AUTO_INSTALL=0` vetoes the download even
+with the LLVM opt-in. A previously installed verified package is reusable.
+
+| Package architecture | SHA-256 |
+| --- | --- |
+| amd64 | `24c6a9d7b763c2b9ce3199012eca7366cada3e41978ecee022e9d44a110a9c6d` |
+| arm64 | `e9dd1b2ae8187de6b138bcd8a8ab3bf04fb7639c68e90e30a1b86b266510e7e6` |
+
+These checksums were read from Ubuntu's official noble package indexes. Package
+storage is account-local under `llvm-packages/llvm-18.1.3-1-<arch>-<sha256>`.
+The LLVM opt-in never grants Microsoft SDK consent and does not permit signing.
+
+Aliases live under `llvm-tools/llvm-v1-<sha256>/bin`. The identity hashes a
+manifest of canonical executable paths and SHA-256 content hashes, not merely
+version output. MSVC installation/cache paths include that identity and keep a
+link to the verified alias directory. A changed executable creates a new
+identity. These are aliases to installed binaries, not a downloaded immutable
+LLVM distribution: the host must keep them and their shared libraries stable
+while builds run. Host-image pinning remains necessary for full reproducibility.
+CMake/Ninja when required by dependencies and the Rust target standard library
+must also be provisioned separately. Generic host `CC`, `CXX`, and `AR` are
+unchanged; cargo-xwin configures target compilation.
+
+Run the explicit no-SDK acceptance probe using the following command. This
+ignored test explicitly permits downloading the pinned LLVM-only package if
+needed, but does not authorize any Microsoft SDK operation:
+
+```sh
+justrust test --lib msvc_tools::tests::installed_llvm_compiles_archives_and_links_both_targets_without_sdk -- --ignored
+```
+
+The ordinary unit suite does not require LLVM to be installed. The explicit
+acceptance test requires genuine Clang/LLD and a compatible host runtime for
+installed or rootlessly provisioned LLVM archive tools.
 
 ## Caller integration contract
 
 ```rust
 pub fn supported(target: &str) -> bool;
+pub fn prepare_llvm() -> anyhow::Result<std::path::PathBuf>;
+pub fn prepare_llvm_with_install(install: bool) -> anyhow::Result<std::path::PathBuf>;
 pub fn prepare(target: &str) -> anyhow::Result<std::path::PathBuf>;
 pub fn apply(
     cmd: &mut std::process::Command,
@@ -75,7 +136,9 @@ pub fn apply(
 ) -> anyhow::Result<()>;
 ```
 
-Call `prepare(target)` on the actual build host, then construct a command for
+Call `prepare_llvm()` independently for license-free prerequisite preflight.
+Call `prepare(target)` on the actual build host after caller license consent;
+it prepares LLVM aliases as part of the operation. Then construct a command for
 `root.join("bin/cargo-xwin")` with arguments
 `xwin build --release --target <target>` (or the supported check/test operation),
 and call `apply` before execution. Alternatively use `cargo xwin ...` with the
@@ -114,5 +177,6 @@ LLVM provisioning. No speedup claim follows from this helper.
 - `https://github.com/rust-cross/cargo-xwin/blob/v0.20.2/README.md`
 - `https://github.com/rust-cross/cargo-xwin/blob/v0.20.2/src/options.rs`
 - `https://github.com/rust-cross/cargo-xwin/blob/v0.20.2/src/compiler/clang_cl.rs`
+- `https://github.com/llvm/llvm-project/blob/llvmorg-18.1.8/llvm/tools/llvm-ar/llvm-ar.cpp`
 - `https://github.com/Jake-Shadle/xwin/blob/0.6.7/src/lib.rs`
 - `https://aka.ms/vs/17/release/channel`
