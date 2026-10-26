@@ -652,6 +652,338 @@ fn forged_ordered_actuals_cannot_reuse_component_member_authority() {
 }
 
 #[test]
+fn finite_drop_presence_finishes_every_owning_equation_before_answering() {
+    for workers in [1, 8] {
+        let source_provider = provider(
+            "struct Link<T>{value:*mut T}enum List{End,More(Link<List>)}fn main(){}",
+            &[1],
+            &[],
+        );
+        let budget = source_provider.plan.trait_world().unwrap().budget().clone();
+        let crate::compiler::frontend::PublishedCallableBody::Source(publication) = source_provider
+            .plan
+            .publish_callable_body(source_provider.plan.function_decl(0).unwrap(), &budget)
+            .unwrap()
+        else {
+            panic!("source callable required");
+        };
+        let engine = crate::engine::Engine::new(source_provider);
+        let demand = engine.request(test_root());
+        engine.run(workers).unwrap();
+        demand.completion().unwrap();
+        let reads = demand.fact::<Vec<ReadNominal>>(0).unwrap();
+        let root = reads[0].definition().unwrap();
+        reads[0].check_definition(&root).unwrap();
+        assert!(
+            !publication
+                .facts()
+                .normal_drop_required(&root, &budget)
+                .unwrap()
+        );
+        let ir::Ty::Enum(value) = &root else {
+            panic!("enum root required");
+        };
+        let mut changed = value.def().clone();
+        changed.variants = Arc::from([]);
+        let forged = ir::Ty::Enum(ir::EnumTy::new(changed).with_realization(reads[0].clone()));
+        assert!(
+            publication
+                .facts()
+                .normal_drop_required(&forged, &budget)
+                .is_err()
+        );
+        // Rebinding the exact same declaration/fields to the same capability
+        // still forges the rooted allocation and must not warm a positive cache.
+        let rebound =
+            ir::Ty::Enum(ir::EnumTy::new(value.def().clone()).with_realization(reads[0].clone()));
+        assert!(
+            publication
+                .facts()
+                .normal_drop_required(&rebound, &budget)
+                .is_err()
+        );
+        let zero = ir::Ty::Array {
+            element: Arc::new(root.clone()),
+            len: 0,
+        };
+        assert!(
+            !publication
+                .facts()
+                .normal_drop_required(&zero, &budget)
+                .unwrap()
+        );
+        let zero_forged = ir::Ty::Array {
+            element: Arc::new(rebound),
+            len: 0,
+        };
+        assert!(
+            publication
+                .facts()
+                .normal_drop_required(&zero_forged, &budget)
+                .is_err()
+        );
+        let foreign_provider = provider(
+            "struct Link<T>{value:*mut T}enum List{End,More(Link<List>)}fn main(){}",
+            &[1],
+            &[],
+        );
+        let foreign_budget = foreign_provider
+            .plan
+            .trait_world()
+            .unwrap()
+            .budget()
+            .clone();
+        let crate::compiler::frontend::PublishedCallableBody::Source(foreign_publication) =
+            foreign_provider
+                .plan
+                .publish_callable_body(
+                    foreign_provider.plan.function_decl(0).unwrap(),
+                    &foreign_budget,
+                )
+                .unwrap()
+        else {
+            panic!("source callable required");
+        };
+        assert!(
+            foreign_publication
+                .facts()
+                .normal_drop_required(&root, &foreign_budget)
+                .is_err()
+        );
+        assert!(
+            publication
+                .facts()
+                .normal_drop_required(&root, &foreign_budget)
+                .is_err()
+        );
+        assert!(
+            publication
+                .facts()
+                .normal_drop_required(&zero, &foreign_budget)
+                .is_err()
+        );
+        let mut calls = 0;
+        let answer = reads[0]
+            .component_drop_presence(&budget, 0, &mut |_, own_only, _| {
+                assert!(own_only);
+                calls += 1;
+                Ok((true, false))
+            })
+            .unwrap()
+            .unwrap();
+        assert_eq!(answer, (true, false));
+        assert_eq!(calls, 2);
+        let mut calls = 0;
+        assert!(
+            reads[0]
+                .component_drop_presence(&budget, 0, &mut |_, _, _| {
+                    calls += 1;
+                    if calls == 2 {
+                        Err(Error::new("later owning equation failed"))
+                    } else {
+                        Ok((true, false))
+                    }
+                })
+                .unwrap()
+                .is_err()
+        );
+        assert_eq!(calls, 2);
+        let mut calls = 0;
+        let answer = reads[0]
+            .component_drop_presence(&budget, 0, &mut |_, _, _| {
+                calls += 1;
+                Ok((calls == 1, calls == 2))
+            })
+            .unwrap()
+            .unwrap();
+        assert_eq!(answer, (true, true));
+        for tiny in [
+            ir::PlanBudget::new(ir::PlanLimits {
+                work: 1,
+                ..ir::PlanLimits::default()
+            }),
+            ir::PlanBudget::new(ir::PlanLimits {
+                bytes: 1,
+                ..ir::PlanLimits::default()
+            }),
+        ] {
+            assert!(
+                reads[0]
+                    .component_drop_presence(&tiny, 0, &mut |_, _, _| Ok((true, false)))
+                    .unwrap()
+                    .is_err()
+            );
+        }
+        assert!(
+            reads[0]
+                .component_drop_presence(&budget, usize::MAX, &mut |_, _, _| {
+                    panic!("depth failure must precede callbacks")
+                })
+                .unwrap()
+                .is_err()
+        );
+        // Exercise the actual public query against its own exhausted ledger,
+        // rather than only passing a tiny token to the inventory callback API.
+        // Exhaust bytes through the real public query before work is exhausted.
+        let used_bytes = budget.usage_for_tests(|usage| usage.bytes);
+        budget.usage_for_tests(|usage| usage.bytes = budget.limits().bytes);
+        assert!(
+            publication
+                .facts()
+                .normal_drop_required(&root, &budget)
+                .is_err()
+        );
+        assert!(
+            publication
+                .facts()
+                .normal_drop_required(&zero, &budget)
+                .is_err()
+        );
+        budget.usage_for_tests(|usage| usage.bytes = used_bytes);
+        let limit = budget.limits().work;
+        budget.usage_for_tests(|usage| usage.work = limit);
+        assert!(
+            publication
+                .facts()
+                .normal_drop_required(&root, &budget)
+                .is_err()
+        );
+        assert!(
+            publication
+                .facts()
+                .normal_drop_required(&zero, &budget)
+                .is_err()
+        );
+        let failure = budget.first_resource_failure();
+        budget.poison_ledger_for_tests();
+        assert!(
+            publication
+                .facts()
+                .normal_drop_required(&root, &budget)
+                .is_err()
+        );
+        assert!(
+            publication
+                .facts()
+                .normal_drop_required(&zero, &budget)
+                .is_err()
+        );
+        assert_eq!(budget.first_resource_failure(), failure);
+
+        // The zero is inside the component equation, not merely around its
+        // public root. Its child must run in validation-only mode.
+        let zero_provider = provider(
+            "struct Leaf<T>{value:*mut T}struct Link<T>{value:[Leaf<T>;0]}enum List{End,More(Link<List>)}fn main(){}",
+            &[2],
+            &[],
+        );
+        let zero_budget = zero_provider.plan.trait_world().unwrap().budget().clone();
+        let crate::compiler::frontend::PublishedCallableBody::Source(zero_publication) =
+            zero_provider
+                .plan
+                .publish_callable_body(zero_provider.plan.function_decl(0).unwrap(), &zero_budget)
+                .unwrap()
+        else {
+            panic!("source callable required");
+        };
+        let zero_engine = crate::engine::Engine::new(zero_provider);
+        let zero_demand = zero_engine.request(test_root());
+        zero_engine.run(workers).unwrap();
+        zero_demand.completion().unwrap();
+        let zero_reads = zero_demand.fact::<Vec<ReadNominal>>(0).unwrap();
+        let zero_root = zero_reads[0].definition().unwrap();
+        assert!(
+            !zero_publication
+                .facts()
+                .normal_drop_required(&zero_root, &zero_budget)
+                .unwrap()
+        );
+        let mut calls = 0;
+        let answer = zero_reads[0]
+            .component_drop_presence(&zero_budget, 0, &mut |_, own_only, _| {
+                assert!(own_only);
+                calls += 1;
+                // Leaf is reached only through the zero edge. Its own Drop
+                // result cannot contribute, but its unresolved status must.
+                Ok((calls > 2, calls > 2))
+            })
+            .unwrap()
+            .unwrap();
+        assert_eq!(calls, 3);
+        assert_eq!(answer, (false, true));
+        let mut calls = 0;
+        assert!(
+            zero_reads[0]
+                .component_drop_presence(&zero_budget, 0, &mut |_, _, _| {
+                    calls += 1;
+                    if calls > 2 {
+                        Err(Error::new("zero-array child validation failed"))
+                    } else {
+                        Ok((false, false))
+                    }
+                },)
+                .unwrap()
+                .is_err()
+        );
+        assert_eq!(calls, 3);
+    }
+}
+
+#[test]
+fn finite_drop_presence_follows_rc_pointee_backedge_without_borrowing_pending_success() {
+    for workers in [1, 8] {
+        let source_provider = provider(
+            "struct Node{next:__justrust_std::rc::Rc<Node>}mod __justrust_std{pub mod rc{pub struct Rc<T>{pub ptr:*mut T,pub strong:*mut usize}}}fn main(){}",
+            &[0],
+            &[],
+        );
+        let world = source_provider.plan.trait_world().unwrap();
+        let budget = world.budget().clone();
+        let crate::compiler::frontend::PublishedCallableBody::Source(publication) = source_provider
+            .plan
+            .publish_callable_body(source_provider.plan.function_decl(0).unwrap(), &budget)
+            .unwrap()
+        else {
+            panic!("source callable required");
+        };
+        let engine = crate::engine::Engine::new(source_provider);
+        let demand = engine.request(test_root());
+        engine.run(workers).unwrap();
+        demand.completion().unwrap();
+        let reads = demand.fact::<Vec<ReadNominal>>(0).unwrap();
+        let root = reads[0].definition().unwrap();
+        assert!(reads[0].is_component());
+        reads[0].replay(&root, &world).unwrap();
+        assert!(
+            publication
+                .facts()
+                .normal_drop_required(&root, &budget)
+                .unwrap()
+        );
+        let mut ordinary = 0;
+        let mut rc = 0;
+        let answer = reads[0]
+            .component_drop_presence(&budget, 0, &mut |ty, own_only, _| {
+                assert!(own_only);
+                if matches!(
+                    ty.owned_pointer_pointee(),
+                    Some((ir::OwnedPointerKind::Rc, _))
+                ) {
+                    rc += 1;
+                    Ok((true, false))
+                } else {
+                    ordinary += 1;
+                    Ok((false, false))
+                }
+            })
+            .unwrap()
+            .unwrap();
+        assert_eq!(answer, (true, false));
+        assert_eq!((ordinary, rc), (1, 1));
+    }
+}
+
+#[test]
 fn finite_ownership_preflight_keeps_equations_array_work_and_exact_root_authority() {
     use crate::compiler::ownership::component_preflight_for_tests as preflight;
     for workers in [1, 8] {

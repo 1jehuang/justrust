@@ -76,6 +76,17 @@ impl ReadNominal {
             Self::Acyclic(_) => None,
         }
     }
+    pub(in crate::compiler) fn component_drop_presence(
+        &self,
+        budget: &ir::PlanBudget,
+        depth: usize,
+        event: &mut impl FnMut(&ir::Ty, bool, usize) -> Result<(bool, bool), Error>,
+    ) -> Option<Result<(bool, bool), Error>> {
+        match self {
+            Self::Component(read) => Some(read.drop_presence(budget, depth, event)),
+            Self::Acyclic(_) => None,
+        }
+    }
     pub(in crate::compiler) fn component_ownership_preflight(
         &self,
         budget: &ir::PlanBudget,

@@ -869,6 +869,137 @@ impl ReadComponent {
     }
 }
 
+/// A finite drop query over an already authenticated component. Queue
+/// membership only schedules equations. Zero arrays suppress drop contribution,
+/// never child validation, unresolved status, or failure. Each member has at
+/// most two scheduled modes and no answer escapes before all modes finish.
+struct DropPresenceInventory<'a, F> {
+    read: &'a ReadComponent,
+    budget: &'a ir::PlanBudget,
+    event: &'a mut F,
+    queued: Vec<[bool; 2]>,
+    pending: Vec<(usize, bool)>,
+    required: bool,
+    unresolved: bool,
+}
+impl<F: FnMut(&ir::Ty, bool, usize) -> Result<(bool, bool), Error>> DropPresenceInventory<'_, F> {
+    fn term(&mut self, term: &Term, depth: usize, contributes: bool) -> Result<(), Error> {
+        self.budget.check_depth(depth).map_err(Error::new)?;
+        self.budget.charge_work(1).map_err(Error::new)?;
+        match term {
+            Term::Ref(..) | Term::RawPtr(..) => {}
+            Term::Array(child, len) => {
+                self.term(child, depth + 1, contributes && *len > 0)?;
+            }
+            Term::Tuple(children) => {
+                for child in children {
+                    self.term(child, depth + 1, contributes)?;
+                }
+            }
+            Term::Nominal(declaration, actuals) => {
+                let key =
+                    producer::key(self.read.world_word(), *declaration, actuals, self.budget)?;
+                let mut target = None;
+                for (index, member) in self.read.fact.members.iter().enumerate() {
+                    self.budget.charge_work(1).map_err(Error::new)?;
+                    if member.key == key {
+                        target = Some(index);
+                        break;
+                    }
+                }
+                if let Some(index) = target {
+                    let mode = usize::from(contributes);
+                    if !self.queued[index][mode] {
+                        self.queued[index][mode] = true;
+                        self.pending.push((index, contributes));
+                    }
+                } else {
+                    self.budget
+                        .charge_work(self.read.fact.external.len())
+                        .map_err(Error::new)?;
+                    let external = self.read.external(&key).ok_or_else(|| {
+                        Error::new("drop presence omitted successful external read")
+                    })?;
+                    let ty = external.definition()?;
+                    external.check_definition(&ty)?;
+                    let (required, unresolved) = (self.event)(&ty, false, depth)?;
+                    self.required |= contributes && required;
+                    self.unresolved |= unresolved;
+                }
+            }
+            Term::Str | Term::Slice(_) | Term::Dyn(..) => {
+                return Err(Error::new(
+                    "unsupported recursive drop presence unsized equation",
+                ));
+            }
+            Term::Int(_) | Term::Float(_) | Term::Bool | Term::Unit | Term::Never | Term::Char => {}
+        }
+        Ok(())
+    }
+    fn finish(mut self, depth: usize) -> Result<(bool, bool), Error> {
+        let read = self.read;
+        let budget = self.budget;
+        while let Some((index, contributes)) = self.pending.pop() {
+            budget.charge_work(1).map_err(Error::new)?;
+            let ordinal = u32::try_from(index)
+                .map_err(|_| Error::new("component member ordinal overflow"))?;
+            let ty = read.materialize(ordinal, budget)?.definition()?;
+            let (required, unresolved) = (self.event)(&ty, true, depth)?;
+            self.required |= contributes && required;
+            self.unresolved |= unresolved;
+            let member = &read.fact.members[index];
+            if read.pointer_kind(ordinal) == Some(ir::OwnedPointerKind::Rc) {
+                let [pointee] = member.actuals.as_ref() else {
+                    return Err(Error::new("Rc component changed pointee arity"));
+                };
+                self.term(pointee, depth + 1, contributes)?;
+            } else {
+                for (_, term) in member.fields.iter() {
+                    self.term(term, depth + 1, contributes)?;
+                }
+            }
+        }
+        Ok((self.required, self.unresolved))
+    }
+}
+impl ReadComponent {
+    pub(super) fn drop_presence(
+        &self,
+        member: u32,
+        budget: &ir::PlanBudget,
+        depth: usize,
+        event: &mut impl FnMut(&ir::Ty, bool, usize) -> Result<(bool, bool), Error>,
+    ) -> Result<(bool, bool), Error> {
+        budget.check_depth(depth).map_err(Error::new)?;
+        let root =
+            usize::try_from(member).map_err(|_| Error::new("component member ordinal overflow"))?;
+        if root >= self.fact.members.len() {
+            return Err(Error::new("component member ordinal out of bounds"));
+        }
+        let mut queued = topology::storage(self.fact.members.len(), budget)?;
+        queued.resize(self.fact.members.len(), [false; 2]);
+        queued[root][1] = true;
+        let mode_count = self
+            .fact
+            .members
+            .len()
+            .checked_mul(2)
+            .ok_or_else(|| Error::new("drop presence mode count overflow"))?;
+        let mut pending = topology::storage(mode_count, budget)?;
+        pending.push((root, true));
+        DropPresenceInventory {
+            read: self,
+            budget,
+            event,
+            queued,
+            pending,
+            required: false,
+            unresolved: false,
+        }
+        .finish(depth)
+    }
+}
+
 /// Finite ownership preflight over authenticated component equations. The
 /// callback charges weighted visits (`None`) or recursively checks a genuine
 /// external nominal (`Some`). A queued bit denotes pending work, never success.

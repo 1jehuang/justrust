@@ -9,6 +9,14 @@ pub enum NormalDropPlan {
     Destructor(Arc<ValidatedDestructor>),
 }
 
+/// The canonical own-Drop resolution, shared by glue and presence consumers.
+/// This is node-local evidence, not a published fact or executable destructor.
+enum OwnNormalDrop {
+    Trivial,
+    Unresolved,
+    Resolved(CallTarget, Signature),
+}
+
 /// Declaration-ordered fields with nontrivial drop glue.
 pub type DropGlueFields = Vec<(usize, Arc<ValidatedDestructor>)>;
 
@@ -153,6 +161,185 @@ impl ValidatedFacts {
     pub fn has_normal_drop_impls(&self) -> bool {
         self.world.has_normal_drop
     }
+    /// Ownership-only presence, never executable glue or negative Copy evidence.
+    /// Both flags are accumulated without short circuiting so unresolved families
+    /// and failures in later children retain the ordinary planner's behavior.
+    pub(in crate::compiler) fn normal_drop_required(
+        &self,
+        ty: &Ty,
+        budget: &PlanBudget,
+    ) -> Result<bool> {
+        self.validate_ty_with_budget(ty, budget)?;
+        let (required, unresolved) = self.normal_drop_presence(ty, 0)?;
+        Ok(required && !unresolved)
+    }
+    fn normal_drop_presence(&self, ty: &Ty, depth: usize) -> Result<(bool, bool)> {
+        charged(self.budget(), self.budget().check_depth(depth))?;
+        charged(self.budget(), self.budget().charge_work(1))?;
+        if matches!(
+            ty,
+            Ty::Ref { .. }
+                | Ty::RawPtr { .. }
+                | Ty::Int(_)
+                | Ty::Float(_)
+                | Ty::Bool
+                | Ty::Char
+                | Ty::Unit
+                | Ty::Never
+                | Ty::Str
+        ) {
+            return Ok((false, false));
+        }
+        if matches!(ty, Ty::Param(_) | Ty::AssociatedType(_)) {
+            return Ok((false, true));
+        }
+        if ty.owned_pointer_object().is_some() {
+            return Ok((true, false));
+        }
+        let read = match ty {
+            Ty::Struct(value) => value.realization(),
+            Ty::Enum(value) => value.realization(),
+            _ => None,
+        };
+        if let Some(read) = read.filter(|read| read.is_component()) {
+            read.check_definition(ty)
+                .map_err(|e| FactsError::from_message(self.budget(), &e.to_string()))?;
+            // Authenticate every equation and external receipt before using the
+            // finite owning-edge inventory. Pending membership is not a proof.
+            read.replay(ty, self.world())
+                .map_err(|e| FactsError::from_message(self.budget(), &e.to_string()))?;
+            return read
+                .component_drop_presence(self.budget(), depth, &mut |ty, own_only, depth| {
+                    let result = if own_only {
+                        if matches!(
+                            ty.owned_pointer_pointee(),
+                            Some((ir::OwnedPointerKind::Rc, _))
+                        ) {
+                            Ok((true, false))
+                        } else {
+                            self.normal_drop_own_presence(ty)
+                        }
+                    } else {
+                        self.normal_drop_presence(ty, depth)
+                    };
+                    result.map_err(|e| {
+                        crate::engine::Error::new(e.into_legacy_diagnostic(self.budget()))
+                    })
+                })
+                .ok_or_else(|| {
+                    FactsError::invalid(self.budget(), "missing recursive drop presence capability")
+                })?
+                .map_err(|e| FactsError::from_message(self.budget(), &e.to_string()));
+        }
+        if let Some((ir::OwnedPointerKind::Rc, pointee)) = ty.owned_pointer_pointee() {
+            let (_, unresolved) = self.normal_drop_presence(pointee, depth + 1)?;
+            return Ok((true, unresolved));
+        }
+        let (mut required, mut unresolved) = self.normal_drop_own_presence(ty)?;
+        let mut child = |ty: &Ty| -> Result<()> {
+            let (needs, open) = self.normal_drop_presence(ty, depth + 1)?;
+            required |= needs;
+            unresolved |= open;
+            Ok(())
+        };
+        match ty {
+            Ty::Tuple(parts) => {
+                for part in parts.iter() {
+                    child(part)?;
+                }
+            }
+            Ty::Closure(value) => {
+                for part in value.captures() {
+                    child(part)?;
+                }
+            }
+            Ty::Array { element, len } => {
+                let (needs, open) = self.normal_drop_presence(element, depth + 1)?;
+                required |= *len > 0 && needs;
+                unresolved |= open;
+            }
+            Ty::Slice { element } => {
+                let (needs, open) = self.normal_drop_presence(element, depth + 1)?;
+                if needs && !open {
+                    return Err(FactsError::unsupported(
+                        self.budget(),
+                        "unsupported: drop glue for an unsized slice",
+                    ));
+                }
+                unresolved |= open;
+            }
+            Ty::Struct(value) => {
+                for field in nominal_fields(&value.def().fields, self.budget())?.iter() {
+                    child(&field.ty)?;
+                }
+            }
+            Ty::Enum(value) => {
+                for variant in value.def().variants.iter() {
+                    for field in nominal_fields(&variant.fields, self.budget())?.iter() {
+                        child(&field.ty)?;
+                    }
+                }
+            }
+            _ => {}
+        }
+        Ok((required, unresolved))
+    }
+    fn normal_drop_own_presence(&self, ty: &Ty) -> Result<(bool, bool)> {
+        Ok(match self.normal_drop_own(ty)? {
+            OwnNormalDrop::Trivial => (false, false),
+            OwnNormalDrop::Unresolved => (false, true),
+            OwnNormalDrop::Resolved(..) => (true, false),
+        })
+    }
+    fn normal_drop_own(&self, ty: &Ty) -> Result<OwnNormalDrop> {
+        let nominal = match ty {
+            Ty::Struct(t) => Some(t.def().source_decl),
+            Ty::Enum(t) => Some(t.def().source_decl),
+            _ => None,
+        };
+        let mut implementation = None;
+        if let Some(nominal) = nominal {
+            for h in self.world.headers.impls.iter() {
+                charged(self.budget(), self.budget().charge_work(1))?;
+                if h.trait_ref.declaration != self.world.catalog.id(CatalogItem::Drop) {
+                    continue;
+                }
+                let owner = match &h.trait_ref.self_ty {
+                    Ty::Struct(t) => Some(t.def().source_decl),
+                    Ty::Enum(t) => Some(t.def().source_decl),
+                    _ => None,
+                };
+                if owner == Some(nominal) {
+                    implementation = Some(h);
+                    break;
+                }
+            }
+        }
+        if implementation.is_none() {
+            return Ok(OwnNormalDrop::Trivial);
+        }
+        let call = TraitCall {
+            trait_ref: TraitRef {
+                declaration: self.world.catalog.id(CatalogItem::Drop),
+                self_ty: ty.clone(),
+                args: Arc::from([]),
+            },
+            item: self.world.catalog.id(CatalogItem::DropItem),
+            method_args: Arc::from([]),
+        };
+        let resolved = self.world.resolve_trait_call(&call, self)?;
+        match resolved.callee() {
+            Callee::Direct(target) => Ok(OwnNormalDrop::Resolved(
+                target.clone(),
+                resolved.signature().clone(),
+            )),
+            _ if self.phase() == FactsPhase::Universal => Ok(OwnNormalDrop::Unresolved),
+            _ => Err(FactsError::unsupported(
+                self.budget(),
+                "unsupported: unresolved normal Drop",
+            )),
+        }
+    }
     pub fn normal_drop_plan(&self, ty: &Ty) -> Result<NormalDropPlan> {
         self.validate_ty(ty)?;
         self.normal_drop_plan_inner(ty, 0)
@@ -220,55 +407,11 @@ impl ValidatedFacts {
                 budget: self.budget().clone(),
             })));
         }
-        let nominal = match ty {
-            Ty::Struct(t) => Some(t.def().source_decl),
-            Ty::Enum(t) => Some(t.def().source_decl),
-            _ => None,
+        let (own, mut unresolved) = match self.normal_drop_own(ty)? {
+            OwnNormalDrop::Trivial => (None, false),
+            OwnNormalDrop::Unresolved => (None, true),
+            OwnNormalDrop::Resolved(target, signature) => (Some((target, signature)), false),
         };
-        let mut implementation = None;
-        if let Some(nominal) = nominal {
-            for h in self.world.headers.impls.iter() {
-                charged(self.budget(), self.budget().charge_work(1))?;
-                if h.trait_ref.declaration != self.world.catalog.id(CatalogItem::Drop) {
-                    continue;
-                }
-                let owner = match &h.trait_ref.self_ty {
-                    Ty::Struct(t) => Some(t.def().source_decl),
-                    Ty::Enum(t) => Some(t.def().source_decl),
-                    _ => None,
-                };
-                if owner == Some(nominal) {
-                    implementation = Some(h);
-                    break;
-                }
-            }
-        }
-        let mut unresolved = false;
-        let mut own = None;
-        if implementation.is_some() {
-            let call = TraitCall {
-                trait_ref: TraitRef {
-                    declaration: self.world.catalog.id(CatalogItem::Drop),
-                    self_ty: ty.clone(),
-                    args: Arc::from([]),
-                },
-                item: self.world.catalog.id(CatalogItem::DropItem),
-                method_args: Arc::from([]),
-            };
-            let resolved = self.world.resolve_trait_call(&call, self)?;
-            match resolved.callee() {
-                Callee::Direct(target) => {
-                    own = Some((target.clone(), resolved.signature().clone()));
-                }
-                _ if self.phase() == FactsPhase::Universal => unresolved = true,
-                _ => {
-                    return Err(FactsError::unsupported(
-                        self.budget(),
-                        "unsupported: unresolved normal Drop",
-                    ));
-                }
-            }
-        }
         let mut child = |child: &Ty| -> Result<Option<Arc<ValidatedDestructor>>> {
             match self.normal_drop_plan_inner(child, depth + 1)? {
                 NormalDropPlan::Destructor(d) => Ok(Some(d)),

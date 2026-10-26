@@ -83,6 +83,14 @@ impl RootedNominal {
             work,
         )
     }
+    pub(super) fn drop_presence(
+        &self,
+        budget: &ir::PlanBudget,
+        depth: usize,
+        event: &mut impl FnMut(&ir::Ty, bool, usize) -> Result<(bool, bool), Error>,
+    ) -> Result<(bool, bool), Error> {
+        self.read.drop_presence(self.member, budget, depth, event)
+    }
     pub(super) fn ownership_preflight(
         &self,
         budget: &ir::PlanBudget,

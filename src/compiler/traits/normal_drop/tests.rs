@@ -22,6 +22,36 @@ fn normal_drop_descriptor_rejects_abi_compatible_noncanonical_target_and_signatu
         .unwrap()
         .ty
         .clone();
+    assert!(facts.normal_drop_required(&owner, &budget).unwrap());
+    assert!(!facts.normal_drop_required(&Ty::Bool, &budget).unwrap());
+    assert!(
+        !facts
+            .normal_drop_required(
+                &Ty::Ref {
+                    kind: ir::BorrowKind::Shared,
+                    referent: Arc::new(owner.clone()),
+                },
+                &budget,
+            )
+            .unwrap()
+    );
+    for len in [0, 1, 3] {
+        let array = Ty::Array {
+            element: Arc::new(owner.clone()),
+            len,
+        };
+        assert_eq!(
+            facts.normal_drop_required(&array, &budget).unwrap(),
+            len != 0
+        );
+        assert_eq!(
+            facts.normal_drop_required(&array, &budget).unwrap(),
+            matches!(
+                facts.normal_drop_plan(&array).unwrap(),
+                NormalDropPlan::Destructor(_)
+            )
+        );
+    }
     let NormalDropPlan::Destructor(valid) = facts.normal_drop_plan(&owner).unwrap() else {
         panic!("destructor expected")
     };
@@ -80,7 +110,10 @@ fn closure_capture_cleanup_rejects_changed_glue_and_same_layout_owner() {
 
 #[test]
 fn normal_drop_unresolved_parameter_is_not_negative_evidence() {
-    let program = frontend::parse("fn f<T>(value:T){}fn main(){}").unwrap();
+    let program = frontend::parse(
+        "fn f<T>(value:T, d:D){}struct D;impl Drop for D{fn drop(&mut self){}}fn main(){}",
+    )
+    .unwrap();
     let budget = PlanBudget::default();
     let context = frontend::PlanCtx::from_program(&program, &budget).unwrap();
     let frontend::PublishedCallableBody::Source(publication) = context
@@ -90,8 +123,47 @@ fn normal_drop_unresolved_parameter_is_not_negative_evidence() {
         panic!("source expected")
     };
     let ty = &publication.source().locals[publication.source().params[0].0].ty;
+    let facts = publication.facts();
     assert!(matches!(
-        publication.facts().normal_drop_plan(ty).unwrap(),
+        facts.normal_drop_plan(ty).unwrap(),
         NormalDropPlan::Unresolved
     ));
+    assert!(!facts.normal_drop_required(ty, &budget).unwrap());
+    let owner = publication.source().locals[publication.source().params[1].0]
+        .ty
+        .clone();
+    assert!(facts.normal_drop_required(&owner, &budget).unwrap());
+    // Even a known destructor in another field cannot hide an unresolved child.
+    for parts in [[owner.clone(), ty.clone()], [ty.clone(), owner.clone()]] {
+        let aggregate = Ty::Tuple(Arc::from(parts));
+        assert!(!facts.normal_drop_required(&aggregate, &budget).unwrap());
+        assert!(matches!(
+            facts.normal_drop_plan(&aggregate).unwrap(),
+            NormalDropPlan::Unresolved
+        ));
+    }
+    // Zero arrays still compute the element's unresolved status. Skipping
+    // this child would let the other field's known destructor win.
+    let zero = Ty::Array {
+        element: Arc::new(ty.clone()),
+        len: 0,
+    };
+    for parts in [[owner.clone(), zero.clone()], [zero, owner.clone()]] {
+        let aggregate = Ty::Tuple(Arc::from(parts));
+        assert!(!facts.normal_drop_required(&aggregate, &budget).unwrap());
+        assert!(matches!(
+            facts.normal_drop_plan(&aggregate).unwrap(),
+            NormalDropPlan::Unresolved
+        ));
+    }
+    // Invalid children cannot turn into a successful empty-array answer.
+    let invalid = Ty::Array {
+        element: Arc::new(Ty::Slice {
+            element: Arc::new(owner.clone()),
+        }),
+        len: 0,
+    };
+    let aggregate = Ty::Tuple(Arc::from([owner, invalid]));
+    assert!(facts.normal_drop_required(&aggregate, &budget).is_err());
+    assert!(facts.normal_drop_plan(&aggregate).is_err());
 }

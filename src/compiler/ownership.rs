@@ -3126,11 +3126,12 @@ impl Transfer<'_> {
         ) {
             return Ok(false);
         }
-        match facts.normal_drop_plan(&self.f.locals[local.0].ty) {
-            Ok(super::traits::NormalDropPlan::Destructor(_)) => Ok(true),
-            Ok(_) => Ok(false),
-            Err(_) => Err(Exhausted),
-        }
+        facts
+            .normal_drop_required(
+                &self.f.locals[local.0].ty,
+                self.budget.plan_budget().ok_or(Exhausted)?,
+            )
+            .map_err(|_| Exhausted)
     }
     fn const_drop_node(
         &mut self,
