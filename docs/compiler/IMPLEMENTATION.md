@@ -1943,10 +1943,13 @@ PlanCtx/interner/source-context debt and wide adapter activation remain held.
       `CARGO_HOME` and `HOME` values/absence. Its immutable discovery receipt is
       supplied through `SourceOptions` into the existing per-file graph fact
       (`justrust test --lib project::inputs` and `--lib source_inputs`). The
-      existing project loader is not yet graph-scheduled. Subsequent planning
-      IO, unsupported configuration sources, probe locks, embedded/tool identity,
-      registry inspection tools and uncontrolled build scripts/proc macros remain
-      explicit gaps. Exhaustion or uncontrolled discovery cannot issue an input
+      existing project loader is not yet graph-scheduled. Native path dependency
+      identities are frozen from observed loading, so feature and visibility
+      planning no longer reopen or redirect those paths (regression:
+      `path_planning_uses_observed_identity_after_symlink_mutation`). Registry
+      planning IO, unsupported configuration sources, probe locks, embedded/tool
+      identity, registry inspection tools and uncontrolled build scripts/proc macros
+      remain explicit gaps. Exhaustion or uncontrolled discovery cannot issue an input
       identity. No persistent or global private cache is enabled by this foundation.
 - [ ] Add bounded asynchronous persistence, atomic manifests, durable checkpoint
       contracts, recovery, eviction and corruption/crash/cancellation tests.

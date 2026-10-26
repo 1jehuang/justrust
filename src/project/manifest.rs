@@ -490,6 +490,12 @@ fn load_observed(manifest: &Path, inputs: &mut Recorder) -> Result<Workspace, Ma
             match &dep.source {
                 DependencySource::Path(path) => {
                     let index = loader.package(path)?;
+                    loader
+                        .inputs
+                        .bind_path_package(path, index)
+                        .map_err(|reason| {
+                            ManifestError(format!("dependency path `{}` {reason}", path.display()))
+                        })?;
                     if loader.packages[index].name != dep.package {
                         return err(format!(
                             "no matching package named `{}` found at `{}` (found `{}`)",
@@ -1245,7 +1251,7 @@ pub fn resolve_features(
             return None;
         }
         let path = match &dep.source {
-            DependencySource::Path(path) => path.canonicalize().ok()?,
+            DependencySource::Path(path) => return ws.inputs.path_package(path),
             DependencySource::Registry(registry) => registry_source_root(registry).ok()?,
             DependencySource::UnresolvedRegistry | DependencySource::Git => return None,
         };
@@ -1401,7 +1407,16 @@ pub fn visible_dependencies(
         if d.optional && !active_deps.contains(&d.name) {
             continue;
         }
-        let Some(path) = dependency_root(d).and_then(|p| p.canonicalize().ok()) else {
+        let index = match &d.source {
+            DependencySource::Path(path) => ws.inputs.path_package(path),
+            // Registry authentication remains deliberately live and unshareable.
+            DependencySource::Registry(registry) => registry_source_root(registry)
+                .ok()
+                .and_then(|path| path.canonicalize().ok())
+                .and_then(|path| ws.packages.iter().position(|p| p.root == path)),
+            DependencySource::UnresolvedRegistry | DependencySource::Git => None,
+        };
+        let Some(index) = index else {
             unresolved.push(match &d.source {
                 DependencySource::Registry(registry) => format!(
                     "package `{}`: locked registry dependency `{}` {} from {} is not available in the local Cargo cache or failed checksum validation",
@@ -1422,19 +1437,9 @@ pub fn visible_dependencies(
             });
             continue;
         };
-        if let Some(index) = ws.packages.iter().position(|p| p.root == path) {
-            out.push((d.name.clone(), index));
-        }
+        out.push((d.name.clone(), index));
     }
     out
-}
-
-fn dependency_root(dep: &Dependency) -> Option<PathBuf> {
-    match &dep.source {
-        DependencySource::Path(path) => Some(path.clone()),
-        DependencySource::Registry(registry) => registry_source_root(registry).ok(),
-        DependencySource::UnresolvedRegistry | DependencySource::Git => None,
-    }
 }
 
 fn registry_source_root(package: &LockedRegistryPackage) -> Result<PathBuf, ManifestError> {

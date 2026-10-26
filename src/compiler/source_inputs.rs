@@ -92,7 +92,7 @@ impl SourceInputs {
     /// In particular no arbitrary build-script/proc-macro execution is tracked.
     pub fn shareability_blockers(&self) -> &'static [&'static str] {
         &[
-            "project discovery evidence, if supplied, excludes later planning IO and unsupported configuration sources",
+            "project discovery evidence, if supplied, excludes registry planning IO and unsupported configuration sources",
             "compiler, embedded libraries and external tool identity are not sealed",
             "reviewed source-probe lock and provider inputs are not covered",
             "build scripts and procedural macros require controlled input tracking",
@@ -578,8 +578,18 @@ mod tests {
         use crate::engine::Engine;
         let f = Fixture::new();
         f.file("main.rs", "fn main() {}");
-        let manifest = "[package]\nname='tracked'\nversion='0.1.0'\nedition='2024'\n[[bin]]\nname='tracked'\npath='main.rs'\n";
+        let manifest = "[package]\nname='tracked'\nversion='0.1.0'\nedition='2024'\n[[bin]]\nname='tracked'\npath='main.rs'\n[dependencies]\ndep={path='selected'}\n";
         f.file("Cargo.toml", manifest);
+        for directory in ["one", "two"] {
+            std::fs::create_dir_all(f.0.join(directory).join("src")).unwrap();
+            f.file(
+                &format!("{directory}/Cargo.toml"),
+                "[package]\nname='dep'\nversion='0.1.0'\nedition='2024'\n",
+            );
+            f.file(&format!("{directory}/src/lib.rs"), "pub fn value() {}\n");
+        }
+        let selected = f.0.join("selected");
+        std::os::unix::fs::symlink("one", &selected).unwrap();
         for workers in [1, 8] {
             for check_only in [true, false] {
                 let workspace = crate::project::manifest::load(&f.0.join("Cargo.toml")).unwrap();
@@ -608,6 +618,13 @@ mod tests {
                     .project_inputs()
                     .expect("missing project receipt in source fact");
                 assert_eq!(project.identity(), workspace.inputs.identity());
+                assert!(unit.inputs.matches_current_source(&options));
+                std::fs::remove_file(&selected).unwrap();
+                std::os::unix::fs::symlink("two", &selected).unwrap();
+                assert!(!unit.inputs.matches_current_source(&options));
+                std::fs::remove_file(&selected).unwrap();
+                assert!(!unit.inputs.matches_current_source(&options));
+                std::os::unix::fs::symlink("one", &selected).unwrap();
                 assert!(unit.inputs.matches_current_source(&options));
                 f.file("Cargo.toml", &manifest.replace("0.1.0", "0.1.1"));
                 assert!(!unit.inputs.matches_current_source(&options));

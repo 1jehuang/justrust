@@ -24,10 +24,11 @@ struct Observation {
 }
 
 /// Discovery evidence is separate from whole-build completeness. Registry
-/// tools, subsequent planning IO and atomic snapshots remain outside this scope.
+/// tools, registry planning IO and atomic snapshots remain outside this scope.
 #[derive(Clone, Debug)]
 pub struct DiscoveryInputs {
     environment: std::collections::BTreeMap<String, Option<OsString>>,
+    path_packages: std::collections::BTreeMap<PathBuf, usize>,
     observations: Vec<Observation>,
     complete: bool,
     uncontrolled: bool,
@@ -38,11 +39,15 @@ impl DiscoveryInputs {
     pub(crate) fn untracked() -> Arc<Self> {
         Arc::new(Self {
             environment: std::collections::BTreeMap::new(),
+            path_packages: std::collections::BTreeMap::new(),
             observations: Vec::new(),
             complete: false,
             uncontrolled: true,
             identity: [0; 32],
         })
+    }
+    pub(crate) fn path_package(&self, path: &Path) -> Option<usize> {
+        self.path_packages.get(path).copied()
     }
     pub fn observation_count(&self) -> usize {
         self.observations.len()
@@ -86,25 +91,29 @@ impl DiscoveryInputs {
 
 pub(crate) struct Recorder {
     environment: std::collections::BTreeMap<String, Option<OsString>>,
+    path_packages: std::collections::BTreeMap<PathBuf, usize>,
     observations: Vec<Observation>,
     cwd: Option<PathBuf>,
     complete: bool,
     uncontrolled: bool,
     remaining: usize,
+    binding_remaining: usize,
     identity: blake3::Hasher,
 }
 impl Recorder {
     pub(crate) fn new() -> Self {
         let cwd = std::env::current_dir().ok();
         let mut identity = blake3::Hasher::new();
-        identity.update(b"justrust-project-discovery-v1");
+        identity.update(b"justrust-project-discovery-v2");
         Self {
             environment: std::collections::BTreeMap::new(),
+            path_packages: std::collections::BTreeMap::new(),
             observations: Vec::new(),
             complete: cwd.is_some(),
             cwd,
             uncontrolled: false,
             remaining: MAX_BYTES,
+            binding_remaining: MAX_BYTES,
             identity,
         }
     }
@@ -190,7 +199,13 @@ impl Recorder {
                 }
             }
         }
-        if self.observations.len() >= MAX_ENTRIES || encoded.len() > self.remaining {
+        if self
+            .observations
+            .len()
+            .saturating_add(self.path_packages.len())
+            >= MAX_ENTRIES
+            || encoded.len() > self.remaining
+        {
             self.complete = false;
             return;
         }
@@ -262,12 +277,55 @@ impl Recorder {
         self.record(Path::new(name), Observed::Environment(value.clone()));
         value
     }
+    /// Freeze the package selected by an already-observed canonical path read.
+    /// Exhausted observation recording disables identity without losing bindings.
+    /// Exhausting the separately bounded binding storage rejects discovery.
+    pub(crate) fn bind_path_package(
+        &mut self,
+        path: &Path,
+        index: usize,
+    ) -> Result<(), &'static str> {
+        if let Some(previous) = self.path_packages.get(path) {
+            if *previous != index {
+                self.complete = false;
+                return Err("changed during project discovery");
+            }
+            return Ok(());
+        }
+        let bytes = path.as_os_str().as_encoded_bytes();
+        let cost = bytes.len().saturating_add(17);
+        if self.path_packages.len() >= MAX_ENTRIES || cost > self.binding_remaining {
+            self.complete = false;
+            return Err("exceeded project discovery path identity limits");
+        }
+        self.binding_remaining -= cost;
+        if self.complete {
+            if self
+                .observations
+                .len()
+                .saturating_add(self.path_packages.len())
+                >= MAX_ENTRIES
+                || cost > self.remaining
+            {
+                self.complete = false;
+            } else {
+                self.remaining -= cost;
+                self.identity.update(&[5]);
+                self.identity.update(&(bytes.len() as u64).to_le_bytes());
+                self.identity.update(bytes);
+                self.identity.update(&(index as u64).to_le_bytes());
+            }
+        }
+        self.path_packages.insert(path.to_owned(), index);
+        Ok(())
+    }
     pub(crate) fn uncontrolled(&mut self) {
         self.uncontrolled = true;
     }
     pub(crate) fn finish(self) -> Arc<DiscoveryInputs> {
         Arc::new(DiscoveryInputs {
             environment: self.environment,
+            path_packages: self.path_packages,
             observations: self.observations,
             complete: self.complete,
             uncontrolled: self.uncontrolled,
@@ -517,6 +575,98 @@ mod tests {
                 assert!(identities.insert(identity.to_owned()));
             }
         }
+    }
+
+    #[test]
+    fn path_binding_identity_is_bounded_and_conflicts_fail_closed() {
+        let f = Fixture::new();
+        let path = f.0.join("dep");
+        let mut one = Recorder::new();
+        assert!(one.bind_path_package(&path, 1).is_ok());
+        assert!(one.bind_path_package(&path, 1).is_ok());
+        let one = one.finish();
+        assert_eq!(one.path_package(&path), Some(1));
+        let mut two = Recorder::new();
+        assert!(two.bind_path_package(&path, 2).is_ok());
+        assert_ne!(one.identity(), two.finish().identity());
+        let mut conflicting = Recorder::new();
+        assert!(conflicting.bind_path_package(&path, 1).is_ok());
+        assert!(conflicting.bind_path_package(&path, 2).is_err());
+        assert!(conflicting.finish().identity().is_none());
+        let mut exhausted = Recorder::new();
+        exhausted.remaining = 0;
+        assert!(exhausted.bind_path_package(&path, 1).is_ok());
+        let exhausted = exhausted.finish();
+        assert_eq!(exhausted.path_package(&path), Some(1));
+        assert!(exhausted.identity().is_none());
+        assert!(!exhausted.matches_current());
+        let mut bounded = Recorder::new();
+        bounded.binding_remaining = 0;
+        assert!(bounded.bind_path_package(&path, 1).is_err());
+        let bounded = bounded.finish();
+        assert!(bounded.path_package(&path).is_none());
+        assert!(bounded.identity().is_none());
+        assert!(!bounded.matches_current());
+    }
+
+    #[test]
+    fn path_planning_uses_observed_identity_after_symlink_mutation() {
+        let f = Fixture::new();
+        f.write("Cargo.toml", &format!("{MANIFEST}\n[dependencies]\ndep={{path='selected', optional=true}}\n[features]\nuse_dep=['dep:dep','dep/marker']\n"));
+        f.write("src/main.rs", "fn main() {}\n");
+        for dir in ["one", "two"] {
+            f.write(
+                &format!("{dir}/Cargo.toml"),
+                &format!(
+                    "{}\n[features]\nmarker=[]\n",
+                    MANIFEST.replace("tracked", "dep")
+                ),
+            );
+            f.write(&format!("{dir}/src/lib.rs"), "pub fn value() {}\n");
+        }
+        let selected = f.0.join("selected");
+        std::os::unix::fs::symlink("one", &selected).unwrap();
+        let ws = f.load();
+        let root = ws.members[0];
+        let expected = ws
+            .packages
+            .iter()
+            .position(|p| p.root == f.0.join("one"))
+            .unwrap();
+        let plan = |ws: &manifest::Workspace| {
+            let features =
+                manifest::resolve_features(ws, &[(root, vec!["use_dep".into()], false)], false)
+                    .unwrap();
+            assert!(features.enabled[expected].contains("marker"));
+            let mut unresolved = Vec::new();
+            let visible = manifest::visible_dependencies(
+                ws,
+                root,
+                false,
+                &features.active_deps[root],
+                &mut unresolved,
+            );
+            assert!(unresolved.is_empty(), "{unresolved:?}");
+            assert_eq!(visible, vec![("dep".into(), expected)]);
+        };
+        plan(&ws);
+        assert!(ws.inputs.matches_current());
+        std::fs::remove_file(&selected).unwrap();
+        std::os::unix::fs::symlink("two", &selected).unwrap();
+        assert!(!ws.inputs.matches_current());
+        // A changed link must not silently redirect an already loaded plan.
+        plan(&ws);
+        let fresh = f.load();
+        assert!(fresh.packages.iter().any(|p| p.root == f.0.join("two")));
+        std::fs::remove_file(&selected).unwrap();
+        assert!(!ws.inputs.matches_current());
+        plan(&ws);
+        // Missing paths cannot enter a freshly loaded successful workspace.
+        assert!(manifest::load(&f.0.join("Cargo.toml")).is_err());
+        std::os::unix::fs::symlink("one", &selected).unwrap();
+        assert!(ws.inputs.matches_current());
+        f.write("one/Cargo.toml", &MANIFEST.replace("tracked", "dep"));
+        assert!(!ws.inputs.matches_current());
     }
 
     #[test]
