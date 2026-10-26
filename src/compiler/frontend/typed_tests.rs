@@ -2967,13 +2967,20 @@ fn arrays_reject_bounds_types_repeat_moves_and_unsupported_inference() {
         String::from_utf8_lossy(&stock.stderr)
     );
     check(&parse(source).unwrap()).unwrap();
+    // Large scalar repeats are valid type-level inputs. Per-element expansion
+    // and backend storage admission are separate from this CHECK boundary.
+    let large_scalar = "fn main(){let a=[1;65536];}";
+    let stock =
+        super::parser_tests::stock_compile(large_scalar, std::path::Path::new("unused"), true);
+    assert!(stock.status.success());
+    check(&parse(large_scalar).unwrap()).unwrap();
     for source in [
         "fn main(){let a=[1,2];let n=a[2];}",
         "fn main(){let a=[1,true];}",
         "fn main(){let a:[i32;1]=[];}",
         "struct S{x:i32}fn main(){let a=[S{x:1};2];}",
         "struct S{x:i32}fn main(){let a=[S{x:1}];let s=a[0];}",
-        "fn main(){let a=[1;65536];}",
+        "fn main(){let a=[1;16777217];}",
         "fn main(){let a=[];}",
     ] {
         assert!(

@@ -9365,9 +9365,22 @@ mod tests {
         let exact = 2 * super::super::ir::MAX_ARRAY_LEN + 1;
         assert!(preflight_ty(&ty, 0, &mut Budget::new(exact - 1)).is_err());
         assert!(preflight_ty(&ty, 0, &mut Budget::new(exact)).is_ok());
+        // Scalar arrays beyond the expansion bound are summarized as one leaf.
         assert!(
             preflight_ty(
                 &array(Ty::Int(IntTy::I32), super::super::ir::MAX_ARRAY_LEN + 1),
+                0,
+                &mut Budget::new(1)
+            )
+            .is_ok()
+        );
+        // Aggregate elements still require bounded per-element expansion.
+        assert!(
+            preflight_ty(
+                &array(
+                    Ty::Tuple(vec![Ty::Int(IntTy::I32)].into()),
+                    super::super::ir::MAX_ARRAY_LEN + 1,
+                ),
                 0,
                 &mut Budget::new(1_000_000)
             )

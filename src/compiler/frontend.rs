@@ -16650,8 +16650,8 @@ mod inactive_item_syntax_tests {
     #[test]
     fn inactive_array_lengths_skip_the_semantic_length_limit() {
         for source in [
-            "fn unused(){ let a = [0u8; 1048576]; }",
-            "fn unused(){ let a = [0xffu8; 1024 * 1024 - 1024]; }",
+            "fn unused(){ let a = [0u8; 33554432]; }",
+            "fn unused(){ let a = [0xffu8; 32 * 1024 * 1024 - 1024]; }",
         ] {
             validate_inactive_syntax(source).unwrap();
             let active = format!("{source} fn main(){{}}");

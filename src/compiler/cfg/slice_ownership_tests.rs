@@ -278,7 +278,7 @@ fn large_byte_arrays_unsize_to_slices_past_the_old_4096_limit() {
         "fn main() { let p: [u8; 5552] = [255; 5552]; let s = adler2_adapted_update(&p, 1);
          let q: [u8; 22208] = [255; 22208]; let t = adler2_adapted_update(&q, s); }",
     ));
-    let limit = super::super::ir::MAX_ARRAY_LEN;
+    let limit = super::super::ir::MAX_ARRAY_TYPE_LEN;
     let error = rejected(&format!(
         "fn main() {{ let p: [u8; {}] = [0; {}]; }}",
         limit + 1,
