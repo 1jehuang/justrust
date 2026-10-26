@@ -1,0 +1,2843 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-10-26T21:25:00+00:00",
+  "threshold_secs": 10,
+  "recent_days": 7,
+  "coverage": {
+    "measured_runs": 36404,
+    "meta_loaded": 36506,
+    "meta_malformed_or_unreadable": 14,
+    "meta_missing": 147,
+    "run_directories": 36667,
+    "summary_loaded": 36404,
+    "summary_malformed_or_unreadable": 19,
+    "summary_missing": 244,
+    "unmeasured_wall": 263
+  },
+  "caveats": [
+    "All run directories counted, including missing or malformed summaries. Inventory is not an atomic snapshot.",
+    "Threshold applies strictly to recorded summary.wall, not full agent wait. Remote client_wall is separately reported where available, never substituted or added.",
+    "Aggregate wall and excess are sums across runs, not elapsed session time or guaranteed recoverable savings. Concurrent runs overlap.",
+    "Cause is the largest measured top-level phase, not a proven root cause. Phase coverage varies. Phase, unit, linker, and remote timings may overlap and are never added together.",
+    "Workload classes use path/argument heuristics. Real-workload-candidate may include experiments. Unknown dates excluded from recent; failures retained and grouped.",
+    "Paths and arguments are omitted. Unknown workspaces are hashed. Detail is bounded; all measured runs contribute to aggregates."
+  ],
+  "all": {
+    "runs": 36404,
+    "slow_runs": 13111,
+    "recorded_wall_secs": 985685.786,
+    "excess_secs": 786672.814,
+    "groups": {
+      "workspace": {
+        "by_excess": [
+          {
+            "key": "scratch",
+            "runs": 4879,
+            "slow_runs": 4879,
+            "recorded_wall_secs": 445865.946,
+            "excess_secs": 397075.946,
+            "example_run_ids": [
+              "20261019-040114371-3058873",
+              "20261019-041503981-3240101",
+              "20261019-080155391-1433419"
+            ]
+          },
+          {
+            "key": "justrust-clean-room",
+            "runs": 3440,
+            "slow_runs": 3440,
+            "recorded_wall_secs": 275689.266,
+            "excess_secs": 241289.266,
+            "example_run_ids": [
+              "20261022-042033839-2216985",
+              "20261022-093454990-3331888",
+              "20261022-094502510-3383256"
+            ]
+          },
+          {
+            "key": "jcode-desktop",
+            "runs": 1486,
+            "slow_runs": 1486,
+            "recorded_wall_secs": 69214.08,
+            "excess_secs": 54354.08,
+            "example_run_ids": [
+              "20261011-063822820-1846844793",
+              "20261010-200902446-266766443",
+              "20261010-200901439-266766412"
+            ]
+          },
+          {
+            "key": "jcode",
+            "runs": 2367,
+            "slow_runs": 2367,
+            "recorded_wall_secs": 77102.854,
+            "excess_secs": 53432.854,
+            "example_run_ids": [
+              "20261011-152445899-3380309",
+              "20261019-210414126-2066692",
+              "20261015-223609180-1137943"
+            ]
+          },
+          {
+            "key": "workspace-c9274c789cd9",
+            "runs": 52,
+            "slow_runs": 52,
+            "recorded_wall_secs": 11319.465,
+            "excess_secs": 10799.465,
+            "example_run_ids": [
+              "20261011-083315454-3785807",
+              "20261010-230317605-2783335",
+              "20261011-235046243-562197"
+            ]
+          },
+          {
+            "key": "justrust",
+            "runs": 503,
+            "slow_runs": 503,
+            "recorded_wall_secs": 12085.565,
+            "excess_secs": 7055.565,
+            "example_run_ids": [
+              "20261014-075109202-235228",
+              "20261014-074753678-185581",
+              "20261014-074403026-138166"
+            ]
+          },
+          {
+            "key": "workspace-da2322fbdf69",
+            "runs": 11,
+            "slow_runs": 11,
+            "recorded_wall_secs": 3984.601,
+            "excess_secs": 3874.601,
+            "example_run_ids": [
+              "20261019-074254139-1288690",
+              "20261019-071847754-1060234",
+              "20261019-073842151-1265987"
+            ]
+          },
+          {
+            "key": "workspace-f3cadadbecec",
+            "runs": 14,
+            "slow_runs": 14,
+            "recorded_wall_secs": 3600.642,
+            "excess_secs": 3460.642,
+            "example_run_ids": [
+              "20261022-014849163-1875338",
+              "20261022-004606003-1496486",
+              "20261022-011758110-1690034"
+            ]
+          },
+          {
+            "key": "workspace-4c9f5637f640",
+            "runs": 78,
+            "slow_runs": 78,
+            "recorded_wall_secs": 3803.538,
+            "excess_secs": 3023.538,
+            "example_run_ids": [
+              "20261018-212457109-4013053",
+              "20261018-214628572-533635",
+              "20261018-215749407-1006026"
+            ]
+          },
+          {
+            "key": "workspace-6c8c9a766c32",
+            "runs": 52,
+            "slow_runs": 52,
+            "recorded_wall_secs": 3488.636,
+            "excess_secs": 2968.636,
+            "example_run_ids": [
+              "20261010-225545197-2447438",
+              "20261010-225958505-2628676",
+              "20261010-230357464-2788417"
+            ]
+          },
+          {
+            "key": "workspace-5b10e6388bc6",
+            "runs": 1,
+            "slow_runs": 1,
+            "recorded_wall_secs": 1619.315,
+            "excess_secs": 1609.315,
+            "example_run_ids": [
+              "20261022-022800089-1958851"
+            ]
+          },
+          {
+            "key": "workspace-942e9c20abc8",
+            "runs": 64,
+            "slow_runs": 64,
+            "recorded_wall_secs": 1522.901,
+            "excess_secs": 882.901,
+            "example_run_ids": [
+              "20261020-042421739-3918220",
+              "20261024-171018027-2953441",
+              "20261024-171018027-2953439"
+            ]
+          },
+          {
+            "key": "workspace-40903f272fd7",
+            "runs": 8,
+            "slow_runs": 8,
+            "recorded_wall_secs": 896.273,
+            "excess_secs": 816.273,
+            "example_run_ids": [
+              "20261011-153421904-3550325",
+              "20261011-153421904-3550324",
+              "20261011-154429959-3658481"
+            ]
+          },
+          {
+            "key": "workspace-7ed9d28345b3",
+            "runs": 10,
+            "slow_runs": 10,
+            "recorded_wall_secs": 789.621,
+            "excess_secs": 689.621,
+            "example_run_ids": [
+              "20261007-212332690-2294488",
+              "20261008-000212998-3571167",
+              "20261007-235948365-3531764"
+            ]
+          },
+          {
+            "key": "workspace-e7d5187f9fc8",
+            "runs": 8,
+            "slow_runs": 8,
+            "recorded_wall_secs": 691.207,
+            "excess_secs": 611.207,
+            "example_run_ids": [
+              "20261019-071514006-1000326",
+              "20261019-070217371-885997",
+              "20261019-071311596-984696"
+            ]
+          },
+          {
+            "key": "workspace-dac4d38582f6",
+            "runs": 2,
+            "slow_runs": 2,
+            "recorded_wall_secs": 479.046,
+            "excess_secs": 459.046,
+            "example_run_ids": [
+              "20261018-213601031-227898",
+              "20261018-214443669-462690"
+            ]
+          },
+          {
+            "key": "workspace-4b26670e77e1",
+            "runs": 2,
+            "slow_runs": 2,
+            "recorded_wall_secs": 472.668,
+            "excess_secs": 452.668,
+            "example_run_ids": [
+              "20261008-000148017-3556060",
+              "20261008-000637145-3633798"
+            ]
+          },
+          {
+            "key": "workspace-fba0cbec6862",
+            "runs": 5,
+            "slow_runs": 5,
+            "recorded_wall_secs": 448.135,
+            "excess_secs": 398.135,
+            "example_run_ids": [
+              "20261019-071901027-1061439",
+              "20261019-071538311-1009973",
+              "20261019-071346367-990291"
+            ]
+          },
+          {
+            "key": "workspace-d314042d01e2",
+            "runs": 10,
+            "slow_runs": 10,
+            "recorded_wall_secs": 489.827,
+            "excess_secs": 389.827,
+            "example_run_ids": [
+              "20261013-202415896-959492",
+              "20261013-200902070-859506",
+              "20261013-201806836-651866-pre"
+            ]
+          },
+          {
+            "key": "workspace-8e021a35950f",
+            "runs": 9,
+            "slow_runs": 9,
+            "recorded_wall_secs": 403.819,
+            "excess_secs": 313.819,
+            "example_run_ids": [
+              "20261012-052051722-186071",
+              "20261012-052852369-237722",
+              "20261012-052750480-233472"
+            ]
+          }
+        ],
+        "omitted_by_excess": {
+          "runs": 110,
+          "slow_runs": 110,
+          "recorded_wall_secs": 3815.409,
+          "excess_secs": 2715.409
+        },
+        "by_total_wall_keys": [
+          "scratch",
+          "justrust-clean-room",
+          "jcode",
+          "jcode-desktop",
+          "justrust",
+          "workspace-c9274c789cd9",
+          "workspace-da2322fbdf69",
+          "workspace-4c9f5637f640",
+          "workspace-f3cadadbecec",
+          "workspace-6c8c9a766c32",
+          "workspace-5b10e6388bc6",
+          "workspace-942e9c20abc8",
+          "workspace-40903f272fd7",
+          "workspace-7ed9d28345b3",
+          "workspace-e7d5187f9fc8",
+          "workspace-d314042d01e2",
+          "workspace-dac4d38582f6",
+          "workspace-4b26670e77e1",
+          "workspace-fba0cbec6862",
+          "workspace-8e021a35950f"
+        ]
+      },
+      "command": {
+        "by_excess": [
+          {
+            "key": "test",
+            "runs": 8466,
+            "slow_runs": 8466,
+            "recorded_wall_secs": 754380.482,
+            "excess_secs": 669720.482,
+            "example_run_ids": [
+              "20261022-042033839-2216985",
+              "20261019-040114371-3058873",
+              "20261019-041503981-3240101"
+            ]
+          },
+          {
+            "key": "build",
+            "runs": 2435,
+            "slow_runs": 2435,
+            "recorded_wall_secs": 92442.944,
+            "excess_secs": 68092.944,
+            "example_run_ids": [
+              "20261011-152445899-3380309",
+              "20261011-063822820-1846844793",
+              "20261015-223609180-1137943"
+            ]
+          },
+          {
+            "key": "check",
+            "runs": 1759,
+            "slow_runs": 1759,
+            "recorded_wall_secs": 59589.844,
+            "excess_secs": 41999.844,
+            "example_run_ids": [
+              "20261011-151509426-3212287",
+              "20261011-152926205-3476035",
+              "20261011-081357364-3529209"
+            ]
+          },
+          {
+            "key": "clippy",
+            "runs": 323,
+            "slow_runs": 323,
+            "recorded_wall_secs": 7727.377,
+            "excess_secs": 4497.377,
+            "example_run_ids": [
+              "20261010-193903434-206036",
+              "20261014-033510047-1756228",
+              "20261014-035830926-2254927"
+            ]
+          },
+          {
+            "key": "run",
+            "runs": 125,
+            "slow_runs": 125,
+            "recorded_wall_secs": 3325.694,
+            "excess_secs": 2075.694,
+            "example_run_ids": [
+              "20261022-094956058-3445272",
+              "20261025-233349920-304573",
+              "20261014-175727545-4051423"
+            ]
+          },
+          {
+            "key": "other",
+            "runs": 3,
+            "slow_runs": 3,
+            "recorded_wall_secs": 316.472,
+            "excess_secs": 286.472,
+            "example_run_ids": [
+              "20261025-224434066-4142697",
+              "20261020-210056471-1369295",
+              "20261025-225053880-4189670"
+            ]
+          }
+        ],
+        "omitted_by_excess": {
+          "runs": 0,
+          "slow_runs": 0,
+          "recorded_wall_secs": 0,
+          "excess_secs": 0
+        },
+        "by_total_wall_keys": [
+          "test",
+          "build",
+          "check",
+          "clippy",
+          "run",
+          "other"
+        ]
+      },
+      "cause": {
+        "by_excess": [
+          {
+            "key": "test_run",
+            "runs": 2337,
+            "slow_runs": 2337,
+            "recorded_wall_secs": 351617.099,
+            "excess_secs": 328247.099,
+            "example_run_ids": [
+              "20261019-040114371-3058873",
+              "20261019-041503981-3240101",
+              "20261011-083315454-3785807"
+            ]
+          },
+          {
+            "key": "compile",
+            "runs": 8796,
+            "slow_runs": 8796,
+            "recorded_wall_secs": 318745.309,
+            "excess_secs": 230785.309,
+            "example_run_ids": [
+              "20261011-152445899-3380309",
+              "20261019-081708881-1583938",
+              "20261011-063822820-1846844793"
+            ]
+          },
+          {
+            "key": "tail",
+            "runs": 1193,
+            "slow_runs": 1193,
+            "recorded_wall_secs": 187334.474,
+            "excess_secs": 175404.474,
+            "example_run_ids": [
+              "20261019-080155391-1433419",
+              "20261019-074254139-1288690",
+              "20261019-035808844-2989929"
+            ]
+          },
+          {
+            "key": "build_gaps",
+            "runs": 48,
+            "slow_runs": 48,
+            "recorded_wall_secs": 23656.257,
+            "excess_secs": 23176.257,
+            "example_run_ids": [
+              "20261022-042033839-2216985",
+              "20261024-173035612-3041042",
+              "20261024-135908066-2387267"
+            ]
+          },
+          {
+            "key": "lock_wait",
+            "runs": 502,
+            "slow_runs": 502,
+            "recorded_wall_secs": 21020.343,
+            "excess_secs": 16000.343,
+            "example_run_ids": [
+              "20261019-084136292-1907846",
+              "20261019-095017501-2655111",
+              "20261011-151509426-3212287"
+            ]
+          },
+          {
+            "key": "startup",
+            "runs": 235,
+            "slow_runs": 235,
+            "recorded_wall_secs": 15409.332,
+            "excess_secs": 13059.332,
+            "example_run_ids": [
+              "20261019-050108401-3832263",
+              "20261019-055411486-248245",
+              "20261019-024937505-1960071"
+            ]
+          }
+        ],
+        "omitted_by_excess": {
+          "runs": 0,
+          "slow_runs": 0,
+          "recorded_wall_secs": 0,
+          "excess_secs": 0
+        },
+        "by_total_wall_keys": [
+          "test_run",
+          "compile",
+          "tail",
+          "build_gaps",
+          "lock_wait",
+          "startup"
+        ]
+      },
+      "category": {
+        "by_excess": [
+          {
+            "key": "scratch",
+            "runs": 4943,
+            "slow_runs": 4943,
+            "recorded_wall_secs": 457080.954,
+            "excess_secs": 407650.954,
+            "example_run_ids": [
+              "20261019-040114371-3058873",
+              "20261019-041503981-3240101",
+              "20261019-080155391-1433419"
+            ]
+          },
+          {
+            "key": "real-workload-candidate",
+            "runs": 6913,
+            "slow_runs": 6913,
+            "recorded_wall_secs": 403594.853,
+            "excess_secs": 334464.853,
+            "example_run_ids": [
+              "20261022-042033839-2216985",
+              "20261011-083315454-3785807",
+              "20261022-093454990-3331888"
+            ]
+          },
+          {
+            "key": "benchmark",
+            "runs": 1255,
+            "slow_runs": 1255,
+            "recorded_wall_secs": 57107.007,
+            "excess_secs": 44557.007,
+            "example_run_ids": [
+              "20261011-063822820-1846844793",
+              "20261010-200902446-266766443",
+              "20261010-200901439-266766412"
+            ]
+          }
+        ],
+        "omitted_by_excess": {
+          "runs": 0,
+          "slow_runs": 0,
+          "recorded_wall_secs": 0,
+          "excess_secs": 0
+        },
+        "by_total_wall_keys": [
+          "scratch",
+          "real-workload-candidate",
+          "benchmark"
+        ]
+      },
+      "outcome": {
+        "by_excess": [
+          {
+            "key": "failure",
+            "runs": 3871,
+            "slow_runs": 3871,
+            "recorded_wall_secs": 441980.043,
+            "excess_secs": 403270.043,
+            "example_run_ids": [
+              "20261022-042033839-2216985",
+              "20261019-040114371-3058873",
+              "20261019-041503981-3240101"
+            ]
+          },
+          {
+            "key": "success",
+            "runs": 9240,
+            "slow_runs": 9240,
+            "recorded_wall_secs": 475802.772,
+            "excess_secs": 383402.772,
+            "example_run_ids": [
+              "20261020-204309608-1312729",
+              "20261020-204016860-1301400",
+              "20261011-152445899-3380309"
+            ]
+          }
+        ],
+        "omitted_by_excess": {
+          "runs": 0,
+          "slow_runs": 0,
+          "recorded_wall_secs": 0,
+          "excess_secs": 0
+        },
+        "by_total_wall_keys": [
+          "success",
+          "failure"
+        ]
+      },
+      "place": {
+        "by_excess": [
+          {
+            "key": "local",
+            "runs": 5992,
+            "slow_runs": 5992,
+            "recorded_wall_secs": 496770.337,
+            "excess_secs": 436850.337,
+            "example_run_ids": [
+              "20261019-040114371-3058873",
+              "20261019-041503981-3240101",
+              "20261019-080155391-1433419"
+            ]
+          },
+          {
+            "key": "remote",
+            "runs": 4831,
+            "slow_runs": 4831,
+            "recorded_wall_secs": 304868.005,
+            "excess_secs": 256558.005,
+            "example_run_ids": [
+              "20261022-042033839-2216985",
+              "20261022-014849163-1875338",
+              "20261023-145728883-2609245"
+            ]
+          },
+          {
+            "key": "unknown",
+            "runs": 2288,
+            "slow_runs": 2288,
+            "recorded_wall_secs": 116144.472,
+            "excess_secs": 93264.472,
+            "example_run_ids": [
+              "20261011-083315454-3785807",
+              "20261020-054856223-4063897",
+              "20261011-152445899-3380309"
+            ]
+          }
+        ],
+        "omitted_by_excess": {
+          "runs": 0,
+          "slow_runs": 0,
+          "recorded_wall_secs": 0,
+          "excess_secs": 0
+        },
+        "by_total_wall_keys": [
+          "local",
+          "remote",
+          "unknown"
+        ]
+      }
+    },
+    "remote_client_wall_coverage": {
+      "runs": 13822,
+      "reported_secs": 377404.584,
+      "client_slow_but_recorded_wall_not_slow": 1031
+    },
+    "slowest": [
+      {
+        "id": "20261022-042033839-2216985",
+        "wall": 18361.016,
+        "workspace": "justrust-clean-room",
+        "command": "test",
+        "category": "real-workload-candidate",
+        "outcome": "failure",
+        "place": "remote",
+        "cause": "build_gaps",
+        "client_wall": 18362.537,
+        "excess_secs": 18351.016,
+        "measured_phases_secs": {
+          "startup": 0.037,
+          "lock_wait": 0.0,
+          "compile": 43.184,
+          "build_gaps": 17321.812,
+          "test_run": 995.982,
+          "tail": 0.0
+        }
+      },
+      {
+        "id": "20261019-040114371-3058873",
+        "wall": 10304.616,
+        "workspace": "scratch",
+        "command": "test",
+        "category": "scratch",
+        "outcome": "failure",
+        "place": "local",
+        "cause": "test_run",
+        "client_wall": null,
+        "excess_secs": 10294.616,
+        "measured_phases_secs": {
+          "startup": 0.034,
+          "lock_wait": 0.0,
+          "compile": 6.754,
+          "build_gaps": 0.008,
+          "test_run": 8995.691,
+          "tail": 1302.129
+        }
+      },
+      {
+        "id": "20261019-041503981-3240101",
+        "wall": 9832.867,
+        "workspace": "scratch",
+        "command": "test",
+        "category": "scratch",
+        "outcome": "failure",
+        "place": "local",
+        "cause": "test_run",
+        "client_wall": null,
+        "excess_secs": 9822.867,
+        "measured_phases_secs": {
+          "startup": 0.111,
+          "lock_wait": 0.0,
+          "compile": 60.545,
+          "build_gaps": 8.733,
+          "test_run": 7595.509,
+          "tail": 2167.968
+        }
+      },
+      {
+        "id": "20261011-083315454-3785807",
+        "wall": 6985.055,
+        "workspace": "workspace-c9274c789cd9",
+        "command": "test",
+        "category": "real-workload-candidate",
+        "outcome": "failure",
+        "place": "unknown",
+        "cause": "test_run",
+        "client_wall": null,
+        "excess_secs": 6975.055,
+        "measured_phases_secs": {
+          "startup": 0.254,
+          "lock_wait": 0.0,
+          "compile": 76.848,
+          "build_gaps": 3.878,
+          "test_run": 6904.075,
+          "tail": 0.0
+        }
+      },
+      {
+        "id": "20261019-080155391-1433419",
+        "wall": 5031.045,
+        "workspace": "scratch",
+        "command": "test",
+        "category": "scratch",
+        "outcome": "failure",
+        "place": "local",
+        "cause": "tail",
+        "client_wall": null,
+        "excess_secs": 5021.045,
+        "measured_phases_secs": {
+          "startup": 0.025,
+          "lock_wait": 0.0,
+          "compile": 0.0,
+          "build_gaps": 0.0,
+          "test_run": 1063.801,
+          "tail": 3967.22
+        }
+      },
+      {
+        "id": "20261019-050108401-3832263",
+        "wall": 4974.116,
+        "workspace": "scratch",
+        "command": "test",
+        "category": "scratch",
+        "outcome": "failure",
+        "place": "local",
+        "cause": "startup",
+        "client_wall": null,
+        "excess_secs": 4964.116,
+        "measured_phases_secs": {
+          "startup": 4974.116,
+          "lock_wait": 0.0,
+          "compile": 0.0,
+          "build_gaps": 0.0,
+          "test_run": 0.0,
+          "tail": 0.0
+        }
+      },
+      {
+        "id": "20261022-093454990-3331888",
+        "wall": 4332.801,
+        "workspace": "justrust-clean-room",
+        "command": "test",
+        "category": "real-workload-candidate",
+        "outcome": "failure",
+        "place": "local",
+        "cause": "test_run",
+        "client_wall": null,
+        "excess_secs": 4322.801,
+        "measured_phases_secs": {
+          "startup": 0.031,
+          "lock_wait": 0.0,
+          "compile": 11.921,
+          "build_gaps": 0.711,
+          "test_run": 2265.229,
+          "tail": 2054.908
+        }
+      },
+      {
+        "id": "20261019-041459788-3239663",
+        "wall": 3521.718,
+        "workspace": "scratch",
+        "command": "test",
+        "category": "scratch",
+        "outcome": "failure",
+        "place": "local",
+        "cause": "test_run",
+        "client_wall": null,
+        "excess_secs": 3511.718,
+        "measured_phases_secs": {
+          "startup": 0.221,
+          "lock_wait": 0.0,
+          "compile": 192.687,
+          "build_gaps": 0.834,
+          "test_run": 3137.863,
+          "tail": 190.114
+        }
+      },
+      {
+        "id": "20261022-094502510-3383256",
+        "wall": 3517.857,
+        "workspace": "justrust-clean-room",
+        "command": "test",
+        "category": "real-workload-candidate",
+        "outcome": "failure",
+        "place": "local",
+        "cause": "test_run",
+        "client_wall": null,
+        "excess_secs": 3507.857,
+        "measured_phases_secs": {
+          "startup": 0.696,
+          "lock_wait": 0.0,
+          "compile": 4.632,
+          "build_gaps": 0.43,
+          "test_run": 2271.97,
+          "tail": 1240.13
+        }
+      },
+      {
+        "id": "20261019-074254139-1288690",
+        "wall": 3400.071,
+        "workspace": "workspace-da2322fbdf69",
+        "command": "test",
+        "category": "scratch",
+        "outcome": "failure",
+        "place": "local",
+        "cause": "tail",
+        "client_wall": null,
+        "excess_secs": 3390.071,
+        "measured_phases_secs": {
+          "startup": 0.032,
+          "lock_wait": 0.0,
+          "compile": 0.267,
+          "build_gaps": 0.007,
+          "test_run": 542.837,
+          "tail": 2856.928
+        }
+      },
+      {
+        "id": "20261019-035808844-2989929",
+        "wall": 3000.032,
+        "workspace": "scratch",
+        "command": "test",
+        "category": "scratch",
+        "outcome": "failure",
+        "place": "local",
+        "cause": "tail",
+        "client_wall": null,
+        "excess_secs": 2990.032,
+        "measured_phases_secs": {
+          "startup": 0.053,
+          "lock_wait": 0.0,
+          "compile": 1.56,
+          "build_gaps": 0.0,
+          "test_run": 0.0,
+          "tail": 2998.419
+        }
+      },
+      {
+        "id": "20261019-045104037-3712644",
+        "wall": 2999.966,
+        "workspace": "scratch",
+        "command": "test",
+        "category": "scratch",
+        "outcome": "failure",
+        "place": "local",
+        "cause": "tail",
+        "client_wall": null,
+        "excess_secs": 2989.966,
+        "measured_phases_secs": {
+          "startup": 0.517,
+          "lock_wait": 0.0,
+          "compile": 65.913,
+          "build_gaps": 0.602,
+          "test_run": 0.0,
+          "tail": 2932.934
+        }
+      }
+    ]
+  },
+  "recent": {
+    "runs": 10449,
+    "slow_runs": 5294,
+    "recorded_wall_secs": 452998.41,
+    "excess_secs": 382876.68,
+    "groups": {
+      "workspace": {
+        "by_excess": [
+          {
+            "key": "justrust-clean-room",
+            "runs": 2749,
+            "slow_runs": 2749,
+            "recorded_wall_secs": 236183.721,
+            "excess_secs": 208693.721,
+            "example_run_ids": [
+              "20261022-042033839-2216985",
+              "20261022-093454990-3331888",
+              "20261022-094502510-3383256"
+            ]
+          },
+          {
+            "key": "scratch",
+            "runs": 1669,
+            "slow_runs": 1669,
+            "recorded_wall_secs": 169874.1,
+            "excess_secs": 153184.1,
+            "example_run_ids": [
+              "20261022-000158628-1371378",
+              "20261020-204309608-1312729",
+              "20261020-204016860-1301400"
+            ]
+          },
+          {
+            "key": "jcode",
+            "runs": 764,
+            "slow_runs": 764,
+            "recorded_wall_secs": 21682.855,
+            "excess_secs": 14042.855,
+            "example_run_ids": [
+              "20261019-210414126-2066692",
+              "20261021-151911934-141729",
+              "20261021-153100469-103376-pre"
+            ]
+          },
+          {
+            "key": "workspace-f3cadadbecec",
+            "runs": 14,
+            "slow_runs": 14,
+            "recorded_wall_secs": 3600.642,
+            "excess_secs": 3460.642,
+            "example_run_ids": [
+              "20261022-014849163-1875338",
+              "20261022-004606003-1496486",
+              "20261022-011758110-1690034"
+            ]
+          },
+          {
+            "key": "workspace-5b10e6388bc6",
+            "runs": 1,
+            "slow_runs": 1,
+            "recorded_wall_secs": 1619.315,
+            "excess_secs": 1609.315,
+            "example_run_ids": [
+              "20261022-022800089-1958851"
+            ]
+          },
+          {
+            "key": "justrust",
+            "runs": 58,
+            "slow_runs": 58,
+            "recorded_wall_secs": 1659.599,
+            "excess_secs": 1079.599,
+            "example_run_ids": [
+              "20261025-224434066-4142697",
+              "20261025-225716573-42029",
+              "20261025-225053880-4189670"
+            ]
+          },
+          {
+            "key": "workspace-942e9c20abc8",
+            "runs": 23,
+            "slow_runs": 23,
+            "recorded_wall_secs": 624.078,
+            "excess_secs": 394.078,
+            "example_run_ids": [
+              "20261020-042421739-3918220",
+              "20261024-171018027-2953441",
+              "20261024-171018027-2953439"
+            ]
+          },
+          {
+            "key": "jcode-desktop",
+            "runs": 9,
+            "slow_runs": 9,
+            "recorded_wall_secs": 306.924,
+            "excess_secs": 216.924,
+            "example_run_ids": [
+              "20261025-215136535-3637552401",
+              "20261025-215415887-3637552507",
+              "20261025-214806984-3637552106"
+            ]
+          },
+          {
+            "key": "workspace-c078832e7ae7",
+            "runs": 2,
+            "slow_runs": 2,
+            "recorded_wall_secs": 154.102,
+            "excess_secs": 134.102,
+            "example_run_ids": [
+              "20261022-014855868-1875576",
+              "20261022-012135988-1698686"
+            ]
+          },
+          {
+            "key": "workspace-131493c819dc",
+            "runs": 1,
+            "slow_runs": 1,
+            "recorded_wall_secs": 47.426,
+            "excess_secs": 37.426,
+            "example_run_ids": [
+              "20261021-154401619-218222"
+            ]
+          },
+          {
+            "key": "workspace-0ea4e90ed13b",
+            "runs": 3,
+            "slow_runs": 3,
+            "recorded_wall_secs": 43.063,
+            "excess_secs": 13.063,
+            "example_run_ids": [
+              "20261021-224622527-1039281",
+              "20261021-233010025-1255718",
+              "20261022-005132024-1542914"
+            ]
+          },
+          {
+            "key": "workspace-70c89ac7f58e",
+            "runs": 1,
+            "slow_runs": 1,
+            "recorded_wall_secs": 20.857,
+            "excess_secs": 10.857,
+            "example_run_ids": [
+              "20261023-214135758-3858534"
+            ]
+          }
+        ],
+        "omitted_by_excess": {
+          "runs": 0,
+          "slow_runs": 0,
+          "recorded_wall_secs": 0,
+          "excess_secs": 0
+        },
+        "by_total_wall_keys": [
+          "justrust-clean-room",
+          "scratch",
+          "jcode",
+          "workspace-f3cadadbecec",
+          "justrust",
+          "workspace-5b10e6388bc6",
+          "workspace-942e9c20abc8",
+          "jcode-desktop",
+          "workspace-c078832e7ae7",
+          "workspace-131493c819dc",
+          "workspace-0ea4e90ed13b",
+          "workspace-70c89ac7f58e"
+        ]
+      },
+      "command": {
+        "by_excess": [
+          {
+            "key": "test",
+            "runs": 3619,
+            "slow_runs": 3619,
+            "recorded_wall_secs": 383403.343,
+            "excess_secs": 347213.343,
+            "example_run_ids": [
+              "20261022-042033839-2216985",
+              "20261022-093454990-3331888",
+              "20261022-094502510-3383256"
+            ]
+          },
+          {
+            "key": "build",
+            "runs": 1096,
+            "slow_runs": 1096,
+            "recorded_wall_secs": 38670.053,
+            "excess_secs": 27710.053,
+            "example_run_ids": [
+              "20261021-151911934-141729",
+              "20261021-153100469-103376-pre",
+              "20261025-205537709-3403713"
+            ]
+          },
+          {
+            "key": "check",
+            "runs": 365,
+            "slow_runs": 365,
+            "recorded_wall_secs": 8726.583,
+            "excess_secs": 5076.583,
+            "example_run_ids": [
+              "20261020-062718264-4123202",
+              "20261022-192739293-831612",
+              "20261023-214941503-3946899"
+            ]
+          },
+          {
+            "key": "run",
+            "runs": 112,
+            "slow_runs": 112,
+            "recorded_wall_secs": 2832.495,
+            "excess_secs": 1712.495,
+            "example_run_ids": [
+              "20261022-094956058-3445272",
+              "20261025-233349920-304573",
+              "20261023-003954869-208854"
+            ]
+          },
+          {
+            "key": "clippy",
+            "runs": 99,
+            "slow_runs": 99,
+            "recorded_wall_secs": 1867.734,
+            "excess_secs": 877.734,
+            "example_run_ids": [
+              "20261020-025946536-3577893",
+              "20261019-213219893-2200599",
+              "20261023-204235742-3516766"
+            ]
+          },
+          {
+            "key": "other",
+            "runs": 3,
+            "slow_runs": 3,
+            "recorded_wall_secs": 316.472,
+            "excess_secs": 286.472,
+            "example_run_ids": [
+              "20261025-224434066-4142697",
+              "20261020-210056471-1369295",
+              "20261025-225053880-4189670"
+            ]
+          }
+        ],
+        "omitted_by_excess": {
+          "runs": 0,
+          "slow_runs": 0,
+          "recorded_wall_secs": 0,
+          "excess_secs": 0
+        },
+        "by_total_wall_keys": [
+          "test",
+          "build",
+          "check",
+          "run",
+          "clippy",
+          "other"
+        ]
+      },
+      "cause": {
+        "by_excess": [
+          {
+            "key": "test_run",
+            "runs": 1466,
+            "slow_runs": 1466,
+            "recorded_wall_secs": 224848.689,
+            "excess_secs": 210188.689,
+            "example_run_ids": [
+              "20261022-093454990-3331888",
+              "20261022-094502510-3383256",
+              "20261022-060856633-2584352"
+            ]
+          },
+          {
+            "key": "tail",
+            "runs": 657,
+            "slow_runs": 657,
+            "recorded_wall_secs": 90494.346,
+            "excess_secs": 83924.346,
+            "example_run_ids": [
+              "20261022-014849163-1875338",
+              "20261020-204309608-1312729",
+              "20261020-204016860-1301400"
+            ]
+          },
+          {
+            "key": "compile",
+            "runs": 2811,
+            "slow_runs": 2811,
+            "recorded_wall_secs": 84727.451,
+            "excess_secs": 56617.451,
+            "example_run_ids": [
+              "20261021-151911934-141729",
+              "20261021-153100469-103376-pre",
+              "20261023-213313541-3803428"
+            ]
+          },
+          {
+            "key": "build_gaps",
+            "runs": 26,
+            "slow_runs": 26,
+            "recorded_wall_secs": 22084.961,
+            "excess_secs": 21824.961,
+            "example_run_ids": [
+              "20261022-042033839-2216985",
+              "20261024-173035612-3041042",
+              "20261024-135908066-2387267"
+            ]
+          },
+          {
+            "key": "lock_wait",
+            "runs": 259,
+            "slow_runs": 259,
+            "recorded_wall_secs": 11639.469,
+            "excess_secs": 9049.469,
+            "example_run_ids": [
+              "20261020-062810184-4124713",
+              "20261020-062838761-4125512",
+              "20261020-181848318-477550-pre"
+            ]
+          },
+          {
+            "key": "startup",
+            "runs": 75,
+            "slow_runs": 75,
+            "recorded_wall_secs": 2021.764,
+            "excess_secs": 1271.764,
+            "example_run_ids": [
+              "20261022-051758674-2410328",
+              "20261022-094956058-3445272",
+              "20261020-201310219-477550-pre"
+            ]
+          }
+        ],
+        "omitted_by_excess": {
+          "runs": 0,
+          "slow_runs": 0,
+          "recorded_wall_secs": 0,
+          "excess_secs": 0
+        },
+        "by_total_wall_keys": [
+          "test_run",
+          "tail",
+          "compile",
+          "build_gaps",
+          "lock_wait",
+          "startup"
+        ]
+      },
+      "category": {
+        "by_excess": [
+          {
+            "key": "real-workload-candidate",
+            "runs": 3592,
+            "slow_runs": 3592,
+            "recorded_wall_secs": 259265.907,
+            "excess_secs": 223345.907,
+            "example_run_ids": [
+              "20261022-042033839-2216985",
+              "20261022-093454990-3331888",
+              "20261022-094502510-3383256"
+            ]
+          },
+          {
+            "key": "scratch",
+            "runs": 1685,
+            "slow_runs": 1685,
+            "recorded_wall_secs": 175189.269,
+            "excess_secs": 158339.269,
+            "example_run_ids": [
+              "20261022-000158628-1371378",
+              "20261022-014849163-1875338",
+              "20261020-204309608-1312729"
+            ]
+          },
+          {
+            "key": "benchmark",
+            "runs": 17,
+            "slow_runs": 17,
+            "recorded_wall_secs": 1361.504,
+            "excess_secs": 1191.504,
+            "example_run_ids": [
+              "20261025-220115083-3790927745",
+              "20261025-220949679-3879019429",
+              "20261025-221300415-3879019639"
+            ]
+          }
+        ],
+        "omitted_by_excess": {
+          "runs": 0,
+          "slow_runs": 0,
+          "recorded_wall_secs": 0,
+          "excess_secs": 0
+        },
+        "by_total_wall_keys": [
+          "real-workload-candidate",
+          "scratch",
+          "benchmark"
+        ]
+      },
+      "outcome": {
+        "by_excess": [
+          {
+            "key": "failure",
+            "runs": 1829,
+            "slow_runs": 1829,
+            "recorded_wall_secs": 238693.869,
+            "excess_secs": 220403.869,
+            "example_run_ids": [
+              "20261022-042033839-2216985",
+              "20261022-093454990-3331888",
+              "20261022-094502510-3383256"
+            ]
+          },
+          {
+            "key": "success",
+            "runs": 3465,
+            "slow_runs": 3465,
+            "recorded_wall_secs": 197122.811,
+            "excess_secs": 162472.811,
+            "example_run_ids": [
+              "20261020-204309608-1312729",
+              "20261020-204016860-1301400",
+              "20261021-141917300-43103"
+            ]
+          }
+        ],
+        "omitted_by_excess": {
+          "runs": 0,
+          "slow_runs": 0,
+          "recorded_wall_secs": 0,
+          "excess_secs": 0
+        },
+        "by_total_wall_keys": [
+          "failure",
+          "success"
+        ]
+      },
+      "place": {
+        "by_excess": [
+          {
+            "key": "remote",
+            "runs": 2914,
+            "slow_runs": 2914,
+            "recorded_wall_secs": 249643.818,
+            "excess_secs": 220503.818,
+            "example_run_ids": [
+              "20261022-042033839-2216985",
+              "20261022-014849163-1875338",
+              "20261023-145728883-2609245"
+            ]
+          },
+          {
+            "key": "local",
+            "runs": 2379,
+            "slow_runs": 2379,
+            "recorded_wall_secs": 184274.082,
+            "excess_secs": 160484.082,
+            "example_run_ids": [
+              "20261022-093454990-3331888",
+              "20261022-094502510-3383256",
+              "20261022-060856633-2584352"
+            ]
+          },
+          {
+            "key": "unknown",
+            "runs": 1,
+            "slow_runs": 1,
+            "recorded_wall_secs": 1898.781,
+            "excess_secs": 1888.781,
+            "example_run_ids": [
+              "20261020-054856223-4063897"
+            ]
+          }
+        ],
+        "omitted_by_excess": {
+          "runs": 0,
+          "slow_runs": 0,
+          "recorded_wall_secs": 0,
+          "excess_secs": 0
+        },
+        "by_total_wall_keys": [
+          "remote",
+          "local",
+          "unknown"
+        ]
+      }
+    },
+    "remote_client_wall_coverage": {
+      "runs": 5067,
+      "reported_secs": 273144.016,
+      "client_slow_but_recorded_wall_not_slow": 312
+    },
+    "slowest": [
+      {
+        "id": "20261022-042033839-2216985",
+        "wall": 18361.016,
+        "workspace": "justrust-clean-room",
+        "command": "test",
+        "category": "real-workload-candidate",
+        "outcome": "failure",
+        "place": "remote",
+        "cause": "build_gaps",
+        "client_wall": 18362.537,
+        "excess_secs": 18351.016,
+        "measured_phases_secs": {
+          "startup": 0.037,
+          "lock_wait": 0.0,
+          "compile": 43.184,
+          "build_gaps": 17321.812,
+          "test_run": 995.982,
+          "tail": 0.0
+        }
+      },
+      {
+        "id": "20261022-093454990-3331888",
+        "wall": 4332.801,
+        "workspace": "justrust-clean-room",
+        "command": "test",
+        "category": "real-workload-candidate",
+        "outcome": "failure",
+        "place": "local",
+        "cause": "test_run",
+        "client_wall": null,
+        "excess_secs": 4322.801,
+        "measured_phases_secs": {
+          "startup": 0.031,
+          "lock_wait": 0.0,
+          "compile": 11.921,
+          "build_gaps": 0.711,
+          "test_run": 2265.229,
+          "tail": 2054.908
+        }
+      },
+      {
+        "id": "20261022-094502510-3383256",
+        "wall": 3517.857,
+        "workspace": "justrust-clean-room",
+        "command": "test",
+        "category": "real-workload-candidate",
+        "outcome": "failure",
+        "place": "local",
+        "cause": "test_run",
+        "client_wall": null,
+        "excess_secs": 3507.857,
+        "measured_phases_secs": {
+          "startup": 0.696,
+          "lock_wait": 0.0,
+          "compile": 4.632,
+          "build_gaps": 0.43,
+          "test_run": 2271.97,
+          "tail": 1240.13
+        }
+      },
+      {
+        "id": "20261022-060856633-2584352",
+        "wall": 2892.979,
+        "workspace": "justrust-clean-room",
+        "command": "test",
+        "category": "real-workload-candidate",
+        "outcome": "failure",
+        "place": "local",
+        "cause": "test_run",
+        "client_wall": null,
+        "excess_secs": 2882.979,
+        "measured_phases_secs": {
+          "startup": 0.015,
+          "lock_wait": 0.0,
+          "compile": 0.0,
+          "build_gaps": 0.0,
+          "test_run": 2892.913,
+          "tail": 0.051
+        }
+      },
+      {
+        "id": "20261020-042429014-3919638",
+        "wall": 2100.294,
+        "workspace": "justrust-clean-room",
+        "command": "test",
+        "category": "real-workload-candidate",
+        "outcome": "failure",
+        "place": "local",
+        "cause": "test_run",
+        "client_wall": null,
+        "excess_secs": 2090.294,
+        "measured_phases_secs": {
+          "startup": 0.077,
+          "lock_wait": 0.0,
+          "compile": 2.501,
+          "build_gaps": 0.004,
+          "test_run": 2093.597,
+          "tail": 4.116
+        }
+      },
+      {
+        "id": "20261022-000158628-1371378",
+        "wall": 1999.057,
+        "workspace": "scratch",
+        "command": "test",
+        "category": "scratch",
+        "outcome": "failure",
+        "place": "local",
+        "cause": "test_run",
+        "client_wall": null,
+        "excess_secs": 1989.057,
+        "measured_phases_secs": {
+          "startup": 0.103,
+          "lock_wait": 0.0,
+          "compile": 63.21,
+          "build_gaps": 0.051,
+          "test_run": 1914.535,
+          "tail": 21.159
+        }
+      },
+      {
+        "id": "20261020-054856223-4063897",
+        "wall": 1898.781,
+        "workspace": "justrust-clean-room",
+        "command": "test",
+        "category": "real-workload-candidate",
+        "outcome": "failure",
+        "place": "unknown",
+        "cause": "test_run",
+        "client_wall": null,
+        "excess_secs": 1888.781,
+        "measured_phases_secs": {
+          "startup": 0.02,
+          "lock_wait": 0.0,
+          "compile": 43.023,
+          "build_gaps": 0.013,
+          "test_run": 1855.72,
+          "tail": 0.006
+        }
+      },
+      {
+        "id": "20261022-014849163-1875338",
+        "wall": 1868.745,
+        "workspace": "workspace-f3cadadbecec",
+        "command": "test",
+        "category": "scratch",
+        "outcome": "failure",
+        "place": "remote",
+        "cause": "tail",
+        "client_wall": 1869.55,
+        "excess_secs": 1858.745,
+        "measured_phases_secs": {
+          "startup": 0.014,
+          "lock_wait": 0.0,
+          "compile": 0.0,
+          "build_gaps": 0.0,
+          "test_run": 716.439,
+          "tail": 1152.293
+        }
+      },
+      {
+        "id": "20261020-204309608-1312729",
+        "wall": 1866.045,
+        "workspace": "scratch",
+        "command": "test",
+        "category": "scratch",
+        "outcome": "success",
+        "place": "local",
+        "cause": "tail",
+        "client_wall": null,
+        "excess_secs": 1856.045,
+        "measured_phases_secs": {
+          "startup": 0.065,
+          "lock_wait": 0.0,
+          "compile": 13.904,
+          "build_gaps": 1.2,
+          "test_run": 0.0,
+          "tail": 1850.877
+        }
+      },
+      {
+        "id": "20261020-204016860-1301400",
+        "wall": 1852.389,
+        "workspace": "scratch",
+        "command": "test",
+        "category": "scratch",
+        "outcome": "success",
+        "place": "local",
+        "cause": "tail",
+        "client_wall": null,
+        "excess_secs": 1842.389,
+        "measured_phases_secs": {
+          "startup": 0.052,
+          "lock_wait": 0.0,
+          "compile": 36.075,
+          "build_gaps": 0.387,
+          "test_run": 0.0,
+          "tail": 1815.875
+        }
+      },
+      {
+        "id": "20261021-205415150-802697",
+        "wall": 1826.998,
+        "workspace": "justrust-clean-room",
+        "command": "test",
+        "category": "real-workload-candidate",
+        "outcome": "failure",
+        "place": "local",
+        "cause": "tail",
+        "client_wall": null,
+        "excess_secs": 1816.998,
+        "measured_phases_secs": {
+          "startup": 0.057,
+          "lock_wait": 0.0,
+          "compile": 16.307,
+          "build_gaps": 0.385,
+          "test_run": 429.894,
+          "tail": 1380.357
+        }
+      },
+      {
+        "id": "20261020-042148399-3910280",
+        "wall": 1728.766,
+        "workspace": "justrust-clean-room",
+        "command": "test",
+        "category": "real-workload-candidate",
+        "outcome": "failure",
+        "place": "local",
+        "cause": "test_run",
+        "client_wall": null,
+        "excess_secs": 1718.766,
+        "measured_phases_secs": {
+          "startup": 501.573,
+          "lock_wait": 0.0,
+          "compile": 0.0,
+          "build_gaps": 0.0,
+          "test_run": 1227.165,
+          "tail": 0.028
+        }
+      }
+    ]
+  },
+  "recent_24h_real_workload_candidates": {
+    "runs": 1082,
+    "slow_runs": 445,
+    "recorded_wall_secs": 15193.857,
+    "excess_secs": 8779.161,
+    "groups": {
+      "workspace": {
+        "by_excess": [
+          {
+            "key": "justrust-clean-room",
+            "runs": 237,
+            "slow_runs": 237,
+            "recorded_wall_secs": 7677.556,
+            "excess_secs": 5307.556,
+            "example_run_ids": [
+              "20261025-234813569-416231",
+              "20261025-230408663-88120",
+              "20261025-203723357-3339712"
+            ]
+          },
+          {
+            "key": "jcode",
+            "runs": 159,
+            "slow_runs": 159,
+            "recorded_wall_secs": 4090.144,
+            "excess_secs": 2500.144,
+            "example_run_ids": [
+              "20261025-220129313-3793128",
+              "20261025-205537709-3403713",
+              "20261025-233349920-304573"
+            ]
+          },
+          {
+            "key": "justrust",
+            "runs": 49,
+            "slow_runs": 49,
+            "recorded_wall_secs": 1461.461,
+            "excess_secs": 971.461,
+            "example_run_ids": [
+              "20261025-224434066-4142697",
+              "20261025-225716573-42029",
+              "20261025-225053880-4189670"
+            ]
+          }
+        ],
+        "omitted_by_excess": {
+          "runs": 0,
+          "slow_runs": 0,
+          "recorded_wall_secs": 0,
+          "excess_secs": 0
+        },
+        "by_total_wall_keys": [
+          "justrust-clean-room",
+          "jcode",
+          "justrust"
+        ]
+      },
+      "command": {
+        "by_excess": [
+          {
+            "key": "test",
+            "runs": 327,
+            "slow_runs": 327,
+            "recorded_wall_secs": 9924.641,
+            "excess_secs": 6654.641,
+            "example_run_ids": [
+              "20261025-220129313-3793128",
+              "20261025-234813569-416231",
+              "20261025-230408663-88120"
+            ]
+          },
+          {
+            "key": "build",
+            "runs": 53,
+            "slow_runs": 53,
+            "recorded_wall_secs": 1965.083,
+            "excess_secs": 1435.083,
+            "example_run_ids": [
+              "20261025-205537709-3403713",
+              "20261025-225716573-42029",
+              "20261025-225911440-55033"
+            ]
+          },
+          {
+            "key": "check",
+            "runs": 45,
+            "slow_runs": 45,
+            "recorded_wall_secs": 755.589,
+            "excess_secs": 305.589,
+            "example_run_ids": [
+              "20261025-234903754-422450",
+              "20261025-234742825-411740",
+              "20261026-015338276-299623"
+            ]
+          },
+          {
+            "key": "other",
+            "runs": 2,
+            "slow_runs": 2,
+            "recorded_wall_secs": 211.39,
+            "excess_secs": 191.39,
+            "example_run_ids": [
+              "20261025-224434066-4142697",
+              "20261025-225053880-4189670"
+            ]
+          },
+          {
+            "key": "clippy",
+            "runs": 17,
+            "slow_runs": 17,
+            "recorded_wall_secs": 271.039,
+            "excess_secs": 101.039,
+            "example_run_ids": [
+              "20261025-235202952-446738",
+              "20261025-215755994-3764457",
+              "20261026-142305944-299350"
+            ]
+          },
+          {
+            "key": "run",
+            "runs": 1,
+            "slow_runs": 1,
+            "recorded_wall_secs": 101.42,
+            "excess_secs": 91.42,
+            "example_run_ids": [
+              "20261025-233349920-304573"
+            ]
+          }
+        ],
+        "omitted_by_excess": {
+          "runs": 0,
+          "slow_runs": 0,
+          "recorded_wall_secs": 0,
+          "excess_secs": 0
+        },
+        "by_total_wall_keys": [
+          "test",
+          "build",
+          "check",
+          "clippy",
+          "other",
+          "run"
+        ]
+      },
+      "cause": {
+        "by_excess": [
+          {
+            "key": "compile",
+            "runs": 367,
+            "slow_runs": 367,
+            "recorded_wall_secs": 9694.12,
+            "excess_secs": 6024.12,
+            "example_run_ids": [
+              "20261025-205537709-3403713",
+              "20261025-234813569-416231",
+              "20261025-224434066-4142697"
+            ]
+          },
+          {
+            "key": "test_run",
+            "runs": 33,
+            "slow_runs": 33,
+            "recorded_wall_secs": 1812.443,
+            "excess_secs": 1482.443,
+            "example_run_ids": [
+              "20261025-230408663-88120",
+              "20261026-055009253-1677075",
+              "20261026-073356487-2256471"
+            ]
+          },
+          {
+            "key": "tail",
+            "runs": 15,
+            "slow_runs": 15,
+            "recorded_wall_secs": 840.062,
+            "excess_secs": 690.062,
+            "example_run_ids": [
+              "20261025-220129313-3793128",
+              "20261025-203723357-3339712",
+              "20261026-014748680-254328"
+            ]
+          },
+          {
+            "key": "build_gaps",
+            "runs": 5,
+            "slow_runs": 5,
+            "recorded_wall_secs": 324.457,
+            "excess_secs": 274.457,
+            "example_run_ids": [
+              "20261025-231830323-193516",
+              "20261025-233240222-297414",
+              "20261025-195951214-3201035"
+            ]
+          },
+          {
+            "key": "lock_wait",
+            "runs": 21,
+            "slow_runs": 21,
+            "recorded_wall_secs": 440.822,
+            "excess_secs": 230.822,
+            "example_run_ids": [
+              "20261026-015312420-296303",
+              "20261026-015908948-339774",
+              "20261025-185246413-2920615"
+            ]
+          },
+          {
+            "key": "startup",
+            "runs": 4,
+            "slow_runs": 4,
+            "recorded_wall_secs": 117.258,
+            "excess_secs": 77.258,
+            "example_run_ids": [
+              "20261025-221240428-3906202",
+              "20261026-032154762-788560-pre",
+              "20261026-032125289-788560-pre"
+            ]
+          }
+        ],
+        "omitted_by_excess": {
+          "runs": 0,
+          "slow_runs": 0,
+          "recorded_wall_secs": 0,
+          "excess_secs": 0
+        },
+        "by_total_wall_keys": [
+          "compile",
+          "test_run",
+          "tail",
+          "lock_wait",
+          "build_gaps",
+          "startup"
+        ]
+      },
+      "category": {
+        "by_excess": [
+          {
+            "key": "real-workload-candidate",
+            "runs": 445,
+            "slow_runs": 445,
+            "recorded_wall_secs": 13229.161,
+            "excess_secs": 8779.161,
+            "example_run_ids": [
+              "20261025-220129313-3793128",
+              "20261025-205537709-3403713",
+              "20261025-234813569-416231"
+            ]
+          }
+        ],
+        "omitted_by_excess": {
+          "runs": 0,
+          "slow_runs": 0,
+          "recorded_wall_secs": 0,
+          "excess_secs": 0
+        },
+        "by_total_wall_keys": [
+          "real-workload-candidate"
+        ]
+      },
+      "outcome": {
+        "by_excess": [
+          {
+            "key": "success",
+            "runs": 307,
+            "slow_runs": 307,
+            "recorded_wall_secs": 8697.555,
+            "excess_secs": 5627.555,
+            "example_run_ids": [
+              "20261025-205537709-3403713",
+              "20261025-234813569-416231",
+              "20261025-230408663-88120"
+            ]
+          },
+          {
+            "key": "failure",
+            "runs": 138,
+            "slow_runs": 138,
+            "recorded_wall_secs": 4531.606,
+            "excess_secs": 3151.606,
+            "example_run_ids": [
+              "20261025-220129313-3793128",
+              "20261025-225053880-4189670",
+              "20261025-203723357-3339712"
+            ]
+          }
+        ],
+        "omitted_by_excess": {
+          "runs": 0,
+          "slow_runs": 0,
+          "recorded_wall_secs": 0,
+          "excess_secs": 0
+        },
+        "by_total_wall_keys": [
+          "success",
+          "failure"
+        ]
+      },
+      "place": {
+        "by_excess": [
+          {
+            "key": "remote",
+            "runs": 383,
+            "slow_runs": 383,
+            "recorded_wall_secs": 10888.01,
+            "excess_secs": 7058.01,
+            "example_run_ids": [
+              "20261025-220129313-3793128",
+              "20261025-230408663-88120",
+              "20261025-224434066-4142697"
+            ]
+          },
+          {
+            "key": "local",
+            "runs": 62,
+            "slow_runs": 62,
+            "recorded_wall_secs": 2341.151,
+            "excess_secs": 1721.151,
+            "example_run_ids": [
+              "20261025-205537709-3403713",
+              "20261025-234813569-416231",
+              "20261025-233349920-304573"
+            ]
+          }
+        ],
+        "omitted_by_excess": {
+          "runs": 0,
+          "slow_runs": 0,
+          "recorded_wall_secs": 0,
+          "excess_secs": 0
+        },
+        "by_total_wall_keys": [
+          "remote",
+          "local"
+        ]
+      }
+    },
+    "remote_client_wall_coverage": {
+      "runs": 985,
+      "reported_secs": 15488.894,
+      "client_slow_but_recorded_wall_not_slow": 75
+    },
+    "slowest": [
+      {
+        "id": "20261025-220129313-3793128",
+        "wall": 389.862,
+        "workspace": "jcode",
+        "command": "test",
+        "category": "real-workload-candidate",
+        "outcome": "failure",
+        "place": "remote",
+        "cause": "tail",
+        "client_wall": 399.02,
+        "excess_secs": 379.862,
+        "measured_phases_secs": {
+          "startup": 0.192,
+          "lock_wait": 0.0,
+          "compile": 8.691,
+          "build_gaps": 0.153,
+          "test_run": 18.556,
+          "tail": 362.271
+        }
+      },
+      {
+        "id": "20261025-205537709-3403713",
+        "wall": 260.22,
+        "workspace": "jcode",
+        "command": "build",
+        "category": "real-workload-candidate",
+        "outcome": "success",
+        "place": "local",
+        "cause": "compile",
+        "client_wall": null,
+        "excess_secs": 250.22,
+        "measured_phases_secs": {
+          "startup": 0.303,
+          "lock_wait": 0.0,
+          "compile": 259.096,
+          "build_gaps": 0.768,
+          "test_run": 0.0,
+          "tail": 0.053
+        }
+      },
+      {
+        "id": "20261025-234813569-416231",
+        "wall": 141.02,
+        "workspace": "justrust-clean-room",
+        "command": "test",
+        "category": "real-workload-candidate",
+        "outcome": "success",
+        "place": "local",
+        "cause": "compile",
+        "client_wall": null,
+        "excess_secs": 131.02,
+        "measured_phases_secs": {
+          "startup": 0.037,
+          "lock_wait": 0.0,
+          "compile": 137.778,
+          "build_gaps": 0.041,
+          "test_run": 3.138,
+          "tail": 0.026
+        }
+      },
+      {
+        "id": "20261025-230408663-88120",
+        "wall": 113.132,
+        "workspace": "justrust-clean-room",
+        "command": "test",
+        "category": "real-workload-candidate",
+        "outcome": "success",
+        "place": "remote",
+        "cause": "test_run",
+        "client_wall": 113.863,
+        "excess_secs": 103.132,
+        "measured_phases_secs": {
+          "startup": 0.086,
+          "lock_wait": 0.0,
+          "compile": 26.465,
+          "build_gaps": 0.31,
+          "test_run": 86.267,
+          "tail": 0.004
+        }
+      },
+      {
+        "id": "20261025-224434066-4142697",
+        "wall": 107.108,
+        "workspace": "justrust",
+        "command": "other",
+        "category": "real-workload-candidate",
+        "outcome": "success",
+        "place": "remote",
+        "cause": "compile",
+        "client_wall": 129.022,
+        "excess_secs": 97.108,
+        "measured_phases_secs": {
+          "startup": 0.688,
+          "lock_wait": 0.0,
+          "compile": 106.347,
+          "build_gaps": 0.063,
+          "test_run": 0.0,
+          "tail": 0.009
+        }
+      },
+      {
+        "id": "20261025-225716573-42029",
+        "wall": 105.271,
+        "workspace": "justrust",
+        "command": "build",
+        "category": "real-workload-candidate",
+        "outcome": "success",
+        "place": "remote",
+        "cause": "compile",
+        "client_wall": 114.746,
+        "excess_secs": 95.271,
+        "measured_phases_secs": {
+          "startup": 0.392,
+          "lock_wait": 0.0,
+          "compile": 104.799,
+          "build_gaps": 0.069,
+          "test_run": 0.0,
+          "tail": 0.011
+        }
+      },
+      {
+        "id": "20261025-225053880-4189670",
+        "wall": 104.282,
+        "workspace": "justrust",
+        "command": "other",
+        "category": "real-workload-candidate",
+        "outcome": "failure",
+        "place": "remote",
+        "cause": "compile",
+        "client_wall": 117.808,
+        "excess_secs": 94.282,
+        "measured_phases_secs": {
+          "startup": 0.146,
+          "lock_wait": 0.0,
+          "compile": 104.064,
+          "build_gaps": 0.063,
+          "test_run": 0.0,
+          "tail": 0.009
+        }
+      },
+      {
+        "id": "20261025-233349920-304573",
+        "wall": 101.42,
+        "workspace": "jcode",
+        "command": "run",
+        "category": "real-workload-candidate",
+        "outcome": "success",
+        "place": "local",
+        "cause": "compile",
+        "client_wall": null,
+        "excess_secs": 91.42,
+        "measured_phases_secs": {
+          "startup": 0.364,
+          "lock_wait": 0.0,
+          "compile": 98.8,
+          "build_gaps": 2.204,
+          "test_run": 0.0,
+          "tail": 0.053
+        }
+      },
+      {
+        "id": "20261025-225911440-55033",
+        "wall": 100.849,
+        "workspace": "justrust",
+        "command": "build",
+        "category": "real-workload-candidate",
+        "outcome": "success",
+        "place": "remote",
+        "cause": "compile",
+        "client_wall": 110.711,
+        "excess_secs": 90.849,
+        "measured_phases_secs": {
+          "startup": 0.092,
+          "lock_wait": 0.0,
+          "compile": 100.676,
+          "build_gaps": 0.071,
+          "test_run": 0.0,
+          "tail": 0.01
+        }
+      },
+      {
+        "id": "20261025-203723357-3339712",
+        "wall": 98.583,
+        "workspace": "justrust-clean-room",
+        "command": "test",
+        "category": "real-workload-candidate",
+        "outcome": "failure",
+        "place": "remote",
+        "cause": "tail",
+        "client_wall": 99.971,
+        "excess_secs": 88.583,
+        "measured_phases_secs": {
+          "startup": 0.016,
+          "lock_wait": 0.0,
+          "compile": 0.0,
+          "build_gaps": 0.0,
+          "test_run": 14.878,
+          "tail": 83.688
+        }
+      },
+      {
+        "id": "20261026-142049697-283659",
+        "wall": 96.699,
+        "workspace": "jcode",
+        "command": "build",
+        "category": "real-workload-candidate",
+        "outcome": "success",
+        "place": "remote",
+        "cause": "compile",
+        "client_wall": 135.989,
+        "excess_secs": 86.699,
+        "measured_phases_secs": {
+          "startup": 0.902,
+          "lock_wait": 0.0,
+          "compile": 95.65,
+          "build_gaps": 0.105,
+          "test_run": 0.0,
+          "tail": 0.042
+        }
+      },
+      {
+        "id": "20261025-234631211-402564",
+        "wall": 93.019,
+        "workspace": "justrust-clean-room",
+        "command": "test",
+        "category": "real-workload-candidate",
+        "outcome": "success",
+        "place": "local",
+        "cause": "compile",
+        "client_wall": null,
+        "excess_secs": 83.019,
+        "measured_phases_secs": {
+          "startup": 0.072,
+          "lock_wait": 0.0,
+          "compile": 76.245,
+          "build_gaps": 0.626,
+          "test_run": 16.069,
+          "tail": 0.007
+        }
+      }
+    ]
+  },
+  "recent_real_workload_candidates": {
+    "runs": 7616,
+    "slow_runs": 3592,
+    "recorded_wall_secs": 273447.031,
+    "excess_secs": 223345.907,
+    "groups": {
+      "workspace": {
+        "by_excess": [
+          {
+            "key": "justrust-clean-room",
+            "runs": 2743,
+            "slow_runs": 2743,
+            "recorded_wall_secs": 235235.562,
+            "excess_secs": 207805.562,
+            "example_run_ids": [
+              "20261022-042033839-2216985",
+              "20261022-093454990-3331888",
+              "20261022-094502510-3383256"
+            ]
+          },
+          {
+            "key": "jcode",
+            "runs": 762,
+            "slow_runs": 762,
+            "recorded_wall_secs": 21576.434,
+            "excess_secs": 13956.434,
+            "example_run_ids": [
+              "20261019-210414126-2066692",
+              "20261021-151911934-141729",
+              "20261021-153100469-103376-pre"
+            ]
+          },
+          {
+            "key": "justrust",
+            "runs": 58,
+            "slow_runs": 58,
+            "recorded_wall_secs": 1659.599,
+            "excess_secs": 1079.599,
+            "example_run_ids": [
+              "20261025-224434066-4142697",
+              "20261025-225716573-42029",
+              "20261025-225053880-4189670"
+            ]
+          },
+          {
+            "key": "workspace-942e9c20abc8",
+            "runs": 23,
+            "slow_runs": 23,
+            "recorded_wall_secs": 624.078,
+            "excess_secs": 394.078,
+            "example_run_ids": [
+              "20261020-042421739-3918220",
+              "20261024-171018027-2953441",
+              "20261024-171018027-2953439"
+            ]
+          },
+          {
+            "key": "scratch",
+            "runs": 1,
+            "slow_runs": 1,
+            "recorded_wall_secs": 58.889,
+            "excess_secs": 48.889,
+            "example_run_ids": [
+              "20261024-055319949-820303"
+            ]
+          },
+          {
+            "key": "workspace-131493c819dc",
+            "runs": 1,
+            "slow_runs": 1,
+            "recorded_wall_secs": 47.426,
+            "excess_secs": 37.426,
+            "example_run_ids": [
+              "20261021-154401619-218222"
+            ]
+          },
+          {
+            "key": "workspace-0ea4e90ed13b",
+            "runs": 3,
+            "slow_runs": 3,
+            "recorded_wall_secs": 43.063,
+            "excess_secs": 13.063,
+            "example_run_ids": [
+              "20261021-224622527-1039281",
+              "20261021-233010025-1255718",
+              "20261022-005132024-1542914"
+            ]
+          },
+          {
+            "key": "workspace-70c89ac7f58e",
+            "runs": 1,
+            "slow_runs": 1,
+            "recorded_wall_secs": 20.857,
+            "excess_secs": 10.857,
+            "example_run_ids": [
+              "20261023-214135758-3858534"
+            ]
+          }
+        ],
+        "omitted_by_excess": {
+          "runs": 0,
+          "slow_runs": 0,
+          "recorded_wall_secs": 0,
+          "excess_secs": 0
+        },
+        "by_total_wall_keys": [
+          "justrust-clean-room",
+          "jcode",
+          "justrust",
+          "workspace-942e9c20abc8",
+          "scratch",
+          "workspace-131493c819dc",
+          "workspace-0ea4e90ed13b",
+          "workspace-70c89ac7f58e"
+        ]
+      },
+      "command": {
+        "by_excess": [
+          {
+            "key": "test",
+            "runs": 2498,
+            "slow_runs": 2498,
+            "recorded_wall_secs": 227833.569,
+            "excess_secs": 202853.569,
+            "example_run_ids": [
+              "20261022-042033839-2216985",
+              "20261022-093454990-3331888",
+              "20261022-094502510-3383256"
+            ]
+          },
+          {
+            "key": "build",
+            "runs": 693,
+            "slow_runs": 693,
+            "recorded_wall_secs": 22399.74,
+            "excess_secs": 15469.74,
+            "example_run_ids": [
+              "20261021-151911934-141729",
+              "20261021-153100469-103376-pre",
+              "20261025-205537709-3403713"
+            ]
+          },
+          {
+            "key": "check",
+            "runs": 229,
+            "slow_runs": 229,
+            "recorded_wall_secs": 4761.954,
+            "excess_secs": 2471.954,
+            "example_run_ids": [
+              "20261020-062718264-4123202",
+              "20261023-214941503-3946899",
+              "20261019-223142398-2481540"
+            ]
+          },
+          {
+            "key": "run",
+            "runs": 91,
+            "slow_runs": 91,
+            "recorded_wall_secs": 2493.525,
+            "excess_secs": 1583.525,
+            "example_run_ids": [
+              "20261022-094956058-3445272",
+              "20261025-233349920-304573",
+              "20261023-003954869-208854"
+            ]
+          },
+          {
+            "key": "clippy",
+            "runs": 78,
+            "slow_runs": 78,
+            "recorded_wall_secs": 1460.646,
+            "excess_secs": 680.646,
+            "example_run_ids": [
+              "20261020-025946536-3577893",
+              "20261019-213219893-2200599",
+              "20261023-204235742-3516766"
+            ]
+          },
+          {
+            "key": "other",
+            "runs": 3,
+            "slow_runs": 3,
+            "recorded_wall_secs": 316.472,
+            "excess_secs": 286.472,
+            "example_run_ids": [
+              "20261025-224434066-4142697",
+              "20261020-210056471-1369295",
+              "20261025-225053880-4189670"
+            ]
+          }
+        ],
+        "omitted_by_excess": {
+          "runs": 0,
+          "slow_runs": 0,
+          "recorded_wall_secs": 0,
+          "excess_secs": 0
+        },
+        "by_total_wall_keys": [
+          "test",
+          "build",
+          "check",
+          "run",
+          "clippy",
+          "other"
+        ]
+      },
+      "cause": {
+        "by_excess": [
+          {
+            "key": "test_run",
+            "runs": 919,
+            "slow_runs": 919,
+            "recorded_wall_secs": 121960.927,
+            "excess_secs": 112770.927,
+            "example_run_ids": [
+              "20261022-093454990-3331888",
+              "20261022-094502510-3383256",
+              "20261022-060856633-2584352"
+            ]
+          },
+          {
+            "key": "tail",
+            "runs": 429,
+            "slow_runs": 429,
+            "recorded_wall_secs": 50072.083,
+            "excess_secs": 45782.083,
+            "example_run_ids": [
+              "20261021-205415150-802697",
+              "20261023-145728883-2609245",
+              "20261019-210414126-2066692"
+            ]
+          },
+          {
+            "key": "compile",
+            "runs": 1907,
+            "slow_runs": 1907,
+            "recorded_wall_secs": 52227.131,
+            "excess_secs": 33157.131,
+            "example_run_ids": [
+              "20261021-151911934-141729",
+              "20261021-153100469-103376-pre",
+              "20261025-205537709-3403713"
+            ]
+          },
+          {
+            "key": "build_gaps",
+            "runs": 26,
+            "slow_runs": 26,
+            "recorded_wall_secs": 22084.961,
+            "excess_secs": 21824.961,
+            "example_run_ids": [
+              "20261022-042033839-2216985",
+              "20261024-173035612-3041042",
+              "20261024-135908066-2387267"
+            ]
+          },
+          {
+            "key": "lock_wait",
+            "runs": 255,
+            "slow_runs": 255,
+            "recorded_wall_secs": 11512.196,
+            "excess_secs": 8962.196,
+            "example_run_ids": [
+              "20261020-062810184-4124713",
+              "20261020-062838761-4125512",
+              "20261020-181848318-477550-pre"
+            ]
+          },
+          {
+            "key": "startup",
+            "runs": 56,
+            "slow_runs": 56,
+            "recorded_wall_secs": 1408.608,
+            "excess_secs": 848.608,
+            "example_run_ids": [
+              "20261022-051758674-2410328",
+              "20261022-094956058-3445272",
+              "20261020-210153928-1371744"
+            ]
+          }
+        ],
+        "omitted_by_excess": {
+          "runs": 0,
+          "slow_runs": 0,
+          "recorded_wall_secs": 0,
+          "excess_secs": 0
+        },
+        "by_total_wall_keys": [
+          "test_run",
+          "compile",
+          "tail",
+          "build_gaps",
+          "lock_wait",
+          "startup"
+        ]
+      },
+      "category": {
+        "by_excess": [
+          {
+            "key": "real-workload-candidate",
+            "runs": 3592,
+            "slow_runs": 3592,
+            "recorded_wall_secs": 259265.907,
+            "excess_secs": 223345.907,
+            "example_run_ids": [
+              "20261022-042033839-2216985",
+              "20261022-093454990-3331888",
+              "20261022-094502510-3383256"
+            ]
+          }
+        ],
+        "omitted_by_excess": {
+          "runs": 0,
+          "slow_runs": 0,
+          "recorded_wall_secs": 0,
+          "excess_secs": 0
+        },
+        "by_total_wall_keys": [
+          "real-workload-candidate"
+        ]
+      },
+      "outcome": {
+        "by_excess": [
+          {
+            "key": "failure",
+            "runs": 1232,
+            "slow_runs": 1232,
+            "recorded_wall_secs": 147647.242,
+            "excess_secs": 135327.242,
+            "example_run_ids": [
+              "20261022-042033839-2216985",
+              "20261022-093454990-3331888",
+              "20261022-094502510-3383256"
+            ]
+          },
+          {
+            "key": "success",
+            "runs": 2360,
+            "slow_runs": 2360,
+            "recorded_wall_secs": 111618.665,
+            "excess_secs": 88018.665,
+            "example_run_ids": [
+              "20261020-181559882-747459",
+              "20261024-183346275-3264772",
+              "20261023-192006249-3096005"
+            ]
+          }
+        ],
+        "omitted_by_excess": {
+          "runs": 0,
+          "slow_runs": 0,
+          "recorded_wall_secs": 0,
+          "excess_secs": 0
+        },
+        "by_total_wall_keys": [
+          "failure",
+          "success"
+        ]
+      },
+      "place": {
+        "by_excess": [
+          {
+            "key": "remote",
+            "runs": 2222,
+            "slow_runs": 2222,
+            "recorded_wall_secs": 162964.209,
+            "excess_secs": 140744.209,
+            "example_run_ids": [
+              "20261022-042033839-2216985",
+              "20261023-145728883-2609245",
+              "20261020-185921834-896927"
+            ]
+          },
+          {
+            "key": "local",
+            "runs": 1369,
+            "slow_runs": 1369,
+            "recorded_wall_secs": 94402.917,
+            "excess_secs": 80712.917,
+            "example_run_ids": [
+              "20261022-093454990-3331888",
+              "20261022-094502510-3383256",
+              "20261022-060856633-2584352"
+            ]
+          },
+          {
+            "key": "unknown",
+            "runs": 1,
+            "slow_runs": 1,
+            "recorded_wall_secs": 1898.781,
+            "excess_secs": 1888.781,
+            "example_run_ids": [
+              "20261020-054856223-4063897"
+            ]
+          }
+        ],
+        "omitted_by_excess": {
+          "runs": 0,
+          "slow_runs": 0,
+          "recorded_wall_secs": 0,
+          "excess_secs": 0
+        },
+        "by_total_wall_keys": [
+          "remote",
+          "local",
+          "unknown"
+        ]
+      }
+    },
+    "remote_client_wall_coverage": {
+      "runs": 4151,
+      "reported_secs": 181863.685,
+      "client_slow_but_recorded_wall_not_slow": 294
+    },
+    "slowest": [
+      {
+        "id": "20261022-042033839-2216985",
+        "wall": 18361.016,
+        "workspace": "justrust-clean-room",
+        "command": "test",
+        "category": "real-workload-candidate",
+        "outcome": "failure",
+        "place": "remote",
+        "cause": "build_gaps",
+        "client_wall": 18362.537,
+        "excess_secs": 18351.016,
+        "measured_phases_secs": {
+          "startup": 0.037,
+          "lock_wait": 0.0,
+          "compile": 43.184,
+          "build_gaps": 17321.812,
+          "test_run": 995.982,
+          "tail": 0.0
+        }
+      },
+      {
+        "id": "20261022-093454990-3331888",
+        "wall": 4332.801,
+        "workspace": "justrust-clean-room",
+        "command": "test",
+        "category": "real-workload-candidate",
+        "outcome": "failure",
+        "place": "local",
+        "cause": "test_run",
+        "client_wall": null,
+        "excess_secs": 4322.801,
+        "measured_phases_secs": {
+          "startup": 0.031,
+          "lock_wait": 0.0,
+          "compile": 11.921,
+          "build_gaps": 0.711,
+          "test_run": 2265.229,
+          "tail": 2054.908
+        }
+      },
+      {
+        "id": "20261022-094502510-3383256",
+        "wall": 3517.857,
+        "workspace": "justrust-clean-room",
+        "command": "test",
+        "category": "real-workload-candidate",
+        "outcome": "failure",
+        "place": "local",
+        "cause": "test_run",
+        "client_wall": null,
+        "excess_secs": 3507.857,
+        "measured_phases_secs": {
+          "startup": 0.696,
+          "lock_wait": 0.0,
+          "compile": 4.632,
+          "build_gaps": 0.43,
+          "test_run": 2271.97,
+          "tail": 1240.13
+        }
+      },
+      {
+        "id": "20261022-060856633-2584352",
+        "wall": 2892.979,
+        "workspace": "justrust-clean-room",
+        "command": "test",
+        "category": "real-workload-candidate",
+        "outcome": "failure",
+        "place": "local",
+        "cause": "test_run",
+        "client_wall": null,
+        "excess_secs": 2882.979,
+        "measured_phases_secs": {
+          "startup": 0.015,
+          "lock_wait": 0.0,
+          "compile": 0.0,
+          "build_gaps": 0.0,
+          "test_run": 2892.913,
+          "tail": 0.051
+        }
+      },
+      {
+        "id": "20261020-042429014-3919638",
+        "wall": 2100.294,
+        "workspace": "justrust-clean-room",
+        "command": "test",
+        "category": "real-workload-candidate",
+        "outcome": "failure",
+        "place": "local",
+        "cause": "test_run",
+        "client_wall": null,
+        "excess_secs": 2090.294,
+        "measured_phases_secs": {
+          "startup": 0.077,
+          "lock_wait": 0.0,
+          "compile": 2.501,
+          "build_gaps": 0.004,
+          "test_run": 2093.597,
+          "tail": 4.116
+        }
+      },
+      {
+        "id": "20261020-054856223-4063897",
+        "wall": 1898.781,
+        "workspace": "justrust-clean-room",
+        "command": "test",
+        "category": "real-workload-candidate",
+        "outcome": "failure",
+        "place": "unknown",
+        "cause": "test_run",
+        "client_wall": null,
+        "excess_secs": 1888.781,
+        "measured_phases_secs": {
+          "startup": 0.02,
+          "lock_wait": 0.0,
+          "compile": 43.023,
+          "build_gaps": 0.013,
+          "test_run": 1855.72,
+          "tail": 0.006
+        }
+      },
+      {
+        "id": "20261021-205415150-802697",
+        "wall": 1826.998,
+        "workspace": "justrust-clean-room",
+        "command": "test",
+        "category": "real-workload-candidate",
+        "outcome": "failure",
+        "place": "local",
+        "cause": "tail",
+        "client_wall": null,
+        "excess_secs": 1816.998,
+        "measured_phases_secs": {
+          "startup": 0.057,
+          "lock_wait": 0.0,
+          "compile": 16.307,
+          "build_gaps": 0.385,
+          "test_run": 429.894,
+          "tail": 1380.357
+        }
+      },
+      {
+        "id": "20261020-042148399-3910280",
+        "wall": 1728.766,
+        "workspace": "justrust-clean-room",
+        "command": "test",
+        "category": "real-workload-candidate",
+        "outcome": "failure",
+        "place": "local",
+        "cause": "test_run",
+        "client_wall": null,
+        "excess_secs": 1718.766,
+        "measured_phases_secs": {
+          "startup": 501.573,
+          "lock_wait": 0.0,
+          "compile": 0.0,
+          "build_gaps": 0.0,
+          "test_run": 1227.165,
+          "tail": 0.028
+        }
+      },
+      {
+        "id": "20261023-145728883-2609245",
+        "wall": 1679.773,
+        "workspace": "justrust-clean-room",
+        "command": "test",
+        "category": "real-workload-candidate",
+        "outcome": "failure",
+        "place": "remote",
+        "cause": "tail",
+        "client_wall": 1681.044,
+        "excess_secs": 1669.773,
+        "measured_phases_secs": {
+          "startup": 0.233,
+          "lock_wait": 0.0,
+          "compile": 0.0,
+          "build_gaps": 0.0,
+          "test_run": 793.055,
+          "tail": 886.485
+        }
+      },
+      {
+        "id": "20261019-210414126-2066692",
+        "wall": 1506.213,
+        "workspace": "jcode",
+        "command": "test",
+        "category": "real-workload-candidate",
+        "outcome": "failure",
+        "place": "local",
+        "cause": "tail",
+        "client_wall": null,
+        "excess_secs": 1496.213,
+        "measured_phases_secs": {
+          "startup": 0.253,
+          "lock_wait": 0.0,
+          "compile": 6.022,
+          "build_gaps": 0.081,
+          "test_run": 0.0,
+          "tail": 1499.857
+        }
+      },
+      {
+        "id": "20261020-185921834-896927",
+        "wall": 1458.522,
+        "workspace": "justrust-clean-room",
+        "command": "test",
+        "category": "real-workload-candidate",
+        "outcome": "failure",
+        "place": "remote",
+        "cause": "test_run",
+        "client_wall": 1459.667,
+        "excess_secs": 1448.522,
+        "measured_phases_secs": {
+          "startup": 0.033,
+          "lock_wait": 0.0,
+          "compile": 38.016,
+          "build_gaps": 21.964,
+          "test_run": 1398.51,
+          "tail": 0.0
+        }
+      },
+      {
+        "id": "20261022-081609695-3038323",
+        "wall": 1455.733,
+        "workspace": "justrust-clean-room",
+        "command": "test",
+        "category": "real-workload-candidate",
+        "outcome": "failure",
+        "place": "local",
+        "cause": "test_run",
+        "client_wall": null,
+        "excess_secs": 1445.733,
+        "measured_phases_secs": {
+          "startup": 0.033,
+          "lock_wait": 0.0,
+          "compile": 8.68,
+          "build_gaps": 0.038,
+          "test_run": 1446.931,
+          "tail": 0.051
+        }
+      }
+    ]
+  }
+}
