@@ -2613,11 +2613,20 @@ mod tests {
         );
         let entries = proofs.normalization_validations.len();
         assert!(entries > 0);
+        // Original caller facts are authenticated even on a warm replay. Keep
+        // that metered obligation distinct from the single memo lookup probe.
+        let before = budget.usage_snapshot().work;
+        world.check_context(context.proof).unwrap();
+        let authentication_work = budget.usage_snapshot().work - before;
+        assert_eq!(authentication_work, 1);
         let before = budget.usage_snapshot().work;
         world
             .validate_normalization_evidence_with(&normalized.0, context, &mut proofs)
             .unwrap();
-        assert_eq!(budget.usage_snapshot().work - before, 1);
+        assert_eq!(
+            budget.usage_snapshot().work - before,
+            authentication_work + 1
+        );
         assert_eq!(proofs.normalization_validations.len(), entries);
         for _ in 0..3 {
             world
