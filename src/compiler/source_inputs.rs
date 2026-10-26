@@ -40,6 +40,7 @@ pub(super) enum InputDomain {
 #[derive(Clone, Debug)]
 pub struct SourceInputs {
     domain: InputDomain,
+    compiler_image: Option<std::sync::Arc<crate::compiler::procfs::CompilerImage>>,
     project: Option<std::sync::Arc<crate::project::inputs::DiscoveryInputs>>,
     observations: Vec<Observation>,
     options: Option<[u8; 32]>,
@@ -47,12 +48,16 @@ pub struct SourceInputs {
 }
 impl crate::engine::Fact for SourceInputs {}
 impl SourceInputs {
+    pub fn compiler_image(&self) -> Option<&crate::compiler::procfs::CompilerImage> {
+        self.compiler_image.as_deref()
+    }
     pub fn project_inputs(&self) -> Option<&crate::project::inputs::DiscoveryInputs> {
         self.project.as_deref()
     }
     pub(super) fn untracked() -> Self {
         Self {
             domain: InputDomain::Untracked,
+            compiler_image: None,
             project: None,
             observations: Vec::new(),
             options: None,
@@ -71,6 +76,13 @@ impl SourceInputs {
     /// not protect against concurrent mutation. A future cache must pin a snapshot.
     pub fn matches_current_source(&self, options: &SourceOptions) -> bool {
         if !self.complete || self.options.is_none() || self.options != option_identity(options) {
+            return false;
+        }
+        if self
+            .compiler_image
+            .as_ref()
+            .is_some_and(|image| !image.matches_current())
+        {
             return false;
         }
         if self
@@ -124,7 +136,7 @@ impl SourceInputs {
     pub fn shareability_blockers(&self) -> &'static [&'static str] {
         &[
             "project discovery evidence, if supplied, excludes registry planning IO and unsupported configuration sources",
-            "compiler and external tool identity are not sealed; all embedded input receipts require validation",
+            "running compiler image must be present and revalidated; dynamic libraries and external tools remain unsealed",
             "attached reviewed source-probe receipts require separate validation",
             "build scripts and procedural macros require controlled input tracking",
             "filesystem observations are not an atomic immutable snapshot",
@@ -154,6 +166,7 @@ impl<'a> TrackingReader<'a> {
             inner,
             inputs: SourceInputs {
                 domain,
+                compiler_image: options.compiler_image.clone(),
                 project: options.project_inputs.clone(),
                 observations: Vec::new(),
                 options: option_identity(options),
@@ -286,6 +299,7 @@ impl Identity {
 fn option_identity(options: &SourceOptions) -> Option<[u8; 32]> {
     // Exhaustive destructuring makes new public configuration require a decision.
     let SourceOptions {
+        compiler_image,
         project_inputs,
         edition,
         native_link,
@@ -303,7 +317,15 @@ fn option_identity(options: &SourceOptions) -> Option<[u8; 32]> {
         remaining: MAX_IDENTITY_BYTES,
         valid: true,
     };
-    id.bytes(b"justrust-source-input-v2");
+    id.bytes(b"justrust-source-input-v3");
+    match compiler_image {
+        Some(image) => {
+            id.flag(true);
+            id.bytes(&image.bytes().to_le_bytes());
+            id.bytes(image.digest());
+        }
+        None => id.flag(false),
+    }
     match project_inputs {
         Some(project) => {
             id.flag(true);

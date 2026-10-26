@@ -1954,9 +1954,16 @@ PlanCtx/interner/source-context debt and wide adapter activation remain held.
       only against the compiled source table, and embedded provenance issuance
       and validation require those receipts (`--lib source_inputs` and
       `--lib source_embedded`). Host files cannot satisfy the embedded domain.
-      Registry planning IO, unsupported configuration sources, compiler/tool
-      identity, registry inspection tools and uncontrolled build scripts/proc macros
-      remain explicit gaps. Exhaustion or uncontrolled discovery cannot issue an input
+      Source compilation entry points also capture bounded full running-executable
+      bytes through a pinned Linux process-image handle. The immutable compiler
+      image digest enters source configuration identity and existing prepared-source
+      graph output, from which compilation results return it (`--lib procfs`).
+      Caller-supplied image stamps are replaced; absent/oversized images remain
+      unproven rather than authorizing reuse. Synthetic Program fixtures do not
+      claim image coverage. Registry planning IO, unsupported configuration sources,
+      dynamic libraries and process state, external tool identity, registry inspection
+      tools and uncontrolled build scripts/proc macros remain explicit gaps.
+      Exhaustion or uncontrolled discovery cannot issue an input
       identity. No persistent or global private cache is enabled by this foundation.
 - [ ] Add bounded asynchronous persistence, atomic manifests, durable checkpoint
       contracts, recovery, eviction and corruption/crash/cancellation tests.

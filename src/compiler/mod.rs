@@ -42,6 +42,7 @@ mod opaque_source_tests;
 mod opaque_specialization;
 pub mod owner_path;
 pub mod ownership;
+pub mod procfs;
 mod resource_accounting;
 mod root_cleanup;
 pub mod sema;
@@ -2985,6 +2986,9 @@ fn item_index(key: &Key, missing: &str) -> Result<usize, Error> {
 
 /// One snapshot may serve check and build roots together without redoing checks.
 pub struct Compilation {
+    /// Running-image evidence read back from the prepared-source graph fact.
+    /// Missing evidence never authorizes reuse; dynamic libraries are not covered.
+    pub compiler_image: Option<Arc<procfs::CompilerImage>>,
     pub executable: Option<Vec<u8>>,
     pub report: Report,
     pub functions: usize,
@@ -3207,8 +3211,15 @@ fn compile_input_configured(
     workers: usize,
     check_only: bool,
     budget: ir::PlanBudget,
-    source_options: source::SourceOptions,
+    mut source_options: source::SourceOptions,
 ) -> Result<Compilation, Failure> {
+    // Always capture the actual running image, never trust caller-supplied stamps.
+    // Synthetic Program fixtures make no external compiler-input claim.
+    source_options.compiler_image = if matches!(&input, Input::Program(_)) {
+        None
+    } else {
+        procfs::CompilerImage::current().ok()
+    };
     let snapshot = Arc::new(Snapshot {
         input,
         source_options,
@@ -3288,8 +3299,8 @@ fn compile_input_configured(
         Ok(count)
     })()
     .map_err(|message| failure(Error::new(message), &report))?;
-    let (source_bytes, source_files) = match &snapshot.input {
-        Input::Program(_) => (0, 0),
+    let (source_bytes, source_files, compiler_image) = match &snapshot.input {
+        Input::Program(_) => (0, 0, None),
         Input::Text(_) | Input::File(_) | Input::ProbeFile(_, _) => {
             let loaded = engine
                 .fact_of::<source::PreparedSource>(
@@ -3297,7 +3308,11 @@ fn compile_input_configured(
                     PREPARED_SOURCE_OUTPUT,
                 )
                 .ok_or_else(|| failure(Error::new("missing loaded source accounting"), &report))?;
-            (loaded.source_bytes, loaded.files)
+            (
+                loaded.source_bytes,
+                loaded.files,
+                loaded.compiler_image().cloned(),
+            )
         }
     };
     let lowered_instances = discovered_instances(&report, LOWER);
@@ -3395,6 +3410,7 @@ fn compile_input_configured(
         }
     }
     Ok(Compilation {
+        compiler_image,
         executable: executable.map(|bytes| bytes.as_ref().clone()),
         report,
         functions,

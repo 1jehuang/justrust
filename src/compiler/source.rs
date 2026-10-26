@@ -38,6 +38,8 @@ const MAX_ORIGINS: usize = 1024 * 1024;
 /// Native x86_64 Linux configuration plus bounded user predicates.
 /// The default pins abort and enables debug assertions, not complete Rust panic semantics.
 pub struct SourceOptions {
+    /// Bounded identity of the running compiler image, supplied by source compilation.
+    pub compiler_image: Option<Arc<super::procfs::CompilerImage>>,
     /// Frozen native project-discovery inputs, when invoked by the project driver.
     pub project_inputs: Option<Arc<crate::project::inputs::DiscoveryInputs>>,
     /// Explicit language input. Unsupported editions reject before source IO.
@@ -93,6 +95,7 @@ impl TestFilter {
 impl Default for SourceOptions {
     fn default() -> Self {
         Self {
+            compiler_image: None,
             project_inputs: None,
             edition: Edition::E2024,
             native_link: super::c_abi::elf::LinkOptions::default(),
@@ -293,6 +296,7 @@ impl CratePolicy {
 }
 #[derive(Clone, Debug)]
 pub struct PreparedSource {
+    compiler_image: Option<Arc<super::procfs::CompilerImage>>,
     edition: Edition,
     embedded_files: Vec<source_embedded::EmbeddedFile>,
     embedded_transport: Option<source_embedded::AssemblyTransport>,
@@ -314,6 +318,7 @@ pub struct PreparedSource {
 impl Default for PreparedSource {
     fn default() -> Self {
         Self {
+            compiler_image: None,
             edition: Edition::E2024,
             embedded_files: Vec::new(),
             embedded_transport: None,
@@ -386,6 +391,7 @@ impl FileView {
         library: bool,
     ) -> Result<Self, SourceError> {
         let mut prepared = PreparedSource {
+            compiler_image: options.compiler_image.clone(),
             edition: unit.edition,
             debug_assertions: options.cfg.debug_assertions(),
             overflow_checks: options.overflow_checks,
@@ -457,6 +463,9 @@ impl FileView {
 }
 
 impl PreparedSource {
+    pub fn compiler_image(&self) -> Option<&Arc<super::procfs::CompilerImage>> {
+        self.compiler_image.as_ref()
+    }
     /// Language edition captured from the source preparation input.
     pub fn edition(&self) -> Edition {
         self.edition
@@ -1079,6 +1088,7 @@ impl SourceAssembler {
     pub fn new(options: &SourceOptions) -> Self {
         Self {
             prepared: PreparedSource {
+                compiler_image: options.compiler_image.clone(),
                 edition: options.edition,
                 debug_assertions: options.cfg.debug_assertions(),
                 overflow_checks: options.overflow_checks,
