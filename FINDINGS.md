@@ -8102,3 +8102,55 @@ are estimates, not measured savings. `nominal_schema` imports `super::*` and
 implements parent-owned `PlanState`; moving that file alone is not a valid leaf
 crate extraction. The active rewrite also had overlapping uncommitted compiler
 work. No active compiler files were changed or automatically split.
+
+## 2026-10-26: Jcode documentation edits and status timeout tests
+
+The apparent 40-second test runs were mostly compilation or Cargo lock waits,
+not arbitrary test execution. Historical runs `20261025-215608614-3735981`
+(38.85s total, 34.54s compile, 2.03s tests) and
+`20261025-185224604-2919084` (42.15s total, 18.00s lock, 23.45s compile,
+0.41s tests) illustrate the distinction.
+
+Pinned Jcode snapshot: `146b6f4d84a7e76f212695c89936d69fe36b3e3c`.
+`bench/jcode-docs.py` uses isolated source archives, recorded candidate patches,
+one warmup and three measured hosted README edits followed by
+`justrust test -p jcode-tui --lib justrust`. Every measured sample retained
+all 12 passing tests. Results and exact candidate patches are in the five
+`bench/results/jcode-docs-*-20261026.json` files.
+
+| Candidate | Median wall seconds | Compile seconds | Test seconds | Compiled units |
+| --- | ---: | ---: | ---: | ---: |
+| Original baseline | 13.19 | 9.28 | 2.02 | 2 |
+| Data leaf, still a normal app dependency | 12.90 | 9.53 | 2.02 | 3 |
+| Dependency inversion | 2.98 | 0.00 | 2.01 | 0 |
+| Repeated original baseline | 14.52 | 9.46 | 2.02 | 2 |
+| Inversion plus injected test timeout | 0.84 | 0.00 | 0.06 | 0 |
+
+`python3 bench/suite.py compare bench/results/jcode-docs-baseline-repeat-20261026.json bench/results/jcode-docs-final-20261026.json`
+reports a -13.68s observed median difference, but its verdict is **uncontrolled**
+because baseline samples include contention. This is a targeted workload result,
+not a general 94% speedup claim. No comprehensive synthetic default-promotion
+gate was run. Final measured run IDs are `20261026-014429849-197520119`,
+`20261026-014432706-197520302`, and `20261026-014433587-197520393`.
+
+Jcode commits `21a40600d` and `07d9354d0` move bundled document data to a
+CLI-only normal dependency, explicitly register it with app-core at startup,
+and keep it a dev dependency for app-core tests. The rejected normal-dependency
+leaf did not eliminate downstream recompilation. The timeout test still runs
+the real subprocess/deadline path, with a 50ms injected deadline instead of
+waiting for the unchanged two-second production deadline.
+
+Validation: app documentation tests (3), production registration test (1),
+status tests (12), and exact corpus tests (2) passed on hosted. Adding and
+removing a documentation file in the isolated snapshot also passed corpus
+freshness tests; removal run `20261026-015015947-271744`. Data/app-core strict
+clippy passed (`20261026-015017330-271743`). Broader Jcode lint remains blocked
+by pre-existing collapsible-if/needless-borrow findings in unrelated root and
+tool-display files. The justrust serial suite passed 770 tests, with 3 ignored
+(`20261026-014748680-254328`), and the client was reinstalled.
+
+Hosted Cargo lock contention remains unresolved: the inspected 97GB shared
+target is on ext4 and its reflink probe fails. Commit `f07a3941c` explains the
+safe shared-target fallback instead of silently implying build-slot isolation.
+The installed diagnostic appeared in the two validation runs above. No storage
+migration, unsafe target copying, or change to cache isolation was made.

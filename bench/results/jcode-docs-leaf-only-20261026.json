@@ -1,0 +1,273 @@
+{
+  "started": "2026-10-26T01:37:40-0700",
+  "env": {
+    "host": "xps14",
+    "cpu": "Intel(R) Core(TM) Ultra X9 388H",
+    "ncpu": 16,
+    "mem_gb": 62.3,
+    "kernel": "7.2.11-arch1-1",
+    "foreign_rustc_policy": "proc-stat-live-excluding-Z-X-x-fail-closed-v1",
+    "justrust": "justrust 0.1.0-alpha.19",
+    "justrust_rev": "f07a3941cc0a",
+    "benchmark_repo_rev": "f07a3941cc0a",
+    "justrust_binary_revision": null,
+    "justrust_revision_source": "repository HEAD, not binary revision",
+    "justrust_binary_sha256": "5e653fe14ec67b81208dd3336badc9ea500295f842b2392758c008b0438f8647",
+    "justrust_dirty": true,
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13) (Arch Linux rust 1:1.99.1-1)",
+    "toolchain": "system",
+    "optimization_env": {},
+    "rustc_threads": null,
+    "workspace_threads": null,
+    "pass_times": false,
+    "cargo": "cargo 1.99.1 (5f94df478 2026-08-27) (Arch Linux rust 1:1.99.1-1)",
+    "governor": "powersave",
+    "on_ac": "0",
+    "snapshots": {
+      "jcode-docs-readme-edit": {
+        "jcode": "146b6f4d84a7e76f212695c89936d69fe36b3e3c"
+      }
+    },
+    "execution": "remote"
+  },
+  "runs_per_scenario": 3,
+  "workload": {
+    "pin": "146b6f4d84a7e76f212695c89936d69fe36b3e3c",
+    "command": [
+      "test",
+      "-p",
+      "jcode-tui",
+      "--lib",
+      "justrust"
+    ],
+    "file": "README.md",
+    "anchor": "High-performance coding agents.",
+    "edit": "unique markdown body suffix",
+    "n": 3,
+    "warmup": 1
+  },
+  "candidate": {
+    "kind": "patch",
+    "patch_sha256": "246d7a126593c340f825689c3ff4d9a8dbec018df081c73f08f5c1b199359a8e",
+    "patch": "diff --git a/Cargo.lock b/Cargo.lock\nindex 748bed096..d09d09805 100644\n--- a/Cargo.lock\n+++ b/Cargo.lock\n@@ -3267,6 +3267,7 @@ dependencies = [\n  \"jcode-command-risk\",\n  \"jcode-core\",\n  \"jcode-desktop-open\",\n+ \"jcode-docs-data\",\n  \"jcode-harness-api\",\n  \"jcode-import-core\",\n  \"jcode-message-types\",\n@@ -3517,6 +3518,10 @@ dependencies = [\n  \"url\",\n ]\n \n+[[package]]\n+name = \"jcode-docs-data\"\n+version = \"0.1.0\"\n+\n [[package]]\n name = \"jcode-embedding\"\n version = \"0.1.0\"\ndiff --git a/Cargo.toml b/Cargo.toml\nindex 004b96937..5f78442c5 100644\n--- a/Cargo.toml\n+++ b/Cargo.toml\n@@ -10,6 +10,7 @@ members = [\n     \".\",\n     \"crates/jcode-agent-runtime\",\n     \"crates/jcode-app-core\",\n+    \"crates/jcode-docs-data\",\n     \"crates/jcode-base\",\n     \"crates/jcode-tui\",\n     \"crates/jcode-build-meta\",\ndiff --git a/crates/jcode-app-core/Cargo.toml b/crates/jcode-app-core/Cargo.toml\nindex 2652afd8d..115ed3624 100644\n--- a/crates/jcode-app-core/Cargo.toml\n+++ b/crates/jcode-app-core/Cargo.toml\n@@ -80,6 +80,7 @@ tokio-stream = \"0.1\"\n jcode-pdf = { path = \"../jcode-pdf\", optional = true }\n jcode-build-support = { path = \"../jcode-build-support\" }\n jcode-build-meta = { path = \"../jcode-build-meta\" }\n+jcode-docs-data = { path = \"../jcode-docs-data\" }\n \n # Foundational layer (provider, auth, config, session, message, memory, ...).\n # Re-exported via `pub use jcode_base::*` in lib.rs. default-features=false so\ndiff --git a/crates/jcode-app-core/build.rs b/crates/jcode-app-core/build.rs\ndeleted file mode 100644\nindex 7b208a112..000000000\n--- a/crates/jcode-app-core/build.rs\n+++ /dev/null\n@@ -1,44 +0,0 @@\n-use std::env;\n-use std::fs;\n-use std::path::{Path, PathBuf};\n-\n-fn main() {\n-    let manifest = PathBuf::from(env::var(\"CARGO_MANIFEST_DIR\").expect(\"CARGO_MANIFEST_DIR\"));\n-    let repo = manifest.join(\"../..\");\n-    let docs_dir = repo.join(\"docs\");\n-    println!(\n-        \"cargo:rerun-if-changed={}\",\n-        repo.join(\"README.md\").display()\n-    );\n-    println!(\"cargo:rerun-if-changed={}\", docs_dir.display());\n-\n-    let mut files = vec![repo.join(\"README.md\")];\n-    if let Ok(entries) = fs::read_dir(&docs_dir) {\n-        files.extend(entries.flatten().map(|entry| entry.path()).filter(|path| {\n-            path.is_file() && path.extension().and_then(|ext| ext.to_str()) == Some(\"md\")\n-        }));\n-    }\n-    files.sort();\n-\n-    let mut generated = String::from(\"pub(crate) static JCODE_DOCS: &[(&str, &str)] = &[\\n\");\n-    for path in files {\n-        let relative = path\n-            .strip_prefix(&repo)\n-            .expect(\"documentation is in repository\");\n-        let relative = slash_path(relative);\n-        generated.push_str(&format!(\n-            \"    ({relative:?}, include_str!(concat!(env!(\\\"CARGO_MANIFEST_DIR\\\"), \\\"/../../{relative}\\\"))),\\n\"\n-        ));\n-    }\n-    generated.push_str(\"];\\n\");\n-\n-    let out = PathBuf::from(env::var(\"OUT_DIR\").expect(\"OUT_DIR\")).join(\"jcode_docs.rs\");\n-    fs::write(out, generated).expect(\"write generated Jcode documentation corpus\");\n-}\n-\n-fn slash_path(path: &Path) -> String {\n-    path.components()\n-        .map(|part| part.as_os_str().to_string_lossy())\n-        .collect::<Vec<_>>()\n-        .join(\"/\")\n-}\ndiff --git a/crates/jcode-app-core/src/tool/jcode_docs.rs b/crates/jcode-app-core/src/tool/jcode_docs.rs\nindex ac1ab7b59..679e079b5 100644\n--- a/crates/jcode-app-core/src/tool/jcode_docs.rs\n+++ b/crates/jcode-app-core/src/tool/jcode_docs.rs\n@@ -6,7 +6,7 @@ use serde_json::{Value, json};\n use std::cmp::Reverse;\n use std::collections::HashSet;\n \n-include!(concat!(env!(\"OUT_DIR\"), \"/jcode_docs.rs\"));\n+use jcode_docs_data::documents;\n \n const DEFAULT_LIMIT: usize = 5;\n const MAX_LIMIT: usize = 10;\n@@ -111,9 +111,9 @@ impl Tool for JcodeDocsTool {\n fn list_docs() -> String {\n     let mut output = format!(\n         \"Bundled Jcode documentation ({} files):\\n\",\n-        JCODE_DOCS.len()\n+        documents().len()\n     );\n-    for (path, body) in JCODE_DOCS {\n+    for (path, body) in documents() {\n         let title = body\n             .lines()\n             .find_map(|line| line.strip_prefix(\"# \"))\n@@ -124,7 +124,7 @@ fn list_docs() -> String {\n }\n \n fn read_doc(path: &str) -> Result<String> {\n-    let (_, body) = JCODE_DOCS\n+    let (_, body) = documents()\n         .iter()\n         .find(|(candidate, _)| *candidate == path)\n         .ok_or_else(|| {\n@@ -202,7 +202,7 @@ fn terms(query: &str) -> Vec<String> {\n \n fn sections() -> Vec<Section<'static>> {\n     let mut result = Vec::new();\n-    for (path, document) in JCODE_DOCS {\n+    for (path, document) in documents() {\n         let mut heading = \"Overview\".to_string();\n         let mut body = String::new();\n         for line in document.lines() {\n@@ -261,10 +261,14 @@ mod tests {\n \n     #[test]\n     fn corpus_includes_current_docs_but_not_plans() {\n-        assert!(JCODE_DOCS.iter().any(|(path, _)| *path == \"README.md\"));\n-        assert!(JCODE_DOCS.iter().any(|(path, _)| *path == \"docs/README.md\"));\n+        assert!(documents().iter().any(|(path, _)| *path == \"README.md\"));\n         assert!(\n-            !JCODE_DOCS\n+            documents()\n+                .iter()\n+                .any(|(path, _)| *path == \"docs/README.md\")\n+        );\n+        assert!(\n+            !documents()\n                 .iter()\n                 .any(|(path, _)| path.starts_with(\"docs/plans/\"))\n         );\ndiff --git a/crates/jcode-docs-data/Cargo.toml b/crates/jcode-docs-data/Cargo.toml\nnew file mode 100644\nindex 000000000..8ada7367e\n--- /dev/null\n+++ b/crates/jcode-docs-data/Cargo.toml\n@@ -0,0 +1,8 @@\n+[package]\n+name = \"jcode-docs-data\"\n+version = \"0.1.0\"\n+edition = \"2024\"\n+publish = false\n+\n+[lib]\n+path = \"src/lib.rs\"\ndiff --git a/crates/jcode-docs-data/build.rs b/crates/jcode-docs-data/build.rs\nnew file mode 100644\nindex 000000000..130eaf04f\n--- /dev/null\n+++ b/crates/jcode-docs-data/build.rs\n@@ -0,0 +1,46 @@\n+use std::env;\n+use std::fs;\n+use std::path::{Path, PathBuf};\n+\n+fn main() {\n+    let manifest = PathBuf::from(env::var(\"CARGO_MANIFEST_DIR\").expect(\"CARGO_MANIFEST_DIR\"));\n+    let repo = manifest.join(\"../..\");\n+    let docs_dir = repo.join(\"docs\");\n+    println!(\n+        \"cargo:rerun-if-changed={}\",\n+        repo.join(\"README.md\").display()\n+    );\n+    println!(\"cargo:rerun-if-changed={}\", docs_dir.display());\n+\n+    let mut files = vec![repo.join(\"README.md\")];\n+    if let Ok(entries) = fs::read_dir(&docs_dir) {\n+        files.extend(entries.flatten().map(|entry| entry.path()).filter(|path| {\n+            path.is_file() && path.extension().and_then(|ext| ext.to_str()) == Some(\"md\")\n+        }));\n+    }\n+    files.sort();\n+\n+    let mut generated = String::from(\"pub(crate) static JCODE_DOCS: &[(&str, &str)] = &[\\n\");\n+    for path in files {\n+        let relative = path\n+            .strip_prefix(&repo)\n+            .expect(\"documentation is in repository\");\n+        let relative = slash_path(relative);\n+        generated.push_str(&format!(\n+            \"    ({relative:?}, include_str!(concat!(env!(\\\"CARGO_MANIFEST_DIR\\\"), \\\"/../../{relative}\\\"))),\\n\"\n+        ));\n+    }\n+    generated.push_str(\"];\\n\");\n+\n+    let out = PathBuf::from(env::var(\"OUT_DIR\").expect(\"OUT_DIR\")).join(\"jcode_docs.rs\");\n+    if fs::read_to_string(&out).ok().as_deref() != Some(&generated) {\n+        fs::write(out, generated).expect(\"write generated Jcode documentation corpus\");\n+    }\n+}\n+\n+fn slash_path(path: &Path) -> String {\n+    path.components()\n+        .map(|part| part.as_os_str().to_string_lossy())\n+        .collect::<Vec<_>>()\n+        .join(\"/\")\n+}\ndiff --git a/crates/jcode-docs-data/src/lib.rs b/crates/jcode-docs-data/src/lib.rs\nnew file mode 100644\nindex 000000000..add785c66\n--- /dev/null\n+++ b/crates/jcode-docs-data/src/lib.rs\n@@ -0,0 +1,49 @@\n+//! Version-matched documentation embedded independently of application code.\n+//!\n+//! Keep the corpus private and access it through a non-inlined function. Docs\n+//! edits should not put their contents into the application core's expanded\n+//! source or require downstream crates to optimize an accessor again.\n+\n+include!(concat!(env!(\"OUT_DIR\"), \"/jcode_docs.rs\"));\n+\n+/// The README and top-level Markdown documents shipped with this build.\n+#[inline(never)]\n+pub fn documents() -> &'static [(&'static str, &'static str)] {\n+    JCODE_DOCS\n+}\n+\n+#[cfg(test)]\n+mod tests {\n+    use super::documents;\n+\n+    #[test]\n+    fn corpus_is_sorted_unique_and_excludes_plans() {\n+        let docs = documents();\n+        assert!(docs.iter().any(|(path, _)| *path == \"README.md\"));\n+        assert!(docs.iter().any(|(path, _)| *path == \"docs/README.md\"));\n+        assert!(docs.windows(2).all(|pair| pair[0].0 < pair[1].0));\n+        assert!(docs.iter().all(|(path, body)| {\n+            !body.is_empty()\n+                && (*path == \"README.md\"\n+                    || (path.starts_with(\"docs/\")\n+                        && path.ends_with(\".md\")\n+                        && !path[5..].contains('/')))\n+        }));\n+    }\n+\n+    #[test]\n+    fn corpus_matches_build_inputs() {\n+        let root = std::path::Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"../..\");\n+        for (path, body) in documents() {\n+            assert_eq!(*body, std::fs::read_to_string(root.join(path)).unwrap());\n+        }\n+        let markdown_files = std::fs::read_dir(root.join(\"docs\"))\n+            .unwrap()\n+            .map(Result::unwrap)\n+            .filter(|entry| {\n+                entry.path().is_file() && entry.path().extension().is_some_and(|ext| ext == \"md\")\n+            })\n+            .count();\n+        assert_eq!(documents().len(), markdown_files + 1);\n+    }\n+}\n",
+    "changed_files": [
+      "Cargo.lock",
+      "Cargo.toml",
+      "crates/jcode-app-core/Cargo.toml",
+      "crates/jcode-app-core/build.rs",
+      "crates/jcode-app-core/src/tool/jcode_docs.rs",
+      "crates/jcode-docs-data/Cargo.toml",
+      "crates/jcode-docs-data/build.rs",
+      "crates/jcode-docs-data/src/lib.rs"
+    ],
+    "baseline_commit": "146b6f4d84a7e76f212695c89936d69fe36b3e3c"
+  },
+  "isolation": {
+    "root": "/home/jeremy/.jcode/scratch/jcode-docs-bench/work/jcode-docs-kwancwdt/jcode-docs-readme-edit/jcode@146b6f4d84a7e76f212695c89936d69fe36b3e3c",
+    "edit_nonce": "e4c47a468dee400ebc81a64503017782"
+  },
+  "scenarios": {
+    "jcode-docs-readme-edit": {
+      "what": "README body edit to filtered jcode-tui library test result",
+      "cmd": [
+        "test",
+        "-p",
+        "jcode-tui",
+        "--lib",
+        "justrust"
+      ],
+      "samples": [
+        {
+          "id": "20261026-013825632-145608212",
+          "wall": 12.602,
+          "first_error": null,
+          "first_fail": null,
+          "early": null,
+          "recorded_wall": 11.992,
+          "remote": {
+            "machine": "hosted",
+            "sync_ms": 45.165519,
+            "client_wall": 12.599113971,
+            "host_wall": 11.992136716842651,
+            "toolchain": "system",
+            "target_state": "persistent remote target"
+          },
+          "admission_transport": "curl",
+          "cpu": 16.02,
+          "startup": 0.207,
+          "compile": 9.564,
+          "test_run": 2.016,
+          "units": 3,
+          "local_units": 3,
+          "dep_units": 0,
+          "reuse": {
+            "compiled": 3,
+            "fresh": 594,
+            "depcache_hits": 0,
+            "depcache_misses": 0,
+            "depcache_saved_secs": 0.0,
+            "script_hits": 0,
+            "script_saved_secs": 0.0,
+            "slot_refreshed_units": 0,
+            "local_hits": 0,
+            "local_saved_secs": -0.0
+          },
+          "split": {
+            "frontend": 0.0,
+            "codegen": 0.0,
+            "link": 0.0,
+            "incremental": 0.0,
+            "other": 0.0
+          },
+          "link_secs": 0.0,
+          "hotpatch": null,
+          "tests_passed": 12,
+          "tests_failed": 0,
+          "other_cores": 0.12,
+          "foreign_rustc_before": 0,
+          "load_before": 8.02,
+          "noisy": false,
+          "top_unit": "jcode_tui (test)",
+          "workspace_frontend_threads": null
+        },
+        {
+          "id": "20261026-013838256-145608352",
+          "wall": 12.897,
+          "first_error": null,
+          "first_fail": null,
+          "early": null,
+          "recorded_wall": 11.959,
+          "remote": {
+            "machine": "hosted",
+            "sync_ms": 153.758396,
+            "client_wall": 12.894446587000001,
+            "host_wall": 11.959371089935305,
+            "toolchain": "system",
+            "target_state": "persistent remote target"
+          },
+          "admission_transport": "curl",
+          "cpu": 15.3,
+          "startup": 0.207,
+          "compile": 9.529,
+          "test_run": 2.015,
+          "units": 3,
+          "local_units": 3,
+          "dep_units": 0,
+          "reuse": {
+            "compiled": 3,
+            "fresh": 594,
+            "depcache_hits": 0,
+            "depcache_misses": 0,
+            "depcache_saved_secs": 0.0,
+            "script_hits": 0,
+            "script_saved_secs": 0.0,
+            "slot_refreshed_units": 0,
+            "local_hits": 0,
+            "local_saved_secs": -0.0
+          },
+          "split": {
+            "frontend": 0.0,
+            "codegen": 0.0,
+            "link": 0.0,
+            "incremental": 0.0,
+            "other": 0.0
+          },
+          "link_secs": 0.0,
+          "hotpatch": null,
+          "tests_passed": 12,
+          "tests_failed": 0,
+          "other_cores": 0.13,
+          "foreign_rustc_before": 0,
+          "load_before": 7.74,
+          "noisy": false,
+          "top_unit": "jcode_tui (test)",
+          "workspace_frontend_threads": null
+        },
+        {
+          "id": "20261026-013851177-145608935",
+          "wall": 13.531,
+          "first_error": null,
+          "first_fail": null,
+          "early": null,
+          "recorded_wall": 11.827,
+          "remote": {
+            "machine": "hosted",
+            "sync_ms": 1211.728617,
+            "client_wall": 13.527329167,
+            "host_wall": 11.827051639556885,
+            "toolchain": "system",
+            "target_state": "persistent remote target"
+          },
+          "admission_transport": "curl",
+          "cpu": 15.47,
+          "startup": 0.221,
+          "compile": 9.384,
+          "test_run": 2.017,
+          "units": 3,
+          "local_units": 3,
+          "dep_units": 0,
+          "reuse": {
+            "compiled": 3,
+            "fresh": 594,
+            "depcache_hits": 0,
+            "depcache_misses": 0,
+            "depcache_saved_secs": 0.0,
+            "script_hits": 0,
+            "script_saved_secs": 0.0,
+            "slot_refreshed_units": 0,
+            "local_hits": 0,
+            "local_saved_secs": -0.0
+          },
+          "split": {
+            "frontend": 0.0,
+            "codegen": 0.0,
+            "link": 0.0,
+            "incremental": 0.0,
+            "other": 0.0
+          },
+          "link_secs": 0.0,
+          "hotpatch": null,
+          "tests_passed": 12,
+          "tests_failed": 0,
+          "other_cores": 0.15,
+          "foreign_rustc_before": 2,
+          "load_before": 7.3,
+          "noisy": true,
+          "top_unit": "jcode_tui (test)",
+          "workspace_frontend_threads": null
+        }
+      ],
+      "stats": {
+        "first_fail": null,
+        "first_fail_min": null,
+        "first_fail_max": null,
+        "n": 3,
+        "first_error": null,
+        "first_error_min": null,
+        "first_error_max": null,
+        "median": 12.897,
+        "min": 12.602,
+        "max": 13.531,
+        "quiet_n": 2,
+        "quiet_median": 12.75,
+        "phases": {
+          "startup": 0.207,
+          "compile": 9.529,
+          "test_run": 2.016,
+          "cpu": 15.47,
+          "link_secs": 0.0
+        },
+        "split": {
+          "frontend": 0.0,
+          "codegen": 0.0,
+          "link": 0.0,
+          "incremental": 0.0,
+          "other": 0.0
+        },
+        "units": 3
+      }
+    }
+  },
+  "valid": true,
+  "finished": "2026-10-26T01:39:04-0700"
+}
