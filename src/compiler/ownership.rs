@@ -4471,12 +4471,38 @@ mod tests {
     }
 
     fn borrowed_source(source: &str) -> cfg::Function {
+        let budget = super::super::ir::PlanBudget::default();
         let program = super::super::frontend::parse(&format!("{source} fn main(){{}}")).unwrap();
-        let signatures = super::super::frontend::signature_table(&program).unwrap();
-        let checked =
-            super::super::frontend::type_function_with_signatures(&program, 0, &signatures)
-                .unwrap();
-        cfg::lower(&checked).unwrap()
+        let plan = super::super::frontend::PlanCtx::from_program(&program, &budget).unwrap();
+        let super::super::frontend::PublishedCallableBody::Source(publication) = plan
+            .publish_callable_body(plan.function_decl(0).unwrap(), &budget)
+            .unwrap()
+        else {
+            panic!("canonical source publication required")
+        };
+        publication
+            .source()
+            .validate_with_facts(super::super::ir::FactsCtx::from_validated(
+                publication.facts(),
+            ))
+            .unwrap();
+        let function = match publication.facts().phase() {
+            super::super::traits::FactsPhase::Universal => {
+                cfg::lower_source_template(&publication, &budget)
+                    .unwrap()
+                    .function()
+                    .as_ref()
+                    .clone()
+            }
+            super::super::traits::FactsPhase::Closed => {
+                cfg::lower_source_closed(&publication, &budget).unwrap()
+            }
+            super::super::traits::FactsPhase::Schema => {
+                panic!("source fixture requires executable callable facts")
+            }
+        };
+        function.validate().unwrap();
+        function
     }
 
     fn fixture_world(
