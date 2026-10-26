@@ -478,9 +478,10 @@ pub(crate) fn requested_targets(args: &[OsString], env_target: Option<OsString>)
 }
 
 fn target_has_core(rustc: &Path, target: &OsString) -> bool {
+    let normalized = target.to_str().map(crate::remote_artifacts::rust_target);
     let Ok(output) = Command::new(rustc)
         .args(["--print", "target-libdir", "--target"])
-        .arg(target)
+        .arg(normalized.map(OsString::from).as_ref().unwrap_or(target))
         .output()
     else {
         return false;
@@ -528,6 +529,7 @@ fn compatible_toolchain(
         for target in &targets {
             if let Some(target_name) = target.to_str()
                 && (crate::remote_artifacts::musl_target(target_name)
+                    || crate::remote_artifacts::glibc_target(target_name)
                     || crate::cross_tools::supported(target_name))
                 && !target_has_core(&tc.bin("rustc"), target)
                 && let Err(error) =
@@ -1704,6 +1706,22 @@ mod tests {
         assert!(!super::target_has_core(&rustc, &target));
         std::fs::write(lib.join("libcore-abc.rmeta"), b"").unwrap();
         assert!(super::target_has_core(&rustc, &target));
+        std::fs::write(
+            &rustc,
+            format!(
+                "#!/bin/sh\n[ \"$4\" = x86_64-unknown-linux-gnu ] || exit 1\nprintf '%s\\n' '{}'\n",
+                lib.display()
+            ),
+        )
+        .unwrap();
+        assert!(super::target_has_core(
+            &rustc,
+            &OsString::from(crate::remote_artifacts::GLIBC_217_TARGET)
+        ));
+        assert!(!super::target_has_core(
+            &rustc,
+            &OsString::from("x86_64-unknown-linux-gnu.2.18")
+        ));
         std::fs::write(&rustc, "#!/bin/sh\nexit 1\n").unwrap();
         assert!(!super::target_has_core(&rustc, &target));
         std::fs::remove_dir_all(temp).unwrap();

@@ -930,9 +930,13 @@ pub fn add_component(tc: &Toolchain, name: &str, log: &mut dyn std::io::Write) -
 /// Publish only the target directory after the download checksum and layout
 /// have been verified. In particular, never copy libraries from system rustup.
 pub(crate) fn add_target(tc: &Toolchain, target: &str, log: &mut dyn std::io::Write) -> Result<()> {
-    if !crate::remote_artifacts::musl_target(target) && !crate::cross_tools::supported(target) {
+    if !crate::remote_artifacts::musl_target(target)
+        && !crate::cross_tools::supported(target)
+        && !crate::remote_artifacts::glibc_target(target)
+    {
         bail!("automatic target installation does not support {target}");
     }
+    let target = crate::remote_artifacts::rust_target(target);
     let spec = Spec::parse(&tc.id)?;
     if spec.is_jr() {
         bail!("{target} must be supplied by the exact jr compiler bundle, not upstream std");

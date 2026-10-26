@@ -205,7 +205,7 @@ pub fn profile_dir(args: &[OsString]) -> PathBuf {
         i += 1;
     }
     match target {
-        Some(t) => Path::new(&t).join(profile),
+        Some(t) => Path::new(crate::remote_artifacts::rust_target(&t)).join(profile),
         None => PathBuf::from(profile),
     }
 }

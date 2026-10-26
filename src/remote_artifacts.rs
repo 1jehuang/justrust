@@ -303,6 +303,22 @@ pub(crate) fn build_target(args: &[String]) -> Option<&str> {
     target
 }
 
+pub(crate) const GLIBC_217_TARGET: &str = "x86_64-unknown-linux-gnu.2.17";
+
+pub(crate) fn glibc_target(target: &str) -> bool {
+    target == GLIBC_217_TARGET
+}
+
+/// Only the explicitly supported Zig ABI suffix is stripped. Cargo-zigbuild
+/// receives the original selector, while rustc and Cargo output paths do not.
+pub(crate) fn rust_target(target: &str) -> &str {
+    if glibc_target(target) {
+        "x86_64-unknown-linux-gnu"
+    } else {
+        target
+    }
+}
+
 pub(crate) fn musl_target(target: &str) -> bool {
     matches!(
         target,
@@ -598,8 +614,65 @@ fn check_windows(data: &[u8], executable: bool) -> Result<()> {
     Ok(())
 }
 
+/// Inspect structured ELF version requirements, never strings in arbitrary data.
+/// Missing version metadata fails closed, including section-stripped binaries.
+fn check_glibc_217(data: &[u8]) -> Result<()> {
+    use object::read::elf::{ElfFile64, FileHeader, SectionHeader};
+    let elf = ElfFile64::<object::Endianness>::parse(data)
+        .context("expected ELF64 glibc baseline artifact")?;
+    let endian = elf.endian();
+    if endian != object::Endianness::Little
+        || elf.elf_header().e_machine(endian) != object::elf::EM_X86_64
+        || !matches!(
+            elf.elf_header().e_type(endian),
+            object::elf::ET_EXEC | object::elf::ET_DYN
+        )
+        || elf.elf_program_headers().is_empty()
+    {
+        bail!("glibc baseline artifact is not an x86-64 Linux executable ELF");
+    }
+    let sections = elf.elf_section_table();
+    let mut requirements = 0;
+    for section in sections.iter() {
+        if let Some((mut needs, link)) = section.gnu_verneed(endian, data)? {
+            let strings = sections.strings(endian, data, link)?;
+            while let Some((_, mut aux)) = needs.next()? {
+                while let Some(need) = aux.next()? {
+                    let name = need.name(endian, strings)?;
+                    if let Some(version) = name.strip_prefix(b"GLIBC_") {
+                        check_glibc_version(version)?;
+                        requirements += 1;
+                    }
+                }
+            }
+        }
+    }
+    if requirements == 0 {
+        bail!("glibc baseline artifact has no verifiable GLIBC version requirements");
+    }
+    Ok(())
+}
+
+fn check_glibc_version(version: &[u8]) -> Result<()> {
+    let text = std::str::from_utf8(version).context("invalid GLIBC version")?;
+    let parts = text
+        .split('.')
+        .map(str::parse::<u32>)
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .context("non-numeric GLIBC version requirement")?;
+    if !(2..=3).contains(&parts.len())
+        || parts[0] != 2
+        || parts[1] > 17
+        || (parts[1] == 17 && parts.get(2).copied().unwrap_or(0) > 0)
+    {
+        bail!("artifact requires GLIBC_{text}, exceeds GLIBC_2.17 baseline");
+    }
+    Ok(())
+}
+
 enum Validation<'a> {
     NativeBuild,
+    Glibc217,
     Musl(&'a str),
     Test,
     WindowsBuild,
@@ -655,6 +728,7 @@ fn apply(
         }
         crate::sys::set_mode(&tmp, mode)?;
         match validation {
+            Validation::Glibc217 => check_glibc_217(&std::fs::read(&tmp)?)?,
             Validation::Test => check_native_test(&std::fs::read(&tmp)?)?,
             Validation::Musl(target) => check_static_musl(&std::fs::read(&tmp)?, target)?,
             Validation::WindowsBuild => {
@@ -705,6 +779,7 @@ fn fetch_inner(
         profile_dir(&cwd, args)?
     };
     let musl = build_target(args).filter(|target| musl_target(target));
+    let glibc = build_target(args).is_some_and(glibc_target);
     let windows = build_target(args) == Some(crate::cross_tools::WINDOWS_GNU);
     let mut records = load_records();
     // A newer locally built file is not evidence that it is this hosted
@@ -715,7 +790,10 @@ fn fetch_inner(
         have_list(&dir, &records)
     }
     .into_iter()
-    .filter(|h| (musl.is_none() && !windows) || h.id.is_some())
+    .filter(|h| (musl.is_none() && !windows && !glibc) || h.id.is_some())
+    .filter(|h| {
+        !glibc || std::fs::read(dir.join(&h.name)).is_ok_and(|data| check_glibc_217(&data).is_ok())
+    })
     .collect();
     let backend = crate::remote_backend::load().context("no remote machine configured")?;
     let t = backend.ensure_ready()?;
@@ -754,7 +832,7 @@ fn fetch_inner(
             }
             match serde_json::from_str::<Frame>(&line).context("bad artifact frame")? {
                 Frame::Hello { arch, dir } => {
-                    if musl.is_none() && !windows && arch != std::env::consts::ARCH {
+                    if musl.is_none() && !windows && !glibc && arch != std::env::consts::ARCH {
                         bail!(
                             "the machine builds for {arch}, this machine is {}",
                             std::env::consts::ARCH
@@ -822,6 +900,8 @@ fn fetch_inner(
                         Validation::Test
                     } else if let Some(target) = musl {
                         Validation::Musl(target)
+                    } else if glibc {
+                        Validation::Glibc217
                     } else {
                         Validation::NativeBuild
                     };
@@ -1076,6 +1156,124 @@ mod tests {
         assert!(!test_no_run(&args(&["test", "--", "--no-run"])));
         assert!(!test_no_run(&args(&["build", "--no-run"])));
         assert!(!test_no_run(&args(&["test"])));
+    }
+
+    #[test]
+    fn baseline_target_normalizes_only_the_approved_selector() {
+        assert_eq!(rust_target(GLIBC_217_TARGET), "x86_64-unknown-linux-gnu");
+        for target in [
+            "x86_64-unknown-linux-gnu.2.18",
+            "x86_64-unknown-linux-gnu.2.17.0",
+            "x86_64-unknown-linux-gnu.2.17/../bad",
+        ] {
+            assert!(!glibc_target(target));
+            assert_eq!(rust_target(target), target);
+        }
+        let args = ["zigbuild", "--release", "--target", GLIBC_217_TARGET].map(OsString::from);
+        assert_eq!(
+            crate::slots::profile_dir(&args),
+            Path::new("x86_64-unknown-linux-gnu/release")
+        );
+    }
+
+    fn glibc_fixture(version: &str) -> Vec<u8> {
+        let mut bytes = elf_fixture(object::elf::EM_X86_64, object::elf::PT_LOAD, false);
+        // Three ELF section headers: null, version needs, linked string table.
+        bytes.resize(416, 0);
+        bytes[40..48].copy_from_slice(&136u64.to_le_bytes());
+        bytes[58..60].copy_from_slice(&64u16.to_le_bytes());
+        bytes[60..62].copy_from_slice(&3u16.to_le_bytes());
+        bytes[62..64].copy_from_slice(&2u16.to_le_bytes());
+        let needs = 200;
+        bytes[needs + 4..needs + 8].copy_from_slice(&object::elf::SHT_GNU_VERNEED.to_le_bytes());
+        bytes[needs + 24..needs + 32].copy_from_slice(&328u64.to_le_bytes());
+        bytes[needs + 32..needs + 40].copy_from_slice(&32u64.to_le_bytes());
+        bytes[needs + 40..needs + 44].copy_from_slice(&2u32.to_le_bytes());
+        let strings = 264;
+        bytes[strings + 4..strings + 8].copy_from_slice(&object::elf::SHT_STRTAB.to_le_bytes());
+        bytes[strings + 24..strings + 32].copy_from_slice(&360u64.to_le_bytes());
+        let names = format!("\0libc.so.6\0GLIBC_{version}\0");
+        bytes[strings + 32..strings + 40].copy_from_slice(&(names.len() as u64).to_le_bytes());
+        bytes[328..330].copy_from_slice(&1u16.to_le_bytes());
+        bytes[330..332].copy_from_slice(&1u16.to_le_bytes());
+        bytes[332..336].copy_from_slice(&1u32.to_le_bytes());
+        bytes[336..340].copy_from_slice(&16u32.to_le_bytes());
+        bytes[352..356].copy_from_slice(&11u32.to_le_bytes());
+        bytes[360..360 + names.len()].copy_from_slice(names.as_bytes());
+        bytes
+    }
+
+    #[test]
+    fn glibc_baseline_checks_elf_version_needs_not_arbitrary_strings() {
+        for version in ["2.2.5", "2.3.4", "2.17"] {
+            let mut data = glibc_fixture(version);
+            data.extend_from_slice(b"GLIBC_2.99");
+            check_glibc_217(&data).unwrap();
+        }
+        for version in ["2.18", "2.39", "2.17.1", "PRIVATE", "ABI_DT_RELR", "2.x"] {
+            assert!(
+                check_glibc_217(&glibc_fixture(version)).is_err(),
+                "{version}"
+            );
+        }
+        let mut wrong_arch = glibc_fixture("2.17");
+        wrong_arch[18..20].copy_from_slice(&object::elf::EM_AARCH64.to_le_bytes());
+        assert!(check_glibc_217(&wrong_arch).is_err());
+        let mut malformed = glibc_fixture("2.17");
+        malformed[336..340].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(check_glibc_217(&malformed).is_err());
+        assert!(
+            check_glibc_217(&elf_fixture(
+                object::elf::EM_X86_64,
+                object::elf::PT_LOAD,
+                false
+            ))
+            .is_err()
+        );
+        assert!(check_glibc_217(b"GLIBC_2.17").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn glibc_baseline_rejects_before_replacing_artifacts() {
+        if !available() {
+            return;
+        }
+        let root =
+            std::env::temp_dir().join(format!("jr-glibc-art-{}", crate::record::new_run_id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let destination = root.join("app");
+        std::fs::write(&destination, b"keep original").unwrap();
+        for version in ["2.39", "2.17"] {
+            let body = glibc_fixture(version);
+            let mut child = Command::new("zstd")
+                .args(["-q", "-c"])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .spawn()
+                .unwrap();
+            child.stdin.take().unwrap().write_all(&body).unwrap();
+            let encoded = child.wait_with_output().unwrap();
+            assert!(encoded.status.success());
+            let result = apply(
+                &root,
+                "app",
+                0o755,
+                body.len() as u64,
+                false,
+                &encoded.stdout,
+                Validation::Glibc217,
+            );
+            if version == "2.39" {
+                assert!(result.is_err());
+                assert_eq!(std::fs::read(&destination).unwrap(), b"keep original");
+                assert!(!root.join(".app.jrtmp").exists());
+            } else {
+                result.unwrap();
+                assert_eq!(std::fs::read(&destination).unwrap(), body);
+            }
+        }
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     fn elf_fixture(machine: u16, kind: u32, needed: bool) -> Vec<u8> {

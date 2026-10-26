@@ -117,6 +117,10 @@ fn unsupported_hosted_target(args: &[OsString], env_target: Option<OsString>) ->
         .iter()
         .any(|target| {
             target != native.as_str()
+                && !(args.first().is_some_and(|a| a == "zigbuild")
+                    && target
+                        .to_str()
+                        .is_some_and(crate::remote_artifacts::glibc_target))
                 && !(windows_compile && target == crate::cross_tools::WINDOWS_GNU)
                 && !(musl_build
                     && target
@@ -139,9 +143,9 @@ fn routable_build(args: &[String]) -> bool {
         return false;
     }
     if zig {
-        if !crate::remote_artifacts::build_target(args)
-            .is_some_and(crate::remote_artifacts::musl_target)
-        {
+        if !crate::remote_artifacts::build_target(args).is_some_and(|t| {
+            crate::remote_artifacts::musl_target(t) || crate::remote_artifacts::glibc_target(t)
+        }) {
             return false;
         }
     } else if let Some(target) = crate::remote_artifacts::build_target(args) {
@@ -771,8 +775,12 @@ mod tests {
     }
 
     #[test]
-    fn zigbuild_routes_only_explicit_optimized_linux_musl_targets() {
-        for target in ["x86_64-unknown-linux-musl", "aarch64-unknown-linux-musl"] {
+    fn zigbuild_routes_only_explicit_optimized_release_targets() {
+        for target in [
+            "x86_64-unknown-linux-musl",
+            "aarch64-unknown-linux-musl",
+            crate::remote_artifacts::GLIBC_217_TARGET,
+        ] {
             let args = vec![
                 "zigbuild".into(),
                 "--release".into(),
@@ -794,6 +802,10 @@ mod tests {
         }
         for target in [
             "x86_64-unknown-linux-gnu",
+            "x86_64-unknown-linux-gnu.2.18",
+            "x86_64-unknown-linux-gnu.2.17.0",
+            "x86_64-unknown-linux-gnu.2.17/../../escape",
+            "aarch64-unknown-linux-gnu.2.17",
             "aarch64-apple-darwin",
             "custom.json",
             "",
