@@ -14,6 +14,16 @@ import suite
 
 
 class HostedMeasurements(unittest.TestCase):
+    def test_rewrite_retry_workload_is_pinned_and_opt_in(self):
+        scenario = suite.BY_NAME["rewrite-lib-tests"]
+        self.assertTrue(scenario.opt_in)
+        self.assertTrue(scenario.expect_test_fail)
+        self.assertEqual(scenario.cmd, ["test", "--lib"])
+        self.assertIsNone(scenario.edit)
+        self.assertNotIn("rewrite", suite.SNAPSHOTS)
+        _, revision = suite.OPTIONAL_SNAPSHOTS["rewrite"]["repos"]["justrust-clean-room"]
+        self.assertEqual(len(revision), 40)
+
     def test_compare_never_claims_speed_from_noisy_or_unknown_samples(self):
         for noisy_a, noisy_b in [(True, False), (False, True), (None, False),
                                  (False, None), (False, False)]:

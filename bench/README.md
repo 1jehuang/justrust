@@ -46,6 +46,18 @@ cold-build, contention, hosted-mode, and correctness checks. See
 blocked, say so explicitly rather than substituting one convenient loop.
 Real-usage trends remain the reality check, not a controlled attribution test.
 
+## Failure-heavy rewrite test diagnostic
+
+`python3 bench/suite.py run rewrite-lib-tests -n 2` runs the library tests
+from a pinned `~/justrust-clean-room` commit. It is explicitly opt-in, does not
+edit the active rewrite checkout, and expects test failures in that snapshot.
+The warmup populates test history so measured runs exercise failure-prioritized
+parallel splitting and isolated failure confirmation. Keep the snapshot, test
+flags, warmup count, and execution mode identical on both sides.
+
+This diagnoses retry overhead, not compiler performance or general session
+speed. Still run the comprehensive synthetic workload for regression coverage.
+
 ## Explicit native compiler identity (local synthetic runs)
 
 Use `suite.py run --toolchain SPEC --toolchain-identity PRIVATE_JSON` when two

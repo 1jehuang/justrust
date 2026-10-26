@@ -594,15 +594,27 @@ fn adjust_filtered(line: &[u8], n: u64) -> Vec<u8> {
     format!("{}{}{}", &text[..start], v.saturating_sub(n), &text[end..]).into_bytes()
 }
 
+/// Prefer selective serial retries only for a small, inexpensive failure set.
+/// With many failures, serializing their execution can cost much more than
+/// replaying the original group with its normal libtest thread count.
+fn selective_retry_is_cheap(first: &Finished) -> bool {
+    let failed: Vec<_> = first.outcomes.iter().filter(|o| !o.passed).collect();
+    failed.len() <= 8
+        && failed.iter().filter_map(|o| o.secs).sum::<f64>()
+            <= (first.end - first.start).max(0.0) * 2.0
+}
+
 /// A process failed while other test processes ran. Rerun its failed
 /// tests by exact name, one at a time (some tests fail only next to another
 /// test of the same process): if every one fails again, the first result
 /// stands and is reported at once. If some pass, they are rerun once more
 /// with no other test process running; the ones that still pass are
-/// reported as failing only in parallel, the rest as failures. Only a
+/// reported as failing only in parallel, the rest as failures. A
 /// process that died without naming a failed test (a crash) is run again
-/// whole and alone: rerunning a 2,500-test binary to settle three flaky
-/// names doubled `test -p jcode-tui --lib` (FINDINGS 41).
+/// whole and alone, as is a group with many or expensive failures: serial
+/// confirmation of 120 failures added 84s to a 15s rewrite test group.
+/// Small failure sets remain selective: rerunning a 2,500-test binary to
+/// settle three flaky names doubled `test -p jcode-tui --lib` (FINDINGS 41).
 fn confirm_alone(
     inner: &Inner,
     req: &Request,
@@ -630,7 +642,8 @@ fn confirm_alone(
         let r = execute(inner, req, &again, stem);
         Some(failed_names(&r).into_iter().map(str::to_owned).collect())
     };
-    if !failed.is_empty() {
+    let selective = selective_retry_is_cheap(&first);
+    if !failed.is_empty() && selective {
         // Quick check, next to whatever else runs: a real failure does not
         // wait for the pool to drain.
         if let Some(still) = rerun(&failed, false) {
@@ -666,14 +679,28 @@ fn confirm_alone(
             }
         }
     }
+    if !failed.is_empty() && !selective {
+        let note = format!(
+            "justrust: {stem}: confirming {} failures by replaying the original test group alone instead of retrying each test serially",
+            failed.len()
+        );
+        inner
+            .sink
+            .emit_block(&[(paths::now(), "e", note.into_bytes())]);
+    }
     let _alone = inner.gate.exclusive();
     let mut alone = execute(inner, req, args, stem);
     alone.hide_filtered = first.hide_filtered;
-    let alone_failed: HashSet<&str> = failed_names(&alone).into_iter().collect();
+    let alone_passed: HashSet<&str> = alone
+        .outcomes
+        .iter()
+        .filter(|o| o.passed)
+        .map(|o| o.name.as_str())
+        .collect();
     let flaky: Vec<&str> = failed
         .iter()
         .copied()
-        .filter(|f| !alone_failed.contains(f))
+        .filter(|f| alone_passed.contains(f))
         .collect();
     if alone.exit == 0 || !flaky.is_empty() {
         let what = if failed.is_empty() {
@@ -1266,6 +1293,21 @@ fn fnv(s: &[u8]) -> u64 {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
+    struct TmpDir(PathBuf);
+    #[cfg(unix)]
+    impl TmpDir {
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+    #[cfg(unix)]
+    impl Drop for TmpDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
     fn s(v: &[&str]) -> Vec<String> {
         v.iter().map(|x| x.to_string()).collect()
     }
@@ -1429,6 +1471,73 @@ mod tests {
         }
     }
 
+    #[test]
+    fn retry_policy_keeps_small_failures_selective() {
+        assert!(selective_retry_is_cheap(&fin(&[("a", false, 0.1)])));
+        assert!(selective_retry_is_cheap(&fin(&[("a", false, 4.0)])));
+        assert!(!selective_retry_is_cheap(&fin(&[("a", false, 4.1)])));
+        let mut many = fin(&[]);
+        many.outcomes = (0..8)
+            .map(|n| TestOutcome {
+                name: format!("test_{n}"),
+                passed: false,
+                secs: None,
+            })
+            .collect();
+        assert!(selective_retry_is_cheap(&many));
+        many.outcomes.push(TestOutcome {
+            name: "ninth".into(),
+            passed: false,
+            secs: None,
+        });
+        assert!(!selective_retry_is_cheap(&many));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn many_failures_replay_original_group_and_preserve_exit() {
+        let dir = TmpDir(std::env::temp_dir().join(format!("jr-retry-{}", std::process::id())));
+        std::fs::create_dir_all(dir.path()).unwrap();
+        let bin = dir.path().join("retry");
+        let calls = dir.path().join("calls");
+        std::fs::write(
+            &bin,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\necho 'test t0 ... FAILED'\necho 'test t1 ... ok'\nexit 101\n",
+                calls.display()
+            ),
+        )
+        .unwrap();
+        crate::sys::set_mode(&bin, 0o755).unwrap();
+        let sink = Arc::new(VecSink(Mutex::new(Vec::new())));
+        let pool = Pool::start(dir.path(), dir.path(), Path::new("jr"), sink, true).unwrap();
+        let req = Request {
+            bin: bin.to_string_lossy().into_owned(),
+            args: s(&["group", "--skip", "excluded"]),
+            cwd: dir.path().to_string_lossy().into_owned(),
+            env: Vec::new(),
+        };
+        let mut first = fin(&[]);
+        first.exit = 101;
+        first.hide_filtered = Some(7);
+        first.outcomes = (0..120)
+            .map(|n| TestOutcome {
+                name: format!("t{n}"),
+                passed: false,
+                secs: Some(0.1),
+            })
+            .collect();
+        let replay = confirm_alone(&pool.inner, &req, "retry", &req.args, first);
+        assert_eq!(replay.exit, 101);
+        assert_eq!(replay.hide_filtered, Some(7));
+        assert_eq!(failed_names(&replay), ["t0"]);
+        assert_eq!(
+            std::fs::read_to_string(calls).unwrap(),
+            "group --skip excluded\n"
+        );
+        pool.finish();
+    }
+
     #[cfg(unix)]
     struct VecSink(Mutex<Vec<String>>);
     #[cfg(unix)]
@@ -1448,17 +1557,6 @@ mod tests {
     /// 8,911 tests against stock's 1,862 (FINDINGS 41).
     #[cfg(unix)]
     fn pool_run(fail_fast: bool) -> (bool, Vec<String>, Vec<String>) {
-        struct TmpDir(PathBuf);
-        impl TmpDir {
-            fn path(&self) -> &Path {
-                &self.0
-            }
-        }
-        impl Drop for TmpDir {
-            fn drop(&mut self) {
-                let _ = std::fs::remove_dir_all(&self.0);
-            }
-        }
         // Short: the pool's socket path must fit in sockaddr_un.
         let dir =
             TmpDir(std::env::temp_dir().join(format!("jr-ff-{}-{fail_fast}", std::process::id())));

@@ -127,6 +127,20 @@ SNAPSHOTS = {
     },
 }
 
+# Loaded only when explicitly selected. The rewrite checkout is not required
+# for the normal benchmark suite or the session-weighted synthetic workload.
+OPTIONAL_SNAPSHOTS = {
+    "rewrite": {
+        "repos": {
+            "justrust-clean-room": (
+                HOME / "justrust-clean-room",
+                "c7bda805f8886369571bc41e3309f4fd36c0bebb",
+            ),
+        },
+        "cwd": "justrust-clean-room",
+    },
+}
+
 
 @dataclass
 class Edit:
@@ -150,6 +164,7 @@ class Scenario:
     # Cold, with an empty local depcache every iteration and a prebuilt
     # store (JUSTRUST_PREBUILT) published once from another cargo home.
     prebuilt: bool = False
+    opt_in: bool = False
 
 
 FPS = "jcode-desktop/crates/jcode-desktop-ui/src/fps_counter.rs"
@@ -157,6 +172,16 @@ DESKTOP_TEST = ["test", "-p", "jcode-desktop-ui", "--lib", "--", "fps_counter"]
 DESKTOP_CHECK = ["check", "-p", "jcode-desktop-ui"]
 
 SCENARIOS = [
+    Scenario(
+        "rewrite-lib-tests",
+        "rewrite",
+        ["test", "--lib"],
+        None,
+        "pinned rewrite library suite, including failure confirmation after parallel splitting",
+        expect_test_fail=True,
+        env={"JUSTRUST_TEST_PARALLEL": "1", "JUSTRUST_TEST_SPLIT": "1"},
+        opt_in=True,
+    ),
     Scenario(
         "desktop-test-edit",
         "desktop",
@@ -1290,7 +1315,7 @@ def table(result: dict) -> str:
 
 def cmd_list(_args) -> None:
     for s in SCENARIOS:
-        tag = " [cold, opt-in]" if s.cold else ""
+        tag = " [cold, opt-in]" if s.cold else " [opt-in]" if s.opt_in else ""
         print(f"{s.name:28s} {s.what}{tag}\n{'':28s} justrust {' '.join(s.cmd)}")
 
 
@@ -1330,13 +1355,16 @@ def cmd_run(args) -> None:
         subprocess.run([J, "toolchain", "install", TOOLCHAIN], check=True, stdout=subprocess.DEVNULL)
     if args.synth is not None:
         return cmd_run_synth(args, identity) if identity is not None else cmd_run_synth(args)
-    names = args.scenarios or [s.name for s in SCENARIOS if not s.cold
+    names = args.scenarios or [s.name for s in SCENARIOS if not s.cold and not s.opt_in
                                and not (REMOTE and s.env.get("JUSTRUST_EARLY") == "1")]
     if args.cold:
         names += [s.name for s in SCENARIOS if s.cold and s.name not in names]
     for n in names:
         if n not in BY_NAME:
             sys.exit(f"bench: unknown scenario {n} (see `bench/suite.py list`)")
+        snapshot = BY_NAME[n].snapshot
+        if snapshot in OPTIONAL_SNAPSHOTS:
+            SNAPSHOTS[snapshot] = OPTIONAL_SNAPSHOTS[snapshot]
         if REMOTE and (BY_NAME[n].cold or BY_NAME[n].prebuilt):
             sys.exit("bench: --remote supports warm scenarios only. Clearing a local target/cache "
                      "does not clear the persistent remote target/cache; it is not a cold hosted build.")
