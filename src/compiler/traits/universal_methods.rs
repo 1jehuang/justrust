@@ -568,7 +568,7 @@ impl ValidatedTraitWorld {
         authority: &UniversalMethodEvidence,
         facts: &ValidatedFacts,
     ) -> Result<()> {
-        self.validate_universal_required_evidence(authority, facts)?;
+        let (application, replay) = self.validate_universal_required_evidence(authority, facts)?;
         let parameter_equality::EqualityResultSubject::Required(subject) = &view.result_subject
         else {
             return Err(FactsError::invalid(
@@ -588,8 +588,6 @@ impl ValidatedTraitWorld {
                 "universal required carrier changed method actuals",
             ));
         }
-        let (application, replay) =
-            self.instantiate_universal_required_item(&authority.call, facts)?;
         let expected = self.universal_required_carrier_parts(application, replay, facts)?;
         if view.declaration != authority.call.item
             || !self.same_env(&view.original_env, facts.env())?
@@ -671,12 +669,16 @@ impl ValidatedTraitWorld {
         })
     }
 
+    /// Return this invocation's freshly authenticated replay to the carrier
+    /// validator rather than discarding it and repeating the same instantiation.
+    /// No cache, proof refund, or cross-context reuse is involved.
     pub(super) fn validate_universal_required_evidence(
         &self,
         evidence: &UniversalMethodEvidence,
         facts: &ValidatedFacts,
-    ) -> Result<()> {
-        let (_, replay) = self.instantiate_universal_required_item(&evidence.call, facts)?;
+    ) -> Result<(InstantiatedSchema, Arc<UniversalMethodEvidence>)> {
+        let (application, replay) =
+            self.instantiate_universal_required_item(&evidence.call, facts)?;
         if evidence.dependencies.len() != replay.dependencies.len() {
             return Err(FactsError::invalid(
                 &self.budget,
@@ -753,7 +755,7 @@ impl ValidatedTraitWorld {
                 "universal required method changed application or caller authority",
             ));
         }
-        Ok(())
+        Ok((application, replay))
     }
 }
 
@@ -1074,6 +1076,64 @@ mod tests {
                 )
                 .is_err()
         );
+    }
+
+    #[test]
+    fn authenticated_required_replay_keeps_payload_and_rejects_live_short_or_poison() {
+        for control in 0..3 {
+            let (world, facts, call) = fixture();
+            let (_, evidence) = world
+                .instantiate_universal_required_item(&call, &facts)
+                .unwrap();
+            let budget = facts.budget();
+            let before = budget.usage_snapshot();
+            assert!(before.first_failure.is_none());
+            assert!(!before.poisoned);
+            let mut held = None;
+            if control == 1 {
+                held = Some(
+                    budget
+                        .reserve_bytes(budget.limits().bytes - before.bytes)
+                        .unwrap(),
+                );
+                let full = budget.usage_snapshot();
+                assert!(full.first_failure.is_none());
+                assert!(!full.poisoned);
+                assert_eq!(full.bytes, budget.limits().bytes);
+            } else if control == 2 {
+                budget.poison_ledger_for_tests();
+                assert!(budget.usage_snapshot().poisoned);
+            }
+            let result = world.validate_universal_required_evidence(&evidence, &facts);
+            if control == 0 {
+                let (application, replay) = result.unwrap();
+                assert!(
+                    world
+                        .eq_signature(&application.signature, &evidence.signature)
+                        .unwrap()
+                );
+                assert!(
+                    world
+                        .eq_signature(&replay.signature, &evidence.signature)
+                        .unwrap()
+                );
+                assert_eq!(replay.dependencies.len(), evidence.dependencies.len());
+                assert_eq!(
+                    replay.implementation_dependencies.len(),
+                    evidence.implementation_dependencies.len()
+                );
+            } else {
+                assert!(result.is_err());
+                if control == 1 {
+                    let failure = budget.first_resource_failure().unwrap();
+                    assert_eq!(failure.kind, ir::ResourceBudgetKind::Bytes);
+                    assert_eq!(failure.used, failure.limit);
+                }
+            }
+            drop(held);
+            assert!(budget.usage_snapshot().bytes >= before.bytes);
+            assert_eq!(evidence.selection.0.world, world.id);
+        }
     }
 
     #[test]
