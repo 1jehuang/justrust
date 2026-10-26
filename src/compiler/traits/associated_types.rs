@@ -2046,9 +2046,10 @@ impl ValidatedTraitWorld {
         if proofs.cycles == cycles
             && proofs.normalization_validations.len() < MAX_SCRATCH_OBLIGATIONS
         {
-            push(
+            push_scratch_row(
                 &self.budget,
                 &mut proofs.normalization_validations,
+                &mut proofs.normalization_validation_storage,
                 NormalizationValidation {
                     evidence: evidence.clone(),
                     world: self.id,
@@ -2602,6 +2603,36 @@ mod tests {
             proof: ProofContext::from_facts(&facts),
             staged: false,
         };
+        // Only memo row storage is scoped. The normalized proof survives it.
+        let evidence_refs = Arc::strong_count(&normalized.0);
+        let baseline = budget.usage_snapshot().bytes;
+        let mut owned = ProofScratch::default();
+        push_scratch_row(
+            &budget,
+            &mut owned.normalization_validations,
+            &mut owned.normalization_validation_storage,
+            NormalizationValidation {
+                evidence: normalized.0.clone(),
+                world: world.id,
+                environment: context.proof.predicates.index,
+                phase: context.proof.phase,
+                staged: context.staged,
+                finalized: world.owner_normalization_finalized,
+            },
+        )
+        .unwrap();
+        let row_bytes = scratch_row_bytes::<NormalizationValidation>().unwrap();
+        assert_eq!(budget.usage_snapshot().bytes, baseline + row_bytes);
+        assert_eq!(Arc::strong_count(&normalized.0), evidence_refs + 1);
+        world
+            .validate_normalization_evidence_with(&normalized.0, context, &mut owned)
+            .unwrap();
+        assert_eq!(owned.normalization_validations.len(), 1);
+        assert_eq!(budget.usage_snapshot().bytes, baseline + row_bytes);
+        drop(owned);
+        assert_eq!(budget.usage_snapshot().bytes, baseline);
+        assert_eq!(Arc::strong_count(&normalized.0), evidence_refs);
+        normalized.validate_for(&projection, &facts).unwrap();
         let mut proofs = ProofScratch::default();
         let before = budget.usage_snapshot().bytes;
         world

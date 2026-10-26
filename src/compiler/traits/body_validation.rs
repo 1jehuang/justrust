@@ -8,6 +8,7 @@ use super::*;
 #[derive(Default)]
 pub(super) struct RawFormations {
     entries: Vec<RawFormation>,
+    storage: Vec<ir::PlanReservation>,
 }
 
 struct RawFormation {
@@ -28,6 +29,11 @@ impl RawFormations {
     #[cfg(test)]
     pub(super) fn retained_roots(&self) -> usize {
         self.entries.len()
+    }
+
+    #[cfg(test)]
+    pub(super) fn storage_bytes(&self) -> usize {
+        self.storage.len() * scratch_row_bytes::<RawFormation>().unwrap()
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -87,9 +93,10 @@ impl RawFormations {
         if let Some(key) = key
             && self.entries.len() < MAX_SCRATCH_OBLIGATIONS
         {
-            push(
+            push_scratch_row(
                 &world.budget,
                 &mut self.entries,
+                &mut self.storage,
                 RawFormation {
                     world: world.id,
                     registry: world.registry,

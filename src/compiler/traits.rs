@@ -377,6 +377,95 @@ fn push<T>(b: &PlanBudget, values: &mut Vec<T>, value: T) -> Result<()> {
     values.push(value);
     Ok(())
 }
+/// Storage for private memo rows, never for a returned semantic payload.
+/// The caller declares `leases` after `values`, so rows die before their leases.
+fn push_scratch_row<T>(
+    budget: &PlanBudget,
+    values: &mut Vec<T>,
+    leases: &mut Vec<ir::PlanReservation>,
+    value: T,
+) -> Result<()> {
+    push_scratch_row_with(budget, values, leases, value, || Ok(()))
+}
+
+fn scratch_row_bytes<T>() -> Option<usize> {
+    std::mem::size_of::<T>()
+        .checked_mul(2)?
+        .checked_add(std::mem::size_of::<ir::PlanReservation>().checked_mul(2)?)?
+        .checked_add(32)
+}
+
+fn push_scratch_row_with<T>(
+    budget: &PlanBudget,
+    values: &mut Vec<T>,
+    leases: &mut Vec<ir::PlanReservation>,
+    value: T,
+    after_row_growth: impl FnOnce() -> Result<()>,
+) -> Result<()> {
+    let bytes = scratch_row_bytes::<T>()
+        .ok_or_else(|| FactsError::resource(budget, "scratch row storage overflow"))?;
+    let storage = charged(budget, budget.reserve_bytes(bytes))?;
+    let row_growth = TypeWalk::growth_slots(values.len(), values.capacity())
+        .ok_or_else(|| FactsError::resource(budget, "scratch row capacity overflow"))?;
+    let lease_growth = TypeWalk::growth_slots(leases.len(), leases.capacity())
+        .ok_or_else(|| FactsError::resource(budget, "scratch lease capacity overflow"))?;
+    let old_rows = if row_growth == 0 { 0 } else { values.len() };
+    let old_leases = if lease_growth == 0 { 0 } else { leases.len() };
+    let relocation_bytes = old_rows
+        .checked_mul(std::mem::size_of::<T>())
+        .and_then(|bytes| {
+            old_leases
+                .checked_mul(std::mem::size_of::<ir::PlanReservation>())
+                .and_then(|other| bytes.checked_add(other))
+        })
+        .ok_or_else(|| FactsError::resource(budget, "scratch relocation storage overflow"))?;
+    let _relocation = charged(budget, budget.reserve_bytes(relocation_bytes))?;
+    let work = old_rows
+        .checked_add(old_leases)
+        .ok_or_else(|| FactsError::resource(budget, "scratch relocation work overflow"))?;
+    charged(budget, budget.charge_work(work))?;
+    let grow = (|| {
+        if row_growth != 0 {
+            values
+                .try_reserve_exact(row_growth)
+                .map_err(|_| FactsError::resource(budget, "scratch row allocation failed"))?;
+        }
+        // A no-op in production. Tests deny this exact post-growth boundary.
+        after_row_growth()?;
+        if lease_growth != 0 {
+            leases
+                .try_reserve_exact(lease_growth)
+                .map_err(|_| FactsError::resource(budget, "scratch lease allocation failed"))?;
+        }
+        let paid_slots = values
+            .len()
+            .checked_add(1)
+            .and_then(|len| len.checked_mul(2))
+            .ok_or_else(|| FactsError::resource(budget, "scratch paid capacity overflow"))?;
+        if values.len() != leases.len()
+            || values.capacity() > paid_slots
+            || leases.capacity() > paid_slots
+        {
+            return Err(FactsError::resource(
+                budget,
+                "scratch allocator exceeded paid capacity",
+            ));
+        }
+        Ok(())
+    })();
+    if let Err(error) = grow {
+        // A first growth may have succeeded before a later allocation failed.
+        // Destroy all surviving buffers while BOTH old and new leases are live.
+        // Never refund capacity that an error path leaves allocated in the owner.
+        drop(std::mem::take(values));
+        drop(std::mem::take(leases));
+        return Err(error);
+    }
+    values.push(value);
+    leases.push(storage);
+    Ok(())
+}
+
 fn reserve_carriers<T>(b: &PlanBudget, values: &mut Vec<T>, additional: usize) -> Result<()> {
     let capacity = values
         .len()
@@ -1401,7 +1490,9 @@ struct ProofScratch {
     cycles: usize,
     projections: Vec<associated_types::NormalizationMemo>,
     normalization_validations: Vec<associated_types::NormalizationValidation>,
+    normalization_validation_storage: Vec<ir::PlanReservation>,
     closedness: Vec<ClosednessValidation>,
+    closedness_storage: Vec<ir::PlanReservation>,
     /// Successful raw substitutions only; all normalization and proof work
     /// remains outside this node-local retained-input cache.
     instantiations: schema_instantiation::Substitutions,
@@ -8367,9 +8458,10 @@ impl ValidatedTraitWorld {
             has_opaque: walk.has_opaque,
         };
         if !ty.is_nominal_back_edge() && scratch.closedness.len() < MAX_SCRATCH_OBLIGATIONS {
-            push(
+            push_scratch_row(
                 &self.budget,
                 &mut scratch.closedness,
+                &mut scratch.closedness_storage,
                 ClosednessValidation {
                     world: self.id,
                     ty: ty.clone(),
@@ -9820,6 +9912,189 @@ pub(crate) mod test_support {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn scratch_row_storage_exact_short_and_growth_peak() {
+        let row = scratch_row_bytes::<u64>().unwrap();
+        let overlap = std::mem::size_of::<u64>() + std::mem::size_of::<ir::PlanReservation>();
+        for short in [false, true] {
+            let budget = PlanBudget::new(ir::PlanLimits {
+                bytes: row - usize::from(short),
+                ..ir::PlanLimits::default()
+            });
+            let mut values = Vec::new();
+            let mut leases = Vec::new();
+            let result = push_scratch_row(&budget, &mut values, &mut leases, 7u64);
+            if short {
+                assert!(result.unwrap_err().is_resource());
+                assert_eq!(values.capacity(), 0);
+                assert_eq!(leases.capacity(), 0);
+                assert_eq!(budget.usage_snapshot().bytes, 0);
+                assert!(budget.first_resource_failure().is_some());
+            } else {
+                result.unwrap();
+                assert_eq!(budget.usage_snapshot().bytes, row);
+                assert_eq!(values, [7]);
+                drop(values);
+                drop(leases);
+                assert_eq!(budget.usage_snapshot().bytes, 0);
+                assert!(!budget.has_resource_failure());
+            }
+        }
+        for short in [false, true] {
+            let budget = PlanBudget::new(ir::PlanLimits {
+                bytes: 2 * row + overlap - usize::from(short),
+                ..ir::PlanLimits::default()
+            });
+            let mut values = Vec::new();
+            let mut leases = Vec::new();
+            push_scratch_row(&budget, &mut values, &mut leases, 1u64).unwrap();
+            assert_eq!(values.capacity(), 1);
+            assert_eq!(leases.capacity(), 1);
+            let result = push_scratch_row(&budget, &mut values, &mut leases, 2u64);
+            if short {
+                assert!(result.unwrap_err().is_resource());
+                assert_eq!(values, [1]);
+                assert_eq!(leases.len(), 1);
+                assert_eq!(budget.usage_snapshot().bytes, row);
+                let first = budget.first_resource_failure();
+                drop(values);
+                drop(leases);
+                assert_eq!(budget.usage_snapshot().bytes, 0);
+                assert_eq!(budget.first_resource_failure(), first);
+            } else {
+                result.unwrap();
+                assert_eq!(values, [1, 2]);
+                assert_eq!(budget.usage_snapshot().bytes, 2 * row);
+                assert_eq!(budget.usage_snapshot().work, 2);
+                drop(values);
+                drop(leases);
+                assert_eq!(budget.usage_snapshot().bytes, 0);
+            }
+        }
+        let budget = PlanBudget::default();
+        let mut values = Vec::new();
+        let mut leases = Vec::new();
+        for value in 0u64..65 {
+            push_scratch_row(&budget, &mut values, &mut leases, value).unwrap();
+            assert_eq!(values.len(), leases.len());
+            assert!(values.capacity() <= 2 * values.len());
+            assert!(leases.capacity() <= 2 * leases.len());
+            assert_eq!(budget.usage_snapshot().bytes, values.len() * row);
+        }
+        assert_eq!(budget.usage_snapshot().work, 254);
+        drop(values);
+        drop(leases);
+        assert_eq!(budget.usage_snapshot().bytes, 0);
+    }
+
+    #[test]
+    fn scratch_row_postgrowth_denial_destroys_buffers_before_refund() {
+        let budget = PlanBudget::default();
+        let input = Arc::new(23u64);
+        let weak = Arc::downgrade(&input);
+        retain::<u64>(&budget, 1).unwrap();
+        let payload_bytes = budget.usage_snapshot().bytes;
+        let mut values = Vec::new();
+        let mut leases = Vec::new();
+        push_scratch_row(&budget, &mut values, &mut leases, input.clone()).unwrap();
+        assert_eq!(Arc::strong_count(&input), 2);
+        let before_work = budget.usage_snapshot().work;
+        let error = push_scratch_row_with(&budget, &mut values, &mut leases, input.clone(), || {
+            charged(&budget, budget.charge_work(usize::MAX))?;
+            Ok(())
+        })
+        .unwrap_err();
+        assert!(error.is_resource());
+        assert_eq!(values.capacity(), 0);
+        assert_eq!(leases.capacity(), 0);
+        assert_eq!(Arc::strong_count(&input), 1);
+        assert!(weak.upgrade().is_some());
+        assert_eq!(budget.usage_snapshot().bytes, payload_bytes);
+        assert_eq!(budget.usage_snapshot().work, before_work + 2);
+        let first = budget.first_resource_failure();
+        drop(values);
+        drop(leases);
+        assert_eq!(budget.first_resource_failure(), first);
+        assert_eq!(budget.usage_snapshot().bytes, payload_bytes);
+    }
+
+    #[test]
+    fn scratch_row_postgrowth_cleanup_keeps_overlap_paid_during_row_drop() {
+        struct Observe<'a> {
+            budget: &'a PlanBudget,
+            dropped: &'a std::cell::Cell<bool>,
+            observe: bool,
+        }
+        impl Drop for Observe<'_> {
+            fn drop(&mut self) {
+                if self.observe {
+                    let row = scratch_row_bytes::<Self>().unwrap();
+                    let overlap =
+                        std::mem::size_of::<Self>() + std::mem::size_of::<ir::PlanReservation>();
+                    assert_eq!(self.budget.usage_snapshot().bytes, 2 * row + overlap);
+                    self.dropped.set(true);
+                }
+            }
+        }
+        let budget = PlanBudget::default();
+        let dropped = std::cell::Cell::new(false);
+        let mut values = Vec::new();
+        let mut leases = Vec::new();
+        push_scratch_row(
+            &budget,
+            &mut values,
+            &mut leases,
+            Observe {
+                budget: &budget,
+                dropped: &dropped,
+                observe: true,
+            },
+        )
+        .unwrap();
+        let result = push_scratch_row_with(
+            &budget,
+            &mut values,
+            &mut leases,
+            Observe {
+                budget: &budget,
+                dropped: &dropped,
+                observe: false,
+            },
+            || charged(&budget, budget.charge_work(usize::MAX)),
+        );
+        assert!(result.unwrap_err().is_resource());
+        assert!(dropped.get());
+        assert_eq!(values.capacity(), 0);
+        assert_eq!(leases.capacity(), 0);
+        assert_eq!(budget.usage_snapshot().bytes, 0);
+        assert!(budget.has_resource_failure());
+    }
+
+    #[test]
+    fn scratch_row_poison_preserves_charges_and_first_failure() {
+        let budget = PlanBudget::default();
+        let mut values = Vec::new();
+        let mut leases = Vec::new();
+        push_scratch_row(&budget, &mut values, &mut leases, 1u64).unwrap();
+        assert!(budget.charge_work(usize::MAX).is_err());
+        let first = budget.first_resource_failure();
+        let bytes = budget.usage_snapshot().bytes;
+        budget.poison_ledger_for_tests();
+        drop(values);
+        drop(leases);
+        assert_eq!(budget.usage_snapshot().bytes, bytes);
+        assert_eq!(budget.first_resource_failure(), first);
+        let mut values = Vec::new();
+        let mut leases = Vec::new();
+        assert!(
+            push_scratch_row(&budget, &mut values, &mut leases, 2u64)
+                .unwrap_err()
+                .is_resource()
+        );
+        assert_eq!(budget.first_resource_failure(), first);
+        assert!(values.is_empty());
+    }
+
+    #[test]
     fn trait_vector_growth_is_paid_and_amortized() {
         let budget = PlanBudget::new(ir::PlanLimits::default());
         let mut values = Vec::new();
@@ -10107,6 +10382,58 @@ mod tests {
             leaf,
             boxed,
         }
+    }
+
+    #[test]
+    fn scratch_row_real_owners_refund_only_row_buffers() {
+        let c = case();
+        let world = c.build().unwrap();
+        let ty = Ty::Tuple(Arc::from([Ty::Unit]));
+        let Ty::Tuple(input) = &ty else {
+            unreachable!()
+        };
+        let input_refs = Arc::strong_count(input);
+        let mut raw = body_validation::RawFormations::default();
+        raw.check(&world, &ty, world.empty.env(), TypeUse::Root, None, 0)
+            .unwrap();
+        assert_eq!(raw.retained_roots(), 1);
+        let paid = raw.storage_bytes();
+        let before_hit = c.budget.usage_snapshot().bytes;
+        raw.check(&world, &ty, world.empty.env(), TypeUse::Root, None, 0)
+            .unwrap();
+        assert_eq!(raw.retained_roots(), 1);
+        assert_eq!(c.budget.usage_snapshot().bytes, before_hit);
+        assert!(Arc::strong_count(input) > input_refs);
+        drop(raw);
+        assert_eq!(c.budget.usage_snapshot().bytes, before_hit - paid);
+        assert_eq!(Arc::strong_count(input), input_refs);
+
+        let mut scratch = ProofScratch::default();
+        world
+            .closedness_of_root(&ty, world.empty.env(), TypeUse::Root, 0, &mut scratch)
+            .unwrap();
+        assert_eq!(scratch.closedness.len(), 1);
+        let paid = scratch_row_bytes::<ClosednessValidation>().unwrap();
+        let before_hit = c.budget.usage_snapshot().bytes;
+        world
+            .closedness_of_root(&ty, world.empty.env(), TypeUse::Root, 0, &mut scratch)
+            .unwrap();
+        assert_eq!(scratch.closedness.len(), 1);
+        assert_eq!(c.budget.usage_snapshot().bytes, before_hit);
+        assert!(Arc::strong_count(input) > input_refs);
+        drop(scratch);
+        assert_eq!(c.budget.usage_snapshot().bytes, before_hit - paid);
+        assert_eq!(Arc::strong_count(input), input_refs);
+        // The original immutable type outlives both memos and remains valid.
+        world
+            .validate_ty_inner(
+                &ty,
+                world.empty.env(),
+                0,
+                TypeUse::Root,
+                &mut TypeWalk::default(),
+            )
+            .unwrap();
     }
 
     #[test]
