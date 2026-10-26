@@ -1,5 +1,26 @@
 # Findings: where agent build time goes
 
+## 2026-10-26: Slow-run inventory and development DEFLATE tail
+
+`bench/SLOW-RUNS.md` inventories all recorded runs and separates remote client
+wait from build-side wall time. The pinned `justrust-public-cache-cap` diagnostic
+keeps the 96 MiB incompressible artifact, public publish/fetch/content checks,
+and private-cap rejection. Only miniz_oxide's development optimization changes.
+`bench/suite.py compare` reports 16.00s -> 5.80s median (three warm samples,
+zero compiled units), **uncontrolled (noisy or unknown samples)**. This is a
+scoped observation, not a controlled or general compiler speedup claim.
+The matching results are `bench/results/public-cache-cap-miniz{0,3}-local-20261026.json`.
+Hosted pinned-root measurements were blocked twice by `cannot protect source
+activity: No such file or directory`; both sides therefore used local execution.
+Real hosted test timing was 11.33s (`20261026-142030694-281363`) before and
+3.79s (`20261026-143305145-386513`) after. The serial library suite passed;
+default-parallel validation exposed existing remote_evict lock-test races.
+Only the development compression dependency is optimized, not the changing
+client crate or release profile. No comprehensive workload speedup is claimed.
+Full hosted `justrust test -- --test-threads=1` passed 784 tests
+(`20261026-143543882-404516`), all-target clippy with `-D warnings` passed,
+and all benchmark harness regression tests passed.
+
 ## 2026-10-19: Correct the durable-GC rollout's legacy lock-mode regression
 
 The initial durable registry change (`68b0dddec`) rejected group-writable lock

@@ -30,6 +30,11 @@ memchr = "2"
 object = { version = "=0.37.3", default-features = false, features = ["read_core", "elf", "pe", "std"] }
 memmap2 = "0.9.11"
 
+# Large artifact round trips otherwise spend their test time in debug DEFLATE.
+# Keep the client itself unoptimized for fast edit/build loops. Release is unchanged.
+[profile.dev.package.miniz_oxide]
+opt-level = 3
+
 [target.'cfg(windows)'.dependencies]
 uds_windows = "1.2.1"
 windows-sys = { version = "0.61", features = [

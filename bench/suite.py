@@ -95,6 +95,7 @@ TOOLCHAIN = "system"
 RUSTC_THREADS = None
 WORKSPACE_THREADS = None
 PASS_TIMES = False
+MINIZ_OPT_LEVEL = None
 # A sample is noisy when other processes averaged more than this many cores
 # or another rustc was running when it started.
 NOISY_CORES = float(os.environ.get("BENCH_NOISY_CORES", "4"))
@@ -130,6 +131,10 @@ SNAPSHOTS = {
 # Loaded only when explicitly selected. The rewrite checkout is not required
 # for the normal benchmark suite or the session-weighted synthetic workload.
 OPTIONAL_SNAPSHOTS = {
+    "public-cache-cap": {
+        "repos": {"justrust": (ROOT, "96f0e239bc105f798b0e8001fb63f3ddad66a2e7")},
+        "cwd": "justrust",
+    },
     "retry-storm": {
         # A git tree object pins only the small fixture, not the full toolchain.
         "repos": {"retry-storm": (ROOT, "10d9c88270859a93825e36a48dd2d27733425ae6")},
@@ -177,6 +182,15 @@ DESKTOP_TEST = ["test", "-p", "jcode-desktop-ui", "--lib", "--", "fps_counter"]
 DESKTOP_CHECK = ["check", "-p", "jcode-desktop-ui"]
 
 SCENARIOS = [
+    Scenario(
+        "justrust-public-cache-cap",
+        "public-cache-cap",
+        ["test", "--lib", "depcache_prebuilt::tests::public_publish_fetch_allows_bundle_above_worker_cap",
+         "--", "--exact"],
+        None,
+        "96 MiB incompressible public artifact publish/fetch with private-cap rejection and content verification",
+        opt_in=True,
+    ),
     Scenario(
         "test-retry-storm",
         "retry-storm",
@@ -1184,7 +1198,8 @@ def workspace_thread_provenance(summary: dict, expected: int | None) -> int | No
 
 
 def compiler_scenario(s: Scenario, threads: int | None, passes: bool,
-                      workspace_threads: int | None = None) -> Scenario:
+                      workspace_threads: int | None = None,
+                      miniz_opt_level: int | None = None) -> Scenario:
     """Explicit Cargo config survives hosted transport, unlike arbitrary env.
 
     Never mutate shared scenarios or put Cargo options after libtest's --.
@@ -1193,6 +1208,10 @@ def compiler_scenario(s: Scenario, threads: int | None, passes: bool,
     if threads is not None and workspace_threads is not None:
         raise ValueError("global rustc threads override the workspace wrapper control")
     configs = []
+    if miniz_opt_level is not None:
+        if type(miniz_opt_level) is not int or miniz_opt_level not in range(4):
+            raise ValueError("miniz optimization level must be 0, 1, 2, or 3")
+        configs += ["--config", f"profile.dev.package.miniz_oxide.opt-level={miniz_opt_level}"]
     if workspace_threads is not None:
         configs += ["--config", f'env.JCODE_FRONTEND_THREADS.value="{workspace_threads}"',
                     "--config", "env.JCODE_FRONTEND_THREADS.force=true"]
@@ -1309,6 +1328,7 @@ def env_info() -> dict:
         "rustc_threads": RUSTC_THREADS,
         "workspace_threads": WORKSPACE_THREADS,
         "pass_times": PASS_TIMES,
+        "miniz_opt_level": MINIZ_OPT_LEVEL,
         "cargo": tryrun(["cargo", "-V"]),
         "governor": tryrun(["cat", "/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor"]),
         "on_ac": tryrun(["cat", "/sys/class/power_supply/AC/online"]),
@@ -1343,11 +1363,14 @@ def cmd_list(_args) -> None:
 
 
 def cmd_run(args) -> None:
-    global TOOLCHAIN, REMOTE, RUSTC_THREADS, WORKSPACE_THREADS, PASS_TIMES
+    global TOOLCHAIN, REMOTE, RUSTC_THREADS, WORKSPACE_THREADS, PASS_TIMES, MINIZ_OPT_LEVEL
     TOOLCHAIN = args.toolchain
     RUSTC_THREADS = getattr(args, "rustc_threads", None)
     WORKSPACE_THREADS = getattr(args, "workspace_threads", None)
     PASS_TIMES = getattr(args, "pass_times", False)
+    MINIZ_OPT_LEVEL = getattr(args, "miniz_opt_level", None)
+    if MINIZ_OPT_LEVEL is not None and args.synth is not None:
+        sys.exit("--miniz-opt-level is a named-scenario diagnostic, not a synthetic-stack control")
     if WORKSPACE_THREADS is not None:
         if RUSTC_THREADS is not None:
             sys.exit("bench: global rustc threads override workspace threads; choose only one")
@@ -1408,7 +1431,8 @@ def cmd_run(args) -> None:
     result = {"started": started, "env": info, "runs_per_scenario": args.n, "scenarios": {}}
     for k, name in enumerate(names):
         print(f"bench: {name} ({k + 1}/{len(names)})", file=sys.stderr)
-        scenario = compiler_scenario(BY_NAME[name], RUSTC_THREADS, PASS_TIMES, WORKSPACE_THREADS)
+        scenario = compiler_scenario(BY_NAME[name], RUSTC_THREADS, PASS_TIMES, WORKSPACE_THREADS,
+                                     MINIZ_OPT_LEVEL)
         if hosted_early:
             scenario = replace(scenario, env={**scenario.env, "JUSTRUST_EARLY": "query", "JUSTRUST_EARLY_EXIT": "0"})
         result["scenarios"][name] = run_scenario(scenario, args.n, args.warmup, args.quiet_wait)
@@ -1596,6 +1620,8 @@ def main() -> None:
     r.add_argument("--workspace-threads", type=int, choices=(1, 2, 4, 6, 8, 12, 16),
                    help="Desktop workspace wrapper threads via forced Cargo env config; "
                         "registry compiler flags stay unchanged, warm up first")
+    r.add_argument("--miniz-opt-level", type=int, choices=[0, 1, 2, 3],
+                   help="named diagnostics: optimize only miniz_oxide through explicit Cargo config")
     r.add_argument("--pass-times", action="store_true",
                    help="local-crate pass timings through explicit Cargo environment config; warmup required")
     r.add_argument("--quiet-wait", type=float, default=0, metavar="SECS",

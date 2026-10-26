@@ -46,6 +46,29 @@ cold-build, contention, hosted-mode, and correctness checks. See
 blocked, say so explicitly rather than substituting one convenient loop.
 Real-usage trends remain the reality check, not a controlled attribution test.
 
+## Slow-run inventory and public artifact diagnostic
+
+`python3 bench/slow_runs.py` reads all recorded runs, reports missing/malformed
+coverage, and ranks strictly-over-10-second runs separately from client-side
+remote waits. See `bench/SLOW-RUNS.md` for the current optimization queue.
+
+The opt-in `justrust-public-cache-cap` scenario pins the actual 96 MiB
+incompressible public artifact regression test. It preserves publishing,
+fetching, hash verification, and rejection by the smaller private-cache cap.
+Compare development compression settings without changing the client crate:
+
+```sh
+python3 bench/suite.py run justrust-public-cache-cap --toolchain nightly-2026-10-08 --miniz-opt-level 0 -n 3 -o bench/results/cap-before.json
+python3 bench/suite.py run justrust-public-cache-cap --toolchain nightly-2026-10-08 --miniz-opt-level 3 -n 3 -o bench/results/cap-after.json
+python3 bench/suite.py compare bench/results/cap-before.json bench/results/cap-after.json
+```
+
+Use `--remote` on both sides for hosted measurements. These are warmed test
+runtime diagnostics, not cold-compilation or comprehensive workload results.
+Keep execution mode and client identity identical. Noisy comparisons remain
+uncontrolled even when ranges do not overlap. `--miniz-opt-level` is explicit
+Cargo configuration recorded in commands and provenance, not a compiler flag.
+
 ## Failure-heavy rewrite test diagnostic
 
 `python3 bench/suite.py run test-retry-storm -n 5` isolates confirmation

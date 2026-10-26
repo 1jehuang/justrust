@@ -14,6 +14,29 @@ import suite
 
 
 class HostedMeasurements(unittest.TestCase):
+    def test_public_cache_cap_is_pinned_and_opt_in(self):
+        scenario = suite.BY_NAME["justrust-public-cache-cap"]
+        self.assertTrue(scenario.opt_in)
+        self.assertIsNone(scenario.edit)
+        self.assertFalse(scenario.expect_fail)
+        self.assertEqual(scenario.cmd[-2:], ["--", "--exact"])
+        self.assertNotIn("public-cache-cap", suite.SNAPSHOTS)
+        _, revision = suite.OPTIONAL_SNAPSHOTS["public-cache-cap"]["repos"]["justrust"]
+        self.assertEqual(len(revision), 40)
+
+    def test_miniz_config_is_explicit_before_test_arguments(self):
+        original = suite.BY_NAME["justrust-public-cache-cap"]
+        for level in range(4):
+            changed = suite.compiler_scenario(original, None, False, miniz_opt_level=level)
+            self.assertEqual(changed.cmd[:3], ["test", "--config",
+                             f"profile.dev.package.miniz_oxide.opt-level={level}"])
+            self.assertEqual(changed.cmd[3:], original.cmd[1:])
+        self.assertNotIn("--config", original.cmd)
+        self.assertIs(suite.compiler_scenario(original, None, False), original)
+        for invalid in (-1, 4, True, "3", 3.0):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                suite.compiler_scenario(original, None, False, miniz_opt_level=invalid)
+
     def test_retry_storm_is_pinned_and_opt_in(self):
         scenario = suite.BY_NAME["test-retry-storm"]
         self.assertTrue(scenario.opt_in)
