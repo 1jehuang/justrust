@@ -57,12 +57,12 @@ def digest(path):
 
 
 def parser():
-    p = argparse.ArgumentParser(description=__doc__)
+    p = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     p.add_argument('--input', required=True, type=Path)
     p.add_argument('--output', required=True, type=Path)
     p.add_argument('--sha256', required=True)
     p.add_argument('--target', required=True, choices=TARGETS)
-    p.add_argument('--identity', help='full Developer ID Application keychain identity')
+    p.add_argument('--identity', help='full Developer ID Application name or 40-hex keychain certificate SHA1')
     p.add_argument('--identifier', default='com.jcode.cli')
     p.add_argument('--thumbprint', help='installed Windows CurrentUser/My certificate SHA1')
     p.add_argument('--signtool', type=Path, help='absolute trusted Windows SDK signtool.exe path')
@@ -73,8 +73,9 @@ def parser():
 
 def commands(a, artifact):
     if TARGETS[a.target][0] == 'Darwin':
-        if not a.identity or not a.identity.startswith('Developer ID Application: '):
-            raise ValueError('a full Developer ID Application identity is required; ad-hoc is not trusted')
+        if not a.identity or not (a.identity.startswith('Developer ID Application: ')
+                                  or re.fullmatch(r'[A-Fa-f0-9]{40}', a.identity)):
+            raise ValueError('a Developer ID Application name or 40-hex certificate SHA1 is required; ad-hoc is not trusted')
         if a.thumbprint or a.signtool:
             raise ValueError('Windows signing arguments cannot be used for macOS')
         if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9.-]*', a.identifier):

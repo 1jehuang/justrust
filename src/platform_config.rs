@@ -58,8 +58,8 @@ fn validate(key: &str, value: &str) -> Result<()> {
         ),
         // Fingerprints only: never accept arbitrary strings, paths, PEM, passwords or key data.
         "darwin-signing-identity" | "windows-signing-thumbprint" => ensure!(
-            [40, 64].contains(&value.len()) && value.bytes().all(|b| b.is_ascii_hexdigit()),
-            "{key} must be a public certificate SHA-1 or SHA-256 hexadecimal fingerprint, not a key, password, path or certificate"
+            value.len() == 40 && value.bytes().all(|b| b.is_ascii_hexdigit()),
+            "{key} must be a public certificate SHA-1 40-hex fingerprint, not a key, password, path or certificate"
         ),
         _ => unreachable!(),
     }
@@ -200,6 +200,67 @@ pub fn command(command: Command) -> Result<()> {
     Ok(())
 }
 
+fn signing_args(config: Config, mut args: Vec<std::ffi::OsString>) -> Vec<std::ffi::OsString> {
+    // Match argparse's last-value-wins behavior. Abbreviated options are disabled
+    // in the embedded helper so an alias cannot accidentally override a default.
+    let option = |name: &str| -> Option<std::ffi::OsString> {
+        let mut value = None;
+        for (index, arg) in args.iter().enumerate() {
+            if arg == name {
+                value = Some(args.get(index + 1).cloned().unwrap_or_default());
+            } else if let Some(text) = arg
+                .to_str()
+                .and_then(|s| s.strip_prefix(&format!("{name}=")))
+            {
+                value = Some(text.into());
+            }
+        }
+        value
+    };
+    let target = option("--target");
+    let setting = match target.as_deref().and_then(|s| s.to_str()) {
+        Some("aarch64-apple-darwin" | "x86_64-apple-darwin") if option("--identity").is_none() => {
+            Some(("darwin-signing-identity", "--identity"))
+        }
+        Some("aarch64-pc-windows-msvc" | "x86_64-pc-windows-msvc")
+            if option("--thumbprint").is_none() =>
+        {
+            Some(("windows-signing-thumbprint", "--thumbprint"))
+        }
+        _ => None,
+    };
+    if let Some((key, flag)) = setting
+        && let Some(value) = config.values.get(key)
+    {
+        args.push(flag.into());
+        args.push(value.into());
+    }
+    args
+}
+
+/// The embedded helper remains plan-only unless --execute is explicitly passed.
+/// It owns header/hash checks, host restrictions and native chain verification.
+pub fn sign_release(args: Vec<std::ffi::OsString>) -> Result<()> {
+    let args = signing_args(load(&crate::paths::home()?)?, args);
+    for python in ["python3", "python"] {
+        let result = std::process::Command::new(python)
+            // Ignore PYTHONPATH/user-site and the caller's working directory:
+            // project-local modules must not intercept the signing helper.
+            .arg("-I")
+            .arg("-c")
+            .arg(include_str!("../scripts/sign-release.py"))
+            .args(&args)
+            .status();
+        match result {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(e).context("launching local signing helper"),
+            Ok(status) if status.success() => return Ok(()),
+            Ok(status) => std::process::exit(crate::sys::exit_code(status)),
+        }
+    }
+    bail!("local release signing requires Python 3 (python3 or python on PATH)")
+}
+
 fn defaults(config: Config, mut present: impl FnMut(&str) -> bool) -> Vec<(&'static str, String)> {
     config
         .values
@@ -245,6 +306,75 @@ mod tests {
         assert!(crate::Cli::try_parse_from(["justrust", "setup", "set", "darwin-sdk"]).is_err());
         assert!(crate::Cli::try_parse_from(["justrust", "setup", "unset", "darwin-sdk"]).is_ok());
         assert!(defaults(Config::default(), |_| false).is_empty());
+        let parsed = crate::Cli::try_parse_from([
+            "justrust",
+            "sign-release",
+            "--target",
+            "aarch64-apple-darwin",
+            "--identity",
+            "Developer ID Application: Example (TEAM)",
+            "--execute",
+        ])
+        .unwrap();
+        match parsed.command {
+            crate::Command::SignRelease { args } => {
+                assert_eq!(args.len(), 5);
+                assert_eq!(args[3], "Developer ID Application: Example (TEAM)");
+                assert_eq!(args[4], "--execute");
+            }
+            _ => panic!("expected sign-release"),
+        }
+    }
+    #[test]
+    fn signing_defaults_are_targeted_and_explicit_flags_win() {
+        use std::ffi::OsString;
+        let config = || Config {
+            values: BTreeMap::from([
+                ("darwin-signing-identity".into(), "a".repeat(40)),
+                ("windows-signing-thumbprint".into(), "b".repeat(40)),
+            ]),
+        };
+        let args = |values: &[&str]| values.iter().map(OsString::from).collect::<Vec<_>>();
+        let actual = signing_args(config(), args(&["--target=aarch64-apple-darwin"]));
+        assert_eq!(
+            actual,
+            args(&[
+                "--target=aarch64-apple-darwin",
+                "--identity",
+                &"a".repeat(40)
+            ])
+        );
+        assert!(!actual.contains(&OsString::from("--execute")));
+        for flag in ["--identity=explicit", "--identity="] {
+            let explicit = args(&["--target", "x86_64-apple-darwin", flag]);
+            assert_eq!(signing_args(config(), explicit.clone()), explicit);
+        }
+        let explicit = args(&[
+            "--target",
+            "x86_64-pc-windows-msvc",
+            "--thumbprint",
+            "explicit",
+            "--signtool",
+            "/trusted/tool",
+        ]);
+        assert_eq!(signing_args(config(), explicit.clone()), explicit);
+        let windows = signing_args(
+            config(),
+            args(&[
+                "--target",
+                "aarch64-apple-darwin",
+                "--target=x86_64-pc-windows-msvc",
+            ]),
+        );
+        assert_eq!(
+            &windows[windows.len() - 2..],
+            &args(&["--thumbprint", &"b".repeat(40)])
+        );
+        assert!(!windows.contains(&OsString::from("--identity")));
+        assert!(!windows.contains(&OsString::from("--signtool")));
+        assert!(signing_args(config(), Vec::new()).is_empty());
+        assert!(validate("windows-signing-thumbprint", &"a".repeat(64)).is_err());
+        assert!(validate("darwin-signing-identity", &"a".repeat(64)).is_err());
     }
     #[test]
     fn validates_allowlist_and_rejects_secrets() {

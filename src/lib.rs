@@ -466,6 +466,11 @@ enum Command {
         /// Message to send. Quote it as one argument.
         message: String,
     },
+    /// Plan local release signing. Pass --execute explicitly to sign on the target OS.
+    SignRelease {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<OsString>,
+    },
     /// Persist user platform defaults without storing credentials.
     Setup {
         #[command(subcommand)]
@@ -806,6 +811,7 @@ fn command_name(c: &Command) -> Option<&'static str> {
         | Command::Cargo(_)
         | Command::Feedback { .. }
         | Command::Telemetry { .. } => return None,
+        Command::SignRelease { .. } => "sign-release",
         Command::Setup { .. } => "setup",
         Command::TestBundle { .. } => "test-bundle",
         Command::Log { .. } => "log",
@@ -921,6 +927,7 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
             sync,
             publish,
         } => depcache_gc::command(prune, clear, auto, sync, publish)?,
+        Command::SignRelease { args } => platform_config::sign_release(args)?,
         Command::Setup { command } => platform_config::command(command)?,
         Command::Early { action } => early::command(&action)?,
         Command::Daemon { action, args } => buildd::command(&action, args)?,

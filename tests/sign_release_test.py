@@ -181,9 +181,38 @@ class SigningTests(unittest.TestCase):
         self.assertNotIn('/p', sign)
         self.assertNotIn('/f', sign)
 
+    def test_fingerprint_keeps_developer_id_chain_requirement(self):
+        a = self.args()
+        a.identity = 'AB' * 20
+        sign, verify = signing.commands(a, '<artifact>')
+        self.assertEqual(sign[sign.index('--sign') + 1], a.identity)
+        requirement = verify[verify.index('-R') + 1]
+        self.assertIn('anchor apple generic', requirement)
+        self.assertIn('1.2.840.113635.100.6.2.6', requirement)
+        self.assertIn('1.2.840.113635.100.6.1.13', requirement)
+        for bad in ['AB' * 32, '-', 'password', '/tmp/key.p12']:
+            a.identity = bad
+            with self.assertRaises(ValueError):
+                signing.commands(a, '<artifact>')
+
+    def test_fingerprint_signing_still_refuses_failed_chain_verification(self):
+        a = self.args('--execute')
+        a.identity = 'AB' * 20
+        with patch.object(signing.platform, 'system', return_value='Darwin'), \
+                patch.object(signing.subprocess, 'run', side_effect=[
+                    None, subprocess.CalledProcessError(1, ['codesign', '--verify'])]):
+            with self.assertRaises(subprocess.CalledProcessError):
+                self.invoke(a)
+        self.clean()
+
+    def test_abbreviated_identity_is_not_accepted(self):
+        with contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit):
+                self.args('--iden', 'AB' * 20)
+
     def test_windows_bad_thumbprint_tool_and_header(self):
         a = self.windows_args()
-        for field, bad in [('thumbprint', 'bad'), ('signtool', Path('relative.exe')),
+        for field, bad in [('thumbprint', 'bad'), ('thumbprint', 'AB' * 32), ('signtool', Path('relative.exe')),
                            ('timestamp_url', 'https://user:password@example.com')]:
             b = signing.argparse.Namespace(**vars(a))
             setattr(b, field, bad)
