@@ -6,6 +6,14 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 
 ## Completed foundations, not full compatibility
 
+- [x] Shared-reference call replay uses common input constraints across multiple
+  ordered generic slots and shared-reference parameter schemas, replacing its
+  single-slot/all-parameters-are-`T` restriction. Exact source operands and
+  canonical type-actual region rows remain authenticated. `callable_reference_inputs`
+  covers stock CHECK/BUILD/run at workers 1/8, with frontend source-replay
+  forgery controls. Mutable inputs, aggregate carriers and returned-reference
+  inference remain separate boundaries; see `GENERIC-INFERENCE.md`.
+
 - [ ] Complete all twenty unchanged full programs. The current
   `justrust test --test full_programs -- --nocapture` gate checks/builds every
   fixture at workers 1 and 8 and runs successful outputs against stored stock

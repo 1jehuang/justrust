@@ -230,3 +230,33 @@ workers 1/8 acceptance. The frozen inventory remains 28 sources, now 17 native
 positives, eight invalid sources and three legal excluded sources. This does
 not promote general opaque/generic argument evidence or unresolved nested
 omission. The historical checkpoint and artifact hash above remain historical.
+
+## Shared-reference input constraint composition
+
+Ordinary free-function calls can replay shared-reference inputs through the
+same `CallInferenceState` input-constraint operation across multiple ordered
+type parameters. Original parameter schemas may use an own type parameter
+directly or beneath shared-reference layers, rather than requiring every
+parameter to be the same single `T`. Repeated occurrences constrain the same
+slot; distinct slots remain independent. All slots must resolve without
+numeric defaulting or checked-result evidence.
+
+Each operand is still reconstructed from its original immutable source binding
+or immediate shared borrow. The supported inputs are shared-reference chains
+ending in integer, Boolean or character types. Replay checks the exact source
+binding, initializer, operand, instantiated parameter type, and argument
+expectation. Type-actual region rows are checked in canonical slot/carrier order,
+including slots with no reference carriers. Bounds and ordinary borrow checking
+remain mandatory.
+
+This replaces the one-slot/every-parameter-is-`T` restriction in that path, not
+all reference inference restrictions. Mutable inputs, arbitrary reference-bearing
+aggregates, projected source places, caller-owned generic referents and returned
+references are not generalized by this change. Results retain the existing
+authenticated closed, reference-free result boundary. The original identity
+and scalar-input paths remain for their separate supported cases.
+
+`callable_reference_inputs` covers independent type parameters, mixed parameter
+schemas, nested shared references, repeated-slot conflicts, missing inference
+inputs, trait bounds and borrow/escape rejection against stock at workers 1/8.
+The frontend's source-replay tests cover forged operand and region evidence.

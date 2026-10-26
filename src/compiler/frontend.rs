@@ -254,10 +254,77 @@ mod canonical_source_replay_tests {
         }
     }
     #[test]
+    fn multi_slot_shared_inputs_reject_forged_source_and_region_evidence() {
+        for input in [
+            "fn consume<A,B>(a:A,b:B,c:A)->bool{true}fn main(){let n=1i32;let other=2i32;let b=true;let r=&b;consume(&n,&r,&other);}",
+            "fn consume<A,B>(a:&A,b:B,c:B)->bool{true}fn main(){let n=1i32;let b=true;let r=&b;consume(&n,&r,&r);}",
+        ] {
+            let (_, _, budget, publication) = published(input, 1);
+            let source = publication.source();
+            let original = publication.original().source_for_test();
+            publication
+                .validate_source(source, publication.facts(), &budget)
+                .unwrap();
+            assert_eq!(source.call_evidence.len(), 1);
+            assert!(source.call_evidence[0].type_actual_regions.len() >= 2);
+            for mode in 0..8 {
+                let mut changed = source.as_ref().clone();
+                if mode < 6 {
+                    let evidence = &mut Arc::make_mut(&mut changed.call_evidence)[0];
+                    match mode {
+                        0 => Arc::make_mut(&mut evidence.type_actual_regions)[0].argument = 99,
+                        1 => Arc::make_mut(&mut evidence.type_actual_regions).swap(0, 1),
+                        2 => evidence.type_actual_regions = Arc::from([]),
+                        3 => {
+                            let rows = Arc::make_mut(&mut evidence.type_actual_regions);
+                            rows[1] = rows[0].clone();
+                        }
+                        4 => {
+                            Arc::make_mut(&mut evidence.type_actual_regions)[0]
+                                .location
+                                .channel =
+                                ir::CarrierChannel::Fixed(ir::ReferencePosition { depth: 99 });
+                        }
+                        _ => {
+                            let other = evidence.arguments[1].value;
+                            Arc::make_mut(&mut evidence.arguments)[0].value = other;
+                        }
+                    }
+                } else {
+                    let expression = changed
+                        .exprs
+                        .iter_mut()
+                        .find(|expression| matches!(&expression.kind, ir::ExprKind::Call { .. }))
+                        .unwrap();
+                    let ir::ExprKind::Call { target, args, .. } = &mut expression.kind else {
+                        unreachable!()
+                    };
+                    if mode == 6 {
+                        args.swap(0, 1);
+                    } else {
+                        let ir::Callee::Direct(target) = target else {
+                            unreachable!()
+                        };
+                        Arc::make_mut(&mut target.type_args).swap(0, 1);
+                    }
+                }
+                assert_eq!(
+                    kind_error(replay_source_body(
+                        &original,
+                        &Arc::new(changed),
+                        publication.facts(),
+                        &budget,
+                    )),
+                    tr::FactsErrorKind::InvalidMetadata,
+                    "multi-slot shared input forgery {mode}: {input}",
+                );
+            }
+        }
+    }
+    #[test]
     fn shared_local_dispatch_declines_non_candidates_before_replay() {
         for source in [
             "fn consume(a:i32,b:i32)->bool{true}fn main(){consume(1i32,2i32);}",
-            "fn consume<T,U>(a:T,b:U)->bool{true}fn main(){consume(1i32,2i32);}",
             "fn consume<T>(a:T,b:i32)->bool{true}fn main(){consume(1i32,2i32);}",
         ] {
             let (_, _, budget, publication) = published(source, 1);
@@ -284,7 +351,7 @@ mod canonical_source_replay_tests {
                 .unwrap();
             let mut signature = call.1.clone();
             // Even an all-shared instantiated signature cannot turn a
-            // nongeneric, multi-slot or mixed original schema into this route.
+            // nongeneric or mixed rigid/generic original schema into this route.
             for parameter in &mut signature.params {
                 *parameter = shared_input_reference(parameter.clone(), &budget, 0).unwrap();
             }
@@ -6108,6 +6175,25 @@ fn shared_scalar_chain(
 }
 // Dispatch admission only, never proof: non-candidates retain the old fallback.
 // Checked signature shape may deny this route but cannot authenticate an operand.
+fn shared_local_input_schema(
+    ty: &ir::Ty,
+    env: &ir::ParamEnv,
+    budget: &ir::PlanBudget,
+    depth: usize,
+) -> Result<bool, FactsError> {
+    sr::depth(budget, depth)?;
+    sr::work(budget, 1)?;
+    match ty {
+        ir::Ty::Param(parameter) => {
+            Ok(parameter.owner == env.binder() && (parameter.index as usize) < env.arity())
+        }
+        ir::Ty::Ref {
+            kind: ir::BorrowKind::Shared,
+            referent,
+        } => shared_local_input_schema(referent, env, budget, depth + 1),
+        _ => Ok(false),
+    }
+}
 fn shared_local_input_candidate(
     view: &tr::OriginalCallableView,
     signature: &ir::Signature,
@@ -6117,7 +6203,7 @@ fn shared_local_input_candidate(
     sr::work(budget, 1)?;
     let scopes = view.generic_env().scopes();
     if scopes.len() != 1
-        || scopes[0].arity() != 1
+        || scopes[0].arity() == 0
         || input_count == 0
         || input_count != view.signature().params.len()
         || input_count != signature.params.len()
@@ -6126,12 +6212,8 @@ fn shared_local_input_candidate(
     {
         return Ok(false);
     }
-    let parameter = ir::Ty::Param(ir::ParamId {
-        owner: scopes[0].binder(),
-        index: 0,
-    });
     for (original, instantiated) in view.signature().params.iter().zip(&signature.params) {
-        if !replay_type_equal(original, &parameter, budget)?
+        if !shared_local_input_schema(original, &scopes[0], budget, 0)?
             || !matches!(
                 instantiated,
                 ir::Ty::Ref {
@@ -6383,23 +6465,19 @@ fn replay_shared_local_inputs(
         }
     }
     let scopes = view.generic_env().scopes();
-    if scopes.len() != 1 || scopes[0].arity() != 1 {
+    if scopes.len() != 1 || scopes[0].arity() == 0 {
         return Err(FactsError::unsupported(
             budget,
-            "shared input replay requires one original own slot",
+            "shared input replay requires one nonempty original binder",
         ));
     }
-    let parameter = ir::Ty::Param(ir::ParamId {
-        owner: scopes[0].binder(),
-        index: 0,
-    });
     let mut state = sr::CallInferenceState::new(Some(scopes[0].clone()), budget)?;
     for (index, ((binding, borrow), argument)) in inputs.iter().zip(arguments).enumerate() {
         sr::work(budget, 1)?;
-        if !replay_type_equal(&view.signature().params[index], &parameter, budget)? {
+        if !shared_local_input_schema(&view.signature().params[index], &scopes[0], budget, 0)? {
             return Err(FactsError::unsupported(
                 budget,
-                "shared input replay requires original parameter T at every position",
+                "shared input replay requires own slots under shared reference layers",
             ));
         }
         let source_index = source_binding_index(&original.bindings, binding, budget)?
@@ -6458,9 +6536,7 @@ fn replay_shared_local_inputs(
             ));
         }
         facts.validate_ty_metadata_with_budget(&input, budget)?;
-        let schema = state.schema(&view.signature().params[index], 0)?;
-        let evidence = state.type_term(&input, None, 0)?;
-        state.constrain(&schema, &evidence, 0)?;
+        state.constrain_input(&view.signature().params[index], &input)?;
     }
     let actuals = state
         .finish(false, &mut |_, _| {
@@ -6486,32 +6562,39 @@ fn replay_shared_local_inputs(
             ));
         }
     }
-    if actuals.len() != 1
-        || evidence.type_actual_regions.len()
-            != ir::root_reference_layers(&actuals[0]).map_err(|e| source_error(budget, &e))?
-    {
+    // Replay the same canonical carrier walk used when source call evidence
+    // is emitted. Regions belong to inferred slots, not input positions: two
+    // inputs can constrain one slot, and a shared schema layer is not itself
+    // part of the inferred actual. No checked trace row supplies inference.
+    let mut rows = evidence.type_actual_regions.iter();
+    for (argument, actual) in actuals.iter().enumerate() {
+        for location in ir::carrier_locations(actual, budget)
+            .map_err(|e| source_error(budget, &e))?
+            .iter()
+        {
+            sr::work(budget, location.path.0.len() + 1)?;
+            if !matches!(location.channel, ir::CarrierChannel::Fixed(_)) {
+                continue;
+            }
+            let row = rows.next().ok_or_else(|| {
+                FactsError::invalid(budget, "shared input trace region count changed")
+            })?;
+            if row.argument != argument
+                || row.location != *location
+                || row.source != ir::ActualRegion::Elided
+            {
+                return Err(FactsError::invalid(
+                    budget,
+                    "shared input trace changed exact region occurrence",
+                ));
+            }
+        }
+    }
+    if rows.next().is_some() {
         return Err(FactsError::invalid(
             budget,
-            "shared input trace region count changed",
+            "shared input trace retained extra region occurrences",
         ));
-    }
-    for (depth, row) in evidence.type_actual_regions.iter().enumerate() {
-        sr::work(budget, row.location.path.0.len() + 1)?;
-        if row.argument != 0
-            || !row.location.path.0.is_empty()
-            || row.location.channel
-                != ir::CarrierChannel::Fixed(ir::ReferencePosition {
-                    depth: u8::try_from(depth).map_err(|_| {
-                        FactsError::resource(budget, "shared input region depth overflow")
-                    })?,
-                })
-            || row.source != ir::ActualRegion::Elided
-        {
-            return Err(FactsError::invalid(
-                budget,
-                "shared input trace changed exact region occurrence",
-            ));
-        }
     }
     ir::validate_callee(
         &ir::Callee::Direct(target.clone()),

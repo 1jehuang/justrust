@@ -203,6 +203,20 @@ impl CallInferenceState {
             .ok_or_else(|| FactsError::invalid(&self.budget, "inference schema has no binder"))?;
         self.type_term(ty, Some(env.binder()), depth)
     }
+    /// Add one independently authenticated input type to the call's constraints.
+    /// The caller owns source authentication. This operation neither consults
+    /// checked result types nor applies fallback to unresolved inputs.
+    /// Return the immutable constraint terms for callers retaining a trace.
+    pub(super) fn constrain_input(
+        &mut self,
+        parameter: &ir::Ty,
+        input: &ir::Ty,
+    ) -> Result<(InferTerm, InferTerm), FactsError> {
+        let schema = self.schema(parameter, 0)?;
+        let evidence = self.type_term(input, None, 0)?;
+        self.constrain(&schema, &evidence, 0)?;
+        Ok((schema, evidence))
+    }
     pub(super) fn work(&self, depth: usize) -> Result<(), FactsError> {
         self.budget
             .check_depth(depth)
@@ -1160,9 +1174,7 @@ pub(super) fn infer_single_input_trace(
         ));
     }
     let mut state = CallInferenceState::new(Some(scopes[0].clone()), budget)?;
-    let schema = state.schema(&parameter, 0)?;
-    let evidence = state.type_term(input, None, 0)?;
-    state.constrain(&schema, &evidence, 0)?;
+    let (schema, evidence) = state.constrain_input(&parameter, input)?;
     let after = state.slots()[0]
         .as_ref()
         .ok_or_else(|| FactsError::invalid(budget, "input inference lost its slot"))?

@@ -4,6 +4,77 @@
 mod oracle;
 
 #[test]
+fn independent_reference_type_parameters_match_stock() {
+    oracle::stock_native(
+        r#"fn inspect<A: Copy, B: Copy>(a: A, b: B) -> i32 { let _ = a; let _ = b; 17 }
+fn main() {
+    let number = 4i32;
+    let flag = true;
+    let character = 'q';
+    let reference = &number;
+    println!("{} {} {}", inspect(&number, &flag), inspect(&character, &number), inspect(&reference, &flag));
+}"#,
+    );
+}
+
+#[test]
+fn shaped_shared_reference_parameters_match_stock() {
+    oracle::stock_native(
+        r#"fn inspect<T, U>(a: &T, b: &&U, c: &T) -> i32 { let _ = a; let _ = b; let _ = c; 23 }
+fn main() {
+    let number = 4i32;
+    let other = 9i32;
+    let flag = true;
+    let reference = &flag;
+    println!("{}", inspect(&number, &reference, &other));
+}"#,
+    );
+}
+
+#[test]
+fn mixed_reference_parameter_schemas_match_stock() {
+    oracle::stock_native(
+        r#"fn inspect<A, B>(a: A, b: &B, c: A) -> i32 { let _ = a; let _ = b; let _ = c; 29 }
+fn main() {
+    let number = 4i32;
+    let other = 9i32;
+    let flag = true;
+    let reference = &flag;
+    println!("{} {}", inspect(&number, &flag, &other), inspect(&number, &reference, &other));
+}"#,
+    );
+}
+
+#[test]
+fn multi_slot_reference_constraints_preserve_values() {
+    oracle::stock_native(
+        r#"fn equal_pairs<A: PartialEq, B: PartialEq>(a:A,b:B,c:A,d:B)->bool { a==c && b==d }
+fn main() {
+    let first=4i32;
+    let equal=4i32;
+    let different=9i32;
+    let yes=true;
+    let no=false;
+    println!("{} {} {}", equal_pairs(&first,&yes,&equal,&yes), equal_pairs(&first,&yes,&different,&yes), equal_pairs(&first,&yes,&equal,&no));
+}"#,
+    );
+}
+
+#[test]
+fn generalized_reference_inputs_preserve_constraints() {
+    for source in [
+        "fn same<T>(a:&T,b:&T)->i32{let _=a;let _=b;1}fn unused(){let n=1i32;let b=true;same(&n,&b);}fn main(){}",
+        "fn same<A,B>(a:A,b:&B,c:A)->i32{let _=a;let _=b;let _=c;1}fn unused(){let n=1i32;let b=true;same(&n,&b,&b);}fn main(){}",
+        "fn missing<A,B>(a:A)->i32{let _=a;1}fn unused(){let n=1i32;missing(&n);}fn main(){}",
+        "fn bounded<A:Copy,B:Copy>(a:A,b:B)->i32{let _=a;let _=b;1}fn unused(){let mut n=1i32;let b=true;bounded(&mut n,&b);}fn main(){}",
+        "fn consume<A,B>(a:A,b:B)->i32{let _=a;let _=b;1}fn main(){let mut n=1i32;let r=&n;let b=true;consume(&mut n,&b);println!(\"{}\",r);}",
+        "fn escape<'a,T,U>(a:&T,b:&U)->&'a T{let _=b;a}fn main(){}",
+    ] {
+        oracle::stock_and_native_reject(source);
+    }
+}
+
+#[test]
 fn unchanged_generic_container_matches_stock() {
     oracle::stock_native(include_str!(
         "fixtures/full_programs/14_generic_container.rs"
