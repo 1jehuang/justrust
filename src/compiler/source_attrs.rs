@@ -2053,6 +2053,13 @@ mod tests {
                 "{text}"
             );
         }
+        for attr in ["allow(dead_code)", "warn(unused)", "expect(unused)"] {
+            let text = format!("impl S {{ #[doc=\"prefix\"] #[{attr}] fn f(){{}} }}");
+            let out = prep(&text).unwrap();
+            assert_eq!(out.text.len(), text.len());
+            assert_eq!(out.attributes.len(), 2);
+            assert!(out.attributes.iter().all(|record| record.effective));
+        }
         for attr in [
             "cfg(any())",
             "cfg_attr(any(),doc=\"hidden\")",
@@ -2060,12 +2067,12 @@ mod tests {
             "repr(C)",
             "lang=\"x\"",
             "target_feature(enable=\"sse2\")",
-            "allow(dead_code)",
             "deny(warnings)",
             "forbid(unused)",
-            "expect(unused)",
             "must_use",
             "stable(feature=\"x\",since=\"1.0\")",
+            "deny(missing_docs)",
+            "forbid(dead_code)",
             "custom",
         ] {
             let text = format!("impl S {{ #[doc=\"prefix\"] #[{attr}] fn f(){{}} }}");
@@ -2284,10 +2291,23 @@ mod tests {
     }
     #[test]
     fn associated_inline_never_activates_semantic_attributes_or_nested_owners() {
+        for lint in [
+            "allow(unused_attributes)",
+            "warn(dead_code)",
+            "expect(dead_code)",
+        ] {
+            for attrs in [format!("#[inline]#[{lint}]"), format!("#[{lint}]#[inline]")] {
+                let text = format!("impl S{{{attrs}fn f(){{}}}}");
+                let out = prep(&text).unwrap();
+                assert_eq!(out.text.len(), text.len());
+                assert_eq!(out.attributes.len(), 2);
+                assert!(out.attributes.iter().all(|record| record.effective));
+            }
+        }
         for semantic in [
             "target_feature(enable=\"sse2\")",
             "deny(unused_attributes)",
-            "allow(unused_attributes)",
+            "forbid(unused_attributes)",
             "cfg(any())",
             "cfg_attr(any(),inline)",
             "unsafe(no_mangle)",

@@ -2350,7 +2350,7 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_source_editions_reject_before_reading_or_parsing() {
+    fn admitted_source_editions_preserve_identity_before_parsing() {
         assert_eq!(SourceOptions::default().edition, Edition::E2024);
         assert_eq!(
             Edition::parse("2021").unwrap(),
@@ -2359,20 +2359,20 @@ mod tests {
         assert!(Edition::E2021.validate_native().is_ok());
         assert!(Edition::parse("2099").is_err());
         assert!(Edition::parse(" 2024").is_err());
-        for name in ["2015", "2018"] {
+        for name in ["2015", "2018", "2021", "2024"] {
             let options = SourceOptions {
                 edition: Edition::parse(name).unwrap(),
                 ..SourceOptions::default()
             };
-            let mut reader = RecordingReader::default();
-            let file =
-                prepare_with_reader(Path::new("main.rs"), &options, &mut reader).unwrap_err();
-            assert_eq!(file.kind, SourceErrorKind::Unsupported);
-            assert!(file.message.contains(name));
-            assert!(reader.calls.is_empty());
-            let memory = prepare_text("main.rs", "not valid Rust", &options).unwrap_err();
-            assert_eq!(memory.kind, SourceErrorKind::Unsupported);
-            assert!(memory.message.contains(name));
+            let mut reader = RecordingReader {
+                root: "fn main(){}".into(),
+                ..Default::default()
+            };
+            let file = prepare_with_reader(Path::new("main.rs"), &options, &mut reader).unwrap();
+            assert_eq!(file.edition(), options.edition);
+            assert!(reader.calls.contains(&("read", PathBuf::from("main.rs"))));
+            let memory = prepare_text("main.rs", "fn main(){}", &options).unwrap();
+            assert_eq!(memory.edition(), options.edition);
         }
     }
 

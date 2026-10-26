@@ -393,29 +393,45 @@ fn warning_only_crate_lints_keep_stock_acceptance() {
         "#![warn(missing_debug_implementations)]\npub struct Hidden; fn main(){println!(\"{}\",1);}",
         "#![allow(missing_debug_implementations)] #![forbid(unsafe_code)] fn main(){println!(\"{}\",1);}",
         "#![cfg_attr(all(), warn(missing_debug_implementations))] fn main(){println!(\"{}\",1);}",
+        "#![warn(unused_variables)] fn main(){let unused=7;println!(\"{}\",1);}",
+        "#![warn(missing_debug_implementations, warnings)] pub struct Hidden; fn main(){println!(\"{}\",1);}",
+        "#[warn(missing_debug_implementations)] pub struct Hidden; fn main(){println!(\"{}\",1);}",
+        "mod m { #![warn(missing_debug_implementations)] pub struct Hidden; } fn main(){println!(\"{}\",1);}",
+        "struct S;impl S{#[doc=\"value\"]#[allow(dead_code)]fn value()->i32{42}}fn main(){println!(\"{}\",S::value());}",
+        "trait T{#[doc=\"output\"]#[allow(dead_code)]type A;#[doc=\"value\"]#[warn(dead_code)]const N:u8;}fn main(){println!(\"{}\",1);}",
+        "struct S;impl S{#[inline]#[allow(unused_attributes)]fn first()->i32{20}#[warn(dead_code)]#[inline]fn second()->i32{22}}fn main(){println!(\"{}\",S::first()+S::second());}",
     ] {
         stock_native_run(source);
     }
-    // Levels that can change acceptance, unknown lints, and non-root
-    // placement stay explicit boundaries rather than silently passing.
+    // Error-level ordinary lints remain explicit boundaries: they are not
+    // implemented by the native compiler, even when stock emits no violation.
     for source in [
         "#![deny(missing_debug_implementations)] pub struct Hidden; fn main(){}",
         "#![forbid(missing_debug_implementations)] fn main(){}",
-        "#![warn(unused_variables)] fn main(){}",
-        "#![warn(missing_debug_implementations, warnings)] fn main(){}",
-        "#[warn(missing_debug_implementations)] pub struct Hidden; fn main(){}",
-        "mod m { #![warn(missing_debug_implementations)] } fn main(){}",
     ] {
-        for check_only in [true, false] {
-            let failure = super::super::compile(source.into(), 1, check_only)
-                .err()
-                .expect("unsupported lint level was accepted");
-            let message = failure.to_string();
-            assert!(
-                message.contains("unsupported") || message.contains("is supported"),
-                "{failure}: {source}"
-            );
+        for workers in [1, 8] {
+            for check_only in [true, false] {
+                let failure = super::super::compile(source.into(), workers, check_only)
+                    .err()
+                    .expect("unsupported error-level lint was accepted");
+                let message = failure.to_string();
+                assert!(
+                    message.contains("unsupported") || message.contains("is supported"),
+                    "{failure}: {source}"
+                );
+            }
         }
+    }
+    // These are genuinely invalid stock sources, not warning-only policy
+    // boundaries. Preserve rejection even when surrounded by admitted lints.
+    for source in [
+        "#![allow(foo::bar)] fn main(){}",
+        "#![allow(dead_code reason)] fn main(){}",
+        "#![forbid(unsafe_code)] #[allow(unsafe_code)] fn main(){}",
+        "#![allow(dead_code)] struct S;impl S{#[inline]#[allow(foo::bar)]fn f(){}}fn main(){}",
+        "trait T{#[doc=\"output\"]#[allow(dead_code reason)]type A;}fn main(){}",
+    ] {
+        stock_native_reject(source);
     }
 }
 

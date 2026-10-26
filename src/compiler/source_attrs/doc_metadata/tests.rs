@@ -98,7 +98,6 @@ fn associated_declaration_docs_do_not_activate_other_attributes_or_nested_docs()
             "inline",
             "cfg(any())",
             "cfg_attr(any(),doc=\"x\")",
-            "allow(dead_code)",
             "derive(Copy)",
         ] {
             let text = format!("trait T{{#[doc=\"prefix\"]#[{attribute}]{item}}}");
@@ -107,6 +106,24 @@ fn associated_declaration_docs_do_not_activate_other_attributes_or_nested_docs()
                 AttributeErrorKind::Unsupported,
                 "{text}"
             );
+        }
+    }
+    for item in ["type A;", "const N:u8;", "const N:u8={1};"] {
+        for attribute in ["allow(dead_code)", "warn(unused)", "expect(dead_code)"] {
+            let text = format!("trait T{{#[doc=\"prefix\"]#[{attribute}]{item}}}");
+            let out = prepare(&text, &CfgSet::default()).unwrap();
+            assert_eq!(out.text.len(), text.len());
+            assert_eq!(out.attributes.len(), 2);
+            assert!(out.attributes.iter().all(|record| record.effective));
+        }
+        for attribute in [
+            "deny(dead_code)",
+            "forbid(unused)",
+            "allow(foo::bar)",
+            "allow(dead_code reason)",
+        ] {
+            let text = format!("trait T{{#[doc=\"prefix\"]#[{attribute}]{item}}}");
+            assert!(prepare(&text, &CfgSet::default()).is_err(), "{text}");
         }
     }
     for text in [
