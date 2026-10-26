@@ -674,6 +674,15 @@ fn finite_drop_presence_finishes_every_owning_equation_before_answering() {
         let reads = demand.fact::<Vec<ReadNominal>>(0).unwrap();
         let root = reads[0].definition().unwrap();
         reads[0].check_definition(&root).unwrap();
+        let argument = crate::compiler::frontend::validate_argument_allocation_for_tests;
+        let caller = ir::FactsCtx::Validated(publication.facts());
+        assert_eq!(argument(&root, caller, &budget, 0).unwrap(), (false, 0));
+        // Ordinary acyclic roots keep the existing reservation and memo rules.
+        assert_eq!(
+            argument(&ir::Ty::Bool, caller, &budget, 0).unwrap(),
+            (true, 0)
+        );
+        assert!(argument(&root, ir::FactsCtx::Concrete, &budget, 0).is_err());
         assert!(
             !publication
                 .facts()
@@ -686,6 +695,7 @@ fn finite_drop_presence_finishes_every_owning_equation_before_answering() {
         let mut changed = value.def().clone();
         changed.variants = Arc::from([]);
         let forged = ir::Ty::Enum(ir::EnumTy::new(changed).with_realization(reads[0].clone()));
+        assert!(argument(&forged, caller, &budget, 0).is_err());
         assert!(
             publication
                 .facts()
@@ -696,6 +706,7 @@ fn finite_drop_presence_finishes_every_owning_equation_before_answering() {
         // still forges the rooted allocation and must not warm a positive cache.
         let rebound =
             ir::Ty::Enum(ir::EnumTy::new(value.def().clone()).with_realization(reads[0].clone()));
+        assert!(argument(&rebound, caller, &budget, 0).is_err());
         assert!(
             publication
                 .facts()
@@ -744,6 +755,16 @@ fn finite_drop_presence_finishes_every_owning_equation_before_answering() {
         else {
             panic!("source callable required");
         };
+        assert!(argument(&root, caller, &foreign_budget, 0).is_err());
+        assert!(
+            argument(
+                &root,
+                ir::FactsCtx::Validated(foreign_publication.facts()),
+                &foreign_budget,
+                0,
+            )
+            .is_err()
+        );
         assert!(
             foreign_publication
                 .facts()
@@ -814,6 +835,11 @@ fn finite_drop_presence_finishes_every_owning_equation_before_answering() {
                     .is_err()
             );
         }
+        assert!(argument(&root, caller, &budget, budget.limits().depth + 1).is_err());
+        assert_eq!(
+            budget.first_resource_failure().unwrap().kind,
+            ir::ResourceBudgetKind::Depth,
+        );
         assert!(
             reads[0]
                 .component_drop_presence(&budget, usize::MAX, &mut |_, _, _| {
@@ -856,6 +882,7 @@ fn finite_drop_presence_finishes_every_owning_equation_before_answering() {
         );
         let failure = budget.first_resource_failure();
         budget.poison_ledger_for_tests();
+        assert!(argument(&root, caller, &budget, 0).is_err());
         assert!(
             publication
                 .facts()

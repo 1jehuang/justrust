@@ -23582,10 +23582,43 @@ fn validate_argument(
     budget: &ir::PlanBudget,
     depth: usize,
 ) -> Result<(), String> {
-    let _scratch = budget.reserve_bytes(4096 * (std::mem::size_of::<ir::NominalAppId>() + 128))?;
+    let _scratch = argument_memo_reservation(ty, budget)?;
     let mut memo = HashMap::new();
     argument_height(ty, caller, budget, depth, &mut memo).map(|_| ())
 }
+fn argument_memo_reservation(
+    ty: &ir::Ty,
+    budget: &ir::PlanBudget,
+) -> Result<Option<ir::PlanReservation>, String> {
+    let capability = match ty {
+        ir::Ty::Struct(value) => value.realization(),
+        ir::Ty::Enum(value) => value.realization(),
+        _ => None,
+    };
+    // This root branch returns from argument_height before any memo access.
+    // This is allocation selection only, not authority: argument_height still
+    // authenticates the definition, original facts, budget and complete height.
+    if capability.is_some_and(|capability| capability.is_component()) {
+        return Ok(None);
+    }
+    budget
+        .reserve_bytes(4096 * (std::mem::size_of::<ir::NominalAppId>() + 128))
+        .map(Some)
+}
+
+#[cfg(test)]
+pub(in crate::compiler) fn validate_argument_allocation_for_tests(
+    ty: &ir::Ty,
+    caller: ir::FactsCtx<'_>,
+    budget: &ir::PlanBudget,
+    depth: usize,
+) -> Result<(bool, usize), String> {
+    let scratch = argument_memo_reservation(ty, budget)?;
+    let mut memo = HashMap::new();
+    argument_height(ty, caller, budget, depth, &mut memo)?;
+    Ok((scratch.is_some(), memo.len()))
+}
+
 fn argument_height(
     ty: &ir::Ty,
     caller: ir::FactsCtx<'_>,
