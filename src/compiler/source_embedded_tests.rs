@@ -15,7 +15,7 @@ fn embedded_issuer_rejects_child_route_and_unit_transport_mutation() {
     let issuer = unit.embedded.as_ref().unwrap();
     issuer.validate(unit).unwrap();
     // `take` is the assembler's normal shallow authority-preserving copy.
-    for change in 0..11 {
+    for change in 0..12 {
         let mut changed = SourceAssembler::take(shared.clone());
         match change {
             0 => changed.path.push("spoof"),
@@ -33,6 +33,7 @@ fn embedded_issuer_rejects_child_route_and_unit_transport_mutation() {
             }),
             9 => changed.forbid_unsafe_code = !changed.forbid_unsafe_code,
             10 => changed.edition = Edition::E2021,
+            11 => changed.inputs = source_inputs::SourceInputs::untracked(),
             _ => unreachable!(),
         }
         assert!(

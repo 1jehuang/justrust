@@ -28,10 +28,18 @@ struct Observation {
     value: Value,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum InputDomain {
+    Untracked,
+    Filesystem,
+    EmbeddedPrelude,
+}
+
 /// Immutable evidence retained by the existing per-file graph fact.
 /// Private fields prevent callers from asserting observation completeness.
 #[derive(Clone, Debug)]
 pub struct SourceInputs {
+    domain: InputDomain,
     project: Option<std::sync::Arc<crate::project::inputs::DiscoveryInputs>>,
     observations: Vec<Observation>,
     options: Option<[u8; 32]>,
@@ -44,6 +52,7 @@ impl SourceInputs {
     }
     pub(super) fn untracked() -> Self {
         Self {
+            domain: InputDomain::Untracked,
             project: None,
             observations: Vec::new(),
             options: None,
@@ -71,7 +80,16 @@ impl SourceInputs {
         {
             return false;
         }
-        let mut reader = super::FsReader;
+        match self.domain {
+            InputDomain::Untracked => false,
+            InputDomain::Filesystem => self.matches_reader(&mut super::FsReader),
+            InputDomain::EmbeddedPrelude => {
+                self.matches_reader(&mut super::source_prelude::PreludeReader)
+            }
+        }
+    }
+
+    fn matches_reader(&self, reader: &mut dyn SourceReader) -> bool {
         self.observations.iter().all(|o| match &o.value {
             Value::Canonical(expected) => {
                 reader.canonicalize(&o.path).is_ok_and(|v| &v == expected)
@@ -88,12 +106,25 @@ impl SourceInputs {
         })
     }
 
+    /// Embedded provenance consumes the receipt, not a virtual path or label.
+    /// No host filesystem read can satisfy this domain-specific proof.
+    pub(super) fn matches_embedded_bytes(&self, path: &Path, bytes: &[u8]) -> bool {
+        self.domain == InputDomain::EmbeddedPrelude
+            && self.complete
+            && self.observations.iter().any(|o| {
+                o.path == path
+                    && matches!(&o.value, Value::Bytes { length, digest, .. }
+                    if *length == bytes.len() && digest == blake3::hash(bytes).as_bytes())
+            })
+            && self.matches_reader(&mut super::source_prelude::PreludeReader)
+    }
+
     /// Source evidence alone never proves complete compilation input identity.
     /// In particular no arbitrary build-script/proc-macro execution is tracked.
     pub fn shareability_blockers(&self) -> &'static [&'static str] {
         &[
             "project discovery evidence, if supplied, excludes registry planning IO and unsupported configuration sources",
-            "compiler, embedded libraries and external tool identity are not sealed",
+            "compiler and external tool identity are not sealed; all embedded input receipts require validation",
             "attached reviewed source-probe receipts require separate validation",
             "build scripts and procedural macros require controlled input tracking",
             "filesystem observations are not an atomic immutable snapshot",
@@ -110,11 +141,19 @@ pub(super) struct TrackingReader<'a> {
 }
 impl<'a> TrackingReader<'a> {
     pub(super) fn new(inner: &'a mut dyn SourceReader, options: &SourceOptions) -> Self {
-        let cwd = std::env::current_dir().ok();
-        let complete = inner.host_filesystem() && cwd.is_some();
+        let domain = inner.input_domain();
+        let cwd = (domain == InputDomain::Filesystem)
+            .then(|| std::env::current_dir().ok())
+            .flatten();
+        let complete = match domain {
+            InputDomain::Untracked => false,
+            InputDomain::Filesystem => cwd.is_some(),
+            InputDomain::EmbeddedPrelude => true,
+        };
         Self {
             inner,
             inputs: SourceInputs {
+                domain,
                 project: options.project_inputs.clone(),
                 observations: Vec::new(),
                 options: option_identity(options),
@@ -135,7 +174,7 @@ impl<'a> TrackingReader<'a> {
         if !self.inputs.complete {
             return;
         }
-        let path = if path.is_absolute() {
+        let path = if self.inputs.domain != InputDomain::Filesystem || path.is_absolute() {
             path.to_owned()
         } else {
             self.cwd.as_ref().unwrap().join(path)
@@ -513,7 +552,7 @@ mod tests {
         let text = source::prepare_text_unit("memory.rs", "fn main() {}", &options).unwrap();
         assert!(!text.inputs.matches_current_source(&options));
         let embedded = source::prepare_prelude_unit(&options, &ExpansionBudget::default()).unwrap();
-        assert!(!embedded.inputs.matches_current_source(&options));
+        assert!(embedded.inputs.matches_current_source(&options));
         assert!(
             embedded
                 .inputs
@@ -521,6 +560,132 @@ mod tests {
                 .iter()
                 .any(|b| b.contains("procedural macros"))
         );
+    }
+
+    #[test]
+    fn embedded_domain_tracks_bytes_and_rejects_forged_or_missing_evidence() {
+        let options = SourceOptions::default();
+        let unit = source::prepare_prelude_unit(&options, &ExpansionBudget::default()).unwrap();
+        assert!(unit.inputs.matches_current_source(&options));
+        assert!(
+            unit.inputs
+                .matches_embedded_bytes(&unit.path, unit.contents.as_bytes())
+        );
+        for mutation in 0..4 {
+            let mut inputs = unit.inputs.clone();
+            match mutation {
+                0 => inputs.domain = InputDomain::Filesystem,
+                1 => inputs.complete = false,
+                2 => inputs.observations.clear(),
+                3 => {
+                    for observation in &mut inputs.observations {
+                        if let Value::Bytes { digest, .. } = &mut observation.value {
+                            digest[0] ^= 1;
+                        }
+                    }
+                }
+                _ => unreachable!(),
+            }
+            assert!(!inputs.matches_embedded_bytes(&unit.path, unit.contents.as_bytes()));
+            if mutation != 2 {
+                assert!(!inputs.matches_current_source(&options));
+            }
+        }
+        let missing = PathBuf::from("<prelude>/not-a-registered-module.rs");
+        let mut inputs = unit.inputs.clone();
+        inputs.observations.push(Observation {
+            path: missing.clone(),
+            value: Value::Exists(false),
+        });
+        assert!(inputs.matches_current_source(&options));
+        inputs.observations.last_mut().unwrap().value = Value::Exists(true);
+        assert!(!inputs.matches_current_source(&options));
+        let mut embedded_reader = source::source_prelude::PreludeReader;
+        let mut tracked = TrackingReader::new(&mut embedded_reader, &options);
+        tracked.remaining = 0;
+        assert!(
+            !tracked
+                .read(&unit.path, source::MAX_BYTES)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            !tracked
+                .finish()
+                .matches_embedded_bytes(&unit.path, unit.contents.as_bytes())
+        );
+        let raw = source::prepare_text_unit("<prelude>/root.rs", &unit.contents, &options).unwrap();
+        assert!(
+            !raw.inputs
+                .matches_embedded_bytes(&unit.path, unit.contents.as_bytes())
+        );
+        // An incomplete project identity must prevent cache revalidation, but is
+        // unrelated to trusted provenance of the compiled embedded byte table.
+        let options = SourceOptions {
+            project_inputs: Some(crate::project::inputs::DiscoveryInputs::untracked()),
+            ..options
+        };
+        let unit = source::prepare_prelude_unit(&options, &ExpansionBudget::default()).unwrap();
+        assert!(!unit.inputs.matches_current_source(&options));
+        assert!(
+            unit.inputs
+                .matches_embedded_bytes(&unit.path, unit.contents.as_bytes())
+        );
+    }
+
+    #[test]
+    fn graph_embedded_inputs_are_revalidated_in_their_own_domain() {
+        use crate::engine::Engine;
+        let f = Fixture::new();
+        f.file("main.rs", "fn main() {}");
+        let options = SourceOptions::default();
+        for workers in [1, 8] {
+            for check_only in [true, false] {
+                let snapshot = Arc::new(compiler::Snapshot {
+                    input: compiler::Input::File(f.0.join("main.rs")),
+                    source_options: options.clone(),
+                    budget: compiler::ir::PlanBudget::default(),
+                });
+                let engine = Engine::new(compiler::CompilerProvider(snapshot));
+                let check = engine.request(compiler::keys::CheckRoot.key());
+                let build = (!check_only).then(|| engine.request(compiler::keys::BuildRoot.key()));
+                let report = engine.run(workers).unwrap();
+                check.completion().unwrap();
+                let mut embedded = 0;
+                for (key, _) in &report.node_evaluations {
+                    if key.kind != 107 {
+                        continue;
+                    }
+                    let fact = engine.fact_of::<source::UnitResult>(key, 0).unwrap();
+                    let unit = fact.as_ref().as_ref().unwrap();
+                    assert!(unit.inputs.matches_current_source(&options));
+                    if unit.embedded.is_some() {
+                        embedded += 1;
+                        assert_eq!(unit.inputs.domain, InputDomain::EmbeddedPrelude);
+                        assert!(
+                            unit.inputs
+                                .matches_embedded_bytes(&unit.path, unit.contents.as_bytes())
+                        );
+                    }
+                }
+                assert!(embedded > 1);
+                if let Some(build) = build {
+                    build.completion().unwrap();
+                    let executable = f.0.join(format!("embedded-{workers}"));
+                    std::fs::write(&executable, build.fact::<Vec<u8>>(0).unwrap().as_slice())
+                        .unwrap();
+                    use std::os::unix::fs::PermissionsExt;
+                    std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755))
+                        .unwrap();
+                    assert!(
+                        std::process::Command::new(executable)
+                            .status()
+                            .unwrap()
+                            .success()
+                    );
+                }
+            }
+        }
     }
 
     #[test]

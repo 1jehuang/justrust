@@ -1950,7 +1950,11 @@ PlanCtx/interner/source-context debt and wide adapter activation remain held.
       probe records also retain bounded lock/provider path and byte observations in
       the existing prepared-source fact (`justrust test --lib source_probe` and
       `--test core_identity_graph`), independently revalidated from client inputs.
-      Registry planning IO, unsupported configuration sources, embedded/tool
+      Embedded prelude units retain domain-specific byte/path receipts replayed
+      only against the compiled source table, and embedded provenance issuance
+      and validation require those receipts (`--lib source_inputs` and
+      `--lib source_embedded`). Host files cannot satisfy the embedded domain.
+      Registry planning IO, unsupported configuration sources, compiler/tool
       identity, registry inspection tools and uncontrolled build scripts/proc macros
       remain explicit gaps. Exhaustion or uncontrolled discovery cannot issue an input
       identity. No persistent or global private cache is enabled by this foundation.

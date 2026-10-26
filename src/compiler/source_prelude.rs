@@ -137,6 +137,9 @@ fn lookup(path: &Path) -> Option<&'static str> {
 /// Read-only reader over the embedded table. It has no filesystem capability.
 pub(super) struct PreludeReader;
 impl super::SourceReader for PreludeReader {
+    fn input_domain(&self) -> super::source_inputs::InputDomain {
+        super::source_inputs::InputDomain::EmbeddedPrelude
+    }
     fn canonicalize(&mut self, p: &Path) -> std::io::Result<PathBuf> {
         lookup(p)
             .map(|_| p.to_path_buf())

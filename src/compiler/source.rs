@@ -1467,9 +1467,9 @@ fn append_to(
     Ok(())
 }
 trait SourceReader {
-    /// Only the native filesystem reader may produce revalidatable observations.
-    fn host_filesystem(&self) -> bool {
-        false
+    /// Only sealed native readers may produce revalidatable observations.
+    fn input_domain(&self) -> source_inputs::InputDomain {
+        source_inputs::InputDomain::Untracked
     }
     fn canonicalize(&mut self, p: &Path) -> std::io::Result<PathBuf>;
     fn is_file(&mut self, p: &Path) -> std::io::Result<bool>;
@@ -1478,8 +1478,8 @@ trait SourceReader {
 }
 struct FsReader;
 impl SourceReader for FsReader {
-    fn host_filesystem(&self) -> bool {
-        true
+    fn input_domain(&self) -> source_inputs::InputDomain {
+        source_inputs::InputDomain::Filesystem
     }
     fn canonicalize(&mut self, p: &Path) -> std::io::Result<PathBuf> {
         p.canonicalize()

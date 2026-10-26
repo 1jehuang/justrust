@@ -32,6 +32,16 @@ impl EmbeddedUnit {
         unit: &FileUnit,
         budget: &super::super::expansion_budget::ExpansionBudget,
     ) -> Result<Self, SourceError> {
+        if !unit
+            .inputs
+            .matches_embedded_bytes(&unit.path, unit.contents.as_bytes())
+        {
+            return Err(Loader::error(
+                SourceErrorKind::Contract,
+                None,
+                "embedded source input receipt does not match its table bytes",
+            ));
+        }
         let bytes = unit_transport_bytes(unit)?;
         let admitted = admit(budget, bytes)?;
         Ok(Self {
@@ -54,7 +64,10 @@ impl EmbeddedUnit {
     }
 
     pub(super) fn validate(&self, unit: &FileUnit) -> Result<(), SourceError> {
-        if self.edition != unit.edition
+        if !unit
+            .inputs
+            .matches_embedded_bytes(&unit.path, unit.contents.as_bytes())
+            || self.edition != unit.edition
             || self.path != unit.path
             || !Arc::ptr_eq(&self.original, &unit.contents)
             || self.prepared.as_ref() != unit.text
