@@ -106,7 +106,11 @@ def main(argv=None):
     # Keep snapshot labels identical for suite.compare. Actual modifications are
     # disclosed independently in candidate, while physical paths never overlap.
     suite.SNAPSHOTS = {NAME: {"repos": {"jcode": (args.repo.resolve(), PIN)}, "cwd": "jcode"}}
-    suite.WORK = Path(tempfile.mkdtemp(prefix="jcode-docs-", dir=suite.WORK.parent if suite.WORK.parent.exists() else None))
+    staging = Path(os.environ.get("JUSTRUST_BENCH_WORK", Path.home() / ".cache" / "jcode-docs-bench"))
+    if any(part in {".justrust", ".cargo", ".git", "target"} for part in staging.resolve().parts):
+        p.error("benchmark staging must be outside hosted registry excluded directories")
+    staging.mkdir(parents=True, exist_ok=True)
+    suite.WORK = Path(tempfile.mkdtemp(prefix="jcode-docs-", dir=staging))
     root = suite.prepare(NAME)
     paths = apply_candidate(root / "jcode", patch, args.allow_file) if is_candidate else []
     if is_candidate:

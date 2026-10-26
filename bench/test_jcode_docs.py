@@ -54,7 +54,8 @@ class DocsBenchmarkTests(unittest.TestCase):
             def run(scenario, n, warmup, quiet):
                 captured.append((scenario, n, warmup))
                 return {"samples": [{"tests_passed": 9, "tests_failed": 0}], "stats": {}}
-            with patch.object(driver, "git", return_value=(driver.PIN + "\n").encode()), \
+            with patch.dict(driver.os.environ, {"JUSTRUST_BENCH_WORK": str(root / "staging")}), \
+                 patch.object(driver, "git", return_value=(driver.PIN + "\n").encode()), \
                  patch.object(driver.suite, "WORK", root / "work"), \
                  patch.object(driver.suite, "prepare", return_value=root), \
                  patch.object(driver.suite, "env_info", return_value=info), \
@@ -62,6 +63,7 @@ class DocsBenchmarkTests(unittest.TestCase):
                  patch.object(driver.suite, "verify_binary_identity"), \
                  patch.object(driver.suite, "table", return_value="table"):
                 driver.main(["--out", str(out)])
+                self.assertEqual(driver.suite.WORK.parent, root / "staging")
             data = json.loads(out.read_text())
             self.assertEqual(data["candidate"]["baseline_commit"], driver.PIN)
             self.assertEqual(data["candidate"]["kind"], "baseline")
