@@ -3963,7 +3963,7 @@ impl<'a> Checker<'a> {
             _ => true,
         })
     }
-    fn member_index(
+    pub(super) fn member_index(
         &self,
         declaration: ir::DeclId,
         variant: Option<usize>,
@@ -3991,7 +3991,11 @@ impl<'a> Checker<'a> {
         }
         Err("unknown nominal field".into())
     }
-    fn variant_index(&self, declaration: ir::DeclId, name: AstIdent) -> Result<usize, String> {
+    pub(super) fn variant_index(
+        &self,
+        declaration: ir::DeclId,
+        name: AstIdent,
+    ) -> Result<usize, String> {
         let key = self
             .names()?
             .key(name, LookupClass::Member)
@@ -7334,12 +7338,19 @@ impl<'a> Checker<'a> {
                         } else {
                             None
                         };
+                        // Resolve structural evidence without fallback before checking
+                        // the assignment. This admits independently known products and
+                        // nominal types without guessing from later uses of the local.
+                        let evidence = self.inference_evidence(value, 0)?;
+                        let independently_known =
+                            Inference::empty(self)?.resolve(&evidence, false, 0)?;
                         let value = self.expr(value)?;
                         let flow = self.flow(value);
                         if !matches!(flow.ty, ir::Ty::Ref { .. })
                             && scalar.as_ref() != Some(&flow.ty)
+                            && independently_known.as_ref() != Some(&flow.ty)
                         {
-                            return Err("untyped deferred declarations require an independently known reference or scalar dereference type; general backward inference is unsupported".into());
+                            return Err("untyped deferred declarations require an independently known type; general backward inference is unsupported".into());
                         }
                         let local = ir::LocalId(self.locals.len());
                         let key = self
@@ -8802,16 +8813,24 @@ impl<'a> Checker<'a> {
         if identity && (receiver.is_some() || source_args.len() != 1) {
             return Err("shared replay identity argument shape changed".into());
         }
-        let expectations = signature
-            .params
-            .iter()
-            .map(|ty| match ty {
-                ir::Ty::Ref { kind, .. } if !identity => {
-                    ir::CallExpectation::FirmReference { kind: *kind }
-                }
-                _ => ir::CallExpectation::NoFirmReference,
-            })
-            .collect::<Vec<_>>();
+        let authored_expectations = match self.canonical {
+            Some(cap) if receiver.is_none() => {
+                cap.input_expectations(source_args, &target, &signature)?
+            }
+            _ => None,
+        };
+        let expectations = authored_expectations.unwrap_or_else(|| {
+            signature
+                .params
+                .iter()
+                .map(|ty| match ty {
+                    ir::Ty::Ref { kind, .. } if !identity => {
+                        ir::CallExpectation::FirmReference { kind: *kind }
+                    }
+                    _ => ir::CallExpectation::NoFirmReference,
+                })
+                .collect::<Vec<_>>()
+        });
         let mut completes = true;
         if let Some((id, reason)) = receiver {
             self.require(&self.flow(id), &signature.params[0])?;
@@ -8845,7 +8864,13 @@ impl<'a> Checker<'a> {
                     self.borrow_value(ir::BorrowKind::Shared, source, Some(ty))?
                 };
                 (id, None)
-            } else if identity {
+            } else if identity
+                || (matches!(ty, ir::Ty::Ref { .. })
+                    && matches!(
+                        expectations[i + offset],
+                        ir::CallExpectation::NoFirmReference
+                    ))
+            {
                 (self.expr(source)?, None)
             } else {
                 self.call_argument(source, ty, self.reachable && completes)?

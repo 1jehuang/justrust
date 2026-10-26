@@ -260,3 +260,31 @@ and scalar-input paths remain for their separate supported cases.
 schemas, nested shared references, repeated-slot conflicts, missing inference
 inputs, trait bounds and borrow/escape rejection against stock at workers 1/8.
 The frontend's source-replay tests cover forged operand and region evidence.
+
+## Recursive reference input evidence
+
+The input replay path now uses one immutable `CallInputTrace` over the original
+parameter and result schemas, all ordered input evidence, and all inferred
+slots. The same constraint engine supports multiple parameters, nested shared
+and mutable references, tuples, arrays and nominal arguments. It retains the
+original parameter's argument expectation: an inferred `T = &mut U` moves its
+operand, while an authored `&mut T` parameter reborrows it. Explicit applications
+retain their existing argument-checking rules.
+
+Input types are reconstructed recursively from original root bindings or
+parameters, with exact lexical operand and initializer correspondence. Product,
+array/repeat, record, tuple-struct and enum constructors replay their field
+identities and types. Graph-backed nominal types remain authenticated through
+original declarations, ordered arguments and typed realization evidence, not
+names or matching field layouts. The normal trait, ownership and carrier-region
+checks remain mandatory. Independently known deferred assignment types use the
+same no-fallback inference machinery, rather than admitting only scalar and
+single-reference shapes.
+
+The trace API can also retain an independently authored expected result type.
+This is solver infrastructure, not by itself source-level returned-reference
+support. The input integration still requires a closed reference-free result and
+one own generic binder. Direct aggregate operands, arbitrary scoped/producer
+expressions and generalized returned-reference inference remain separate work.
+Acceptance lives in `callable_reference_inputs`, with source forgery tests in
+`canonical_source_replay_tests` and solver evidence tests in `source_replay`.

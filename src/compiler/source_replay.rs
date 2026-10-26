@@ -618,6 +618,12 @@ impl CallInferenceState {
                 InferKind::Opaque(descriptor.clone(), children.into())
             }
             ir::Ty::Param(param) if schema == Some(param.owner) => {
+                if self.env.as_ref().is_some_and(|env| !env.contains(*param)) {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "inference schema parameter outside original binder",
+                    ));
+                }
                 InferKind::Slot(param.index as usize)
             }
             ir::Ty::Tuple(fields) => {
@@ -755,6 +761,201 @@ pub(super) fn retain(budget: &ir::PlanBudget, n: usize) -> Result<(), FactsError
         .retain_bytes(n)
         .map_err(|e| FactsError::resource(budget, &e))
 }
+
+/// Source replay bridges canonical concrete source applications to typed graph
+/// realizations, whose provenance names the original symbolic template rather
+/// than the concrete source slot. This is not full metadata validation:
+/// callers must still authenticate source declarations and graph input facts.
+/// In particular, neither names nor a coincidentally equal field layout grant
+/// nominal equality, and a bare graph coordinate is never source authority.
+pub(super) fn replay_types_equal(
+    left: &ir::Ty,
+    right: &ir::Ty,
+    budget: &ir::PlanBudget,
+) -> Result<bool, FactsError> {
+    replay_types_equal_at(left, right, budget, 0)
+}
+
+fn nominal_source_identity(
+    ty: &ir::Ty,
+    identity: ir::NominalAppId,
+    realization: Option<&super::nominal_realization::ReadNominal>,
+    budget: &ir::PlanBudget,
+) -> Result<(ir::NominalAppId, Option<ir::NominalAppId>), FactsError> {
+    work(budget, 1)?;
+    if let Some(realization) = realization {
+        realization
+            .check_definition(ty)
+            .map_err(|error| FactsError::invalid(budget, &error.to_string()))?;
+        // This is the declaration TEMPLATE application, not the concrete
+        // source interner slot for the realized ordered actuals.
+        Ok((realization.source_application(), Some(identity)))
+    } else if identity.index.is_graph() {
+        Err(FactsError::invalid(
+            budget,
+            "source equality requires a typed nominal realization",
+        ))
+    } else {
+        Ok((identity, None))
+    }
+}
+
+fn nominal_replay_identity_equal(
+    left: (ir::NominalAppId, Option<ir::NominalAppId>),
+    right: (ir::NominalAppId, Option<ir::NominalAppId>),
+    declaration: ir::DeclId,
+    left_args: &[ir::Ty],
+    right_args: &[ir::Ty],
+    budget: &ir::PlanBudget,
+) -> Result<bool, FactsError> {
+    work(budget, 1)?;
+    match (left.1, right.1) {
+        // Neither source nor graph coordinates may be weakened within their
+        // own domain. In particular, equal source provenance does not authorize
+        // a graph output from a foreign engine (or another node/output).
+        (None, None) => Ok(left.0 == right.0),
+        (Some(a), Some(b)) => Ok(a == b),
+        _ => {
+            let (source, source_args, template) = if left.1.is_some() {
+                (right.0, right_args, left.0)
+            } else {
+                (left.0, left_args, right.0)
+            };
+            if source.snapshot != declaration.snapshot || template.snapshot != declaration.snapshot
+            {
+                return Ok(false);
+            }
+            // The typed read authenticates (declaration, concrete actuals).
+            // Its retained source_application names the symbolic template, so
+            // compare the source side with its concrete canonical identity,
+            // not with that template's different symbolic-argument digest.
+            Ok(source == frontend::replay_nominal_source_id(declaration, source_args, budget)?)
+        }
+    }
+}
+
+fn replay_type_lists_equal(
+    left: &[ir::Ty],
+    right: &[ir::Ty],
+    budget: &ir::PlanBudget,
+    at: usize,
+) -> Result<bool, FactsError> {
+    if left.len() != right.len() {
+        return Ok(false);
+    }
+    for (left, right) in left.iter().zip(right) {
+        if !replay_types_equal_at(left, right, budget, at)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn replay_types_equal_at(
+    left: &ir::Ty,
+    right: &ir::Ty,
+    budget: &ir::PlanBudget,
+    at: usize,
+) -> Result<bool, FactsError> {
+    depth(budget, at)?;
+    work(budget, 1)?;
+    match (left, right) {
+        (ir::Ty::Struct(a), ir::Ty::Struct(b)) => {
+            let a_id = nominal_source_identity(left, a.id(), a.realization(), budget)?;
+            let b_id = nominal_source_identity(right, b.id(), b.realization(), budget)?;
+            Ok(a.def().source_decl == b.def().source_decl
+                && replay_type_lists_equal(&a.def().type_args, &b.def().type_args, budget, at + 1)?
+                && nominal_replay_identity_equal(
+                    a_id,
+                    b_id,
+                    a.def().source_decl,
+                    &a.def().type_args,
+                    &b.def().type_args,
+                    budget,
+                )?)
+        }
+        (ir::Ty::Enum(a), ir::Ty::Enum(b)) => {
+            let a_id = nominal_source_identity(left, a.id(), a.realization(), budget)?;
+            let b_id = nominal_source_identity(right, b.id(), b.realization(), budget)?;
+            Ok(a.def().source_decl == b.def().source_decl
+                && replay_type_lists_equal(&a.def().type_args, &b.def().type_args, budget, at + 1)?
+                && nominal_replay_identity_equal(
+                    a_id,
+                    b_id,
+                    a.def().source_decl,
+                    &a.def().type_args,
+                    &b.def().type_args,
+                    budget,
+                )?)
+        }
+        (ir::Ty::Tuple(a), ir::Ty::Tuple(b)) => replay_type_lists_equal(a, b, budget, at + 1),
+        (
+            ir::Ty::Ref {
+                kind: a,
+                referent: x,
+            },
+            ir::Ty::Ref {
+                kind: b,
+                referent: y,
+            },
+        )
+        | (
+            ir::Ty::RawPtr {
+                kind: a,
+                pointee: x,
+            },
+            ir::Ty::RawPtr {
+                kind: b,
+                pointee: y,
+            },
+        ) => Ok(a == b && replay_types_equal_at(x, y, budget, at + 1)?),
+        (ir::Ty::Array { element: a, len: n }, ir::Ty::Array { element: b, len: m }) => {
+            Ok(n == m && replay_types_equal_at(a, b, budget, at + 1)?)
+        }
+        (ir::Ty::Slice { element: a }, ir::Ty::Slice { element: b }) => {
+            replay_types_equal_at(a, b, budget, at + 1)
+        }
+        (ir::Ty::FnItem(a), ir::Ty::FnItem(b)) => Ok(a.declaration == b.declaration
+            && replay_type_lists_equal(&a.type_args, &b.type_args, budget, at + 1)?),
+        (ir::Ty::AssociatedType(a), ir::Ty::AssociatedType(b)) => Ok(a.item == b.item
+            && a.trait_ref.declaration == b.trait_ref.declaration
+            && replay_types_equal_at(&a.trait_ref.self_ty, &b.trait_ref.self_ty, budget, at + 1)?
+            && replay_type_lists_equal(&a.trait_ref.args, &b.trait_ref.args, budget, at + 1)?),
+        (ir::Ty::Dyn(a), ir::Ty::Dyn(b)) => {
+            if a.principal != b.principal
+                || a.associated_types.len() != b.associated_types.len()
+                || !replay_type_lists_equal(&a.args, &b.args, budget, at + 1)?
+            {
+                return Ok(false);
+            }
+            for ((a_item, a), (b_item, b)) in
+                a.associated_types.iter().zip(b.associated_types.iter())
+            {
+                work(budget, 1)?;
+                if a_item != b_item || !replay_types_equal_at(a, b, budget, at + 1)? {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        }
+        (ir::Ty::Opaque(a), ir::Ty::Opaque(b)) => {
+            if !opaque_shape_equal(a, b, budget, at + 1)? {
+                return Ok(false);
+            }
+            a.try_eq(b, |a, b| replay_types_equal_at(a, b, budget, at + 1))
+        }
+        (ir::Ty::Closure(a), ir::Ty::Closure(b)) => {
+            for source in a.sources().iter().chain(b.sources()) {
+                work(budget, 1)?;
+                work(budget, source.place.projection.len())?;
+            }
+            a.try_eq(b, |a, b| replay_types_equal_at(a, b, budget, at + 1))
+        }
+        // Every recursive representation is handled above. This fallback only
+        // compares rigid leaves or immediately unequal variant discriminants.
+        _ => Ok(left == right),
+    }
+}
 pub(super) fn depth(budget: &ir::PlanBudget, n: usize) -> Result<(), FactsError> {
     budget
         .check_depth(n)
@@ -838,10 +1039,50 @@ impl OriginalBody {
     }
 }
 #[derive(Clone, Debug)]
+pub(super) enum CallTrace {
+    Identity(Arc<SharedIdentityTrace>),
+    Inputs(Arc<CallInputTrace>),
+}
+impl From<Arc<SharedIdentityTrace>> for CallTrace {
+    fn from(trace: Arc<SharedIdentityTrace>) -> Self {
+        Self::Identity(trace)
+    }
+}
+impl From<Arc<CallInputTrace>> for CallTrace {
+    fn from(trace: Arc<CallInputTrace>) -> Self {
+        Self::Inputs(trace)
+    }
+}
+impl CallTrace {
+    fn expected(
+        &self,
+        argument: usize,
+        budget: &ir::PlanBudget,
+    ) -> Result<ir::CallExpectation, FactsError> {
+        match self {
+            Self::Identity(trace) => {
+                if argument != 0 {
+                    return Err(FactsError::invalid(budget, "shared replay argument index"));
+                }
+                if !matches!(trace.before.as_ref(), InferKind::Slot(0))
+                    || !Arc::ptr_eq(&trace.evidence, &trace.after)
+                {
+                    return Err(FactsError::invalid(
+                        budget,
+                        "retained shared frontier changed",
+                    ));
+                }
+                Ok(ir::CallExpectation::NoFirmReference)
+            }
+            Self::Inputs(trace) => trace.expected(argument, budget),
+        }
+    }
+}
+#[derive(Clone, Debug)]
 pub(super) struct NarrowValidatedCall {
     pub(super) call: ir::ExprId,
     pub(super) source: SourceNode,
-    pub(super) trace: Arc<SharedIdentityTrace>,
+    pub(super) trace: CallTrace,
 }
 #[derive(Debug)]
 pub(super) struct ValidatedOriginalCalls {
@@ -858,19 +1099,8 @@ impl ValidatedOriginalCalls {
         work(budget, self.calls.len())?;
         for row in self.calls.iter() {
             if row.call == call {
-                if argument != 0 {
-                    return Err(FactsError::invalid(budget, "shared replay argument index"));
-                }
                 frontend::validate_original_occurrence(&self.original.source, &row.source, budget)?;
-                if !matches!(row.trace.before.as_ref(), InferKind::Slot(0))
-                    || !Arc::ptr_eq(&row.trace.evidence, &row.trace.after)
-                {
-                    return Err(FactsError::invalid(
-                        budget,
-                        "retained shared frontier changed",
-                    ));
-                }
-                return Ok(Some(ir::CallExpectation::NoFirmReference));
+                return row.trace.expected(argument, budget).map(Some);
             }
         }
         Ok(None)
@@ -1022,7 +1252,242 @@ pub(super) fn publish_canonical_source(
     }))
 }
 
-// The only retained result context in this bounded grammar is source-derived Absent.
+/// Immutable replay of constraints from every original source argument. This is
+/// not source authentication: callers must independently recover input types
+/// from authored expressions, never from the checked call or its actuals.
+/// An optional expected result must likewise come from independent authored
+/// context. Numeric fallback is never applied by this API.
+#[derive(Clone, Debug)]
+pub(super) struct CallInputTrace {
+    binder: Option<ir::BinderId>,
+    schemas: Arc<[InferTerm]>,
+    result_schema: InferTerm,
+    expected: Option<InferTerm>,
+    evidence: Arc<[InferTerm]>,
+    slots: Arc<[InferTerm]>,
+    actuals: Arc<[ir::Ty]>,
+}
+impl CallInputTrace {
+    pub(super) fn actuals(&self) -> &[ir::Ty] {
+        &self.actuals
+    }
+
+    /// The authored input schema, not the inferred actual, determines whether
+    /// checking this argument supplied a firm reference expectation. In
+    /// particular, `T = &mut U` must preserve a move where `&mut T` reborrows.
+    pub(super) fn expected(
+        &self,
+        argument: usize,
+        budget: &ir::PlanBudget,
+    ) -> Result<ir::CallExpectation, FactsError> {
+        work(budget, 1)?;
+        if self.schemas.len() != self.evidence.len() {
+            return Err(FactsError::invalid(
+                budget,
+                "input expectation arity changed",
+            ));
+        }
+        let schema = self.schemas.get(argument).ok_or_else(|| {
+            FactsError::invalid(budget, "input expectation argument outside signature")
+        })?;
+        Ok(match schema.as_ref() {
+            InferKind::Ref(kind, _) => ir::CallExpectation::FirmReference { kind: *kind },
+            _ => ir::CallExpectation::NoFirmReference,
+        })
+    }
+
+    /// Compare ordered inferred actuals, including rigid caller parameters.
+    pub(super) fn validate_actuals(
+        &self,
+        actuals: &[ir::Ty],
+        budget: &ir::PlanBudget,
+    ) -> Result<(), FactsError> {
+        work(budget, 1)?;
+        if actuals.len() != self.actuals.len() {
+            return Err(FactsError::invalid(
+                budget,
+                "source input actual count changed",
+            ));
+        }
+        for (inferred, actual) in self.actuals.iter().zip(actuals) {
+            if !replay_types_equal(inferred, actual, budget)? {
+                return Err(FactsError::invalid(budget, "source input actual changed"));
+            }
+        }
+        Ok(())
+    }
+
+    /// `other` must be independently reconstructed from original source.
+    pub(super) fn validate_replayed(
+        &self,
+        other: &Self,
+        budget: &ir::PlanBudget,
+    ) -> Result<(), FactsError> {
+        work(budget, 1)?;
+        if self.binder != other.binder
+            || self.schemas.len() != other.schemas.len()
+            || self.evidence.len() != other.evidence.len()
+            || self.slots.len() != other.slots.len()
+            || !terms_equal(&self.result_schema, &other.result_schema, budget, 0)?
+        {
+            return Err(FactsError::invalid(budget, "source input frontier changed"));
+        }
+        match (&self.expected, &other.expected) {
+            (None, None) => {}
+            (Some(left), Some(right)) if terms_equal(left, right, budget, 0)? => {}
+            _ => {
+                return Err(FactsError::invalid(
+                    budget,
+                    "source expected result changed",
+                ));
+            }
+        }
+        for (left, right) in self
+            .schemas
+            .iter()
+            .zip(other.schemas.iter())
+            .chain(self.evidence.iter().zip(other.evidence.iter()))
+            .chain(self.slots.iter().zip(other.slots.iter()))
+        {
+            if !terms_equal(left, right, budget, 0)? {
+                return Err(FactsError::invalid(
+                    budget,
+                    "source input constraint changed",
+                ));
+            }
+        }
+        self.validate_actuals(&other.actuals, budget)
+    }
+}
+
+/// Infer all own slots from the full original input schema. Extra enclosing
+/// binders are not guessed: until their own-slot boundary is authenticated by
+/// the caller, multi-scope callable views remain explicitly unsupported.
+pub(super) fn infer_call_input_trace(
+    view: &tr::OriginalCallableView,
+    inputs: &[ir::Ty],
+    budget: &ir::PlanBudget,
+    materialize: &mut impl FnMut(ir::DeclId, &[ir::Ty]) -> Result<ir::Ty, FactsError>,
+) -> Result<Arc<CallInputTrace>, FactsError> {
+    infer_call_input_trace_with_context(view, inputs, None, budget, materialize)
+}
+
+/// As above, with an independently authenticated source result annotation.
+/// `expected` must never be obtained from the checked call's result or actuals.
+/// It seeds constraints before the input evidence without weakening rigidity.
+pub(super) fn infer_call_input_trace_with_context(
+    view: &tr::OriginalCallableView,
+    inputs: &[ir::Ty],
+    expected: Option<&ir::Ty>,
+    budget: &ir::PlanBudget,
+    materialize: &mut impl FnMut(ir::DeclId, &[ir::Ty]) -> Result<ir::Ty, FactsError>,
+) -> Result<Arc<CallInputTrace>, FactsError> {
+    let scopes = view.generic_env().scopes();
+    if scopes.len() > 1 {
+        return Err(FactsError::unsupported(
+            budget,
+            "input inference requires an authenticated own binder",
+        ));
+    }
+    infer_input_schema_trace_with_context(
+        scopes.first().cloned(),
+        &view.signature().params,
+        &view.signature().result,
+        inputs,
+        expected,
+        budget,
+        materialize,
+    )
+}
+
+fn infer_input_schema_trace(
+    env: Option<Arc<ir::ParamEnv>>,
+    parameters: &[ir::Ty],
+    result: &ir::Ty,
+    inputs: &[ir::Ty],
+    budget: &ir::PlanBudget,
+    materialize: &mut impl FnMut(ir::DeclId, &[ir::Ty]) -> Result<ir::Ty, FactsError>,
+) -> Result<Arc<CallInputTrace>, FactsError> {
+    infer_input_schema_trace_with_context(
+        env,
+        parameters,
+        result,
+        inputs,
+        None,
+        budget,
+        materialize,
+    )
+}
+
+fn infer_input_schema_trace_with_context(
+    env: Option<Arc<ir::ParamEnv>>,
+    parameters: &[ir::Ty],
+    result: &ir::Ty,
+    inputs: &[ir::Ty],
+    expected: Option<&ir::Ty>,
+    budget: &ir::PlanBudget,
+    materialize: &mut impl FnMut(ir::DeclId, &[ir::Ty]) -> Result<ir::Ty, FactsError>,
+) -> Result<Arc<CallInputTrace>, FactsError> {
+    work(budget, 1)?;
+    if parameters.len() != inputs.len() {
+        return Err(FactsError::invalid(
+            budget,
+            "source input signature arity changed",
+        ));
+    }
+    let binder = env.as_ref().map(|env| env.binder());
+    let mut state = CallInferenceState::new(env, budget)?;
+    state.storage(parameters.len())?;
+    let mut schemas = Vec::new();
+    let mut evidence = Vec::new();
+    schemas
+        .try_reserve_exact(parameters.len())
+        .map_err(|_| FactsError::resource(budget, "input schema trace allocation"))?;
+    evidence
+        .try_reserve_exact(inputs.len())
+        .map_err(|_| FactsError::resource(budget, "input evidence trace allocation"))?;
+    let result_schema = state.type_term(result, binder, 0)?;
+    let expected = expected
+        .map(|ty| state.type_term(ty, None, 0))
+        .transpose()?;
+    if let Some(expected) = &expected {
+        state.constrain(&result_schema, expected, 0)?;
+    }
+    for (parameter, input) in parameters.iter().zip(inputs) {
+        let schema = state.type_term(parameter, binder, 0)?;
+        let actual = state.type_term(input, None, 0)?;
+        state.constrain(&schema, &actual, 0)?;
+        schemas.push(schema);
+        evidence.push(actual);
+    }
+    let actuals = state.finish(false, materialize)?.ok_or_else(|| {
+        FactsError::unsupported(budget, "source evidence leaves generic slots unresolved")
+    })?;
+    state.storage(state.slots.len())?;
+    let mut slots = Vec::new();
+    slots
+        .try_reserve_exact(state.slots.len())
+        .map_err(|_| FactsError::resource(budget, "input frontier trace allocation"))?;
+    for slot in state.slots() {
+        slots.push(
+            slot.as_ref()
+                .ok_or_else(|| FactsError::invalid(budget, "resolved input slot missing"))?
+                .clone(),
+        );
+    }
+    state.storage(1)?;
+    Ok(Arc::new(CallInputTrace {
+        binder,
+        schemas: schemas.into(),
+        result_schema,
+        expected,
+        evidence: evidence.into(),
+        slots: slots.into(),
+        actuals: actuals.into(),
+    }))
+}
+
+// Legacy identity wrappers retain their narrower source expectation contract.
 #[derive(Clone, Debug)]
 pub(super) struct SharedIdentityTrace {
     binder: ir::BinderId,
@@ -1173,37 +1638,20 @@ pub(super) fn infer_single_input_trace(
             "input inference requires original first parameter T",
         ));
     }
-    let mut state = CallInferenceState::new(Some(scopes[0].clone()), budget)?;
-    let (schema, evidence) = state.constrain_input(&parameter, input)?;
-    let after = state.slots()[0]
-        .as_ref()
-        .ok_or_else(|| FactsError::invalid(budget, "input inference lost its slot"))?
-        .clone();
-    let mut actuals = state
-        .finish(false, &mut |_, _| {
+    let trace = infer_input_schema_trace(
+        Some(scopes[0].clone()),
+        std::slice::from_ref(&parameter),
+        &view.signature().result,
+        std::slice::from_ref(input),
+        budget,
+        &mut |_, _| {
             Err(FactsError::invalid(
                 budget,
                 "scalar input unexpectedly materialized a nominal",
             ))
-        })?
-        .ok_or_else(|| FactsError::invalid(budget, "input inference remained unresolved"))?;
-    if actuals.len() != 1 {
-        return Err(FactsError::invalid(
-            budget,
-            "input inference changed actual count",
-        ));
-    }
-    budget
-        .charge_nodes(1)
-        .map_err(|e| FactsError::resource(budget, &e))?;
-    retain(budget, std::mem::size_of::<SharedIdentityTrace>() + 32)?;
-    Ok(Arc::new(SharedIdentityTrace {
-        binder: scopes[0].binder(),
-        before: schema,
-        evidence,
-        after,
-        actual: actuals.pop().unwrap(),
-    }))
+        },
+    )?;
+    legacy_identity_trace(&trace, budget)
 }
 
 /// One transition program is called during source checking and immutable replay.
@@ -1248,56 +1696,730 @@ pub(super) fn infer_reference_identity(
             "shared inference requires original (T)->T",
         ));
     }
-    let mut state = CallInferenceState::new(Some(env), budget)?;
-    let before = state.schema(&parameter, 0)?;
-    // The original None result context seeds no constraint. No defaulting is performed.
-    if !matches!(before.as_ref(), InferKind::Slot(0)) || state.slots().iter().any(Option::is_some) {
-        return Err(FactsError::invalid(
-            budget,
-            "nonempty initial shared frontier",
-        ));
-    }
-    state.storage(1)?;
+    // Reuse the all-input solver without weakening this wrapper's authored
+    // identity-call expectation contract.
+    retain(budget, std::mem::size_of::<ir::Ty>() + 32)?;
     let input = ir::Ty::Ref {
         kind,
         referent: Arc::new(referent.clone()),
     };
-    let evidence = state.type_term(&input, None, 0)?;
-    state.constrain(&before, &evidence, 0)?;
-    let Some(Some(after)) = state.slots().first() else {
-        return Err(FactsError::invalid(budget, "missing final shared frontier"));
-    };
-    let after = after.clone();
-    if !Arc::ptr_eq(&after, &evidence) {
+    let trace = infer_call_input_trace(view, &[input], budget, materialize)?;
+    legacy_identity_trace(&trace, budget)
+}
+
+fn legacy_identity_trace(
+    trace: &CallInputTrace,
+    budget: &ir::PlanBudget,
+) -> Result<Arc<SharedIdentityTrace>, FactsError> {
+    work(budget, 1)?;
+    let Some(binder) = trace.binder else {
         return Err(FactsError::invalid(
             budget,
-            "shared frontier changed evidence",
-        ));
-    }
-    let Some(mut actuals) = state.finish(false, materialize)? else {
-        return Err(FactsError::invalid(
-            budget,
-            "shared final frontier unresolved",
+            "identity trace lost its binder",
         ));
     };
-    if actuals.len() != 1 {
+    if trace.schemas.len() != 1
+        || trace.evidence.len() != 1
+        || trace.slots.len() != 1
+        || trace.actuals.len() != 1
+        || !matches!(trace.schemas[0].as_ref(), InferKind::Slot(0))
+        || !Arc::ptr_eq(&trace.evidence[0], &trace.slots[0])
+    {
         return Err(FactsError::invalid(
             budget,
-            "shared final actual count changed",
+            "identity trace changed its frontier",
         ));
     }
-    let actual = actuals.pop().unwrap();
     budget
         .charge_nodes(1)
         .map_err(|e| FactsError::resource(budget, &e))?;
     retain(budget, std::mem::size_of::<SharedIdentityTrace>() + 32)?;
     Ok(Arc::new(SharedIdentityTrace {
         binder,
-        before,
-        evidence,
-        after,
-        actual,
+        before: trace.schemas[0].clone(),
+        evidence: trace.evidence[0].clone(),
+        after: trace.slots[0].clone(),
+        actual: trace.actuals[0].clone(),
     }))
+}
+
+#[cfg(test)]
+mod replay_type_equality_tests {
+    use super::*;
+
+    fn source_form(ty: &ir::Ty, budget: &ir::PlanBudget) -> ir::Ty {
+        match ty {
+            ir::Ty::Struct(value) => {
+                let mut definition = value.def().clone();
+                definition.type_args = definition
+                    .type_args
+                    .iter()
+                    .map(|ty| source_form(ty, budget))
+                    .collect();
+                definition.id = frontend::replay_nominal_source_id(
+                    definition.source_decl,
+                    &definition.type_args,
+                    budget,
+                )
+                .unwrap();
+                ir::Ty::Struct(ir::StructTy::new(definition))
+            }
+            ir::Ty::Enum(value) => {
+                let mut definition = value.def().clone();
+                definition.type_args = definition
+                    .type_args
+                    .iter()
+                    .map(|ty| source_form(ty, budget))
+                    .collect();
+                definition.id = frontend::replay_nominal_source_id(
+                    definition.source_decl,
+                    &definition.type_args,
+                    budget,
+                )
+                .unwrap();
+                ir::Ty::Enum(ir::EnumTy::new(definition))
+            }
+            ir::Ty::Ref { kind, referent } => ir::Ty::Ref {
+                kind: *kind,
+                referent: Arc::new(source_form(referent, budget)),
+            },
+            _ => ty.clone(),
+        }
+    }
+
+    #[test]
+    fn source_and_graph_nominals_compare_by_authenticated_original_application() {
+        let compiled = super::super::compile(
+            "struct Empty;enum Tag{A}struct Pair<T,U>{first:T,second:U}enum Maybe<T>{Some(T),None}fn main(){let x=Empty;let y=Tag::A;let p=Pair::<u32,bool>{first:1u32,second:true};let m=Maybe::<u32>::Some(2u32);}".into(),
+            1,
+            false,
+        )
+        .unwrap();
+        let budget = ir::PlanBudget::default();
+        let mut count = 0;
+        let mut generic_count = 0;
+        for graph in compiled
+            .control_flow
+            .iter()
+            .flat_map(|f| f.locals.iter())
+            .map(|l| &l.ty)
+        {
+            let has_capability = match graph {
+                ir::Ty::Struct(value) => value.realization().is_some(),
+                ir::Ty::Enum(value) => value.realization().is_some(),
+                _ => false,
+            };
+            if !has_capability {
+                continue;
+            }
+            count += 1;
+            let source = source_form(graph, &budget);
+            match graph {
+                ir::Ty::Struct(value) if !value.def().type_args.is_empty() => {
+                    let ir::Ty::Struct(source) = &source else {
+                        unreachable!()
+                    };
+                    assert_ne!(
+                        source.id(),
+                        value.realization().unwrap().source_application()
+                    );
+                    generic_count += 1;
+                }
+                ir::Ty::Enum(value) if !value.def().type_args.is_empty() => {
+                    let ir::Ty::Enum(source) = &source else {
+                        unreachable!()
+                    };
+                    assert_ne!(
+                        source.id(),
+                        value.realization().unwrap().source_application()
+                    );
+                    generic_count += 1;
+                }
+                _ => {}
+            }
+            assert_ne!(&source, graph);
+            assert!(replay_types_equal(&source, graph, &budget).unwrap());
+            assert!(replay_types_equal(graph, &source, &budget).unwrap());
+            let nested = |ty: ir::Ty| ir::Ty::Ref {
+                kind: ir::BorrowKind::Shared,
+                referent: Arc::new(ir::Ty::Tuple(Arc::from([
+                    ir::Ty::Array {
+                        element: Arc::new(ty),
+                        len: 2,
+                    },
+                    ir::Ty::Bool,
+                ]))),
+            };
+            assert!(
+                replay_types_equal(&nested(source.clone()), &nested(graph.clone()), &budget)
+                    .unwrap()
+            );
+            let (stripped, forged, foreign, changed_args) = match graph {
+                ir::Ty::Struct(value) => {
+                    let stripped = ir::Ty::Struct(ir::StructTy::new(value.def().clone()));
+                    let forged = ir::Ty::Struct(
+                        ir::StructTy::new(value.def().clone())
+                            .with_realization(value.realization().unwrap().clone()),
+                    );
+                    let ir::Ty::Struct(source) = &source else {
+                        unreachable!()
+                    };
+                    let mut foreign = source.def().clone();
+                    foreign.id.index = ir::NominalIndex::SourceSlot(
+                        foreign.id.index.source_slot().unwrap().wrapping_add(1),
+                    );
+                    let mut changed_args = source.def().clone();
+                    changed_args.type_args = Arc::from([ir::Ty::Bool]);
+                    (
+                        stripped,
+                        forged,
+                        ir::Ty::Struct(ir::StructTy::new(foreign)),
+                        ir::Ty::Struct(ir::StructTy::new(changed_args)),
+                    )
+                }
+                ir::Ty::Enum(value) => {
+                    let stripped = ir::Ty::Enum(ir::EnumTy::new(value.def().clone()));
+                    let forged = ir::Ty::Enum(
+                        ir::EnumTy::new(value.def().clone())
+                            .with_realization(value.realization().unwrap().clone()),
+                    );
+                    let ir::Ty::Enum(source) = &source else {
+                        unreachable!()
+                    };
+                    let mut foreign = source.def().clone();
+                    foreign.id.index = ir::NominalIndex::SourceSlot(
+                        foreign.id.index.source_slot().unwrap().wrapping_add(1),
+                    );
+                    let mut changed_args = source.def().clone();
+                    changed_args.type_args = Arc::from([ir::Ty::Bool]);
+                    (
+                        stripped,
+                        forged,
+                        ir::Ty::Enum(ir::EnumTy::new(foreign)),
+                        ir::Ty::Enum(ir::EnumTy::new(changed_args)),
+                    )
+                }
+                _ => unreachable!(),
+            };
+            assert!(replay_types_equal(&stripped, graph, &budget).is_err());
+            assert!(replay_types_equal(&forged, graph, &budget).is_err());
+            assert!(!replay_types_equal(&foreign, graph, &budget).unwrap());
+            assert!(!replay_types_equal(&source, &foreign, &budget).unwrap());
+            assert!(!replay_types_equal(&changed_args, graph, &budget).unwrap());
+        }
+        assert!(
+            count >= 2,
+            "fixture must retain typed graph struct and enum locals"
+        );
+        assert!(
+            generic_count >= 2,
+            "fixture must include concrete generic struct and enum applications"
+        );
+    }
+
+    #[test]
+    fn source_type_equality_preserves_rigid_identity_shape_and_budgets() {
+        let budget = ir::PlanBudget::default();
+        let param = |snapshot| {
+            ir::Ty::Param(ir::ParamId {
+                owner: ir::BinderId {
+                    declaration: ir::DeclId { snapshot, index: 0 },
+                },
+                index: 0,
+            })
+        };
+        let a = param(ir::SnapshotId::standalone().unwrap());
+        let b = param(ir::SnapshotId::standalone().unwrap());
+        assert!(replay_types_equal(&a, &a, &budget).unwrap());
+        assert!(!replay_types_equal(&a, &b, &budget).unwrap());
+        let tuple = ir::Ty::Tuple(Arc::from([a.clone(), b.clone()]));
+        let reordered = ir::Ty::Tuple(Arc::from([b, a]));
+        assert!(!replay_types_equal(&tuple, &reordered, &budget).unwrap());
+        let tiny = ir::PlanBudget::new(ir::PlanLimits {
+            work: 0,
+            ..Default::default()
+        });
+        assert!(
+            replay_types_equal(&tuple, &tuple, &tiny)
+                .unwrap_err()
+                .is_resource()
+        );
+    }
+}
+
+#[cfg(test)]
+mod call_input_trace_tests {
+    use super::*;
+
+    fn env(count: usize) -> Arc<ir::ParamEnv> {
+        Arc::new(
+            ir::ParamEnv::new(
+                ir::BinderId {
+                    declaration: ir::DeclId {
+                        snapshot: ir::SnapshotId::standalone().unwrap(),
+                        index: 0,
+                    },
+                },
+                count,
+            )
+            .unwrap(),
+        )
+    }
+    fn param(env: &ir::ParamEnv, index: u16) -> ir::Ty {
+        ir::Ty::Param(ir::ParamId {
+            owner: env.binder(),
+            index,
+        })
+    }
+    fn reference(kind: ir::BorrowKind, ty: ir::Ty) -> ir::Ty {
+        ir::Ty::Ref {
+            kind,
+            referent: Arc::new(ty),
+        }
+    }
+    fn array(ty: ir::Ty, len: usize) -> ir::Ty {
+        ir::Ty::Array {
+            element: Arc::new(ty),
+            len,
+        }
+    }
+    fn infer(
+        env: Arc<ir::ParamEnv>,
+        parameters: &[ir::Ty],
+        inputs: &[ir::Ty],
+        budget: &ir::PlanBudget,
+    ) -> Result<Arc<CallInputTrace>, FactsError> {
+        infer_input_schema_trace(
+            Some(env),
+            parameters,
+            &ir::Ty::Unit,
+            inputs,
+            budget,
+            &mut |_, _| panic!("fixture has no nominal materialization"),
+        )
+    }
+
+    #[test]
+    fn expected_result_infers_zero_input_nominal_output() {
+        let budget = ir::PlanBudget::default();
+        let own = env(1);
+        let expansion = super::super::expansion_budget::ExpansionBudget::default();
+        let modules = super::super::module_identity::ModuleArenaBuilder::for_catalog(
+            expansion.clone(),
+            super::super::owner_path::standalone_issued(
+                &expansion,
+                super::super::owner_path::OwnerDomain::ModuleArena,
+            )
+            .unwrap(),
+        )
+        .unwrap()
+        .freeze()
+        .unwrap();
+        let declaration = env(0).binder().declaration;
+        let option = |argument: ir::Ty, index| {
+            ir::Ty::Enum(ir::EnumTy::new(ir::EnumDef {
+                id: ir::NominalAppId {
+                    snapshot: declaration.snapshot,
+                    index: ir::NominalIndex::SourceSlot(index),
+                },
+                source_decl: declaration,
+                type_args: Arc::from([argument.clone()]),
+                name: "Option".into(),
+                module: modules.core_root(),
+                visibility: ir::Visibility::Public,
+                variants: Arc::from([
+                    ir::VariantDef {
+                        name: "None".into(),
+                        shape: ir::VariantShape::Unit,
+                        fields: [].into(),
+                    },
+                    ir::VariantDef {
+                        name: "Some".into(),
+                        shape: ir::VariantShape::Tuple,
+                        fields: [ir::FieldDef {
+                            name: "0".into(),
+                            ty: argument,
+                            visibility: ir::Visibility::Public,
+                            lifetime_bound: false,
+                        }]
+                        .into(),
+                    },
+                ]),
+            }))
+        };
+        let result = option(param(&own, 0), 0);
+        let inferred = reference(ir::BorrowKind::Shared, ir::Ty::Int(ir::IntTy::I32));
+        let expected = option(inferred.clone(), 1);
+        let trace = infer_input_schema_trace_with_context(
+            Some(own.clone()),
+            &[],
+            &result,
+            &[],
+            Some(&expected),
+            &budget,
+            &mut |_, _| unreachable!(),
+        )
+        .unwrap();
+        assert_eq!(trace.actuals(), &[inferred]);
+        let replay = infer_input_schema_trace_with_context(
+            Some(own.clone()),
+            &[],
+            &result,
+            &[],
+            Some(&expected),
+            &budget,
+            &mut |_, _| unreachable!(),
+        )
+        .unwrap();
+        trace.validate_replayed(&replay, &budget).unwrap();
+        assert!(
+            infer_input_schema_trace(
+                Some(own),
+                &[],
+                &result,
+                &[],
+                &budget,
+                &mut |_, _| unreachable!()
+            )
+            .is_err()
+        );
+        assert!(trace.expected(0, &budget).is_err());
+    }
+
+    #[test]
+    fn expected_result_conflicts_and_context_mutations_are_rejected() {
+        let budget = ir::PlanBudget::default();
+        let own = env(1);
+        let parameter = param(&own, 0);
+        let parameters = [parameter.clone()];
+        let inputs = [ir::Ty::Char];
+        let solve = |expected: Option<&ir::Ty>| {
+            infer_input_schema_trace_with_context(
+                Some(own.clone()),
+                &parameters,
+                &parameter,
+                &inputs,
+                expected,
+                &budget,
+                &mut |_, _| unreachable!(),
+            )
+        };
+        let trace = solve(Some(&ir::Ty::Char)).unwrap();
+        assert!(solve(Some(&ir::Ty::Bool)).is_err());
+        let absent = solve(None).unwrap();
+        assert_eq!(trace.actuals(), absent.actuals());
+        assert!(trace.validate_replayed(&absent, &budget).is_err());
+        assert!(absent.validate_replayed(&trace, &budget).is_err());
+        let mut changed = (*trace).clone();
+        changed.expected = Some(Arc::new(InferKind::Rigid(ir::Ty::Bool)));
+        assert!(trace.validate_replayed(&changed, &budget).is_err());
+        let mut changed = (*trace).clone();
+        changed.expected = None;
+        assert!(trace.validate_replayed(&changed, &budget).is_err());
+    }
+
+    #[test]
+    fn expected_result_keeps_caller_parameters_rigid() {
+        let budget = ir::PlanBudget::default();
+        let own = env(1);
+        let caller = env(1);
+        let result = reference(ir::BorrowKind::Shared, param(&own, 0));
+        let expected = reference(ir::BorrowKind::Shared, param(&caller, 0));
+        let trace = infer_input_schema_trace_with_context(
+            Some(own.clone()),
+            &[],
+            &result,
+            &[],
+            Some(&expected),
+            &budget,
+            &mut |_, _| unreachable!(),
+        )
+        .unwrap();
+        assert_eq!(trace.actuals(), &[param(&caller, 0)]);
+        assert!(
+            infer_input_schema_trace_with_context(
+                Some(own.clone()),
+                &[param(&own, 0)],
+                &result,
+                &[ir::Ty::Char],
+                Some(&expected),
+                &budget,
+                &mut |_, _| unreachable!()
+            )
+            .is_err()
+        );
+        let foreign = env(1);
+        let foreign_expected = reference(ir::BorrowKind::Shared, param(&foreign, 0));
+        let foreign_trace = infer_input_schema_trace_with_context(
+            Some(own),
+            &[],
+            &result,
+            &[],
+            Some(&foreign_expected),
+            &budget,
+            &mut |_, _| unreachable!(),
+        )
+        .unwrap();
+        assert!(trace.validate_replayed(&foreign_trace, &budget).is_err());
+    }
+
+    #[test]
+    fn input_expectations_follow_source_schema_not_reference_actuals() {
+        let budget = ir::PlanBudget::default();
+        let own = env(3);
+        let parameters = [
+            param(&own, 0),
+            reference(ir::BorrowKind::Mut, param(&own, 1)),
+            reference(ir::BorrowKind::Shared, param(&own, 2)),
+        ];
+        let inputs = [
+            reference(ir::BorrowKind::Mut, ir::Ty::Bool),
+            reference(ir::BorrowKind::Mut, ir::Ty::Char),
+            reference(ir::BorrowKind::Shared, ir::Ty::Int(ir::IntTy::I32)),
+        ];
+        let trace = infer(own, &parameters, &inputs, &budget).unwrap();
+        let erased: CallTrace = trace.clone().into();
+        for (argument, expectation) in [
+            ir::CallExpectation::NoFirmReference,
+            ir::CallExpectation::FirmReference {
+                kind: ir::BorrowKind::Mut,
+            },
+            ir::CallExpectation::FirmReference {
+                kind: ir::BorrowKind::Shared,
+            },
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            assert_eq!(trace.expected(argument, &budget).unwrap(), expectation);
+            assert_eq!(erased.expected(argument, &budget).unwrap(), expectation);
+        }
+        assert!(trace.expected(3, &budget).is_err());
+        assert!(erased.expected(usize::MAX, &budget).is_err());
+        let mut malformed = (*trace).clone();
+        malformed.evidence = Arc::from([]);
+        assert!(malformed.expected(0, &budget).is_err());
+    }
+
+    #[test]
+    fn full_input_trace_replays_multiple_slots_and_nested_aggregates() {
+        let budget = ir::PlanBudget::default();
+        let own = env(3);
+        let caller = env(1);
+        let rigid = param(&caller, 0);
+        let parameters = [
+            reference(
+                ir::BorrowKind::Shared,
+                ir::Ty::Tuple(Arc::from([
+                    array(param(&own, 0), 4),
+                    reference(ir::BorrowKind::Mut, param(&own, 1)),
+                ])),
+            ),
+            array(reference(ir::BorrowKind::Shared, param(&own, 2)), 2),
+            param(&own, 0),
+        ];
+        let inputs = [
+            reference(
+                ir::BorrowKind::Shared,
+                ir::Ty::Tuple(Arc::from([
+                    array(ir::Ty::Bool, 4),
+                    reference(ir::BorrowKind::Mut, rigid.clone()),
+                ])),
+            ),
+            array(reference(ir::BorrowKind::Shared, ir::Ty::Char), 2),
+            ir::Ty::Bool,
+        ];
+        let trace = infer(own.clone(), &parameters, &inputs, &budget).unwrap();
+        let replay = infer(own.clone(), &parameters, &inputs, &budget).unwrap();
+        assert_eq!(
+            trace.actuals(),
+            &[ir::Ty::Bool, rigid.clone(), ir::Ty::Char]
+        );
+        trace.validate_replayed(&replay, &budget).unwrap();
+        trace.validate_actuals(trace.actuals(), &budget).unwrap();
+        assert!(
+            trace
+                .validate_actuals(&[ir::Ty::Bool, ir::Ty::Char, rigid], &budget)
+                .is_err()
+        );
+        let mut conflict = inputs.clone();
+        conflict[2] = ir::Ty::Char;
+        assert!(infer(own.clone(), &parameters, &conflict, &budget).is_err());
+        assert!(infer(own, &parameters, &inputs[..2], &budget).is_err());
+
+        let mut changed = (*replay).clone();
+        changed.schemas = Arc::from([]);
+        assert!(trace.validate_replayed(&changed, &budget).is_err());
+        let mut changed = (*replay).clone();
+        changed.evidence = Arc::from([]);
+        assert!(trace.validate_replayed(&changed, &budget).is_err());
+        let mut changed = (*replay).clone();
+        changed.slots = Arc::from([]);
+        assert!(trace.validate_replayed(&changed, &budget).is_err());
+        let mut changed = (*replay).clone();
+        changed.actuals = Arc::from([ir::Ty::Char, ir::Ty::Bool, ir::Ty::Char]);
+        assert!(trace.validate_replayed(&changed, &budget).is_err());
+        let mut changed = (*replay).clone();
+        changed.result_schema = Arc::new(InferKind::Rigid(ir::Ty::Bool));
+        assert!(trace.validate_replayed(&changed, &budget).is_err());
+    }
+
+    #[test]
+    fn full_input_trace_preserves_rigid_binders_and_reference_kinds() {
+        let budget = ir::PlanBudget::default();
+        let own = env(2);
+        let caller = env(1);
+        let other_caller = env(1);
+        let parameters = [param(&own, 0), param(&own, 1), param(&own, 0)];
+        let rigid = param(&caller, 0);
+        let inputs = [
+            rigid.clone(),
+            reference(ir::BorrowKind::Mut, ir::Ty::Char),
+            rigid,
+        ];
+        let trace = infer(own.clone(), &parameters, &inputs, &budget).unwrap();
+        let mut foreign = inputs.clone();
+        foreign[2] = param(&other_caller, 0);
+        assert!(infer(own.clone(), &parameters, &foreign, &budget).is_err());
+        let mut changed = inputs.clone();
+        changed[1] = reference(ir::BorrowKind::Shared, ir::Ty::Char);
+        let changed = infer(own, &parameters, &changed, &budget).unwrap();
+        assert!(trace.validate_replayed(&changed, &budget).is_err());
+    }
+
+    #[test]
+    fn full_input_trace_keeps_caller_schema_rigid_and_result_non_inferential() {
+        let budget = ir::PlanBudget::default();
+        let own = env(1);
+        let caller = env(1);
+        let rigid = param(&caller, 0);
+        let parameters = [
+            param(&own, 0),
+            reference(ir::BorrowKind::Shared, rigid.clone()),
+        ];
+        let inputs = [
+            ir::Ty::Char,
+            reference(ir::BorrowKind::Shared, rigid.clone()),
+        ];
+        let trace = infer(own.clone(), &parameters, &inputs, &budget).unwrap();
+        assert_eq!(trace.actuals(), &[ir::Ty::Char]);
+        let changed = [
+            ir::Ty::Char,
+            reference(ir::BorrowKind::Shared, ir::Ty::Bool),
+        ];
+        assert!(infer(own.clone(), &parameters, &changed, &budget).is_err());
+
+        // Even a result schema naming the slot is not independently authored
+        // expected-type evidence. An unused input slot must remain unresolved.
+        assert!(
+            infer_input_schema_trace(
+                Some(own.clone()),
+                &[ir::Ty::Bool],
+                &param(&own, 0),
+                &[ir::Ty::Bool],
+                &budget,
+                &mut |_, _| unreachable!()
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn full_input_trace_accepts_the_entire_own_slot_range_in_declaration_order() {
+        let budget = ir::PlanBudget::default();
+        let own = env(32);
+        let parameters: Vec<_> = (0..32).rev().map(|i| param(&own, i)).collect();
+        let inputs: Vec<_> = (0..32)
+            .rev()
+            .map(|i| {
+                if i % 2 == 0 {
+                    ir::Ty::Bool
+                } else {
+                    ir::Ty::Char
+                }
+            })
+            .collect();
+        let trace = infer(own, &parameters, &inputs, &budget).unwrap();
+        for (index, actual) in trace.actuals().iter().enumerate() {
+            assert_eq!(
+                *actual,
+                if index % 2 == 0 {
+                    ir::Ty::Bool
+                } else {
+                    ir::Ty::Char
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn full_input_trace_rejects_unconstrained_and_malformed_slots_and_is_metered() {
+        let budget = ir::PlanBudget::default();
+        let own = env(2);
+        assert!(infer(own.clone(), &[param(&own, 0)], &[ir::Ty::Bool], &budget).is_err());
+        assert!(infer(own.clone(), &[param(&own, 2)], &[ir::Ty::Bool], &budget).is_err());
+        let tiny = ir::PlanBudget::new(ir::PlanLimits {
+            work: 0,
+            ..Default::default()
+        });
+        let err = infer(own.clone(), &[param(&own, 0)], &[ir::Ty::Bool], &tiny).unwrap_err();
+        assert!(err.is_resource());
+        let trace = infer_input_schema_trace(
+            None,
+            &[ir::Ty::Char],
+            &ir::Ty::Unit,
+            &[ir::Ty::Char],
+            &budget,
+            &mut |_, _| unreachable!(),
+        )
+        .unwrap();
+        assert!(trace.actuals().is_empty());
+    }
+
+    #[test]
+    fn nominal_constraints_match_identity_and_ordered_nested_arguments() {
+        let budget = ir::PlanBudget::default();
+        let own = env(2);
+        let mut state = CallInferenceState::new(Some(own.clone()), &budget).unwrap();
+        let declaration = own.binder().declaration;
+        let schema = state
+            .node(InferKind::Nominal(
+                declaration,
+                Arc::from([
+                    state.schema(&array(param(&own, 1), 3), 0).unwrap(),
+                    state
+                        .schema(&reference(ir::BorrowKind::Shared, param(&own, 0)), 0)
+                        .unwrap(),
+                ]),
+            ))
+            .unwrap();
+        let evidence = state
+            .node(InferKind::Nominal(
+                declaration,
+                Arc::from([
+                    state.type_term(&array(ir::Ty::Char, 3), None, 0).unwrap(),
+                    state
+                        .type_term(&reference(ir::BorrowKind::Shared, ir::Ty::Bool), None, 0)
+                        .unwrap(),
+                ]),
+            ))
+            .unwrap();
+        state.constrain(&schema, &evidence, 0).unwrap();
+        assert_eq!(
+            state
+                .finish(false, &mut |_, _| unreachable!())
+                .unwrap()
+                .unwrap(),
+            vec![ir::Ty::Bool, ir::Ty::Char]
+        );
+        let other = env(0).binder().declaration;
+        let InferKind::Nominal(_, args) = evidence.as_ref() else {
+            unreachable!()
+        };
+        let foreign = state.node(InferKind::Nominal(other, args.clone())).unwrap();
+        assert!(state.constrain(&schema, &foreign, 0).is_err());
+        assert!(!terms_equal(&evidence, &foreign, &budget, 0).unwrap());
+    }
 }
 
 #[cfg(test)]
@@ -1382,6 +2504,15 @@ mod reference_identity_trace_tests {
         let mut replaced = mutable.clone();
         replaced.after = trace(ir::BorrowKind::Mut).after;
         assert!(mutable.validate_replayed(&replaced, &budget).is_err());
+
+        let legacy: CallTrace = Arc::new(mutable).into();
+        assert_eq!(
+            legacy.expected(0, &budget).unwrap(),
+            ir::CallExpectation::NoFirmReference
+        );
+        assert!(legacy.expected(1, &budget).is_err());
+        let replaced: CallTrace = Arc::new(replaced).into();
+        assert!(replaced.expected(0, &budget).is_err());
     }
 }
 

@@ -4,6 +4,128 @@
 mod oracle;
 
 #[test]
+fn generic_mutable_reference_inputs_match_stock() {
+    oracle::stock_native(
+        r#"fn consume<A,B>(a:A,b:B)->i32 { let _=a; let _=b; 31 }
+fn main() {
+    let mut n=4i32;
+    let flag=true;
+    println!("{}",consume(&mut n,&flag));
+    n+=1;
+    let reference:&mut i32=&mut n;
+    println!("{}",consume(reference,&flag));
+    n+=1;
+    println!("{}",n);
+}"#,
+    );
+}
+
+#[test]
+fn generic_mutable_input_preserves_trait_dispatch() {
+    oracle::stock_native(
+        r#"trait Increment { fn increment(self); }
+impl Increment for &mut i32 { fn increment(self) { *self+=1; } }
+fn update<A:Increment,B>(a:A,b:B) { a.increment();let _=b; }
+fn main() {
+    let mut n=4i32;
+    let flag=true;
+    update(&mut n,&flag);
+    update(&mut n,&flag);
+    println!("{}",n);
+}"#,
+    );
+}
+
+#[test]
+fn generic_reference_schema_reborrows_match_stock() {
+    oracle::stock_native(
+        r#"fn use_refs<T,U>(a:&mut T,b:&U)->i32 { let _=a;let _=b;43 }
+fn consume<A,B>(a:A,b:B)->i32 { let _=a;let _=b;47 }
+fn main() {
+    let mut n=4i32;
+    let flag=true;
+    let r:&mut i32=&mut n;
+    println!("{} {}",use_refs(r,&flag),use_refs(r,&flag));
+    println!("{}",consume::<&mut i32,&bool>(r,&flag));
+    *r+=1;
+    println!("{}",n);
+}"#,
+    );
+}
+
+#[test]
+fn generic_nested_reference_inputs_match_stock() {
+    oracle::stock_native(
+        r#"fn consume<A,B>(a:A,b:B)->bool { let _=a; let _=b; true }
+fn main() {
+    let mut n=4i32;
+    let flag=true;
+    let reference:&mut i32=&mut n;
+    let shared:&&mut i32=&reference;
+    println!("{}",consume(shared,&flag));
+    *reference+=1;
+    println!("{}",n);
+}"#,
+    );
+}
+
+#[test]
+fn generic_tuple_and_array_reference_inputs_match_stock() {
+    oracle::stock_native(
+        r#"fn consume<A,B>(a:A,b:B)->i32 { let _=a; let _=b; 37 }
+fn main() {
+    let a=4i32;
+    let b=9i32;
+    let flag=true;
+    let pair:(&i32,&bool)=(&a,&flag);
+    let values:[&i32;2]=[&a,&b];
+    println!("{} {}",consume(pair,&b),consume(values,&flag));
+    println!("{} {}",*pair.0,*values[1]);
+}"#,
+    );
+}
+
+#[test]
+fn generic_nominal_reference_inputs_match_stock() {
+    oracle::stock_native(
+        r#"struct Pair<'a> { a:&'a i32, b:&'a i32 }
+fn consume<A,B>(a:A,b:B)->i32 { let _=a; let _=b; 41 }
+fn main() {
+    let a=4i32;
+    let b=9i32;
+    let pair:Pair<'_>=Pair { a:&a,b:&b };
+    let optional:Option<&i32>=Some(&a);
+    println!("{} {}",consume(pair,&b),consume(optional,&b));
+}"#,
+    );
+}
+
+#[test]
+fn deferred_reference_product_matches_stock() {
+    oracle::stock_native(
+        "fn main(){let n=7i32;let pair;pair=(&n,true);println!(\"{} {}\",*pair.0,pair.1);}",
+    );
+}
+
+#[test]
+fn generalized_reference_inputs_reject_moves_aliases_and_escapes() {
+    for source in [
+        "fn consume<A,B>(a:A,b:B){let _=a;let _=b;}fn main(){let mut n=1i32;let b=true;let r=&mut n;consume(r,&b);*r=2;}",
+        "fn consume<A,B>(a:A,b:B){let _=a;let _=b;}fn main(){let mut n=1i32;consume(&mut n,&n);}",
+        "fn consume<A,B>(a:A,b:B){let _=a;let _=b;}fn main(){let mut n=1i32;let a=[&mut n];consume(a,&true);*a[0]=2;}",
+        "fn consume<A,B>(a:A,b:B){let _=a;let _=b;}fn main(){let escaped;{let n=1i32;escaped=(&n,);}consume(escaped,&true);}",
+    ] {
+        oracle::stock_and_native_reject_observed(source, |workers, check, failure| {
+            let message = failure.to_string();
+            assert!(
+                !message.contains("unsupported") && !message.contains("resource limit"),
+                "ownership control hit an implementation boundary (workers={workers}, check={check}): {message}"
+            );
+        });
+    }
+}
+
+#[test]
 fn independent_reference_type_parameters_match_stock() {
     oracle::stock_native(
         r#"fn inspect<A: Copy, B: Copy>(a: A, b: B) -> i32 { let _ = a; let _ = b; 17 }
