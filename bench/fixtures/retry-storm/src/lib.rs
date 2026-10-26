@@ -8,7 +8,7 @@ mod tests {
         ($($name:ident),+ $(,)?) => {$(
             #[test]
             fn $name() {
-                std::thread::sleep(std::time::Duration::from_millis(50));
+                std::thread::sleep(std::time::Duration::from_millis(200));
                 panic!("intentional failure for retry-overhead measurement");
             }
         )+};
