@@ -1386,6 +1386,8 @@ struct MemoEntry {
 #[derive(Default)]
 struct ProofScratch {
     checked: Option<Box<ProofScratch>>,
+    // Scratch allocation admission ends with this arena, not the whole node.
+    _checked_storage: Option<ir::PlanReservation>,
     checked_context: Option<(WorldId, usize, usize, FactsPhase, DeclId)>,
     _checked_env: Option<Arc<GenericEnv>>,
     active: Vec<GoalKey>,
@@ -1472,6 +1474,8 @@ pub(in crate::compiler) struct NominalReplays {
     /// A raw nested computation never borrows caller-authorized records. Its
     /// own exact world/environment arena survives repeated raw replay roots.
     raw_metadata: Option<(WorldId, GenericEnv, Box<NominalReplays>)>,
+    // The child never leaves its parent replay computation.
+    _raw_metadata_storage: Option<ir::PlanReservation>,
     /// Complete raw formation proofs, distinct from metadata-only answers.
     raw_formations: body_validation::RawFormations,
     /// Full caller-authorized predicate formations never enter the raw memo.
@@ -1646,9 +1650,14 @@ impl NominalReplays {
                 return Ok(None);
             }
         } else {
-            retain::<(WorldId, GenericEnv, Box<NominalReplays>)>(&world.budget, 1)?;
-            retain::<NominalReplays>(&world.budget, 1)?;
+            let storage = charged(
+                &world.budget,
+                world.budget.reserve_bytes(
+                    std::mem::size_of::<NominalReplays>() + 2 * std::mem::size_of::<usize>(),
+                ),
+            )?;
             self.raw_metadata = Some((world.id, env.clone(), Box::default()));
+            self._raw_metadata_storage = Some(storage);
         }
         Ok(self
             .raw_metadata
@@ -1851,7 +1860,12 @@ impl ProofScratch {
         }
         if self.checked_context.is_none() {
             if self.checked.is_none() {
-                retain::<ProofScratch>(caller.budget(), 1)?;
+                self._checked_storage = Some(charged(
+                    caller.budget(),
+                    caller.budget().reserve_bytes(
+                        std::mem::size_of::<ProofScratch>() + 2 * std::mem::size_of::<usize>(),
+                    ),
+                )?);
             }
             let arena = self.checked.get_or_insert_with(|| {
                 Box::new(Self {
@@ -10865,6 +10879,91 @@ mod tests {
             Err(error) if error.kind() == FactsErrorKind::Resource
         ));
         assert_eq!(facts.budget().first_resource_failure(), failure);
+    }
+
+    #[test]
+    fn proof_arena_boxes_release_only_their_own_scoped_storage() {
+        let c = case();
+        let world = c.build().unwrap();
+        let facts = world.callable_facts(c.caller).unwrap();
+        let before = facts.budget().usage_snapshot().bytes;
+        {
+            let mut scratch = ProofScratch::default();
+            scratch
+                .with_caller_arena(world.id, Some(&facts), |_| Ok(()))
+                .unwrap();
+            let live = facts.budget().usage_snapshot().bytes;
+            assert_eq!(
+                live - before,
+                std::mem::size_of::<ProofScratch>() + 2 * std::mem::size_of::<usize>()
+            );
+            let address = std::ptr::from_ref(scratch.checked.as_deref().unwrap());
+            scratch
+                .with_caller_arena(world.id, Some(&facts), |arena| {
+                    assert_eq!(std::ptr::from_ref(arena), address);
+                    Ok(())
+                })
+                .unwrap();
+            assert_eq!(facts.budget().usage_snapshot().bytes, live);
+        }
+        assert_eq!(facts.budget().usage_snapshot().bytes, before);
+        {
+            let mut replays = NominalReplays::default();
+            assert!(
+                replays
+                    .raw_metadata_child(&world, facts.env())
+                    .unwrap()
+                    .is_some()
+            );
+            let live = facts.budget().usage_snapshot().bytes;
+            assert_eq!(
+                live - before,
+                std::mem::size_of::<NominalReplays>() + 2 * std::mem::size_of::<usize>()
+            );
+            assert!(
+                replays
+                    .raw_metadata_child(&world, facts.env())
+                    .unwrap()
+                    .is_some()
+            );
+            assert_eq!(facts.budget().usage_snapshot().bytes, live);
+        }
+        assert_eq!(facts.budget().usage_snapshot().bytes, before);
+        assert!(facts.budget().first_resource_failure().is_none());
+    }
+
+    #[test]
+    fn proof_arena_box_drop_never_erases_poison_or_first_failure() {
+        let c = case();
+        let world = c.build().unwrap();
+        let facts = world.callable_facts(c.caller).unwrap();
+        let mut scratch = ProofScratch::default();
+        scratch
+            .with_caller_arena(world.id, Some(&facts), |_| Ok(()))
+            .unwrap();
+        let mut replays = NominalReplays::default();
+        assert!(
+            replays
+                .raw_metadata_child(&world, facts.env())
+                .unwrap()
+                .is_some()
+        );
+        let admitted = facts.budget().usage_snapshot().bytes;
+        assert!(facts.budget().charge_work(usize::MAX).is_err());
+        let first_failure = facts.budget().first_resource_failure();
+        assert!(first_failure.is_some());
+        facts.budget().poison_ledger_for_tests();
+        drop(scratch);
+        drop(replays);
+        assert_eq!(facts.budget().usage_snapshot().bytes, admitted);
+        assert_eq!(facts.budget().first_resource_failure(), first_failure);
+        assert!(facts.budget().usage_snapshot().poisoned);
+        let mut fresh = ProofScratch::default();
+        assert!(matches!(
+            fresh.with_caller_arena(world.id, Some(&facts), |_| Ok(())),
+            Err(error) if error.kind() == FactsErrorKind::Resource
+        ));
+        assert_eq!(facts.budget().first_resource_failure(), first_failure);
     }
 
     #[test]
