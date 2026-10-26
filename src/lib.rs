@@ -42,6 +42,7 @@ mod history;
 #[cfg(unix)]
 mod hotpatch;
 mod msvc_tools;
+mod platform_config;
 /// Hot patching rewrites ELF binaries: nothing to do on Windows.
 #[cfg(windows)]
 mod hotpatch {
@@ -465,6 +466,11 @@ enum Command {
         /// Message to send. Quote it as one argument.
         message: String,
     },
+    /// Persist user platform defaults without storing credentials.
+    Setup {
+        #[command(subcommand)]
+        command: platform_config::Command,
+    },
     /// Anonymous usage stats: status (default), on, off.
     /// Also off with JUSTRUST_NO_TELEMETRY=1 or DO_NOT_TRACK=1.
     Telemetry {
@@ -739,6 +745,9 @@ pub fn main() -> anyhow::Result<()> {
     if shim::invoked_as_shim(&argv0) {
         shim::main();
     }
+    if std::env::args_os().nth(1).as_deref() != Some(std::ffi::OsStr::new("setup")) {
+        platform_config::apply_defaults()?;
+    }
     telemetry::install_panic_hook();
     if name == "cargo" {
         record::main(std::env::args_os().skip(1).collect());
@@ -797,6 +806,7 @@ fn command_name(c: &Command) -> Option<&'static str> {
         | Command::Cargo(_)
         | Command::Feedback { .. }
         | Command::Telemetry { .. } => return None,
+        Command::Setup { .. } => "setup",
         Command::TestBundle { .. } => "test-bundle",
         Command::Log { .. } => "log",
         Command::Runs { .. } => "runs",
@@ -911,6 +921,7 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
             sync,
             publish,
         } => depcache_gc::command(prune, clear, auto, sync, publish)?,
+        Command::Setup { command } => platform_config::command(command)?,
         Command::Early { action } => early::command(&action)?,
         Command::Daemon { action, args } => buildd::command(&action, args)?,
         Command::Toolchain { cmd } => match cmd.unwrap_or(ToolchainCmd::Status) {
