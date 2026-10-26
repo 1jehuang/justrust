@@ -154,10 +154,7 @@ fn equal_spelling_and_allocation_order_do_not_merge_foreign_owners() {
 
 #[test]
 fn lexical_validity_does_not_silently_admit_new_name_classes() {
-    for (text, reason) in [
-        ("r#type", UnsupportedName::RawIdentifier),
-        ("β", UnsupportedName::UnicodeIdentifier),
-    ] {
+    for (text, reason) in [("β", UnsupportedName::UnicodeIdentifier)] {
         let (mut names, tokens) = scanned(text, Edition::E2024, &ExpansionBudget::default());
         assert!(
             matches!(names.from_token(tokens[0], Edition::E2024), Err(NameError::Unsupported(actual)) if actual == reason)
@@ -168,6 +165,19 @@ fn lexical_validity_does_not_silently_admit_new_name_classes() {
         names.from_token(tokens[0], Edition::E2024),
         Err(NameError::ExpectedIdentifier)
     ));
+}
+
+#[test]
+fn raw_identifier_keeps_spelling_and_canonical_name_identity() {
+    let (mut names, tokens) = scanned("r#type type", Edition::E2024, &ExpansionBudget::default());
+    let raw = names.from_token(tokens[0], Edition::E2024).unwrap();
+    let ordinary = names.from_token(tokens[1], Edition::E2024).unwrap();
+    assert!(names.data(raw).unwrap().raw);
+    assert!(!names.data(ordinary).unwrap().raw);
+    assert_eq!(
+        names.key(raw, LookupClass::Local).unwrap(),
+        names.key(ordinary, LookupClass::Local).unwrap(),
+    );
 }
 
 /// The frozen store's owner receipt, checked to pay exactly the step capacity

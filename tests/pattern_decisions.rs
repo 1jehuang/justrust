@@ -443,6 +443,7 @@ fn all_blocks(function: &ir::CheckedFunction) -> Vec<&ir::TypedBlock> {
 }
 // Independent projection walk pins exact tag domination, not merely a matching enum name.
 fn projected_type(domain: &ir::Ty, path: &[ir::Projection], prior: &[ir::PatternTest]) -> ir::Ty {
+    let budget = ir::PlanBudget::default();
     let mut current = domain.clone();
     let mut selected = None;
     for (index, projection) in path.iter().enumerate() {
@@ -463,13 +464,18 @@ fn projected_type(domain: &ir::Ty, path: &[ir::Projection], prior: &[ir::Pattern
                         let variant = selected
                             .take()
                             .expect("enum field without a preceding downcast");
-                        enumeration.def().variants[variant].fields[*field]
+                        enumeration.def().variants[variant]
+                            .fields
+                            .read(&budget)
+                            .unwrap()[*field]
                             .ty
                             .clone()
                     }
                     ir::Ty::Struct(structure) => {
                         assert!(selected.is_none());
-                        structure.def().fields[*field].ty.clone()
+                        structure.def().fields.read(&budget).unwrap()[*field]
+                            .ty
+                            .clone()
                     }
                     ir::Ty::Tuple(fields) => {
                         assert!(selected.is_none());
