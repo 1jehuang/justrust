@@ -638,6 +638,7 @@ fn kind_name(kind: u32) -> String {
         149 => "signature_module",
         147 => "module_decls",
         150 => "admit",
+        151 => "file_base",
         _ => return format!("kind{kind}"),
     }
     .to_string()

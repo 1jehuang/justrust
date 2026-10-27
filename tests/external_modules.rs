@@ -562,6 +562,12 @@ fn external_source_graph_is_shared_and_accounts_for_all_files() {
                         .iter()
                         .map(|file| Key::new(150, file.params.clone())),
                 );
+                // Item bases are chained per file: one FILE_BASE per SOURCE.
+                expected.extend(
+                    source_files
+                        .iter()
+                        .map(|file| Key::new(151, file.params.clone())),
+                );
                 // Resolution and signature producers are keyed by their own
                 // independently derived typed module inventories. Declaration
                 // producers instead use canonical module keys from source DeclIds.
@@ -673,6 +679,7 @@ fn external_source_graph_is_shared_and_accounts_for_all_files() {
                             vec![(101, vec![], 1)]
                         }
                         150 => Vec::new(),
+                        151 => Vec::new(),
                         _ => continue,
                     };
                     assert_eq!(*count, 1, "producer repeated {key:?}");
@@ -701,6 +708,19 @@ fn external_source_graph_is_shared_and_accounts_for_all_files() {
                         .collect::<Vec<_>>();
                     actual.sort();
                     actual.dedup();
+                    if key.kind == 151 {
+                        // An item base reads only its own ADMIT entry and its
+                        // single admitted predecessor's base and parse.
+                        for (kind, _, _) in &actual {
+                            assert!(
+                                matches!(kind, 150 | 151 | 121),
+                                "FILE_BASE {key:?} read {kind}"
+                            );
+                        }
+                        assert!(actual.contains(&(150, key.params.clone(), 0)));
+                        assert!(actual.iter().filter(|(kind, _, _)| *kind == 151).count() <= 1);
+                        continue;
+                    }
                     if key.kind == 150 {
                         // Admission is a per-file chain: it reads only other
                         // ADMIT checkpoints and its own or its parent's SOURCE.

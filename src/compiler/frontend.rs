@@ -8335,6 +8335,35 @@ pub struct ParsedProgram {
     /// Child file entries of a single-file view parse, in child-site order.
     child_entries: Vec<ChildEntry>,
 }
+/// Crate-wide index base of one file's items: the item counts of every
+/// file admitted before it. Each file relocates against its own base.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FileItemBase {
+    pub functions: usize,
+    pub impls: usize,
+    pub structs: usize,
+    pub enums: usize,
+    pub traits: usize,
+    pub constants: usize,
+}
+impl crate::engine::Fact for FileItemBase {}
+impl FileItemBase {
+    /// The base of the file admitted right after `program`'s file.
+    pub fn after(&self, program: &Program) -> Result<Self, String> {
+        let add = |base: usize, count: usize| {
+            base.checked_add(count)
+                .ok_or_else(|| "file item base overflow".to_string())
+        };
+        Ok(Self {
+            functions: add(self.functions, program.functions.len())?,
+            impls: add(self.impls, program.impls.len())?,
+            structs: add(self.structs, program.structs.len())?,
+            enums: add(self.enums, program.enums.len())?,
+            traits: add(self.traits, program.traits.len())?,
+            constants: add(self.constants, program.constants.len())?,
+        })
+    }
+}
 /// Where a child file's items mount (PARSE-SPLIT.md step C1): its module in
 /// the parent file's arena and the textual macro scope at the declaration.
 #[derive(Clone)]
@@ -18823,6 +18852,25 @@ pub(super) fn merge_crate_file_refs(
     budget: super::expansion_budget::ExpansionBudget,
     owner: super::owner_path::Issued,
 ) -> Result<ParsedProgram, String> {
+    let mut bases = Vec::with_capacity(files.len());
+    let mut base = FileItemBase::default();
+    for file in files {
+        bases.push(base);
+        base = base.after(&file.program)?;
+    }
+    merge_crate_file_refs_at(files, &bases, budget, owner)
+}
+/// Merge files whose crate-wide item bases were published per file
+/// (FILE_BASE). A base disagreeing with the files before it fails closed.
+pub(super) fn merge_crate_file_refs_at(
+    files: &[&ParsedProgram],
+    bases: &[FileItemBase],
+    budget: super::expansion_budget::ExpansionBudget,
+    owner: super::owner_path::Issued,
+) -> Result<ParsedProgram, String> {
+    if bases.len() != files.len() || bases.first() != Some(&FileItemBase::default()) {
+        return Err("file item bases do not match the admitted files".into());
+    }
     use super::semantic_scope::ScopeArenaBuilder;
     let (root, rest) = files.split_first().ok_or("no crate files to merge")?;
     let siblings = rest
@@ -18895,8 +18943,19 @@ pub(super) fn merge_crate_file_refs(
                 Some(source.relocate_parsed(block, index, 0, &root.program, names.budget())?);
         }
     }
-    for file in rest {
+    for (file, base) in rest.iter().zip(&bases[1..]) {
         let p = &file.program;
+        let expected = FileItemBase {
+            functions: program.functions.len(),
+            impls: program.impls.len(),
+            structs: program.structs.len(),
+            enums: program.enums.len(),
+            traits: program.traits.len(),
+            constants: program.constants.len(),
+        };
+        if *base != expected {
+            return Err("file item base disagrees with the files admitted before it".into());
+        }
         name_validation::validate_struct_sources(p)?;
         generated_owners::validate(p)?;
         generated_metadata::validate(p)?;
@@ -18930,7 +18989,7 @@ pub(super) fn merge_crate_file_refs(
             }
         }
         extern_crate_aliases.extend(p.extern_crate_aliases.iter().cloned());
-        let function_offset = program.functions.len();
+        let function_offset = base.functions;
         for (index, function) in p.functions.iter().enumerate() {
             let mut relocated = function.clone();
             if let Some(source) = &function.embedded_source {
@@ -18947,7 +19006,7 @@ pub(super) fn merge_crate_file_refs(
         program.constants.extend(p.constants.iter().cloned());
         program.structs.extend(p.structs.iter().cloned());
         program.enums.extend(p.enums.iter().cloned());
-        let implementation_offset = program.impls.len();
+        let implementation_offset = base.impls;
         for (index, block) in p.impls.iter().enumerate() {
             let mut relocated = block.clone();
             if let Some(source) = &block.primitive_source {

@@ -94,6 +94,12 @@ impl AdmitState {
     pub fn admitted(&self) -> Vec<Vec<u64>> {
         in_order(&self.admitted).into_iter().cloned().collect()
     }
+    /// The file admitted immediately before this entry's file, in rendered
+    /// FileId order. O(1): the admission list is newest first.
+    pub fn previous(&self) -> Option<&[u64]> {
+        let head = self.admitted.as_ref()?;
+        head.tail.as_ref().map(|link| link.head.as_slice())
+    }
     pub fn entry_text(&self) -> Option<&str> {
         self.entry.as_deref()
     }

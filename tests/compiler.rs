@@ -1047,7 +1047,13 @@ fn compiler_graph_shares_check_and_build_and_check_only_never_demands_codegen() 
                     .filter(|key| key.kind == 107)
                     .map(|key| Key::new(150, key.params.clone()))
                     .collect();
+                // Each admitted file also has one FILE_BASE offset node.
+                let bases: Vec<_> = admitted
+                    .iter()
+                    .map(|key| Key::new(151, key.params.clone()))
+                    .collect();
                 expected.extend(admitted);
+                expected.extend(bases);
                 // Per-module inventories, associated-constant headers,
                 // nominal well-formedness, per-instance, per-signature and
                 // per-trait/impl/item coherence nodes are keyed

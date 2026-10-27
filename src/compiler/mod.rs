@@ -200,6 +200,7 @@ fn source_fact_error(error: traits::FactsError, budget: &ir::PlanBudget) -> Erro
 }
 
 const ADMIT: u32 = 150;
+const FILE_BASE: u32 = 151;
 const PARSE_FILE: u32 = 121;
 const SIGNATURES: u32 = 101;
 const BODY: u32 = 102;
@@ -920,7 +921,12 @@ impl CompilerProvider {
             .iter()
             .map(|ordinal| keys::SourceFile::from_words(ordinal).map(keys::ParseFile))
             .collect::<Result<Vec<_>, _>>()?;
+        let base_keys = file_keys
+            .iter()
+            .map(|file| keys::FileBase(file.0.clone()))
+            .collect::<Vec<_>>();
         let handles = cx.request_all(file_keys.iter(), 0);
+        let base_handles = cx.request_all(base_keys.iter(), 0);
         let mut parsed_files = Vec::with_capacity(handles.len());
         let mut retry = false;
         for handle in handles {
@@ -944,7 +950,12 @@ impl CompilerProvider {
                 .iter()
                 .filter_map(|file| file.as_ref().as_ref().ok())
                 .collect::<Vec<_>>();
-            frontend::merge_crate_file_refs(&files, budget, owner).map_err(Error::new)?
+            let mut bases = Vec::with_capacity(base_handles.len());
+            for handle in base_handles {
+                let base: Arc<frontend::FileItemBase> = cx.read_fact(handle).await?;
+                bases.push(*base);
+            }
+            frontend::merge_crate_file_refs_at(&files, &bases, budget, owner).map_err(Error::new)?
         };
         Ok((parsed, accounting))
     }
@@ -1254,6 +1265,28 @@ impl Provider for CompilerProvider {
                     }
                     source::source_admit::finish(&mut state, &key.params, unit, id, options);
                     cx.publish_fact(1, state)
+                }
+                FILE_BASE => {
+                    let file = keys::SourceFile::from_words(&key.params)?;
+                    let entry: Arc<source::source_admit::AdmitState> =
+                        cx.read_item(&keys::Admit(file), 0).await?;
+                    if entry.failed() {
+                        return Err(Error::new("file base of an unadmitted file"));
+                    }
+                    let Some(previous) = entry.previous() else {
+                        return cx.publish_fact(0, frontend::FileItemBase::default());
+                    };
+                    let previous = keys::SourceFile::from_words(previous)?;
+                    // Request both predecessor facts before awaiting either.
+                    let base = cx.request_item(&keys::FileBase(previous.clone())).get(0);
+                    let parsed = cx.request_item(&keys::ParseFile(previous)).get(0);
+                    let base: Arc<frontend::FileItemBase> = cx.read_fact(base).await?;
+                    let parsed: Arc<Result<frontend::ParsedProgram, ParseFileFailure>> =
+                        cx.read_fact(parsed).await?;
+                    let parsed = parsed.as_ref().as_ref().map_err(|error| {
+                        Error::new(format!("file base predecessor failed: {error}"))
+                    })?;
+                    cx.publish_fact(0, base.after(&parsed.program).map_err(Error::new)?)
                 }
                 RESOLVE_MODULE => {
                     let ordinal = item_index(&key, "missing resolution module")?;

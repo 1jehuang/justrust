@@ -94,6 +94,19 @@ impl ItemKey for Admit {
     }
 }
 
+/// Crate-wide item base of one admitted file: the counts of every file
+/// admitted before it, chained through its single predecessor.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct FileBase(pub SourceFile);
+
+impl ItemKey for FileBase {
+    const KIND: u32 = super::FILE_BASE;
+
+    fn params(&self) -> (u64, Vec<u64>) {
+        self.0.params()
+    }
+}
+
 /// A per-item (declaration, instance or file ordinal) key of node kind `K`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct Item<const K: u32>(pub usize);
