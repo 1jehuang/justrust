@@ -4097,10 +4097,68 @@ pub struct ResolutionNamespace {
     functions: Vec<Vec<usize>>,
     /// Implementation blocks per module ordinal, in source order.
     impls: Vec<Vec<usize>>,
+    /// Struct and enum declarations per module ordinal: enums first, then
+    /// structs, each in source order (the crate-wide diagnostic order).
+    nominals: Vec<Vec<NominalSource>>,
+    /// First anonymous-adapter body error, ranked after nominal errors.
+    adapter_error: Option<String>,
     associated_boundary: Option<String>,
     equality_boundary: Option<String>,
     associated_bound_sources: Vec<AssociatedBoundSource>,
     derived_debug_source: Option<usize>,
+}
+
+/// A struct or enum resolved inside its module fact. Enums order before
+/// structs, matching the crate-wide resolution order for diagnostics.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum NominalSource {
+    Enum(usize),
+    Struct(usize),
+}
+
+#[derive(Clone, Debug)]
+enum ResolvedNominal {
+    Enum(usize, EnumDecl),
+    Struct(usize, StructDecl),
+}
+impl ResolvedNominal {
+    fn source(&self) -> NominalSource {
+        match self {
+            Self::Enum(index, _) => NominalSource::Enum(*index),
+            Self::Struct(index, _) => NominalSource::Struct(*index),
+        }
+    }
+}
+
+fn resolve_nominal(
+    resolver: &mut Resolver<'_>,
+    program: &Program,
+    source: NominalSource,
+) -> Result<ResolvedNominal, String> {
+    match source {
+        NominalSource::Enum(index) => {
+            let mut enumeration = program.enums[index].clone();
+            resolver.type_params = enumeration.type_params.clone();
+            resolver.bounds(&mut enumeration.bounds, enumeration.module)?;
+            for variant in &mut enumeration.variants {
+                for field in &mut variant.fields {
+                    validate_depth(DepthNode::Type(&field.ty))?;
+                    resolver.ty(&mut field.ty, enumeration.module)?;
+                }
+            }
+            Ok(ResolvedNominal::Enum(index, enumeration))
+        }
+        NominalSource::Struct(index) => {
+            let mut structure = program.structs[index].clone();
+            resolver.type_params = structure.type_params.clone();
+            resolver.bounds(&mut structure.bounds, structure.module)?;
+            for field in &mut structure.fields {
+                validate_depth(DepthNode::Type(&field.ty))?;
+                resolver.ty(&mut field.ty, structure.module)?;
+            }
+            Ok(ResolvedNominal::Struct(index, structure))
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -4113,6 +4171,9 @@ pub struct ResolvedModuleItems {
     /// First failing implementation block of this module. Ranked after every
     /// free-function error, then by implementation index.
     impl_error: Option<(usize, String)>,
+    /// First failing nominal of this module. Ranked before every other error.
+    nominal_error: Option<(NominalSource, String)>,
+    nominals: Vec<ResolvedNominal>,
     ordinal: usize,
     functions: Vec<(usize, Function)>,
     impls: Vec<(usize, ImplDecl)>,
@@ -4149,6 +4210,22 @@ pub fn resolve_module_items(
     let parsed = namespace.parsed.as_ref();
     let indices = resolution_module_indices(namespace, ordinal)?;
     let mut resolver = namespace.state.resolver(parsed);
+    let sources = namespace
+        .nominals
+        .get(ordinal)
+        .ok_or("foreign resolution module ordinal")?;
+    let mut nominals = Vec::with_capacity(sources.len());
+    let mut nominal_error = None;
+    for &source in sources {
+        match resolve_nominal(&mut resolver, &namespace.program, source) {
+            Ok(nominal) => nominals.push(nominal),
+            Err(diagnostic) => {
+                nominal_error = Some((source, diagnostic));
+                break;
+            }
+        }
+    }
+    resolver.type_params.clear();
     let mut functions = Vec::with_capacity(indices.len());
     let mut error = None;
     for &index in indices {
@@ -4193,6 +4270,8 @@ pub fn resolve_module_items(
         namespace_token: namespace.token.clone(),
         error,
         impl_error,
+        nominal_error,
+        nominals,
         ordinal,
         functions,
         impls,
@@ -4755,58 +4834,77 @@ pub fn prepare_resolution_owned(parsed: Arc<ParsedProgram>) -> Result<Resolution
             Ok(())
         })?;
     }
-    for enumeration in &mut program.enums {
-        resolver.type_params = enumeration.type_params.clone();
-        resolver.bounds(&mut enumeration.bounds, enumeration.module)?;
-        for variant in &mut enumeration.variants {
-            for field in &mut variant.fields {
-                validate_depth(DepthNode::Type(&field.ty))?;
-                resolver.ty(&mut field.ty, enumeration.module)?;
-            }
-        }
-    }
-    for structure in &mut program.structs {
-        resolver.type_params = structure.type_params.clone();
-        resolver.bounds(&mut structure.bounds, structure.module)?;
-        for field in &mut structure.fields {
-            validate_depth(DepthNode::Type(&field.ty))?;
-            resolver.ty(&mut field.ty, structure.module)?;
-        }
-    }
     let mut modules = Vec::new();
     let mut functions: Vec<Vec<usize>> = Vec::new();
     let mut impls: Vec<Vec<usize>> = Vec::new();
+    let mut nominals: Vec<Vec<NominalSource>> = Vec::new();
+    let mut ordinal_of = |module: ModuleId,
+                          modules: &mut Vec<ModuleId>,
+                          functions: &mut Vec<Vec<usize>>,
+                          impls: &mut Vec<Vec<usize>>,
+                          nominals: &mut Vec<Vec<NominalSource>>| {
+        match modules.iter().position(|candidate| *candidate == module) {
+            Some(ordinal) => ordinal,
+            None => {
+                modules.push(module);
+                functions.push(Vec::new());
+                impls.push(Vec::new());
+                nominals.push(Vec::new());
+                modules.len() - 1
+            }
+        }
+    };
     // Anonymous adapters establish capture descriptors before parent bodies.
+    // Their diagnostic is deferred: nominal field errors rank first.
+    let mut adapter_error = None;
     for index in 0..program.functions.len() {
         if closures::anonymous_path(&program.functions[index].name, resolver.names())? {
-            resolve_free_function(&mut resolver, index, &mut program.functions[index])?;
+            if adapter_error.is_none()
+                && let Err(error) =
+                    resolve_free_function(&mut resolver, index, &mut program.functions[index])
+            {
+                adapter_error = Some(error);
+            }
         } else {
             let module = program.functions[index].module;
-            let ordinal =
-                if let Some(ordinal) = modules.iter().position(|candidate| *candidate == module) {
-                    ordinal
-                } else {
-                    modules.push(module);
-                    functions.push(Vec::new());
-                    impls.push(Vec::new());
-                    modules.len() - 1
-                };
+            let ordinal = ordinal_of(
+                module,
+                &mut modules,
+                &mut functions,
+                &mut impls,
+                &mut nominals,
+            );
             functions[ordinal].push(index);
         }
     }
+    for (index, enumeration) in program.enums.iter().enumerate() {
+        let ordinal = ordinal_of(
+            enumeration.module,
+            &mut modules,
+            &mut functions,
+            &mut impls,
+            &mut nominals,
+        );
+        nominals[ordinal].push(NominalSource::Enum(index));
+    }
+    for (index, structure) in program.structs.iter().enumerate() {
+        let ordinal = ordinal_of(
+            structure.module,
+            &mut modules,
+            &mut functions,
+            &mut impls,
+            &mut nominals,
+        );
+        nominals[ordinal].push(NominalSource::Struct(index));
+    }
     for (index, block) in program.impls.iter().enumerate() {
-        let ordinal = match modules
-            .iter()
-            .position(|candidate| *candidate == block.module)
-        {
-            Some(ordinal) => ordinal,
-            None => {
-                modules.push(block.module);
-                functions.push(Vec::new());
-                impls.push(Vec::new());
-                modules.len() - 1
-            }
-        };
+        let ordinal = ordinal_of(
+            block.module,
+            &mut modules,
+            &mut functions,
+            &mut impls,
+            &mut nominals,
+        );
         impls[ordinal].push(index);
     }
     let state = ResolutionState::capture(&resolver);
@@ -4818,6 +4916,8 @@ pub fn prepare_resolution_owned(parsed: Arc<ParsedProgram>) -> Result<Resolution
         modules,
         functions,
         impls,
+        nominals,
+        adapter_error,
         associated_boundary,
         equality_boundary,
         associated_bound_sources,
@@ -4886,6 +4986,22 @@ fn finish_resolution_with<T>(
         {
             return Err("foreign resolved module inventory".into());
         }
+        let expected = &namespace.nominals[ordinal];
+        let prefix = match &item.nominal_error {
+            Some((source, _)) if expected.get(item.nominals.len()) == Some(source) => {
+                &expected[..item.nominals.len()]
+            }
+            Some(_) => return Err("foreign resolved module error inventory".into()),
+            None => expected.as_slice(),
+        };
+        if !item
+            .nominals
+            .iter()
+            .map(ResolvedNominal::source)
+            .eq(prefix.iter().copied())
+        {
+            return Err("foreign resolved module inventory".into());
+        }
         let expected = &namespace.impls[ordinal];
         let prefix = match (&item.error, &item.impl_error) {
             (Some(_), None) => &expected[..0],
@@ -4904,6 +5020,16 @@ fn finish_resolution_with<T>(
         {
             return Err("foreign resolved module inventory".into());
         }
+    }
+    if let Some((_, diagnostic)) = items
+        .iter()
+        .filter_map(|item| item.nominal_error.as_ref())
+        .min_by_key(|(source, _)| *source)
+    {
+        return Err(diagnostic.clone());
+    }
+    if let Some(diagnostic) = &namespace.adapter_error {
+        return Err(diagnostic.clone());
     }
     if let Some((_, diagnostic)) = items
         .iter()
@@ -4931,6 +5057,12 @@ fn finish_resolution_with<T>(
         }
         for (index, block) in item.impls {
             program.impls[index] = block;
+        }
+        for nominal in item.nominals {
+            match nominal {
+                ResolvedNominal::Enum(index, declaration) => program.enums[index] = declaration,
+                ResolvedNominal::Struct(index, declaration) => program.structs[index] = declaration,
+            }
         }
         for (key, source) in item.closures {
             if resolver.resolved_closures.insert(key, source).is_some() {
