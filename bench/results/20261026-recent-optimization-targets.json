@@ -1,0 +1,4310 @@
+{
+ "schema_version": 1,
+ "window_start": "2026-10-26T23:28:01Z",
+ "window_end": "2026-10-27T00:58:01Z",
+ "scope": "Exact primary-checkout paths only; benchmark and scratch copies excluded",
+ "caveats": [
+  "Non-atomic read of completed local run summaries; in-flight runs without summaries are omitted.",
+  "Aggregate wall/phase totals overlap across concurrent runs, are not elapsed session time, and are not guaranteed savings.",
+  "Place describes pre-existing recorded runs; this analysis launches no builds or remote work."
+ ],
+ "runs": 267,
+ "wall": 6887.502,
+ "phase_totals": {
+  "compile": 2610.893,
+  "lock_wait": 2304.131,
+  "test_run": 1047.228,
+  "tail": 876.649,
+  "build_gaps": 24.883
+ },
+ "lock_waiting_runs": 121,
+ "top_command_groups": [
+  {
+   "workspace": "justrust-clean-room",
+   "command": "test --test graph_integrity",
+   "runs": 26,
+   "wall": 580.878,
+   "phases": {
+    "compile": 160.34,
+    "lock_wait": 291.188,
+    "test_run": 125.02,
+    "tail": 0.247,
+    "build_gaps": 3.254
+   },
+   "example": "20261026-172317752-1456504"
+  },
+  {
+   "workspace": "justrust-clean-room",
+   "command": "test --test full_programs recursive_linked_list_actual_program",
+   "runs": 21,
+   "wall": 504.211,
+   "phases": {
+    "compile": 77.915,
+    "lock_wait": 293.035,
+    "test_run": 12.937,
+    "tail": 118.064,
+    "build_gaps": 1.724
+   },
+   "example": "20261026-171336299-1397216"
+  },
+  {
+   "workspace": "justrust-clean-room",
+   "command": "check",
+   "runs": 26,
+   "wall": 490.109,
+   "phases": {
+    "compile": 183.57,
+    "lock_wait": 304.58,
+    "test_run": 0,
+    "tail": 0.077,
+    "build_gaps": 0.729
+   },
+   "example": "20261026-172546852-1468351"
+  },
+  {
+   "workspace": "justrust-clean-room",
+   "command": "run --bin jr-rust --",
+   "runs": 6,
+   "wall": 368.612,
+   "phases": {
+    "compile": 329.056,
+    "lock_wait": 31.046,
+    "test_run": 0,
+    "tail": 5.389,
+    "build_gaps": 2.818
+   },
+   "example": "20261026-171806491-1425256"
+  },
+  {
+   "workspace": "justrust-clean-room",
+   "command": "test --test full_programs unchanged_hashmap_actual_program",
+   "runs": 8,
+   "wall": 302.434,
+   "phases": {
+    "compile": 87.076,
+    "lock_wait": 77.64,
+    "test_run": 0,
+    "tail": 135.48,
+    "build_gaps": 1.952
+   },
+   "example": "20261026-175216310-1619913"
+  },
+  {
+   "workspace": "justrust-clean-room",
+   "command": "test --test heap",
+   "runs": 4,
+   "wall": 255.177,
+   "phases": {
+    "compile": 18.644,
+    "lock_wait": 60.017,
+    "test_run": 175.527,
+    "tail": 0.02,
+    "build_gaps": 0.826
+   },
+   "example": "20261026-172351773-1459372"
+  },
+  {
+   "workspace": "justrust-clean-room",
+   "command": "test --test full_programs full_programs_ratchet",
+   "runs": 4,
+   "wall": 242.091,
+   "phases": {
+    "compile": 23.205,
+    "lock_wait": 46.067,
+    "test_run": 74.386,
+    "tail": 97.801,
+    "build_gaps": 0.543
+   },
+   "example": "20261026-175344239-1627152"
+  },
+  {
+   "workspace": "justrust-clean-room",
+   "command": "test --lib",
+   "runs": 3,
+   "wall": 215.771,
+   "phases": {
+    "compile": 82.152,
+    "lock_wait": 3.542,
+    "test_run": 129.363,
+    "tail": 0.63,
+    "build_gaps": 0.031
+   },
+   "example": "20261026-173152207-1496998"
+  },
+  {
+   "workspace": "justrust-clean-room",
+   "command": "test --test full_programs --",
+   "runs": 4,
+   "wall": 202.058,
+   "phases": {
+    "compile": 39.042,
+    "lock_wait": 84.634,
+    "test_run": 0,
+    "tail": 77.175,
+    "build_gaps": 0.584
+   },
+   "example": "20261026-172545142-1465463"
+  },
+  {
+   "workspace": "justrust-clean-room",
+   "command": "test --lib compiler::procfs::tests",
+   "runs": 11,
+   "wall": 197.726,
+   "phases": {
+    "compile": 177.201,
+    "lock_wait": 0.056,
+    "test_run": 20.107,
+    "tail": 0.064,
+    "build_gaps": 0.064
+   },
+   "example": "20261026-171533314-1410357"
+  },
+  {
+   "workspace": "justrust-clean-room",
+   "command": "test --lib source_snapshot",
+   "runs": 7,
+   "wall": 194.541,
+   "phases": {
+    "compile": 101.155,
+    "lock_wait": 41.13,
+    "test_run": 51.948,
+    "tail": 0.098,
+    "build_gaps": 0.034
+   },
+   "example": "20261026-171621116-1415148"
+  },
+  {
+   "workspace": "justrust-clean-room",
+   "command": "test --test raw_slices unchanged_sorting_program_matches_stock_at_both_worker_counts",
+   "runs": 5,
+   "wall": 188.792,
+   "phases": {
+    "compile": 83.372,
+    "lock_wait": 72.428,
+    "test_run": 0,
+    "tail": 32.017,
+    "build_gaps": 0.849
+   },
+   "example": "20261026-172058782-1441353"
+  },
+  {
+   "workspace": "justrust-clean-room",
+   "command": "test --test full_programs hashmap_word_count_matches_stored_stock_stdout",
+   "runs": 5,
+   "wall": 163.532,
+   "phases": {
+    "compile": 23.7,
+    "lock_wait": 126.78,
+    "test_run": 0,
+    "tail": 12.39,
+    "build_gaps": 0.537
+   },
+   "example": "20261026-171322498-1395506"
+  },
+  {
+   "workspace": "justrust-clean-room",
+   "command": "test --test reference_self_generic_method_authority --test",
+   "runs": 2,
+   "wall": 143.103,
+   "phases": {
+    "compile": 40.946,
+    "lock_wait": 33.658,
+    "test_run": 0,
+    "tail": 68.149,
+    "build_gaps": 0.287
+   },
+   "example": "20261026-172523592-1466603"
+  },
+  {
+   "workspace": "justrust-clean-room",
+   "command": "test --test heap owning_box_projection",
+   "runs": 5,
+   "wall": 139.151,
+   "phases": {
+    "compile": 42.162,
+    "lock_wait": 64.358,
+    "test_run": 8.939,
+    "tail": 22.758,
+    "build_gaps": 0.545
+   },
+   "example": "20261026-172306990-1455554"
+  },
+  {
+   "workspace": "justrust-clean-room",
+   "command": "test --test heap owning_box_projection_moves_drop_remaining_fields_once",
+   "runs": 4,
+   "wall": 135.45,
+   "phases": {
+    "compile": 37.048,
+    "lock_wait": 94.356,
+    "test_run": 2.3,
+    "tail": 1.032,
+    "build_gaps": 0.552
+   },
+   "example": "20261026-171321460-1395415"
+  },
+  {
+   "workspace": "jcode",
+   "command": "build --profile selfdev -p",
+   "runs": 7,
+   "wall": 132.518,
+   "phases": {
+    "compile": 126.646,
+    "lock_wait": 0,
+    "test_run": 0,
+    "tail": 0.712,
+    "build_gaps": 2.199
+   },
+   "example": "20261026-175623899-1644375"
+  },
+  {
+   "workspace": "justrust-clean-room",
+   "command": "test --test heap owning_box_projection_rejects_borrowed_shared_and_reused_moves",
+   "runs": 3,
+   "wall": 123.499,
+   "phases": {
+    "compile": 13.653,
+    "lock_wait": 48.259,
+    "test_run": 17.097,
+    "tail": 44.122,
+    "build_gaps": 0.272
+   },
+   "example": "20261026-172536816-1467633"
+  },
+  {
+   "workspace": "justrust-clean-room",
+   "command": "test --test raw_slices --test",
+   "runs": 3,
+   "wall": 120.758,
+   "phases": {
+    "compile": 11.107,
+    "lock_wait": 25.931,
+    "test_run": 26.077,
+    "tail": 57.288,
+    "build_gaps": 0.271
+   },
+   "example": "20261026-172356177-1459727"
+  },
+  {
+   "workspace": "justrust-clean-room",
+   "command": "test --lib nominal_validation_session_reuses_canonical_work_not_input_authority",
+   "runs": 3,
+   "wall": 116.22,
+   "phases": {
+    "compile": 40.627,
+    "lock_wait": 75.459,
+    "test_run": 0.015,
+    "tail": 0.022,
+    "build_gaps": 0.035
+   },
+   "example": "20261026-171613255-1414598"
+  }
+ ],
+ "records": [
+  {
+   "id": "20261026-165932653-1306842",
+   "workspace": "jcode",
+   "command": "zigbuild --help",
+   "wall": 0.015062332153320312,
+   "exit": 0,
+   "place": "local",
+   "phases": {
+    "compile": 0,
+    "lock_wait": 0,
+    "test_run": 0,
+    "tail": 0,
+    "build_gaps": 0
+   }
+  },
+  {
+   "id": "20261026-170013033-1313517",
+   "workspace": "justrust-clean-room",
+   "command": "check",
+   "wall": 33.886927127838135,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 11.074,
+    "lock_wait": 22.08,
+    "test_run": 0,
+    "tail": 0.003,
+    "build_gaps": 0.036
+   }
+  },
+  {
+   "id": "20261026-170041744-1316817",
+   "workspace": "justrust-clean-room",
+   "command": "test --test full_programs --",
+   "wall": 39.95889306068421,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 21.585,
+    "lock_wait": 0.214,
+    "test_run": 0,
+    "tail": 17.325,
+    "build_gaps": 0.286
+   }
+  },
+  {
+   "id": "20261026-170144660-1323043",
+   "workspace": "justrust-clean-room",
+   "command": "test --lib compiler::procfs::tests",
+   "wall": 24.70391297340393,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 24.19,
+    "lock_wait": 0,
+    "test_run": 0.464,
+    "tail": 0.007,
+    "build_gaps": 0.014
+   }
+  },
+  {
+   "id": "20261026-170223605-1326953",
+   "workspace": "justrust-clean-room",
+   "command": "test --lib compiler::procfs::tests --",
+   "wall": 8.526767015457153,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 5.885,
+    "lock_wait": 0,
+    "test_run": 0,
+    "tail": 2.603,
+    "build_gaps": 0.014
+   }
+  },
+  {
+   "id": "20261026-170238595-1328776",
+   "workspace": "justrust-clean-room",
+   "command": "test --lib compiler::procfs::tests",
+   "wall": 1.847850561141968,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 0,
+    "lock_wait": 0,
+    "test_run": 1.83,
+    "tail": 0.003,
+    "build_gaps": 0
+   }
+  },
+  {
+   "id": "20261026-170241188-1328775",
+   "workspace": "justrust-clean-room",
+   "command": "test --test graph_integrity",
+   "wall": 15.06375217437744,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 9.966,
+    "lock_wait": 0,
+    "test_run": 4.759,
+    "tail": 0.009,
+    "build_gaps": 0.275
+   }
+  },
+  {
+   "id": "20261026-170308696-1331538",
+   "workspace": "justrust-clean-room",
+   "command": "test --lib compiler::procfs::tests",
+   "wall": 12.488885402679443,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 10.69,
+    "lock_wait": 0,
+    "test_run": 1.751,
+    "tail": 0.008,
+    "build_gaps": 0.014
+   }
+  },
+  {
+   "id": "20261026-170332784-1333708",
+   "workspace": "justrust-clean-room",
+   "command": "test --lib compiler::procfs::tests",
+   "wall": 10.72649908065796,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 8.63,
+    "lock_wait": 0,
+    "test_run": 2.049,
+    "tail": 0.008,
+    "build_gaps": 0.014
+   }
+  },
+  {
+   "id": "20261026-170344343-1335025",
+   "workspace": "justrust-clean-room",
+   "command": "test --lib compiler::procfs::tests",
+   "wall": 1.851036548614502,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 0,
+    "lock_wait": 0,
+    "test_run": 1.833,
+    "tail": 0.003,
+    "build_gaps": 0
+   }
+  },
+  {
+   "id": "20261026-170346904-1335432",
+   "workspace": "justrust-clean-room",
+   "command": "test --test graph_integrity",
+   "wall": 14.990631103515623,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 9.732,
+    "lock_wait": 0,
+    "test_run": 4.924,
+    "tail": 0.008,
+    "build_gaps": 0.274
+   }
+  },
+  {
+   "id": "20261026-170501696-1342565",
+   "workspace": "justrust-clean-room",
+   "command": "check",
+   "wall": 12.503016471862791,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 12.444,
+    "lock_wait": 0,
+    "test_run": 0,
+    "tail": 0.003,
+    "build_gaps": 0.039
+   }
+  },
+  {
+   "id": "20261026-170515465-1343599",
+   "workspace": "justrust-clean-room",
+   "command": "test --lib compiler::procfs::tests",
+   "wall": 42.86259365081787,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 40.767,
+    "lock_wait": 0,
+    "test_run": 2.056,
+    "tail": 0.008,
+    "build_gaps": 0.014
+   }
+  },
+  {
+   "id": "20261026-170559364-1347720",
+   "workspace": "justrust-clean-room",
+   "command": "test --lib compiler::source::source_snapshot::tests",
+   "wall": 7.728196144104004,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 0,
+    "lock_wait": 0,
+    "test_run": 7.707,
+    "tail": 0.006,
+    "build_gaps": 0
+   }
+  },
+  {
+   "id": "20261026-170607966-1342564",
+   "workspace": "justrust-clean-room",
+   "command": "test --test graph_integrity",
+   "wall": 33.66839003562927,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 28.303,
+    "lock_wait": 0,
+    "test_run": 5.038,
+    "tail": 0.008,
+    "build_gaps": 0.27
+   }
+  },
+  {
+   "id": "20261026-170730035-1355483",
+   "workspace": "justrust-clean-room",
+   "command": "check",
+   "wall": 2.642528533935547,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 2.599,
+    "lock_wait": 0,
+    "test_run": 0,
+    "tail": 0.003,
+    "build_gaps": 0
+   }
+  },
+  {
+   "id": "20261026-170738635-1357781",
+   "workspace": "justrust-clean-room",
+   "command": "test --lib compiler::procfs",
+   "wall": 4.142359256744385,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 4.114,
+    "lock_wait": 0,
+    "test_run": 0,
+    "tail": 0.004,
+    "build_gaps": 0
+   }
+  },
+  {
+   "id": "20261026-170804272-1360175",
+   "workspace": "justrust-clean-room",
+   "command": "check",
+   "wall": 3.73093581199646,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 3.675,
+    "lock_wait": 0,
+    "test_run": 0,
+    "tail": 0.003,
+    "build_gaps": 0.037
+   }
+  },
+  {
+   "id": "20261026-170808729-1360511",
+   "workspace": "justrust-clean-room",
+   "command": "test --lib compiler::source::source_snapshot::tests",
+   "wall": 26.805026054382324,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 18.641,
+    "lock_wait": 0,
+    "test_run": 8.1,
+    "tail": 0.024,
+    "build_gaps": 0.014
+   }
+  },
+  {
+   "id": "20261026-170902853-1365737",
+   "workspace": "justrust-clean-room",
+   "command": "test --lib source_snapshot",
+   "wall": 18.690048933029175,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 10.642,
+    "lock_wait": 0,
+    "test_run": 7.981,
+    "tail": 0.027,
+    "build_gaps": 0.014
+   }
+  },
+  {
+   "id": "20261026-170940195-1370366",
+   "workspace": "justrust-clean-room",
+   "command": "test --lib source_snapshot",
+   "wall": 14.056786298751833,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 5.994,
+    "lock_wait": 0,
+    "test_run": 8.002,
+    "tail": 0.021,
+    "build_gaps": 0.014
+   }
+  },
+  {
+   "id": "20261026-170955739-1371751",
+   "workspace": "justrust-clean-room",
+   "command": "test --lib project::",
+   "wall": 5.432728290557861,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 0,
+    "lock_wait": 0,
+    "test_run": 5.415,
+    "tail": 0.002,
+    "build_gaps": 0
+   }
+  },
+  {
+   "id": "20261026-171002429-1372779",
+   "workspace": "justrust-clean-room",
+   "command": "test --lib source_inputs",
+   "wall": 2.398578405380249,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 0,
+    "lock_wait": 0,
+    "test_run": 2.379,
+    "tail": 0.005,
+    "build_gaps": 0
+   }
+  },
+  {
+   "id": "20261026-171005540-1373046",
+   "workspace": "justrust-clean-room",
+   "command": "test --test graph_integrity",
+   "wall": 20.067425966262817,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 14.949,
+    "lock_wait": 0,
+    "test_run": 4.802,
+    "tail": 0.009,
+    "build_gaps": 0.262
+   }
+  },
+  {
+   "id": "20261026-171006221-1373123",
+   "workspace": "justrust-clean-room",
+   "command": "test --test raw_slices unchanged_sorting_program_matches_stock_at_both_worker_counts",
+   "wall": 34.07602071762085,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 12.972,
+    "lock_wait": 14.326,
+    "test_run": 0,
+    "tail": 6.442,
+    "build_gaps": 0.294
+   }
+  },
+  {
+   "id": "20261026-171011861-1373660",
+   "workspace": "justrust-clean-room",
+   "command": "run --bin jr-rust --",
+   "wall": 76.59098243713379,
+   "exit": 1,
+   "place": "local",
+   "phases": {
+    "compile": 73.67,
+    "lock_wait": 0,
+    "test_run": 0,
+    "tail": 2.291,
+    "build_gaps": 0.6
+   }
+  },
+  {
+   "id": "20261026-171014815-1373934",
+   "workspace": "justrust-clean-room",
+   "command": "test --test full_programs recursive_linked_list_actual_program",
+   "wall": 26.04892206192017,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 0.466,
+    "lock_wait": 19.261,
+    "test_run": 0,
+    "tail": 6.304,
+    "build_gaps": 0.001
+   }
+  },
+  {
+   "id": "20261026-171026370-1375276",
+   "workspace": "justrust-clean-room",
+   "command": "clippy --lib",
+   "wall": 22.368338584899902,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 13.854,
+    "lock_wait": 8.11,
+    "test_run": 0,
+    "tail": 0.005,
+    "build_gaps": 0.122
+   }
+  },
+  {
+   "id": "20261026-171156000-1384453",
+   "workspace": "justrust-clean-room",
+   "command": "check",
+   "wall": 5.014771223068237,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 4.961,
+    "lock_wait": 0,
+    "test_run": 0,
+    "tail": 0.003,
+    "build_gaps": 0.034
+   }
+  },
+  {
+   "id": "20261026-171203723-1385130",
+   "workspace": "justrust-clean-room",
+   "command": "test --lib compiler::procfs::tests",
+   "wall": 30.30723667144775,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 27.821,
+    "lock_wait": 0,
+    "test_run": 2.458,
+    "tail": 0.007,
+    "build_gaps": 0.004
+   }
+  },
+  {
+   "id": "20261026-171235881-1388438",
+   "workspace": "justrust-clean-room",
+   "command": "test --lib source_snapshot",
+   "wall": 20.434669256210327,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 20.389,
+    "lock_wait": 0,
+    "test_run": 0,
+    "tail": 0.004,
+    "build_gaps": 0
+   }
+  },
+  {
+   "id": "20261026-171259743-1392799",
+   "workspace": "justrust-clean-room",
+   "command": "check",
+   "wall": 12.999820709228516,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 12.954,
+    "lock_wait": 0,
+    "test_run": 0,
+    "tail": 0.003,
+    "build_gaps": 0.025
+   }
+  },
+  {
+   "id": "20261026-171302600-1393228",
+   "workspace": "justrust-clean-room",
+   "command": "check",
+   "wall": 12.863397359848022,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 2.591,
+    "lock_wait": 10.219,
+    "test_run": 0,
+    "tail": 0.003,
+    "build_gaps": 0.035
+   }
+  },
+  {
+   "id": "20261026-171319986-1395264",
+   "workspace": "justrust-clean-room",
+   "command": "check",
+   "wall": 10.318181991577148,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 10.272,
+    "lock_wait": 0,
+    "test_run": 0,
+    "tail": 0.003,
+    "build_gaps": 0.025
+   }
+  },
+  {
+   "id": "20261026-171320232-1395313",
+   "workspace": "justrust-clean-room",
+   "command": "test --test raw_slices unchanged_sorting_program_matches_stock_at_both_worker_counts",
+   "wall": 45.70238733291626,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 29.345,
+    "lock_wait": 10.054,
+    "test_run": 0,
+    "tail": 5.991,
+    "build_gaps": 0.274
+   }
+  },
+  {
+   "id": "20261026-171321460-1395415",
+   "workspace": "justrust-clean-room",
+   "command": "test --test heap owning_box_projection_moves_drop_remaining_fields_once",
+   "wall": 52.37999129295349,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 12.545,
+    "lock_wait": 38.386,
+    "test_run": 1.127,
+    "tail": 0.004,
+    "build_gaps": 0.282
+   }
+  },
+  {
+   "id": "20261026-171322498-1395506",
+   "workspace": "justrust-clean-room",
+   "command": "test --test full_programs hashmap_word_count_matches_stored_stock_stdout",
+   "wall": 66.80384826660156,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 10.208,
+    "lock_wait": 50.319,
+    "test_run": 0,
+    "tail": 5.97,
+    "build_gaps": 0.27
+   }
+  },
+  {
+   "id": "20261026-171336299-1397216",
+   "workspace": "justrust-clean-room",
+   "command": "test --test full_programs recursive_linked_list_actual_program",
+   "wall": 52.9196240901947,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 0,
+    "lock_wait": 46.47,
+    "test_run": 0,
+    "tail": 6.438,
+    "build_gaps": 0
+   }
+  },
+  {
+   "id": "20261026-171346257-1398468",
+   "workspace": "justrust-clean-room",
+   "command": "check",
+   "wall": 40.54485058784485,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 5.067,
+    "lock_wait": 35.435,
+    "test_run": 0,
+    "tail": 0.003,
+    "build_gaps": 0.024
+   }
+  },
+  {
+   "id": "20261026-171429369-1403680",
+   "workspace": "justrust-clean-room",
+   "command": "test --lib compiler::procfs::tests",
+   "wall": 20.684884786605835,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 20.663,
+    "lock_wait": 0,
+    "test_run": 0,
+    "tail": 0.005,
+    "build_gaps": 0
+   }
+  },
+  {
+   "id": "20261026-171446613-1405682",
+   "workspace": "justrust-clean-room",
+   "command": "test --test heap owning_box_projection_moves_drop_remaining_fields_once",
+   "wall": 15.401475191116331,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 10.846,
+    "lock_wait": 3.067,
+    "test_run": 1.173,
+    "tail": 0.004,
+    "build_gaps": 0.269
+   }
+  },
+  {
+   "id": "20261026-171448894-1405910",
+   "workspace": "justrust-clean-room",
+   "command": "test --test raw_slices --",
+   "wall": 43.06914186477661,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 13.863,
+    "lock_wait": 12.383,
+    "test_run": 0,
+    "tail": 16.505,
+    "build_gaps": 0.28
+   }
+  },
+  {
+   "id": "20261026-171455400-1406481",
+   "workspace": "justrust-clean-room",
+   "command": "test --test full_programs recursive_linked_list_actual_program",
+   "wall": 39.53815507888794,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 12.984,
+    "lock_wait": 19.776,
+    "test_run": 0,
+    "tail": 6.459,
+    "build_gaps": 0.281
+   }
+  },
+  {
+   "id": "20261026-171457853-1406668",
+   "workspace": "justrust-clean-room",
+   "command": "test --test full_programs hashmap_word_count_matches_stored_stock_stdout",
+   "wall": 32.437915325164795,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 0,
+    "lock_wait": 30.833,
+    "test_run": 0,
+    "tail": 1.595,
+    "build_gaps": 0
+   }
+  },
+  {
+   "id": "20261026-171503249-1407160",
+   "workspace": "justrust-clean-room",
+   "command": "test --test full_programs recursive_linked_list_actual_program",
+   "wall": 31.921585083007812,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 0,
+    "lock_wait": 25.487,
+    "test_run": 6.419,
+    "tail": 0.002,
+    "build_gaps": 0
+   }
+  },
+  {
+   "id": "20261026-171529162-1409987",
+   "workspace": "justrust-clean-room",
+   "command": "check",
+   "wall": 3.3841607570648193,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 3.331,
+    "lock_wait": 0,
+    "test_run": 0,
+    "tail": 0.003,
+    "build_gaps": 0.034
+   }
+  },
+  {
+   "id": "20261026-171533314-1410357",
+   "workspace": "justrust-clean-room",
+   "command": "test --lib compiler::procfs::tests",
+   "wall": 46.94033360481262,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 44.44,
+    "lock_wait": 0,
+    "test_run": 2.469,
+    "tail": 0.011,
+    "build_gaps": 0.004
+   }
+  },
+  {
+   "id": "20261026-171535933-1405650",
+   "workspace": "justrust-clean-room",
+   "command": "test --test graph_integrity",
+   "wall": 62.106422901153564,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 14.985,
+    "lock_wait": 41.788,
+    "test_run": 5.015,
+    "tail": 0.009,
+    "build_gaps": 0.258
+   }
+  },
+  {
+   "id": "20261026-171535969-1410684",
+   "workspace": "justrust-clean-room",
+   "command": "test --lib forged_noncopy_reference_move_is_invalid_even_in_disconnected_block",
+   "wall": 77.14725828170776,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 20.29,
+    "lock_wait": 56.828,
+    "test_run": 0.003,
+    "tail": 0.007,
+    "build_gaps": 0.003
+   }
+  },
+  {
+   "id": "20261026-171613255-1414598",
+   "workspace": "justrust-clean-room",
+   "command": "test --lib nominal_validation_session_reuses_canonical_work_not_input_authority",
+   "wall": 50.450685024261475,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 10.247,
+    "lock_wait": 40.16,
+    "test_run": 0.005,
+    "tail": 0.007,
+    "build_gaps": 0.014
+   }
+  },
+  {
+   "id": "20261026-171621116-1415148",
+   "workspace": "justrust-clean-room",
+   "command": "test --lib source_snapshot",
+   "wall": 50.207146883010864,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 0,
+    "lock_wait": 41.13,
+    "test_run": 9.059,
+    "tail": 0.004,
+    "build_gaps": 0
+   }
+  },
+  {
+   "id": "20261026-171646291-1417425",
+   "workspace": "justrust-clean-room",
+   "command": "test --test heap",
+   "wall": 71.70847821235657,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 10.737,
+    "lock_wait": 17.127,
+    "test_run": 43.525,
+    "tail": 0.006,
+    "build_gaps": 0.271
+   }
+  },
+  {
+   "id": "20261026-171649473-1417625",
+   "workspace": "justrust-clean-room",
+   "command": "test --test raw_slices mutable_split_preserves_disjoint_receiver_loans",
+   "wall": 41.00067949295044,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 13.312,
+    "lock_wait": 25.144,
+    "test_run": 0,
+    "tail": 2.23,
+    "build_gaps": 0.268
+   }
+  },
+  {
+   "id": "20261026-171654127-1406100",
+   "workspace": "justrust-clean-room",
+   "command": "test --test graph_integrity",
+   "wall": 44.3940155506134,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 4.823,
+    "lock_wait": 34.205,
+    "test_run": 5.05,
+    "tail": 0.01,
+    "build_gaps": 0.269
+   }
+  },
+  {
+   "id": "20261026-171713466-1419834",
+   "workspace": "justrust-clean-room",
+   "command": "test --test graph_integrity",
+   "wall": 25.110668420791622,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 0,
+    "lock_wait": 20.021,
+    "test_run": 5.072,
+    "tail": 0.004,
+    "build_gaps": 0
+   }
+  },
+  {
+   "id": "20261026-171717392-1420222",
+   "workspace": "justrust-clean-room",
+   "command": "test --lib nominal_validation_session_reuses_canonical_work_not_input_authority",
+   "wall": 30.520015954971313,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 14.441,
+    "lock_wait": 16.034,
+    "test_run": 0.005,
+    "tail": 0.007,
+    "build_gaps": 0.014
+   }
+  },
+  {
+   "id": "20261026-171731711-1421376",
+   "workspace": "justrust-clean-room",
+   "command": "test --test full_programs recursive_linked_list_actual_program",
+   "wall": 23.17434000968933,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 0.424,
+    "lock_wait": 16.196,
+    "test_run": 0,
+    "tail": 6.536,
+    "build_gaps": 0.002
+   }
+  },
+  {
+   "id": "20261026-171744182-1422804",
+   "workspace": "justrust-clean-room",
+   "command": "clippy --lib",
+   "wall": 17.87802219390869,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 13.503,
+    "lock_wait": 4.144,
+    "test_run": 0,
+    "tail": 0.004,
+    "build_gaps": 0.082
+   }
+  },
+  {
+   "id": "20261026-171747709-1423220",
+   "workspace": "justrust-clean-room",
+   "command": "test --test heap owning_box_projection_moves_drop_remaining_fields_once",
+   "wall": 15.418586015701294,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 0.06,
+    "lock_wait": 14.302,
+    "test_run": 0,
+    "tail": 1.02,
+    "build_gaps": 0.001
+   }
+  },
+  {
+   "id": "20261026-171748637-1420220",
+   "workspace": "justrust-clean-room",
+   "command": "test --test full_programs hashmap_word_count_matches_stored_stock_stdout",
+   "wall": 15.051250219345093,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 0,
+    "lock_wait": 13.436,
+    "test_run": 0,
+    "tail": 1.596,
+    "build_gaps": 0
+   }
+  },
+  {
+   "id": "20261026-171806491-1425256",
+   "workspace": "justrust-clean-room",
+   "command": "run --bin jr-rust --",
+   "wall": 82.49267530441284,
+   "exit": 1,
+   "place": "local",
+   "phases": {
+    "compile": 79.937,
+    "lock_wait": 0,
+    "test_run": 0,
+    "tail": 1.847,
+    "build_gaps": 0.661
+   }
+  },
+  {
+   "id": "20261026-171809566-1425746",
+   "workspace": "justrust-clean-room",
+   "command": "test --test heap owning_box_projection",
+   "wall": 13.10741925239563,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 9.109,
+    "lock_wait": 0,
+    "test_run": 3.678,
+    "tail": 0.004,
+    "build_gaps": 0.27
+   }
+  },
+  {
+   "id": "20261026-171830937-1427567",
+   "workspace": "justrust-clean-room",
+   "command": "test --test raw_slices mutable_split_preserves_disjoint_receiver_loans",
+   "wall": 23.798678636550903,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 15.492,
+    "lock_wait": 0,
+    "test_run": 0,
+    "tail": 7.994,
+    "build_gaps": 0.275
+   }
+  },
+  {
+   "id": "20261026-171832796-1427803",
+   "workspace": "justrust-clean-room",
+   "command": "test --test full_programs hashmap_word_count_matches_stored_stock_stdout",
+   "wall": 15.754963874816896,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 0.143,
+    "lock_wait": 14.006,
+    "test_run": 0,
+    "tail": 1.587,
+    "build_gaps": 0.003
+   }
+  },
+  {
+   "id": "20261026-171905250-1430856",
+   "workspace": "justrust-clean-room",
+   "command": "test --test raw_slices --test",
+   "wall": 33.299312353134155,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 10.266,
+    "lock_wait": 0,
+    "test_run": 0,
+    "tail": 22.712,
+    "build_gaps": 0.269
+   }
+  },
+  {
+   "id": "20261026-171906421-1431019",
+   "workspace": "justrust-clean-room",
+   "command": "check",
+   "wall": 13.177852153778076,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 4.348,
+    "lock_wait": 8.773,
+    "test_run": 0,
+    "tail": 0.003,
+    "build_gaps": 0.037
+   }
+  },
+  {
+   "id": "20261026-171921736-1433235",
+   "workspace": "justrust-clean-room",
+   "command": "test --lib project::inputs::tests",
+   "wall": 30.614593029022217,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 25.11,
+    "lock_wait": 0,
+    "test_run": 5.468,
+    "tail": 0.008,
+    "build_gaps": 0.012
+   }
+  },
+  {
+   "id": "20261026-171943184-1435049",
+   "workspace": "justrust-clean-room",
+   "command": "test --lib",
+   "wall": 66.95472717285156,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 17.108,
+    "lock_wait": 3.542,
+    "test_run": 46.108,
+    "tail": 0.164,
+    "build_gaps": 0.014
+   }
+  },
+  {
+   "id": "20261026-171953225-1435848",
+   "workspace": "justrust-clean-room",
+   "command": "test --test graph_integrity",
+   "wall": 32.08030867576599,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 15.853,
+    "lock_wait": 10.869,
+    "test_run": 5.031,
+    "tail": 0.008,
+    "build_gaps": 0.281
+   }
+  },
+  {
+   "id": "20261026-171955505-1436374",
+   "workspace": "justrust-clean-room",
+   "command": "test --lib independent_slice_pair_rows_reject_forged_families --",
+   "wall": 45.4976282119751,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 20.773,
+    "lock_wait": 24.698,
+    "test_run": 0,
+    "tail": 0.005,
+    "build_gaps": 0
+   }
+  },
+  {
+   "id": "20261026-172002470-1436940",
+   "workspace": "justrust-clean-room",
+   "command": "test --test heap owning_box_projection_moves_drop_remaining_fields_once",
+   "wall": 52.250250816345215,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 13.597,
+    "lock_wait": 38.601,
+    "test_run": 0,
+    "tail": 0.004,
+    "build_gaps": 0
+   }
+  },
+  {
+   "id": "20261026-172041837-1436373",
+   "workspace": "justrust-clean-room",
+   "command": "test --test reference_self_generic_method_authority --test",
+   "wall": 26.367981910705566,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 13.48,
+    "lock_wait": 12.866,
+    "test_run": 0,
+    "tail": 0.004,
+    "build_gaps": 0
+   }
+  },
+  {
+   "id": "20261026-172048449-1440828",
+   "workspace": "justrust-clean-room",
+   "command": "test --lib project::inputs::tests",
+   "wall": 39.62885785102844,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 20.092,
+    "lock_wait": 19.515,
+    "test_run": 0,
+    "tail": 0.004,
+    "build_gaps": 0
+   }
+  },
+  {
+   "id": "20261026-172051214-1441213",
+   "workspace": "justrust-clean-room",
+   "command": "test --test graph_integrity",
+   "wall": 50.52889585494995,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 13.55,
+    "lock_wait": 36.956,
+    "test_run": 0,
+    "tail": 0.004,
+    "build_gaps": 0
+   }
+  },
+  {
+   "id": "20261026-172058782-1441353",
+   "workspace": "justrust-clean-room",
+   "command": "test --test raw_slices unchanged_sorting_program_matches_stock_at_both_worker_counts",
+   "wall": 56.561054706573486,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 13.379,
+    "lock_wait": 43.16,
+    "test_run": 0,
+    "tail": 0.004,
+    "build_gaps": 0
+   }
+  },
+  {
+   "id": "20261026-172241763-1452935",
+   "workspace": "justrust-clean-room",
+   "command": "test --test heap owning_box_projection",
+   "wall": 13.51673173904419,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 13.495,
+    "lock_wait": 0,
+    "test_run": 0,
+    "tail": 0.004,
+    "build_gaps": 0
+   }
+  },
+  {
+   "id": "20261026-172251745-1453770",
+   "workspace": "justrust-clean-room",
+   "command": "check",
+   "wall": 16.20360255241394,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 12.642,
+    "lock_wait": 3.495,
+    "test_run": 0,
+    "tail": 0.003,
+    "build_gaps": 0.028
+   }
+  },
+  {
+   "id": "20261026-172303795-1454902",
+   "workspace": "justrust-clean-room",
+   "command": "test --test raw_slices unchanged_sorting_program_matches_stock_at_both_worker_counts",
+   "wall": 42.59124183654785,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 27.676,
+    "lock_wait": 4.888,
+    "test_run": 0,
+    "tail": 9.731,
+    "build_gaps": 0.281
+   }
+  },
+  {
+   "id": "20261026-172306151-1455471",
+   "workspace": "justrust-clean-room",
+   "command": "check",
+   "wall": 32.5996835231781,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 2.96,
+    "lock_wait": 29.584,
+    "test_run": 0,
+    "tail": 0.003,
+    "build_gaps": 0.036
+   }
+  },
+  {
+   "id": "20261026-172306990-1455554",
+   "workspace": "justrust-clean-room",
+   "command": "test --test heap owning_box_projection",
+   "wall": 37.6593873500824,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 0.057,
+    "lock_wait": 32.319,
+    "test_run": 5.261,
+    "tail": 0.005,
+    "build_gaps": 0.001
+   }
+  },
+  {
+   "id": "20261026-172312399-1455984",
+   "workspace": "justrust-clean-room",
+   "command": "test --lib source_metadata_",
+   "wall": 66.43602538108826,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 39.098,
+    "lock_wait": 27.296,
+    "test_run": 0.005,
+    "tail": 0.007,
+    "build_gaps": 0.014
+   }
+  },
+  {
+   "id": "20261026-172317752-1456504",
+   "workspace": "justrust-clean-room",
+   "command": "test --test graph_integrity",
+   "wall": 67.67045998573303,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 1.225,
+    "lock_wait": 61.056,
+    "test_run": 5.364,
+    "tail": 0.008,
+    "build_gaps": 0.001
+   }
+  },
+  {
+   "id": "20261026-172343730-1458650",
+   "workspace": "justrust-clean-room",
+   "command": "test --lib project::inputs::tests",
+   "wall": 41.94263696670532,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 0,
+    "lock_wait": 36.143,
+    "test_run": 5.783,
+    "tail": 0.002,
+    "build_gaps": 0
+   }
+  },
+  {
+   "id": "20261026-172348064-1459109",
+   "workspace": "justrust-clean-room",
+   "command": "test --test heap owning_box_projection",
+   "wall": 37.52729105949402,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 0,
+    "lock_wait": 32.039,
+    "test_run": 0,
+    "tail": 5.478,
+    "build_gaps": 0
+   }
+  },
+  {
+   "id": "20261026-172351773-1459372",
+   "workspace": "justrust-clean-room",
+   "command": "test --test heap",
+   "wall": 72.28830003738403,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 0,
+    "lock_wait": 28.257,
+    "test_run": 44.017,
+    "tail": 0.002,
+    "build_gaps": 0
+   }
+  },
+  {
+   "id": "20261026-172356177-1459727",
+   "workspace": "justrust-clean-room",
+   "command": "test --test raw_slices --test",
+   "wall": 55.60496759414673,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 0.294,
+    "lock_wait": 23.654,
+    "test_run": 0,
+    "tail": 31.64,
+    "build_gaps": 0.001
+   }
+  },
+  {
+   "id": "20261026-172426203-1456503",
+   "workspace": "justrust-clean-room",
+   "command": "test --test full_programs --",
+   "wall": 20.56039357185364,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 0.504,
+    "lock_wait": 0,
+    "test_run": 0,
+    "tail": 20.038,
+    "build_gaps": 0.002
+   }
+  },
+  {
+   "id": "20261026-172426300-1462116",
+   "workspace": "justrust-clean-room",
+   "command": "test --test full_programs recursive_linked_list_actual_program",
+   "wall": 7.159654378890991,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 0,
+    "lock_wait": 0.278,
+    "test_run": 0,
+    "tail": 6.871,
+    "build_gaps": 0
+   }
+  },
+  {
+   "id": "20261026-172426614-1462132",
+   "workspace": "justrust-clean-room",
+   "command": "test --lib compiler::procfs::tests",
+   "wall": 2.7377939224243164,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 0,
+    "lock_wait": 0.056,
+    "test_run": 2.664,
+    "tail": 0.002,
+    "build_gaps": 0
+   }
+  },
+  {
+   "id": "20261026-172430202-1462430",
+   "workspace": "justrust-clean-room",
+   "command": "test --lib source_snapshot",
+   "wall": 9.082389116287231,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 0,
+    "lock_wait": 0,
+    "test_run": 9.063,
+    "tail": 0.004,
+    "build_gaps": 0
+   }
+  },
+  {
+   "id": "20261026-172434401-1458825",
+   "workspace": "justrust-clean-room",
+   "command": "test --test graph_integrity",
+   "wall": 5.099623680114746,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 0,
+    "lock_wait": 0,
+    "test_run": 5.08,
+    "tail": 0.005,
+    "build_gaps": 0
+   }
+  },
+  {
+   "id": "20261026-172440224-1463241",
+   "workspace": "justrust-clean-room",
+   "command": "test --test graph_integrity",
+   "wall": 4.925793647766113,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 0,
+    "lock_wait": 0,
+    "test_run": 4.906,
+    "tail": 0.006,
+    "build_gaps": 0
+   }
+  },
+  {
+   "id": "20261026-172445802-1463593",
+   "workspace": "justrust-clean-room",
+   "command": "clippy --lib",
+   "wall": 13.579630851745604,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 13.294,
+    "lock_wait": 0,
+    "test_run": 0,
+    "tail": 0.004,
+    "build_gaps": 0.075
+   }
+  },
+  {
+   "id": "20261026-172452798-1459726",
+   "workspace": "justrust-clean-room",
+   "command": "test --lib independent_slice_pair_rows_reject_forged_families --",
+   "wall": 20.902201175689697,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 14.359,
+    "lock_wait": 6.488,
+    "test_run": 0,
+    "tail": 0.009,
+    "build_gaps": 0.004
+   }
+  },
+  {
+   "id": "20261026-172504865-1459371",
+   "workspace": "justrust-clean-room",
+   "command": "test --test graph_integrity",
+   "wall": 28.07723307609558,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 14.053,
+    "lock_wait": 8.717,
+    "test_run": 4.973,
+    "tail": 0.008,
+    "build_gaps": 0.27
+   }
+  },
+  {
+   "id": "20261026-172506869-1465395",
+   "workspace": "justrust-clean-room",
+   "command": "test --test full_programs recursive_linked_list_actual_program",
+   "wall": 28.128913402557373,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 0.415,
+    "lock_wait": 21.03,
+    "test_run": 0,
+    "tail": 6.659,
+    "build_gaps": 0.001
+   }
+  },
+  {
+   "id": "20261026-172509118-1465546",
+   "workspace": "justrust-clean-room",
+   "command": "test --lib nominal_validation_session_reuses_canonical_work_not_input_authority",
+   "wall": 35.24931979179382,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 15.939,
+    "lock_wait": 19.265,
+    "test_run": 0.005,
+    "tail": 0.008,
+    "build_gaps": 0.007
+   }
+  },
+  {
+   "id": "20261026-172523592-1466603",
+   "workspace": "justrust-clean-room",
+   "command": "test --test reference_self_generic_method_authority --test",
+   "wall": 116.73549127578735,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 27.466,
+    "lock_wait": 20.792,
+    "test_run": 0,
+    "tail": 68.145,
+    "build_gaps": 0.287
+   }
+  },
+  {
+   "id": "20261026-172534516-1467416",
+   "workspace": "justrust-clean-room",
+   "command": "check",
+   "wall": 50.493396043777466,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 12.794,
+    "lock_wait": 37.649,
+    "test_run": 0,
+    "tail": 0.003,
+    "build_gaps": 0.03
+   }
+  },
+  {
+   "id": "20261026-172536816-1467633",
+   "workspace": "justrust-clean-room",
+   "command": "test --test heap owning_box_projection_rejects_borrowed_shared_and_reused_moves",
+   "wall": 79.02120113372803,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 13.343,
+    "lock_wait": 48.259,
+    "test_run": 17.097,
+    "tail": 0.006,
+    "build_gaps": 0.271
+   }
+  },
+  {
+   "id": "20261026-172545142-1465463",
+   "workspace": "justrust-clean-room",
+   "command": "test --test full_programs --",
+   "wall": 73.84899115562439,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 0.461,
+    "lock_wait": 53.559,
+    "test_run": 0,
+    "tail": 19.811,
+    "build_gaps": 0.002
+   }
+  },
+  {
+   "id": "20261026-172546852-1468351",
+   "workspace": "justrust-clean-room",
+   "command": "check",
+   "wall": 54.7874767780304,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 2.718,
+    "lock_wait": 52.016,
+    "test_run": 0,
+    "tail": 0.003,
+    "build_gaps": 0.035
+   }
+  },
+  {
+   "id": "20261026-172620571-1470862",
+   "workspace": "justrust-clean-room",
+   "command": "test --test full_programs recursive_linked_list_actual_program",
+   "wall": 27.962977170944217,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 0,
+    "lock_wait": 21.342,
+    "test_run": 0,
+    "tail": 6.61,
+    "build_gaps": 0
+   }
+  },
+  {
+   "id": "20261026-172625757-1471195",
+   "workspace": "justrust-clean-room",
+   "command": "test --lib project::capture",
+   "wall": 53.13986611366272,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 36.974,
+    "lock_wait": 16.128,
+    "test_run": 0.004,
+    "tail": 0.007,
+    "build_gaps": 0.01
+   }
+  },
+  {
+   "id": "20261026-172659504-1473952",
+   "workspace": "justrust-clean-room",
+   "command": "test --test full_programs recursive_linked_list_actual_program",
+   "wall": 32.57304239273071,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 6.41,
+    "lock_wait": 19.311,
+    "test_run": 6.518,
+    "tail": 0.005,
+    "build_gaps": 0.283
+   }
+  },
+  {
+   "id": "20261026-172700376-1474107",
+   "workspace": "justrust-clean-room",
+   "command": "test --test full_programs recursive_linked_list_actual_program",
+   "wall": 31.79563879966736,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 0,
+    "lock_wait": 25.224,
+    "test_run": 0,
+    "tail": 6.562,
+    "build_gaps": 0
+   }
+  },
+  {
+   "id": "20261026-172717757-1475332",
+   "workspace": "justrust-clean-room",
+   "command": "test --lib source_metadata_",
+   "wall": 21.99262762069702,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 14.1,
+    "lock_wait": 7.847,
+    "test_run": 0.006,
+    "tail": 0.008,
+    "build_gaps": 0.014
+   }
+  },
+  {
+   "id": "20261026-172719650-1475531",
+   "workspace": "justrust-clean-room",
+   "command": "test --test projects",
+   "wall": 33.650444984436035,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 0.484,
+    "lock_wait": 20.051,
+    "test_run": 13.093,
+    "tail": 0.004,
+    "build_gaps": 0.001
+   }
+  },
+  {
+   "id": "20261026-172756430-1478348",
+   "workspace": "justrust-clean-room",
+   "command": "test --test heap owning_box_projection",
+   "wall": 37.34002184867859,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 19.501,
+    "lock_wait": 0,
+    "test_run": 0,
+    "tail": 17.267,
+    "build_gaps": 0.274
+   }
+  },
+  {
+   "id": "20261026-172805424-1479056",
+   "workspace": "justrust-clean-room",
+   "command": "check",
+   "wall": 18.505887269973755,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 7.18,
+    "lock_wait": 11.277,
+    "test_run": 0,
+    "tail": 0.003,
+    "build_gaps": 0.029
+   }
+  },
+  {
+   "id": "20261026-172835104-1481094",
+   "workspace": "justrust-clean-room",
+   "command": "test --test full_programs --",
+   "wall": 67.69009852409363,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 16.492,
+    "lock_wait": 30.861,
+    "test_run": 0,
+    "tail": 20.001,
+    "build_gaps": 0.294
+   }
+  },
+  {
+   "id": "20261026-172835124-1481119",
+   "workspace": "justrust-clean-room",
+   "command": "test --lib forged_noncopy_reference_move_is_invalid_even_in_disconnected_block",
+   "wall": 31.133420705795288,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 31.089,
+    "lock_wait": 0,
+    "test_run": 0.003,
+    "tail": 0.006,
+    "build_gaps": 0.016
+   }
+  },
+  {
+   "id": "20261026-172848850-1482061",
+   "workspace": "justrust-clean-room",
+   "command": "check",
+   "wall": 37.63883209228515,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 3.335,
+    "lock_wait": 34.251,
+    "test_run": 0,
+    "tail": 0.003,
+    "build_gaps": 0.034
+   }
+  },
+  {
+   "id": "20261026-172907008-1477900",
+   "workspace": "justrust-clean-room",
+   "command": "test --test graph_integrity",
+   "wall": 25.478394031524655,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 1.294,
+    "lock_wait": 19.181,
+    "test_run": 4.977,
+    "tail": 0.009,
+    "build_gaps": 0.001
+   }
+  },
+  {
+   "id": "20261026-172927187-1485119",
+   "workspace": "justrust-clean-room",
+   "command": "test --lib project::capture",
+   "wall": 23.93386197090149,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 14.926,
+    "lock_wait": 0.355,
+    "test_run": 8.61,
+    "tail": 0.009,
+    "build_gaps": 0.014
+   }
+  },
+  {
+   "id": "20261026-172946623-1486591",
+   "workspace": "justrust-clean-room",
+   "command": "test --lib compiler::ownership::tests",
+   "wall": 0.06801724433898926,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 0,
+    "lock_wait": 0,
+    "test_run": 0.049,
+    "tail": 0.004,
+    "build_gaps": 0
+   }
+  },
+  {
+   "id": "20261026-172952056-1487114",
+   "workspace": "justrust-clean-room",
+   "command": "test --test projects --",
+   "wall": 56.377853870391846,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 0.478,
+    "lock_wait": 0,
+    "test_run": 42.244,
+    "tail": 13.637,
+    "build_gaps": 0.001
+   }
+  },
+  {
+   "id": "20261026-173006316-1488275",
+   "workspace": "justrust-clean-room",
+   "command": "test --test heap owning_box_projection_composes_alias_depth",
+   "wall": 32.03085446357727,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 27.778,
+    "lock_wait": 0,
+    "test_run": 3.944,
+    "tail": 0.005,
+    "build_gaps": 0.259
+   }
+  },
+  {
+   "id": "20261026-173016636-1489009",
+   "workspace": "justrust-clean-room",
+   "command": "test --test full_programs hashmap_word_count_matches_stored_stock_stdout",
+   "wall": 33.48367190361023,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 13.349,
+    "lock_wait": 18.186,
+    "test_run": 0,
+    "tail": 1.642,
+    "build_gaps": 0.264
+   }
+  },
+  {
+   "id": "20261026-173033855-1490480",
+   "workspace": "justrust-clean-room",
+   "command": "test --test heap",
+   "wall": 62.322901487350464,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 3.806,
+    "lock_wait": 14.633,
+    "test_run": 43.569,
+    "tail": 0.006,
+    "build_gaps": 0.265
+   }
+  },
+  {
+   "id": "20261026-173119901-1494354",
+   "workspace": "justrust-clean-room",
+   "command": "test --test projects doctest_selection_is_explicit_and_never_reports_invented_success",
+   "wall": 59.0685350894928,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 10.328,
+    "lock_wait": 0,
+    "test_run": 0,
+    "tail": 48.419,
+    "build_gaps": 0.282
+   }
+  },
+  {
+   "id": "20261026-173152207-1496998",
+   "workspace": "justrust-clean-room",
+   "command": "test --lib",
+   "wall": 78.22547817230225,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 37.115,
+    "lock_wait": 0,
+    "test_run": 40.869,
+    "tail": 0.222,
+    "build_gaps": 0.003
+   }
+  },
+  {
+   "id": "20261026-173155769-1497356",
+   "workspace": "jcode",
+   "command": "check -p jcode-tui --tests",
+   "wall": 21.161545038223267,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 15.919,
+    "lock_wait": 0,
+    "test_run": 0,
+    "tail": 0.029,
+    "build_gaps": 0.319
+   }
+  },
+  {
+   "id": "20261026-173222886-1499604",
+   "workspace": "justrust-clean-room",
+   "command": "test --test full_programs recursive_linked_list_actual_program",
+   "wall": 33.35781908035278,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 19.633,
+    "lock_wait": 6.863,
+    "test_run": 0,
+    "tail": 6.519,
+    "build_gaps": 0.302
+   }
+  },
+  {
+   "id": "20261026-173235607-1500653",
+   "workspace": "justrust-clean-room",
+   "command": "test --lib project::capture",
+   "wall": 30.322113513946533,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 7.492,
+    "lock_wait": 14.14,
+    "test_run": 8.65,
+    "tail": 0.008,
+    "build_gaps": 0.014
+   }
+  },
+  {
+   "id": "20261026-173239346-1500972",
+   "workspace": "jcode",
+   "command": "check -p jcode-tui --tests",
+   "wall": 6.11164116859436,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 5.929,
+    "lock_wait": 0,
+    "test_run": 0,
+    "tail": 0.031,
+    "build_gaps": 0.015
+   }
+  },
+  {
+   "id": "20261026-173247865-1500959",
+   "workspace": "jcode",
+   "command": "test -p jcode-tui --lib",
+   "wall": 18.548826932907104,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 14.943,
+    "lock_wait": 0,
+    "test_run": 1.303,
+    "tail": 0.029,
+    "build_gaps": 0.005
+   }
+  },
+  {
+   "id": "20261026-173306706-1503181",
+   "workspace": "justrust-clean-room",
+   "command": "test --lib compiler::procfs::tests",
+   "wall": 2.5752787590026855,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 0,
+    "lock_wait": 0,
+    "test_run": 2.533,
+    "tail": 0.002,
+    "build_gaps": 0
+   }
+  },
+  {
+   "id": "20261026-173310336-1503521",
+   "workspace": "justrust-clean-room",
+   "command": "test --test projects --",
+   "wall": 57.55722022056579,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 8.635,
+    "lock_wait": 0,
+    "test_run": 48.582,
+    "tail": 0.006,
+    "build_gaps": 0.291
+   }
+  },
+  {
+   "id": "20261026-173311721-1496726",
+   "workspace": "justrust-clean-room",
+   "command": "test --test graph_integrity",
+   "wall": 13.937233924865724,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 1.237,
+    "lock_wait": 7.612,
+    "test_run": 5.063,
+    "tail": 0.008,
+    "build_gaps": 0.001
+   }
+  },
+  {
+   "id": "20261026-173313612-1503733",
+   "workspace": "justrust-clean-room",
+   "command": "test --test full_programs recursive_linked_list_actual_program",
+   "wall": 13.795131921768188,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 0.152,
+    "lock_wait": 7.022,
+    "test_run": 0,
+    "tail": 6.604,
+    "build_gaps": 0.001
+   }
+  },
+  {
+   "id": "20261026-173328458-1504762",
+   "workspace": "justrust-clean-room",
+   "command": "test --lib source_metadata_",
+   "wall": 14.383200645446776,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 14.349,
+    "lock_wait": 0,
+    "test_run": 0.005,
+    "tail": 0.007,
+    "build_gaps": 0.004
+   }
+  },
+  {
+   "id": "20261026-173332523-1505258",
+   "workspace": "jcode",
+   "command": "test -p jcode-tui --lib",
+   "wall": 3.5164635181427,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 3.366,
+    "lock_wait": 0,
+    "test_run": 0,
+    "tail": 0.025,
+    "build_gaps": 0
+   }
+  },
+  {
+   "id": "20261026-173347554-1506036",
+   "workspace": "justrust-clean-room",
+   "command": "clippy --lib",
+   "wall": 13.766133785247805,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 13.479,
+    "lock_wait": 0,
+    "test_run": 0,
+    "tail": 0.004,
+    "build_gaps": 0.076
+   }
+  },
+  {
+   "id": "20261026-173408850-1507665",
+   "workspace": "justrust-clean-room",
+   "command": "test --test full_programs recursive_linked_list_actual_program",
+   "wall": 23.972598791122437,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 16.965,
+    "lock_wait": 0,
+    "test_run": 0,
+    "tail": 6.659,
+    "build_gaps": 0.291
+   }
+  },
+  {
+   "id": "20261026-173408884-1508047",
+   "workspace": "justrust-clean-room",
+   "command": "test --test graph_integrity",
+   "wall": 30.47088861465454,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 8.178,
+    "lock_wait": 17.019,
+    "test_run": 4.94,
+    "tail": 0.01,
+    "build_gaps": 0.27
+   }
+  },
+  {
+   "id": "20261026-173418822-1508778",
+   "workspace": "jcode",
+   "command": "check -p jcode --tests",
+   "wall": 4.713190317153931,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 4.417,
+    "lock_wait": 0,
+    "test_run": 0,
+    "tail": 0.039,
+    "build_gaps": 0.043
+   }
+  },
+  {
+   "id": "20261026-173426347-1509417",
+   "workspace": "jcode",
+   "command": "test -p jcode-tui --lib",
+   "wall": 9.621317148208618,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 9.365,
+    "lock_wait": 0,
+    "test_run": 0.082,
+    "tail": 0.032,
+    "build_gaps": 0.015
+   }
+  },
+  {
+   "id": "20261026-173433174-1510110",
+   "workspace": "justrust-clean-room",
+   "command": "test --test raw_slices --test",
+   "wall": 31.853845596313477,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 0.547,
+    "lock_wait": 2.277,
+    "test_run": 26.077,
+    "tail": 2.936,
+    "build_gaps": 0.001
+   }
+  },
+  {
+   "id": "20261026-173439010-1510654",
+   "workspace": "jcode",
+   "command": "test -p jcode --bin",
+   "wall": 9.427337169647217,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 9.06,
+    "lock_wait": 0,
+    "test_run": 0.001,
+    "tail": 0.03,
+    "build_gaps": 0.133
+   }
+  },
+  {
+   "id": "20261026-173441328-1500652",
+   "workspace": "justrust-clean-room",
+   "command": "clippy --lib",
+   "wall": 4.329607248306274,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 4.089,
+    "lock_wait": 0,
+    "test_run": 0,
+    "tail": 0.003,
+    "build_gaps": 0.031
+   }
+  },
+  {
+   "id": "20261026-173442321-1510939",
+   "workspace": "justrust-clean-room",
+   "command": "test --test nominal_intern_liveness",
+   "wall": 13.73723602294922,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 8.033,
+    "lock_wait": 3.408,
+    "test_run": 1.949,
+    "tail": 0.004,
+    "build_gaps": 0.286
+   }
+  },
+  {
+   "id": "20261026-173451291-1508777",
+   "workspace": "jcode",
+   "command": "test -p jcode-tui --lib",
+   "wall": 0.5545704364776611,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 0,
+    "lock_wait": 0,
+    "test_run": 0.38,
+    "tail": 0.04,
+    "build_gaps": 0
+   }
+  },
+  {
+   "id": "20261026-173456790-1512210",
+   "workspace": "justrust-clean-room",
+   "command": "test --test full_programs recursive_linked_list_actual_program",
+   "wall": 6.620651960372925,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 0.129,
+    "lock_wait": 0,
+    "test_run": 0,
+    "tail": 6.472,
+    "build_gaps": 0.002
+   }
+  },
+  {
+   "id": "20261026-173456886-1512228",
+   "workspace": "justrust-clean-room",
+   "command": "test --test graph_integrity",
+   "wall": 5.140268087387085,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 0.169,
+    "lock_wait": 0,
+    "test_run": 4.945,
+    "tail": 0.008,
+    "build_gaps": 0.001
+   }
+  },
+  {
+   "id": "20261026-173506780-1513027",
+   "workspace": "jcode",
+   "command": "test -p jcode-tui --lib",
+   "wall": 1.1632142066955566,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 0,
+    "lock_wait": 0,
+    "test_run": 0,
+    "tail": 1.049,
+    "build_gaps": 0
+   }
+  },
+  {
+   "id": "20261026-173514430-1513662",
+   "workspace": "jcode",
+   "command": "test -p jcode --lib",
+   "wall": 4.730036735534668,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 4.562,
+    "lock_wait": 0,
+    "test_run": 0.005,
+    "tail": 0.026,
+    "build_gaps": 0.005
+   }
+  },
+  {
+   "id": "20261026-173523061-1514408",
+   "workspace": "justrust-clean-room",
+   "command": "test --test closures box_move_closure_preserves_mutable_receiver_capture",
+   "wall": 9.713997840881348,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 6.003,
+    "lock_wait": 1.828,
+    "test_run": 0,
+    "tail": 1.568,
+    "build_gaps": 0.295
+   }
+  },
+  {
+   "id": "20261026-173530558-1515087",
+   "workspace": "jcode",
+   "command": "build --profile selfdev -p",
+   "wall": 16.659136056900024,
+   "exit": 0,
+   "place": "local",
+   "phases": {
+    "compile": 15.518,
+    "lock_wait": 0,
+    "test_run": 0,
+    "tail": 0.114,
+    "build_gaps": 0.258
+   }
+  },
+  {
+   "id": "20261026-173557729-1522397",
+   "workspace": "justrust-clean-room",
+   "command": "test --test heap recursive_box_traversal_converges_without_losing_loans",
+   "wall": 11.30136013031006,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 9.271,
+    "lock_wait": 0,
+    "test_run": 0,
+    "tail": 1.722,
+    "build_gaps": 0.29
+   }
+  },
+  {
+   "id": "20261026-173602846-1523030",
+   "workspace": "justrust-clean-room",
+   "command": "test --test generic_inference --test",
+   "wall": 28.514469385147095,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 0.453,
+    "lock_wait": 4.475,
+    "test_run": 23.498,
+    "tail": 0.07,
+    "build_gaps": 0.001
+   }
+  },
+  {
+   "id": "20261026-173618369-1524229",
+   "workspace": "justrust-clean-room",
+   "command": "test --test heap recursive_box_traversal_converges_without_losing_loans",
+   "wall": 9.979973554611206,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 8.616,
+    "lock_wait": 0,
+    "test_run": 0,
+    "tail": 1.046,
+    "build_gaps": 0.274
+   }
+  },
+  {
+   "id": "20261026-173620873-1524577",
+   "workspace": "justrust-clean-room",
+   "command": "test --test graph_integrity",
+   "wall": 20.254323959350582,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 8.649,
+    "lock_wait": 6.496,
+    "test_run": 4.784,
+    "tail": 0.008,
+    "build_gaps": 0.271
+   }
+  },
+  {
+   "id": "20261026-173625956-1524628",
+   "workspace": "justrust-clean-room",
+   "command": "test --test closures box_move_closure_preserves_mutable_receiver_capture",
+   "wall": 16.64954161643982,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 0.132,
+    "lock_wait": 10.273,
+    "test_run": 0,
+    "tail": 6.224,
+    "build_gaps": 0.004
+   }
+  },
+  {
+   "id": "20261026-173643166-1526221",
+   "workspace": "justrust-clean-room",
+   "command": "test --test heap recursive_box_traversal_converges_without_losing_loans",
+   "wall": 1.491513967514038,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 0.311,
+    "lock_wait": 0,
+    "test_run": 0,
+    "tail": 1.161,
+    "build_gaps": 0.001
+   }
+  },
+  {
+   "id": "20261026-173645463-1526220",
+   "workspace": "justrust-clean-room",
+   "command": "test --test heap owning_box_projection_rejects_borrowed_shared_and_reused_moves",
+   "wall": 20.298528909683228,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 0,
+    "lock_wait": 0,
+    "test_run": 0,
+    "tail": 20.286,
+    "build_gaps": 0
+   }
+  },
+  {
+   "id": "20261026-173651506-1526940",
+   "workspace": "justrust-clean-room",
+   "command": "test --test closures",
+   "wall": 65.59047269821167,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 0,
+    "lock_wait": 0,
+    "test_run": 65.535,
+    "tail": 0.043,
+    "build_gaps": 0
+   }
+  },
+  {
+   "id": "20261026-173731790-1529867",
+   "workspace": "justrust-clean-room",
+   "command": "test --test full_programs",
+   "wall": 94.13762187957764,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 6.233,
+    "lock_wait": 0,
+    "test_run": 38.165,
+    "tail": 49.405,
+    "build_gaps": 0.293
+   }
+  },
+  {
+   "id": "20261026-173733679-1529945",
+   "workspace": "justrust-clean-room",
+   "command": "test --test graph_integrity",
+   "wall": 10.728339672088625,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 0.175,
+    "lock_wait": 4.701,
+    "test_run": 5.825,
+    "tail": 0.008,
+    "build_gaps": 0.003
+   }
+  },
+  {
+   "id": "20261026-173734518-1530129",
+   "workspace": "justrust-clean-room",
+   "command": "test --test borrowing --test",
+   "wall": 17.829720973968506,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 0.059,
+    "lock_wait": 4.078,
+    "test_run": 0,
+    "tail": 13.67,
+    "build_gaps": 0.007
+   }
+  },
+  {
+   "id": "20261026-173743471-1530668",
+   "workspace": "justrust-clean-room",
+   "command": "test --test reference_self_generic_method_authority",
+   "wall": 0.3552088737487793,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 0.3,
+    "lock_wait": 0,
+    "test_run": 0.029,
+    "tail": 0.005,
+    "build_gaps": 0.001
+   }
+  },
+  {
+   "id": "20261026-173755834-1531741",
+   "workspace": "justrust-clean-room",
+   "command": "test --test heap recursive_box_traversal_converges_without_losing_loans",
+   "wall": 5.974512100219727,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 0.308,
+    "lock_wait": 0,
+    "test_run": 0,
+    "tail": 5.648,
+    "build_gaps": 0.001
+   }
+  },
+  {
+   "id": "20261026-173757811-1531923",
+   "workspace": "justrust-clean-room",
+   "command": "test --test full_programs recursive_linked_list_actual_program",
+   "wall": 6.51691460609436,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 0,
+    "lock_wait": 0,
+    "test_run": 0,
+    "tail": 6.505,
+    "build_gaps": 0
+   }
+  },
+  {
+   "id": "20261026-173805046-1526939",
+   "workspace": "justrust-clean-room",
+   "command": "test --test graph_integrity",
+   "wall": 4.881390333175659,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 0,
+    "lock_wait": 0,
+    "test_run": 4.857,
+    "tail": 0.01,
+    "build_gaps": 0
+   }
+  },
+  {
+   "id": "20261026-173819967-1533812",
+   "workspace": "justrust-clean-room",
+   "command": "test --test heap owning_box_projection_rejects_borrowed_shared_and_reused_moves",
+   "wall": 24.178810834884644,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 0.31,
+    "lock_wait": 0,
+    "test_run": 0,
+    "tail": 23.83,
+    "build_gaps": 0.001
+   }
+  },
+  {
+   "id": "20261026-173824220-1534091",
+   "workspace": "justrust-clean-room",
+   "command": "test --test reference_self_generic_method_authority",
+   "wall": 0.2930734157562256,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 0.247,
+    "lock_wait": 0,
+    "test_run": 0.024,
+    "tail": 0.004,
+    "build_gaps": 0.001
+   }
+  },
+  {
+   "id": "20261026-173826197-1534373",
+   "workspace": "justrust-clean-room",
+   "command": "test --test raw_slices generic_mutable_result_identity_matches_stock",
+   "wall": 20.346839904785156,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 0.127,
+    "lock_wait": 0,
+    "test_run": 0,
+    "tail": 20.201,
+    "build_gaps": 0.002
+   }
+  },
+  {
+   "id": "20261026-173830463-1534741",
+   "workspace": "justrust-clean-room",
+   "command": "test --test full_programs recursive_linked_list_actual_program",
+   "wall": 7.0280890464782715,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 0.512,
+    "lock_wait": 0,
+    "test_run": 0,
+    "tail": 6.497,
+    "build_gaps": 0.001
+   }
+  },
+  {
+   "id": "20261026-173844422-1535856",
+   "workspace": "justrust-clean-room",
+   "command": "test --test reference_self_generic_method_authority",
+   "wall": 0.2910444736480713,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 0.246,
+    "lock_wait": 0,
+    "test_run": 0.023,
+    "tail": 0.004,
+    "build_gaps": 0.001
+   }
+  },
+  {
+   "id": "20261026-173847897-1534372",
+   "workspace": "justrust-clean-room",
+   "command": "test --test raw_slices unchanged_sorting_program_matches_stock_at_both_worker_counts",
+   "wall": 9.860917091369627,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 0,
+    "lock_wait": 0,
+    "test_run": 0,
+    "tail": 9.849,
+    "build_gaps": 0
+   }
+  },
+  {
+   "id": "20261026-173855603-1536808",
+   "workspace": "jcode",
+   "command": "check -p jcode-tui --tests",
+   "wall": 4.0614354610443115,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 3.868,
+    "lock_wait": 0,
+    "test_run": 0,
+    "tail": 0.029,
+    "build_gaps": 0.013
+   }
+  },
+  {
+   "id": "20261026-173902099-1537306",
+   "workspace": "justrust-clean-room",
+   "command": "test --test heap",
+   "wall": 48.85747241973877,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 4.101,
+    "lock_wait": 0,
+    "test_run": 44.416,
+    "tail": 0.006,
+    "build_gaps": 0.29
+   }
+  },
+  {
+   "id": "20261026-173903917-1536806",
+   "workspace": "jcode",
+   "command": "test -p jcode-tui --lib",
+   "wall": 8.80997610092163,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 8.584,
+    "lock_wait": 0,
+    "test_run": 0.052,
+    "tail": 0.028,
+    "build_gaps": 0.014
+   }
+  },
+  {
+   "id": "20261026-173906764-1537905",
+   "workspace": "justrust-clean-room",
+   "command": "test --test graph_integrity",
+   "wall": 5.4338366985321045,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 0.188,
+    "lock_wait": 0,
+    "test_run": 5.218,
+    "tail": 0.008,
+    "build_gaps": 0.001
+   }
+  },
+  {
+   "id": "20261026-173908752-1537949",
+   "workspace": "jcode",
+   "command": "test -p jcode-tui --lib",
+   "wall": 4.004958391189575,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 0,
+    "lock_wait": 3.881,
+    "test_run": 0.004,
+    "tail": 0.003,
+    "build_gaps": 0
+   }
+  },
+  {
+   "id": "20261026-173917645-1538691",
+   "workspace": "justrust-clean-room",
+   "command": "test --test reference_self_generic_method_authority",
+   "wall": 0.2983825206756592,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 0.253,
+    "lock_wait": 0,
+    "test_run": 0.023,
+    "tail": 0.004,
+    "build_gaps": 0.001
+   }
+  },
+  {
+   "id": "20261026-173937075-1540238",
+   "workspace": "jcode",
+   "command": "test -p jcode-tui --lib",
+   "wall": 0.18482112884521484,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 0,
+    "lock_wait": 0,
+    "test_run": 0.033,
+    "tail": 0.017,
+    "build_gaps": 0
+   }
+  },
+  {
+   "id": "20261026-173941340-1540564",
+   "workspace": "justrust-clean-room",
+   "command": "test --test reference_self_generic_method_authority",
+   "wall": 2.4318785667419434,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 2.383,
+    "lock_wait": 0,
+    "test_run": 0,
+    "tail": 0.004,
+    "build_gaps": 0
+   }
+  },
+  {
+   "id": "20261026-173943020-1540783",
+   "workspace": "jcode",
+   "command": "build --profile selfdev -p",
+   "wall": 13.208960056304932,
+   "exit": 0,
+   "place": "local",
+   "phases": {
+    "compile": 12.798,
+    "lock_wait": 0,
+    "test_run": 0,
+    "tail": 0.073,
+    "build_gaps": 0.178
+   }
+  },
+  {
+   "id": "20261026-173946558-1542395",
+   "workspace": "justrust-clean-room",
+   "command": "run --bin jr-rust --",
+   "wall": 21.68412733078003,
+   "exit": 101,
+   "place": "local",
+   "phases": {
+    "compile": 21.639,
+    "lock_wait": 0,
+    "test_run": 0,
+    "tail": 0.003,
+    "build_gaps": 0
+   }
+  },
+  {
+   "id": "20261026-173956731-1544467",
+   "workspace": "justrust-clean-room",
+   "command": "check",
+   "wall": 11.657005786895752,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 11.636,
+    "lock_wait": 0,
+    "test_run": 0,
+    "tail": 0.003,
+    "build_gaps": 0
+   }
+  },
+  {
+   "id": "20261026-174005377-1546332",
+   "workspace": "jcode",
+   "command": "build --profile selfdev -p",
+   "wall": 13.77189326286316,
+   "exit": 0,
+   "place": "local",
+   "phases": {
+    "compile": 13.208,
+    "lock_wait": 0,
+    "test_run": 0,
+    "tail": 0.037,
+    "build_gaps": 0.376
+   }
+  },
+  {
+   "id": "20261026-174007722-1546990",
+   "workspace": "jcode",
+   "command": "test -p jcode-tui --lib",
+   "wall": 0.48982763290405273,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 0,
+    "lock_wait": 0,
+    "test_run": 0.346,
+    "tail": 0.006,
+    "build_gaps": 0
+   }
+  },
+  {
+   "id": "20261026-174037764-1554669",
+   "workspace": "justrust-clean-room",
+   "command": "check",
+   "wall": 13.057742595672607,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 13.001,
+    "lock_wait": 0,
+    "test_run": 0,
+    "tail": 0.003,
+    "build_gaps": 0.037
+   }
+  },
+  {
+   "id": "20261026-174039356-1554787",
+   "workspace": "jcode",
+   "command": "check -p jcode --tests",
+   "wall": 1.4048454761505127,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 1.234,
+    "lock_wait": 0,
+    "test_run": 0,
+    "tail": 0.035,
+    "build_gaps": 0.003
+   }
+  },
+  {
+   "id": "20261026-174043680-1555273",
+   "workspace": "jcode",
+   "command": "test -p jcode --lib",
+   "wall": 6.069662809371948,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 5.805,
+    "lock_wait": 0,
+    "test_run": 0.006,
+    "tail": 0.028,
+    "build_gaps": 0.091
+   }
+  },
+  {
+   "id": "20261026-174051708-1554204",
+   "workspace": "justrust-clean-room",
+   "command": "test --test full_programs full_programs_ratchet",
+   "wall": 54.70946645736694,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 16.851,
+    "lock_wait": 0,
+    "test_run": 37.56,
+    "tail": 0.006,
+    "build_gaps": 0.272
+   }
+  },
+  {
+   "id": "20261026-174052488-1556185",
+   "workspace": "jcode",
+   "command": "test -p jcode --lib",
+   "wall": 0.14049005508422852,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 0,
+    "lock_wait": 0,
+    "test_run": 0.004,
+    "tail": 0.002,
+    "build_gaps": 0
+   }
+  },
+  {
+   "id": "20261026-174055405-1554786",
+   "workspace": "jcode",
+   "command": "test -p jcode-tui --lib",
+   "wall": 0.5306897163391113,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 0,
+    "lock_wait": 0,
+    "test_run": 0.389,
+    "tail": 0.006,
+    "build_gaps": 0
+   }
+  },
+  {
+   "id": "20261026-174205970-1561305",
+   "workspace": "justrust-clean-room",
+   "command": "test --lib",
+   "wall": 70.5903549194336,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 27.929,
+    "lock_wait": 0,
+    "test_run": 42.386,
+    "tail": 0.244,
+    "build_gaps": 0.014
+   }
+  },
+  {
+   "id": "20261026-174305865-1565595",
+   "workspace": "justrust-clean-room",
+   "command": "run --bin jr-rust --",
+   "wall": 77.58750200271606,
+   "exit": 1,
+   "place": "local",
+   "phases": {
+    "compile": 76.533,
+    "lock_wait": 0,
+    "test_run": 0,
+    "tail": 0.313,
+    "build_gaps": 0.665
+   }
+  },
+  {
+   "id": "20261026-174337150-1567950",
+   "workspace": "justrust-clean-room",
+   "command": "test --test graph_integrity",
+   "wall": 11.339581966400146,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 6.196,
+    "lock_wait": 0,
+    "test_run": 4.795,
+    "tail": 0.008,
+    "build_gaps": 0.271
+   }
+  },
+  {
+   "id": "20261026-174341448-1568261",
+   "workspace": "jcode",
+   "command": "check -p jcode-tui",
+   "wall": 3.2657527923583984,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 2.854,
+    "lock_wait": 0,
+    "test_run": 0,
+    "tail": 0.02,
+    "build_gaps": 0.012
+   }
+  },
+  {
+   "id": "20261026-174350538-1567949",
+   "workspace": "justrust-clean-room",
+   "command": "clippy --lib",
+   "wall": 6.759493350982666,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 6.355,
+    "lock_wait": 0,
+    "test_run": 0,
+    "tail": 0.005,
+    "build_gaps": 0.194
+   }
+  },
+  {
+   "id": "20261026-174351302-1569952",
+   "workspace": "jcode",
+   "command": "build --profile selfdev -p",
+   "wall": 15.775760173797607,
+   "exit": 0,
+   "place": "local",
+   "phases": {
+    "compile": 14.129,
+    "lock_wait": 0,
+    "test_run": 0,
+    "tail": 0.065,
+    "build_gaps": 0.643
+   }
+  },
+  {
+   "id": "20261026-174352036-1570188",
+   "workspace": "justrust-clean-room",
+   "command": "run --bin jr-rust --",
+   "wall": 31.543135166168213,
+   "exit": 1,
+   "place": "local",
+   "phases": {
+    "compile": 0,
+    "lock_wait": 31.046,
+    "test_run": 0,
+    "tail": 0.439,
+    "build_gaps": 0
+   }
+  },
+  {
+   "id": "20261026-174357004-1570530",
+   "workspace": "jcode",
+   "command": "test -p jcode-tui --lib",
+   "wall": 8.054558992385864,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 7.687,
+    "lock_wait": 0,
+    "test_run": 0.172,
+    "tail": 0.031,
+    "build_gaps": 0.014
+   }
+  },
+  {
+   "id": "20261026-174411788-1570529",
+   "workspace": "jcode",
+   "command": "test -p jcode-tui --lib",
+   "wall": 0.14194035530090332,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 0,
+    "lock_wait": 0,
+    "test_run": 0.006,
+    "tail": 0.003,
+    "build_gaps": 0
+   }
+  },
+  {
+   "id": "20261026-174423501-1565594",
+   "workspace": "justrust-clean-room",
+   "command": "test --test full_programs recursive_linked_list_actual_program",
+   "wall": 6.6458985805511475,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 0.126,
+    "lock_wait": 0,
+    "test_run": 0,
+    "tail": 6.482,
+    "build_gaps": 0.002
+   }
+  },
+  {
+   "id": "20261026-174436636-1574800",
+   "workspace": "jcode",
+   "command": "test -p jcode-tui --lib",
+   "wall": 6.385040760040283,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 6.207,
+    "lock_wait": 0,
+    "test_run": 0.007,
+    "tail": 0.026,
+    "build_gaps": 0.014
+   }
+  },
+  {
+   "id": "20261026-174442180-1575384",
+   "workspace": "jcode",
+   "command": "build --profile selfdev -p",
+   "wall": 6.202849388122559,
+   "exit": 0,
+   "place": "local",
+   "phases": {
+    "compile": 5.662,
+    "lock_wait": 0,
+    "test_run": 0,
+    "tail": 0.123,
+    "build_gaps": 0.204
+   }
+  },
+  {
+   "id": "20261026-174449063-1576565",
+   "workspace": "justrust-clean-room",
+   "command": "test --lib recursive_return_and_expected_context_reject_forged_evidence",
+   "wall": 25.912075757980347,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 25.865,
+    "lock_wait": 0,
+    "test_run": 0.014,
+    "tail": 0.008,
+    "build_gaps": 0.008
+   }
+  },
+  {
+   "id": "20261026-174452529-1576952",
+   "workspace": "justrust-clean-room",
+   "command": "check",
+   "wall": 27.966655492782593,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 5.369,
+    "lock_wait": 22.543,
+    "test_run": 0,
+    "tail": 0.004,
+    "build_gaps": 0.035
+   }
+  },
+  {
+   "id": "20261026-174521636-1579176",
+   "workspace": "jcode",
+   "command": "build --profile selfdev -p",
+   "wall": 12.81432843208313,
+   "exit": 0,
+   "place": "local",
+   "phases": {
+    "compile": 12.184,
+    "lock_wait": 0,
+    "test_run": 0,
+    "tail": 0.132,
+    "build_gaps": 0.265
+   }
+  },
+  {
+   "id": "20261026-174639623-1590484",
+   "workspace": "justrust-clean-room",
+   "command": "test --test full_programs unchanged_hashmap_actual_program",
+   "wall": 33.74134707450867,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 16.688,
+    "lock_wait": 0,
+    "test_run": 0,
+    "tail": 16.763,
+    "build_gaps": 0.272
+   }
+  },
+  {
+   "id": "20261026-174644078-1590923",
+   "workspace": "justrust-clean-room",
+   "command": "test --lib normal_drop_descriptor_rejects_abi_compatible_noncanonical_target_and_signature",
+   "wall": 38.4773211479187,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 25.922,
+    "lock_wait": 12.516,
+    "test_run": 0.007,
+    "tail": 0.007,
+    "build_gaps": 0.007
+   }
+  },
+  {
+   "id": "20261026-174702723-1592374",
+   "workspace": "justrust-clean-room",
+   "command": "check",
+   "wall": 22.59798288345337,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 2.754,
+    "lock_wait": 19.789,
+    "test_run": 0,
+    "tail": 0.003,
+    "build_gaps": 0.035
+   }
+  },
+  {
+   "id": "20261026-174707330-1592712",
+   "workspace": "justrust-clean-room",
+   "command": "test --lib diagnostic_inventory_source_budget --",
+   "wall": 35.583881855010986,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 14.866,
+    "lock_wait": 17.898,
+    "test_run": 0,
+    "tail": 2.8,
+    "build_gaps": 0.003
+   }
+  },
+  {
+   "id": "20261026-174715061-1593225",
+   "workspace": "justrust-clean-room",
+   "command": "test --test reference_self_generic_method_authority",
+   "wall": 34.50310945510864,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 8.937,
+    "lock_wait": 25.201,
+    "test_run": 0.023,
+    "tail": 0.007,
+    "build_gaps": 0.291
+   }
+  },
+  {
+   "id": "20261026-174723412-1590499",
+   "workspace": "justrust-clean-room",
+   "command": "test --test full_programs full_programs_ratchet",
+   "wall": 62.474491119384766,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 0.138,
+    "lock_wait": 25.486,
+    "test_run": 36.826,
+    "tail": 0.006,
+    "build_gaps": 0.002
+   }
+  },
+  {
+   "id": "20261026-174726198-1594128",
+   "workspace": "justrust-clean-room",
+   "command": "test --test compiler",
+   "wall": 43.670806646347046,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 0.733,
+    "lock_wait": 22.786,
+    "test_run": 20.129,
+    "tail": 0.005,
+    "build_gaps": 0.001
+   }
+  },
+  {
+   "id": "20261026-174733002-1594747",
+   "workspace": "justrust-clean-room",
+   "command": "test --test full_programs recursive_linked_list_actual_program",
+   "wall": 24.08467698097229,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 0,
+    "lock_wait": 17.429,
+    "test_run": 0,
+    "tail": 6.645,
+    "build_gaps": 0
+   }
+  },
+  {
+   "id": "20261026-174744488-1595817",
+   "workspace": "justrust-clean-room",
+   "command": "test --test full_programs unchanged_hashmap_actual_program",
+   "wall": 22.602158308029175,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 0,
+    "lock_wait": 5.839,
+    "test_run": 0,
+    "tail": 16.752,
+    "build_gaps": 0
+   }
+  },
+  {
+   "id": "20261026-174811358-1598072",
+   "workspace": "justrust-clean-room",
+   "command": "test --test native_c_abi",
+   "wall": 4.634756088256836,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 0.135,
+    "lock_wait": 0,
+    "test_run": 4.478,
+    "tail": 0.004,
+    "build_gaps": 0.001
+   }
+  },
+  {
+   "id": "20261026-174816850-1598622",
+   "workspace": "justrust-clean-room",
+   "command": "test --test graph_integrity",
+   "wall": 5.1497321128845215,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 0.17,
+    "lock_wait": 0,
+    "test_run": 4.953,
+    "tail": 0.009,
+    "build_gaps": 0.001
+   }
+  },
+  {
+   "id": "20261026-174834239-1600013",
+   "workspace": "justrust-clean-room",
+   "command": "test --test full_programs unchanged_hashmap_actual_program",
+   "wall": 30.99046301841736,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 13.603,
+    "lock_wait": 0,
+    "test_run": 0,
+    "tail": 17.061,
+    "build_gaps": 0.283
+   }
+  },
+  {
+   "id": "20261026-174835782-1600145",
+   "workspace": "justrust-clean-room",
+   "command": "test --lib diagnostic_inventory_source_budget --",
+   "wall": 31.452611446380615,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 16.084,
+    "lock_wait": 12.497,
+    "test_run": 0,
+    "tail": 2.845,
+    "build_gaps": 0.01
+   }
+  },
+  {
+   "id": "20261026-174907532-1603024",
+   "workspace": "justrust-clean-room",
+   "command": "test --test full_programs recursive_linked_list_actual_program",
+   "wall": 13.38483190536499,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 6.387,
+    "lock_wait": 0,
+    "test_run": 0,
+    "tail": 6.644,
+    "build_gaps": 0.283
+   }
+  },
+  {
+   "id": "20261026-174916048-1603617",
+   "workspace": "justrust-clean-room",
+   "command": "clippy --bin jr-rust --test",
+   "wall": 6.408961296081543,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 5.907,
+    "lock_wait": 0,
+    "test_run": 0,
+    "tail": 0.004,
+    "build_gaps": 0.292
+   }
+  },
+  {
+   "id": "20261026-174923287-1604425",
+   "workspace": "justrust-clean-room",
+   "command": "test --lib source_snapshot",
+   "wall": 34.806092977523804,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 25.831,
+    "lock_wait": 0,
+    "test_run": 8.925,
+    "tail": 0.012,
+    "build_gaps": 0.003
+   }
+  },
+  {
+   "id": "20261026-174941565-1605954",
+   "workspace": "justrust-clean-room",
+   "command": "test --test raw_slices mutable_split_preserves_disjoint_receiver_loans",
+   "wall": 29.926104068756104,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 17.686,
+    "lock_wait": 7.435,
+    "test_run": 4.482,
+    "tail": 0.008,
+    "build_gaps": 0.265
+   }
+  },
+  {
+   "id": "20261026-174948543-1606625",
+   "workspace": "justrust-clean-room",
+   "command": "test --test full_programs unchanged_hashmap_actual_program",
+   "wall": 40.527812480926514,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 4.301,
+    "lock_wait": 18.527,
+    "test_run": 0,
+    "tail": 17.384,
+    "build_gaps": 0.29
+   }
+  },
+  {
+   "id": "20261026-174958820-1603616",
+   "workspace": "justrust-clean-room",
+   "command": "test --test core_identity",
+   "wall": 70.33243155479431,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 0.403,
+    "lock_wait": 12.88,
+    "test_run": 57.028,
+    "tail": 0.005,
+    "build_gaps": 0.001
+   }
+  },
+  {
+   "id": "20261026-175054189-1612359",
+   "workspace": "justrust-clean-room",
+   "command": "test --test full_programs unchanged_hashmap_actual_program",
+   "wall": 24.490185737609863,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 6.984,
+    "lock_wait": 0,
+    "test_run": 0,
+    "tail": 17.205,
+    "build_gaps": 0.261
+   }
+  },
+  {
+   "id": "20261026-175100740-1612926",
+   "workspace": "justrust-clean-room",
+   "command": "test --lib source_field_integer_context_rejects_forged_literal",
+   "wall": 4.637287855148315,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 3.797,
+    "lock_wait": 0.819,
+    "test_run": 0,
+    "tail": 0.004,
+    "build_gaps": 0
+   }
+  },
+  {
+   "id": "20261026-175129452-1615530",
+   "workspace": "justrust-clean-room",
+   "command": "test --lib source_field_integer_context_rejects_forged_literal",
+   "wall": 5.628826141357422,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 5.607,
+    "lock_wait": 0,
+    "test_run": 0,
+    "tail": 0.004,
+    "build_gaps": 0
+   }
+  },
+  {
+   "id": "20261026-175205705-1618586",
+   "workspace": "justrust-clean-room",
+   "command": "check",
+   "wall": 9.721497058868408,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 9.702,
+    "lock_wait": 0,
+    "test_run": 0,
+    "tail": 0.002,
+    "build_gaps": 0
+   }
+  },
+  {
+   "id": "20261026-175213274-1619733",
+   "workspace": "justrust-clean-room",
+   "command": "check",
+   "wall": 11.49224066734314,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 9.73,
+    "lock_wait": 1.743,
+    "test_run": 0,
+    "tail": 0.002,
+    "build_gaps": 0
+   }
+  },
+  {
+   "id": "20261026-175213657-1619746",
+   "workspace": "justrust-clean-room",
+   "command": "test --lib source_field_integer_context_rejects_forged_literal",
+   "wall": 25.73073959350586,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 14.684,
+    "lock_wait": 11.027,
+    "test_run": 0,
+    "tail": 0.004,
+    "build_gaps": 0
+   }
+  },
+  {
+   "id": "20261026-175216310-1619913",
+   "workspace": "justrust-clean-room",
+   "command": "test --test full_programs unchanged_hashmap_actual_program",
+   "wall": 63.20009398460388,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 22.941,
+    "lock_wait": 22.952,
+    "test_run": 0,
+    "tail": 16.987,
+    "build_gaps": 0.28
+   }
+  },
+  {
+   "id": "20261026-175221095-1620407",
+   "workspace": "justrust-clean-room",
+   "command": "test --test full_programs recursive_linked_list_actual_program",
+   "wall": 41.95496344566345,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 1.893,
+    "lock_wait": 40.014,
+    "test_run": 0,
+    "tail": 0.004,
+    "build_gaps": 0
+   }
+  },
+  {
+   "id": "20261026-175332357-1627153",
+   "workspace": "justrust-clean-room",
+   "command": "check",
+   "wall": 11.036866188049316,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 10.984,
+    "lock_wait": 0,
+    "test_run": 0,
+    "tail": 0.003,
+    "build_gaps": 0.033
+   }
+  },
+  {
+   "id": "20261026-175336724-1627431",
+   "workspace": "justrust-clean-room",
+   "command": "check",
+   "wall": 7.591695785522461,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 2.714,
+    "lock_wait": 4.822,
+    "test_run": 0,
+    "tail": 0.003,
+    "build_gaps": 0.036
+   }
+  },
+  {
+   "id": "20261026-175337519-1627583",
+   "workspace": "justrust-clean-room",
+   "command": "test --test full_programs recursive_linked_list_actual_program",
+   "wall": 25.62625622749329,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 11.419,
+    "lock_wait": 7.332,
+    "test_run": 0,
+    "tail": 6.587,
+    "build_gaps": 0.274
+   }
+  },
+  {
+   "id": "20261026-175340346-1627855",
+   "workspace": "jcode",
+   "command": "check -p jcode --tests",
+   "wall": 16.00529956817627,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 15.739,
+    "lock_wait": 0,
+    "test_run": 0,
+    "tail": 0.032,
+    "build_gaps": 0.076
+   }
+  },
+  {
+   "id": "20261026-175344239-1627152",
+   "workspace": "justrust-clean-room",
+   "command": "test --test full_programs full_programs_ratchet",
+   "wall": 68.85891056060791,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 6.216,
+    "lock_wait": 13.667,
+    "test_run": 0,
+    "tail": 48.666,
+    "build_gaps": 0.269
+   }
+  },
+  {
+   "id": "20261026-175353338-1629120",
+   "workspace": "justrust-clean-room",
+   "command": "check",
+   "wall": 13.692450284957886,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 2.735,
+    "lock_wait": 10.904,
+    "test_run": 0,
+    "tail": 0.003,
+    "build_gaps": 0.035
+   }
+  },
+  {
+   "id": "20261026-175400262-1629957",
+   "workspace": "justrust-clean-room",
+   "command": "test --test full_programs full_programs_ratchet",
+   "wall": 56.04791235923767,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 0,
+    "lock_wait": 6.914,
+    "test_run": 0,
+    "tail": 49.123,
+    "build_gaps": 0
+   }
+  },
+  {
+   "id": "20261026-175407984-1630596",
+   "workspace": "justrust-clean-room",
+   "command": "test --lib source_snapshot",
+   "wall": 47.26424169540405,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 38.299,
+    "lock_wait": 0,
+    "test_run": 8.918,
+    "tail": 0.026,
+    "build_gaps": 0.003
+   }
+  },
+  {
+   "id": "20261026-175415971-1631282",
+   "workspace": "justrust-clean-room",
+   "command": "test --test full_programs unchanged_hashmap_actual_program",
+   "wall": 59.079426765441895,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 11.651,
+    "lock_wait": 30.322,
+    "test_run": 0,
+    "tail": 16.758,
+    "build_gaps": 0.285
+   }
+  },
+  {
+   "id": "20261026-175444466-1634075",
+   "workspace": "justrust-clean-room",
+   "command": "test --lib trait_world_conditional_assumptions_and_closed_dispatch --",
+   "wall": 28.90199613571167,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 16.268,
+    "lock_wait": 12.593,
+    "test_run": 0,
+    "tail": 0.011,
+    "build_gaps": 0.014
+   }
+  },
+  {
+   "id": "20261026-175456204-1635122",
+   "workspace": "justrust-clean-room",
+   "command": "test --test compiler",
+   "wall": 38.42602729797363,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 0.632,
+    "lock_wait": 17.766,
+    "test_run": 20.006,
+    "tail": 0.004,
+    "build_gaps": 0.002
+   }
+  },
+  {
+   "id": "20261026-175457223-1635295",
+   "workspace": "justrust-clean-room",
+   "command": "test --test graph_integrity",
+   "wall": 22.1876802444458,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 1.221,
+    "lock_wait": 15.961,
+    "test_run": 4.965,
+    "tail": 0.022,
+    "build_gaps": 0.001
+   }
+  },
+  {
+   "id": "20261026-175505445-1636057",
+   "workspace": "jcode",
+   "command": "check -p jcode-tui",
+   "wall": 17.41568088531494,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 17.157,
+    "lock_wait": 0,
+    "test_run": 0,
+    "tail": 0.025,
+    "build_gaps": 0.106
+   }
+  },
+  {
+   "id": "20261026-175515408-1636927",
+   "workspace": "justrust-clean-room",
+   "command": "test --lib generic_projected_signature_does_not_invent_an_implementation --",
+   "wall": 0.9607203006744384,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 0,
+    "lock_wait": 0.941,
+    "test_run": 0,
+    "tail": 0.008,
+    "build_gaps": 0
+   }
+  },
+  {
+   "id": "20261026-175529305-1638559",
+   "workspace": "justrust-clean-room",
+   "command": "test --lib source_field_integer_context_rejects_forged_literal",
+   "wall": 0.022843599319458008,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 0,
+    "lock_wait": 0,
+    "test_run": 0.005,
+    "tail": 0.003,
+    "build_gaps": 0
+   }
+  },
+  {
+   "id": "20261026-175531190-1638683",
+   "workspace": "jcode",
+   "command": "check -p jcode --tests",
+   "wall": 7.791308641433716,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 7.546,
+    "lock_wait": 0,
+    "test_run": 0,
+    "tail": 0.029,
+    "build_gaps": 0.085
+   }
+  },
+  {
+   "id": "20261026-175536039-1639171",
+   "workspace": "justrust-clean-room",
+   "command": "test --test native_c_abi",
+   "wall": 17.87513041496277,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 13.15,
+    "lock_wait": 0,
+    "test_run": 4.404,
+    "tail": 0.004,
+    "build_gaps": 0.273
+   }
+  },
+  {
+   "id": "20261026-175541017-1639652",
+   "workspace": "justrust-clean-room",
+   "command": "run --bin jr-rust --",
+   "wall": 78.71327137947083,
+   "exit": 1,
+   "place": "local",
+   "phases": {
+    "compile": 77.277,
+    "lock_wait": 0,
+    "test_run": 0,
+    "tail": 0.496,
+    "build_gaps": 0.892
+   }
+  },
+  {
+   "id": "20261026-175549092-1640443",
+   "workspace": "justrust-clean-room",
+   "command": "test --test full_programs unchanged_hashmap_actual_program",
+   "wall": 27.802243947982788,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 10.908,
+    "lock_wait": 0,
+    "test_run": 0,
+    "tail": 16.57,
+    "build_gaps": 0.281
+   }
+  },
+  {
+   "id": "20261026-175554812-1640976",
+   "workspace": "justrust-clean-room",
+   "command": "test --test graph_integrity",
+   "wall": 16.102227210998535,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 4.358,
+    "lock_wait": 6.606,
+    "test_run": 4.801,
+    "tail": 0.02,
+    "build_gaps": 0.272
+   }
+  },
+  {
+   "id": "20261026-175555411-1640998",
+   "workspace": "jcode",
+   "command": "check -p jcode --tests",
+   "wall": 5.383501291275024,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 5.179,
+    "lock_wait": 0,
+    "test_run": 0,
+    "tail": 0.035,
+    "build_gaps": 0.037
+   }
+  },
+  {
+   "id": "20261026-175601732-1641718",
+   "workspace": "jcode",
+   "command": "check -p jcode-tui",
+   "wall": 8.089561223983765,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 7.854,
+    "lock_wait": 0,
+    "test_run": 0,
+    "tail": 0.025,
+    "build_gaps": 0.084
+   }
+  },
+  {
+   "id": "20261026-175603663-1641969",
+   "workspace": "jcode",
+   "command": "test -p jcode-task-types -p",
+   "wall": 8.104055404663086,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 1.761,
+    "lock_wait": 5.742,
+    "test_run": 0.092,
+    "tail": 0.413,
+    "build_gaps": 0.002
+   }
+  },
+  {
+   "id": "20261026-175603870-1642013",
+   "workspace": "justrust-clean-room",
+   "command": "test --lib diagnostic_inventory_source_budget --",
+   "wall": 19.6913640499115,
+   "exit": 101,
+   "place": "remote",
+   "phases": {
+    "compile": 16.917,
+    "lock_wait": 0,
+    "test_run": 0,
+    "tail": 2.751,
+    "build_gaps": 0.005
+   }
+  },
+  {
+   "id": "20261026-175611699-1629119",
+   "workspace": "justrust-clean-room",
+   "command": "clippy --bin jr-rust --test",
+   "wall": 23.194854974746704,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 11.464,
+    "lock_wait": 11.303,
+    "test_run": 0,
+    "tail": 0.004,
+    "build_gaps": 0.205
+   }
+  },
+  {
+   "id": "20261026-175612625-1642951",
+   "workspace": "jcode",
+   "command": "test -p jcode-tui --lib",
+   "wall": 34.29751706123352,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 33.793,
+    "lock_wait": 0,
+    "test_run": 0.178,
+    "tail": 0.038,
+    "build_gaps": 0.162
+   }
+  },
+  {
+   "id": "20261026-175614870-1640997",
+   "workspace": "jcode",
+   "command": "test -p jcode-app-core -p",
+   "wall": 50.28997611999512,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 19.426,
+    "lock_wait": 30.219,
+    "test_run": 0.461,
+    "tail": 0.047,
+    "build_gaps": 0.034
+   }
+  },
+  {
+   "id": "20261026-175623899-1644375",
+   "workspace": "jcode",
+   "command": "build --profile selfdev -p",
+   "wall": 54.08500003814697,
+   "exit": 0,
+   "place": "local",
+   "phases": {
+    "compile": 53.147,
+    "lock_wait": 0,
+    "test_run": 0,
+    "tail": 0.168,
+    "build_gaps": 0.275
+   }
+  },
+  {
+   "id": "20261026-175628096-1645938",
+   "workspace": "justrust-clean-room",
+   "command": "test --lib source_field_integer_context_rejects_forged_literal",
+   "wall": 12.51474118232727,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 6.181,
+    "lock_wait": 6.272,
+    "test_run": 0.006,
+    "tail": 0.007,
+    "build_gaps": 0.014
+   }
+  },
+  {
+   "id": "20261026-175642176-1647760",
+   "workspace": "justrust-clean-room",
+   "command": "test --test reference_self_generic_method_authority",
+   "wall": 9.916784763336182,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 9.572,
+    "lock_wait": 0,
+    "test_run": 0.023,
+    "tail": 0.006,
+    "build_gaps": 0.275
+   }
+  },
+  {
+   "id": "20261026-175650374-1641717",
+   "workspace": "jcode",
+   "command": "test -p jcode-tui --lib",
+   "wall": 15.023307085037231,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 0,
+    "lock_wait": 14.859,
+    "test_run": 0.005,
+    "tail": 0.048,
+    "build_gaps": 0
+   }
+  },
+  {
+   "id": "20261026-175654191-1645935",
+   "workspace": "justrust-clean-room",
+   "command": "test --test graph_integrity",
+   "wall": 5.990715742111206,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 1.066,
+    "lock_wait": 0,
+    "test_run": 4.883,
+    "tail": 0.023,
+    "build_gaps": 0.001
+   }
+  },
+  {
+   "id": "20261026-175747020-1658922",
+   "workspace": "jcode",
+   "command": "test -p jcode-tui complete_blocker",
+   "wall": 0.21468806266784668,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 0,
+    "lock_wait": 0,
+    "test_run": 0.072,
+    "tail": 0.005,
+    "build_gaps": 0
+   }
+  },
+  {
+   "id": "20261026-175749895-1659145",
+   "workspace": "jcode",
+   "command": "test -p jcode-app-core todo_external_blocker",
+   "wall": 0.1318259239196777,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 0,
+    "lock_wait": 0,
+    "test_run": 0.004,
+    "tail": 0.002,
+    "build_gaps": 0
+   }
+  },
+  {
+   "id": "20261026-175752840-1659573",
+   "workspace": "jcode",
+   "command": "test -p jcode-app-core swarm_todo_statuses_include_items_outside_detail_window",
+   "wall": 0.13338732719421387,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 0,
+    "lock_wait": 0,
+    "test_run": 0.005,
+    "tail": 0.003,
+    "build_gaps": 0
+   }
+  },
+  {
+   "id": "20261026-175758177-1660163",
+   "workspace": "jcode",
+   "command": "test -p jcode-app-core swarm_snapshot_does_not_override_independent_work",
+   "wall": 0.13324403762817383,
+   "exit": 0,
+   "place": "remote",
+   "phases": {
+    "compile": 0,
+    "lock_wait": 0,
+    "test_run": 0.004,
+    "tail": 0.002,
+    "build_gaps": 0
+   }
+  }
+ ]
+}

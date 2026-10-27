@@ -1,5 +1,60 @@
 # Findings: where agent build time goes
 
+## 2026-10-26: Next optimization targets from recent real work
+
+Read-only triage of the 90-minute window ending 2026-10-27 00:58:01 UTC
+(2026-10-26 17:58:01 PDT) found 267 completed runs from the exact primary
+checkout paths, excluding benchmark/scratch copies. The fixed snapshot is
+`bench/results/20261026-recent-optimization-targets.json`. Aggregate recorded
+wall is 6,887.5s: compilation 2,610.9s, build-lock waits 2,304.1s, measured
+test execution 1,047.2s, tail 876.6s, and build gaps 24.9s. These are sums of
+overlapping run waits, not elapsed session time or guaranteed savings. No
+new remote builds were launched for this investigation.
+
+1. **Shared-build contention is the first target.** 121 runs waited more
+   than 0.1s for a build-directory lock. Graph-integrity commands alone
+   accumulated 291.2s of lock waits across 26 runs. Run
+   `20261026-172317752-1456504` spent 61.06s of 67.67s waiting, versus 1.22s
+   compiling and 5.36s in tests. Even the small Jcode policy/protocol test
+   run `20261026-175603663-1641969` spent 5.74s of 8.10s waiting, versus
+   0.09s executing 205 tests. Investigate native jr-cargo coordination that
+   shares identical compilation work, publishes ready artifacts to separate
+   test consumers, and keeps lock ownership as narrow as correctness allows.
+   Do not allocate per-agent target trees or worktrees. Gate on concurrent
+   identical and mixed-edit workloads, cancellation/failure correctness,
+   compiled-unit counts, and p50/p95 agent wait. The logs establish contention,
+   not which critical section can safely be shortened.
+2. **The earlier test-profile change does not speed up local `run` builds.**
+   Six `run --bin jr-rust` invocations accumulated 329.1s of compilation out
+   of 368.6s wall. The compiler crate alone took 78.8s in
+   `20261026-171806491-1425256` and 76.1s in
+   `20261026-175541017-1639652`; both executed locally and rebuilt the large
+   library. The dev profile still has opt-level=1 and default local ThinLTO,
+   whereas only the test profile has LTO off. Next diagnostic: a pinned local
+   source-edit/run scenario comparing dev LTO/codegen choices, including the
+   resulting compiler's execution time. Do not promote the test-only result
+   to dev defaults without measuring this separate tradeoff. A longer-term
+   per-module compilation boundary may be needed for the 312k-line library.
+3. **Large sequential oracle batches have real execution cost.** Run
+   `20261026-173651506-1526940` compiled nothing and spent 65.54s in the
+   closures suite; one mutable-capture test accounted for 65.52s. Its 15
+   cases call `tests/support/oracle.rs` sequentially, then independently run
+   both worker counts and CHECK/BUILD modes in `capture_cases_workers`.
+   The CLI rejection batch in `tests/compiler.rs` likewise loops over 28
+   cases in one test and took 20.00s in `20261026-175456204-1635122`.
+   Instrument per-case stock/native/check/build time, then evaluate bounded
+   case parallelism and precisely keyed local stock-oracle reuse. Retain
+   every case, rejection assertion, and worker/mode check; do not optimize
+   by weakening acceptance coverage or oversubscribing nested workers.
+4. **Fix attribution before treating long tails as infrastructure cost.**
+   `20261026-175400262-1629957` labels 49.12s as after-build time despite
+   libtest reporting that same 49.12s for a failing `full_programs_ratchet`.
+   Other failing suites have similar missing test spans. Improve native
+   test execution telemetry and the stock compatibility fallback, with
+   regressions for failed, filtered, and multi-binary suites. This is a
+   reporting/correctness target, not a measured speedup or evidence that
+   876.6s of aggregate tail is network overhead.
+
 ## 2026-10-26: Local compiler test edits without test-profile ThinLTO
 
 The recent clean-room run `20261026-153635937-779805` spent 30.66s of
