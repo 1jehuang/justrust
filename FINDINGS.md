@@ -144,6 +144,50 @@ failure-confirmation retries: `20261026-145342655-509649` and
 `20261026-145352802-510494`. Strict all-target clippy also passed
 (`20261026-145358472-509275`).
 
+## 2026-10-25: Jcode preview-updater hosted edit loop
+
+Hosted check `20261025-231934593-200649` passed in 12.30s rust-side
+(14.6s including sync), with 11.89s compiling and 26 rebuilt workspace
+units. The report attributes about 8.4s to downstream rebuilds, notably
+the broad `jcode-config-types` root and `docs` being a build-script input
+of `jcode-app-core`. The CLI parser test run
+`20261025-232218743-220112` passed in 20.7s rust-side (23.2s hosted),
+including 20.30s compiling: `jcode_tui` 5.93s, `jcode_app_core` 5.08s,
+and the root test binary 5.05s. The app-core updater run
+`20261025-232302158-226381` spent 15.39s compiling its 1,731-test binary
+to run 31 tests (30 passed, one expected prerelease-comparison failure
+pending a concurrent fix). These are project crate/input fanout costs,
+not evidence of a justrust cache defect. Potential follow-up: isolate
+embedded docs in a leaf crate and split frequently changed config types.
+No unrelated project restructuring or measured speedup claim.
+
+## 2026-10-23: Duplicate-final-response TUI regression loop
+
+Run `20261023-213953174-3845270` (`justrust check -p jcode-tui --tests`)
+passed in 72.70s locally after the hosted outage fallback. `justrust remote
+status` explicitly reported that hosted builds were temporarily unavailable.
+The report measured 71.79s compiling, 65 rebuilt units, and 555 fresh units.
+The largest local units were `jcode_tui(test)` (30.8s wall, 21.3s attributed),
+`jcode_app_core` (13.0s wall), and `jcode_base` (8.1s wall). Other processes
+used 12.2 cores on average, with up to 10 concurrent rustc processes and
+30.51s machine-wide CPU stalls. A subsequent targeted test run
+`20261023-214112947-3854331` spent 50.6s before failing on an unrelated
+in-flight `agentgrep::control` import. The actionable costs are oversized
+project crates and cross-agent source/dependency coordination, not a measured
+justrust cache regression. No project crate restructuring or speedup claim.
+
+## 2026-10-23: Todo completion renderer test iteration
+
+Hosted run `20261023-184855172-2967684` spent 8.35s compiling the
+247k-line `jcode_tui` test crate to run seven completion-report tests
+(0.15s test execution, 8.67s measured wall). `justrust show` confirms
+remote on hosted, 614 fresh units and one rebuilt unit. This is project
+crate granularity, not a client failure. A leaf renderer test crate could
+reduce this cost, but restructuring is outside the requested UI change.
+The final no-edit run `20261023-185129829-2973952` passed all seven tests
+with 615 fresh units, 0s compile and 0.3s measured wall. No speedup claim:
+these compare an edited compile against a no-edit cache hit.
+
 ## 2026-10-19: Correct the durable-GC rollout's legacy lock-mode regression
 
 The initial durable registry change (`68b0dddec`) rejected group-writable lock
@@ -8139,6 +8183,120 @@ active leases. One `justrust remote gc --apply` freed 138,805,305,344 bytes
 afterwards. The hosted agent now runs the same binary (sha256 2989351da2ba344e...)
 and its plan reports no collection needed.
 
+## 2026-10-20: Jcode cloud Git widget build fanout
+
+Hosted run `20261020-001709789-2905971` (`justrust build --profile selfdev
+-p jcode --bin jcode`) succeeded in 41.7s end-to-end, with 34.7s build
+time and 4.76s artifact transfer (58.1 MB). The report attributed 13.5s
+to the oversized `jcode_app_core` (171k lines, 7.07s) and `jcode_base`
+(150k lines, 6.46s) crates, despite this task changing TUI/CLI code.
+It compiled 49 units (44 workspace, 3 registry, 2 build scripts), with
+583 fresh. There were also concurrent unrelated workspace edits, so this
+is not a controlled before/after comparison. No project restructuring
+was attempted during the widget task.
+
+Follow-up cloud status widget run `20261020-004329529-3007129`
+(`justrust test --remote -p jcode-tui --lib info_widget`) passed all 152
+selected tests in 8.9s hosted wall time. Tests themselves took 0.22s,
+while recompiling the 242k-line `jcode_tui` test crate took 6.45s and
+2282 MB peak rustc memory after one regression-test edit. The report
+estimated 5.9s oversized-crate waste. This supports splitting frequently
+edited UI modules in a separate scoped task, not an unmeasured claim of
+a speedup or a reason to restructure during the cloud widget change.
+
+## 2026-10-20: Todo UI validation latency and hosted startup stall
+
+During Jcode lane-status deduplication, hosted run
+`20261020-040317149-3824494` passed 4 sidebar tests but spent 19.43s
+waiting for the shared build-directory lock and 9.61s compiling the
+2842-test TUI binary. Broader run `20261020-040422515-3828522` passed
+139 tests (6 ignored), with 15.69s compile versus 0.21s test execution.
+These are concurrent-workspace measurements, not controlled comparisons.
+
+A later `justrust test -p jcode-tui --lib todo` started at 11:06:46 UTC
+and emitted no output for over two minutes. At 11:08:55 UTC its client
+PID 3845451 was blocked in `unix_stream_read_generic` on the shared
+`~/.justrust/remote/daemon.sock`; other clients were also waiting. The
+request was cancelled without restarting the shared daemon, and final
+validation switched to `justrust test --local --profile selfdev`.
+The remote startup path needs bounded waits and visible progress before
+its first compiler output. No cause or speedup is claimed here.
+
+## 2026-10-22: Cloud handoff regression validation
+
+Hosted run `20261022-111200958-3850282` passed 40 cloud-related TUI tests
+in 48.5s end to end. Compilation took 44.43s, versus 0.43s running tests.
+The 2866-test `jcode_tui` binary alone compiled for 15.11s, with
+`jcode_app_core` at 8.35s and `jcode_base` at 6.49s. The report estimated
+26.9s of oversized-crate waste and 7.6s for compiling a broad test binary
+to run a small subset (overlapping estimates). A smaller TUI handoff/input
+leaf crate could reduce this edit loop, but restructuring was intentionally
+left out of the cloud cancellation fix. No speedup is claimed.
+
+## 2026-10-24: Benchmark clean-cloud subscription routing fix
+
+During end-to-end Jcode Cloud benchmark validation, run
+`20261023-191330000-3061094` compiled the 1967-test `jcode_base` test
+binary to execute five targeted provider regressions. Compilation of that
+binary took 23.5s, with 36.6s attributed to recompiling the oversized base
+crate across units. The tests themselves passed. Follow-up build
+`20261023-191416861-3068827` took 41.31s wall time, including 40.63s
+compilation, and rebuilt four registry dependency units (14.6s estimated
+cost). `justrust show` explicitly reported local execution because remote
+had failed within the prior ten minutes, despite no local flag being used.
+The build produced the verified corrected candidate. No restructuring or
+speedup is claimed; smaller provider regression targets and clearer remote
+fallback diagnostics remain follow-up opportunities.
+
+## 2026-10-24: Background dependency validation loop
+
+Jcode hosted check `20261024-023329221-58932` took 18.4s, including
+6.34s waiting for the target lock and 11.74s compilation. Hosted policy test
+`20261024-023424414-61021` spent 6.57s on the same lock for 0.28s compilation.
+Concurrent agent validation serialized at the build directory, so consolidating
+checks into a coordinator-owned queue avoids this measured wait.
+
+Hosted bash suite `20261024-023800501-69851` passed 38 tests and failed three
+repository/environment-dependent tests: the cargo-wrapper test could not find
+the repository ancestor, and two destructive-gate assertions saw ungated
+execution. The same 41 tests passed locally in
+`20261024-023843046-71583` (44.7s, 40.84s compilation, 3.14s tests). This
+justified a local-only validation exception, not a hosted service outage.
+The hosted self-dev build/watcher test then passed in
+`20261024-023927825-71573` (13.3s hosted wall time, 9.16s test compilation,
+0.58s test runtime). Repository-independent fixtures and smaller app-core
+test targets would improve this loop. No restructuring or speedup is claimed.
+
+## 2026-10-24: Cache diagnostic wording regression loop
+
+Jcode hosted check `20261024-134807888-2329881` passed in 2.3s compiler wall
+time. Hosted test `20261024-134812180-2329880` passed 23 cache-monitor tests in
+13.14s wall time, with 12.88s compiling and 0.01s running tests. The base test
+binary contained 1,993 tests. The command omitted `--lib`, unnecessarily building
+other targets, estimated at 3.5s by justrust. Future focused invocations should
+use `justrust test -p jcode-base --lib kv_cache_monitor`. A one-file base change
+also rebuilt the OpenRouter runtime (0.4s). Smaller test/crate boundaries are a
+project-level opportunity, not a reason to restructure during this bug fix.
+No build speedup is claimed.
+
+The follow-up cache-notice tag run `20261024-140740391-2416527` passed 38
+focused TUI tests in 18.8s compiler wall time, including 18.15s compilation
+and 0.31s tests. The 2,993-test TUI binary cost 9.66s rustc wall time, with
+2,975 MB peak rustc memory. This is another measured candidate for narrower
+test/crate boundaries, not justification for an unrequested project split.
+
+## 2026-10-26: Cloud replacement documentation invalidates app-core
+
+Jcode cloud replacement validation on hosted justrust passed check
+`20261025-183208193-2818105` in 9.3s total and test run
+`20261025-183217453-2818088` in 11.1s total (17 tests, 0.34s test time).
+The latter compiled for 8.33s. Its waste report attributes approximately 5.3s
+to downstream jcode-tui/jcode rebuilds because the app-core build script treats
+the docs directory as an input. A cloud command documentation edit therefore
+invalidated app-core and its dependents. Narrowing those build-script inputs or
+moving documentation embedding to a small leaf crate is a project-level
+follow-up, not part of this command change. No speedup is claimed.
+
 ## 2026-10-26: failure-heavy test confirmation, not unexplained shutdown
 
 The clean-room run `20261025-203723357-3339712` took 98.58s. Its initial
@@ -8367,3 +8525,20 @@ A local-only stock-path fixture used `JUSTRUST_TOOLCHAIN=system`,
 `20261026-152958194-740614` (zero compiled, one fresh). This isolates recording
 from toolchain and slot changes; local execution was required to compare the
 same on-disk Cargo artifacts. No comprehensive performance claim is made.
+
+## Jcode complete-blocker edit loop (2026-10-26)
+
+Hosted run `20261026-175614870-1640997` (`justrust test -p jcode-app-core
+-p jcode-tui -p jcode completely_blocked`) passed five matching tests. The client
+reported 55.4s wall time, including 4.48s source sync. Compiler accounting showed
+30.22s waiting for the shared target-directory lock and 19.43s compilation.
+Build slots were disabled because the reflink probe failed. `justrust show`
+confirmed `where remote on hosted`, 32 rebuilt local units and 597 fresh units.
+The app-core test unit took 12.25s attributed build time (19.3s unit wall), 49.0s
+CPU and 4653 MB peak memory. The report estimated 17.9s downstream rebuild cost
+from shared upstream changes and 10.9s oversized app-core cost. No crate split
+was attempted because it is outside the blocker change. Warm follow-up run
+`20261026-175747020-1658922` passed eight UI blocker tests with no compiled units
+in 2.9s client wall time, mostly its 2.14s sync. These are observations, not a
+controlled speedup comparison. Investigate the hosted reflink probe/slot fallback
+to avoid shared-target lock serialization before restructuring Jcode crates.
