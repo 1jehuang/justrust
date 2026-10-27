@@ -168,14 +168,8 @@ impl Resolver<'_> {
         if target.kind != ResolvedKind::Trait {
             return Err("associated projection target is not a trait".into());
         }
-        let target = self.key(target.source()?)?;
-        for (index, declaration) in self.program.traits.iter().enumerate() {
-            self.alias_budget.charge_work(1)?;
-            if self.key(&declaration.name)? == target {
-                return Ok(index);
-            }
-        }
-        Err("projection trait is not a retained source declaration".into())
+        self.trait_decl_index(target.source()?)?
+            .ok_or_else(|| "projection trait is not a retained source declaration".into())
     }
 
     fn check_associated_member(
@@ -367,6 +361,56 @@ impl Resolver<'_> {
     ) -> Result<bool, String> {
         Ok(self.ident_key(ident, LookupClass::Item(namespace))?
             == self.program.symbols.key(self.names(), atom)?)
+    }
+    /// The struct declaration an item binding names, checked by identity.
+    fn struct_decl(&self, index: usize, path: &AstPath) -> Result<&StructDecl, String> {
+        let declaration = self
+            .program
+            .structs
+            .get(index)
+            .ok_or("struct binding names no declaration")?;
+        if self.key(&declaration.name)? != self.key(path)? {
+            return Err("struct binding disagrees with its declaration".into());
+        }
+        Ok(declaration)
+    }
+    /// The declaration index bound at the source path `path`, by kind.
+    fn declaration_index(
+        &self,
+        path: &AstPath,
+        pick: fn(&ItemKind) -> Option<usize>,
+    ) -> Result<Option<usize>, String> {
+        let Some(items) = self.path_items(path)? else {
+            return Ok(None);
+        };
+        let mut found = None;
+        for item in items {
+            self.alias_budget.charge_work(1)?;
+            if let Some(index) = pick(&item.kind) {
+                if found.is_some_and(|previous| previous != index) {
+                    return Err("ambiguous source declaration binding".into());
+                }
+                found = Some(index);
+            }
+        }
+        Ok(found)
+    }
+    fn trait_decl_index(&self, path: &AstPath) -> Result<Option<usize>, String> {
+        let index = self.declaration_index(path, |kind| match kind {
+            ItemKind::Trait(index) => Some(*index),
+            _ => None,
+        })?;
+        if let Some(index) = index {
+            let declaration = self
+                .program
+                .traits
+                .get(index)
+                .ok_or("trait binding names no declaration")?;
+            if self.key(&declaration.name)? != self.key(path)? {
+                return Err("trait binding disagrees with its declaration".into());
+            }
+        }
+        Ok(index)
     }
     fn path_items(&self, path: &AstPath) -> Result<Option<&Vec<Item>>, String> {
         Ok(self.items.get(&self.key(path)?))
@@ -1181,16 +1225,9 @@ impl Resolver<'_> {
             }
             match item.path {
                 ResolvedPath::Source(target) => {
-                    let target_key = self.key(&target)?;
-                    let mut trait_index = None;
-                    for (index, declaration) in self.program.traits.iter().enumerate() {
-                        self.alias_budget.charge_work(1)?;
-                        if self.key(&declaration.name)? == target_key {
-                            trait_index = Some(index);
-                        }
-                    }
-                    let trait_index =
-                        trait_index.ok_or("trait is not a retained source declaration")?;
+                    let trait_index = self
+                        .trait_decl_index(&target)?
+                        .ok_or("trait is not a retained source declaration")?;
                     // Every row is checked before any duplicate handling or boundary.
                     for segment in &source.segments {
                         for binding in &segment.associated_types {
@@ -1333,13 +1370,15 @@ impl Resolver<'_> {
                 ItemKind::Module(_) if namespace => Some(ResolvedKind::Module),
                 ItemKind::Function if !namespace => Some(ResolvedKind::Function),
                 ItemKind::Const if !namespace => Some(ResolvedKind::Const),
-                ItemKind::Trait if namespace => Some(ResolvedKind::Trait),
-                ItemKind::Struct
-                    if namespace || self.source_struct(&item.path)?.shape == StructShape::Tuple =>
+                ItemKind::Trait(_) if namespace => Some(ResolvedKind::Trait),
+                ItemKind::Struct(declaration)
+                    if namespace
+                        || self.struct_decl(*declaration, &item.path)?.shape
+                            == StructShape::Tuple =>
                 {
                     Some(ResolvedKind::Struct)
                 }
-                ItemKind::Enum if namespace => Some(ResolvedKind::Enum),
+                ItemKind::Enum(_) if namespace => Some(ResolvedKind::Enum),
                 ItemKind::Variant(shape) if namespace || *shape != ir::VariantShape::Struct => {
                     Some(ResolvedKind::Variant)
                 }
@@ -1383,7 +1422,7 @@ impl Resolver<'_> {
                         .and_then(|items| {
                             items
                                 .iter()
-                                .find(|item| matches!(item.kind, ItemKind::Enum))
+                                .find(|item| matches!(item.kind, ItemKind::Enum(_)))
                         })
                         .ok_or("variant has no checked enum owner")?
                         .visibility
@@ -2014,15 +2053,9 @@ impl Resolver<'_> {
         if let Some(item) = self.path(&original, module, true, false)?
             && item.kind == ResolvedKind::Trait
         {
-            let target = self.key(item.source()?)?;
-            let mut index = None;
-            for (candidate, declaration) in self.program.traits.iter().enumerate() {
-                self.alias_budget.charge_work(1)?;
-                if self.key(&declaration.name)? == target {
-                    index = Some(candidate);
-                }
-            }
-            let index = index.ok_or("trait is not a retained source declaration")?;
+            let index = self
+                .trait_decl_index(item.source()?)?
+                .ok_or("trait is not a retained source declaration")?;
             for segment in &path.segments {
                 for binding in &segment.associated_types {
                     self.check_associated_member(index, binding.name)?;
@@ -2382,10 +2415,14 @@ impl Resolver<'_> {
         if item.kind != ResolvedKind::Struct {
             return Ok(false);
         }
-        let key = self.key(item.source()?)?;
-        for declaration in &self.program.structs {
-            self.alias_budget.charge_work(1)?;
-            if self.key(&declaration.name)? == key {
+        let source = item.source()?;
+        let index = self.declaration_index(source, |kind| match kind {
+            ItemKind::Struct(index) => Some(*index),
+            _ => None,
+        })?;
+        if let Some(index) = index {
+            let declaration = self.struct_decl(index, source)?;
+            {
                 if declaration.shape != StructShape::Unit {
                     return Ok(false);
                 }
@@ -2457,14 +2494,13 @@ impl Resolver<'_> {
         Ok(())
     }
     fn source_struct(&self, path: &AstPath) -> Result<&StructDecl, String> {
-        let key = self.key(path)?;
-        for declaration in &self.program.structs {
-            self.alias_budget.charge_work(1)?;
-            if self.key(&declaration.name)? == key {
-                return Ok(declaration);
-            }
-        }
-        Err("resolved struct has no checked source schema".into())
+        let index = self
+            .declaration_index(path, |kind| match kind {
+                ItemKind::Struct(index) => Some(*index),
+                _ => None,
+            })?
+            .ok_or("resolved struct has no checked source schema")?;
+        self.struct_decl(index, path)
     }
     fn tuple_struct(&self, path: &AstPath) -> Result<&StructDecl, String> {
         let declaration = self.source_struct(path)?;
@@ -3424,7 +3460,7 @@ impl Resolver<'_> {
             } else if self.path_items(&canonical)?.is_some_and(|items| {
                 items
                     .iter()
-                    .any(|item| matches!(item.kind, ItemKind::Struct))
+                    .any(|item| matches!(item.kind, ItemKind::Struct(_)))
             }) {
                 let Expr::Struct { name, fields } = value else {
                     return Err("type alias is not a value constructor".into());

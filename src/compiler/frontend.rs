@@ -8770,13 +8770,43 @@ enum ItemKind {
     Module(ModuleId),
     Function,
     Const,
-    Struct,
-    Enum,
-    Trait,
+    /// Declaration index in the owning file's (later crate's) `structs`.
+    Struct(usize),
+    /// Declaration index in `enums`.
+    Enum(usize),
+    /// Declaration index in `traits`.
+    Trait(usize),
     Variant(ir::VariantShape),
     Import(AstPath, bool), // target path, type-namespace-only (`prefix::{self}`)
 }
 
+/// Offsets added to a file-local item's declaration index when its file's
+/// declarations are appended after others.
+#[derive(Clone, Copy)]
+struct DeclarationBase {
+    structs: usize,
+    enums: usize,
+    traits: usize,
+}
+impl DeclarationBase {
+    fn rebase(&self, items: &mut [Item]) -> Result<(), String> {
+        let add = |index: &mut usize, base: usize| -> Result<(), String> {
+            *index = index
+                .checked_add(base)
+                .ok_or("item declaration index overflow")?;
+            Ok(())
+        };
+        for item in items {
+            match &mut item.kind {
+                ItemKind::Struct(index) => add(index, self.structs)?,
+                ItemKind::Enum(index) => add(index, self.enums)?,
+                ItemKind::Trait(index) => add(index, self.traits)?,
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+}
 #[derive(Clone, Debug)]
 struct TypeAliasDecl {
     params: Vec<AstIdent>,
@@ -11025,8 +11055,15 @@ impl<'input, 'names> Parser<'input, 'names> {
                 return Err(self.error("duplicate item name"));
             }
         }
-        for (key, items) in product.items.drain() {
+        let base = DeclarationBase {
+            structs: parsed.program.structs.len(),
+            enums: parsed.program.enums.len(),
+            traits: parsed.program.traits.len(),
+        };
+        for (key, mut items) in product.items.drain() {
             self.reserve_item_publication(parsed)?;
+            base.rebase(&mut items)
+                .map_err(|message| self.error(&message))?;
             parsed.items.insert(key, items);
         }
         let mut generated = product.program;
@@ -14362,6 +14399,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                 });
             }
             self.expect("}")?;
+            let declaration = parsed.program.traits.len();
             parsed.program.traits.push(TraitDecl {
                 module,
                 type_params,
@@ -14376,7 +14414,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                 associated_constants,
                 self_defaults,
             });
-            (name, ItemKind::Trait)
+            (name, ItemKind::Trait(declaration))
         } else if self.eat("enum") {
             let name = self.ident()?;
             let type_params = self.type_parameters()?;
@@ -14471,6 +14509,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             if variants.is_empty() {
                 return Err(self.unsupported("empty enums are unsupported"));
             }
+            let declaration = parsed.program.enums.len();
             parsed.program.enums.push(EnumDecl {
                 module,
                 type_params,
@@ -14482,7 +14521,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                 visibility: visibility.clone(),
                 variants,
             });
-            (name, ItemKind::Enum)
+            (name, ItemKind::Enum(declaration))
         } else if self.eat("struct") {
             let name = self.ident()?;
             if std::mem::take(&mut self.pending_repr_c) {
@@ -14548,6 +14587,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                 // constructors. Source-shape authority is retained separately.
                 StructShape::Record
             };
+            let declaration = parsed.program.structs.len();
             parsed.program.structs.push(StructDecl {
                 shape,
                 module,
@@ -14560,7 +14600,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                 visibility: visibility.clone(),
                 fields,
             });
-            (name, ItemKind::Struct)
+            (name, ItemKind::Struct(declaration))
         } else if self.is("impl") {
             let original_start = primitive_constants::original_token(self);
             self.expect("impl")?;
@@ -14821,22 +14861,22 @@ impl<'input, 'names> Parser<'input, 'names> {
                 .map_err(native_adapter::name_error)?;
         }
         if bindings.iter().any(|item| {
-            if matches!(kind, ItemKind::Enum)
+            if matches!(kind, ItemKind::Enum(_))
                 && matches!(
                     item.kind,
-                    ItemKind::Module(_) | ItemKind::Struct | ItemKind::Enum
+                    ItemKind::Module(_) | ItemKind::Struct(_) | ItemKind::Enum(_)
                 )
-                || matches!(item.kind, ItemKind::Enum)
-                    && matches!(kind, ItemKind::Module(_) | ItemKind::Struct)
+                || matches!(item.kind, ItemKind::Enum(_))
+                    && matches!(kind, ItemKind::Module(_) | ItemKind::Struct(_))
             {
                 return true;
             }
             matches!(
                 (&item.kind, &kind),
                 (ItemKind::Module(_), ItemKind::Module(_))
-                    | (ItemKind::Module(_), ItemKind::Struct)
-                    | (ItemKind::Struct, ItemKind::Module(_))
-                    | (ItemKind::Struct, ItemKind::Struct)
+                    | (ItemKind::Module(_), ItemKind::Struct(_))
+                    | (ItemKind::Struct(_), ItemKind::Module(_))
+                    | (ItemKind::Struct(_), ItemKind::Struct(_))
                     | (ItemKind::Function, ItemKind::Function)
                     | (ItemKind::Function, ItemKind::Const)
                     | (ItemKind::Const, ItemKind::Function)
@@ -19024,11 +19064,15 @@ pub(super) fn merge_crate_file_refs_at(
         program
             .trait_imports
             .extend(p.trait_imports.iter().cloned());
+        let declarations = DeclarationBase {
+            structs: base.structs,
+            enums: base.enums,
+            traits: base.traits,
+        };
         for (key, list) in &file.items {
-            items
-                .entry(key.clone())
-                .or_default()
-                .extend(list.iter().cloned());
+            let mut list = list.clone();
+            declarations.rebase(&mut list)?;
+            items.entry(key.clone()).or_default().extend(list);
         }
         empty_use_prefixes.extend(file.empty_use_prefixes.iter().cloned());
         glob_imports.extend(file.glob_imports.iter().cloned());
