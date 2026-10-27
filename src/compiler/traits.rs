@@ -2249,6 +2249,9 @@ pub struct TraitScratch {
     /// Successful direct-call discharges under the current facts subject.
     directs: Vec<DirectCallProof>,
     direct_index: std::collections::HashMap<u64, Vec<usize>>,
+    /// Canonical signatures produced for exact retained trait-call inputs.
+    formed_trait_signatures: Vec<(TraitCall, Signature)>,
+    formed_trait_signature_index: std::collections::HashMap<DeclId, Vec<usize>>,
     /// The facts identity these answers belong to (environment + phase).
     facts_key: Option<(usize, FactsPhase, DeclId)>,
 }
@@ -2275,6 +2278,8 @@ impl TraitScratch {
             self.signature_index.clear();
             self.directs.clear();
             self.direct_index.clear();
+            self.formed_trait_signatures.clear();
+            self.formed_trait_signature_index.clear();
         }
     }
 }
@@ -8038,6 +8043,15 @@ impl ValidatedTraitWorld {
         goal: &TraitRef,
         context: ProofContext<'_>,
     ) -> Result<(InstantiatedSchema, Option<Arc<SignatureTopologyProof>>)> {
+        self.instantiate_item_with_scratch(item, goal, context, &mut ProofScratch::default())
+    }
+    fn instantiate_item_with_scratch(
+        &self,
+        item: &TraitItemHeader,
+        goal: &TraitRef,
+        context: ProofContext<'_>,
+        scratch: &mut ProofScratch,
+    ) -> Result<(InstantiatedSchema, Option<Arc<SignatureTopologyProof>>)> {
         self.check_context(context)?;
         if goal.declaration != item.trait_decl {
             return Err(FactsError::invalid(
@@ -8045,7 +8059,7 @@ impl ValidatedTraitWorld {
                 "trait item application owner mismatch",
             ));
         }
-        self.validate_ref_in(goal, context.env(), None)?;
+        self.validate_ref_with(goal, context.env(), None, &mut scratch.replays)?;
         let actual = &goal.self_ty;
         let arguments = self.trait_arguments(goal)?;
         let owner = self.trait_header(item.trait_decl)?;
@@ -8083,13 +8097,14 @@ impl ValidatedTraitWorld {
                 &arguments,
                 context,
                 Some(item.declaration),
-                &mut ProofScratch::default(),
+                scratch,
                 context.original,
             )?;
             return Ok((instantiated, None));
         }
         if self.schema_contains_projection(&item.schema)? {
-            let application = self.instantiate_projected_item(item, goal, &[], context)?;
+            let application =
+                self.instantiate_projected_item_with_scratch(item, goal, &[], context, scratch)?;
             return Ok((application.instantiated, None));
         }
         let origin = self
@@ -9048,6 +9063,30 @@ impl ValidatedTraitWorld {
         self.evidence(predicate, context, ProofOrigin::Builtin { item })
             .map(Some)
     }
+    fn instantiate_trait_signature_uncached(
+        &self,
+        call: &TraitCall,
+        facts: &ValidatedFacts,
+        scratch: &mut TraitScratch,
+    ) -> Result<Signature> {
+        if facts.phase() == FactsPhase::Universal
+            && self.schema_contains_projection(&self.item_header(call.item)?.schema)?
+            && !self.trait_call_is_closed(call, facts.env())?
+            && !matches!(&call.trait_ref.self_ty, Ty::Dyn(_))
+        {
+            return Ok(self
+                .instantiate_universal_required_item(call, facts)?
+                .0
+                .signature);
+        }
+        self.trait_signature_scratch(
+            call,
+            ProofContext::from_facts(facts),
+            scratch.for_world(self.id),
+        )
+        .map(|(signature, _)| signature)
+    }
+
     fn trait_signature_with_topology(
         &self,
         call: &TraitCall,
@@ -9091,10 +9130,16 @@ impl ValidatedTraitWorld {
             scratch,
         )?;
         let (instantiated, topology) = if method_arity == 0 {
-            self.instantiate_item(item, &call.trait_ref, context)?
+            self.instantiate_item_with_scratch(item, &call.trait_ref, context, scratch)?
         } else {
             (
-                self.instantiate_generic_method(item, &call.trait_ref, &call.method_args, context)?,
+                self.instantiate_generic_method_with_scratch(
+                    item,
+                    &call.trait_ref,
+                    &call.method_args,
+                    context,
+                    scratch,
+                )?,
                 None,
             )
         };
@@ -9102,10 +9147,6 @@ impl ValidatedTraitWorld {
             self.require_in(predicate, context, scratch)?;
         }
         Ok((instantiated.signature, topology))
-    }
-    fn trait_signature_in(&self, call: &TraitCall, context: ProofContext<'_>) -> Result<Signature> {
-        self.trait_signature_with_topology(call, context)
-            .map(|(s, _)| s)
     }
     fn discharge_in(
         &self,
@@ -9457,6 +9498,26 @@ impl ValidatedTraitWorld {
         scratch: &mut TraitScratch,
     ) -> Result<()> {
         let expected = match subject {
+            SignatureSubject::Body if facts.closure.is_some() => {
+                self.closure_body_signature(facts)?
+            }
+            SignatureSubject::Body => match &facts.subject {
+                FactsSubject::UniversalCallable(declaration) => {
+                    let signature = &self.callable_header(*declaration)?.schema.signature;
+                    retain::<Ty>(&self.budget, signature.params.len())?;
+                    signature.clone()
+                }
+                FactsSubject::ClosedInstance(target) => {
+                    self.discharge_direct_with(target, facts, scratch)?
+                        .signature
+                }
+                FactsSubject::SchemaItem(_) | FactsSubject::AssociatedConstant(_) => {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "schema facts cannot validate an executable body",
+                    ));
+                }
+            },
             SignatureSubject::Call(Callee::Direct(target)) => {
                 self.discharge_direct_with(target, facts, scratch)?
                     .signature
@@ -9603,18 +9664,62 @@ impl TraitCx for ValidatedTraitWorld {
         call: &TraitCall,
         facts: &ValidatedFacts,
     ) -> Result<Signature> {
+        self.instantiate_trait_signature_with(call, facts, &mut TraitScratch::default())
+    }
+    fn instantiate_trait_signature_with(
+        &self,
+        call: &TraitCall,
+        facts: &ValidatedFacts,
+        scratch: &mut TraitScratch,
+    ) -> Result<Signature> {
         self.check_facts(facts, true)?;
-        if facts.phase() == FactsPhase::Universal
-            && self.schema_contains_projection(&self.item_header(call.item)?.schema)?
-            && !self.trait_call_is_closed(call, facts.env())?
-            && !matches!(&call.trait_ref.self_ty, Ty::Dyn(_))
-        {
-            return Ok(self
-                .instantiate_universal_required_item(call, facts)?
-                .0
-                .signature);
+        // This memo stores only this service's completed canonical outputs.
+        // Keep the exact facts subject and the retained actual payloads, not
+        // merely their declaration IDs or semantic type equality. In
+        // particular a copied nominal with a forged definition/capability is
+        // not the same input. Caller-supplied signatures are still validated
+        // separately by validate_signature_with.
+        scratch.for_facts(facts);
+        if let Some(rows) = scratch.formed_trait_signature_index.get(&call.item) {
+            for &row in rows {
+                charged(&self.budget, self.budget.charge_work(1))?;
+                let (original, signature) = &scratch.formed_trait_signatures[row];
+                if same_trait_call(original, call) {
+                    retain::<Ty>(&self.budget, signature.params.len())?;
+                    return Ok(signature.clone());
+                }
+            }
         }
-        self.trait_signature_in(call, ProofContext::from_facts(facts))
+        let signature = self.instantiate_trait_signature_uncached(call, facts, scratch)?;
+        if scratch.formed_trait_signatures.len() < MAX_SCRATCH_OBLIGATIONS {
+            retain::<(TraitCall, Signature)>(&self.budget, 2)?;
+            retain::<Ty>(&self.budget, signature.params.len())?;
+            retain::<usize>(&self.budget, 2)?;
+            scratch
+                .formed_trait_signatures
+                .try_reserve(1)
+                .map_err(|_| {
+                    FactsError::resource(&self.budget, "trait signature memo allocation")
+                })?;
+            scratch
+                .formed_trait_signature_index
+                .try_reserve(1)
+                .map_err(|_| {
+                    FactsError::resource(&self.budget, "trait signature index allocation")
+                })?;
+            let rows = scratch
+                .formed_trait_signature_index
+                .entry(call.item)
+                .or_default();
+            rows.try_reserve(1).map_err(|_| {
+                FactsError::resource(&self.budget, "trait signature row allocation")
+            })?;
+            rows.push(scratch.formed_trait_signatures.len());
+            scratch
+                .formed_trait_signatures
+                .push((call.clone(), signature.clone()));
+        }
+        Ok(signature)
     }
     fn prove_goal(&self, goal: &Predicate, facts: &ValidatedFacts) -> Result<ProofOutcome> {
         self.prove_goal_with(goal, facts, &mut TraitScratch::default())
@@ -13177,7 +13282,9 @@ mod tests {
         let scratch = std::cell::RefCell::new(TraitScratch::default());
         let replay = |facts: &ValidatedFacts, call: &TraitCall| {
             let authority = facts.world();
-            let signature = authority.instantiate_trait_signature(call, facts).unwrap();
+            let signature = authority
+                .instantiate_trait_signature_with(call, facts, &mut scratch.borrow_mut())
+                .unwrap();
             let mut proofs = scratch.borrow_mut();
             facts
                 .validate_signature_with(
@@ -13208,6 +13315,16 @@ mod tests {
                     .unwrap()
             );
         }
+        assert_eq!(scratch.borrow().formed_trait_signatures.len(), 1);
+        assert!(matches!(
+            world.instantiate_trait_signature_with(
+                &c.call(c.caller_parameter.clone()),
+                &closed,
+                &mut scratch.borrow_mut(),
+            ),
+            Err(error) if error.kind() == FactsErrorKind::InvalidMetadata
+        ));
+        assert_eq!(scratch.borrow().formed_trait_signatures.len(), 1);
         let mut forged = resolved.signature().clone();
         forged.result = Ty::Never;
         assert!(matches!(
@@ -13234,6 +13351,30 @@ mod tests {
         ));
         replay(&closed, &call);
         assert_eq!(scratch.borrow().world, Some(world.id));
+        let body_signature = world
+            .discharge_direct_with(&target, &closed, &mut scratch.borrow_mut())
+            .unwrap()
+            .signature
+            .clone();
+        for _ in 0..4 {
+            closed
+                .validate_signature_with(
+                    SignatureSubject::Body,
+                    &body_signature,
+                    &mut scratch.borrow_mut(),
+                )
+                .unwrap();
+        }
+        let mut forged_body = body_signature;
+        forged_body.result = Ty::Never;
+        assert!(matches!(
+            closed.validate_signature_with(
+                SignatureSubject::Body,
+                &forged_body,
+                &mut scratch.borrow_mut(),
+            ),
+            Err(error) if error.kind() == FactsErrorKind::InvalidMetadata
+        ));
         assert!(closed.budget().charge_work(usize::MAX).is_err());
         let first_failure = closed.budget().first_resource_failure();
         closed.budget().poison_ledger_for_tests();

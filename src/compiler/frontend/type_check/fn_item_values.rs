@@ -46,7 +46,7 @@ impl Checker<'_> {
         }
         let plan = self.signatures.plan()?;
         let owner = checked_local_ty(&value.owner, self.signatures)?;
-        let (callee, _, _) = plan.select_associated(
+        let (callee, _, _) = plan.select_associated_with_scratch(
             &owner,
             &value.name,
             &[],
@@ -54,6 +54,7 @@ impl Checker<'_> {
             &self.module,
             false,
             &plan.budget,
+            &self.trait_scratch,
         )?;
         // `i32::max`: a trait item selected for a closed owner resolves to its
         // exact implementation or provided default body, never a dispatch.

@@ -9,12 +9,16 @@ use super::*;
 pub(super) struct Capabilities {
     pub(super) sources: Vec<ReadSource>,
     pub(super) nominals: Vec<ReadNominal>,
+    // Retained only by this consumer computation across missing-input retries.
+    // Replay still checks the exact current definition and world before a hit.
+    replays: std::cell::RefCell<traits::NominalReplays>,
 }
 impl Capabilities {
     pub(super) fn new() -> Self {
         Self {
             sources: Vec::new(),
             nominals: Vec::new(),
+            replays: std::cell::RefCell::new(traits::NominalReplays::default()),
         }
     }
 
@@ -104,7 +108,7 @@ impl Capabilities {
             return Ok(None);
         };
         let definition = capability.definition()?;
-        capability.replay(&definition, world)?;
+        capability.replay_with(&definition, world, &mut self.replays.borrow_mut())?;
         Ok(Some(definition))
     }
     pub(super) fn demand_key(
@@ -194,7 +198,7 @@ impl Capabilities {
                     return Ok(None);
                 };
                 let ty = cap.definition()?;
-                cap.replay(&ty, world)?;
+                cap.replay_with(&ty, world, &mut self.replays.borrow_mut())?;
                 ty
             }
             Shape::Ref(kind, value) => {
@@ -359,6 +363,36 @@ impl Capabilities {
             .map_err(|_| Error::new("nominal realization read inventory allocation failed"))?;
         self.sources.extend(sources);
         self.nominals.extend(nominals);
+        // A demand's key can depend on realized nominal arguments. Reading one
+        // inner frontier may therefore expose the next key without requiring
+        // any new source inference. Saturate only these already-declared body
+        // demands here, rather than restarting the entire source checker for
+        // every layer. All authority still arrives through typed graph reads.
+        loop {
+            let keys = self.missing_keys(&demands, &world, &caller, budget)?;
+            if keys.is_empty() {
+                break;
+            }
+            for key in &keys {
+                cx.request(key.0.clone());
+            }
+            let nominals = read_manifest(cx, &keys, budget).await?;
+            if nominals.is_empty() {
+                return Err(Error::new("nominal prerequisite frontier made no progress"));
+            }
+            budget
+                .retain_bytes(
+                    nominals
+                        .len()
+                        .checked_mul(std::mem::size_of::<ReadNominal>())
+                        .ok_or_else(|| Error::new("nominal consumer capability size overflow"))?,
+                )
+                .map_err(Error::new)?;
+            self.nominals
+                .try_reserve_exact(nominals.len())
+                .map_err(|_| Error::new("nominal realization read inventory allocation failed"))?;
+            self.nominals.extend(nominals);
+        }
         Ok(())
     }
 

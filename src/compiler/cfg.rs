@@ -2093,15 +2093,30 @@ impl Function {
                     budget,
                 )?
                 .is_some();
-                if !raw
-                    && !facts.must_copy_scratch(&ty, scratch)?
-                    && place.projection.iter().any(|part| {
-                        matches!(part, Projection::ConstantIndex(_) | Projection::Deref)
-                    })
-                {
-                    return Err(
-                        "cannot move non-Copy value out of array index or dereference".into(),
-                    );
+                let mut borrowed_or_indexed = false;
+                if !raw && !facts.must_copy_scratch(&ty, scratch)? {
+                    for (index, part) in place.projection.iter().enumerate() {
+                        match part {
+                            Projection::ConstantIndex(_) | Projection::DynamicIndex(_) => {
+                                borrowed_or_indexed = true;
+                            }
+                            Projection::Deref => {
+                                let owner = ir::projected_ty_optional(
+                                    &self.locals[place.local.0].ty,
+                                    &place.projection[..index],
+                                    budget,
+                                )?;
+                                borrowed_or_indexed |= owner.owned_box_pointee().is_none();
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                if borrowed_or_indexed {
+                    return Err(format!(
+                        "cannot move non-Copy value out of array index or dereference: {place:?} rooted at {:?}",
+                        self.locals[place.local.0].ty,
+                    ));
                 }
                 if !raw
                     && !place.projection.is_empty()
@@ -2825,13 +2840,14 @@ impl Function {
             // the resulting concrete carrier contract, never a public alias.
             self.ref_contract.validate(&parameter_types, &self.result)?;
         } else if let Some(authority) = facts.validated() {
-            ir::validate_body_signature(
+            ir::validate_body_signature_with_scratch(
                 &ir::Signature {
                     ref_contract: self.ref_contract.clone(),
                     params: parameter_types.clone(),
                     result: self.result.clone(),
                 },
                 authority,
+                scratch,
             )?;
         }
         drop(parameter_types);

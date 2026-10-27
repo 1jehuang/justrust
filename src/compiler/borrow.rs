@@ -730,6 +730,23 @@ type CellResolution = (
     Option<ResolutionFailure>,
 );
 
+fn probe_projected_shape(
+    root: &Ty,
+    path: &[Projection],
+    budget: &mut Budget,
+) -> Result<Option<Ty>, Exhausted> {
+    match ir::projected_ty_optional(root, path, budget.plan_budget()) {
+        Ok(ty) => Ok(Some(ty)),
+        Err(error) => {
+            let resource = budget.plan_budget().map_or_else(
+                || error.contains("limit") || error.contains("exhaust"),
+                |plan| super::traits::FactsError::from_message(plan, &error).is_resource(),
+            );
+            if resource { Err(Exhausted) } else { Ok(None) }
+        }
+    }
+}
+
 fn resolve_cells<'a>(
     original_locals: &[Ty],
     cover_locals: &[Ty],
@@ -771,7 +788,7 @@ fn resolve_cells<'a>(
     let mut trace = Vec::new();
     let mut failure = None;
     let mut static_referent = false;
-    for step in &place.projection {
+    for (step_index, step) in place.projection.iter().enumerate() {
         if matches!(step, Projection::DynamicIndex(_)) {
             // A runtime index cannot select a more precise provenance row.
             // Expand a known array's complete domain, or select the single
@@ -887,8 +904,91 @@ fn resolve_cells<'a>(
             }
             continue;
         }
+        // A widened heap subtree has no exact current field coordinate.
+        // The validated source place still tells us whether this operation is
+        // an owning Box dereference, which preserves that conservative subtree
+        // rather than reading a nonexistent reference-valued cell from it.
+        let subtree_box = if candidates
+            .iter()
+            .any(|target| target.precision == TargetPrecision::Subtree)
+        {
+            if let Some(root) = cover_locals.get(place.local.0) {
+                probe_projected_shape(root, &place.projection[..step_index], budget)?
+                    .is_some_and(|ty| ty.owned_box_pointee().is_some())
+            } else {
+                false
+            }
+        } else {
+            false
+        };
         let mut next = Vec::new();
-        for candidate in candidates {
+        for mut candidate in candidates {
+            if subtree_box && candidate.precision == TargetPrecision::Subtree {
+                checked_vec_growth(&mut next, budget)?;
+                next.push(candidate);
+                continue;
+            }
+            // An owning Box dereference remains within the owner's canonical
+            // storage tree. Only actual references consume issued loan cells.
+            let (local, location) = match &candidate.place.root {
+                CanonicalRoot::Owned(local) => (*local, None),
+                CanonicalRoot::ParameterReferent(local, location) => (*local, Some(location)),
+            };
+            // Box detection is only a representation probe. An original
+            // generic shape may not expose a concrete carrier projection, so
+            // use its validated substitution cover and leave non-Box or
+            // unavailable projections to ordinary issued-cell resolution.
+            if let Some(location) = location {
+                let depth = match location.channel {
+                    CarrierChannel::Fixed(position) => position.depth,
+                    CarrierChannel::ParamTail { prefix, .. }
+                    | CarrierChannel::ProjectionTail { prefix, .. }
+                    | CarrierChannel::OpaqueTail { prefix, .. } => prefix,
+                };
+                let length = add(mul(location.path.0.len(), 2)?, usize::from(depth))?;
+                budget.reserve_bytes(mul(length, size_of::<Projection>())?)?;
+                budget.spend(add(length, 1)?)?;
+            }
+            let owner = (|| -> Result<Option<Ty>, String> {
+                let Some(mut owner) = cover_locals.get(local.0).cloned() else {
+                    return Ok(None);
+                };
+                if let Some(location) = location {
+                    let path = value_projection(location);
+                    let Ty::Ref { referent, .. } =
+                        ir::projected_ty_optional(&owner, &path, budget.plan_budget())?
+                    else {
+                        return Ok(None);
+                    };
+                    owner = referent.as_ref().clone();
+                }
+                ir::projected_ty_optional(&owner, &candidate.place.projection, budget.plan_budget())
+                    .map(Some)
+            })();
+            let owner = match owner {
+                Ok(owner) => owner,
+                Err(error) => {
+                    let resource = budget.plan_budget().map_or_else(
+                        || error.contains("limit") || error.contains("exhaust"),
+                        |plan| super::traits::FactsError::from_message(plan, &error).is_resource(),
+                    );
+                    if resource {
+                        return Err(Exhausted);
+                    }
+                    None
+                }
+            };
+            if candidate.precision == TargetPrecision::Exact
+                && owner
+                    .as_ref()
+                    .is_some_and(|owner| owner.owned_box_pointee().is_some())
+            {
+                budget.spend(candidate.place.projection.len() + 1)?;
+                candidate.place.projection.push(Projection::Deref);
+                checked_vec_growth(&mut next, budget)?;
+                next.push(candidate);
+                continue;
+            }
             let Some(cover) = read_cell_cover(
                 cover_locals,
                 cell_index,
@@ -1343,6 +1443,9 @@ struct CarrierBuilder<'a, 'b> {
     /// this plan. Validation is a pure function of these immutable Arcs, so a
     /// repeated per-call check would only redo O(blocks * evidence) work.
     validated_provenance: Option<(Arc<cfg::Function>, Arc<super::traits::ValidatedFacts>)>,
+    // Fixed-point revisits query the same immutable carrier types. The trait
+    // scratch retains exact payload/caller proofs and resets on facts changes.
+    copy_scratch: super::traits::TraitScratch,
     bindings: Vec<CallCarrierBinding>,
     regions: RegionRelations,
     effect_table: Option<Arc<super::ownership::CarrierEffectTable>>,
@@ -2441,8 +2544,38 @@ impl CarrierBuilder<'_, '_> {
     fn push_target(
         &mut self,
         origin: ReferenceOriginId,
-        target: Target,
+        mut target: Target,
     ) -> Result<bool, Exhausted> {
+        // Repeated traversal of an owning recursive allocation must converge.
+        // Canonical Deref steps here are owning Box boundaries, never reference
+        // cells (those have already been resolved to their issued origins).
+        // Widen only the same origin and authority chain, retaining the original
+        // exact target as well as a conservative subtree covering descendants.
+        for previous in &self.targets[origin.0] {
+            self.budget
+                .spend(previous.place.projection.len() + previous.authority.len() + 1)?;
+            if previous.place.root != target.place.root || previous.authority != target.authority {
+                continue;
+            }
+            let Some(suffix) = target
+                .place
+                .projection
+                .strip_prefix(previous.place.projection.as_slice())
+            else {
+                continue;
+            };
+            if previous.precision == TargetPrecision::Subtree {
+                return Ok(false);
+            }
+            if target.precision == TargetPrecision::Exact && suffix.contains(&Projection::Deref) {
+                target
+                    .place
+                    .projection
+                    .truncate(previous.place.projection.len());
+                target.precision = TargetPrecision::Subtree;
+                break;
+            }
+        }
         self.budget.spend(
             self.targets[origin.0].len()
                 + target.authority.len()
@@ -2473,6 +2606,27 @@ impl CarrierBuilder<'_, '_> {
             place,
             self.budget,
         )
+    }
+    fn structural_result_target(
+        &mut self,
+        mut target: Target,
+        result: &Ty,
+        location: &CarrierLocation,
+    ) -> Result<Target, Exhausted> {
+        // A lifetime source proves containment, not identical storage. Preserve
+        // an exact referent only when its original typed coordinate agrees
+        // with the result. Otherwise keep every issued descendant in the cover.
+        if target.precision == TargetPrecision::Exact
+            && let Ty::Ref { referent, .. } =
+                ir::carrier_at(result, location, &self.ledger).map_err(|_| Exhausted)?
+            && let CanonicalRoot::Owned(local) = target.place.root
+            && let Some(root) = self.original_locals.get(local.0)
+            && probe_projected_shape(root, &target.place.projection, self.budget)?
+                .is_none_or(|ty| ty != *referent)
+        {
+            target.precision = TargetPrecision::Subtree;
+        }
+        Ok(target)
     }
     fn read_value(
         &mut self,
@@ -2907,6 +3061,7 @@ impl<'a, 'b> CarrierBuilder<'a, 'b> {
             function: None,
             authority: None,
             validated_provenance: None,
+            copy_scratch: super::traits::TraitScratch::default(),
             bindings: vec![],
             regions: RegionRelations::default(),
             effect_table: None,
@@ -3820,6 +3975,7 @@ impl CarrierBuilder<'_, '_> {
             checked_vec_growth(&mut self.bindings, self.budget)?;
             self.bindings.push(binding);
         }
+
         let mut result_values = Vec::new();
         let rows = self.call_rows[block.0].clone();
         let view = self.calls[block.0].clone();
@@ -3834,20 +3990,10 @@ impl CarrierBuilder<'_, '_> {
             return Ok(());
         }
         if let Some(view) = &view {
-            let mut view_validated = false;
+            // `new` seals this exact block's immutable callee/signature/view
+            // only after validating every result row. Dataflow revisits use
+            // that proof rather than reconstructing the same source metadata.
             for result in view.contract().results.iter() {
-                if let Some(problem) = physical_result_flow_problem(
-                    self.physical_calls.get(block.0).and_then(Option::as_ref),
-                    Some(view),
-                    facts,
-                    ir::SignatureSubject::Call(&target),
-                    &signature,
-                    &result.location,
-                    &mut view_validated,
-                )? {
-                    self.problem(block, None, problem)?;
-                    return Ok(());
-                }
                 // Return rows are entry relations. Pointee rows are not new
                 // owned values and remain current-cell views of their anchors.
                 if value_projection(&result.location).contains(&Projection::Deref) {
@@ -3861,19 +4007,24 @@ impl CarrierBuilder<'_, '_> {
                 result_values.push((result.location.clone(), value));
             }
         }
-        let mut view_validated = false;
         for (location, row) in rows {
-            if let Some(problem) = physical_result_flow_problem(
-                self.physical_calls.get(block.0).and_then(Option::as_ref),
-                view.as_deref(),
-                facts,
-                ir::SignatureSubject::Call(&target),
-                &signature,
-                &location,
-                &mut view_validated,
-            )? {
-                self.problem(block, None, problem)?;
-                return Ok(());
+            if let Some(view) = &view {
+                self.budget.spend(view.contract().results.len() + 1)?;
+                if !view
+                    .contract()
+                    .results
+                    .iter()
+                    .any(|result| result.location == location)
+                {
+                    self.problem(
+                        block,
+                        None,
+                        Problem::Invalid(
+                            "call result row is outside its validated carrier view".into(),
+                        ),
+                    )?;
+                    return Ok(());
+                }
             }
             let mut value = self.empty_origins()?;
             let mut fixed_contract = false;
@@ -3965,7 +4116,11 @@ impl CarrierBuilder<'_, '_> {
                         self.parents[row.0].insert(parent);
                         self.dependencies[row.0].insert(parent);
                         for target in self.targets[parent].clone() {
-                            let mut target = target;
+                            let mut target = self.structural_result_target(
+                                target,
+                                &signature.result,
+                                &location,
+                            )?;
                             if !target.authority.contains(&parent) {
                                 target.authority.push(parent);
                                 target.authority.sort_unstable();
@@ -3989,7 +4144,8 @@ impl CarrierBuilder<'_, '_> {
                         continue;
                     }
                     for target in self.targets[parent].clone() {
-                        let mut target = target;
+                        let mut target =
+                            self.structural_result_target(target, &signature.result, &location)?;
                         if !target.authority.contains(&parent) {
                             target.authority.push(parent);
                             target.authority.sort_unstable();
@@ -4008,6 +4164,7 @@ impl CarrierBuilder<'_, '_> {
                 result_values.push((location, value));
             }
         }
+
         let mut writes: Vec<(usize, CarrierOrigins, bool)> = Vec::new();
         if let Some(view) = &view {
             let summary = if let Some(summary) = &self.call_effects[block.0] {
@@ -4243,6 +4400,7 @@ impl CarrierBuilder<'_, '_> {
                 }
             }
         }
+
         // Invariant generic arguments constrain stored value lifetimes even
         // without an executable effect summary. This is a monotone union only:
         // never a target/write authorization, replacement or must-overwrite.
@@ -4293,10 +4451,15 @@ impl CarrierBuilder<'_, '_> {
                         continue;
                     }
                     for target in targets {
-                        let Some(index) = self.cell(&CellKey {
-                            storage: target.place,
-                            channel: channel.clone(),
-                        })?
+                        let Some(cover) = read_cell_cover(
+                            self.family_cover_locals
+                                .as_deref()
+                                .unwrap_or(&self.original_locals),
+                            &self.cell_index,
+                            &target,
+                            &channel,
+                            self.budget,
+                        )?
                         else {
                             if diagnose {
                                 self.problem(
@@ -4310,22 +4473,28 @@ impl CarrierBuilder<'_, '_> {
                             }
                             continue;
                         };
-                        let mut post = entry.cells[index].clone();
-                        post.union(&origins, self.budget)?;
-                        if let Some((_, existing, strong)) = writes
-                            .iter_mut()
-                            .find(|(candidate, _, _)| *candidate == index)
-                        {
-                            existing.union(&post, self.budget)?;
-                            *strong = false;
-                        } else {
-                            checked_vec_growth(&mut writes, self.budget)?;
-                            writes.push((index, post, false));
+                        // This relation only retains lifetimes. A conservative
+                        // cover weakly joins every issued cell, never granting
+                        // replacement, write authorization or disjointness.
+                        for index in cover {
+                            let mut post = entry.cells[index].clone();
+                            post.union(&origins, self.budget)?;
+                            if let Some((_, existing, strong)) = writes
+                                .iter_mut()
+                                .find(|(candidate, _, _)| *candidate == index)
+                            {
+                                existing.union(&post, self.budget)?;
+                                *strong = false;
+                            } else {
+                                checked_vec_growth(&mut writes, self.budget)?;
+                                writes.push((index, post, false));
+                            }
                         }
                     }
                 }
             }
         }
+
         for operand in &args {
             self.consume(state, operand)?;
         }
@@ -4506,7 +4675,7 @@ impl CarrierBuilder<'_, '_> {
             FactsCtx::Validated(facts) => Some(facts),
             _ => None,
         }) {
-            match facts.must_copy(ty) {
+            match facts.must_copy_scratch(ty, &mut self.copy_scratch) {
                 Ok(copy) => Ok(copy),
                 Err(error) if error.is_resource() => Err(Exhausted),
                 Err(error) => {
@@ -4525,7 +4694,7 @@ impl CarrierBuilder<'_, '_> {
                 }
             }
         } else {
-            match self.facts.must_copy(ty) {
+            match self.facts.must_copy_scratch(ty, &mut self.copy_scratch) {
                 Ok(copy) => Ok(copy),
                 Err(message) if message.contains("limit") || message.contains("exhaust") => {
                     Err(Exhausted)
@@ -4850,6 +5019,97 @@ impl CarrierBuilder<'_, '_> {
         }
         Ok(admitted)
     }
+    /// The shape-only affine gate cannot certify a partition of one input.
+    /// A closed pair can instead be certified from its actual output flow:
+    /// no nested carriers, no write envelope, and distinct live mutable origins
+    /// at every return. Ordinary ownership checks still validate each issuance
+    /// and reject duplication, overlapping reborrows and escaping local data.
+    fn closed_pair_result_admitted(
+        &mut self,
+        body: &super::traits::CarrierContractView,
+        outgoing: &[Option<Point>],
+    ) -> Result<bool, Exhausted> {
+        if !self
+            .authority
+            .as_ref()
+            .is_some_and(|facts| facts.phase() == super::traits::FactsPhase::Closed)
+            || !body.contract().writes.is_empty()
+        {
+            return Ok(false);
+        }
+        let Ty::Tuple(fields) = self.f.result.clone() else {
+            return Ok(false);
+        };
+        if fields.len() != 2 {
+            return Ok(false);
+        }
+        for field in fields.iter() {
+            let Some(element) = field.mut_slice_element() else {
+                return Ok(false);
+            };
+            let Some(carriers) =
+                self.metadata_value(ir::carrier_locations(element, &self.ledger))?
+            else {
+                return Ok(false);
+            };
+            if !carriers.is_empty() {
+                return Ok(false);
+            }
+        }
+        self.budget.reserve_bytes(2 * size_of::<Projection>())?;
+        let mut cells = [0; 2];
+        for (index, cell) in cells.iter_mut().enumerate() {
+            self.budget.spend(1)?;
+            let key = CellKey {
+                storage: CanonicalPlace {
+                    root: CanonicalRoot::Owned(self.f.return_local),
+                    projection: vec![Projection::Field(index)],
+                },
+                channel: CellChannel::ReferenceValue,
+            };
+            let Some(found) = self.cell_index.get(&key) else {
+                return Ok(false);
+            };
+            *cell = *found;
+        }
+        let mut returned = false;
+        for (block, point) in outgoing.iter().enumerate() {
+            self.budget.spend(1)?;
+            if !matches!(self.f.blocks[block].terminator.value, Terminator::Return) {
+                continue;
+            }
+            let Some(point) = point else { continue };
+            returned = true;
+            let [left, right] = cells;
+            self.budget.spend(
+                point.origins[left].0.len()
+                    + point.origins[right].0.len()
+                    + point.families[left].0.0.len()
+                    + point.families[right].0.0.len(),
+            )?;
+            if point.origins[left].count() == 0
+                || point.origins[right].count() == 0
+                || point.families[left].0.count() != 0
+                || point.families[right].0.count() != 0
+            {
+                return Ok(false);
+            }
+            for origin in point.origins[left].members() {
+                self.budget.spend(1)?;
+                if self.kinds[origin] != BorrowKind::Mut || point.origins[right].has(origin) {
+                    return Ok(false);
+                }
+            }
+            for origin in point.origins[right].members() {
+                self.budget.spend(1)?;
+                if self.kinds[origin] != BorrowKind::Mut {
+                    return Ok(false);
+                }
+            }
+        }
+        Ok(returned)
+    }
+
     fn solve(mut self) -> Result<Plan, Exhausted> {
         let family_admitted = self.affine_admission()?;
         self.audit_call_admission()?;
@@ -5210,6 +5470,10 @@ impl CarrierBuilder<'_, '_> {
             } else {
                 false
             };
+            let pair_admitted = !family_admitted
+                && !invalid_binding
+                && self.problems.is_empty()
+                && self.closed_pair_result_admitted(&body, &outgoing)?;
             // Raw-pointer stores currently have no physical SAME cell. An
             // empty computed row is not evidence that such a store preserves
             // the entry value. Keep the existing declaration-envelope fallback
@@ -5246,7 +5510,7 @@ impl CarrierBuilder<'_, '_> {
                     }
                 }
             }
-            if (family_admitted || identity_admitted)
+            if (family_admitted || identity_admitted || pair_admitted)
                 && self.problems.is_empty()
                 && !unmodeled_raw_write
             {
@@ -5345,6 +5609,7 @@ impl CarrierBuilder<'_, '_> {
             lifetime_deps: self.dependencies,
             targets: self.targets,
             kinds: self.kinds,
+            call_issuers,
             two_phase,
             activations,
             cells: self.cells,
@@ -5366,7 +5631,7 @@ impl CarrierBuilder<'_, '_> {
                 .ok_or(Exhausted)?,
         };
         plan.compute_activation(f, &mut self.memberships, self.budget)?;
-        plan.check_backedges(f, &reachable, &ins, (&births, &call_issuers), self.budget)?;
+        plan.check_backedges(f, &reachable, &ins, &births, self.budget)?;
         plan.bytes = self
             .budget
             .reserved_bytes()
@@ -5822,6 +6087,9 @@ pub(super) struct Plan {
     lifetime_deps: Vec<Set>,
     targets: Vec<Vec<Target>>,
     kinds: Vec<BorrowKind>,
+    // Distinct owned mutable result carriers of one call are exclusive, while
+    // their shared lifetime dependencies still keep the input borrow alive.
+    call_issuers: Vec<Option<usize>>,
     two_phase: Set,
     activations: Vec<Vec<LoanId>>,
     cells: Vec<CellSlot>,
@@ -6296,7 +6564,7 @@ impl Plan {
         f: &cfg::Function,
         reachable: &[bool],
         ins: &[Set],
-        (births, call_issuers): (&[Option<usize>], &[Option<usize>]),
+        births: &[Option<usize>],
         budget: &mut Budget,
     ) -> Result<(), Exhausted> {
         let b = f.blocks.len();
@@ -6357,12 +6625,14 @@ impl Plan {
             let point = self.outgoing[block].as_ref().unwrap();
             let active = self.active(&point.origins, &ins[next], budget)?;
             for loan in active.members() {
-                // A shared call-result origin reissued each iteration keeps
-                // one static identity whose memberships the fixed point only
-                // unions: every overlapping write and storage end in the loop
-                // still observes it live. Exclusive origins stay rejected,
-                // since two dynamic `&mut` issuances would alias one identity.
-                if call_issuers[loan].is_some() && self.kinds[loan] == BorrowKind::Shared {
+                // A shared origin reissued each iteration keeps one static
+                // identity whose target memberships the fixed point unions.
+                // Every overlapping write and storage end in the loop still
+                // observes all of those targets live, whether issuance came
+                // from a direct borrow or a call. Exclusive origins remain
+                // rejected: distinct dynamic `&mut` issuances must not alias
+                // one static identity.
+                if self.kinds[loan] == BorrowKind::Shared {
                     continue;
                 }
                 if let Some(birth) = births[loan]
@@ -6371,7 +6641,7 @@ impl Plan {
                         f,
                         BlockId(next),
                         loan,
-                        call_issuers[loan].map(BlockId),
+                        self.call_issuers[loan].map(BlockId),
                         budget,
                     )?
                 {
@@ -7200,6 +7470,9 @@ impl Plan {
                         {
                             continue 'loans;
                         }
+                    }
+                    if self.disjoint_call_results(target, borrowed, loan, budget)? {
+                        continue;
                     }
                     return Ok(Some(Problem::Conflict(format!(
                         "access conflicts with live {:?} loan {}",

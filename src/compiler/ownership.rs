@@ -2011,6 +2011,8 @@ struct PathNode {
     children: Vec<usize>,
     /// Enum variants select disjoint groups in `children`. Empty for non-enums.
     variant_offsets: Vec<usize>,
+    /// Pointee storage reached through the language's owning Box dereference.
+    owned_deref: Option<usize>,
     /// Preorder interval [self, end) covers this place's entire subtree.
     end: usize,
 }
@@ -2035,6 +2037,65 @@ impl Paths {
         facts: FactsCtx<'_>,
         budget: &mut Budget,
     ) -> Result<Self, Exhausted> {
+        // Recursive heap types are expanded only as far as this body's place
+        // paths can reach. Each child remains in its owner's preorder interval.
+        let mut box_depth = 0;
+        let mut observe = |place: &Place| {
+            let Some(root) = f.locals.get(place.local.0) else {
+                return;
+            };
+            let mut depth = 0;
+            for (index, step) in place.projection.iter().enumerate() {
+                if *step == Projection::Deref
+                    && let Ok(owner) = super::ir::projected_ty_optional(
+                        &root.ty,
+                        &place.projection[..index],
+                        budget.plan_budget(),
+                    )
+                    && owner.owned_box_pointee().is_some()
+                {
+                    depth += 1;
+                }
+            }
+            box_depth = box_depth.max(depth);
+        };
+        for site in &f.loan_sites {
+            observe(&site.place);
+        }
+        for block in &f.blocks {
+            for statement in &block.statements {
+                match &statement.value {
+                    Statement::Assign { destination, .. } => observe(destination),
+                    Statement::Inspect(place) => observe(place),
+                    Statement::IndexInspect { array, .. }
+                    | Statement::IndexAssign { array, .. }
+                    | Statement::IndexAssignOp { array, .. } => observe(array),
+                    _ => {}
+                }
+                statement
+                    .value
+                    .visit_operands(&mut |operand| {
+                        if let Operand::Copy(place) | Operand::Move(place) = operand {
+                            observe(place);
+                        }
+                        Ok(())
+                    })
+                    .map_err(|_| Exhausted)?;
+            }
+            block
+                .terminator
+                .value
+                .visit_operands(&mut |operand| {
+                    if let Operand::Copy(place) | Operand::Move(place) = operand {
+                        observe(place);
+                    }
+                    Ok(())
+                })
+                .map_err(|_| Exhausted)?;
+            if let Terminator::SwitchVariant { place, .. } = &block.terminator.value {
+                observe(place);
+            }
+        }
         fn count(
             ty: &Ty,
             facts: FactsCtx<'_>,
@@ -2042,6 +2103,7 @@ impl Paths {
             limit: usize,
             depth: usize,
             counts: &mut (usize, usize),
+            box_depth: usize,
         ) -> Result<(), Exhausted> {
             if depth > 128 || counts.0 >= limit {
                 return Err(Exhausted);
@@ -2059,6 +2121,7 @@ impl Paths {
                             limit,
                             depth + 1,
                             counts,
+                            box_depth,
                         )?;
                     }
                 }
@@ -2067,7 +2130,7 @@ impl Paths {
                         return Err(Exhausted);
                     }
                     for _ in 0..len {
-                        count(element, facts, budget, limit, depth + 1, counts)?;
+                        count(element, facts, budget, limit, depth + 1, counts, box_depth)?;
                     }
                 }
                 MoveShape::Sum(definition) => {
@@ -2083,17 +2146,38 @@ impl Paths {
                             .map_err(|_| Exhausted)?
                             .iter()
                         {
-                            count(&field.ty, facts, budget, limit, depth + 1, counts)?;
+                            count(
+                                &field.ty,
+                                facts,
+                                budget,
+                                limit,
+                                depth + 1,
+                                counts,
+                                box_depth,
+                            )?;
                         }
                     }
                 }
                 MoveShape::Scalar | MoveShape::OpaqueParam | MoveShape::Never => {}
             }
+            if box_depth > 0
+                && let Some(pointee) = ty.owned_box_pointee()
+            {
+                count(
+                    pointee,
+                    facts,
+                    budget,
+                    limit,
+                    depth + 1,
+                    counts,
+                    box_depth - 1,
+                )?;
+            }
             Ok(())
         }
         let mut counts = (0, 0);
         for local in &f.locals {
-            count(&local.ty, facts, budget, limit, 0, &mut counts)?;
+            count(&local.ty, facts, budget, limit, 0, &mut counts, box_depth)?;
         }
         let ledger = match facts {
             FactsCtx::Validated(facts) => facts.budget().clone(),
@@ -2111,7 +2195,7 @@ impl Paths {
                     super::ir::carrier_at(&f.locals[local.0].ty, location, &ledger)
                         .map_err(|_| Exhausted)?
                 {
-                    count(&referent, facts, budget, limit, 0, &mut counts)?;
+                    count(&referent, facts, budget, limit, 0, &mut counts, box_depth)?;
                 }
             }
         }
@@ -2128,6 +2212,7 @@ impl Paths {
             limit: usize,
             facts: FactsCtx<'_>,
             budget: &mut Budget,
+            box_depth: usize,
         ) -> Result<usize, Exhausted> {
             if paths.nodes.len() >= limit {
                 return Err(Exhausted);
@@ -2137,6 +2222,7 @@ impl Paths {
                 parent,
                 children: Vec::new(),
                 variant_offsets: Vec::new(),
+                owned_deref: None,
                 end: 0,
             });
             match MoveShape::of(ty, facts, budget)? {
@@ -2151,6 +2237,7 @@ impl Paths {
                             limit,
                             facts,
                             budget,
+                            box_depth,
                         )?;
                         paths.nodes[id].children.push(child);
                     }
@@ -2160,7 +2247,7 @@ impl Paths {
                         return Err(Exhausted);
                     }
                     for _ in 0..len {
-                        let child = add(paths, element, Some(id), limit, facts, budget)?;
+                        let child = add(paths, element, Some(id), limit, facts, budget, box_depth)?;
                         paths.nodes[id].children.push(child);
                     }
                 }
@@ -2175,12 +2262,26 @@ impl Paths {
                             .map_err(|_| Exhausted)?
                             .iter()
                         {
-                            let child = add(paths, &field.ty, Some(id), limit, facts, budget)?;
+                            let child =
+                                add(paths, &field.ty, Some(id), limit, facts, budget, box_depth)?;
                             paths.nodes[id].children.push(child);
                         }
                     }
                 }
                 MoveShape::Scalar | MoveShape::OpaqueParam | MoveShape::Never => {}
+            }
+            if box_depth > 0
+                && let Some(pointee) = ty.owned_box_pointee()
+            {
+                paths.nodes[id].owned_deref = Some(add(
+                    paths,
+                    pointee,
+                    Some(id),
+                    limit,
+                    facts,
+                    budget,
+                    box_depth - 1,
+                )?);
             }
             paths.nodes[id].end = paths.nodes.len();
             Ok(id)
@@ -2191,7 +2292,15 @@ impl Paths {
             nodes: Vec::new(),
         };
         for local in &f.locals {
-            let root = add(&mut result, &local.ty, None, limit, facts, budget)?;
+            let root = add(
+                &mut result,
+                &local.ty,
+                None,
+                limit,
+                facts,
+                budget,
+                box_depth,
+            )?;
             result.roots.push(root);
         }
         for local in &f.params {
@@ -2203,7 +2312,15 @@ impl Paths {
                     super::ir::carrier_at(&f.locals[local.0].ty, location, &ledger)
                         .map_err(|_| Exhausted)?
                 {
-                    let root = add(&mut result, &referent, None, limit, facts, budget)?;
+                    let root = add(
+                        &mut result,
+                        &referent,
+                        None,
+                        limit,
+                        facts,
+                        budget,
+                        box_depth,
+                    )?;
                     budget.reserve_bytes(4 * size_of::<(super::ir::CarrierLocation, usize)>())?;
                     result.external[local.0].push((location.clone(), root));
                 }
@@ -2234,7 +2351,10 @@ impl Paths {
         while let Some(step) = projection.next() {
             let index = match step {
                 Projection::Deref => {
-                    unreachable!("deref must be resolved through canonical loan provenance")
+                    node = self.nodes[node]
+                        .owned_deref
+                        .expect("canonical owning Box dereference");
+                    continue;
                 }
                 // A runtime element has a whole-array initialization
                 // footprint. Never select or initialize one guessed child.
@@ -2474,6 +2594,7 @@ struct Transfer<'a> {
     loans: Option<&'a borrow::Plan>,
     phase: Phase,
     const_context: bool,
+    normal_drop_cache: &'a mut [Option<bool>],
 }
 struct Report {
     stats: AnalysisStats,
@@ -2498,6 +2619,22 @@ impl Transfer<'_> {
             self.budget.plan_budget(),
         )
         .map_err(|_| Exhausted)
+    }
+    fn owning_place(&self, place: &Place) -> Result<bool, Exhausted> {
+        for (index, projection) in place.projection.iter().enumerate() {
+            if *projection == Projection::Deref {
+                let owner = super::ir::projected_ty_optional(
+                    &self.f.locals[place.local.0].ty,
+                    &place.projection[..index],
+                    self.budget.plan_budget(),
+                )
+                .map_err(|_| Exhausted)?;
+                if owner.owned_box_pointee().is_none() {
+                    return Ok(false);
+                }
+            }
+        }
+        Ok(true)
     }
     fn targets(&mut self, place: &Place) -> Result<Vec<Target>, Exhausted> {
         if self.raw_deref(place)?.is_some() {
@@ -2558,10 +2695,19 @@ impl Transfer<'_> {
                 continue;
             }
             self.budget.spend(index + 1)?;
-            let carrier = Place {
+            let mut carrier = Place {
                 local: place.local,
                 projection: place.projection[..index].to_vec(),
             };
+            let carrier_ty = self
+                .f
+                .place_ty_with_budget(&carrier, self.budget.plan_budget())
+                .map_err(|_| Exhausted)?;
+            if carrier_ty.owned_box_pointee().is_some() {
+                // Reading the allocation pointer does not read moved pointee
+                // fields. Its parent's liveness still proves the owner exists.
+                carrier.projection.push(Projection::Field(0));
+            }
             if self.loans.is_none() {
                 if index + 1 == limit && self.raw_deref(place)?.is_some() {
                     self.read_raw(state, &carrier)?;
@@ -2586,6 +2732,9 @@ impl Transfer<'_> {
                 self.budget.plan_budget(),
             )
             .map_err(|_| Exhausted)?;
+            if base.owned_box_pointee().is_some() {
+                continue;
+            }
             if let Ty::RawPtr { kind, .. } = base {
                 if kind != super::ir::BorrowKind::Mut {
                     self.problem(
@@ -2645,6 +2794,7 @@ impl Transfer<'_> {
             return self.write_raw(state, place);
         }
         let deref = place.projection.contains(&Projection::Deref);
+        let owned = self.owning_place(place)?;
         self.carrier_read(state, place)?;
         if deref {
             self.mut_authority(place)?;
@@ -2657,7 +2807,7 @@ impl Transfer<'_> {
         }
         for target in self.targets(place)? {
             self.check_access(&target, Access::Write)?;
-            if deref {
+            if deref && !owned {
                 // Every alternative must already be initialized. A may-alias
                 // write must never initialize every possible referent.
                 self.read_canonical(state, &target.place)?;
@@ -2687,7 +2837,10 @@ impl Transfer<'_> {
         while let Some(step) = projection.next() {
             let index = match step {
                 Projection::Deref => {
-                    unreachable!("deref must be canonicalized before authorization")
+                    node = self.paths.nodes[node]
+                        .owned_deref
+                        .expect("canonical owning Box dereference");
+                    continue;
                 }
                 // A runtime element has a whole-array initialization
                 // footprint. Never select or initialize one guessed child.
@@ -3130,7 +3283,7 @@ impl Transfer<'_> {
         }
         Ok(())
     }
-    fn normal_drop_root(&self, local: LocalId) -> Result<bool, Exhausted> {
+    fn normal_drop_root(&mut self, local: LocalId) -> Result<bool, Exhausted> {
         let Some(facts) = self.facts.validated() else {
             return Ok(false);
         };
@@ -3153,12 +3306,30 @@ impl Transfer<'_> {
         ) {
             return Ok(false);
         }
-        facts
+        if let Some(answer) = self.normal_drop_cache[local.0] {
+            return Ok(answer);
+        }
+        // The CFG and facts authority are immutable throughout this analysis.
+        // Reuse successful presence checks for the same validated local type,
+        // rather than replaying its recursive source receipts each visit.
+        for (index, answer) in self.normal_drop_cache.iter().enumerate() {
+            self.budget.spend(1)?;
+            if let Some(answer) = answer
+                && self.f.locals[index].ty == self.f.locals[local.0].ty
+            {
+                let answer = *answer;
+                self.normal_drop_cache[local.0] = Some(answer);
+                return Ok(answer);
+            }
+        }
+        let answer = facts
             .normal_drop_required(
                 &self.f.locals[local.0].ty,
                 self.budget.plan_budget().ok_or(Exhausted)?,
             )
-            .map_err(|_| Exhausted)
+            .map_err(|_| Exhausted)?;
+        self.normal_drop_cache[local.0] = Some(answer);
+        Ok(answer)
     }
     fn const_drop_node(
         &mut self,
@@ -3394,10 +3565,11 @@ impl Transfer<'_> {
                 // in place. It must be initialized (reads it fully) and the
                 // access requires the same authority as a write.
                 let place = cleanup.owner().clone();
-                if place.projection.contains(&Projection::Deref) {
+                if !self.owning_place(&place)? {
                     self.read(state, &place)?;
                     self.write(state, &place)?;
                 } else {
+                    self.carrier_read(state, &place)?;
                     // An owned field path may be moved-from; its runtime
                     // path flag guards the drop, like a root's flag.
                     let node = self.paths.resolve(&place);
@@ -3756,6 +3928,13 @@ fn analyze_with_context(
                 });
             }
         }
+        budget.reserve_bytes(
+            f.locals
+                .len()
+                .checked_mul(size_of::<Option<bool>>())
+                .ok_or(Exhausted)?,
+        )?;
+        let mut normal_drop_cache = vec![None; f.locals.len()];
         for local in &f.params {
             seed.must_live.set(local.0, true);
             seed.may_live.set(local.0, true);
@@ -3805,6 +3984,7 @@ fn analyze_with_context(
                     diagnostic_limit: limits.diagnostics,
                     loans: loans.as_ref(),
                     phase: Phase::Read,
+                    normal_drop_cache: &mut normal_drop_cache,
                     const_context,
                 }
                 .block(&mut output)
@@ -3877,6 +4057,7 @@ fn analyze_with_context(
                     diagnostic_limit: limits.diagnostics,
                     loans: loans.as_ref(),
                     phase: Phase::Read,
+                    normal_drop_cache: &mut normal_drop_cache,
                     const_context,
                 }
                 .block(&mut state)?;
@@ -3891,16 +4072,6 @@ fn analyze_with_context(
         Ok(())
     })();
     if result.is_err() || !report.complete {
-        if std::env::var_os("JR_DBG_OWN").is_some() {
-            eprintln!(
-                "DBGOWN err={} blocks={} locals={} stats={:?} plan={:?}",
-                result.is_err(),
-                f.blocks.len(),
-                f.locals.len(),
-                report.stats,
-                plan.map(|p| p.usage_snapshot())
-            );
-        }
         report.complete = false;
         if report.diagnostics.len() >= limits.diagnostics && !report.diagnostics.is_empty() {
             report.diagnostics.pop();
@@ -7214,6 +7385,7 @@ mod tests {
                 diagnostic_limit: 10,
                 loans: Some(&plan),
                 phase: Phase::Write,
+                normal_drop_cache: &mut [],
                 const_context: false,
             }
             .write(&mut state, &destination)
@@ -8219,6 +8391,7 @@ mod tests {
                 diagnostic_limit: 10,
                 loans: None,
                 phase: Phase::Read,
+                normal_drop_cache: &mut [],
                 const_context: false,
             }
             .block(&mut state)
@@ -8578,6 +8751,7 @@ mod tests {
             diagnostic_limit: 10,
             loans: None,
             phase: Phase::Read,
+            normal_drop_cache: &mut [],
             const_context: false,
         }
         .index_write(&mut state, &place(1))
@@ -9039,6 +9213,46 @@ mod tests {
         assert!(
             matches!(&result.diagnostics[0].kind, ErrorKind::InvalidCfg(message) if message.contains("cannot move non-Copy value out of array index"))
         );
+    }
+
+    #[test]
+    fn forged_noncopy_reference_move_is_invalid_even_in_disconnected_block() {
+        let (_module_names, modules) = fixture_modules();
+        let element = nominal(&modules, vec![]);
+        for kind in [
+            super::super::ir::BorrowKind::Shared,
+            super::super::ir::BorrowKind::Mut,
+        ] {
+            let mut f = fixture();
+            f.locals.extend([
+                local(Ty::Ref {
+                    kind,
+                    referent: std::sync::Arc::new(element.clone()),
+                }),
+                local(element.clone()),
+            ]);
+            f.params.push(LocalId(1));
+            f.blocks.push(BasicBlock {
+                statements: vec![located(Statement::Assign {
+                    destination: place(2),
+                    value: Rvalue::Use(Operand::Move(Place {
+                        local: LocalId(1),
+                        projection: vec![Projection::Deref],
+                    })),
+                })],
+                terminator: located(Terminator::Unreachable),
+            });
+            assert!(
+                f.validate()
+                    .unwrap_err()
+                    .contains("cannot move non-Copy value")
+            );
+            let result = analyze(&f);
+            assert!(result.complete);
+            assert!(
+                matches!(&result.diagnostics[0].kind, ErrorKind::InvalidCfg(message) if message.contains("cannot move non-Copy value"))
+            );
+        }
     }
 
     #[test]
@@ -9911,6 +10125,7 @@ mod tests {
             diagnostic_limit: 10,
             loans: None,
             phase: Phase::Read,
+            normal_drop_cache: &mut [],
             const_context: false,
         };
         transfer.initialize(&mut state, sibling, true).unwrap();

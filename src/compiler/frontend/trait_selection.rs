@@ -99,21 +99,43 @@ impl PlanCtx {
         name: &AstIdent,
         budget: &ir::PlanBudget,
     ) -> Result<Option<ir::DeclId>, String> {
+        let key = self
+            .program
+            .names
+            .key(*name, LookupClass::Member)
+            .map_err(native_adapter::name_diagnostic)?;
         for (index, id) in self.registry.trait_ids.iter().enumerate() {
             budget.charge_work(1)?;
             if *id != trait_id {
                 continue;
             }
-            for item in &self.registry.trait_items[index] {
-                budget.charge_work(1)?;
-                if self
-                    .registry
-                    .source_member_equal(self.declaration(*item)?.path.item, *name)?
-                {
-                    return Ok(Some(*item));
+            return self.trait_item_at(index, name, key, budget);
+        }
+        Ok(None)
+    }
+
+    fn trait_item_at(
+        &self,
+        index: usize,
+        name: &AstIdent,
+        key: NameKey,
+        budget: &ir::PlanBudget,
+    ) -> Result<Option<ir::DeclId>, String> {
+        for item in &self.registry.trait_items[index] {
+            budget.charge_work(1)?;
+            let matches = match self.declaration(*item)?.path.item {
+                DeclItemName::Source(source) => {
+                    self.program
+                        .names
+                        .key(source, LookupClass::Member)
+                        .map_err(native_adapter::name_diagnostic)?
+                        == key
                 }
+                other => self.registry.source_member_equal(other, *name)?,
+            };
+            if matches {
+                return Ok(Some(*item));
             }
-            return Ok(None);
         }
         Ok(None)
     }
@@ -539,6 +561,45 @@ impl PlanCtx {
         Ok(false)
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn select_associated_with_scratch(
+        &self,
+        owner: &ir::Ty,
+        name: &AstIdent,
+        args: &[ir::Ty],
+        caller: ir::FactsCtx<'_>,
+        module: &ModuleId,
+        dot: bool,
+        budget: &ir::PlanBudget,
+        scratch: &std::cell::RefCell<tr::TraitScratch>,
+    ) -> Result<(ir::Callee, ir::Signature, ReceiverKind), String> {
+        for traits_only in [false, true] {
+            let selected = self.lookup_associated_with_scratch(
+                owner,
+                name,
+                args,
+                caller,
+                module,
+                dot,
+                None,
+                traits_only,
+                budget,
+                &mut scratch.borrow_mut(),
+            )?;
+            if let Some(selected) = selected {
+                return Ok(selected);
+            }
+        }
+        Err(format!(
+            "no applicable associated item {}",
+            self.program
+                .names
+                .spelling(*name)
+                .map_err(native_adapter::name_diagnostic)?
+        ))
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn lookup_associated(
         &self,
         owner: &ir::Ty,
@@ -550,6 +611,34 @@ impl PlanCtx {
         filter: Option<ReceiverKind>,
         traits_only: bool,
         budget: &ir::PlanBudget,
+    ) -> Result<Option<(ir::Callee, ir::Signature, ReceiverKind)>, String> {
+        self.lookup_associated_with_scratch(
+            owner,
+            name,
+            method_args,
+            caller,
+            module,
+            dot,
+            filter,
+            traits_only,
+            budget,
+            &mut tr::TraitScratch::default(),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn lookup_associated_with_scratch(
+        &self,
+        owner: &ir::Ty,
+        name: &AstIdent,
+        method_args: &[ir::Ty],
+        caller: ir::FactsCtx<'_>,
+        module: &ModuleId,
+        dot: bool,
+        filter: Option<ReceiverKind>,
+        traits_only: bool,
+        budget: &ir::PlanBudget,
+        scratch: &mut tr::TraitScratch,
     ) -> Result<Option<(ir::Callee, ir::Signature, ReceiverKind)>, String> {
         self.check_budget(budget)?;
         self.program
@@ -631,7 +720,7 @@ impl PlanCtx {
             };
             let proof = facts
                 .service()
-                .discharge_direct(&target, facts)
+                .discharge_direct_with(&target, facts, scratch)
                 .map_err(|e| e.into_legacy_diagnostic(facts.budget()))?;
             if !facts
                 .world()
@@ -654,7 +743,7 @@ impl PlanCtx {
             .method_trait_candidates(owner, name, caller, module, budget)?
             .as_slice()
         {
-            if let Some(call) = self.select_trait_filtered(
+            if let Some(call) = self.select_trait_filtered_with_scratch(
                 application,
                 name,
                 method_args,
@@ -662,6 +751,7 @@ impl PlanCtx {
                 dot,
                 filter,
                 budget,
+                scratch,
             )? {
                 // Selection may return a concrete implementation target instead
                 // of a TraitItem. Retain the queried trait declaration rather
@@ -696,7 +786,8 @@ impl PlanCtx {
             .modules
             .check(*module)
             .map_err(module_diagnostic)?;
-        self.program
+        let member_key = self
+            .program
             .names
             .key(*name, LookupClass::Member)
             .map_err(native_adapter::name_diagnostic)?;
@@ -715,7 +806,7 @@ impl PlanCtx {
                 imported.push(self.resolve_trait_path(path)?);
             }
         }
-        for trait_id in &self.registry.trait_ids {
+        for (trait_index, trait_id) in self.registry.trait_ids.iter().enumerate() {
             budget.charge_work(1)?;
             let info = self.declaration(*trait_id)?;
             let mut visible =
@@ -738,7 +829,7 @@ impl PlanCtx {
             if !visible {
                 continue;
             }
-            let Some(item) = self.trait_item(*trait_id, name, budget)? else {
+            let Some(item) = self.trait_item_at(trait_index, name, member_key, budget)? else {
                 continue;
             };
             for application in self
@@ -767,6 +858,29 @@ impl PlanCtx {
         self.select_trait_filtered(trait_ref, name, args, caller, dot, None, budget)
     }
     #[allow(clippy::too_many_arguments)]
+    pub(super) fn select_trait_with_scratch(
+        &self,
+        trait_ref: &ir::TraitRef,
+        name: &AstIdent,
+        args: &[ir::Ty],
+        caller: ir::FactsCtx<'_>,
+        dot: bool,
+        budget: &ir::PlanBudget,
+        scratch: &std::cell::RefCell<tr::TraitScratch>,
+    ) -> Result<Option<(ir::Callee, ir::Signature, ReceiverKind)>, String> {
+        self.select_trait_filtered_with_scratch(
+            trait_ref,
+            name,
+            args,
+            caller,
+            dot,
+            None,
+            budget,
+            &mut scratch.borrow_mut(),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn select_trait_filtered(
         &self,
         trait_ref: &ir::TraitRef,
@@ -777,18 +891,42 @@ impl PlanCtx {
         filter: Option<ReceiverKind>,
         budget: &ir::PlanBudget,
     ) -> Result<Option<(ir::Callee, ir::Signature, ReceiverKind)>, String> {
+        self.select_trait_filtered_with_scratch(
+            trait_ref,
+            name,
+            method_args,
+            caller,
+            dot,
+            filter,
+            budget,
+            &mut tr::TraitScratch::default(),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn select_trait_filtered_with_scratch(
+        &self,
+        trait_ref: &ir::TraitRef,
+        name: &AstIdent,
+        method_args: &[ir::Ty],
+        caller: ir::FactsCtx<'_>,
+        dot: bool,
+        filter: Option<ReceiverKind>,
+        budget: &ir::PlanBudget,
+        scratch: &mut tr::TraitScratch,
+    ) -> Result<Option<(ir::Callee, ir::Signature, ReceiverKind)>, String> {
         self.check_budget(budget)?;
         for argument in method_args {
             budget.charge_work(1)?;
-            caller.validate_ty_with_budget(argument, budget)?;
+            caller.validate_ty_with_budget_scratch(argument, budget, scratch)?;
         }
         let ir::FactsCtx::Validated(facts) = caller else {
             return Err("trait call requires validated facts".into());
         };
-        caller.validate_ty_with_budget(&trait_ref.self_ty, budget)?;
+        caller.validate_ty_with_budget_scratch(&trait_ref.self_ty, budget, scratch)?;
         for argument in trait_ref.args.iter() {
             budget.charge_work(1)?;
-            caller.validate_ty_with_budget(argument, budget)?;
+            caller.validate_ty_with_budget_scratch(argument, budget, scratch)?;
         }
         // Check every supplied type before reporting a capability boundary.
         for argument in trait_ref.args.iter() {
@@ -812,7 +950,11 @@ impl PlanCtx {
         };
         match facts
             .service()
-            .prove_goal(&ir::Predicate::Implements(call.trait_ref.clone()), facts)
+            .prove_goal_with(
+                &ir::Predicate::Implements(call.trait_ref.clone()),
+                facts,
+                scratch,
+            )
             .map_err(|e| e.into_legacy_diagnostic(facts.budget()))?
         {
             tr::ProofOutcome::NotProven => return Ok(None),
@@ -820,7 +962,7 @@ impl PlanCtx {
         }
         let signature = facts
             .service()
-            .instantiate_trait_signature(&call, facts)
+            .instantiate_trait_signature_with(&call, facts, scratch)
             .map_err(|e| e.into_legacy_diagnostic(facts.budget()))?;
         let receiver = self.declaration(item)?.receiver;
         if dot && receiver == ReceiverKind::None {

@@ -807,6 +807,7 @@ pub(super) fn direct_demands(
     let schema = context.function_schema(target.declaration)?;
     let env = schema.env;
     let closed_facts = context.instance_facts(&target)?;
+    let mut scratch = traits::TraitScratch::default();
     // Implicit cleanup is part of the same closed demand frontier as an
     // explicit call. Do not rely on nongeneric source-root enumeration.
     if closed_facts.has_normal_drop_impls() {
@@ -834,7 +835,7 @@ pub(super) fn direct_demands(
             ) {
                 continue;
             }
-            let ty = super::nominal_realization::substitution::substitute_ty(
+            let ty = super::nominal_realization::substitution::substitute_ty_with_scratch(
                 ty,
                 &env,
                 &target.type_args,
@@ -842,9 +843,10 @@ pub(super) fn direct_demands(
                 context,
                 budget,
                 engine,
+                &mut scratch,
             )?;
             match closed_facts
-                .normal_drop_plan(&ty)
+                .normal_drop_plan_with_scratch(&ty, &mut scratch)
                 .map_err(|e| e.into_legacy_diagnostic(budget))?
             {
                 traits::NormalDropPlan::Destructor(destructor) => {
@@ -879,7 +881,7 @@ pub(super) fn direct_demands(
                 .exprs
                 .get(reference.0)
                 .ok_or("trait object unsizing operand outside arena")?;
-            let concrete = super::nominal_realization::substitution::substitute_ty(
+            let concrete = super::nominal_realization::substitution::substitute_ty_with_scratch(
                 &operand.ty,
                 &env,
                 &target.type_args,
@@ -887,6 +889,7 @@ pub(super) fn direct_demands(
                 context,
                 budget,
                 engine,
+                &mut scratch,
             )?;
             let referent = match (&concrete, concrete.owned_pointer_pointee()) {
                 (_, Some((_, pointee))) => pointee,
@@ -901,7 +904,7 @@ pub(super) fn direct_demands(
             }
             if closed_facts.has_normal_drop_impls()
                 && let traits::NormalDropPlan::Destructor(destructor) = closed_facts
-                    .normal_drop_plan(referent)
+                    .normal_drop_plan_with_scratch(referent, &mut scratch)
                     .map_err(|e| e.into_legacy_diagnostic(budget))?
             {
                 for target in destructor.targets() {
@@ -928,15 +931,17 @@ pub(super) fn direct_demands(
                 // No copied side inventory or physical target is queued here.
                 continue;
             }
-            let resolved = super::nominal_realization::substitution::substitute_callee(
-                callee,
-                &env,
-                &target.type_args,
-                &closed_facts,
-                context,
-                budget,
-                engine,
-            )?;
+            let resolved =
+                super::nominal_realization::substitution::substitute_callee_with_scratch(
+                    callee,
+                    &env,
+                    &target.type_args,
+                    &closed_facts,
+                    context,
+                    budget,
+                    engine,
+                    &mut scratch,
+                )?;
             let next = match resolved {
                 ir::Callee::TraitItem(call)
                     if matches!(call.trait_ref.self_ty, ir::Ty::Opaque(_)) =>

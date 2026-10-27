@@ -192,8 +192,226 @@ fn heap_case(name: &str, body: &str) {
 }
 
 #[test]
+fn recursive_box_traversal_converges_without_losing_loans() {
+    heap_case(
+        "shared_loop_reborrow",
+        r#"fn main() {
+    let values = [2, 4, 6];
+    let mut current = &values[0];
+    let mut index = 0;
+    while index < 3 {
+        current = &values[index];
+        index += 1;
+    }
+    assert!(*current == 6);
+    println!("ok");
+}"#,
+    );
+    heap_case(
+        "recursive_box_traversal",
+        r#"
+struct Link { value: i32, next: Option<Box<Link>> }
+struct Chain { head: Option<Box<Link>> }
+impl Chain {
+    fn new() -> Self { Chain { head: None } }
+    fn push(&mut self, value: i32) {
+        let next = self.head.take();
+        self.head = Some(Box::new(Link { value, next }));
+    }
+    fn sum(&self) -> i32 {
+        let mut cursor = &self.head;
+        let mut total = 0;
+        while let Some(node) = cursor {
+            total += node.value;
+            cursor = &node.next;
+        }
+        total
+    }
+}
+fn main() {
+    let mut list = Chain::new();
+    for value in 0..64 { list.push(value); }
+    assert!(list.sum() == 2016);
+    println!("ok");
+}
+"#,
+    );
+}
+
+#[test]
 fn generic_functions_drop_concrete_owning_roots() {
     heap_case("generic_owner", &fixture("generic_owner.rs"));
+}
+
+#[test]
+fn owning_box_projection_moves_drop_remaining_fields_once() {
+    heap_case(
+        "box_projection_drop",
+        r#"
+struct Witness { count: *mut u64, digit: u64 }
+impl Drop for Witness {
+    fn drop(&mut self) {
+        unsafe { *self.count = *self.count * 10u64 + self.digit; }
+    }
+}
+struct Pair { first: Witness, second: Witness }
+fn partial(count: *mut u64, take: bool) {
+    let owner = Box::new(Pair {
+        first: Witness { count: count, digit: 1u64 },
+        second: Witness { count: count, digit: 2u64 },
+    });
+    if take { let moved = owner.first; }
+}
+fn main() {
+    let mut count = 0u64;
+    let pointer = &mut count as *mut u64;
+    partial(pointer, true);
+    assert!(count == 12u64);
+    count = 0u64;
+    partial(pointer, false);
+    assert!(count == 12u64);
+    count = 0u64;
+    {
+        let owner = Box::new(Pair {
+            first: Witness { count: pointer, digit: 3u64 },
+            second: Witness { count: pointer, digit: 4u64 },
+        });
+        let moved = *owner;
+    }
+    assert!(count == 34u64);
+    count = 0u64;
+    {
+        let owner = Box::<Box<Pair>>::new(Box::<Pair>::new(Pair {
+            first: Witness { count: pointer, digit: 5u64 },
+            second: Witness { count: pointer, digit: 6u64 },
+        }));
+        let moved = owner.first;
+    }
+    assert!(count == 56u64);
+    count = 0u64;
+    {
+        let mut owner = Box::new(Pair {
+            first: Witness { count: pointer, digit: 1u64 },
+            second: Witness { count: pointer, digit: 2u64 },
+        });
+        { let moved = owner.first; }
+        assert!(count == 1u64);
+        owner.first = Witness { count: pointer, digit: 3u64 };
+    }
+    assert!(count == 132u64);
+    count = 0u64;
+    {
+        let owner = Box::new(Witness { count: pointer, digit: 7u64 });
+        let moved = *owner;
+    }
+    assert!(count == 7u64);
+    println!("ok");
+}
+"#,
+    );
+}
+
+#[test]
+fn owning_box_projection_cannot_move_fields_of_user_drop_type() {
+    let source = r#"
+struct Field { value: i32 }
+struct Owner { field: Field }
+impl Drop for Owner { fn drop(&mut self) {} }
+fn main() {
+    let owner = Box::new(Owner { field: Field { value: 1 } });
+    let moved = owner.field;
+}
+"#;
+    rejects_source("box_user_drop_partial_move", source, "E0509");
+    let scratch = Scratch::new();
+    let input = scratch.source(source);
+    let result = capture(
+        Command::new("rustc")
+            .args(["--edition=2024", "-Cpanic=abort"])
+            .arg(input)
+            .arg("-o")
+            .arg(scratch.path("invalid-box-move")),
+        &scratch,
+        60,
+    );
+    assert!(!result.status.success(), "{result:?}");
+    assert!(String::from_utf8_lossy(&result.stderr).contains("E0509"));
+}
+
+#[test]
+fn owning_box_projection_composes_alias_depth() {
+    heap_case(
+        "box_alias_depth",
+        r#"
+fn main() {
+    let mut outer = Box::<Box<i32>>::new(Box::new(7i32));
+    let inner = &mut *outer;
+    let number = &mut **inner;
+    *number += 1;
+    assert!(*number == 8i32);
+    println!("ok");
+}
+"#,
+    );
+}
+
+#[test]
+fn owning_box_projection_rejects_borrowed_shared_and_reused_moves() {
+    for (name, source, stock_code) in [
+        (
+            "shared_loop_reborrow_cannot_outlive_local",
+            "fn main() { let initial = 1; let mut selected = &initial; let mut i = 0; while i < 2 { let local = 2; selected = &local; i += 1; } println!(\"{}\", selected); }",
+            "E0597",
+        ),
+        (
+            "recursive_traversal_keeps_root_borrowed",
+            "struct Link { next: Option<Box<Link>> } fn bad(root: &mut Option<Box<Link>>) { let mut cursor = &*root; while let Some(node) = cursor { *root = None; cursor = &node.next; } } fn main() {}",
+            "E0506",
+        ),
+        (
+            "borrowed_box_move",
+            "struct Value { n: i32 } fn take(value: &Box<Value>) { let moved = **value; } fn main() {}",
+            "E0507",
+        ),
+        (
+            "rc_pointee_move",
+            "use std::rc::Rc; struct Value { n: i32 } fn main() { let value = Rc::new(Value { n: 1 }); let moved = *value; }",
+            "E0507",
+        ),
+        (
+            "array_element_move",
+            "struct Value { n: i32 } fn main() { let values = [Value { n: 1 }]; let moved = values[0]; }",
+            "E0508",
+        ),
+        (
+            "box_moved_field_reuse",
+            "struct Value { n: i32 } struct Pair { first: Value, second: Value } fn main() { let value = Box::new(Pair { first: Value { n: 1 }, second: Value { n: 2 } }); let first = value.first; let again = value.first; }",
+            "E0382",
+        ),
+        (
+            "box_moved_owner_reuse",
+            "struct Value { n: i32 } fn main() { let value = Box::new(Value { n: 1 }); let moved = *value; let again = *value; }",
+            "E0382",
+        ),
+    ] {
+        rejects_source(name, source, "");
+        let scratch = Scratch::new();
+        let input = scratch.source(source);
+        let result = capture(
+            Command::new("rustc")
+                .args(["--edition=2024", "-Cpanic=abort"])
+                .arg(input)
+                .arg("-o")
+                .arg(scratch.path("invalid-move")),
+            &scratch,
+            60,
+        );
+        assert!(!result.status.success(), "{name}: {result:?}");
+        assert!(
+            String::from_utf8_lossy(&result.stderr).contains(stock_code),
+            "{name}: {result:?}"
+        );
+    }
 }
 
 #[test]

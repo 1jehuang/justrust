@@ -146,11 +146,12 @@ impl<'s> Solver<'_, '_, 's> {
                             break;
                         }
                         if plan
-                            .select_method_with_arguments(
+                            .select_method_with_arguments_scratch(
                                 &owner,
                                 name,
                                 self.checker.facts(),
                                 (&self.checker.module, &plan.budget),
+                                &self.checker.trait_scratch,
                                 |_, _, _| {
                                     Ok(super::super::method_argument_selection::MethodArguments::Ready(
                                         std::borrow::Cow::Borrowed(&[]),
@@ -172,11 +173,12 @@ impl<'s> Solver<'_, '_, 's> {
                             referent: Arc::new(target),
                         };
                     }
-                    let selected = match plan.select_method_with_arguments(
+                    let selected = match plan.select_method_with_arguments_scratch(
                         &ty,
                         name,
                         self.checker.facts(),
                         (&self.checker.module, &plan.budget),
+                        &self.checker.trait_scratch,
                         |_, _, _| {
                             Ok(
                                 super::super::method_argument_selection::MethodArguments::Ready(

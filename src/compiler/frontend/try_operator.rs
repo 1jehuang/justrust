@@ -213,8 +213,15 @@ impl Checker<'_> {
             self_ty: to.clone(),
             args: Arc::from([from.clone()]),
         };
-        let Some((target, signature, _)) =
-            plan.select_trait(&trait_ref, &ident, &[], self.facts(), false, &plan.budget)?
+        let Some((target, signature, _)) = plan.select_trait_with_scratch(
+            &trait_ref,
+            &ident,
+            &[],
+            self.facts(),
+            false,
+            &plan.budget,
+            &self.trait_scratch,
+        )?
         else {
             return Err(format!(
                 "E0277: `?` couldn't convert the error to `{}`: the trait `From<{}>` is not implemented for `{}`",

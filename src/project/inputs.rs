@@ -187,7 +187,7 @@ impl Recorder {
     pub(crate) fn within_namespace(&self, path: &Path) -> bool {
         self.snapshot
             .as_ref()
-            .is_none_or(|snapshot| path.starts_with(snapshot.root()))
+            .is_none_or(|snapshot| snapshot.contains(path))
     }
     fn record(&mut self, path: &Path, value: Observed) {
         if !self.complete {

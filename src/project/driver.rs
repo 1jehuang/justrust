@@ -302,7 +302,12 @@ impl Driver {
                 start.join(&output)
             }
         });
-        let snapshot = super::capture::directory(&ws.root, &output)?;
+        let roots: Vec<_> = ws
+            .packages
+            .iter()
+            .map(|package| package.root.clone())
+            .collect();
+        let snapshot = super::capture::directories(&ws.root, &roots, &output)?;
         if !ws.inputs.matches_current() {
             return Err(err("input changed during native project discovery/capture"));
         }

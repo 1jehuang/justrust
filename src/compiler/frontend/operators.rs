@@ -156,9 +156,15 @@ impl type_check::Checker<'_> {
                 self_ty: owner.clone(),
                 args: vec![index_ty].into(),
             };
-            if let Some((_, signature, _)) =
-                plan.select_trait(&reference, &name, &[], self.facts(), false, &plan.budget)?
-            {
+            if let Some((_, signature, _)) = plan.select_trait_with_scratch(
+                &reference,
+                &name,
+                &[],
+                self.facts(),
+                false,
+                &plan.budget,
+                &self.trait_scratch,
+            )? {
                 return Ok(Some(signature.result));
             }
         }
@@ -182,7 +188,15 @@ impl type_check::Checker<'_> {
             args: Arc::from([]),
         };
         Ok(
-            match plan.select_trait(&reference, &name, &[], self.facts(), false, &plan.budget)? {
+            match plan.select_trait_with_scratch(
+                &reference,
+                &name,
+                &[],
+                self.facts(),
+                false,
+                &plan.budget,
+                &self.trait_scratch,
+            )? {
                 Some((_, signature, _)) => match signature.result {
                     ir::Ty::Ref { referent, .. } => Some(referent.as_ref().clone()),
                     _ => None,
@@ -641,9 +655,16 @@ impl type_check::Checker<'_> {
                 self_ty: self_ty.clone(),
                 args: trait_args.into(),
             };
-            if let Some((target, signature, _)) =
-                plan.select_trait(&trait_ref, &ident, &[], self.facts(), false, &plan.budget)?
-            {
+            let selection = plan.select_trait_with_scratch(
+                &trait_ref,
+                &ident,
+                &[],
+                self.facts(),
+                false,
+                &plan.budget,
+                &self.trait_scratch,
+            )?;
+            if let Some((target, signature, _)) = selection {
                 // The first operand is checked as an already-evaluated receiver
                 // so every source operand keeps its original occurrence.
                 let first = match first {

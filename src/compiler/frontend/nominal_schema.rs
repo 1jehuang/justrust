@@ -1,14 +1,27 @@
 use super::*;
 use std::fmt::Write as _;
 
-/// Node-local syntax receipts. Only fields of the retained immutable schema
-/// enter this cache, never caller-owned syntax or IR type payloads.
+/// Node-local syntax receipts plus a separate exact-payload validation scratch.
+/// Syntax coordinates cover only fields of the retained immutable schema.
+/// Caller-owned IR never supplies syntax authority and must pass metadata replay.
 #[derive(Debug, Default)]
 pub(super) struct SourceMetadataCache {
     registry: Option<Arc<DeclRegistry>>,
     parameters: HashMap<ir::DeclId, Arc<[GenericBindingKey]>>,
     fields: HashMap<(ir::DeclId, usize), Arc<SourceMetadata>>,
     active: Option<Arc<SourceMetadata>>,
+    validation: SourceMetadataValidation,
+}
+
+/// Mutable proof scratch belongs only to this reconstruction, never a fact.
+/// TraitScratch authenticates exact payloads and resets across caller contexts.
+#[derive(Default)]
+struct SourceMetadataValidation(std::cell::RefCell<tr::TraitScratch>);
+
+impl std::fmt::Debug for SourceMetadataValidation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("SourceMetadataValidation")
+    }
 }
 
 #[derive(Debug)]
@@ -38,14 +51,24 @@ struct SourceBindingMetadata<'a> {
 }
 
 impl<'a> SourceBindingMetadata<'a> {
+    #[cfg(test)]
     fn validate(
         bindings: &'a HashMap<GenericBindingKey, ir::Ty>,
         caller: ir::FactsCtx<'a>,
         budget: &'a ir::PlanBudget,
     ) -> Result<Self, String> {
+        Self::validate_with_cache(bindings, caller, budget, &SourceMetadataCache::default())
+    }
+
+    fn validate_with_cache(
+        bindings: &'a HashMap<GenericBindingKey, ir::Ty>,
+        caller: ir::FactsCtx<'a>,
+        budget: &'a ir::PlanBudget,
+        cache: &SourceMetadataCache,
+    ) -> Result<Self, String> {
         for actual in bindings.values() {
             budget.charge_work(1)?;
-            caller.validate_ty_metadata_with_budget(actual, budget)?;
+            cache.validate_actual(actual, caller, budget)?;
         }
         Ok(Self {
             bindings,
@@ -56,12 +79,27 @@ impl<'a> SourceBindingMetadata<'a> {
 }
 
 impl SourceMetadataCache {
+    pub(super) fn validate_actual(
+        &self,
+        actual: &ir::Ty,
+        caller: ir::FactsCtx<'_>,
+        budget: &ir::PlanBudget,
+    ) -> Result<(), String> {
+        match caller {
+            ir::FactsCtx::Validated(facts) => facts
+                .validate_ty_metadata_scratch(actual, budget, &mut self.validation.0.borrow_mut())
+                .map_err(|error| error.into_legacy_diagnostic(budget)),
+            _ => caller.validate_ty_metadata_with_budget(actual, budget),
+        }
+    }
+
     pub(super) fn new(registry: Arc<DeclRegistry>) -> Self {
         Self {
             registry: Some(registry),
             parameters: HashMap::new(),
             fields: HashMap::new(),
             active: None,
+            validation: SourceMetadataValidation::default(),
         }
     }
 
@@ -201,7 +239,12 @@ impl PlanState {
         caller: ir::FactsCtx<'_>,
         budget: &ir::PlanBudget,
     ) -> Result<Arc<SourceMetadata>, String> {
-        let bindings = SourceBindingMetadata::validate(bindings, caller, budget)?;
+        let bindings = SourceBindingMetadata::validate_with_cache(
+            bindings,
+            caller,
+            budget,
+            &self.source_metadata,
+        )?;
         self.source_field_metadata_with_bindings(registry, declaration, schema, ty, &bindings)
     }
 
@@ -1011,7 +1054,14 @@ impl PlanState {
                 .source_metadata
                 .registry
                 .as_ref()
-                .map(|_| SourceBindingMetadata::validate(&bindings, caller, budget))
+                .map(|_| {
+                    SourceBindingMetadata::validate_with_cache(
+                        &bindings,
+                        caller,
+                        budget,
+                        &self.source_metadata,
+                    )
+                })
                 .transpose()?;
             let schema = self
                 .schemas
@@ -1514,6 +1564,13 @@ mod tests {
     }
 
     #[test]
+    fn diagnostic_inventory_source_budget() {
+        let source = include_str!("../../../tests/fixtures/full_programs/20_inventory_system.rs");
+        crate::compiler::compile(source.into(), 1, true)
+            .unwrap_or_else(|error| panic!("inventory source: {error}"));
+    }
+
+    #[test]
     fn source_metadata_reuses_only_retained_syntax_and_rechecks_actuals() {
         let program =
             parse("struct Leaf<T>{value:T} struct Wrap<T>{value:Leaf<T>} fn main(){}").unwrap();
@@ -1699,6 +1756,48 @@ mod tests {
                 )
                 .unwrap_err()
                 .contains("different registry")
+        );
+        // The reusable full metadata walk must authenticate payload identity,
+        // not just the canonical application ID or a warm syntax receipt.
+        let facts = plan.callable_facts(plan.function_decl(0).unwrap()).unwrap();
+        let actual = plan
+            .intern_nominal(
+                declaration,
+                &[ir::Ty::Bool],
+                ir::FactsCtx::Concrete,
+                &budget,
+            )
+            .unwrap();
+        let caller = ir::FactsCtx::Validated(&facts);
+        state
+            .source_metadata
+            .validate_actual(&actual, caller, &budget)
+            .unwrap();
+        let before = budget.usage_snapshot().work;
+        state
+            .source_metadata
+            .validate_actual(&actual, caller, &budget)
+            .unwrap();
+        let warm = budget.usage_snapshot().work - before;
+        assert!(warm > 0, "metadata reuse must still meter authentication");
+        let ir::Ty::Struct(valid) = &actual else {
+            panic!("expected Wrap")
+        };
+        let mut definition = valid.def().clone();
+        definition.name.push_str("_forged");
+        let forged = ir::Ty::Struct(ir::StructTy::new(definition));
+        assert!(
+            state
+                .source_metadata
+                .validate_actual(&forged, caller, &budget)
+                .is_err()
+        );
+        let foreign_budget = ir::PlanBudget::default();
+        assert!(
+            state
+                .source_metadata
+                .validate_actual(&actual, caller, &foreign_budget)
+                .is_err()
         );
     }
 

@@ -2004,22 +2004,40 @@ PlanCtx/interner/source-context debt and wide adapter activation remain held.
       owned snapshot. Symlinks/special files reject; target and cache-tagged
       output directories are excluded and cannot satisfy source reads. Legacy
       registry/config paths remain explicitly unproven. Standalone
-      `jr-rust SOURCE` also captures self-contained native source directories; reviewed
-      probe, outside-root extern and external-link compatibility paths explicitly
-      remain unproven. A source/runtime/acquisition failure never retries live.
+      `jr-rust SOURCE` also captures native source directories and explicitly supplied
+      extern source directories, including outside-root siblings. Project capture
+      admits the discovered native path-package roots, including transitive siblings,
+      rather than widening to their common ancestor. The immutable namespace binds
+      its canonical deduplicated root set in its digest, with at most 64 supplied
+      roots and aggregate 4,096-entry/16-MiB acquisition limits. Reviewed probe and
+      external-link compatibility paths explicitly remain unproven. A
+      source/runtime/acquisition failure never retries live.
       Acceptance: `justrust test --test compiler` includes stock/native standalone
       CHECK/BUILD/run at workers 1/8 and missing/symlink rejection.
       `justrust test --lib project::capture` and `--test projects` cover ordinary
       CLI CHECK/BUILD/run at workers 1/8, missing inputs, symlinks and mutation
-      between capture passes. `justrust test --lib source_snapshot` includes stock/native CHECK/BUILD/run
+      between capture passes. The `sibling_path_dependencies_are_captured_for_cli_check_build_run`
+      and `standalone_cli_captures_sibling_extern_roots_at_workers_one_and_eight`
+      tests compare production CLI results with stock for sibling/transitive path
+      dependencies and standalone externs. Capture regressions cover cross-root
+      mutation/deletion/addition, aggregate limits, negative answers, root aliases,
+      unauthorized siblings and compilation after both host roots disappear.
+      `justrust test --lib source_snapshot` includes stock/native CHECK/BUILD/run
       at workers 1/8 after host files are changed or removed, workspace globs,
       missing/changed inputs and unsupported configuration/tool boundaries.
       This is not an atomic capture of a live host directory, runtime-process
       sealing or authorization to share artifacts. Live registry planning IO,
       unsupported configuration sources, in-memory/process state, external tool
       identity and uncontrolled build scripts/proc macros remain explicit gaps.
-      Exhaustion or uncontrolled discovery cannot issue an input
-      identity. No persistent or global private cache is enabled by this foundation.
+      Exhaustion or uncontrolled discovery cannot issue an input identity.
+
+      | Input boundary | Supported capture / remaining status |
+      | --- | --- |
+      | Native projects, path dependencies, standalone source/extern roots | Bounded repeated acquisition into immutable owned bytes, closed discovery/source reads; CHECK/BUILD/run tested at workers 1/8. |
+      | Missing candidates and paths outside authorized roots | Immutable absence / rejection, never ambient host fallback. Symlinks, special files and exhausted limits reject. |
+      | Registry/git planning, Cargo configuration, reviewed probes, external tools/linkers | Legacy compatibility remains explicitly unproven or frozen mode rejects. |
+      | Build scripts, proc macros, arbitrary process/in-memory state, atomic host snapshots | Not closed by this namespace capture. Complete-input-capture remains incomplete. |
+      | Artifact reuse and global sharing | Disabled. No persistent or global private cache is enabled by this foundation. |
 - [ ] Add bounded asynchronous persistence, atomic manifests, durable checkpoint
       contracts, recovery, eviction and corruption/crash/cancellation tests.
 - [ ] Specify authenticated provenance, artifact integrity and authorization for

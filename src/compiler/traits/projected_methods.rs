@@ -1245,10 +1245,26 @@ impl ValidatedTraitWorld {
         method_args: &[Ty],
         context: ProofContext<'_>,
     ) -> Result<ProjectedApplication> {
+        self.instantiate_projected_item_with_scratch(
+            item,
+            goal,
+            method_args,
+            context,
+            &mut ProofScratch::default(),
+        )
+    }
+    pub(super) fn instantiate_projected_item_with_scratch(
+        &self,
+        item: &TraitItemHeader,
+        goal: &TraitRef,
+        method_args: &[Ty],
+        context: ProofContext<'_>,
+        active: &mut ProofScratch,
+    ) -> Result<ProjectedApplication> {
         self.check_normalization_budget()?;
         self.check_context(context)?;
         self.validate_projected_required_schema(item)?;
-        self.validate_ref_in(goal, context.env(), None)?;
+        self.validate_ref_with(goal, context.env(), None, &mut active.replays)?;
         if goal.declaration != item.trait_decl {
             return Err(FactsError::invalid(
                 &self.budget,
@@ -1265,7 +1281,6 @@ impl ValidatedTraitWorld {
                 "unsupported: rigid caller projected method application",
             ));
         }
-        let mut active = ProofScratch::default();
         let selection = self.require_in(
             &Predicate::Implements(goal.clone()),
             if matches!(&goal.self_ty, Ty::Dyn(_) | Ty::Opaque(_)) || opaque_reference {
@@ -1277,7 +1292,7 @@ impl ValidatedTraitWorld {
                     phase: FactsPhase::Closed,
                 }
             },
-            &mut active,
+            active,
         )?;
         if !matches!(
             &selection.0.origin,
@@ -1310,14 +1325,19 @@ impl ValidatedTraitWorld {
         )?;
         let mut dependencies = Vec::new();
         for ty in &mut instantiated.signature.params {
-            let (normal, proofs) = self.normalize_closed_projected_type(ty, context, false)?;
+            let (normal, proofs) =
+                self.normalize_closed_projected_type_with(ty, context, false, active)?;
             *ty = normal;
             for proof in proofs {
                 push(&self.budget, &mut dependencies, proof)?;
             }
         }
-        let (normal, proofs) =
-            self.normalize_closed_projected_type(&instantiated.signature.result, context, false)?;
+        let (normal, proofs) = self.normalize_closed_projected_type_with(
+            &instantiated.signature.result,
+            context,
+            false,
+            active,
+        )?;
         instantiated.signature.result = normal;
         for proof in proofs {
             push(&self.budget, &mut dependencies, proof)?;
@@ -1326,10 +1346,10 @@ impl ValidatedTraitWorld {
             instantiated.predicates = self.normalize_instantiated_projection_predicates(
                 &instantiated.predicates,
                 context,
-                &mut active,
+                active,
             )?;
             for predicate in instantiated.predicates.iter() {
-                self.require_in(predicate, context, &mut active)?;
+                self.require_in(predicate, context, active)?;
             }
         }
         if let Some(adapter) = self.closed_closure_argument_result_signature(
@@ -1338,7 +1358,7 @@ impl ValidatedTraitWorld {
             &instantiated.signature,
             &selection,
             context,
-            &mut active,
+            active,
         )? {
             if !method_args.is_empty() {
                 return Err(FactsError::invalid(

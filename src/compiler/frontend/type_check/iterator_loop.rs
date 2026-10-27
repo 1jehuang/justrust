@@ -36,13 +36,14 @@ impl Checker<'_> {
                 args: Arc::from([]),
             };
             let (target, signature, _) = plan
-                .select_trait(
+                .select_trait_with_scratch(
                     &into_goal,
                     &into_name,
                     &[],
                     self.facts(),
                     false,
                     &plan.budget,
+                    &self.trait_scratch,
                 )?
                 .ok_or("E0277: for-loop IntoIterator selection failed")?;
             let iterator_value = self.finish_checked_call(
@@ -73,13 +74,14 @@ impl Checker<'_> {
                 args: Arc::from([]),
             };
             let (target, signature, _) = plan
-                .select_trait(
+                .select_trait_with_scratch(
                     &next_goal,
                     &next_name,
                     &[],
                     self.facts(),
                     false,
                     &plan.budget,
+                    &self.trait_scratch,
                 )?
                 .ok_or("E0277: IntoIterator::IntoIter does not implement Iterator")?;
             let ir::Ty::Enum(option) = &signature.result else {

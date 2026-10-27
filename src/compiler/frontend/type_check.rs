@@ -4730,6 +4730,11 @@ impl<'a> Checker<'a> {
                     if derefs > 128 {
                         return Err("reference dereference depth exceeds limit128".into());
                     }
+                    if let Some(pointee) = ty.owned_box_pointee().cloned() {
+                        ty = pointee;
+                        projection.push(ir::Projection::Deref);
+                        continue;
+                    }
                     if let ir::Ty::RawPtr { kind, pointee } = &ty {
                         if self.unsafe_depth == 0 {
                             return Err("E0133: dereference of raw pointer is unsafe and requires unsafe block".into());
@@ -4752,7 +4757,25 @@ impl<'a> Checker<'a> {
                 }
                 _ => {
                     let mut layer = 0;
-                    while let ir::Ty::Ref { kind, referent } = &ty {
+                    loop {
+                        let borrowed = match &ty {
+                            ir::Ty::Ref { kind, referent } => {
+                                Some((*kind, referent.as_ref().clone()))
+                            }
+                            _ => None,
+                        };
+                        let boxed = match &ty {
+                            ir::Ty::Struct(nominal)
+                                if ty.owned_box_pointee().is_some()
+                                    && !self.has_member(nominal.def().source_decl, selector)? =>
+                            {
+                                ty.owned_box_pointee().cloned()
+                            }
+                            _ => None,
+                        };
+                        if borrowed.is_none() && boxed.is_none() {
+                            break;
+                        }
                         if derefs >= 128 {
                             return Err(
                                 "multiple dereferences in one field place are unsupported".into()
@@ -4764,10 +4787,14 @@ impl<'a> Checker<'a> {
                             );
                         }
                         derefs += 1;
-                        let mutable = *kind == ir::BorrowKind::Mut;
-                        writable = (layer == 0 || writable) && mutable;
-                        layer += 1;
-                        ty = referent.as_ref().clone();
+                        if let Some((kind, referent)) = borrowed {
+                            let mutable = kind == ir::BorrowKind::Mut;
+                            writable = (layer == 0 || writable) && mutable;
+                            layer += 1;
+                            ty = referent;
+                        } else {
+                            ty = boxed.unwrap();
+                        }
                         projection.push(ir::Projection::Deref);
                     }
                     let (index, field) = self.field_type(&ty, selector)?;
@@ -4898,13 +4925,14 @@ impl<'a> Checker<'a> {
                     return Ok(None);
                 };
                 Some(
-                    plan.select_trait(
+                    plan.select_trait_with_scratch(
                         &trait_ref,
                         name,
                         &actuals,
                         self.facts(),
                         false,
                         &plan.budget,
+                        &self.trait_scratch,
                     )?
                     .ok_or("E0277: trait obligation not proven")?
                     .1
@@ -8509,14 +8537,22 @@ impl<'a> Checker<'a> {
         if let Some(id) = self.overloaded_index_borrow(e)? {
             return Ok(id);
         }
-        if matches!(
-            e,
-            Expr::Binary { .. }
-                | Expr::Unary { .. }
-                | Expr::Deref { .. }
-                | Expr::DynamicIndex { .. }
-                | Expr::Index { .. }
-        ) && let Some(id) = self.overloaded_operator(e)?
+        let owning_box_deref = match e {
+            Expr::Deref { value } => self
+                .scalar_hint(value)?
+                .is_some_and(|ty| ty.owned_box_pointee().is_some()),
+            _ => false,
+        };
+        if !owning_box_deref
+            && matches!(
+                e,
+                Expr::Binary { .. }
+                    | Expr::Unary { .. }
+                    | Expr::Deref { .. }
+                    | Expr::DynamicIndex { .. }
+                    | Expr::Index { .. }
+            )
+            && let Some(id) = self.overloaded_operator(e)?
         {
             return Ok(id);
         }
@@ -9475,13 +9511,14 @@ impl<'a> Checker<'a> {
                 .collect::<Result<Vec<_>, _>>()?
         };
         let (target, signature, mode) = if let Some(application) = &argument_application {
-            plan.select_trait(
+            plan.select_trait_with_scratch(
                 application,
                 name,
                 &actuals,
                 self.facts(),
                 false,
                 &plan.budget,
+                &self.trait_scratch,
             )?
             .ok_or("E0277: trait obligation not proven")?
         } else if let Expr::TraitCall { trait_path, .. } = expression {
@@ -9492,17 +9529,18 @@ impl<'a> Checker<'a> {
                 self.facts(),
                 &plan.budget,
             )?;
-            plan.select_trait(
+            plan.select_trait_with_scratch(
                 &trait_ref,
                 name,
                 &actuals,
                 self.facts(),
                 false,
                 &plan.budget,
+                &self.trait_scratch,
             )?
             .ok_or("E0277: trait obligation not proven")?
         } else {
-            plan.select_associated(
+            plan.select_associated_with_scratch(
                 &owner,
                 name,
                 &actuals,
@@ -9510,6 +9548,7 @@ impl<'a> Checker<'a> {
                 &self.module,
                 receiver.is_some(),
                 &plan.budget,
+                &self.trait_scratch,
             )?
         };
         let adjusted = if let Some(receiver) = receiver {
@@ -11010,7 +11049,22 @@ impl<'a> Checker<'a> {
                 // `*owner` on a Deref implementor (Box, Rc, user types) reads
                 // `*Deref::deref(&owner)`, as stock does for non-reference
                 // operands.
-                if let Expr::Var(_) = value.as_ref()
+                // Box dereferences retain their owning place instead of
+                // manufacturing a shared Deref borrow before a move.
+                if let Some(owner_ty) = self.scalar_hint(value)?
+                    && let Some(pointee) = owner_ty.owned_box_pointee().cloned()
+                {
+                    let owner = self.expr(value)?;
+                    let completes = self.exprs[owner.0].completion == ir::Completion::Returns;
+                    self.accessible(&pointee)?;
+                    (
+                        ir::ExprKind::Deref { value: owner },
+                        Flow {
+                            ty: pointee,
+                            completes,
+                        },
+                    )
+                } else if let Expr::Var(_) = value.as_ref()
                     && let Ok(place) = static_source_place(value)
                     && let Ok((_, owner_ty, _)) = self.checked_place(&place)
                     && matches!(owner_ty, ir::Ty::Struct(_) | ir::Ty::Enum(_))
@@ -11546,7 +11600,45 @@ impl<'a> Checker<'a> {
                     Ok(place) => self.checked_place(&place).ok().map(|(_, ty, _)| ty),
                     Err(_) => None,
                 };
-                if let Some(hint) =
+                if let Some(hint) = &local_hint
+                    && hint.owned_box_pointee().is_some()
+                    && let ir::Ty::Struct(nominal) = hint
+                    && !self.has_member(nominal.def().source_decl, field)?
+                {
+                    let mut target = self.expr(receiver)?;
+                    let completion = self.exprs[target.0].completion;
+                    let mut target_ty = hint.clone();
+                    for _ in 0..ir::MAX_PATTERN_PROJECTION_DEPTH {
+                        let Some(pointee) = target_ty.owned_box_pointee().cloned() else {
+                            break;
+                        };
+                        let id = ir::ExprId(self.exprs.len());
+                        self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
+                        self.exprs.push(ir::TypedExpr {
+                            ty: pointee.clone(),
+                            completion,
+                            kind: ir::ExprKind::Deref { value: target },
+                        });
+                        target = id;
+                        target_ty = pointee;
+                        if let ir::Ty::Struct(nominal) = &target_ty
+                            && self.has_member(nominal.def().source_decl, field)?
+                        {
+                            break;
+                        }
+                    }
+                    let (index, ty) = self.field_type(&target_ty, field)?;
+                    (
+                        ir::ExprKind::Field {
+                            base: target,
+                            index,
+                        },
+                        Flow {
+                            ty,
+                            completes: completion == ir::Completion::Returns,
+                        },
+                    )
+                } else if let Some(hint) =
                     local_hint.or_else(|| self.method_receiver_hint(receiver).ok().flatten())
                     && let ir::Ty::Struct(nominal) = match &hint {
                         ir::Ty::Ref { referent, .. } => referent.as_ref(),

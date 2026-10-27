@@ -29,11 +29,19 @@ impl Checker<'_> {
             self.argument_selected_trait_application(&owner, name, type_args, arguments)?
         {
             return Ok(plan
-                .select_trait(&application, name, &[], self.facts(), false, &plan.budget)?
+                .select_trait_with_scratch(
+                    &application,
+                    name,
+                    &[],
+                    self.facts(),
+                    false,
+                    &plan.budget,
+                    &self.trait_scratch,
+                )?
                 .map(|(_, signature, _)| signature.result));
         }
         let actuals = self.resolved_method_actuals(&owner, name, type_args, arguments, None)?;
-        let (target, signature, _) = plan.select_associated(
+        let (target, signature, _) = plan.select_associated_with_scratch(
             &owner,
             name,
             &actuals,
@@ -41,6 +49,7 @@ impl Checker<'_> {
             &self.module,
             false,
             &plan.budget,
+            &self.trait_scratch,
         )?;
         // A chained receiver must use the same representation as the mapped
         // method signature. Replay the complete genuine call before extracting

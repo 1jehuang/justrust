@@ -15,18 +15,36 @@ pub(crate) fn directory(
     root: &Path,
     excluded_output: &Path,
 ) -> Result<Arc<SourceSnapshot>, ManifestError> {
-    capture_between(root, excluded_output, || {})
+    directories(root, &[], excluded_output)
 }
 
-#[cfg(target_os = "linux")]
+pub(crate) fn directories(
+    root: &Path,
+    additional: &[PathBuf],
+    excluded_output: &Path,
+) -> Result<Arc<SourceSnapshot>, ManifestError> {
+    capture_roots_between(root, additional, excluded_output, || {})
+}
+
+#[cfg(all(test, target_os = "linux"))]
 fn capture_between(
     root: &Path,
     excluded_output: &Path,
     between: impl FnOnce(),
 ) -> Result<Arc<SourceSnapshot>, ManifestError> {
-    let first = observe(root, excluded_output)?;
+    capture_roots_between(root, &[], excluded_output, between)
+}
+
+#[cfg(target_os = "linux")]
+fn capture_roots_between(
+    root: &Path,
+    additional: &[PathBuf],
+    excluded_output: &Path,
+    between: impl FnOnce(),
+) -> Result<Arc<SourceSnapshot>, ManifestError> {
+    let first = observe(root, additional, excluded_output)?;
     between();
-    let second = observe(root, excluded_output)?;
+    let second = observe(root, additional, excluded_output)?;
     if first.stamps != second.stamps || first.snapshot.digest() != second.snapshot.digest() {
         return Err(ManifestError(
             "input changed during native namespace capture; retry the command".into(),
@@ -36,8 +54,9 @@ fn capture_between(
 }
 
 #[cfg(not(target_os = "linux"))]
-fn capture_between(
+fn capture_roots_between(
     _: &Path,
+    _: &[PathBuf],
     _: &Path,
     _: impl FnOnce(),
 ) -> Result<Arc<SourceSnapshot>, ManifestError> {
@@ -68,22 +87,36 @@ fn stamp(metadata: &std::fs::Metadata) -> [u64; 8] {
 }
 
 #[cfg(target_os = "linux")]
-fn observe(root: &Path, excluded_output: &Path) -> Result<Observation, ManifestError> {
+fn observe(
+    root: &Path,
+    additional: &[PathBuf],
+    excluded_output: &Path,
+) -> Result<Observation, ManifestError> {
     use std::io::Read;
     use std::os::unix::fs::OpenOptionsExt;
     let infrastructure =
         |error| ManifestError(format!("infrastructure: native input capture: {error}"));
-    let canonical = root.canonicalize().map_err(infrastructure)?;
-    if canonical != root || root == Path::new("/") {
-        return Err(ManifestError(
-            "unsupported: capture root must be a canonical private directory".into(),
-        ));
+    let roots = SourceSnapshot::normalized_roots(root, additional).map_err(ManifestError)?;
+    for root in std::iter::once(root).chain(additional.iter().map(PathBuf::as_path)) {
+        let canonical = root.canonicalize().map_err(infrastructure)?;
+        if canonical != root
+            || !std::fs::symlink_metadata(root)
+                .map_err(infrastructure)?
+                .is_dir()
+        {
+            return Err(ManifestError(
+                "unsupported: capture root must be a canonical private directory".into(),
+            ));
+        }
     }
     let mut remaining = MAX_BYTES;
     let mut stamps = BTreeMap::new();
     let mut files = Vec::new();
-    let mut pending = vec![root.to_owned()];
-    while let Some(path) = pending.pop() {
+    let mut pending: Vec<_> = roots
+        .iter()
+        .map(|root| (root.clone(), root.clone()))
+        .collect();
+    while let Some((capture_root, path)) = pending.pop() {
         if stamps.len() >= MAX_ENTRIES {
             return Err(ManifestError(
                 "native input capture entry limit exceeded".into(),
@@ -101,7 +134,7 @@ fn observe(root: &Path, excluded_output: &Path) -> Result<Observation, ManifestE
             // Cache-tagged directories are explicitly outside the source
             // namespace. A source attempting to import one therefore fails
             // closed instead of reading an omitted host file.
-            if path != root {
+            if path != capture_root {
                 let tag = path.join("CACHEDIR.TAG");
                 match std::fs::symlink_metadata(&tag) {
                     Ok(metadata) if metadata.is_file() => {
@@ -133,8 +166,8 @@ fn observe(root: &Path, excluded_output: &Path) -> Result<Observation, ManifestE
             for entry in std::fs::read_dir(&path).map_err(infrastructure)? {
                 let entry = entry.map_err(infrastructure)?.path();
                 if entry == excluded_output
-                    || entry == root.join(".git")
-                    || entry == root.join("target")
+                    || entry == capture_root.join(".git")
+                    || entry == capture_root.join("target")
                 {
                     continue;
                 }
@@ -151,7 +184,7 @@ fn observe(root: &Path, excluded_output: &Path) -> Result<Observation, ManifestE
                 entries.push(entry);
             }
             entries.sort();
-            pending.extend(entries);
+            pending.extend(entries.into_iter().map(|path| (capture_root.clone(), path)));
         } else if metadata.is_file() {
             let cost = path.as_os_str().len();
             if cost > remaining || metadata.len() > (remaining - cost) as u64 {
@@ -204,13 +237,112 @@ fn observe(root: &Path, excluded_output: &Path) -> Result<Observation, ManifestE
             ));
         }
     }
-    let snapshot = SourceSnapshot::new(root.to_owned(), files).map_err(ManifestError)?;
+    let snapshot =
+        SourceSnapshot::with_roots(root.to_owned(), additional, files).map_err(ManifestError)?;
     Ok(Observation { snapshot, stamps })
 }
 
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
+    #[test]
+    fn multi_root_capture_is_closed_bounded_and_rejects_cross_root_mutation() {
+        use crate::compiler::source::SourceReader;
+        let base = std::env::temp_dir().join(format!("jr-multi-capture-{}", std::process::id()));
+        let app = base.join("app");
+        let dep = base.join("dep");
+        std::fs::create_dir_all(&app).unwrap();
+        std::fs::create_dir_all(&dep).unwrap();
+        let app = app.canonicalize().unwrap();
+        let dep = dep.canonicalize().unwrap();
+        let source = dep.join("lib.rs");
+        std::fs::write(app.join("main.rs"), "fn main() {}").unwrap();
+        std::fs::write(&source, "pub fn value() -> i32 { 42 }").unwrap();
+        let output = app.join("target");
+        let roots = [dep.clone()];
+        let frozen = directories(&app, &roots, &output).unwrap();
+        assert!(
+            capture_roots_between(&app, &roots, &output, || {
+                std::fs::write(&source, "pub fn value() -> i32 { 43 }").unwrap();
+            })
+            .is_err()
+        );
+        assert!(
+            capture_roots_between(&app, &roots, &output, || {
+                std::fs::write(dep.join("new.rs"), "").unwrap();
+            })
+            .is_err()
+        );
+        assert!(
+            capture_roots_between(&app, &roots, &output, || {
+                std::fs::remove_file(&source).unwrap();
+            })
+            .is_err()
+        );
+        // Owned reads and negative answers survive live file deletion/creation.
+        assert!(
+            frozen
+                .reader()
+                .read(&source, 100)
+                .unwrap()
+                .ends_with(b"42 }")
+        );
+        assert!(!frozen.reader().exists(&dep.join("new.rs")).unwrap());
+        assert!(frozen.reader().read(&base.join("escape.rs"), 100).is_err());
+        assert!(
+            frozen
+                .reader()
+                .canonicalize(&app.join("../escape.rs"))
+                .is_err()
+        );
+        assert!(!frozen.contains(&app.join("../unowned")));
+        std::os::unix::fs::symlink(app.join("main.rs"), &source).unwrap();
+        assert!(
+            directories(&app, &roots, &output)
+                .unwrap_err()
+                .0
+                .contains("symlinks")
+        );
+        std::fs::remove_file(&source).unwrap();
+        std::fs::write(&source, "").unwrap();
+        let alias = base.join("alias");
+        std::os::unix::fs::symlink(&dep, &alias).unwrap();
+        assert!(directories(&app, &[alias], &output).is_err());
+        assert!(directories(&app, &[PathBuf::from("/")], &output).is_err());
+        assert!(
+            directories(&app, &vec![dep.clone(); 64], &output)
+                .unwrap_err()
+                .0
+                .contains("root limit")
+        );
+        for root in [&app, &dep] {
+            std::fs::File::create(root.join("large"))
+                .unwrap()
+                .set_len((MAX_BYTES / 2) as u64)
+                .unwrap();
+        }
+        assert!(
+            directories(&app, &roots, &output)
+                .unwrap_err()
+                .0
+                .contains("byte limit")
+        );
+        std::fs::remove_file(app.join("large")).unwrap();
+        std::fs::remove_file(dep.join("large")).unwrap();
+        for index in 0..MAX_ENTRIES / 2 {
+            for root in [&app, &dep] {
+                std::fs::write(root.join(format!("entry-{index}")), "").unwrap();
+            }
+        }
+        assert!(
+            directories(&app, &roots, &output)
+                .unwrap_err()
+                .0
+                .contains("entry limit")
+        );
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
     #[test]
     fn capture_owns_bytes_and_rejects_mutation_and_symlinks() {
         let root = std::env::temp_dir().join(format!("jr-capture-{}", std::process::id()));
@@ -293,5 +425,43 @@ mod tests {
             }
         }
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn captured_sibling_path_dependencies_run_after_both_roots_disappear() {
+        use crate::project::driver::{Command, Driver, Selection};
+        let base =
+            std::env::temp_dir().join(format!("jr-captured-siblings-{}", std::process::id()));
+        let app = base.join("app");
+        let dep = base.join("dep");
+        std::fs::create_dir_all(app.join("src")).unwrap();
+        std::fs::create_dir_all(dep.join("src")).unwrap();
+        std::fs::write(app.join("Cargo.toml"), "[package]\nname='app'\nversion='0.1.0'\nedition='2024'\n[dependencies]\ndep={path='../dep'}\n").unwrap();
+        std::fs::write(
+            dep.join("Cargo.toml"),
+            "[package]\nname='dep'\nversion='0.1.0'\nedition='2024'\n",
+        )
+        .unwrap();
+        std::fs::write(
+            app.join("src/main.rs"),
+            "fn main() { assert_eq!(dep::value(), 42); }",
+        )
+        .unwrap();
+        std::fs::write(dep.join("src/lib.rs"), "pub fn value() -> i32 { 42 }").unwrap();
+        let mut driver =
+            Driver::capture(Some(&app.join("Cargo.toml")), &app, Selection::default()).unwrap();
+        let frozen = driver.ws.inputs.source_snapshot().unwrap();
+        assert!(frozen.contains(&dep));
+        assert!(!frozen.contains(&base.join("unowned")));
+        driver.target_dir = base.join("output");
+        std::fs::remove_dir_all(&app).unwrap();
+        std::fs::remove_dir_all(&dep).unwrap();
+        for workers in [1, 8] {
+            driver.sel.workers = workers;
+            for command in [Command::Check, Command::Build, Command::Run] {
+                assert_eq!(driver.run(command).unwrap(), 0);
+            }
+        }
+        std::fs::remove_dir_all(base).unwrap();
     }
 }

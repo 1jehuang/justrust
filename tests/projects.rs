@@ -25,6 +25,89 @@ fn stock_command() -> Command {
 const CRATES_IO_CACHE_ID: &str = "index.crates.io-1949cf8c6b5b557f";
 
 #[test]
+fn sibling_path_dependencies_are_captured_for_cli_check_build_run() {
+    let base = target_dir("captured-siblings-cli");
+    let root = base.join("app");
+    let dep = base.join("dep");
+    let leaf = base.join("leaf");
+    for directory in [&root, &dep, &leaf] {
+        std::fs::create_dir_all(directory.join("src")).unwrap();
+    }
+    std::fs::create_dir_all(base.join("home")).unwrap();
+    std::fs::write(root.join("Cargo.toml"), "[package]\nname='app'\nversion='0.1.0'\nedition='2024'\n[dependencies]\ndep={path='../dep'}\n").unwrap();
+    std::fs::write(dep.join("Cargo.toml"), "[package]\nname='dep'\nversion='0.1.0'\nedition='2024'\n[dependencies]\nleaf={path='../leaf'}\n").unwrap();
+    std::fs::write(
+        leaf.join("Cargo.toml"),
+        "[package]\nname='leaf'\nversion='0.1.0'\nedition='2024'\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("src/main.rs"),
+        "fn main() { assert_eq!(dep::value(), 42); }",
+    )
+    .unwrap();
+    std::fs::write(
+        dep.join("src/lib.rs"),
+        "pub fn value() -> i32 { leaf::value() }",
+    )
+    .unwrap();
+    std::fs::write(
+        leaf.join("src/lib.rs"),
+        "mod child; pub fn value() -> i32 { child::value() }",
+    )
+    .unwrap();
+    let child = leaf.join("src/child.rs");
+    std::fs::write(&child, "pub fn value() -> i32 { 42 }").unwrap();
+    // An unrelated sibling must neither be scanned nor satisfy an escaped read.
+    std::os::unix::fs::symlink("missing", base.join("unowned")).unwrap();
+    let stock = stock_command()
+        .args(["run", "--quiet"])
+        .current_dir(&root)
+        .env("CARGO_TARGET_DIR", base.join("stock"))
+        .output()
+        .unwrap();
+    assert!(stock.status.success(), "{stock:?}");
+    let invoke = |command: &str, workers: &str| {
+        Command::new(env!("CARGO_BIN_EXE_jr-rust"))
+            .args([command, "-j", workers])
+            .current_dir(&root)
+            .env("CARGO_HOME", base.join("home"))
+            .env("CARGO_TARGET_DIR", base.join("native"))
+            .output()
+            .unwrap()
+    };
+    for workers in ["1", "8"] {
+        for command in ["check", "build", "run"] {
+            let output = invoke(command, workers);
+            assert!(output.status.success(), "{output:?}");
+            assert!(
+                String::from_utf8_lossy(&output.stderr)
+                    .contains("Input capture: immutable native project namespace")
+            );
+            assert_eq!(output.stdout, stock.stdout);
+        }
+    }
+    std::fs::remove_file(&child).unwrap();
+    let missing = invoke("build", "8");
+    assert!(!missing.status.success(), "{missing:?}");
+    std::os::unix::fs::symlink("missing", &child).unwrap();
+    let symlink = invoke("check", "1");
+    assert!(!symlink.status.success());
+    assert!(String::from_utf8_lossy(&symlink.stderr).contains("does not follow symlinks"));
+    std::fs::remove_file(&child).unwrap();
+    std::fs::write(
+        &child,
+        "pub fn value() -> i32 { 42 } fn unused() -> i32 { true }",
+    )
+    .unwrap();
+    for workers in ["1", "8"] {
+        let invalid = invoke("check", workers);
+        assert!(!invalid.status.success(), "{invalid:?}");
+    }
+    std::fs::remove_dir_all(base).unwrap();
+}
+
+#[test]
 fn ordinary_cli_captures_one_namespace_for_check_build_and_run() {
     let root = target_dir("captured-cli");
     std::fs::create_dir_all(root.join("src")).unwrap();

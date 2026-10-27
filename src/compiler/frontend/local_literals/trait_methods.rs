@@ -436,11 +436,12 @@ impl Solver<'_, '_, '_> {
         // Reuse the ordinary receiver/adjustment and inherent-before-trait order.
         // Returning Deferred stops at the first applicable frontier, rather than
         // silently considering a lower-priority trait while its arguments wait.
-        let _ = plan.select_method_with_arguments(
+        let _ = plan.select_method_with_arguments_scratch(
             receiver,
             &name,
             checker.facts(),
             (&checker.module, &plan.budget),
+            &checker.trait_scratch,
             |owner, mode, traits_only| {
                 if !traits_only {
                     if let Some((nominal, _)) = nominal_parts(owner)
@@ -467,7 +468,11 @@ impl Solver<'_, '_, '_> {
                     if matches!(
                         facts
                             .service()
-                            .prove_goal(&ir::Predicate::Implements(application.clone()), facts,)
+                            .prove_goal_with(
+                                &ir::Predicate::Implements(application.clone()),
+                                facts,
+                                &mut checker.trait_scratch.borrow_mut()
+                            )
                             .map_err(|error| error.into_legacy_diagnostic(&plan.budget))?,
                         tr::ProofOutcome::NotProven
                     ) {

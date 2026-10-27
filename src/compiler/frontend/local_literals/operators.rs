@@ -283,13 +283,14 @@ impl Solver<'_, '_, '_> {
                 self_ty: receiver.clone(),
                 args: arguments.clone(),
             };
-            selected = plan.select_trait(
+            selected = plan.select_trait_with_scratch(
                 &trait_ref,
                 &method,
                 &[],
                 self.checker.facts(),
                 false,
                 &plan.budget,
+                &self.checker.trait_scratch,
             )?;
             if selected.is_some() || !matches!(kind, Kind::Index(_)) {
                 break;
@@ -308,13 +309,14 @@ impl Solver<'_, '_, '_> {
                         self_ty: receiver.clone(),
                         args: Vec::new().into(),
                     };
-                    let Some((_, signature, _)) = plan.select_trait(
+                    let Some((_, signature, _)) = plan.select_trait_with_scratch(
                         &deref_ref,
                         &deref_method,
                         &[],
                         self.checker.facts(),
                         false,
                         &plan.budget,
+                        &self.checker.trait_scratch,
                     )?
                     else {
                         break;

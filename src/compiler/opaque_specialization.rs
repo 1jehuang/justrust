@@ -12,9 +12,34 @@ pub(super) struct Specialization<'a> {
     // Reuse only within this authenticated publication/target substitution.
     // This scratch never escapes the OBJECT operation or becomes a fact.
     types: Vec<(ir::Ty, ir::Ty)>,
+    // Original publication and closed instance have distinct proof subjects.
+    // Keep their node-local caches separate rather than resetting per call.
+    original_scratch: traits::TraitScratch,
+    closed_scratch: traits::TraitScratch,
 }
 
 impl<'a> Specialization<'a> {
+    pub(super) fn authenticate_context(
+        &self,
+        publication: &Arc<source_replay::CanonicalSourcePublication>,
+        context: &frontend::PlanCtx,
+        budget: &ir::PlanBudget,
+    ) -> Result<(), Error> {
+        budget.charge_work(1).map_err(Error::new)?;
+        if !Arc::ptr_eq(publication, self.publication)
+            || !budget.same_authority(self.budget)
+            || !Arc::ptr_eq(
+                &context.trait_world().map_err(Error::new)?,
+                self.closed.world(),
+            )
+        {
+            return Err(Error::new(
+                "opaque specialization changed exact publication, world or budget",
+            ));
+        }
+        Ok(())
+    }
+
     fn type_buffer(&self, count: usize) -> Result<Vec<ir::Ty>, Error> {
         let resource = |message| {
             source_fact_error(
@@ -63,6 +88,8 @@ impl<'a> Specialization<'a> {
             budget,
             engine,
             types: Vec::new(),
+            original_scratch: traits::TraitScratch::default(),
+            closed_scratch: traits::TraitScratch::default(),
         })
     }
 
@@ -117,10 +144,11 @@ impl<'a> Specialization<'a> {
         else {
             return Err(Error::new("opaque specialization occurrence is not a call"));
         };
-        ir::validate_callee(
+        ir::validate_callee_scratch(
             target,
             signature,
             ir::FactsCtx::from_validated(self.publication.facts()),
+            &mut self.original_scratch,
         )
         .map_err(Error::new)?;
         let (target, canonical) = match target {
@@ -136,7 +164,7 @@ impl<'a> Specialization<'a> {
                 let proof = self
                     .closed
                     .service()
-                    .discharge_direct(&target, &self.closed)
+                    .discharge_direct_with(&target, &self.closed, &mut self.closed_scratch)
                     .map_err(|error| source_fact_error(error, self.budget))?;
                 let mut params = self.type_buffer(proof.signature().params.len())?;
                 params.extend(proof.signature().params.iter().cloned());
@@ -169,7 +197,7 @@ impl<'a> Specialization<'a> {
                 let signature = self
                     .closed
                     .service()
-                    .instantiate_trait_signature(&call, &self.closed)
+                    .instantiate_trait_signature_with(&call, &self.closed, &mut self.closed_scratch)
                     .map_err(|error| source_fact_error(error, self.budget))?;
                 (ir::Callee::TraitItem(call), signature)
             }
@@ -219,7 +247,7 @@ impl<'a> Specialization<'a> {
             &mapped,
             ir::FactsCtx::from_validated(&self.closed),
             self.budget,
-            &mut traits::TraitScratch::default(),
+            &mut self.closed_scratch,
         )
         .map_err(Error::new)?;
         Ok((target, mapped))

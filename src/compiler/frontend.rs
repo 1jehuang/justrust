@@ -23817,13 +23817,13 @@ impl PlanState {
                         let ty = bindings
                             .get(&registry.parameter_key(*parameter)?)
                             .ok_or("unknown generic parameter")?;
-                        caller.validate_ty_metadata_with_budget(ty, budget)?;
+                        self.source_metadata.validate_actual(ty, caller, budget)?;
                     }
                     Type::SelfType => {
                         let ty = bindings
                             .get(&GenericBindingKey::SelfType)
                             .ok_or("Self is not in an impl scope")?;
-                        caller.validate_ty_metadata_with_budget(ty, budget)?;
+                        self.source_metadata.validate_actual(ty, caller, budget)?;
                     }
                     Type::Named(path) => {
                         let key =
@@ -24889,8 +24889,9 @@ impl SchemaAdapter {
         .map_err(|e| self.error(e))
     }
 }
-/// One type walk owns this state. Canonical applications may be reused, but
-/// exact input definitions are compared afresh on every validate_node call.
+/// One type walk owns this state. Canonical applications may be reused. Only
+/// the same retained immutable definition under the same caller context skips
+/// replay; a different payload is always authenticated, even with an equal ID.
 struct SourceNominalValidationSession {
     adapter: SchemaAdapter,
     state: PlanState,

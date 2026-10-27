@@ -29,7 +29,7 @@
 13_trait_objects	pass
 14_generic_container	pass
 15_error_handling	pass
-16_sorting	fail	fmt-display,fmt-debug,fmt-float,str,for,vec,iter,closure,generic-bounds,prim-methods,slice
+16_sorting	pass
 17_hashmap_word_count	fail	fmt-display,fmt-debug,str,string,for,vec,iter,closure,std-paths,hashmap,option-result
 18_tokenizer_calculator	pass
 19_operator_overloading	pass

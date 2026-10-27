@@ -245,18 +245,22 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     {
         source = source.canonicalize()?;
         let root = source.parent().ok_or("source has no parent directory")?;
-        let mut outside = false;
+        let mut roots = Vec::new();
         for external in &mut source_options.externs {
             external.root = external.root.canonicalize()?;
-            outside |= !external.root.starts_with(root);
-        }
-        if !outside {
-            let excluded = output.clone().unwrap_or_else(|| root.join("target"));
-            source_options.source_snapshot = Some(
-                compiler::source::SourceSnapshot::capture_directory(root, &excluded)?,
+            roots.push(
+                external
+                    .root
+                    .parent()
+                    .ok_or("extern source has no parent directory")?
+                    .to_owned(),
             );
-            captured = true;
         }
+        let excluded = output.clone().unwrap_or_else(|| root.join("target"));
+        source_options.source_snapshot = Some(
+            compiler::source::SourceSnapshot::capture_directories(root, &roots, &excluded)?,
+        );
+        captured = true;
     }
     if !captured {
         eprintln!(

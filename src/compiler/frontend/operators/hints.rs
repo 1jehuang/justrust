@@ -25,8 +25,15 @@ impl type_check::Checker<'_> {
         let mut unique = None;
         for application in applications.as_slice() {
             plan.budget.charge_work(1)?;
-            let Some((_, signature, _)) =
-                plan.select_trait(application, method, &[], self.facts(), false, &plan.budget)?
+            let Some((_, signature, _)) = plan.select_trait_with_scratch(
+                application,
+                method,
+                &[],
+                self.facts(),
+                false,
+                &plan.budget,
+                &self.trait_scratch,
+            )?
             else {
                 continue;
             };
@@ -156,9 +163,15 @@ impl type_check::Checker<'_> {
                 self_ty: receiver.clone(),
                 args: args.into(),
             };
-            if let Some((_, signature, _)) =
-                plan.select_trait(&trait_ref, &method, &[], self.facts(), false, &plan.budget)?
-            {
+            if let Some((_, signature, _)) = plan.select_trait_with_scratch(
+                &trait_ref,
+                &method,
+                &[],
+                self.facts(),
+                false,
+                &plan.budget,
+                &self.trait_scratch,
+            )? {
                 return Ok(Some(signature.result));
             }
         }

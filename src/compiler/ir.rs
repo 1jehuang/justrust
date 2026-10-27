@@ -491,12 +491,22 @@ pub fn validate_body_signature(
     signature: &Signature,
     facts: &super::traits::ValidatedFacts,
 ) -> Result<(), String> {
+    validate_body_signature_with_scratch(
+        signature,
+        facts,
+        &mut super::traits::TraitScratch::default(),
+    )
+}
+pub(super) fn validate_body_signature_with_scratch(
+    signature: &Signature,
+    facts: &super::traits::ValidatedFacts,
+    scratch: &mut super::traits::TraitScratch,
+) -> Result<(), String> {
     if facts.phase() == super::traits::FactsPhase::Schema {
         return Err("trait schema cannot authorize executable body".into());
     }
     facts
-        .service()
-        .validate_signature(SignatureSubject::Body, signature, facts)
+        .validate_signature_with(SignatureSubject::Body, signature, scratch)
         .map_err(|e| e.into_legacy_diagnostic(facts.budget()))
 }
 pub trait TraitCx: Send + Sync {
@@ -521,6 +531,14 @@ pub trait TraitCx: Send + Sync {
         call: &TraitCall,
         facts: &super::traits::ValidatedFacts,
     ) -> Result<Signature, super::traits::FactsError>;
+    fn instantiate_trait_signature_with(
+        &self,
+        call: &TraitCall,
+        facts: &super::traits::ValidatedFacts,
+        _scratch: &mut super::traits::TraitScratch,
+    ) -> Result<Signature, super::traits::FactsError> {
+        self.instantiate_trait_signature(call, facts)
+    }
     /// Validate builtin function item dispatch; returns the trait signature.
     fn validate_untupled(
         &self,
@@ -3181,11 +3199,31 @@ pub fn substitute_ty(
     cx: &mut impl SubstitutionCx,
     budget: &PlanBudget,
 ) -> Result<Ty, String> {
+    substitute_ty_with_scratch(
+        ty,
+        env,
+        args,
+        caller,
+        cx,
+        budget,
+        &mut super::traits::TraitScratch::default(),
+    )
+}
+
+pub(super) fn substitute_ty_with_scratch(
+    ty: &Ty,
+    env: &GenericEnv,
+    args: &[Ty],
+    caller: FactsCtx<'_>,
+    cx: &mut impl SubstitutionCx,
+    budget: &PlanBudget,
+    scratch: &mut super::traits::TraitScratch,
+) -> Result<Ty, String> {
     if args.len() != env.total_arity() {
         return Err("generic argument arity mismatch".into());
     }
     for argument in args {
-        caller.validate_ty_with_budget(argument, budget)?;
+        caller.validate_ty_with_budget_scratch(argument, budget, scratch)?;
         validate_root_reference_actual(argument, budget)?;
     }
     let substituted = substitute_ty_walk(ty, env, args, caller, cx, budget, 0)?;
@@ -3733,6 +3771,7 @@ pub(in crate::compiler) fn instantiate_checked_with_constants(
                     closed_facts,
                     visitor.cx,
                     budget,
+                    &mut super::traits::TraitScratch::default(),
                 )?;
                 *signature = visitor.signature(signature)?;
                 signature.ref_contract = closed_facts
@@ -4046,6 +4085,7 @@ fn substitute_callee_metadata(
     closed_facts: &super::traits::ValidatedFacts,
     cx: &mut impl SubstitutionCx,
     budget: &PlanBudget,
+    scratch: &mut super::traits::TraitScratch,
 ) -> Result<Callee, String> {
     if closed_facts.phase() != super::traits::FactsPhase::Closed
         || !closed_facts.budget().same_authority(budget)
@@ -4068,7 +4108,9 @@ fn substitute_callee_metadata(
             .try_reserve_exact(values.len())
             .map_err(|_| "callee argument allocation resource limit")?;
         for ty in values {
-            output.push(substitute_ty(ty, env, args, facts, cx, budget)?);
+            output.push(substitute_ty_with_scratch(
+                ty, env, args, facts, cx, budget, scratch,
+            )?);
         }
         Ok(output.into())
     };
@@ -4080,7 +4122,15 @@ fn substitute_callee_metadata(
         Callee::TraitItem(call) | Callee::Untupled(call) => {
             let method_args = types(&call.method_args)?;
             let trait_args = types(&call.trait_ref.args)?;
-            let self_ty = substitute_ty(&call.trait_ref.self_ty, env, args, facts, cx, budget)?;
+            let self_ty = substitute_ty_with_scratch(
+                &call.trait_ref.self_ty,
+                env,
+                args,
+                facts,
+                cx,
+                budget,
+                scratch,
+            )?;
             let rebuild = if matches!(callee, Callee::Untupled(_)) {
                 Callee::Untupled
             } else {
@@ -4102,13 +4152,14 @@ fn substitute_callee_metadata(
             }
             virtual_call.principal()?;
             let trait_args = types(&virtual_call.call.trait_ref.args)?;
-            let self_ty = substitute_ty(
+            let self_ty = substitute_ty_with_scratch(
                 &virtual_call.call.trait_ref.self_ty,
                 env,
                 args,
                 facts,
                 cx,
                 budget,
+                scratch,
             )?;
             Callee::Virtual(VirtualCall {
                 call: TraitCall {
@@ -4134,18 +4185,39 @@ pub fn substitute_callee(
     cx: &mut impl SubstitutionCx,
     budget: &PlanBudget,
 ) -> Result<Callee, String> {
-    let substituted = substitute_callee_metadata(callee, env, args, closed_facts, cx, budget)?;
+    substitute_callee_with_scratch(
+        callee,
+        env,
+        args,
+        closed_facts,
+        cx,
+        budget,
+        &mut super::traits::TraitScratch::default(),
+    )
+}
+
+pub(super) fn substitute_callee_with_scratch(
+    callee: &Callee,
+    env: &GenericEnv,
+    args: &[Ty],
+    closed_facts: &super::traits::ValidatedFacts,
+    cx: &mut impl SubstitutionCx,
+    budget: &PlanBudget,
+    scratch: &mut super::traits::TraitScratch,
+) -> Result<Callee, String> {
+    let substituted =
+        substitute_callee_metadata(callee, env, args, closed_facts, cx, budget, scratch)?;
     match substituted {
         Callee::Direct(target) => {
             closed_facts
                 .service()
-                .discharge_direct(&target, closed_facts)
+                .discharge_direct_with(&target, closed_facts, scratch)
                 .map_err(|e| e.into_legacy_diagnostic(budget))?;
             Ok(Callee::Direct(target))
         }
         Callee::TraitItem(call) => Ok(closed_facts
             .service()
-            .resolve_trait_call(&call, closed_facts)
+            .resolve_trait_call_with(&call, closed_facts, scratch)
             .map_err(|e| e.into_legacy_diagnostic(budget))?
             .callee()
             .clone()),
@@ -5355,6 +5427,9 @@ pub(super) fn raw_deref_index_optional(
             Projection::Deref => match &ty {
                 Ty::RawPtr { .. } => return Ok(Some(index)),
                 Ty::Ref { referent, .. } => referent.as_ref().clone(),
+                owner if owner.owned_box_pointee().is_some() => {
+                    owner.owned_box_pointee().unwrap().clone()
+                }
                 _ => return Ok(None),
             },
             Projection::Field(field) => match ty.field_ty_optional(*field, budget)? {
@@ -5468,6 +5543,9 @@ fn projected_ty_inner(
                         return Err("compound indexed mutation requires mutable reference at every dereference".into());
                     }
                     referent.as_ref().clone()
+                }
+                owner if owner.owned_box_pointee().is_some() => {
+                    owner.owned_box_pointee().unwrap().clone()
                 }
                 _ => return Err("dereference requires reference type".into()),
             },
@@ -10685,13 +10763,14 @@ impl CheckedFunction {
             .map(|id| self.locals[id.0].ty.clone())
             .collect();
         if let Some(authority) = facts.validated() {
-            validate_body_signature(
+            validate_body_signature_with_scratch(
                 &Signature {
                     ref_contract: self.ref_contract.clone(),
                     params: parameter_types.clone(),
                     result: self.result.clone(),
                 },
                 authority,
+                scratch,
             )?;
         }
         if facts.validated().is_none() {
@@ -10996,12 +11075,15 @@ impl CheckedFunction {
                 }
                 ExprKind::Deref { value: source } => {
                     expr(*source)?;
-                    let (Ty::Ref { referent, .. }
-                    | Ty::RawPtr {
-                        pointee: referent, ..
-                    }) = &self.exprs[source.0].ty
-                    else {
-                        return Err("dereference requires reference type".into());
+                    let source_ty = &self.exprs[source.0].ty;
+                    let referent = match source_ty {
+                        Ty::Ref { referent, .. }
+                        | Ty::RawPtr {
+                            pointee: referent, ..
+                        } => referent.as_ref(),
+                        owner => owner
+                            .owned_box_pointee()
+                            .ok_or("dereference requires reference type")?,
                     };
                     if !pattern_types_equal_with_facts(&value.ty, referent, &mut 0, facts)? {
                         return Err("dereference result type mismatch".into());

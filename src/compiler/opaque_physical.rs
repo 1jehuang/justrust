@@ -19,12 +19,13 @@ struct DirectPhysicalCall {
 impl DirectPhysicalCall {
     fn seal(
         publication: &Arc<source_replay::CanonicalSourcePublication>,
-        caller: &ir::CallTarget,
         occurrence: ir::ExprId,
         representations: &opaque_instances::Representations,
         context: &frontend::PlanCtx,
         budget: &ir::PlanBudget,
+        specialization: &mut opaque_specialization::Specialization<'_>,
     ) -> Result<Self, Error> {
+        specialization.authenticate_context(publication, context, budget)?;
         let expression = publication
             .source()
             .exprs
@@ -40,20 +41,10 @@ impl DirectPhysicalCall {
                 "physical direct ABI requires an original direct-call occurrence",
             ));
         };
-        ir::validate_callee(
-            &ir::Callee::Direct(target.clone()),
-            signature,
-            ir::FactsCtx::from_validated(publication.facts()),
-        )
-        .map_err(Error::new)?;
         let source_target = target.clone();
-        let mut specialization = opaque_specialization::Specialization::new(
-            publication,
-            caller,
-            context,
-            budget,
-            representations.engine(),
-        )?;
+        // The shared specialization authenticates this exact original call
+        // before mapping its ABI. It retains separate original/closed scratch
+        // for this body, not a fresh proof arena for each direct occurrence.
         let (ir::Callee::Direct(target), specialized_signature) =
             specialization.call(occurrence)?
         else {
@@ -399,6 +390,7 @@ pub(super) fn normalize(
         )?;
     }
     let mut output = original.clone();
+    let mut operand_scratch = super::traits::TraitScratch::default();
     let mut local_types = Vec::with_capacity(original.locals.len());
     for local in &mut output.locals {
         local.ty = representations.normalize(&specialization.ty(&local.ty)?, budget)?;
@@ -484,7 +476,7 @@ pub(super) fn normalize(
                         .operand_ty_with_facts(
                             operand,
                             ir::FactsCtx::from_validated(publication.facts()),
-                            &mut super::traits::TraitScratch::default(),
+                            &mut operand_scratch,
                         )
                         .map_err(Error::new)?;
                     let actual = specialization.ty(&actual)?;
@@ -550,11 +542,11 @@ pub(super) fn normalize(
                 ir::Callee::Direct(_) => {
                     let direct = DirectPhysicalCall::seal(
                         publication,
-                        target,
                         occurrence,
                         representations,
                         context,
                         budget,
+                        &mut specialization,
                     )?;
                     if callee != &ir::Callee::Direct(direct.source_target.clone())
                         || signature != &direct.public_signature

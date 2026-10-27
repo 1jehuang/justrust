@@ -333,6 +333,18 @@ fn nested_parent_parameter_shared_to_mutable_upgrade_matches_stock() {
     );
 }
 
+#[test]
+fn box_move_closure_preserves_mutable_receiver_capture() {
+    capture_cases_workers(
+        "closure-box-receiver",
+        &[Case {
+            name: "box_move_mutable_receiver",
+            source: "struct Item { value:i32, owned:Box<i32> } struct Store { item:Option<Box<Item>>, count:usize } impl Store { fn take(&mut self)->Option<Box<i32>> { self.item.take().map(|item| { self.count += 1; assert_eq!(item.value,7); item.owned }) } } fn main(){ let mut store=Store { item:Some(Box::new(Item {value:7,owned:Box::new(42)})), count:0 }; let value=store.take().unwrap(); assert_eq!(*value,42); assert_eq!(store.count,1); assert!(store.take().is_none()); assert_eq!(store.count,1); }",
+            expect: Expect::Run(""),
+        }],
+    );
+}
+
 fn capture_cases_workers(tag: &str, cases: &[Case]) {
     assert!(
         std::process::Command::new("rustc")

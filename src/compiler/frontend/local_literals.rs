@@ -1407,11 +1407,12 @@ impl<'s> Solver<'_, '_, 's> {
                             self.checker.names()?,
                         )?
                         && plan
-                            .select_method_with_arguments(
+                            .select_method_with_arguments_scratch(
                                 &ty,
                                 &method.name,
                                 self.checker.facts(),
                                 (&self.checker.module, &plan.budget),
+                                &self.checker.trait_scratch,
                                 |_, _, _| {
                                     Ok(method_argument_selection::MethodArguments::Ready(
                                         std::borrow::Cow::Borrowed(&[]),
@@ -2472,7 +2473,7 @@ impl<'s> Solver<'_, '_, 's> {
                     if let Some(actuals) = resolved {
                         let plan = self.checker.signatures.plan()?;
                         let mut selected = plan
-                            .select_associated(
+                            .select_associated_with_scratch(
                                 &owner,
                                 name,
                                 &actuals,
@@ -2480,6 +2481,7 @@ impl<'s> Solver<'_, '_, 's> {
                                 &self.checker.module,
                                 false,
                                 &plan.budget,
+                                &self.checker.trait_scratch,
                             )
                             .ok();
                         // Several applications of one trait (`u64: From<u8>`,
@@ -2499,13 +2501,14 @@ impl<'s> Solver<'_, '_, 's> {
                                     )?
                             {
                                 selected = plan
-                                    .select_trait(
+                                    .select_trait_with_scratch(
                                         &application,
                                         name,
                                         &[],
                                         self.checker.facts(),
                                         false,
                                         &plan.budget,
+                                        &self.checker.trait_scratch,
                                     )
                                     .ok()
                                     .flatten();
@@ -2803,8 +2806,15 @@ impl<'s> Solver<'_, '_, 's> {
                 ) else {
                     return self.fresh();
                 };
-                match plan.select_trait(&trait_ref, name, &[], checker.facts(), false, &plan.budget)
-                {
+                match plan.select_trait_with_scratch(
+                    &trait_ref,
+                    name,
+                    &[],
+                    checker.facts(),
+                    false,
+                    &plan.budget,
+                    &checker.trait_scratch,
+                ) {
                     Ok(Some((_, signature, _)))
                         if signature.result.is_closed_shallow()
                             && !generic_nominal(&signature.result) =>

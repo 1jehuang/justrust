@@ -27,6 +27,42 @@ impl Worlds {
 }
 
 impl Plan {
+    /// A checked call transfers each by-value mutable result carrier with its
+    /// own exclusive referent. The result rows may conservatively name the same
+    /// input region, but that shared lifetime is not an aliasing certificate.
+    /// Keep the input origins as dependencies while distinguishing sibling
+    /// result origins, including reborrows whose authority carries them.
+    pub(super) fn disjoint_call_results(
+        &self,
+        target: &Target,
+        borrowed: &Target,
+        loan: usize,
+        budget: &mut Budget,
+    ) -> Result<bool, Exhausted> {
+        if self.authority.is_none() {
+            return Ok(false);
+        }
+        for &first in &target.authority {
+            budget.spend(1)?;
+            if self.kinds[first] != BorrowKind::Mut {
+                continue;
+            }
+            let Some(issuer) = self.call_issuers[first] else {
+                continue;
+            };
+            for second in std::iter::once(loan).chain(borrowed.authority.iter().copied()) {
+                budget.spend(1)?;
+                if first != second
+                    && self.kinds[second] == BorrowKind::Mut
+                    && self.call_issuers[second] == Some(issuer)
+                {
+                    return Ok(true);
+                }
+            }
+        }
+        Ok(false)
+    }
+
     fn pair_at_point(
         &self,
         worlds: Worlds,

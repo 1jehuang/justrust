@@ -775,6 +775,20 @@ mod tests {
                         &types,
                         budget,
                     )?;
+                    let specialization = opaque_specialization::Specialization::new(
+                        publication,
+                        &target,
+                        &types,
+                        budget,
+                        representations.engine(),
+                    )?;
+                    specialization.authenticate_context(publication, &types, budget)?;
+                    let foreign_budget = ir::PlanBudget::default();
+                    assert!(
+                        specialization
+                            .authenticate_context(publication, &types, &foreign_budget)
+                            .is_err()
+                    );
                     physical
                         .seal(
                             publication,

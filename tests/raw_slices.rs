@@ -172,6 +172,46 @@ fn generic_slice_deref_evidence_matches_stock() {
 }
 
 #[test]
+fn generic_mutable_result_identity_matches_stock() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "generic-mutable-result-identity",
+        &[
+            Case {
+                name: "generic_swap_loop_then_partition",
+                source: "fn partition<T:Copy>(s:&mut[T]){let mut i=0usize;while i<s.len(){s.swap(i,i);i+=1;}let(l,r)=s.split_at_mut(1);l.swap(0,0);r.swap(0,0);}fn main(){let mut a=[3i32,2,1];partition(&mut a);println!(\"{} {} {}\",a[0],a[1],a[2]);let mut b=[1.5f64,2.5];partition(&mut b);println!(\"{} {}\",b[0],b[1]);}",
+                expect: Expect::Run("3 2 1\n1.5 2.5\n"),
+            },
+            Case {
+                name: "generic_recursive_partition_after_swap",
+                source: "fn recurse<T:Copy>(s:&mut[T]){if s.len()<=1{return;}let n=s.len()-1;s.swap(0,n);let(l,r)=s.split_at_mut(1);recurse(l);recurse(&mut r[1..]);}fn main(){let mut a=[1i32,2,3,4];recurse(&mut a);println!(\"{} {} {} {}\",a[0],a[1],a[2],a[3]);}",
+                expect: Expect::Run("4 2 1 3\n"),
+            },
+            Case {
+                name: "generic_partition_descendant_loans",
+                source: "fn split<T>(s:&mut[T])->(&mut[T],&mut[T]){s.split_at_mut(1)}fn work(s:&mut[i32]){let(l,r)=split(s);let a=&mut l[0];let b=&mut r[0];let old=*a;*a=*b;*b=old;}fn main(){let mut a=[1i32,2];work(&mut a);println!(\"{} {}\",a[0],a[1]);}",
+                expect: Expect::Run("2 1\n"),
+            },
+            Case {
+                name: "generic_partition_same_side_stays_exclusive",
+                source: "fn split<T>(s:&mut[T])->(&mut[T],&mut[T]){s.split_at_mut(1)}fn bad(s:&mut[i32]){let(l,_)=split(s);let a=&mut l[0];let b=&mut l[0];*a=*b;}fn main(){}",
+                expect: Expect::Invalid("E0499"),
+            },
+            Case {
+                name: "distinct_calls_do_not_share_result_exclusivity",
+                source: "fn split<T>(s:&mut[T])->(&mut[T],&mut[T]){s.split_at_mut(1)}fn bad(s:&mut[i32]){let(l,_)=split(s);let(_,r)=split(s);l[0]=r[0];}fn main(){}",
+                expect: Expect::Invalid("E0499"),
+            },
+            Case {
+                name: "mutable_result_pair_cannot_duplicate_input",
+                source: "fn bad<T>(s:&mut[T])->(&mut[T],&mut[T]){(s,s)}fn main(){}",
+                expect: Expect::Invalid("E0499"),
+            },
+        ],
+    );
+}
+
+#[test]
 fn mutable_split_preserves_disjoint_receiver_loans() {
     use closure_oracle::{Case, Expect};
     closure_oracle::check(

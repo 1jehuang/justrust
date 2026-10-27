@@ -48,11 +48,12 @@ impl Checker<'_> {
                 None
             };
         let mut deferred = false;
-        let selection = plan.select_method_with_arguments(
+        let selection = plan.select_method_with_arguments_scratch(
             receiver,
             name,
             self.facts(),
             (&self.module, &plan.budget),
+            &self.trait_scratch,
             |owner, mode, traits_only| {
                 if let Some(written) = &written {
                     return Ok(MethodArguments::Ready(Cow::Borrowed(written)));
@@ -97,7 +98,11 @@ impl Checker<'_> {
                     }
                     match facts
                         .service()
-                        .prove_goal(&ir::Predicate::Implements(application.clone()), facts)
+                        .prove_goal_with(
+                            &ir::Predicate::Implements(application.clone()),
+                            facts,
+                            &mut self.trait_scratch.borrow_mut(),
+                        )
                         .map_err(|error| error.into_legacy_diagnostic(&plan.budget))?
                     {
                         tr::ProofOutcome::NotProven => continue,

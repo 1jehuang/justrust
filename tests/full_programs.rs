@@ -15,6 +15,52 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[test]
+fn unchanged_closures_iterators_actual_program() {
+    assert_eq!(
+        run_program("11_closures_iterators", &Scratch::new()),
+        Outcome::Pass
+    );
+}
+
+#[test]
+fn unchanged_hashmap_actual_program() {
+    let scratch = Scratch::new();
+    let source = include_str!("fixtures/full_programs/17_hashmap_word_count.rs");
+    for workers in [1, 8] {
+        let checked = justrust_engine::compiler::compile(source.into(), workers, true)
+            .unwrap_or_else(|error| panic!("workers={workers} hashmap CHECK: {error}"));
+        assert!(checked.executable.is_none());
+        assert!(checked.analyses.iter().all(|analysis| analysis.passed()));
+        assert!(!checked.report.published_kind(103));
+    }
+    assert_eq!(
+        run_program("17_hashmap_word_count", &scratch),
+        Outcome::Pass
+    );
+    let output = scratch.path("hashmap-stock");
+    let compiled = capture(
+        Command::new("rustc")
+            .args(["--edition", "2024"])
+            .arg(fixtures().join("17_hashmap_word_count.rs"))
+            .arg("-o")
+            .arg(&output),
+        &scratch,
+        Duration::from_secs(60),
+    );
+    assert!(
+        compiled.success,
+        "{}",
+        String::from_utf8_lossy(&compiled.stderr)
+    );
+    let ran = capture(&mut Command::new(output), &scratch, Duration::from_secs(60));
+    assert!(ran.success);
+    assert_eq!(
+        ran.stdout,
+        fs::read(fixtures().join("17_hashmap_word_count.stdout")).unwrap()
+    );
+}
+
+#[test]
 fn recursive_linked_list_actual_program() {
     let scratch = Scratch::new();
     let actual = run_program("12_linked_list", &scratch);
@@ -231,7 +277,11 @@ enum Outcome {
 
 fn first_diagnostic(stderr: &[u8]) -> String {
     let text = String::from_utf8_lossy(stderr);
-    let line = text.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
+    let line = text
+        .lines()
+        .find(|line| line.starts_with("jr-rust:"))
+        .or_else(|| text.lines().find(|line| !line.trim().is_empty()))
+        .unwrap_or("");
     // Strip the "jr-rust: <path>: <path>:L:C: " prefix to keep the reason.
     let reason = line.rsplit(".rs:").next().unwrap_or(line);
     let reason = reason

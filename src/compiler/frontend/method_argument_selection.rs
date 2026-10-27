@@ -19,6 +19,31 @@ impl PlanCtx {
         name: &AstIdent,
         caller: ir::FactsCtx<'_>,
         context: (&ModuleId, &ir::PlanBudget),
+        arguments: impl FnMut(&ir::Ty, ReceiverKind, bool) -> Result<MethodArguments<'a>, String>,
+        realize_signature: impl FnMut(
+            &ir::Callee,
+            &ir::Signature,
+        ) -> Result<Option<ir::Signature>, String>,
+    ) -> Result<Option<MethodSelection>, String> {
+        self.select_method_with_arguments_scratch(
+            receiver,
+            name,
+            caller,
+            context,
+            &std::cell::RefCell::new(tr::TraitScratch::default()),
+            arguments,
+            realize_signature,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn select_method_with_arguments_scratch<'a>(
+        &self,
+        receiver: &ir::Ty,
+        name: &AstIdent,
+        caller: ir::FactsCtx<'_>,
+        context: (&ModuleId, &ir::PlanBudget),
+        scratch: &std::cell::RefCell<tr::TraitScratch>,
         mut arguments: impl FnMut(&ir::Ty, ReceiverKind, bool) -> Result<MethodArguments<'a>, String>,
         mut realize_signature: impl FnMut(
             &ir::Callee,
@@ -82,24 +107,26 @@ impl PlanCtx {
                         let found = match arguments(owner, mode, traits_only)? {
                             MethodArguments::Missing => continue,
                             MethodArguments::Deferred => return Ok(None),
-                            MethodArguments::Ready(actuals) => self.lookup_associated(
-                                owner,
-                                name,
-                                actuals.as_ref(),
-                                caller,
-                                module,
-                                true,
-                                Some(mode),
-                                traits_only,
-                                budget,
-                            )?,
+                            MethodArguments::Ready(actuals) => self
+                                .lookup_associated_with_scratch(
+                                    owner,
+                                    name,
+                                    actuals.as_ref(),
+                                    caller,
+                                    module,
+                                    true,
+                                    Some(mode),
+                                    traits_only,
+                                    budget,
+                                    &mut scratch.borrow_mut(),
+                                )?,
                             MethodArguments::Applied(application, actuals) => {
                                 if !traits_only {
                                     return Err(
                                         "trait application selected for an inherent probe".into()
                                     );
                                 }
-                                self.select_trait_filtered(
+                                self.select_trait_filtered_with_scratch(
                                     &application,
                                     name,
                                     actuals.as_ref(),
@@ -107,6 +134,7 @@ impl PlanCtx {
                                     true,
                                     Some(mode),
                                     budget,
+                                    &mut scratch.borrow_mut(),
                                 )?
                             }
                         };

@@ -15,6 +15,7 @@ const MAX_BYTES: usize = 16 * 1024 * 1024;
 #[derive(Clone, Debug)]
 pub struct SourceSnapshot {
     root: PathBuf,
+    roots: BTreeSet<PathBuf>,
     files: BTreeMap<PathBuf, Arc<[u8]>>,
     directories: BTreeSet<PathBuf>,
     digest: [u8; 32],
@@ -30,6 +31,17 @@ impl SourceSnapshot {
         crate::project::capture::directory(root, excluded_output).map_err(|error| error.0)
     }
 
+    /// Capture explicitly authorized source directories under one aggregate
+    /// acquisition budget. No common ancestor or ambient siblings are admitted.
+    pub fn capture_directories(
+        root: &Path,
+        additional: &[PathBuf],
+        excluded_output: &Path,
+    ) -> Result<Arc<Self>, String> {
+        crate::project::capture::directories(root, additional, excluded_output)
+            .map_err(|error| error.0)
+    }
+
     /// Create a closed namespace from owned bytes. Paths are relative to `root`
     /// or absolute beneath it. Symlinks, devices and ambient filesystem reads
     /// have no representation. Duplicate or file/directory-conflicting paths
@@ -38,20 +50,29 @@ impl SourceSnapshot {
         root: PathBuf,
         files: impl IntoIterator<Item = (PathBuf, Vec<u8>)>,
     ) -> Result<Arc<Self>, String> {
-        if !root.is_absolute() {
-            return Err("source snapshot root must be absolute".into());
-        }
+        Self::with_roots(root, &[], files)
+    }
+
+    pub(crate) fn with_roots(
+        root: PathBuf,
+        additional: &[PathBuf],
+        files: impl IntoIterator<Item = (PathBuf, Vec<u8>)>,
+    ) -> Result<Arc<Self>, String> {
+        let roots = Self::normalized_roots(&root, additional)?;
         let root = normalize(&root).map_err(|e| e.to_string())?;
-        if root == Path::new("/") || root.starts_with(super::source_prelude::PRELUDE_DIR) {
-            return Err("source snapshot root must be a private non-root namespace".into());
+        let mut remaining = MAX_BYTES;
+        for path in &roots {
+            remaining = remaining
+                .checked_sub(path.as_os_str().len())
+                .ok_or("source snapshot root limit exceeded")?;
         }
         let mut snapshot = Self {
-            root: root.clone(),
+            root,
+            directories: roots.clone(),
+            roots,
             files: BTreeMap::new(),
-            directories: BTreeSet::from([root]),
             digest: [0; 32],
         };
-        let mut remaining = MAX_BYTES;
         for (path, bytes) in files {
             let path = snapshot.path(&path).map_err(|e| e.to_string())?;
             let cost = bytes.len().saturating_add(path.as_os_str().len());
@@ -65,7 +86,7 @@ impl SourceSnapshot {
                 return Err("duplicate or conflicting source snapshot path".into());
             }
             let mut parent = path.parent();
-            while let Some(path) = parent.filter(|p| p.starts_with(&snapshot.root)) {
+            while let Some(path) = parent.filter(|p| snapshot.contains(p)) {
                 if snapshot.files.contains_key(path) {
                     return Err("source snapshot file is also a directory".into());
                 }
@@ -80,8 +101,12 @@ impl SourceSnapshot {
             }
         }
         let mut hash = blake3::Hasher::new();
-        hash.update(b"justrust-immutable-source-namespace-v1");
+        hash.update(b"justrust-immutable-source-namespace-v2");
         frame(&mut hash, snapshot.root.as_os_str().as_encoded_bytes());
+        hash.update(&(snapshot.roots.len() as u64).to_le_bytes());
+        for root in &snapshot.roots {
+            frame(&mut hash, root.as_os_str().as_encoded_bytes());
+        }
         hash.update(&(snapshot.files.len() as u64).to_le_bytes());
         for (path, bytes) in &snapshot.files {
             frame(&mut hash, path.as_os_str().as_encoded_bytes());
@@ -89,6 +114,33 @@ impl SourceSnapshot {
         }
         snapshot.digest = *hash.finalize().as_bytes();
         Ok(Arc::new(snapshot))
+    }
+
+    pub(crate) fn normalized_roots(
+        root: &Path,
+        additional: &[PathBuf],
+    ) -> Result<BTreeSet<PathBuf>, String> {
+        if additional.len() >= 64 {
+            return Err("source snapshot root limit exceeded".into());
+        }
+        let mut roots = BTreeSet::new();
+        for root in std::iter::once(root).chain(additional.iter().map(PathBuf::as_path)) {
+            if !root.is_absolute() {
+                return Err("source snapshot root must be absolute".into());
+            }
+            let root = normalize(&root).map_err(|e| e.to_string())?;
+            if root == Path::new("/") || root.starts_with(super::source_prelude::PRELUDE_DIR) {
+                return Err("source snapshot root must be a private non-root namespace".into());
+            }
+            if !roots
+                .iter()
+                .any(|parent: &PathBuf| root.starts_with(parent))
+            {
+                roots.retain(|child: &PathBuf| !child.starts_with(&root));
+                roots.insert(root);
+            }
+        }
+        Ok(roots)
     }
 
     pub fn digest(&self) -> &[u8; 32] {
@@ -99,13 +151,17 @@ impl SourceSnapshot {
         &self.root
     }
 
+    pub(crate) fn contains(&self, path: &Path) -> bool {
+        normalize(path).is_ok_and(|path| self.roots.iter().any(|root| path.starts_with(root)))
+    }
+
     fn path(&self, path: &Path) -> io::Result<PathBuf> {
         let path = normalize(&if path.is_absolute() {
             path.to_owned()
         } else {
             self.root.join(path)
         })?;
-        if !path.starts_with(&self.root) {
+        if !self.contains(&path) {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
                 "path escapes the immutable source snapshot",
@@ -205,6 +261,62 @@ impl SourceReader for SnapshotReader<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn multi_root_identity_binds_authorization_without_admitting_common_ancestors() {
+        let app = PathBuf::from("/frozen/app");
+        let dep = PathBuf::from("/frozen/dep");
+        let extra = PathBuf::from("/frozen/extra");
+        let files = || {
+            vec![
+                (app.join("main.rs"), b"fn main() {}".to_vec()),
+                (dep.join("lib.rs"), vec![]),
+            ]
+        };
+        let first = SourceSnapshot::with_roots(app.clone(), &[dep.clone(), extra.clone()], files())
+            .unwrap();
+        let reordered = SourceSnapshot::with_roots(
+            app.clone(),
+            &[extra.clone(), dep.clone(), dep.clone()],
+            files(),
+        )
+        .unwrap();
+        assert_eq!(first.digest(), reordered.digest());
+        let fewer = SourceSnapshot::with_roots(app.clone(), &[dep.clone()], files()).unwrap();
+        assert_ne!(first.digest(), fewer.digest());
+        assert!(first.reader().canonicalize(&extra).is_ok());
+        assert!(fewer.reader().canonicalize(&extra).is_err());
+        assert!(first.reader().canonicalize(Path::new("/frozen")).is_err());
+        assert!(
+            first
+                .reader()
+                .read(Path::new("/frozen/unowned"), 100)
+                .is_err()
+        );
+        assert!(first.reader().read(Path::new("../dep/lib.rs"), 100).is_ok());
+        assert!(
+            first
+                .reader()
+                .read(Path::new("../unowned/lib.rs"), 100)
+                .is_err()
+        );
+        assert!(
+            SourceSnapshot::with_roots(
+                app.clone(),
+                &[dep.clone()],
+                [(PathBuf::from("/frozen/unowned"), vec![])]
+            )
+            .is_err()
+        );
+        let nested =
+            SourceSnapshot::with_roots(app.clone(), &[dep.clone(), app.join("nested")], files())
+                .unwrap();
+        assert_eq!(nested.digest(), fewer.digest());
+        assert!(SourceSnapshot::with_roots(app.clone(), &[PathBuf::from("/")], files()).is_err());
+        assert!(
+            SourceSnapshot::with_roots(app.clone(), &[PathBuf::from("relative")], files()).is_err()
+        );
+    }
+
     #[test]
     fn frozen_project_discovery_drives_check_build_run_without_host_reads() {
         use crate::project::{

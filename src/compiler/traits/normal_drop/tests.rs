@@ -52,6 +52,27 @@ fn normal_drop_descriptor_rejects_abi_compatible_noncanonical_target_and_signatu
             )
         );
     }
+    let mut scratch = TraitScratch::default();
+    for _ in 0..2 {
+        let NormalDropPlan::Destructor(warmed) = facts
+            .normal_drop_plan_with_scratch(&owner, &mut scratch)
+            .unwrap()
+        else {
+            panic!("warmed owner still requires destruction")
+        };
+        warmed.validate(&owner, facts).unwrap();
+    }
+    let Ty::Struct(original) = &owner else {
+        unreachable!()
+    };
+    let mut changed = original.def().clone();
+    changed.name.push_str("_forged");
+    let changed = Ty::Struct(ir::StructTy::new(changed));
+    assert!(
+        facts
+            .normal_drop_plan_with_scratch(&changed, &mut scratch)
+            .is_err()
+    );
     let NormalDropPlan::Destructor(valid) = facts.normal_drop_plan(&owner).unwrap() else {
         panic!("destructor expected")
     };

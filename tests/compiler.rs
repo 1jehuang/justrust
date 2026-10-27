@@ -591,6 +591,107 @@ fn historical_array_fixture_now_compiles_and_executes() {
 }
 
 #[test]
+fn standalone_cli_captures_sibling_extern_roots_at_workers_one_and_eight() {
+    let scratch = Scratch::new();
+    fs::create_dir(scratch.path("app")).unwrap();
+    fs::create_dir(scratch.path("dep")).unwrap();
+    let source = scratch.write("app/main.rs", "fn main() { assert_eq!(dep::value(), 42); }");
+    let external = scratch.write(
+        "dep/lib.rs",
+        "mod child; pub fn value() -> i32 { child::value() }",
+    );
+    let child = scratch.write("dep/child.rs", "pub fn value() -> i32 { 42 }");
+    // This sibling is not an authorized root and must not be scanned.
+    std::os::unix::fs::symlink("missing", scratch.path("unowned")).unwrap();
+    let rlib = scratch.path("libdep.rlib");
+    capture(
+        Command::new(stock_rustc::stock_rustc())
+            .args(["--edition=2024", "--crate-type=rlib", "--crate-name=dep"])
+            .arg(&external)
+            .arg("-o")
+            .arg(&rlib),
+        &scratch,
+        COMPILE_TIMEOUT,
+    )
+    .success();
+    let stock = scratch.path("stock");
+    capture(
+        Command::new(stock_rustc::stock_rustc())
+            .arg("--edition=2024")
+            .arg(&source)
+            .arg("--extern")
+            .arg(format!("dep={}", rlib.display()))
+            .arg("-o")
+            .arg(&stock),
+        &scratch,
+        COMPILE_TIMEOUT,
+    )
+    .success();
+    let expected = capture(&mut Command::new(stock), &scratch, RUN_TIMEOUT);
+    expected.success();
+    let spec = format!("dep={}", external.display());
+    for workers in ["1", "8"] {
+        let checked = capture(
+            Command::new(env!("CARGO_BIN_EXE_jr-rust"))
+                .arg(&source)
+                .args(["--check", "--workers", workers, "--extern", &spec]),
+            &scratch,
+            COMPILE_TIMEOUT,
+        );
+        checked.success();
+        assert!(
+            String::from_utf8_lossy(&checked.stderr)
+                .contains("Input capture: immutable native source namespace")
+        );
+        let output = scratch.path(&format!("native-{workers}"));
+        let built = capture(
+            compiler(&source, &output).args(["--workers", workers, "--extern", &spec]),
+            &scratch,
+            COMPILE_TIMEOUT,
+        );
+        built.success();
+        assert!(
+            String::from_utf8_lossy(&built.stderr)
+                .contains("Input capture: immutable native source namespace")
+        );
+        let actual = capture(&mut Command::new(output), &scratch, RUN_TIMEOUT);
+        actual.success();
+        assert_eq!(actual.stdout, expected.stdout);
+    }
+    fs::remove_file(&child).unwrap();
+    let output = scratch.path("missing");
+    let missing = capture(
+        compiler(&source, &output).args(["--extern", &spec]),
+        &scratch,
+        COMPILE_TIMEOUT,
+    );
+    assert!(!missing.status.success());
+    assert!(!output.exists());
+    std::os::unix::fs::symlink("missing", &child).unwrap();
+    let symlink = capture(
+        compiler(&source, &output).args(["--extern", &spec]),
+        &scratch,
+        COMPILE_TIMEOUT,
+    );
+    assert!(!symlink.status.success());
+    assert!(String::from_utf8_lossy(&symlink.stderr).contains("does not follow symlinks"));
+    assert!(!output.exists());
+    fs::remove_file(&child).unwrap();
+    fs::write(
+        &child,
+        "pub fn value() -> i32 { 42 } fn unused() -> i32 { true }",
+    )
+    .unwrap();
+    let invalid = capture(
+        compiler(&source, &output).args(["--extern", &spec]),
+        &scratch,
+        COMPILE_TIMEOUT,
+    );
+    assert!(!invalid.status.success());
+    assert!(!output.exists());
+}
+
+#[test]
 fn standalone_cli_uses_owned_source_namespace_at_workers_one_and_eight() {
     let scratch = Scratch::new();
     let source = scratch.write(

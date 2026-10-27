@@ -111,6 +111,7 @@ impl ValidatedTraitWorld {
         Ok(args)
     }
 
+    #[cfg(test)]
     pub(super) fn instantiate_generic_method(
         &self,
         item: &TraitItemHeader,
@@ -118,8 +119,25 @@ impl ValidatedTraitWorld {
         method_args: &[Ty],
         context: ProofContext<'_>,
     ) -> Result<InstantiatedSchema> {
+        self.instantiate_generic_method_with_scratch(
+            item,
+            goal,
+            method_args,
+            context,
+            &mut ProofScratch::default(),
+        )
+    }
+
+    pub(super) fn instantiate_generic_method_with_scratch(
+        &self,
+        item: &TraitItemHeader,
+        goal: &TraitRef,
+        method_args: &[Ty],
+        context: ProofContext<'_>,
+        scratch: &mut ProofScratch,
+    ) -> Result<InstantiatedSchema> {
         self.check_context(context)?;
-        self.validate_ref_in(goal, context.env(), None)?;
+        self.validate_ref_with(goal, context.env(), None, &mut scratch.replays)?;
         if item.trait_decl != goal.declaration
             || self.info(item.declaration)?.own_env.arity() != method_args.len()
         {
@@ -140,7 +158,14 @@ impl ValidatedTraitWorld {
             self.schema
                 .instantiate_schema(&item.schema, &arguments, context.env(), &self.budget)?
         } else {
-            self.instantiate_in(&item.schema, &arguments, context, Some(item.declaration))?
+            self.instantiate_scratch_with_facts(
+                &item.schema,
+                &arguments,
+                context,
+                Some(item.declaration),
+                scratch,
+                context.original,
+            )?
         };
         if item.schema.signature.params.len() != result.signature.params.len() {
             return Err(FactsError::invalid(
@@ -165,7 +190,14 @@ impl ValidatedTraitWorld {
             0,
         )?;
         let result = if projected {
-            self.instantiate_in(&item.schema, &arguments, context, Some(item.declaration))?
+            self.instantiate_scratch_with_facts(
+                &item.schema,
+                &arguments,
+                context,
+                Some(item.declaration),
+                scratch,
+                context.original,
+            )?
         } else {
             result
         };

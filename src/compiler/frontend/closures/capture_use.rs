@@ -1,6 +1,6 @@
 //! Per-parent-body capture use classification over checked places.
-//! Capture identity retains disjoint field paths. Dereferences and runtime
-//! indices truncate capture precision rather than inventing a movable place.
+//! Capture identity retains disjoint field paths and leading language-reference
+//! dereferences. Owning/raw pointers and runtime indices retain their carrier.
 use super::*;
 use std::collections::{HashMap, HashSet};
 
@@ -69,16 +69,27 @@ pub(super) fn expression_place(
 fn record(
     uses: &mut [Vec<Capture>],
     candidates: &HashMap<ir::LocalId, usize>,
+    locals: &[ir::LocalDecl],
     mut place: ir::Place,
     usage: CaptureUse,
 ) -> Result<(), String> {
     let Some(index) = candidates.get(&place.local) else {
         return Ok(());
     };
-    // Fields are precise captures. Array indices and dereferences retain the
-    // carrier itself, preserving ordinary index/borrow/move authorization.
-    let precise = place
-        .projection
+    // A leading language reference dereference names the borrowed pointee,
+    // not the reference binding. Retain it so mutation captures a reborrow of
+    // the pointee even when the reference binding itself is immutable.
+    // Raw/owning pointers and indices still require the original carrier.
+    let mut referent = &locals.get(place.local.0).ok_or("invalid capture local")?.ty;
+    let mut precise = 0;
+    for step in &place.projection {
+        let (ir::Projection::Deref, ir::Ty::Ref { referent: next, .. }) = (step, referent) else {
+            break;
+        };
+        precise += 1;
+        referent = next;
+    }
+    precise += place.projection[precise..]
         .iter()
         .take_while(|p| matches!(p, ir::Projection::Field(_)))
         .count();
@@ -193,6 +204,7 @@ pub(super) fn analyze(
                     record(
                         &mut uses,
                         candidates,
+                        locals,
                         place,
                         CaptureUse {
                             read: true,
@@ -208,6 +220,7 @@ pub(super) fn analyze(
             ir::ExprKind::BoundsCheck { array, .. } => record(
                 &mut uses,
                 candidates,
+                locals,
                 array.clone(),
                 CaptureUse {
                     read: true,
@@ -218,6 +231,7 @@ pub(super) fn analyze(
             ir::ExprKind::Borrow { kind, place, .. } => record(
                 &mut uses,
                 candidates,
+                locals,
                 place.clone(),
                 CaptureUse {
                     read: true,
@@ -237,7 +251,7 @@ pub(super) fn analyze(
                     for arm in arms {
                         binding_use(&arm.pattern, locals, facts, &mut usage)?;
                     }
-                    record(&mut uses, candidates, place, usage)?;
+                    record(&mut uses, candidates, locals, place, usage)?;
                 }
             }
             ir::ExprKind::If {
@@ -292,7 +306,7 @@ pub(super) fn analyze(
                                 }
                             }
                         }
-                        record(&mut uses, candidates, place, usage)?;
+                        record(&mut uses, candidates, locals, place, usage)?;
                     }
                     None
                 }
@@ -304,7 +318,7 @@ pub(super) fn analyze(
                             ..CaptureUse::default()
                         };
                         binding_use(pattern, locals, facts, &mut usage)?;
-                        record(&mut uses, candidates, place, usage)?;
+                        record(&mut uses, candidates, locals, place, usage)?;
                     }
                     None
                 }
@@ -314,6 +328,7 @@ pub(super) fn analyze(
                 record(
                     &mut uses,
                     candidates,
+                    locals,
                     place,
                     CaptureUse {
                         read: true,
@@ -332,6 +347,7 @@ pub(super) fn analyze(
             record(
                 &mut uses,
                 candidates,
+                locals,
                 place,
                 CaptureUse {
                     read: true,

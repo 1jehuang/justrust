@@ -143,8 +143,15 @@ impl type_check::Checker<'_> {
                 self_ty: referent.as_ref().clone(),
                 args: Arc::from([]),
             };
-            let Some((target, signature, _)) =
-                plan.select_trait(&trait_ref, &ident, &[], self.facts(), false, &plan.budget)?
+            let Some((target, signature, _)) = plan.select_trait_with_scratch(
+                &trait_ref,
+                &ident,
+                &[],
+                self.facts(),
+                false,
+                &plan.budget,
+                &self.trait_scratch,
+            )?
             else {
                 return Ok(None);
             };
@@ -222,8 +229,15 @@ impl type_check::Checker<'_> {
                 self_ty: nominal,
                 args: Arc::from([]),
             };
-            let Some((target, signature, _)) =
-                plan.select_trait(&goal, &name, &[], self.facts(), false, &plan.budget)?
+            let Some((target, signature, _)) = plan.select_trait_with_scratch(
+                &goal,
+                &name,
+                &[],
+                self.facts(),
+                false,
+                &plan.budget,
+                &self.trait_scratch,
+            )?
             else {
                 return Ok(None);
             };
@@ -274,8 +288,15 @@ impl type_check::Checker<'_> {
                 self_ty: owner,
                 args: Arc::from([]),
             };
-            let Some((target, signature, _)) =
-                plan.select_trait(&goal, &name, &[], self.facts(), false, &plan.budget)?
+            let Some((target, signature, _)) = plan.select_trait_with_scratch(
+                &goal,
+                &name,
+                &[],
+                self.facts(),
+                false,
+                &plan.budget,
+                &self.trait_scratch,
+            )?
             else {
                 return Err("overloaded deref receiver has no selected implementation".into());
             };
@@ -343,6 +364,16 @@ impl type_check::Checker<'_> {
         let Some(hint) = self.method_receiver_hint(base)? else {
             return Ok(None);
         };
+        let owner = match &hint {
+            ir::Ty::Ref { referent, .. } => referent.as_ref(),
+            ty => ty,
+        };
+        // Canonical Box dereferences are owning places, not an overloaded
+        // Deref call saved in a reference temporary. checked_place preserves
+        // this identity and emits the actual receiver autoref directly.
+        if owner.owned_box_pointee().is_some() {
+            return Ok(None);
+        }
         let ir::Ty::Struct(nominal) = (match &hint {
             ir::Ty::Ref { referent, .. } => referent.as_ref(),
             ty => ty,

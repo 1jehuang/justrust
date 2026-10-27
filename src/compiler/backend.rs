@@ -420,6 +420,30 @@ impl<'a> NativeConcrete<'a> {
     }
 }
 
+// A raw or borrowed dereference breaks ownership. Only the language's
+// canonical Box dereference preserves a root's runtime partial-move flags.
+fn owning_projection(function: &cfg::Function, place: &ir::Place) -> Result<bool, String> {
+    for (index, projection) in place.projection.iter().enumerate() {
+        match projection {
+            ir::Projection::Field(_) | ir::Projection::Downcast(_) => {}
+            ir::Projection::Deref => {
+                let base = ir::Place {
+                    local: place.local,
+                    projection: place.projection[..index].to_vec(),
+                };
+                if !matches!(
+                    function.place_ty(&base)?.owned_pointer_pointee(),
+                    Some((ir::OwnedPointerKind::Box, _))
+                ) {
+                    return Ok(false);
+                }
+            }
+            _ => return Ok(false),
+        }
+    }
+    Ok(true)
+}
+
 struct Emitter<'a> {
     overflow_checks: bool,
     object: Object,
@@ -619,11 +643,17 @@ impl<'a> Emitter<'a> {
         while let Some(projection) = projections.next() {
             let (field, next) = match projection {
                 ir::Projection::Deref => {
-                    let (ir::Ty::Ref { referent, .. }
+                    let referent = if let Some((ir::OwnedPointerKind::Box, pointee)) =
+                        ty.owned_pointer_pointee()
+                    {
+                        pointee.clone()
+                    } else if let ir::Ty::Ref { referent, .. }
                     | ir::Ty::RawPtr {
                         pointee: referent, ..
-                    }) = &ty
-                    else {
+                    } = &ty
+                    {
+                        referent.as_ref().clone()
+                    } else {
                         return Err("dereference requires reference storage".into());
                     };
                     if indirect_base {
@@ -636,7 +666,7 @@ impl<'a> Emitter<'a> {
                     }
                     // Slice metadata is captured with the genuine data
                     // pointer before any runtime element address is formed.
-                    if matches!(referent.as_ref(), ir::Ty::Slice { .. }) {
+                    if matches!(&referent, ir::Ty::Slice { .. }) {
                         self.bytes(&[0x4c, 0x8b, 0x50, 0x08]); // r10 = descriptor len
                         slice_metadata = true;
                     } else {
@@ -647,7 +677,7 @@ impl<'a> Emitter<'a> {
                     self.bytes(&[0x48, 0x8b, 0x00]);
                     indirect_base = true;
                     offset = 0;
-                    ty = referent.as_ref().clone();
+                    ty = referent;
                     continue;
                 }
                 ir::Projection::Field(index) => {
@@ -1276,6 +1306,35 @@ impl<'a> Emitter<'a> {
             .any(|(l, p, _)| *l == local && p.len() > path.len() && p.starts_with(path));
         if !below {
             self.drop_glue(destructor)?;
+        } else if let Some((ir::OwnedPointerKind::Box, pointee)) =
+            destructor.owner().owned_pointer_pointee()
+        {
+            // Box's source destructor moves the complete pointee. After a
+            // projection move only the still-live subpaths may be destroyed.
+            // The carrier itself remains live until its allocation is freed.
+            let pointee = pointee.clone();
+            let plan = self
+                .concrete
+                .facts()
+                .normal_drop_plan(&pointee)
+                .map_err(|e| e.into_legacy_diagnostic(self.concrete.facts().budget()))?;
+            self.bytes(&[0x48, 0x8b, 0x04, 0x24, 0x48, 0x8b, 0x00, 0x50]);
+            path.push(ir::Projection::Deref);
+            match plan {
+                super::traits::NormalDropPlan::Destructor(value) => {
+                    self.drop_elaborated(local, path, &value)?;
+                }
+                super::traits::NormalDropPlan::Trivial => {}
+                super::traits::NormalDropPlan::Unresolved => {
+                    return Err("unresolved Box pointee cleanup".into());
+                }
+            }
+            path.pop();
+            self.bytes(&[0x48, 0x83, 0xc4, 8]);
+            self.bytes(&[0x48, 0x8b, 0x04, 0x24, 0x48, 0x8b, 0x38]);
+            self.bytes(&[0xbe]);
+            self.i32(value_size(&pointee, self.concrete.facts().budget())?.max(8));
+            self.bytes(&[0xb8, 11, 0, 0, 0, 0x0f, 0x05]);
         } else {
             if destructor.own_target().is_some() {
                 return Err(
@@ -3241,8 +3300,8 @@ impl Emitter<'_> {
         match terminator {
             cfg::Terminator::Drop { cleanup, next } if !cleanup.owner().projection.is_empty() => {
                 let owner = cleanup.owner();
-                let deref = owner.projection.contains(&ir::Projection::Deref);
-                if !deref {
+                let owned = owning_projection(self.function(), owner)?;
+                if owned {
                     // Owned subpath: guarded by the root flag and its own
                     // path flag when it was ever moved.
                     let root = self
@@ -3258,12 +3317,12 @@ impl Emitter<'_> {
                 }
                 self.place_address(owner)?;
                 self.bytes(&[0x50]);
-                if deref {
-                    self.drop_glue(cleanup.destructor())?;
-                } else {
+                if owned {
                     let mut path = owner.projection.clone();
                     self.drop_elaborated(owner.local, &mut path, cleanup.destructor())?;
                     self.set_path_flags(owner, false);
+                } else {
+                    self.drop_glue(cleanup.destructor())?;
                 }
                 self.bytes(&[0x48, 0x83, 0xc4, 8]);
                 self.edge(&[0xe9], *next);
@@ -3693,15 +3752,15 @@ fn emit_native_cfg(
         let mut moved = |operand: &cfg::Operand| -> Result<(), String> {
             if let cfg::Operand::Move(place) = operand
                 && !place.projection.is_empty()
-                && place
-                    .projection
-                    .iter()
-                    .all(|p| matches!(p, ir::Projection::Field(_) | ir::Projection::Downcast(_)))
                 && drop_flags[place.local.0].is_some()
                 && !path_flags
                     .iter()
                     .any(|(l, p, _)| *l == place.local && *p == place.projection)
             {
+                if !owning_projection(function, place)? {
+                    return Ok(());
+                }
+                let owns_box = place.projection.contains(&ir::Projection::Deref);
                 let ty = function.place_ty(place)?;
                 let needs = matches!(
                     concrete
@@ -3710,7 +3769,7 @@ fn emit_native_cfg(
                         .map_err(|e| e.into_legacy_diagnostic(concrete.facts().budget()))?,
                     super::traits::NormalDropPlan::Destructor(_)
                 );
-                if needs {
+                if needs || owns_box {
                     let at = allocate_value(&mut frame_bytes, &ir::Ty::Bool, budget)?;
                     path_flags.push((place.local, place.projection.clone(), at));
                 }

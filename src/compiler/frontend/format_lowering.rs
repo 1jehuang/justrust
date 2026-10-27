@@ -90,8 +90,15 @@ impl Checker<'_> {
             self_ty: referent.clone(),
             args: Arc::from([]),
         };
-        let Some((target, signature, _)) =
-            plan.select_trait(&trait_ref, &ident, &[], self.facts(), false, &plan.budget)?
+        let Some((target, signature, _)) = plan.select_trait_with_scratch(
+            &trait_ref,
+            &ident,
+            &[],
+            self.facts(),
+            false,
+            &plan.budget,
+            &self.trait_scratch,
+        )?
         else {
             let wanted = if spec.format == FormatTrait::Display {
                 "Display"

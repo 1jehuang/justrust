@@ -341,7 +341,14 @@ impl ValidatedFacts {
         }
     }
     pub fn normal_drop_plan(&self, ty: &Ty) -> Result<NormalDropPlan> {
-        self.validate_ty(ty)?;
+        self.normal_drop_plan_with_scratch(ty, &mut TraitScratch::default())
+    }
+    pub(in crate::compiler) fn normal_drop_plan_with_scratch(
+        &self,
+        ty: &Ty,
+        scratch: &mut TraitScratch,
+    ) -> Result<NormalDropPlan> {
+        self.validate_ty_scratch(ty, scratch)?;
         self.normal_drop_plan_inner(ty, 0)
     }
     fn normal_drop_plan_inner(&self, ty: &Ty, depth: usize) -> Result<NormalDropPlan> {
