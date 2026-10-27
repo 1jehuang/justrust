@@ -7971,7 +7971,13 @@ impl PlanCtx {
         ),
         FactsError,
     > {
-        match self.publish_callable_body_inner(declaration, constants, budget, None)? {
+        match self.publish_callable_body_inner(
+            declaration,
+            constants,
+            budget,
+            None,
+            &mut tr::TraitScratch::default(),
+        )? {
             NominalCallablePublication::Ready(body, closures, hidden) => {
                 Ok((body, closures, hidden))
             }
@@ -7988,8 +7994,15 @@ impl PlanCtx {
         budget: &ir::PlanBudget,
         receiver: Option<&NominalShape>,
         inputs: &NominalPreparationInputs<'_>,
+        scratch: &mut tr::TraitScratch,
     ) -> Result<NominalCallablePublication, FactsError> {
-        self.publish_callable_body_inner(declaration, constants, budget, Some((receiver, inputs)))
+        self.publish_callable_body_inner(
+            declaration,
+            constants,
+            budget,
+            Some((receiver, inputs)),
+            scratch,
+        )
     }
     fn publish_callable_body_inner(
         &self,
@@ -7997,6 +8010,7 @@ impl PlanCtx {
         mut constants: const_inputs::SealedBodyConstants,
         budget: &ir::PlanBudget,
         nominal: Option<(Option<&NominalShape>, &NominalPreparationInputs<'_>)>,
+        scratch: &mut tr::TraitScratch,
     ) -> Result<NominalCallablePublication, FactsError> {
         if constants.declaration != declaration {
             return Err(FactsError::invalid(
@@ -8114,6 +8128,7 @@ impl PlanCtx {
                             Some(&cap),
                             receiver,
                             inputs,
+                            scratch,
                         )
                     }
                     None => type_check::type_callable_source_outputs(
@@ -8211,25 +8226,13 @@ impl PlanCtx {
                 };
                 let original = sr::OriginalBody::from_source(&cap, source, budget)?;
                 let mut cx = self.clone();
-                let mut scratch = tr::TraitScratch::default();
                 let final_payload = ir::canonicalize_source_calls(
-                    &checked,
-                    &facts,
-                    &mut cx,
-                    &cap,
-                    budget,
-                    &mut scratch,
+                    &checked, &facts, &mut cx, &cap, budget, scratch,
                 )?;
                 sr::retain(budget, std::mem::size_of::<ir::CheckedFunction>() + 32)?;
                 let source = Arc::new(final_payload);
-                let publication = sr::publish_canonical_source(
-                    cap,
-                    source,
-                    original,
-                    facts,
-                    budget,
-                    &mut scratch,
-                )?;
+                let publication =
+                    sr::publish_canonical_source(cap, source, original, facts, budget, scratch)?;
                 Ok(NominalCallablePublication::Ready(
                     PublishedCallableBody::Source(publication),
                     closures,

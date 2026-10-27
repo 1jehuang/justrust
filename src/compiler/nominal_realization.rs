@@ -32,6 +32,9 @@ pub(super) async fn publish_callable(
     Error,
 > {
     let mut inputs = preparation::Capabilities::new();
+    // Exact successful proofs remain node-local across missing-input retries.
+    // No source-check result or unavailable graph capability is cached here.
+    let mut scratch = traits::TraitScratch::default();
     loop {
         let attempt = inputs
             .with_inputs(types, declaration, |borrowed| {
@@ -42,6 +45,7 @@ pub(super) async fn publish_callable(
                         budget,
                         None,
                         &borrowed,
+                        &mut scratch,
                     )
                     .map_err(|e| e.to_string())
             })

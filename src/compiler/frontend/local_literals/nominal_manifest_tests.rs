@@ -179,6 +179,7 @@ fn canonical_source_parameters_are_seeded_without_runtime_bindings() {
         None,
         None,
         &inputs,
+        &mut tr::TraitScratch::default(),
     )
     .unwrap() else {
         panic!("primitive callable has no missing nominal graph input");
@@ -198,6 +199,7 @@ fn canonical_source_parameters_are_seeded_without_runtime_bindings() {
             &plan.budget,
             None,
             &inputs,
+            &mut tr::TraitScratch::default(),
         )
         .unwrap(),
         NominalCallablePublication::Ready(PublishedCallableBody::Source(_), _, _)
@@ -300,6 +302,7 @@ fn missing_graph_read_blocks_after_later_numeric_constraint_without_emitting() {
             None,
             None,
             &inputs,
+            &mut tr::TraitScratch::default(),
         )
         .unwrap()
     else {
@@ -318,6 +321,7 @@ fn missing_graph_read_blocks_after_later_numeric_constraint_without_emitting() {
         .seal_body_constants(constants, Vec::new(), &plan.budget)
         .unwrap();
     let owner = constants.inventory.as_ref().unwrap().owner.clone();
+    let mut retry_scratch = tr::TraitScratch::default();
     for _ in 0..2 {
         let NominalCallablePublication::Blocked {
             preparation,
@@ -329,6 +333,7 @@ fn missing_graph_read_blocks_after_later_numeric_constraint_without_emitting() {
                 &plan.budget,
                 None,
                 &inputs,
+                &mut retry_scratch,
             )
             .unwrap()
         else {

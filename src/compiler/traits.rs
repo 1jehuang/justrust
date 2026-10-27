@@ -594,7 +594,7 @@ pub struct InstantiatedSchema {
 /// supplies proof on its own: every node still authenticates its exact payload
 /// and caller. Keeping it across one walk avoids rebuilding every descendant
 /// application independently for each enclosing nominal.
-pub trait NominalValidationSession {
+pub trait NominalValidationSession: Send {
     fn validate_node(
         &mut self,
         ty: &Ty,

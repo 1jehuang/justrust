@@ -1216,9 +1216,10 @@ pub(super) fn validate_source_candidate(
         ));
     }
     source
-        .validate_with_evidence(
+        .validate_with_evidence_scratch(
             FactsCtx::from_validated(facts),
             CallEvidencePolicy::Original(replayed.validated()),
+            scratch,
         )
         .map_err(|error| FactsError::from_message(budget, &error))
 }
@@ -4184,7 +4185,7 @@ pub(super) fn canonicalize_source_calls(
             "canonical source transform requires original executable facts",
         ));
     }
-    canonicalize_call_metadata(source, facts, cx, Some(cap), budget)
+    canonicalize_call_metadata_with_scratch(source, facts, cx, Some(cap), budget, scratch)
 }
 
 pub fn canonicalize_checked_calls(

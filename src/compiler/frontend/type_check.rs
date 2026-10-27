@@ -12473,6 +12473,7 @@ pub(super) fn type_callable_source_outputs(
         budget,
         canonical,
         None,
+        &mut tr::TraitScratch::default(),
     )? {
         NominalCallableOutput::Ready(body, closures, hidden) => Ok((*body, closures, hidden)),
         NominalCallableOutput::Blocked(_) => {
@@ -12490,6 +12491,7 @@ pub(in crate::compiler) fn type_callable_source_with_nominal_inputs(
     canonical: Option<&CanonicalSourceCapability>,
     receiver: Option<&NominalShape>,
     inputs: &NominalPreparationInputs<'_>,
+    scratch: &mut tr::TraitScratch,
 ) -> Result<NominalCallableOutput, String> {
     type_callable_source_and_closures_inner(
         program,
@@ -12498,6 +12500,7 @@ pub(in crate::compiler) fn type_callable_source_with_nominal_inputs(
         budget,
         canonical,
         Some((receiver, inputs)),
+        scratch,
     )
 }
 
@@ -12508,6 +12511,7 @@ fn type_callable_source_and_closures_inner(
     budget: &ir::PlanBudget,
     canonical: Option<&CanonicalSourceCapability>,
     nominal: Option<(Option<&NominalShape>, &NominalPreparationInputs<'_>)>,
+    scratch: &mut tr::TraitScratch,
 ) -> Result<NominalCallableOutput, String> {
     plan.check_budget(budget)?;
     budget.charge_work(1)?;
@@ -12609,6 +12613,9 @@ fn type_callable_source_and_closures_inner(
     walk_depth_checked(DepthNode::Block(&f.body), None, Some(&program.names))?;
     let module = context.module;
     let mut c = Checker::new(&signatures, signature.result.clone(), module);
+    // Reuse only exact successful proofs from this node's earlier attempts.
+    // Source syntax, bindings and newly supplied graph inputs are still replayed.
+    *c.trait_scratch.get_mut() = std::mem::take(scratch);
     c.install_lexical_scope(f.lexical_scope)?;
     c.declaration = Some(declaration);
     c.canonical = canonical;
@@ -12623,6 +12630,7 @@ fn type_callable_source_and_closures_inner(
         )? {
             NominalPreparedHints::Ready(hints) => hints,
             NominalPreparedHints::Blocked(blocked) => {
+                *scratch = c.trait_scratch.into_inner();
                 return Ok(NominalCallableOutput::Blocked(blocked));
             }
         };
@@ -12691,14 +12699,20 @@ fn type_callable_source_and_closures_inner(
         Ok(typed) => typed,
         Err(error) => {
             if let Some(blocked) = c.nominal_blocked.get_mut().take() {
+                *scratch = c.trait_scratch.into_inner();
                 return Ok(NominalCallableOutput::Blocked(blocked));
             }
-            return Err(format!("in callable {:?}: {error}", f.name));
+            let name = f
+                .name
+                .display(&*program.names)
+                .map_err(native_adapter::name_diagnostic)?;
+            return Err(format!("in callable {name}: {error}"));
         }
     };
     c.require(&flow, &c.result)?;
     validate_shift_counts(&c.exprs, &c.count_queries)?;
     c.finalize_opaque_returns()?;
+    *scratch = c.trait_scratch.into_inner();
     let checked = ir::CheckedFunction {
         runtime_sites: ir::RuntimeSites::from_source(c.runtime_sites)?,
         name: f
