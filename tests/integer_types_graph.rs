@@ -20,7 +20,11 @@ fn integer_types_share_exact_checked_facts_without_check_objects() {
                 compiler::ir::Ty::Int(compiler::ir::IntTy::U64)
             );
             for index in 0..4 {
-                for kind in [102, 108, 109] {
+                for &kind in if check {
+                    &[][..]
+                } else {
+                    &[102u32, 108, 109][..]
+                } {
                     let key = Key::new(kind, vec![index]);
                     let evaluated: Vec<_> = compiled
                         .report

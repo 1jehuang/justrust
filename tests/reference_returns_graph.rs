@@ -20,7 +20,11 @@ fn shared_returns_share_exact_body_cfg_and_analysis() {
                 ));
             }
             for index in 0..3 {
-                for kind in [102, 108, 109] {
+                for &kind in if check {
+                    &[][..]
+                } else {
+                    &[102u32, 108, 109][..]
+                } {
                     let key = Key::new(kind, vec![index]);
                     let evaluations: Vec<_> = compiled
                         .report

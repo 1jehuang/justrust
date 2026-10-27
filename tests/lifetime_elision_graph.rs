@@ -48,7 +48,11 @@ fn elided_projected_returns_share_canonical_cfg_and_analysis() {
                     .all(|(_, count)| *count == 1),
                 "source and embedded-prelude admissions must be shared"
             );
-            for kind in [102, 108, 109] {
+            for &kind in if check {
+                &[][..]
+            } else {
+                &[102u32, 108, 109][..]
+            } {
                 assert_eq!(
                     report
                         .node_evaluations

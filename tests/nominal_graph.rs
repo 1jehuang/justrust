@@ -26,7 +26,11 @@ fn nominal_types_moves_and_cached_analysis_reach_both_roots() {
                 );
             }
             for index in 0..2 {
-                for kind in [102, 108, 109] {
+                for &kind in if check {
+                    &[][..]
+                } else {
+                    &[102u32, 108, 109][..]
+                } {
                     assert_eq!(
                         result
                             .report

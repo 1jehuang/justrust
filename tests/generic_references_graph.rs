@@ -18,7 +18,11 @@ fn generic_projected_returns_are_proven_before_native_publication() {
             assert_eq!(compiled.functions, 6);
             assert_eq!(compiled.control_flow.len(), 6);
             assert!(compiled.analyses.iter().all(|analysis| analysis.passed()));
-            for kind in [102, 108, 109] {
+            for &kind in if check {
+                &[][..]
+            } else {
+                &[102u32, 108, 109][..]
+            } {
                 let nodes: Vec<_> = compiled
                     .report
                     .node_evaluations

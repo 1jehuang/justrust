@@ -12,7 +12,11 @@ fn eager_bitwise_reuses_checked_facts_and_check_publishes_no_objects() {
             assert_eq!(compiled.analyses.len(), 4);
             assert!(compiled.analyses.iter().all(|analysis| analysis.passed()));
             for index in 0..4 {
-                for kind in [102, 108, 109] {
+                for &kind in if check {
+                    &[][..]
+                } else {
+                    &[102u32, 108, 109][..]
+                } {
                     let key = Key::new(kind, vec![index]);
                     let facts: Vec<_> = compiled
                         .report

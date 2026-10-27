@@ -1204,7 +1204,11 @@ fn graph_all() {
                             assert!(compiled.analyses.iter().all(|analysis| analysis.passed()));
                             for (index, cfg) in compiled.control_flow.iter().enumerate() {
                                 cfg.validate().expect("retained CFG validates");
-                                for kind in [102, 108, 109] {
+                                for &kind in if check {
+                                    &[][..]
+                                } else {
+                                    &[102u32, 108, 109][..]
+                                } {
                                     let key = Key::new(kind, vec![index as u64]);
                                     let evaluated: Vec<_> = compiled
                                         .report

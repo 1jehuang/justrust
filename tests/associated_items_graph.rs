@@ -13,7 +13,9 @@ fn main(){if run()==7{println!("associated items oracle ok");}}
             assert_eq!(compiled.functions, 4);
             assert_eq!(compiled.control_flow.len(), 4);
             assert!(compiled.analyses.iter().all(|analysis| analysis.passed()));
-            for kind in [102, 108, 109] {
+            // CHECK must not demand BODY/LOWER/ANALYZE lowering; count them in BUILD.
+            let kinds: &[u32] = if check { &[] } else { &[102, 108, 109] };
+            for &kind in kinds {
                 let facts: Vec<_> = compiled
                     .report
                     .node_evaluations

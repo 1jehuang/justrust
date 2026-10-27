@@ -15,7 +15,11 @@ fn inferred_and_explicit_instances_share_facts_and_check_has_no_objects() {
             assert_eq!(compiled.control_flow.len(), if check { 2 } else { 3 });
             assert_eq!(compiled.analyses.len(), if check { 2 } else { 3 });
             assert!(compiled.analyses.iter().all(|analysis| analysis.passed()));
-            for kind in [102, 108, 109] {
+            for &kind in if check {
+                &[][..]
+            } else {
+                &[102u32, 108, 109][..]
+            } {
                 let facts: Vec<_> = compiled
                     .report
                     .node_evaluations

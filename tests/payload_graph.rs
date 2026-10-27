@@ -43,7 +43,11 @@ fn payload_dispatch_and_proofs_are_cached_once_for_check_and_native_output() {
                 .sum();
             assert_eq!(compiled.cfg_edges, actual_edges);
             for index in 0..2 {
-                for kind in [102, 108, 109] {
+                for &kind in if check {
+                    &[][..]
+                } else {
+                    &[102u32, 108, 109][..]
+                } {
                     let key = Key::new(kind, vec![index]);
                     let nodes: Vec<_> = compiled
                         .report

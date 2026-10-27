@@ -13,7 +13,11 @@ fn patterns_share_one_checked_cfg_and_analysis_per_function() {
             assert_eq!(result.analyses.len(), 1);
             assert!(result.analyses[0].passed());
             assert!(result.analyses[0].stats.moves > 0);
-            for kind in [102, 108, 109] {
+            for &kind in if check {
+                &[][..]
+            } else {
+                &[102u32, 108, 109][..]
+            } {
                 let key = Key::new(kind, vec![0]);
                 let seen: Vec<_> = result
                     .report

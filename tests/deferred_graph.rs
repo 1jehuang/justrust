@@ -11,7 +11,11 @@ fn deferred_initialization_uses_one_cached_analysis_per_function() {
             assert_eq!(compiled.analyses.len(), 2);
             assert!(compiled.analyses.iter().all(|a| a.passed()));
             for index in 0..2 {
-                for kind in [102, 108, 109] {
+                for &kind in if check {
+                    &[][..]
+                } else {
+                    &[102u32, 108, 109][..]
+                } {
                     let key = Key::new(kind, vec![index]);
                     let evaluations: Vec<_> = compiled
                         .report

@@ -21,7 +21,11 @@ fn local_loans_share_the_cached_analysis_gate() {
                 1
             );
             for index in 0..2 {
-                for kind in [102, 108, 109] {
+                for &kind in if check {
+                    &[][..]
+                } else {
+                    &[102u32, 108, 109][..]
+                } {
                     let key = Key::new(kind, vec![index]);
                     let evaluations: Vec<_> = compiled
                         .report

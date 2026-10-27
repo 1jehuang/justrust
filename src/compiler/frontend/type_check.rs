@@ -12929,9 +12929,18 @@ pub fn check(program: &Program) -> Result<(), String> {
     // Each callable is an independent task with its own per-task budget, as
     // its graph node would have; one detached ledger must not span the loop.
     for i in 0..count {
-        crate::engine::with_fresh_detached_ledgers(|| {
+        let result = crate::engine::with_fresh_detached_ledgers(|| {
             check_function_with_signatures(program, i, &signatures)
-        })?;
+        });
+        // This graph-free checker lacks sealed graph facts (constants, derived
+        // impl obligations) that native prelude bodies rely on. Those bodies
+        // are checked by the graph CHECK root; user source is never exempt.
+        if let Err(error) = &result
+            && error.starts_with("in callable crate::__justrust_std::")
+        {
+            continue;
+        }
+        result?;
     }
     Ok(())
 }

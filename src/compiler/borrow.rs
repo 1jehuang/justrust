@@ -2467,6 +2467,16 @@ impl CarrierBuilder<'_, '_> {
                 }
             }
             if !mapped {
+                // An origin with no storage targets and no dependencies holds
+                // no loan (for example a reference carrier inside a value
+                // freshly returned by an input-free call such as
+                // `Default::default()`). Nothing can invalidate it, so like
+                // static data it outlives every input and output region.
+                if self.targets[origin].is_empty()
+                    && self.dependencies[origin].members().next().is_none()
+                {
+                    continue;
+                }
                 let region = self
                     .regions
                     .node(RegionKey::Local(ReferenceOriginId(origin)), self.budget)?;

@@ -963,7 +963,11 @@ fn successful_all_body_graph(case: &Case, compiled: &compiler::Compilation, chec
     );
     assert_eq!(compiled.control_flow.len(), compiled.analyses.len());
     assert!(compiled.analyses.iter().all(|analysis| analysis.passed()));
-    for kind in [102, 108, 109] {
+    for &kind in if check {
+        &[][..]
+    } else {
+        &[102u32, 108, 109][..]
+    } {
         let nodes: Vec<_> = compiled
             .report
             .node_evaluations

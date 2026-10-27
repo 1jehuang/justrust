@@ -11,7 +11,11 @@ fn heterogeneous_shifts_reuse_checked_facts_and_check_has_no_objects() {
             assert_eq!(c.control_flow.len(), 3);
             assert!(c.analyses.iter().all(|a| a.passed()));
             for index in 0..3 {
-                for kind in [102, 108, 109] {
+                for &kind in if check {
+                    &[][..]
+                } else {
+                    &[102u32, 108, 109][..]
+                } {
                     let key = Key::new(kind, vec![index]);
                     let evaluations: Vec<_> = c
                         .report

@@ -26,7 +26,11 @@ fn reference_calls_share_one_analysis_per_body() {
                 assert_eq!(evaluations.len(), 1);
                 assert_eq!(evaluations[0].1, 1);
             }
-            for kind in [102, 108, 109] {
+            for &kind in if check {
+                &[][..]
+            } else {
+                &[102u32, 108, 109][..]
+            } {
                 let evaluations: Vec<_> = compiled
                     .report
                     .node_evaluations

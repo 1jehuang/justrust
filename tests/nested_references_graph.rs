@@ -40,7 +40,11 @@ fn nested_identity_retains_both_position_rows_through_the_same_graph() {
                 contract.input_regions[1].region,
                 contract.input_regions[0].region,
             )));
-            for kind in [102, 108, 109] {
+            for &kind in if check {
+                &[][..]
+            } else {
+                &[102u32, 108, 109][..]
+            } {
                 let nodes: Vec<_> = compiled
                     .report
                     .node_evaluations

@@ -20,7 +20,11 @@ fn required_signatures_have_no_native_slots_and_conditional_calls_close_before_o
             let instances = if check { 0 } else { 6 };
             assert_eq!(compiled.control_flow.len(), if check { 5 } else { 6 });
             assert!(compiled.analyses.iter().all(|analysis| analysis.passed()));
-            for kind in [102, 108, 109] {
+            for &kind in if check {
+                &[][..]
+            } else {
+                &[102u32, 108, 109][..]
+            } {
                 let facts: Vec<_> = compiled
                     .report
                     .node_evaluations

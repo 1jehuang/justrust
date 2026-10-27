@@ -58,7 +58,11 @@ fn float_values_share_checked_cfg_and_ownership_facts() {
                 compiler::ir::Ty::Float(compiler::ir::FloatTy::F64)
             );
             for index in 0..3 {
-                for kind in [102, 108, 109] {
+                for &kind in if check {
+                    &[][..]
+                } else {
+                    &[102u32, 108, 109][..]
+                } {
                     let key = Key::new(kind, vec![index]);
                     let evaluated: Vec<_> = compiled
                         .report

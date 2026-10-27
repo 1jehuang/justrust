@@ -2080,10 +2080,7 @@ impl BodySubstitutionProof {
                 | Ty::Int(_)
                 | Ty::Float(_)
                 | Ty::Str => Ok(true),
-                Ty::Ref {
-                    kind: BorrowKind::Shared,
-                    referent,
-                } => shared_shape(referent, budget, depth + 1),
+                Ty::Ref { referent, .. } => shared_shape(referent, budget, depth + 1),
                 Ty::Slice { element } | Ty::Array { element, .. } => {
                     shared_shape(element, budget, depth + 1)
                 }

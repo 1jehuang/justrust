@@ -54,7 +54,11 @@ fn mixed_capabilities_retain_actual_input_kinds_and_result_authority() {
                 ));
             }
             for index in 0..3 {
-                for kind in [102, 108, 109] {
+                for &kind in if check {
+                    &[][..]
+                } else {
+                    &[102u32, 108, 109][..]
+                } {
                     let key = Key::new(kind, vec![index]);
                     let evaluated: Vec<_> = compiled
                         .report

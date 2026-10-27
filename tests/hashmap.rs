@@ -128,6 +128,17 @@ fn main() {
                 expect: Expect::Run("2: [\"on\"]\n3: [\"the\", \"cat\", \"mat\"]\n"),
             },
             Case {
+                name: "hashmap_borrowed_string_vectors",
+                source: r#"use std::collections::HashMap;
+fn main() {
+    let mut m: HashMap<usize, Vec<&str>> = HashMap::new();
+    m.entry(1).or_default().push("a");
+    m.entry(1).or_default().push("b");
+    println!("{} {:?}", m.len(), m.get(&1));
+}"#,
+                expect: Expect::Run("1 Some([\"a\", \"b\"])\n"),
+            },
+            Case {
                 name: "borrowed_map_value_cannot_escape_owner",
                 source: "use std::collections::BTreeMap; fn unused() -> &'static str { let text = String::from(\"temporary\"); let mut map: BTreeMap<usize, Vec<&str>> = BTreeMap::new(); map.entry(1).or_default().push(text.as_str()); for (_, values) in &map { return values[0]; } \"\" } fn main() {}",
                 expect: Expect::Invalid("E0515"),

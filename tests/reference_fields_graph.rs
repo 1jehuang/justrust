@@ -38,7 +38,11 @@ fn implicit_reference_fields_retain_real_deref_and_shared_graph_facts() {
                 assert_eq!(function.loan_sites[0].place.local, function.params[0]);
             }
             for index in 0..4 {
-                for kind in [102, 108, 109] {
+                for &kind in if check {
+                    &[][..]
+                } else {
+                    &[102u32, 108, 109][..]
+                } {
                     let key = Key::new(kind, vec![index]);
                     let evaluations: Vec<_> = compiled
                         .report

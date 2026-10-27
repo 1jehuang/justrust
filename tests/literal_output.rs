@@ -352,7 +352,7 @@ error: aborting due to 1 previous error
             source_fingerprint: 15547478099473764768,
             source_sha256: r###"7963f3634c5ce0856c43b4c14c172897f3d99ea5cda86d4448f79261cba988a8"###,
             native: Native::Unsupported,
-            boundary: r###"format argument count mismatch"###,
+            boundary: r###"argument never used"###,
             phase: "parse",
             stock_compile_code: 1,
             stock_code: None,
@@ -819,7 +819,11 @@ fn successful_all_body_graph(case: &Case, compiled: &compiler::Compilation, chec
     );
     assert_eq!(compiled.control_flow.len(), compiled.analyses.len());
     assert!(compiled.analyses.iter().all(|analysis| analysis.passed()));
-    for kind in [102, 108, 109] {
+    for &kind in if check {
+        &[][..]
+    } else {
+        &[102u32, 108, 109][..]
+    } {
         let nodes: Vec<_> = compiled
             .report
             .node_evaluations

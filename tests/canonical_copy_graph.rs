@@ -183,7 +183,11 @@ fn invalid_unused_clone_and_unavailable_dispatch_never_reach_objects() {
                     }
                     // CHECK admits source bodies without BODY/LOWER/ANALYZE.
                     for index in 0..if check { 0 } else { 2 } {
-                        for kind in [102, 108, 109] {
+                        for &kind in if check {
+                            &[][..]
+                        } else {
+                            &[102u32, 108, 109][..]
+                        } {
                             let key = Key::new(kind, vec![index]);
                             assert!(
                                 report.node_evaluations.iter().any(|(seen, _)| *seen == key),
