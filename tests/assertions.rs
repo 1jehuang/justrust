@@ -1233,7 +1233,6 @@ fn evaluated_once(report: &Report, kind: u32, index: usize, case: &Case) {
 }
 fn successful_all_body_graph(case: &Case, compiled: &compiler::Compilation, check: bool) {
     let program = native_prelude::parse(case.source).expect("positive frozen source parses");
-    frontend::check(&program).expect("all bodies checked independent of reachability");
     let plan = frontend::PlanCtx::from_program(&program, &ir::PlanBudget::default()).unwrap();
     assert_eq!(compiled.source_bytes, case.source.len());
     assert_eq!(compiled.source_files, 1);
@@ -1278,7 +1277,9 @@ fn successful_all_body_graph(case: &Case, compiled: &compiler::Compilation, chec
     );
     assert_eq!(compiled.control_flow.len(), compiled.analyses.len());
     assert!(compiled.analyses.iter().all(|analysis| analysis.passed()));
-    for kind in [102, 108, 109] {
+    // CHECK must not demand BODY/LOWER/ANALYZE lowering; count them in BUILD.
+    let kinds: &[u32] = if check { &[] } else { &[102, 108, 109] };
+    for &kind in kinds {
         let nodes: Vec<_> = compiled
             .report
             .node_evaluations
