@@ -2328,6 +2328,42 @@ impl CarrierBuilder<'_, '_> {
                     .push((family.clone(), mapping.original.clone(), region));
             }
         }
+        // Well-formedness of an input `&'r T`: every lifetime or family
+        // reached strictly through that reference's referent outlives 'r.
+        let channel_depth = |channel: &CarrierChannel| match channel {
+            CarrierChannel::Fixed(position) => usize::from(position.depth),
+            CarrierChannel::ParamTail { prefix, .. }
+            | CarrierChannel::ProjectionTail { prefix, .. }
+            | CarrierChannel::OpaqueTail { prefix, .. } => usize::from(*prefix),
+        };
+        let inputs = self.input_regions.clone();
+        for (outer, outer_region) in &inputs {
+            if !matches!(outer.location.channel, CarrierChannel::Fixed(_)) {
+                continue;
+            }
+            let outer_depth = channel_depth(&outer.location.channel);
+            for (inner, inner_region) in &inputs {
+                self.budget.spend(outer.location.path.0.len() + 1)?;
+                // One input carrier has exactly one lifetime: a fixed row and
+                // its substituted family row name the same region.
+                if inner == outer && inner_region != outer_region {
+                    self.regions
+                        .edge(*inner_region, *outer_region, self.budget)?;
+                    self.regions
+                        .edge(*outer_region, *inner_region, self.budget)?;
+                    continue;
+                }
+                if inner.param == outer.param
+                    && inner_region != outer_region
+                    && inner.location.path.0.starts_with(&outer.location.path.0)
+                    && (inner.location.path.0.len() > outer.location.path.0.len()
+                        || channel_depth(&inner.location.channel) > outer_depth)
+                {
+                    self.regions
+                        .edge(*inner_region, *outer_region, self.budget)?;
+                }
+            }
+        }
         for row in source.carriers.iter().filter(|row| {
             row.parameter.is_some() && row.location.path.0.contains(&CarrierStep::SliceElement)
         }) {
