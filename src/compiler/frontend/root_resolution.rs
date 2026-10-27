@@ -4097,10 +4097,71 @@ pub struct ResolutionNamespace {
     functions: Vec<Vec<usize>>,
     /// Implementation blocks per module ordinal, in source order.
     impls: Vec<Vec<usize>>,
-    associated_boundary: Option<String>,
-    equality_boundary: Option<String>,
-    associated_bound_sources: Vec<AssociatedBoundSource>,
+    /// Struct and enum declarations per module ordinal: enums first, then
+    /// structs, each in source order (the crate-wide diagnostic order).
+    nominals: Vec<Vec<NominalSource>>,
+    /// Trait declarations per module ordinal, in source order.
+    traits: Vec<Vec<usize>>,
+    /// Constant declarations per module ordinal, in source order.
+    constants: Vec<Vec<usize>>,
+    /// First trait-import or derived-header error, ranked after constants.
+    header_error: Option<String>,
+    /// First anonymous-adapter body error, ranked after nominal errors.
+    adapter_error: Option<String>,
     derived_debug_source: Option<usize>,
+}
+
+/// A struct or enum resolved inside its module fact. Enums order before
+/// structs, matching the crate-wide resolution order for diagnostics.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum NominalSource {
+    Enum(usize),
+    Struct(usize),
+}
+
+#[derive(Clone, Debug)]
+enum ResolvedNominal {
+    Enum(usize, EnumDecl),
+    Struct(usize, StructDecl),
+}
+impl ResolvedNominal {
+    fn source(&self) -> NominalSource {
+        match self {
+            Self::Enum(index, _) => NominalSource::Enum(*index),
+            Self::Struct(index, _) => NominalSource::Struct(*index),
+        }
+    }
+}
+
+fn resolve_nominal(
+    resolver: &mut Resolver<'_>,
+    program: &Program,
+    source: NominalSource,
+) -> Result<ResolvedNominal, String> {
+    match source {
+        NominalSource::Enum(index) => {
+            let mut enumeration = program.enums[index].clone();
+            resolver.type_params = enumeration.type_params.clone();
+            resolver.bounds(&mut enumeration.bounds, enumeration.module)?;
+            for variant in &mut enumeration.variants {
+                for field in &mut variant.fields {
+                    validate_depth(DepthNode::Type(&field.ty))?;
+                    resolver.ty(&mut field.ty, enumeration.module)?;
+                }
+            }
+            Ok(ResolvedNominal::Enum(index, enumeration))
+        }
+        NominalSource::Struct(index) => {
+            let mut structure = program.structs[index].clone();
+            resolver.type_params = structure.type_params.clone();
+            resolver.bounds(&mut structure.bounds, structure.module)?;
+            for field in &mut structure.fields {
+                validate_depth(DepthNode::Type(&field.ty))?;
+                resolver.ty(&mut field.ty, structure.module)?;
+            }
+            Ok(ResolvedNominal::Struct(index, structure))
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -4113,6 +4174,15 @@ pub struct ResolvedModuleItems {
     /// First failing implementation block of this module. Ranked after every
     /// free-function error, then by implementation index.
     impl_error: Option<(usize, String)>,
+    /// First failing nominal of this module. Ranked before every other error.
+    nominal_error: Option<(NominalSource, String)>,
+    nominals: Vec<ResolvedNominal>,
+    /// First failing trait of this module. Ranked before every other error.
+    trait_error: Option<(usize, String)>,
+    traits: Vec<(usize, TraitDecl, TraitResolution)>,
+    /// First failing constant. Ranked before every other error.
+    constant_error: Option<(usize, String)>,
+    constants: Vec<(usize, ConstDecl)>,
     ordinal: usize,
     functions: Vec<(usize, Function)>,
     impls: Vec<(usize, ImplDecl)>,
@@ -4149,6 +4219,65 @@ pub fn resolve_module_items(
     let parsed = namespace.parsed.as_ref();
     let indices = resolution_module_indices(namespace, ordinal)?;
     let mut resolver = namespace.state.resolver(parsed);
+    let constant_sources = namespace
+        .constants
+        .get(ordinal)
+        .ok_or("foreign resolution module ordinal")?;
+    let mut constants = Vec::with_capacity(constant_sources.len());
+    let mut constant_error = None;
+    for &index in constant_sources {
+        let mut declaration = namespace.program.constants[index].clone();
+        resolver.type_params.clear();
+        let result = resolver
+            .ty(&mut declaration.ty, declaration.module)
+            .and_then(|()| {
+                resolver.expr(
+                    &mut declaration.initializer,
+                    declaration.module,
+                    &mut vec![std::collections::HashSet::new()],
+                )
+            });
+        match result {
+            Ok(_) => constants.push((index, declaration)),
+            Err(diagnostic) => {
+                constant_error = Some((index, diagnostic));
+                break;
+            }
+        }
+    }
+    let trait_sources = namespace
+        .traits
+        .get(ordinal)
+        .ok_or("foreign resolution module ordinal")?;
+    let mut traits = Vec::with_capacity(trait_sources.len());
+    let mut trait_error = None;
+    for &index in trait_sources {
+        let mut declaration = namespace.program.traits[index].clone();
+        match resolve_trait_decl(&mut resolver, index, &mut declaration) {
+            Ok(resolution) => traits.push((index, declaration, resolution)),
+            Err(diagnostic) => {
+                trait_error = Some((index, diagnostic));
+                break;
+            }
+        }
+    }
+    resolver.current_callable = None;
+    let sources = namespace
+        .nominals
+        .get(ordinal)
+        .ok_or("foreign resolution module ordinal")?;
+    let mut nominals = Vec::with_capacity(sources.len());
+    let mut nominal_error = None;
+    for &source in sources {
+        match resolve_nominal(&mut resolver, &namespace.program, source) {
+            Ok(nominal) => nominals.push(nominal),
+            Err(diagnostic) => {
+                nominal_error = Some((source, diagnostic));
+                break;
+            }
+        }
+    }
+    resolver.type_params.clear();
     let mut functions = Vec::with_capacity(indices.len());
     let mut error = None;
     for &index in indices {
@@ -4193,6 +4322,12 @@ pub fn resolve_module_items(
         namespace_token: namespace.token.clone(),
         error,
         impl_error,
+        nominal_error,
+        nominals,
+        trait_error,
+        traits,
+        constant_error,
+        constants,
         ordinal,
         functions,
         impls,
@@ -4203,6 +4338,150 @@ pub fn resolve_module_items(
 
 /// Resolve one implementation block in place: header, associated items and
 /// bodies. Runs inside its module's RESOLVE_MODULE fact, never crate-wide.
+/// Deferred unsupported boundaries and bound sources from one trait.
+#[derive(Clone, Debug, Default)]
+struct TraitResolution {
+    equality_boundary: Option<String>,
+    associated_boundary: Option<String>,
+    associated_bound_sources: Vec<AssociatedBoundSource>,
+}
+
+/// Resolve one trait declaration in place, inside its module's fact.
+fn resolve_trait_decl(
+    resolver: &mut Resolver<'_>,
+    source_index: usize,
+    declaration: &mut TraitDecl,
+) -> Result<TraitResolution, String> {
+    let mut equality_boundary = None;
+    let mut associated_boundary = None;
+    let mut associated_bound_sources = Vec::new();
+    resolver.with_source_owner(SourceOwnerContext::Trait { source_index }, |resolver| {
+        clone_vector(&declaration.type_params, &resolver.alias_budget)?;
+        resolver.type_params = declaration.type_params.clone();
+        resolver.self_nominal = None;
+        resolver.self_allowed = true;
+        defer_equality_boundary(
+            resolver.bounds(&mut declaration.bounds, declaration.module),
+            &mut equality_boundary,
+        )?;
+        for path in &mut declaration.supertraits {
+            defer_equality_boundary(
+                resolver.trait_path(path, declaration.module),
+                &mut equality_boundary,
+            )?;
+        }
+        for (member_index, associated) in declaration.associated_types.iter_mut().enumerate() {
+            resolver.charge_entries::<(GenericPath, TraitPath)>(associated.bounds.len())?;
+            let mut bounds = Vec::new();
+            bounds
+                .try_reserve_exact(associated.bounds.len())
+                .map_err(|_| "associated bound source allocation failed")?;
+            for path in &mut associated.bounds {
+                match resolver.associated_bound(path, declaration.module) {
+                    Ok(target) => {
+                        let TraitPath::Source(source) = path else {
+                            unreachable!()
+                        };
+                        source_clone::clone_path(source, &resolver.alias_budget)?;
+                        bounds.push((source.clone(), target));
+                    }
+                    Err(error) if error.starts_with("unsupported:") => {
+                        associated_boundary.get_or_insert(error);
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+            resolver.charge_entries::<AssociatedBoundSource>(1)?;
+            associated_bound_sources
+                .try_reserve_exact(1)
+                .map_err(|_| "associated source record allocation failed")?;
+            associated_bound_sources.push(AssociatedBoundSource {
+                trait_index: source_index,
+                member_index,
+                module: declaration.module,
+                trait_name: declaration.name.clone(),
+                member_name: associated.name,
+                bounds: bounds.into(),
+            });
+        }
+        for constant in &mut declaration.associated_constants {
+            clone_vector(&declaration.type_params, &resolver.alias_budget)?;
+            resolver.type_params = declaration.type_params.clone();
+            resolver.ty(&mut constant.ty, declaration.module)?;
+            if let Some(value) = &mut constant.initializer {
+                resolver.expr(
+                    value,
+                    declaration.module,
+                    &mut vec![std::collections::HashSet::new()],
+                )?;
+            }
+        }
+        for (item_index, item) in declaration.items.iter_mut().enumerate() {
+            clone_vector(&declaration.type_params, &resolver.alias_budget)?;
+            resolver.type_params = declaration.type_params.clone();
+            resolver.charge_entries::<AstIdent>(item.signature.type_params.len())?;
+            resolver
+                .type_params
+                .try_reserve(item.signature.type_params.len())
+                .map_err(|_| "trait method parameter allocation failed")?;
+            resolver
+                .type_params
+                .extend_from_slice(&item.signature.type_params);
+            defer_equality_boundary(
+                resolver.trait_method_bounds(
+                    &mut item.signature.bounds,
+                    declaration.module,
+                    source_index,
+                    item_index,
+                ),
+                &mut equality_boundary,
+            )?;
+            resolver.ty(&mut item.signature.result, declaration.module)?;
+            for (_, ty) in &mut item.signature.params {
+                resolver.ty(ty, declaration.module)?;
+            }
+            if let Some(function) = &mut item.default {
+                resolver.current_callable = Some(CallableSource::TraitDefault {
+                    trait_index: source_index,
+                    item: item_index,
+                });
+                clone_vector(&declaration.type_params, &resolver.alias_budget)?;
+                resolver.type_params = declaration.type_params.clone();
+                resolver.charge_entries::<AstIdent>(function.type_params.len())?;
+                resolver
+                    .type_params
+                    .try_reserve(function.type_params.len())
+                    .map_err(|_| "trait default parameter allocation failed")?;
+                resolver
+                    .type_params
+                    .extend_from_slice(&function.type_params);
+                defer_equality_boundary(
+                    resolver.trait_method_bounds(
+                        &mut function.bounds,
+                        declaration.module,
+                        source_index,
+                        item_index,
+                    ),
+                    &mut equality_boundary,
+                )?;
+                resolver.ty(&mut function.result, declaration.module)?;
+                for (_, ty) in &mut function.params {
+                    resolver.ty(ty, declaration.module)?;
+                }
+                let names = resolver.function_locals(function, item.receiver)?;
+                validate_depth(DepthNode::Block(&function.body))?;
+                resolver.block(&mut function.body, declaration.module, &mut vec![names])?;
+            }
+        }
+        Ok(())
+    })?;
+    Ok(TraitResolution {
+        equality_boundary,
+        associated_boundary,
+        associated_bound_sources,
+    })
+}
+
 fn resolve_impl_block(
     resolver: &mut Resolver<'_>,
     source_index: usize,
@@ -4584,229 +4863,164 @@ pub fn prepare_resolution_owned(parsed: Arc<ParsedProgram>) -> Result<Resolution
                 .push(const_inline::checked_body(declaration));
         }
     }
-    for declaration in &mut program.constants {
-        resolver.type_params.clear();
-        resolver.ty(&mut declaration.ty, declaration.module)?;
-        resolver.expr(
-            &mut declaration.initializer,
-            declaration.module,
-            &mut vec![std::collections::HashSet::new()],
-        )?;
-    }
-    for path in &paths {
-        let key = resolver.key(path)?;
-        for (index, item) in parsed
-            .items
-            .get(&key)
-            .ok_or("missing source import bucket")?
-            .iter()
-            .enumerate()
-        {
-            if matches!(item.kind, ItemKind::Import(_, _))
-                && let Some(target) = resolver.import(path, index, true)?
-                && target.kind == ResolvedKind::Trait
+    // Constant declarations resolve in their module facts. Errors from the
+    // remaining crate-wide header passes rank after constant errors, so they
+    // are deferred, never returned ahead of them.
+    let header_error = (|| -> Result<Option<usize>, String> {
+        for path in &paths {
+            let key = resolver.key(path)?;
+            for (index, item) in parsed
+                .items
+                .get(&key)
+                .ok_or("missing source import bucket")?
+                .iter()
+                .enumerate()
             {
-                resolver.charge_entries::<(ModuleId, TraitPath)>(1)?;
-                program
-                    .trait_imports
-                    .try_reserve(1)
-                    .map_err(|_| "trait import allocation failed")?;
-                let path = match &target.path {
-                    ResolvedPath::Source(path) => {
-                        TraitPath::Source(resolver.alias_source_path(path)?)
-                    }
-                    ResolvedPath::Builtin(id) => TraitPath::Builtin(*id),
-                    ResolvedPath::CatalogModule(_) => {
-                        return Err("trait import names a module".into());
-                    }
-                };
-                program.trait_imports.push((item.module, path));
-            }
-        }
-    }
-    let mut equality_boundary = None;
-    let mut associated_boundary = None;
-    let mut associated_bound_sources = Vec::new();
-    let mut derived_debug_source = None;
-    for (source_index, declaration) in program.traits.iter_mut().enumerate() {
-        if generated_debug::canonical_source(&parsed.program, declaration)?
-            && derived_debug_source.replace(source_index).is_some()
-        {
-            return Err("duplicate canonical native Debug trait".into());
-        }
-        resolver.with_source_owner(SourceOwnerContext::Trait { source_index }, |resolver| {
-            clone_vector(&declaration.type_params, &resolver.alias_budget)?;
-            resolver.type_params = declaration.type_params.clone();
-            resolver.self_nominal = None;
-            resolver.self_allowed = true;
-            defer_equality_boundary(
-                resolver.bounds(&mut declaration.bounds, declaration.module),
-                &mut equality_boundary,
-            )?;
-            for path in &mut declaration.supertraits {
-                defer_equality_boundary(
-                    resolver.trait_path(path, declaration.module),
-                    &mut equality_boundary,
-                )?;
-            }
-            for (member_index, associated) in declaration.associated_types.iter_mut().enumerate() {
-                resolver.charge_entries::<(GenericPath, TraitPath)>(associated.bounds.len())?;
-                let mut bounds = Vec::new();
-                bounds
-                    .try_reserve_exact(associated.bounds.len())
-                    .map_err(|_| "associated bound source allocation failed")?;
-                for path in &mut associated.bounds {
-                    match resolver.associated_bound(path, declaration.module) {
-                        Ok(target) => {
-                            let TraitPath::Source(source) = path else {
-                                unreachable!()
-                            };
-                            source_clone::clone_path(source, &resolver.alias_budget)?;
-                            bounds.push((source.clone(), target));
+                if matches!(item.kind, ItemKind::Import(_, _))
+                    && let Some(target) = resolver.import(path, index, true)?
+                    && target.kind == ResolvedKind::Trait
+                {
+                    resolver.charge_entries::<(ModuleId, TraitPath)>(1)?;
+                    program
+                        .trait_imports
+                        .try_reserve(1)
+                        .map_err(|_| "trait import allocation failed")?;
+                    let path = match &target.path {
+                        ResolvedPath::Source(path) => {
+                            TraitPath::Source(resolver.alias_source_path(path)?)
                         }
-                        Err(error) if error.starts_with("unsupported:") => {
-                            associated_boundary.get_or_insert(error);
+                        ResolvedPath::Builtin(id) => TraitPath::Builtin(*id),
+                        ResolvedPath::CatalogModule(_) => {
+                            return Err("trait import names a module".into());
                         }
-                        Err(error) => return Err(error),
-                    }
+                    };
+                    program.trait_imports.push((item.module, path));
                 }
-                resolver.charge_entries::<AssociatedBoundSource>(1)?;
-                associated_bound_sources
-                    .try_reserve_exact(1)
-                    .map_err(|_| "associated source record allocation failed")?;
-                associated_bound_sources.push(AssociatedBoundSource {
-                    trait_index: source_index,
-                    member_index,
-                    module: declaration.module,
-                    trait_name: declaration.name.clone(),
-                    member_name: associated.name,
-                    bounds: bounds.into(),
-                });
-            }
-            for constant in &mut declaration.associated_constants {
-                clone_vector(&declaration.type_params, &resolver.alias_budget)?;
-                resolver.type_params = declaration.type_params.clone();
-                resolver.ty(&mut constant.ty, declaration.module)?;
-                if let Some(value) = &mut constant.initializer {
-                    resolver.expr(
-                        value,
-                        declaration.module,
-                        &mut vec![std::collections::HashSet::new()],
-                    )?;
-                }
-            }
-            for (item_index, item) in declaration.items.iter_mut().enumerate() {
-                clone_vector(&declaration.type_params, &resolver.alias_budget)?;
-                resolver.type_params = declaration.type_params.clone();
-                resolver.charge_entries::<AstIdent>(item.signature.type_params.len())?;
-                resolver
-                    .type_params
-                    .try_reserve(item.signature.type_params.len())
-                    .map_err(|_| "trait method parameter allocation failed")?;
-                resolver
-                    .type_params
-                    .extend_from_slice(&item.signature.type_params);
-                defer_equality_boundary(
-                    resolver.trait_method_bounds(
-                        &mut item.signature.bounds,
-                        declaration.module,
-                        source_index,
-                        item_index,
-                    ),
-                    &mut equality_boundary,
-                )?;
-                resolver.ty(&mut item.signature.result, declaration.module)?;
-                for (_, ty) in &mut item.signature.params {
-                    resolver.ty(ty, declaration.module)?;
-                }
-                if let Some(function) = &mut item.default {
-                    resolver.current_callable = Some(CallableSource::TraitDefault {
-                        trait_index: source_index,
-                        item: item_index,
-                    });
-                    clone_vector(&declaration.type_params, &resolver.alias_budget)?;
-                    resolver.type_params = declaration.type_params.clone();
-                    resolver.charge_entries::<AstIdent>(function.type_params.len())?;
-                    resolver
-                        .type_params
-                        .try_reserve(function.type_params.len())
-                        .map_err(|_| "trait default parameter allocation failed")?;
-                    resolver
-                        .type_params
-                        .extend_from_slice(&function.type_params);
-                    defer_equality_boundary(
-                        resolver.trait_method_bounds(
-                            &mut function.bounds,
-                            declaration.module,
-                            source_index,
-                            item_index,
-                        ),
-                        &mut equality_boundary,
-                    )?;
-                    resolver.ty(&mut function.result, declaration.module)?;
-                    for (_, ty) in &mut function.params {
-                        resolver.ty(ty, declaration.module)?;
-                    }
-                    let names = resolver.function_locals(function, item.receiver)?;
-                    validate_depth(DepthNode::Block(&function.body))?;
-                    resolver.block(&mut function.body, declaration.module, &mut vec![names])?;
-                }
-            }
-            Ok(())
-        })?;
-    }
-    for enumeration in &mut program.enums {
-        resolver.type_params = enumeration.type_params.clone();
-        resolver.bounds(&mut enumeration.bounds, enumeration.module)?;
-        for variant in &mut enumeration.variants {
-            for field in &mut variant.fields {
-                validate_depth(DepthNode::Type(&field.ty))?;
-                resolver.ty(&mut field.ty, enumeration.module)?;
             }
         }
-    }
-    for structure in &mut program.structs {
-        resolver.type_params = structure.type_params.clone();
-        resolver.bounds(&mut structure.bounds, structure.module)?;
-        for field in &mut structure.fields {
-            validate_depth(DepthNode::Type(&field.ty))?;
-            resolver.ty(&mut field.ty, structure.module)?;
+        let mut derived_debug_source = None;
+        for (source_index, declaration) in program.traits.iter().enumerate() {
+            if generated_debug::canonical_source(&parsed.program, declaration)?
+                && derived_debug_source.replace(source_index).is_some()
+            {
+                return Err("duplicate canonical native Debug trait".into());
+            }
         }
-    }
+        Ok(derived_debug_source)
+    })();
+    let (derived_debug_source, header_error) = match header_error {
+        Ok(source) => (source, None),
+        Err(error) => (None, Some(error)),
+    };
     let mut modules = Vec::new();
     let mut functions: Vec<Vec<usize>> = Vec::new();
     let mut impls: Vec<Vec<usize>> = Vec::new();
+    let mut nominals: Vec<Vec<NominalSource>> = Vec::new();
+    let mut traits: Vec<Vec<usize>> = Vec::new();
+    let mut constants: Vec<Vec<usize>> = Vec::new();
+    let mut ordinal_of = |module: ModuleId,
+                          modules: &mut Vec<ModuleId>,
+                          functions: &mut Vec<Vec<usize>>,
+                          impls: &mut Vec<Vec<usize>>,
+                          nominals: &mut Vec<Vec<NominalSource>>,
+                          traits: &mut Vec<Vec<usize>>,
+                          constants: &mut Vec<Vec<usize>>| {
+        match modules.iter().position(|candidate| *candidate == module) {
+            Some(ordinal) => ordinal,
+            None => {
+                modules.push(module);
+                functions.push(Vec::new());
+                impls.push(Vec::new());
+                nominals.push(Vec::new());
+                traits.push(Vec::new());
+                constants.push(Vec::new());
+                modules.len() - 1
+            }
+        }
+    };
     // Anonymous adapters establish capture descriptors before parent bodies.
+    // Their diagnostic is deferred: nominal field errors rank first.
+    let mut adapter_error = None;
     for index in 0..program.functions.len() {
         if closures::anonymous_path(&program.functions[index].name, resolver.names())? {
-            resolve_free_function(&mut resolver, index, &mut program.functions[index])?;
+            if adapter_error.is_none()
+                && let Err(error) =
+                    resolve_free_function(&mut resolver, index, &mut program.functions[index])
+            {
+                adapter_error = Some(error);
+            }
         } else {
             let module = program.functions[index].module;
-            let ordinal =
-                if let Some(ordinal) = modules.iter().position(|candidate| *candidate == module) {
-                    ordinal
-                } else {
-                    modules.push(module);
-                    functions.push(Vec::new());
-                    impls.push(Vec::new());
-                    modules.len() - 1
-                };
+            let ordinal = ordinal_of(
+                module,
+                &mut modules,
+                &mut functions,
+                &mut impls,
+                &mut nominals,
+                &mut traits,
+                &mut constants,
+            );
             functions[ordinal].push(index);
         }
     }
+    for (index, declaration) in program.constants.iter().enumerate() {
+        let ordinal = ordinal_of(
+            declaration.module,
+            &mut modules,
+            &mut functions,
+            &mut impls,
+            &mut nominals,
+            &mut traits,
+            &mut constants,
+        );
+        constants[ordinal].push(index);
+    }
+    for (index, declaration) in program.traits.iter().enumerate() {
+        let ordinal = ordinal_of(
+            declaration.module,
+            &mut modules,
+            &mut functions,
+            &mut impls,
+            &mut nominals,
+            &mut traits,
+            &mut constants,
+        );
+        traits[ordinal].push(index);
+    }
+    for (index, enumeration) in program.enums.iter().enumerate() {
+        let ordinal = ordinal_of(
+            enumeration.module,
+            &mut modules,
+            &mut functions,
+            &mut impls,
+            &mut nominals,
+            &mut traits,
+            &mut constants,
+        );
+        nominals[ordinal].push(NominalSource::Enum(index));
+    }
+    for (index, structure) in program.structs.iter().enumerate() {
+        let ordinal = ordinal_of(
+            structure.module,
+            &mut modules,
+            &mut functions,
+            &mut impls,
+            &mut nominals,
+            &mut traits,
+            &mut constants,
+        );
+        nominals[ordinal].push(NominalSource::Struct(index));
+    }
     for (index, block) in program.impls.iter().enumerate() {
-        let ordinal = match modules
-            .iter()
-            .position(|candidate| *candidate == block.module)
-        {
-            Some(ordinal) => ordinal,
-            None => {
-                modules.push(block.module);
-                functions.push(Vec::new());
-                impls.push(Vec::new());
-                modules.len() - 1
-            }
-        };
+        let ordinal = ordinal_of(
+            block.module,
+            &mut modules,
+            &mut functions,
+            &mut impls,
+            &mut nominals,
+            &mut traits,
+            &mut constants,
+        );
         impls[ordinal].push(index);
     }
     let state = ResolutionState::capture(&resolver);
@@ -4818,9 +5032,11 @@ pub fn prepare_resolution_owned(parsed: Arc<ParsedProgram>) -> Result<Resolution
         modules,
         functions,
         impls,
-        associated_boundary,
-        equality_boundary,
-        associated_bound_sources,
+        nominals,
+        traits,
+        constants,
+        header_error,
+        adapter_error,
         derived_debug_source,
     })
 }
@@ -4886,6 +5102,54 @@ fn finish_resolution_with<T>(
         {
             return Err("foreign resolved module inventory".into());
         }
+        let expected = &namespace.constants[ordinal];
+        let prefix = match &item.constant_error {
+            Some((index, _)) if expected.get(item.constants.len()) == Some(index) => {
+                &expected[..item.constants.len()]
+            }
+            Some(_) => return Err("foreign resolved module error inventory".into()),
+            None => expected.as_slice(),
+        };
+        if !item
+            .constants
+            .iter()
+            .map(|(index, _)| *index)
+            .eq(prefix.iter().copied())
+        {
+            return Err("foreign resolved module inventory".into());
+        }
+        let expected = &namespace.traits[ordinal];
+        let prefix = match &item.trait_error {
+            Some((index, _)) if expected.get(item.traits.len()) == Some(index) => {
+                &expected[..item.traits.len()]
+            }
+            Some(_) => return Err("foreign resolved module error inventory".into()),
+            None => expected.as_slice(),
+        };
+        if !item
+            .traits
+            .iter()
+            .map(|(index, _, _)| *index)
+            .eq(prefix.iter().copied())
+        {
+            return Err("foreign resolved module inventory".into());
+        }
+        let expected = &namespace.nominals[ordinal];
+        let prefix = match &item.nominal_error {
+            Some((source, _)) if expected.get(item.nominals.len()) == Some(source) => {
+                &expected[..item.nominals.len()]
+            }
+            Some(_) => return Err("foreign resolved module error inventory".into()),
+            None => expected.as_slice(),
+        };
+        if !item
+            .nominals
+            .iter()
+            .map(ResolvedNominal::source)
+            .eq(prefix.iter().copied())
+        {
+            return Err("foreign resolved module inventory".into());
+        }
         let expected = &namespace.impls[ordinal];
         let prefix = match (&item.error, &item.impl_error) {
             (Some(_), None) => &expected[..0],
@@ -4907,6 +5171,33 @@ fn finish_resolution_with<T>(
     }
     if let Some((_, diagnostic)) = items
         .iter()
+        .filter_map(|item| item.constant_error.as_ref())
+        .min_by_key(|(index, _)| *index)
+    {
+        return Err(diagnostic.clone());
+    }
+    if let Some(diagnostic) = &namespace.header_error {
+        return Err(diagnostic.clone());
+    }
+    if let Some((_, diagnostic)) = items
+        .iter()
+        .filter_map(|item| item.trait_error.as_ref())
+        .min_by_key(|(index, _)| *index)
+    {
+        return Err(diagnostic.clone());
+    }
+    if let Some((_, diagnostic)) = items
+        .iter()
+        .filter_map(|item| item.nominal_error.as_ref())
+        .min_by_key(|(source, _)| *source)
+    {
+        return Err(diagnostic.clone());
+    }
+    if let Some(diagnostic) = &namespace.adapter_error {
+        return Err(diagnostic.clone());
+    }
+    if let Some((_, diagnostic)) = items
+        .iter()
         .filter_map(|item| item.error.as_ref())
         .min_by_key(|(index, _)| *index)
     {
@@ -4921,9 +5212,24 @@ fn finish_resolution_with<T>(
     }
     let mut program = namespace.program.clone();
     let mut resolver = namespace.state.resolver(parsed);
-    let associated_boundary = namespace.associated_boundary.clone();
-    let equality_boundary = namespace.equality_boundary.clone();
-    let associated_bound_sources = namespace.associated_bound_sources.clone();
+    let mut trait_results = items
+        .iter_mut()
+        .flat_map(|item| std::mem::take(&mut item.traits))
+        .collect::<Vec<_>>();
+    trait_results.sort_by_key(|(index, _, _)| *index);
+    let mut associated_boundary = None;
+    let mut equality_boundary = None;
+    let mut associated_bound_sources = Vec::new();
+    for (index, declaration, resolution) in trait_results {
+        program.traits[index] = declaration;
+        if associated_boundary.is_none() {
+            associated_boundary = resolution.associated_boundary;
+        }
+        if equality_boundary.is_none() {
+            equality_boundary = resolution.equality_boundary;
+        }
+        associated_bound_sources.extend(resolution.associated_bound_sources);
+    }
     let derived_debug_source = namespace.derived_debug_source;
     for item in items {
         for (index, function) in item.functions {
@@ -4931,6 +5237,15 @@ fn finish_resolution_with<T>(
         }
         for (index, block) in item.impls {
             program.impls[index] = block;
+        }
+        for (index, declaration) in item.constants {
+            program.constants[index] = declaration;
+        }
+        for nominal in item.nominals {
+            match nominal {
+                ResolvedNominal::Enum(index, declaration) => program.enums[index] = declaration,
+                ResolvedNominal::Struct(index, declaration) => program.structs[index] = declaration,
+            }
         }
         for (key, source) in item.closures {
             if resolver.resolved_closures.insert(key, source).is_some() {
