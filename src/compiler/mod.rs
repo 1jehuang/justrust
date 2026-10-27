@@ -498,6 +498,8 @@ impl SourceAccounting {
     }
 }
 const SOURCE_ACCOUNTING_OUTPUT: usize = 3;
+const UNCONTROLLED_NATIVE_LINKER: &str =
+    "unsupported: immutable source compilation cannot invoke the uncontrolled native linker";
 
 #[derive(Debug)]
 struct ParseFileFailure {
@@ -2987,7 +2989,7 @@ impl Provider for CompilerProvider {
                         || !native.libraries.is_empty()
                     {
                         if this.0.source_options.source_snapshot.is_some() && !native.emit_object {
-                            return Err(Error::new("unsupported: immutable source compilation cannot invoke the uncontrolled native linker"));
+                            return Err(Error::new(UNCONTROLLED_NATIVE_LINKER));
                         }
                         c_abi::elf::link(&objects, native, &this.0.budget)
                     } else {
@@ -3156,6 +3158,28 @@ impl std::fmt::Display for Failure {
     }
 }
 impl std::error::Error for Failure {}
+
+impl Failure {
+    /// A compatibility decision needs the completed graph's failure origin,
+    /// never an input-controlled diagnostic substring. This is not cache or
+    /// artifact-reuse authorization.
+    pub fn requires_uncontrolled_linker(&self) -> bool {
+        let Some(report) = &self.report else {
+            return false;
+        };
+        let [(node, error)] = report.node_errors.as_slice() else {
+            return false;
+        };
+        report.capture_complete
+            && error.0 == UNCONTROLLED_NATIVE_LINKER
+            && self.error.0 == UNCONTROLLED_NATIVE_LINKER
+            && report
+                .node_ids
+                .iter()
+                .zip(&report.node_evaluations)
+                .any(|(id, (key, _))| id == node && *key == keys::BuildRoot.key())
+    }
+}
 
 pub fn compile(source: String, workers: usize, check_only: bool) -> Result<Compilation, Error> {
     compile_observed(source, workers, check_only).map_err(|failure| failure.error)

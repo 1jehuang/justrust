@@ -4,6 +4,8 @@
 
 #[path = "support/native_prelude.rs"]
 mod native_prelude;
+#[path = "support/stock_rustc.rs"]
+mod stock_rustc;
 
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
@@ -586,6 +588,76 @@ fn historical_array_fixture_now_compiles_and_executes() {
     let output = scratch.path("program");
     capture(&mut compiler(&input, &output), &scratch, COMPILE_TIMEOUT).success();
     capture(&mut Command::new(&output), &scratch, RUN_TIMEOUT).success();
+}
+
+#[test]
+fn standalone_cli_uses_owned_source_namespace_at_workers_one_and_eight() {
+    let scratch = Scratch::new();
+    let source = scratch.write(
+        "input.rs",
+        "mod child; fn main() { assert_eq!(child::value(), 42); }",
+    );
+    let child = scratch.write("child.rs", "pub fn value() -> i32 { 42 }");
+    let stock = scratch.path("stock");
+    capture(
+        Command::new(stock_rustc::stock_rustc())
+            .arg("--edition=2024")
+            .arg(&source)
+            .arg("-o")
+            .arg(&stock),
+        &scratch,
+        COMPILE_TIMEOUT,
+    )
+    .success();
+    let expected = capture(&mut Command::new(stock), &scratch, RUN_TIMEOUT);
+    expected.success();
+    for workers in ["1", "8"] {
+        let check = capture(
+            Command::new(env!("CARGO_BIN_EXE_jr-rust"))
+                .arg(&source)
+                .args(["--check", "--workers", workers]),
+            &scratch,
+            COMPILE_TIMEOUT,
+        );
+        check.success();
+        assert!(
+            String::from_utf8_lossy(&check.stderr)
+                .contains("Input capture: immutable native source namespace")
+        );
+        let output = scratch.path(&format!("native-{workers}"));
+        let built = capture(
+            compiler(&source, &output).args(["--workers", workers]),
+            &scratch,
+            COMPILE_TIMEOUT,
+        );
+        built.success();
+        assert!(
+            String::from_utf8_lossy(&built.stderr)
+                .contains("Input capture: immutable native source namespace")
+        );
+        let actual = capture(&mut Command::new(output), &scratch, RUN_TIMEOUT);
+        actual.success();
+        assert_eq!(actual.stdout, expected.stdout);
+    }
+    fs::remove_file(&child).unwrap();
+    let output = scratch.path("missing-module");
+    let missing = capture(&mut compiler(&source, &output), &scratch, COMPILE_TIMEOUT);
+    assert!(!missing.status.success());
+    assert!(!output.exists());
+    std::os::unix::fs::symlink("absent", child).unwrap();
+    let unsupported = capture(&mut compiler(&source, &output), &scratch, COMPILE_TIMEOUT);
+    assert!(!unsupported.status.success());
+    assert!(String::from_utf8_lossy(&unsupported.stderr).contains("does not follow symlinks"));
+    assert!(!output.exists());
+    fs::remove_file(scratch.path("child.rs")).unwrap();
+    fs::write(&source, "compile_error!(\"unsupported: immutable source compilation cannot invoke the uncontrolled native linker\"); fn main() {} ").unwrap();
+    let spoofed = capture(&mut compiler(&source, &output), &scratch, COMPILE_TIMEOUT);
+    assert!(!spoofed.status.success());
+    assert!(
+        !String::from_utf8_lossy(&spoofed.stderr)
+            .contains("external native linking uses unproven input capture")
+    );
+    assert!(!output.exists());
 }
 
 #[test]

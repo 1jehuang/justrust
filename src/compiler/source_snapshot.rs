@@ -22,6 +22,14 @@ pub struct SourceSnapshot {
 impl crate::engine::Fact for SourceSnapshot {}
 
 impl SourceSnapshot {
+    /// Acquire owned directory bytes with bounded, repeated observations and
+    /// mutation checks. This is not a filesystem-wide atomic snapshot, and
+    /// cannot authorize artifact sharing. Excluded output/cache paths stay
+    /// absent for every subsequent compiler read.
+    pub fn capture_directory(root: &Path, excluded_output: &Path) -> Result<Arc<Self>, String> {
+        crate::project::capture::directory(root, excluded_output).map_err(|error| error.0)
+    }
+
     /// Create a closed namespace from owned bytes. Paths are relative to `root`
     /// or absolute beneath it. Symlinks, devices and ambient filesystem reads
     /// have no representation. Duplicate or file/directory-conflicting paths
@@ -584,6 +592,7 @@ mod tests {
                 failure.to_string().contains("uncontrolled native linker"),
                 "{failure}"
             );
+            assert!(failure.requires_uncontrolled_linker());
         }
     }
 

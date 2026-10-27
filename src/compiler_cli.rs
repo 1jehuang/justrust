@@ -210,7 +210,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
-    let source = source.ok_or("missing Rust source file, use --help")?;
+    let mut source = source.ok_or("missing Rust source file, use --help")?;
     let probe = match (source_lock, source_item) {
         (Some(lock_path), Some(item)) => {
             Some(compiler::source::SourceProbeRequest { lock_path, item })
@@ -237,7 +237,33 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     {
         return Err(format!("output already exists: {}", path.display()).into());
     }
-    let compiled = match probe {
+    let legacy_options = source_options.clone();
+    let mut captured = false;
+    if probe.is_none()
+        && source_options.native_link.objects.is_empty()
+        && source_options.native_link.libraries.is_empty()
+    {
+        source = source.canonicalize()?;
+        let root = source.parent().ok_or("source has no parent directory")?;
+        let mut outside = false;
+        for external in &mut source_options.externs {
+            external.root = external.root.canonicalize()?;
+            outside |= !external.root.starts_with(root);
+        }
+        if !outside {
+            let excluded = output.clone().unwrap_or_else(|| root.join("target"));
+            source_options.source_snapshot = Some(
+                compiler::source::SourceSnapshot::capture_directory(root, &excluded)?,
+            );
+            captured = true;
+        }
+    }
+    if !captured {
+        eprintln!(
+            "warning: native source input capture is unproven for this probe/external-input compatibility path; artifact reuse is disabled"
+        );
+    }
+    let mut compiled = match probe {
         Some(request) => compiler::compile_probe_file_observed_with_options(
             source.clone(),
             workers,
@@ -252,6 +278,28 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             source_options,
         ),
     };
+    if captured
+        && compiled
+            .as_ref()
+            .is_err_and(|failure| failure.requires_uncontrolled_linker())
+    {
+        // Preserve the existing explicit C-ABI compatibility path, without
+        // claiming its external linker has a closed input identity. Source or
+        // runtime failures never trigger this fallback.
+        eprintln!(
+            "warning: external native linking uses unproven input capture; artifact reuse is disabled"
+        );
+        compiled = compiler::compile_file_observed_with_options(
+            source.clone(),
+            workers,
+            check,
+            legacy_options,
+        );
+        captured = false;
+    }
+    if captured {
+        eprintln!("Input capture: immutable native source namespace (artifact sharing disabled)");
+    }
     let compiler_wall_ns = start.elapsed().as_nanos();
     // Snapshot before profile serialization so its own allocations are excluded.
     let allocation = profile.as_ref().map(|_| allocator_json());
