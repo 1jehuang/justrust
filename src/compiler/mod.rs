@@ -487,6 +487,21 @@ struct SourceAccounting {
     probes: Vec<source::SourceProbeRecord>,
 }
 impl crate::engine::Fact for SourceAccounting {}
+impl SourceAccounting {
+    fn validate_runtime(&self) -> Result<(), Error> {
+        if self
+            .compiler_image
+            .as_ref()
+            .is_some_and(|image| image.matches_current())
+        {
+            Ok(())
+        } else {
+            Err(Error::new(
+                "infrastructure: compiler runtime inputs changed or could not be revalidated",
+            ))
+        }
+    }
+}
 const SOURCE_ACCOUNTING_OUTPUT: usize = 3;
 
 #[derive(Debug)]
@@ -2719,6 +2734,12 @@ impl Provider for CompilerProvider {
                     )
                 }
                 CHECK | BUILD => {
+                    // Demand independently of signatures, then consume only at
+                    // the success boundary. The source graph owns this evidence.
+                    let runtime = this.0.source_options.source_snapshot.as_ref().map(|_| {
+                        cx.request(keys::ResolveDebtRoot.key())
+                            .get(SOURCE_ACCOUNTING_OUTPUT)
+                    });
                     // Closed source roots are keyed by callable index;
                     // BUILD discovers the generic frontier per instance.
                     let types = facts.types().await?;
@@ -2814,6 +2835,10 @@ impl Provider for CompilerProvider {
                                 associated_constant_graph::AssociatedConstantCheckedFact,
                             > = cx.read_fact(handle).await?;
                             checked.validate(&types, declaration, &this.0.budget)?;
+                        }
+                        if let Some(runtime) = runtime {
+                            let accounting: Arc<SourceAccounting> = cx.read_fact(runtime).await?;
+                            accounting.validate_runtime()?;
                         }
                         return cx.publish(0, 1);
                     }
@@ -2974,6 +2999,10 @@ impl Provider for CompilerProvider {
                         backend::link(&objects)
                     }
                     .map_err(Error::new)?;
+                    if let Some(runtime) = runtime {
+                        let accounting: Arc<SourceAccounting> = cx.read_fact(runtime).await?;
+                        accounting.validate_runtime()?;
+                    }
                     cx.publish_fact(0, bytes)
                 }
                 _ => Err(Error::new("unknown compiler operation")),

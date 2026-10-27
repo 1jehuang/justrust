@@ -1,6 +1,7 @@
 //! Bounded identity of the running compiler and its executable file mappings.
-//! This is on-disk identity evidence, not proof of in-memory code, process state,
-//! external tools, or an atomic filesystem snapshot. It never grants cache permission.
+//! Includes bounded process-visible configuration, not proof of arbitrary
+//! in-memory code/state, external tools, or an atomic filesystem snapshot.
+//! It never grants cache permission.
 use std::fs::{File, Metadata};
 use std::io::{self, Read};
 use std::sync::Arc;
@@ -154,11 +155,13 @@ fn read_mappings() -> io::Result<Vec<ExecutableMapping>> {
 
 #[cfg(target_os = "linux")]
 fn capture_runtime() -> io::Result<CompilerImage> {
+    let process = current_process_identity()?;
     let mappings = read_mappings()?;
     let executable = capture(File::open("/proc/self/exe")?, MAX_IMAGE_BYTES)?;
     let mut bytes = executable.bytes;
     let mut hash = blake3::Hasher::new();
-    hash.update(b"justrust-running-compiler-runtime-v2");
+    hash.update(b"justrust-running-compiler-runtime-v3");
+    hash.update(&process);
     hash.update(&executable.digest);
     let mut files = Vec::new();
     for mapping in &mappings {
@@ -184,6 +187,7 @@ fn capture_runtime() -> io::Result<CompilerImage> {
     }
     if read_mappings()? != mappings
         || capture(File::open("/proc/self/exe")?, MAX_IMAGE_BYTES)? != executable
+        || current_process_identity()? != process
     {
         return Err(invalid("runtime mappings changed during capture"));
     }
@@ -191,6 +195,80 @@ fn capture_runtime() -> io::Result<CompilerImage> {
         bytes,
         digest: *hash.finalize().as_bytes(),
     })
+}
+
+#[cfg(target_os = "linux")]
+fn current_process_identity() -> io::Result<[u8; 32]> {
+    let mut limits = Vec::new();
+    File::open("/proc/self/limits")?
+        .take(64 * 1024 + 1)
+        .read_to_end(&mut limits)?;
+    if limits.len() > 64 * 1024 {
+        return Err(invalid("process resource limits exceed identity limit"));
+    }
+    process_identity(
+        &std::env::current_dir()?,
+        std::env::args_os(),
+        std::env::vars_os(),
+        &limits,
+    )
+}
+
+#[cfg(target_os = "linux")]
+fn process_identity(
+    cwd: &std::path::Path,
+    arguments: impl IntoIterator<Item = std::ffi::OsString>,
+    environment: impl IntoIterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
+    limits: &[u8],
+) -> io::Result<[u8; 32]> {
+    const MAX_PROCESS_BYTES: usize = 1024 * 1024;
+    const MAX_PROCESS_ENTRIES: usize = 4096;
+    let mut remaining = MAX_PROCESS_BYTES;
+    let mut hash = blake3::Hasher::new();
+    hash.update(b"justrust-process-configuration-v1");
+    let mut frame = |bytes: &[u8]| -> io::Result<()> {
+        remaining = remaining
+            .checked_sub(bytes.len().saturating_add(8))
+            .ok_or_else(|| invalid("process configuration byte limit exceeded"))?;
+        hash.update(&(bytes.len() as u64).to_le_bytes());
+        hash.update(bytes);
+        Ok(())
+    };
+    frame(cwd.as_os_str().as_encoded_bytes())?;
+    frame(limits)?;
+    // Argument order matters. Environment entry order does not. Retain raw
+    // non-UTF-8 values, reject ambiguous duplicates, and never publish plaintext credentials.
+    let mut count = 0usize;
+    for argument in arguments {
+        count += 1;
+        if count > MAX_PROCESS_ENTRIES {
+            return Err(invalid("argument identity limit exceeded"));
+        }
+        frame(&[0])?;
+        frame(argument.as_encoded_bytes())?;
+    }
+    frame(&[1])?;
+    let mut entries = Vec::new();
+    let mut environment_bytes = 0usize;
+    for (name, value) in environment {
+        count += 1;
+        environment_bytes = environment_bytes
+            .saturating_add(name.len())
+            .saturating_add(value.len());
+        if count > MAX_PROCESS_ENTRIES || environment_bytes > MAX_PROCESS_BYTES {
+            return Err(invalid("environment identity limit exceeded"));
+        }
+        entries.push((name, value));
+    }
+    entries.sort();
+    if entries.windows(2).any(|pair| pair[0].0 == pair[1].0) {
+        return Err(invalid("duplicate process environment key"));
+    }
+    for (name, value) in entries {
+        frame(name.as_encoded_bytes())?;
+        frame(value.as_encoded_bytes())?;
+    }
+    Ok(*hash.finalize().as_bytes())
 }
 
 #[cfg(target_os = "linux")]
@@ -275,6 +353,164 @@ fn capture(mut file: File, limit: u64) -> io::Result<CompilerImage> {
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
+    #[test]
+    fn frozen_graph_rejects_forged_runtime_before_success_publication() {
+        use crate::compiler::{
+            self,
+            source::{SourceOptions, SourceSnapshot},
+        };
+        let frozen = SourceSnapshot::new(
+            "/frozen-runtime-graph".into(),
+            [("main.rs".into(), b"fn main() {}".to_vec())],
+        )
+        .unwrap();
+        let mut forged = (*CompilerImage::current().unwrap()).clone();
+        forged.digest[0] ^= 1;
+        for workers in [1, 8] {
+            for image in [None, Some(Arc::new(forged.clone()))] {
+                let snapshot = Arc::new(compiler::Snapshot {
+                    input: compiler::Input::File("/frozen-runtime-graph/main.rs".into()),
+                    source_options: SourceOptions {
+                        source_snapshot: Some(frozen.clone()),
+                        compiler_image: image,
+                        ..Default::default()
+                    },
+                    budget: compiler::ir::PlanBudget::default(),
+                });
+                let engine = crate::engine::Engine::new(compiler::CompilerProvider(snapshot));
+                let check = engine.request(compiler::keys::CheckRoot.key());
+                let build = engine.request(compiler::keys::BuildRoot.key());
+                engine.run(workers).unwrap();
+                assert!(check.completion().is_err());
+                assert!(build.completion().is_err());
+                assert!(build.fact::<Vec<u8>>(0).is_err());
+            }
+        }
+    }
+    #[test]
+    fn runtime_process_child() {
+        if std::env::var_os("JR_PROCESS_IDENTITY_CHILD").is_none() {
+            return;
+        }
+        let image = CompilerImage::current().unwrap();
+        println!("PROCESS_DIGEST:{:?}", image.digest());
+        assert!(image.matches_current());
+    }
+
+    #[test]
+    fn public_runtime_identity_tracks_process_configuration() {
+        let root = std::env::temp_dir().join(format!("jr-process-identity-{}", std::process::id()));
+        let other = root.join("other");
+        std::fs::create_dir_all(&other).unwrap();
+        let run = |cwd: &std::path::Path, value: &str| {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "compiler::procfs::tests::runtime_process_child",
+                    "--nocapture",
+                ])
+                .env("JR_PROCESS_IDENTITY_CHILD", "1")
+                .env("JR_PROCESS_IDENTITY_VALUE", value)
+                .current_dir(cwd)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            String::from_utf8(output.stdout)
+                .unwrap()
+                .lines()
+                .find(|line| line.starts_with("PROCESS_DIGEST:"))
+                .expect("child did not emit identity")
+                .to_owned()
+        };
+        let first = run(&root, "first");
+        assert_eq!(first, run(&root, "first"));
+        assert_ne!(first, run(&root, "changed"));
+        assert_ne!(first, run(&other, "first"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn process_configuration_identity_is_framed_bounded_and_sensitive() {
+        use std::ffi::OsString;
+        use std::path::Path;
+        let env = vec![
+            (OsString::from("A"), OsString::from("one")),
+            ("B".into(), "two".into()),
+        ];
+        let identity =
+            |cwd: &str, args: Vec<OsString>, env: Vec<(OsString, OsString)>, limits: &[u8]| {
+                process_identity(Path::new(cwd), args, env, limits)
+            };
+        let first = identity("/root", vec!["compiler".into()], env.clone(), b"limits").unwrap();
+        let mut reversed = env.clone();
+        reversed.reverse();
+        assert_eq!(
+            first,
+            identity("/root", vec!["compiler".into()], reversed, b"limits").unwrap()
+        );
+        for other in [
+            identity("/other", vec!["compiler".into()], env.clone(), b"limits"),
+            identity(
+                "/root",
+                vec!["compiler".into(), "--check".into()],
+                env.clone(),
+                b"limits",
+            ),
+            identity(
+                "/root",
+                vec!["compiler".into()],
+                vec![("A".into(), "changed".into())],
+                b"limits",
+            ),
+            identity(
+                "/root",
+                vec!["compiler".into()],
+                env.clone(),
+                b"different limit",
+            ),
+        ] {
+            assert_ne!(first, other.unwrap());
+        }
+        assert!(
+            identity(
+                "/root",
+                vec![],
+                vec![("A".into(), "one".into()), ("A".into(), "two".into())],
+                b""
+            )
+            .is_err()
+        );
+        assert!(identity("/root", vec!["argument".into(); 4097], vec![], b"").is_err());
+        assert!(
+            identity(
+                "/root",
+                vec![],
+                vec![("A".into(), "x".repeat(1024 * 1024).into())],
+                b""
+            )
+            .is_err()
+        );
+        use std::os::unix::ffi::OsStringExt;
+        assert_ne!(
+            identity(
+                "/root",
+                vec![],
+                vec![("A".into(), OsString::from_vec(vec![0xff]))],
+                b""
+            )
+            .unwrap(),
+            identity(
+                "/root",
+                vec![],
+                vec![("A".into(), OsString::from_vec(vec![0xfe]))],
+                b""
+            )
+            .unwrap()
+        );
+    }
     #[test]
     fn mapped_file_mutation_replacement_and_removal_are_detected() {
         use std::os::unix::fs::MetadataExt;

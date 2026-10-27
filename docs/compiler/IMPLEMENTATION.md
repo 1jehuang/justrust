@@ -1982,8 +1982,13 @@ PlanCtx/interner/source-context debt and wide adapter activation remain held.
       unproven rather than authorizing reuse. Synthetic Program fixtures do not
       claim image coverage. Executable file-backed runtime mappings now add bounded
       content identities, inode/device checks and whole-capture revalidation; deleted,
-      unknown or writable executable mappings fail closed (`--lib procfs`). These
-      are on-disk identities, not proof of in-memory code or process state.
+      unknown or writable executable mappings fail closed (`--lib procfs`). Current
+      directory, argument order, raw environment values and Linux resource limits
+      also enter the digest and are rechecked after capture. Environment order is
+      canonical, duplicate names and bounded-capture exhaustion reject. Frozen
+      CHECK/BUILD roots consume the graph's runtime receipt and revalidate it
+      before publishing success, rejecting absent/forged runtime evidence.
+      These identities do not seal arbitrary in-memory code or process state.
       Caller-owned `SourceSnapshot` namespaces can now supply both source reads and
       native manifest/path-dependency discovery through `Driver::from_snapshot`.
       Directory/target discovery and explicit environment values use that same
