@@ -106,8 +106,31 @@ impl SourceSnapshot {
         Ok(path)
     }
 
-    pub(super) fn reader(&self) -> SnapshotReader<'_> {
+    pub(crate) fn reader(&self) -> SnapshotReader<'_> {
         SnapshotReader(self)
+    }
+
+    pub(crate) fn paths(&self) -> impl Iterator<Item = &Path> {
+        self.files.keys().map(PathBuf::as_path)
+    }
+
+    pub(crate) fn read_dir(&self, path: &Path) -> io::Result<Vec<std::ffi::OsString>> {
+        let path = self.path(path)?;
+        if !self.directories.contains(&path) {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "snapshot directory is absent",
+            ));
+        }
+        Ok(self
+            .files
+            .keys()
+            .chain(self.directories.iter())
+            .filter(|entry| entry.parent() == Some(path.as_path()))
+            .filter_map(|entry| entry.file_name().map(ToOwned::to_owned))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect())
     }
 }
 
@@ -137,7 +160,7 @@ fn normalize(path: &Path) -> io::Result<PathBuf> {
     Ok(normalized)
 }
 
-pub(super) struct SnapshotReader<'a>(&'a SourceSnapshot);
+pub(crate) struct SnapshotReader<'a>(&'a SourceSnapshot);
 impl SourceReader for SnapshotReader<'_> {
     fn input_domain(&self) -> InputDomain {
         InputDomain::Snapshot
@@ -174,6 +197,262 @@ impl SourceReader for SnapshotReader<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn frozen_project_discovery_drives_check_build_run_without_host_reads() {
+        use crate::project::{
+            driver::{Command, Driver, Selection},
+            manifest,
+        };
+        let root = std::env::temp_dir().join(format!("jr-frozen-project-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::create_dir_all(root.join("dep/src")).unwrap();
+        let files = [
+            (
+                "Cargo.toml",
+                "[package]\nname='frozen_app'\nversion='0.1.0'\nedition='2024'\n[dependencies]\ndep={path='dep'}\n",
+            ),
+            ("src/main.rs", "fn main() { assert_eq!(dep::value(), 42); }"),
+            (
+                "dep/Cargo.toml",
+                "[package]\nname='dep'\nversion='0.1.0'\nedition='2024'\n",
+            ),
+            ("dep/src/lib.rs", "pub fn value() -> i32 { 42 }"),
+        ];
+        for (path, bytes) in files {
+            std::fs::write(root.join(path), bytes).unwrap();
+        }
+        let stock = crate::compiler::stock_rustc::stock_rustc();
+        assert!(
+            std::process::Command::new(&stock)
+                .args([
+                    "--edition=2024",
+                    "--crate-name",
+                    "dep",
+                    "--crate-type",
+                    "rlib"
+                ])
+                .arg(root.join("dep/src/lib.rs"))
+                .arg("-o")
+                .arg(root.join("libdep.rlib"))
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert!(
+            std::process::Command::new(&stock)
+                .arg("--edition=2024")
+                .arg(root.join("src/main.rs"))
+                .arg("--extern")
+                .arg(format!("dep={}", root.join("libdep.rlib").display()))
+                .arg("-o")
+                .arg(root.join("stock"))
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert!(
+            std::process::Command::new(root.join("stock"))
+                .status()
+                .unwrap()
+                .success()
+        );
+        let frozen = SourceSnapshot::new(
+            root.clone(),
+            files
+                .into_iter()
+                .map(|(p, b)| (p.into(), b.as_bytes().to_vec())),
+        )
+        .unwrap();
+        let environment = BTreeMap::from([(
+            "CARGO_TARGET_DIR".to_owned(),
+            root.join("output").into_os_string(),
+        )]);
+        let first = manifest::load_snapshot(
+            frozen.clone(),
+            &root.join("Cargo.toml"),
+            environment.clone(),
+        )
+        .unwrap();
+        assert!(first.inputs.identity().is_some());
+        assert_eq!(first.packages.len(), 2);
+        for (path, _) in files {
+            std::fs::remove_file(root.join(path)).unwrap();
+        }
+        std::fs::write(root.join("Cargo.toml"), "not TOML").unwrap();
+        std::fs::write(root.join("src/main.rs"), "not Rust").unwrap();
+        let after = manifest::load_snapshot(
+            frozen.clone(),
+            &root.join("Cargo.toml"),
+            environment.clone(),
+        )
+        .unwrap();
+        assert_eq!(first.inputs.identity(), after.inputs.identity());
+        assert!(first.inputs.matches_current());
+        for workers in [1, 8] {
+            let driver = Driver::from_snapshot(
+                frozen.clone(),
+                &root.join("Cargo.toml"),
+                environment.clone(),
+                Selection {
+                    workers,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            for command in [Command::Check, Command::Build, Command::Run] {
+                assert_eq!(driver.run(command).unwrap(), 0);
+            }
+        }
+        let changed = SourceSnapshot::new(
+            root.clone(),
+            files.into_iter().map(|(p, b)| {
+                (
+                    p.into(),
+                    if p == "dep/src/lib.rs" {
+                        b"pub fn value() -> i32 { 7 }".to_vec()
+                    } else {
+                        b.as_bytes().to_vec()
+                    },
+                )
+            }),
+        )
+        .unwrap();
+        let options = crate::compiler::source::SourceOptions {
+            project_inputs: Some(first.inputs.clone()),
+            source_snapshot: Some(changed),
+            ..Default::default()
+        };
+        assert!(
+            crate::compiler::compile_file_observed_with_options(
+                root.join("src/main.rs"),
+                1,
+                true,
+                options
+            )
+            .is_err()
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn frozen_project_rejects_configs_tools_and_missing_manifests() {
+        use crate::project::manifest;
+        let root = PathBuf::from("/frozen-project-policy");
+        let base = [
+            (
+                "Cargo.toml",
+                "[package]\nname='app'\nversion='0.1.0'\nedition='2024'\n",
+            ),
+            ("src/main.rs", "fn main() {}"),
+        ];
+        let make = |extra: Option<(&str, &str)>| {
+            SourceSnapshot::new(
+                root.clone(),
+                base.into_iter()
+                    .chain(extra)
+                    .map(|(p, b)| (p.into(), b.as_bytes().to_vec())),
+            )
+            .unwrap()
+        };
+        for extra in [
+            (".cargo/config.toml", "[build]\nrustflags=['bad']"),
+            ("build.rs", "fn main() {}"),
+        ] {
+            assert!(
+                manifest::load_snapshot(
+                    make(Some(extra)),
+                    &root.join("Cargo.toml"),
+                    BTreeMap::new()
+                )
+                .is_err()
+            );
+        }
+        assert!(
+            manifest::load_snapshot(
+                make(None),
+                &root.join("missing/Cargo.toml"),
+                BTreeMap::new()
+            )
+            .is_err()
+        );
+        assert!(
+            manifest::load_snapshot(
+                make(None),
+                &root.join("Cargo.toml"),
+                BTreeMap::from([("RUSTFLAGS".into(), "-C opt-level=3".into())])
+            )
+            .is_err()
+        );
+        let registry = SourceSnapshot::new(
+            root.clone(),
+            [
+                (
+                    "Cargo.toml".into(),
+                    b"[package]\nname='app'\nversion='0.1.0'\n[dependencies]\ndep='1'\n".to_vec(),
+                ),
+                ("src/main.rs".into(), b"fn main() {}".to_vec()),
+            ],
+        )
+        .unwrap();
+        // Reject before probing registry caches or invoking archive tools.
+        assert!(
+            manifest::load_snapshot(registry, &root.join("Cargo.toml"), BTreeMap::new()).is_err()
+        );
+    }
+    #[test]
+    fn frozen_workspace_globs_and_environment_are_snapshot_bound() {
+        use crate::project::manifest;
+        let root = PathBuf::from("/frozen-workspace-globs");
+        let files = [
+            (
+                "Cargo.toml",
+                "[workspace]\nmembers=['crates/*']\nresolver='2'\n",
+            ),
+            (
+                "crates/app/Cargo.toml",
+                "[package]\nname='app'\nversion='0.1.0'\nedition='2024'\n",
+            ),
+            ("crates/app/src/main.rs", "fn main() {}"),
+            ("crates/app/src/bin/extra.rs", "fn main() {}"),
+        ];
+        let frozen = SourceSnapshot::new(
+            root.clone(),
+            files
+                .into_iter()
+                .map(|(p, b)| (p.into(), b.as_bytes().to_vec())),
+        )
+        .unwrap();
+        let first =
+            manifest::load_snapshot(frozen.clone(), &root.join("Cargo.toml"), BTreeMap::new())
+                .unwrap();
+        assert_eq!(first.members.len(), 1);
+        assert_eq!(first.packages[0].targets.len(), 2);
+        let changed_env = manifest::load_snapshot(
+            frozen.clone(),
+            &root.join("Cargo.toml"),
+            BTreeMap::from([("CARGO_TARGET_DIR".into(), "/another-output".into())]),
+        )
+        .unwrap();
+        assert_ne!(first.inputs.identity(), changed_env.inputs.identity());
+        let missing = SourceSnapshot::new(
+            root.clone(),
+            files
+                .into_iter()
+                .filter(|(p, _)| *p != "crates/app/Cargo.toml")
+                .map(|(p, b)| {
+                    let bytes = if p == "Cargo.toml" {
+                        b"[workspace]\nmembers=['crates/app']\nresolver='2'\n".to_vec()
+                    } else {
+                        b.as_bytes().to_vec()
+                    };
+                    (p.into(), bytes)
+                }),
+        )
+        .unwrap();
+        assert!(
+            manifest::load_snapshot(missing, &root.join("Cargo.toml"), BTreeMap::new()).is_err()
+        );
+    }
     fn snapshot(files: &[(&str, &str)]) -> Arc<SourceSnapshot> {
         SourceSnapshot::new(
             "/frozen".into(),

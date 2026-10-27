@@ -1506,7 +1506,7 @@ fn append_to(
     });
     Ok(())
 }
-trait SourceReader {
+pub(crate) trait SourceReader {
     /// Only sealed native readers may produce revalidatable observations.
     fn input_domain(&self) -> source_inputs::InputDomain {
         source_inputs::InputDomain::Untracked

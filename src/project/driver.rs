@@ -255,6 +255,17 @@ fn kind_label(unit: &Unit) -> &'static str {
 }
 
 impl Driver {
+    /// Construct a supported native project from one immutable discovery/source
+    /// namespace. No source or manifest read falls back to the host filesystem.
+    pub fn from_snapshot(
+        snapshot: std::sync::Arc<crate::compiler::source::SourceSnapshot>,
+        manifest_path: &Path,
+        environment: std::collections::BTreeMap<String, std::ffi::OsString>,
+        sel: Selection,
+    ) -> Result<Self, ManifestError> {
+        let ws = manifest::load_snapshot(snapshot, manifest_path, environment)?;
+        Ok(Self::from_workspace(ws, sel))
+    }
     pub fn new(manifest_path: &Path, sel: Selection) -> Result<Self, ManifestError> {
         let ws = manifest::load(manifest_path)?;
         Ok(Self::from_workspace(ws, sel))
@@ -348,6 +359,7 @@ impl Driver {
             }
             let mut options = SourceOptions {
                 project_inputs: Some(self.ws.inputs.clone()),
+                source_snapshot: self.ws.inputs.source_snapshot().cloned(),
                 edition: Edition::parse(&package.edition).map_err(err)?,
                 cfg: cfg_for(package, &resolved.enabled[unit.package])?,
                 externs: externs_for(&self.ws, unit, &resolved)?,

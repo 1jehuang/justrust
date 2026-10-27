@@ -1980,9 +1980,24 @@ PlanCtx/interner/source-context debt and wide adapter activation remain held.
       graph output, from which compilation results return it (`--lib procfs`).
       Caller-supplied image stamps are replaced; absent/oversized images remain
       unproven rather than authorizing reuse. Synthetic Program fixtures do not
-      claim image coverage. Registry planning IO, unsupported configuration sources,
-      dynamic libraries and process state, external tool identity, registry inspection
-      tools and uncontrolled build scripts/proc macros remain explicit gaps.
+      claim image coverage. Executable file-backed runtime mappings now add bounded
+      content identities, inode/device checks and whole-capture revalidation; deleted,
+      unknown or writable executable mappings fail closed (`--lib procfs`). These
+      are on-disk identities, not proof of in-memory code or process state.
+      Caller-owned `SourceSnapshot` namespaces can now supply both source reads and
+      native manifest/path-dependency discovery through `Driver::from_snapshot`.
+      Directory/target discovery and explicit environment values use that same
+      immutable namespace; graph source receipts reject a different discovery
+      snapshot. Frozen projects reject Cargo configuration files, registry/git
+      acquisition, uncontrolled environment settings and build scripts, while
+      native linking rejects uncontrolled external linkers. Acceptance:
+      `justrust test --lib source_snapshot` includes stock/native CHECK/BUILD/run
+      at workers 1/8 after host files are changed or removed, workspace globs,
+      missing/changed inputs and unsupported configuration/tool boundaries.
+      This is not an atomic capture of a live host directory, runtime-process
+      sealing or authorization to share artifacts. Live registry planning IO,
+      unsupported configuration sources, in-memory/process state, external tool
+      identity and uncontrolled build scripts/proc macros remain explicit gaps.
       Exhaustion or uncontrolled discovery cannot issue an input
       identity. No persistent or global private cache is enabled by this foundation.
 - [ ] Add bounded asynchronous persistence, atomic manifests, durable checkpoint

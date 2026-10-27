@@ -355,23 +355,28 @@ fn find_manifest_observed(start: &Path, inputs: &mut Recorder) -> Result<PathBuf
     let start = inputs
         .canonicalize(start)
         .map_err(|e| ManifestError(format!("{}: {e}", start.display())))?;
+    let requested = start.clone();
     let mut dir = if inputs.is_file(&start) {
         start.parent().map(Path::to_path_buf).unwrap_or(start)
     } else {
         start
     };
     loop {
+        if !inputs.within_namespace(&dir) {
+            break;
+        }
         let candidate = dir.join("Cargo.toml");
         if inputs.is_file(&candidate) {
             return Ok(candidate);
         }
         if !dir.pop() {
-            return err(format!(
-                "could not find `Cargo.toml` in `{}` or any parent directory",
-                dir.display()
-            ));
+            break;
         }
     }
+    err(format!(
+        "could not find `Cargo.toml` in `{}` or any admitted parent directory",
+        requested.display()
+    ))
 }
 
 /// Load the workspace containing `manifest`.
@@ -385,7 +390,38 @@ pub fn load_from_directory(start: &Path) -> Result<Workspace, ManifestError> {
 }
 
 fn load_request(path: &Path, discover: bool) -> Result<Workspace, ManifestError> {
-    let mut inputs = Recorder::new();
+    load_with_inputs(path, discover, Recorder::new())
+}
+
+/// Load a native workspace entirely from the caller-owned immutable namespace.
+/// Environment absence is explicit. Config overrides and external source/tool
+/// acquisition are not silently interpreted using the ambient host.
+pub fn load_snapshot(
+    snapshot: Arc<crate::compiler::source::SourceSnapshot>,
+    manifest: &Path,
+    environment: BTreeMap<String, std::ffi::OsString>,
+) -> Result<Workspace, ManifestError> {
+    if snapshot.paths().any(|path| {
+        path.parent()
+            .and_then(Path::file_name)
+            .is_some_and(|name| name == ".cargo")
+            && path
+                .file_name()
+                .is_some_and(|name| name == "config" || name == "config.toml")
+    }) {
+        return err(
+            "unsupported: immutable native projects do not yet support Cargo configuration files",
+        );
+    }
+    let inputs = Recorder::frozen(snapshot, environment).map_err(|e| ManifestError(e.into()))?;
+    load_with_inputs(manifest, false, inputs)
+}
+
+fn load_with_inputs(
+    path: &Path,
+    discover: bool,
+    mut inputs: Recorder,
+) -> Result<Workspace, ManifestError> {
     for name in ["CARGO_TARGET_DIR", "CARGO_HOME", "HOME"] {
         inputs.env(name);
     }
@@ -396,6 +432,9 @@ fn load_request(path: &Path, discover: bool) -> Result<Workspace, ManifestError>
     };
     let mut workspace = load_observed(&manifest, &mut inputs)?;
     workspace.inputs = inputs.finish();
+    if workspace.inputs.source_snapshot().is_some() && workspace.inputs.identity().is_none() {
+        return err("unsupported: immutable project discovery did not capture all inputs");
+    }
     Ok(workspace)
 }
 
@@ -409,6 +448,9 @@ fn load_observed(manifest: &Path, inputs: &mut Recorder) -> Result<Workspace, Ma
     if get(&own, "workspace").is_none() {
         let mut dir = manifest.parent().unwrap().to_path_buf();
         while dir.pop() {
+            if !inputs.within_namespace(&dir) {
+                break;
+            }
             let candidate = dir.join("Cargo.toml");
             if inputs.is_file(&candidate)
                 && let Ok(table) = read_manifest(&candidate, inputs)
@@ -481,6 +523,11 @@ fn load_observed(manifest: &Path, inputs: &mut Recorder) -> Result<Workspace, Ma
     while i < loader.packages.len() {
         let deps: Vec<_> = loader.packages[i].dependencies.clone();
         for dep in deps {
+            if loader.inputs.is_frozen() && !matches!(dep.source, DependencySource::Path(_)) {
+                return err(
+                    "unsupported: immutable native projects require path dependencies; registry/git acquisition and archive tools are not admitted",
+                );
+            }
             // Path declarations must still name a real package, as Cargo
             // validates manifests even for a non-selected target. Registry
             // source acquisition is unnecessary for an inactive edge.
@@ -506,6 +553,11 @@ fn load_observed(manifest: &Path, inputs: &mut Recorder) -> Result<Workspace, Ma
                     }
                 }
                 DependencySource::Registry(registry) => {
+                    if loader.inputs.is_frozen() {
+                        return err(
+                            "unsupported: immutable native projects cannot acquire registry packages or run archive tools",
+                        );
+                    }
                     loader.inputs.uncontrolled();
                     // Freeze successful discovery once. Missing optional sources
                     // remain unavailable in this workspace even if installed later.

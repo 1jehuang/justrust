@@ -29,7 +29,7 @@ struct Observation {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum InputDomain {
+pub(crate) enum InputDomain {
     Untracked,
     Filesystem,
     EmbeddedPrelude,
@@ -144,9 +144,17 @@ impl SourceInputs {
         if options.source_snapshot.is_none() {
             return Ok(());
         }
-        if self.project.is_some() {
+        if self.project.as_ref().is_some_and(|project| {
+            project.identity().is_none()
+                || !project.source_snapshot().is_some_and(|snapshot| {
+                    options
+                        .source_snapshot
+                        .as_ref()
+                        .is_some_and(|source| source.digest() == snapshot.digest())
+                })
+        }) {
             return Err(
-                "unsupported: live project discovery is not part of an immutable source snapshot",
+                "unsupported: project discovery must use the identical immutable source snapshot",
             );
         }
         if !self.complete || self.options.is_none() || self.options != option_identity(options) {
@@ -171,11 +179,11 @@ impl SourceInputs {
     /// In particular no arbitrary build-script/proc-macro execution is tracked.
     pub fn shareability_blockers(&self) -> &'static [&'static str] {
         &[
-            "project discovery evidence, if supplied, excludes registry planning IO and unsupported configuration sources",
-            "running compiler image must be present and revalidated; dynamic libraries and external tools remain unsealed",
+            "live project discovery excludes registry planning IO and unsupported configuration sources; frozen projects reject them",
+            "compiler executable and executable mapped files are identified on disk; runtime memory/process state and external tools remain unsealed",
             "attached reviewed source-probe receipts require separate validation",
             "build scripts and procedural macros require controlled input tracking",
-            "filesystem observations are not an atomic immutable snapshot",
+            "live filesystem observations are not an atomic immutable snapshot; caller-owned namespaces do not prove atomic host acquisition",
             "global private artifact sharing is disabled",
         ]
     }

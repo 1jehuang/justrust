@@ -1,6 +1,7 @@
 //! Bounded observations from native project discovery. No cache authorization.
 //! Each loader owns its recorder. Only the immutable receipt crosses into the
 //! source graph; no mutable recorder or filesystem handle is published.
+use crate::compiler::source::{SourceReader, SourceSnapshot};
 use std::ffi::{OsStr, OsString};
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
@@ -27,6 +28,7 @@ struct Observation {
 /// tools, registry planning IO and atomic snapshots remain outside this scope.
 #[derive(Clone, Debug)]
 pub struct DiscoveryInputs {
+    snapshot: Option<Arc<SourceSnapshot>>,
     environment: std::collections::BTreeMap<String, Option<OsString>>,
     path_packages: std::collections::BTreeMap<PathBuf, usize>,
     registry_packages:
@@ -47,6 +49,7 @@ impl crate::engine::Fact for DiscoveryInputs {}
 impl DiscoveryInputs {
     pub(crate) fn untracked() -> Arc<Self> {
         Arc::new(Self {
+            snapshot: None,
             environment: std::collections::BTreeMap::new(),
             path_packages: std::collections::BTreeMap::new(),
             registry_packages: std::collections::BTreeMap::new(),
@@ -68,6 +71,9 @@ impl DiscoveryInputs {
     pub fn observation_count(&self) -> usize {
         self.observations.len()
     }
+    pub fn source_snapshot(&self) -> Option<&Arc<SourceSnapshot>> {
+        self.snapshot.as_ref()
+    }
     pub fn identity(&self) -> Option<&[u8; 32]> {
         (self.complete && !self.uncontrolled).then_some(&self.identity)
     }
@@ -78,6 +84,10 @@ impl DiscoveryInputs {
     }
     /// Revalidate discovery only. This is not a race-free filesystem snapshot.
     pub fn matches_current(&self) -> bool {
+        if self.snapshot.is_some() {
+            // Both the namespace and environment are owned immutable inputs.
+            return self.complete && !self.uncontrolled;
+        }
         self.complete
             && !self.uncontrolled
             && self.observations.iter().all(|o| {
@@ -106,6 +116,7 @@ impl DiscoveryInputs {
 }
 
 pub(crate) struct Recorder {
+    snapshot: Option<Arc<SourceSnapshot>>,
     environment: std::collections::BTreeMap<String, Option<OsString>>,
     path_packages: std::collections::BTreeMap<PathBuf, usize>,
     registry_packages:
@@ -124,6 +135,7 @@ impl Recorder {
         let mut identity = blake3::Hasher::new();
         identity.update(b"justrust-project-discovery-v2");
         Self {
+            snapshot: None,
             environment: std::collections::BTreeMap::new(),
             path_packages: std::collections::BTreeMap::new(),
             registry_packages: std::collections::BTreeMap::new(),
@@ -135,6 +147,47 @@ impl Recorder {
             binding_remaining: MAX_BYTES,
             identity,
         }
+    }
+    pub(crate) fn frozen(
+        snapshot: Arc<SourceSnapshot>,
+        environment: std::collections::BTreeMap<String, OsString>,
+    ) -> Result<Self, &'static str> {
+        let mut size = 0usize;
+        for (name, value) in &environment {
+            if !matches!(name.as_str(), "CARGO_TARGET_DIR" | "CARGO_HOME" | "HOME") {
+                return Err(
+                    "unsupported: immutable project environment contains an uncontrolled setting",
+                );
+            }
+            size = size.saturating_add(name.len()).saturating_add(value.len());
+        }
+        if size > MAX_BYTES {
+            return Err("immutable project environment exceeds input limit");
+        }
+        let mut identity = blake3::Hasher::new();
+        identity.update(b"justrust-frozen-project-discovery-v1");
+        identity.update(snapshot.digest());
+        Ok(Self {
+            cwd: Some(snapshot.root().to_owned()),
+            snapshot: Some(snapshot),
+            environment: environment.into_iter().map(|(k, v)| (k, Some(v))).collect(),
+            path_packages: Default::default(),
+            registry_packages: Default::default(),
+            observations: Vec::new(),
+            complete: true,
+            uncontrolled: false,
+            remaining: MAX_BYTES,
+            binding_remaining: MAX_BYTES,
+            identity,
+        })
+    }
+    pub(crate) fn is_frozen(&self) -> bool {
+        self.snapshot.is_some()
+    }
+    pub(crate) fn within_namespace(&self, path: &Path) -> bool {
+        self.snapshot
+            .as_ref()
+            .is_none_or(|snapshot| path.starts_with(snapshot.root()))
     }
     fn record(&mut self, path: &Path, value: Observed) {
         if !self.complete {
@@ -243,7 +296,10 @@ impl Recorder {
         }
     }
     pub(crate) fn canonicalize(&mut self, path: &Path) -> io::Result<PathBuf> {
-        let r = path.canonicalize();
+        let r = match &self.snapshot {
+            Some(snapshot) => snapshot.reader().canonicalize(path),
+            None => path.canonicalize(),
+        };
         self.record(
             path,
             Observed::Canonical(r.as_ref().cloned().map_err(|e| e.kind())),
@@ -254,7 +310,10 @@ impl Recorder {
         r
     }
     pub(crate) fn is_file(&mut self, path: &Path) -> bool {
-        let r = std::fs::metadata(path).map(|m| m.is_file());
+        let r = match &self.snapshot {
+            Some(snapshot) => snapshot.reader().is_file(path),
+            None => std::fs::metadata(path).map(|m| m.is_file()),
+        };
         self.record(
             path,
             Observed::FileKind(r.as_ref().copied().map_err(|e| e.kind())),
@@ -265,7 +324,10 @@ impl Recorder {
         r.unwrap_or(false)
     }
     pub(crate) fn read_to_string(&mut self, path: &Path) -> io::Result<String> {
-        let r = read_bounded(path);
+        let r = match &self.snapshot {
+            Some(snapshot) => snapshot.reader().read(path, MAX_BYTES + 1),
+            None => read_bounded(path),
+        };
         self.record(
             path,
             Observed::File(
@@ -280,7 +342,10 @@ impl Recorder {
         String::from_utf8(r?).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
     }
     pub(crate) fn read_dir(&mut self, path: &Path) -> io::Result<Vec<PathBuf>> {
-        let r = list_bounded(path);
+        let r = match &self.snapshot {
+            Some(snapshot) => snapshot.read_dir(path),
+            None => list_bounded(path),
+        };
         self.record(
             path,
             Observed::Directory(r.as_ref().cloned().map_err(|e| e.kind())),
@@ -291,7 +356,11 @@ impl Recorder {
         r.map(|names| names.into_iter().map(|n| path.join(n)).collect())
     }
     pub(crate) fn env(&mut self, name: &str) -> Option<OsString> {
-        let value = std::env::var_os(name);
+        let value = if self.snapshot.is_some() {
+            self.environment.get(name).cloned().flatten()
+        } else {
+            std::env::var_os(name)
+        };
         self.environment.insert(name.to_owned(), value.clone());
         self.record(Path::new(name), Observed::Environment(value.clone()));
         value
@@ -380,6 +449,7 @@ impl Recorder {
     }
     pub(crate) fn finish(self) -> Arc<DiscoveryInputs> {
         Arc::new(DiscoveryInputs {
+            snapshot: self.snapshot,
             environment: self.environment,
             path_packages: self.path_packages,
             registry_packages: self.registry_packages,
