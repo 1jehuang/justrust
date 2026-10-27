@@ -513,9 +513,9 @@ impl Resolver<'_> {
             })
             .ok_or_else(|| "missing checked type alias declaration".into())
     }
-    fn resolve_aliases(&mut self) -> Result<(), String> {
-        // Source spans supply deterministic traversal order, never name identity.
-        let roots = self.ordered_paths()?;
+    /// Resolve every alias declared at `roots` (and its dependencies) so
+    /// unused cyclic aliases still reject. Roots come in source order.
+    fn resolve_aliases(&mut self, roots: Vec<AstPath>) -> Result<(), String> {
         #[expect(
             clippy::mutable_key_type,
             reason = "PathKey hashes immutable owner/anchor/namespace/name keys only; its shared resource ledger is not semantic identity"
@@ -4192,6 +4192,8 @@ pub struct ResolvedModuleItems {
     traits: Vec<(usize, TraitDecl, TraitResolution)>,
     /// First failing empty use-group prefix. Ranked first.
     prefix_error: Option<(usize, String)>,
+    /// First alias error of this module. Ranked after declared paths.
+    alias_error: Option<String>,
     /// First failing glob import. Ranked after prefixes.
     glob_error: Option<(usize, String)>,
     /// First failing declared path, by crate source order. Ranked after globs.
@@ -4264,6 +4266,14 @@ pub fn resolve_module_items(
             glob_error = Some((index, diagnostic));
             break;
         }
+    }
+    let mut alias_error = None;
+    let roots = namespace.declared[ordinal]
+        .iter()
+        .map(|&order| namespace.paths[order].clone())
+        .collect::<Vec<_>>();
+    if let Err(diagnostic) = resolver.resolve_aliases(roots) {
+        alias_error = Some(diagnostic);
     }
     let mut path_error = None;
     for &order in namespace
@@ -4386,6 +4396,7 @@ pub fn resolve_module_items(
         traits,
         prefix_error,
         glob_error,
+        alias_error,
         path_error,
         constant_error,
         constants,
@@ -4817,7 +4828,6 @@ pub fn prepare_resolution_owned(parsed: Arc<ParsedProgram>) -> Result<Resolution
         path_sources.push((module, order));
     }
     let prepare_error = (|| -> Result<(), String> {
-    resolver.resolve_aliases()?;
     let root = parsed
         .program
         .modules
@@ -5359,6 +5369,9 @@ fn finish_resolution_with<T>(
         .filter_map(|item| item.path_error.as_ref())
         .min_by_key(|(order, _)| *order)
     {
+        return Err(diagnostic.clone());
+    }
+    if let Some(diagnostic) = items.iter().find_map(|item| item.alias_error.as_ref()) {
         return Err(diagnostic.clone());
     }
     if let Some(diagnostic) = &namespace.prepare_error {
