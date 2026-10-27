@@ -52,7 +52,10 @@ fn guarded(body: &ir::CheckedFunction) -> (ir::ExprId, ir::ExprId, ir::ExprId) {
         .iter()
         .enumerate()
         .filter_map(|(index, expr)| {
-            if let ir::ExprKind::Match { scrutinee, arms } = &expr.kind {
+            if let ir::ExprKind::Match {
+                scrutinee, arms, ..
+            } = &expr.kind
+            {
                 Some((ir::ExprId(index), *scrutinee, arms))
             } else {
                 None

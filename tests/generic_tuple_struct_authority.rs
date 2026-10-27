@@ -313,10 +313,22 @@ fn real_concrete_applications_share_declaration_not_application_identity_or_fiel
     assert_ne!(ints.def().id, bools.def().id);
     assert_eq!(ints.def().type_args.as_ref(), &[Ty::Int(ir::IntTy::I32)]);
     assert_eq!(bools.def().type_args.as_ref(), &[Ty::Bool]);
-    assert_eq!(ints.def().fields[0].ty, Ty::Int(ir::IntTy::I32));
-    assert_eq!(bools.def().fields[0].ty, Ty::Bool);
-    assert_eq!(ints.def().fields[1].ty, Ty::Bool);
-    assert_eq!(bools.def().fields[1].ty, Ty::Bool);
+    assert_eq!(
+        ints.def().fields.read(&ir::PlanBudget::default()).unwrap()[0].ty,
+        Ty::Int(ir::IntTy::I32)
+    );
+    assert_eq!(
+        bools.def().fields.read(&ir::PlanBudget::default()).unwrap()[0].ty,
+        Ty::Bool
+    );
+    assert_eq!(
+        ints.def().fields.read(&ir::PlanBudget::default()).unwrap()[1].ty,
+        Ty::Bool
+    );
+    assert_eq!(
+        bools.def().fields.read(&ir::PlanBudget::default()).unwrap()[1].ty,
+        Ty::Bool
+    );
     fixture
         .ints
         .clone()
@@ -342,7 +354,15 @@ fn real_universal_wrapper_retains_actual_param_id_in_nominal_arguments_and_field
         nominal.def().type_args.as_ref(),
         &[Ty::Param(parameters[0])]
     );
-    assert_eq!(nominal.def().fields[0].ty, Ty::Param(parameters[0]));
+    assert_eq!(
+        nominal
+            .def()
+            .fields
+            .read(&ir::PlanBudget::default())
+            .unwrap()[0]
+            .ty,
+        Ty::Param(parameters[0])
+    );
     assert_eq!(
         checked.locals[checked.params[0].0].ty,
         Ty::Param(parameters[0])

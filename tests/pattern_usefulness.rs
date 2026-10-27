@@ -454,13 +454,22 @@ fn projected_type(domain: &ir::Ty, path: &[ir::Projection], prior: &[ir::Pattern
                         let variant = selected
                             .take()
                             .expect("enum field without a preceding downcast");
-                        enumeration.def().variants[variant].fields[*field]
+                        enumeration.def().variants[variant]
+                            .fields
+                            .read(&ir::PlanBudget::default())
+                            .unwrap()[*field]
                             .ty
                             .clone()
                     }
                     ir::Ty::Struct(structure) => {
                         assert!(selected.is_none());
-                        structure.def().fields[*field].ty.clone()
+                        structure
+                            .def()
+                            .fields
+                            .read(&ir::PlanBudget::default())
+                            .unwrap()[*field]
+                            .ty
+                            .clone()
                     }
                     ir::Ty::Tuple(fields) => {
                         assert!(selected.is_none());

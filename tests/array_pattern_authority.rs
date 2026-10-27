@@ -84,6 +84,7 @@ fn fixture() -> CheckedFunction {
                         guard: None,
                         body: ExprId(1),
                     }],
+                    scrutinee_scope: false,
                 },
             },
         ],
@@ -521,6 +522,7 @@ fn structural_ir_admission_does_not_grant_noncopy_indexed_move_permission() {
                     guard: None,
                     body: ExprId(1),
                 }],
+                scrutinee_scope: false,
             },
         },
     ];
