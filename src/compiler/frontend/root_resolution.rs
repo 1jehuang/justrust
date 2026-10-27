@@ -4104,6 +4104,8 @@ pub struct ResolutionNamespace {
     traits: Vec<Vec<usize>>,
     /// Constant declarations per module ordinal, in source order.
     constants: Vec<Vec<usize>>,
+    /// Parsed inline-constant indices per module ordinal, in source order.
+    inline_constants: Vec<Vec<usize>>,
     /// Empty use-group prefixes per module ordinal, in parse order.
     prefixes: Vec<Vec<usize>>,
     /// Glob imports per module ordinal, in parse order.
@@ -4192,6 +4194,8 @@ pub struct ResolvedModuleItems {
     traits: Vec<(usize, TraitDecl, TraitResolution)>,
     /// First failing empty use-group prefix. Ranked first.
     prefix_error: Option<(usize, String)>,
+    /// First failing inline constant (parsed index). Ranked after entry checks.
+    inline_error: Option<(usize, String)>,
     /// Trait imports declared in this module, keyed by declared-path order.
     trait_imports: Vec<(usize, ModuleId, TraitPath)>,
     /// First alias error of this module. Ranked after declared paths.
@@ -4299,6 +4303,25 @@ pub fn resolve_module_items(
             collect_trait_imports(&mut resolver, order, path, &mut trait_imports)
         {
             path_error = Some((order, diagnostic));
+            break;
+        }
+    }
+    let mut inline_error = None;
+    for &index in namespace
+        .inline_constants
+        .get(ordinal)
+        .ok_or("foreign resolution module ordinal")?
+    {
+        let declaration = parsed
+            .program
+            .constants
+            .get(index)
+            .ok_or("foreign inline constant")?;
+        let mut probe = Expr::Var(declaration.name.clone());
+        if let Err(diagnostic) =
+            resolver.inline_constant(&mut probe, &declaration.name, &mut vec![])
+        {
+            inline_error = Some((index, diagnostic));
             break;
         }
     }
@@ -4413,6 +4436,7 @@ pub fn resolve_module_items(
         glob_error,
         alias_error,
         trait_imports,
+        inline_error,
         path_error,
         constant_error,
         constants,
@@ -4876,14 +4900,6 @@ pub fn prepare_resolution_owned(parsed: Arc<ParsedProgram>) -> Result<Resolution
             }
         }
     }
-        // Inlined constants have no CONST_VALUE fact; their uses carry the
-        // value. Each is still resolved once so unused bad items reject.
-        for declaration in &parsed.program.constants {
-            if const_inline::needs_inline(declaration) {
-                let mut probe = Expr::Var(declaration.name.clone());
-                resolver.inline_constant(&mut probe, &declaration.name, &mut vec![])?;
-            }
-        }
         Ok(())
     })()
     .err();
@@ -4927,6 +4943,7 @@ pub fn prepare_resolution_owned(parsed: Arc<ParsedProgram>) -> Result<Resolution
     let mut traits: Vec<Vec<usize>> = Vec::new();
     let mut constants: Vec<Vec<usize>> = Vec::new();
     let mut declared: Vec<Vec<usize>> = Vec::new();
+    let mut inline_constants: Vec<Vec<usize>> = Vec::new();
     let mut prefixes: Vec<Vec<usize>> = Vec::new();
     let mut globs: Vec<Vec<usize>> = Vec::new();
     let ordinal_of = |module: ModuleId,
@@ -5042,6 +5059,25 @@ pub fn prepare_resolution_owned(parsed: Arc<ParsedProgram>) -> Result<Resolution
         );
         impls[ordinal].push(index);
     }
+    // Inlined constants have no CONST_VALUE fact; their uses carry the value.
+    // Each is still resolved once, in its module fact, so unused bad items reject.
+    for (index, declaration) in parsed.program.constants.iter().enumerate() {
+        if !const_inline::needs_inline(declaration) {
+            continue;
+        }
+        let ordinal = ordinal_of(
+            declaration.module,
+            &mut modules,
+            &mut functions,
+            &mut impls,
+            &mut nominals,
+            &mut traits,
+            &mut constants,
+            &mut declared,
+        );
+        inline_constants.resize_with(modules.len(), Vec::new);
+        inline_constants[ordinal].push(index);
+    }
     for (index, (module, _)) in parsed.empty_use_prefixes.iter().enumerate() {
         let ordinal = ordinal_of(
             *module,
@@ -5085,8 +5121,10 @@ pub fn prepare_resolution_owned(parsed: Arc<ParsedProgram>) -> Result<Resolution
     }
     prefixes.resize_with(modules.len(), Vec::new);
     globs.resize_with(modules.len(), Vec::new);
+    inline_constants.resize_with(modules.len(), Vec::new);
     let state = ResolutionState::capture(&resolver);
     Ok(ResolutionNamespace {
+        inline_constants,
         prefixes,
         globs,
         paths,
@@ -5393,6 +5431,20 @@ fn finish_resolution_with<T>(
         return Err(diagnostic.clone());
     }
     if let Some(diagnostic) = &namespace.prepare_error {
+        return Err(diagnostic.clone());
+    }
+    for item in &items {
+        if let Some((index, _)) = &item.inline_error
+            && !namespace.inline_constants[item.ordinal].contains(index)
+        {
+            return Err("foreign resolved module error inventory".into());
+        }
+    }
+    if let Some((_, diagnostic)) = items
+        .iter()
+        .filter_map(|item| item.inline_error.as_ref())
+        .min_by_key(|(index, _)| *index)
+    {
         return Err(diagnostic.clone());
     }
     if let Some((_, diagnostic)) = items
