@@ -3106,7 +3106,8 @@ fn item_index(key: &Key, missing: &str) -> Result<usize, Error> {
 /// One snapshot may serve check and build roots together without redoing checks.
 pub struct Compilation {
     /// Running-image evidence read back from the prepared-source graph fact.
-    /// Missing evidence never authorizes reuse; dynamic libraries are not covered.
+    /// Includes executable mapped files and bounded process configuration, not
+    /// arbitrary in-memory state. Missing evidence never authorizes reuse.
     pub compiler_image: Option<Arc<procfs::CompilerImage>>,
     pub executable: Option<Vec<u8>>,
     pub report: Report,

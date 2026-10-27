@@ -388,6 +388,63 @@ mod tests {
         }
     }
     #[test]
+    fn runtime_mapping_child() {
+        use std::os::fd::AsRawFd;
+        if std::env::var_os("JR_MAPPING_IDENTITY_CHILD").is_none() {
+            return;
+        }
+        unsafe extern "C" {
+            fn mmap(
+                address: *mut std::ffi::c_void,
+                length: usize,
+                protection: i32,
+                flags: i32,
+                fd: i32,
+                offset: i64,
+            ) -> *mut std::ffi::c_void;
+            fn munmap(address: *mut std::ffi::c_void, length: usize) -> i32;
+        }
+        let path = std::env::temp_dir().join(format!("jr-runtime-map-{}", std::process::id()));
+        std::fs::write(&path, vec![0u8; 4096]).unwrap();
+        let file = File::open(&path).unwrap();
+        let before = CompilerImage::current().unwrap();
+        // Linux PROT_READ | PROT_EXEC, MAP_PRIVATE. The mapping is never
+        // dereferenced or executed; only the kernel's mapping table is read.
+        let mapped = unsafe { mmap(std::ptr::null_mut(), 4096, 1 | 4, 2, file.as_raw_fd(), 0) };
+        assert_ne!(mapped as usize, usize::MAX, "executable mmap failed");
+        let added = CompilerImage::current().unwrap();
+        assert_ne!(before.digest(), added.digest());
+        assert!(!before.matches_current());
+        assert!(added.matches_current());
+        std::fs::write(&path, vec![1u8; 4096]).unwrap();
+        assert!(!added.matches_current());
+        let changed = CompilerImage::current().unwrap();
+        assert_ne!(added.digest(), changed.digest());
+        std::fs::remove_file(&path).unwrap();
+        assert!(CompilerImage::current().is_err());
+        // Replacing the pathname cannot legitimize the still-mapped old inode.
+        std::fs::write(&path, vec![1u8; 4096]).unwrap();
+        assert!(CompilerImage::current().is_err());
+        assert_eq!(unsafe { munmap(mapped, 4096) }, 0);
+        assert!(before.matches_current());
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn public_runtime_identity_tracks_mapped_file_mutations() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "compiler::procfs::tests::runtime_mapping_child",
+                "--nocapture",
+            ])
+            .env("JR_MAPPING_IDENTITY_CHILD", "1")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+    }
+
+    #[test]
     fn runtime_process_child() {
         if std::env::var_os("JR_PROCESS_IDENTITY_CHILD").is_none() {
             return;
