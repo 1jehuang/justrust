@@ -4095,6 +4095,8 @@ pub struct ResolutionNamespace {
     state: ResolutionState,
     modules: Vec<ModuleId>,
     functions: Vec<Vec<usize>>,
+    /// Implementation blocks per module ordinal, in source order.
+    impls: Vec<Vec<usize>>,
     associated_boundary: Option<String>,
     equality_boundary: Option<String>,
     associated_bound_sources: Vec<AssociatedBoundSource>,
@@ -4108,8 +4110,12 @@ pub struct ResolvedModuleItems {
     namespace_token: Arc<ResolutionToken>,
     // Source errors are values so completion order cannot select diagnostics.
     error: Option<(usize, String)>,
+    /// First failing implementation block of this module. Ranked after every
+    /// free-function error, then by implementation index.
+    impl_error: Option<(usize, String)>,
     ordinal: usize,
     functions: Vec<(usize, Function)>,
+    impls: Vec<(usize, ImplDecl)>,
     closures: HashMap<PathKey, closures::ClosureSource>,
     owners: HashMap<PathKey, Vec<PathKey>>,
 }
@@ -4153,6 +4159,25 @@ pub fn resolve_module_items(
         }
         functions.push((index, function));
     }
+    let mut impls = Vec::new();
+    let mut impl_error = None;
+    if error.is_none() {
+        let issuers = namespace.program.embedded_issuers.clone();
+        let blocks = namespace
+            .impls
+            .get(ordinal)
+            .ok_or("foreign resolution module ordinal")?;
+        impls.reserve_exact(blocks.len());
+        for &index in blocks {
+            let mut block = namespace.program.impls[index].clone();
+            if let Err(diagnostic) = resolve_impl_block(&mut resolver, index, &mut block, &issuers)
+            {
+                impl_error = Some((index, diagnostic));
+                break;
+            }
+            impls.push((index, block));
+        }
+    }
     resolver
         .resolved_closures
         .retain(|key, _| !namespace.state.resolved_closures.contains_key(key));
@@ -4167,10 +4192,105 @@ pub fn resolve_module_items(
     Ok(ResolvedModuleItems {
         namespace_token: namespace.token.clone(),
         error,
+        impl_error,
         ordinal,
         functions,
+        impls,
         closures: resolver.resolved_closures,
         owners: resolver.resolved_closure_owners,
+    })
+}
+
+/// Resolve one implementation block in place: header, associated items and
+/// bodies. Runs inside its module's RESOLVE_MODULE fact, never crate-wide.
+fn resolve_impl_block(
+    resolver: &mut Resolver<'_>,
+    source_index: usize,
+    block: &mut ImplDecl,
+    primitive_issuers: &[crate::compiler::source::EmbeddedOriginalFile],
+) -> Result<(), String> {
+    let owner = if block.trait_path.is_some() {
+        SourceOwnerContext::TraitImpl { source_index }
+    } else {
+        SourceOwnerContext::None
+    };
+    resolver.with_source_owner(owner, |resolver| {
+        resolver.type_params = block.type_params.clone();
+        resolver.bounds(&mut block.bounds, block.module)?;
+        // `impl Trait<Self> for T` means `impl Trait<T> for T`: `Self` in
+        // the header's trait arguments denotes the written self type.
+        if let Some(TraitPath::Source(path)) = &mut block.trait_path {
+            for segment in &mut path.segments {
+                for argument in segment.args.iter_mut().chain(
+                    segment
+                        .associated_types
+                        .iter_mut()
+                        .map(|binding| &mut binding.value),
+                ) {
+                    replace_self_type(argument, &block.self_ty, &resolver.alias_budget, 0)?;
+                }
+            }
+        }
+        if let Some(path) = &mut block.trait_path {
+            resolver.trait_path(path, block.module)?;
+        }
+        resolver.ty(&mut block.self_ty, block.module)?;
+        if resolver.contains_projection(&block.self_ty, 0)? {
+            return Err("unsupported: projection-bearing impl heads are unsupported".into());
+        }
+        resolver.self_nominal = match &block.self_ty {
+            Type::Named(path) => Some(path.clone()),
+            Type::Apply(path) => Some(path.path(resolver.names())?),
+            // Trait impls may target any type (primitives, references,
+            // tuples, slices); `Self` then has no nominal namespace.
+            _ if block.trait_path.is_some() => None,
+            _ => {
+                let receipt = block.primitive_source.as_ref()
+                    .ok_or("E0390: cannot define inherent impl for primitive types outside their authenticated source issuer")?;
+                receipt.replay_source(block, source_index, resolver.names(), &primitive_issuers)?;
+                None
+            },
+        };
+        resolver.self_allowed = true;
+        for associated in &mut block.associated_types {
+            validate_depth(DepthNode::Type(&associated.value))?;
+            resolver.ty(&mut associated.value, block.module)?;
+        }
+        for constant in &mut block.associated_constants {
+            clone_vector(&block.type_params, &resolver.alias_budget)?;
+            resolver.type_params = block.type_params.clone();
+            resolver.ty(&mut constant.ty, block.module)?;
+            if let Some(value) = &mut constant.initializer {
+                resolver.expr(
+                    value,
+                    block.module,
+                    &mut vec![std::collections::HashSet::new()],
+                )?;
+            }
+        }
+        for (item_index, item) in block.items.iter_mut().enumerate() {
+            resolver.current_callable = Some(CallableSource::Associated {
+                implementation: source_index,
+                item: item_index,
+            });
+            let function = &mut item.function;
+            resolver.type_params = block.type_params.clone();
+            for name in &function.type_params {
+                if resolver.param_contains(*name)? {
+                    return Err("duplicate visible generic parameter".into());
+                }
+                resolver.type_params.push(*name);
+            }
+            resolver.bounds(&mut function.bounds, block.module)?;
+            resolver.ty(&mut function.result, block.module)?;
+            for (_, ty) in &mut function.params {
+                resolver.ty(ty, block.module)?;
+            }
+            let names = resolver.function_locals(function, item.receiver)?;
+            validate_depth(DepthNode::Block(&function.body))?;
+            resolver.block(&mut function.body, block.module, &mut vec![names])?;
+        }
+        Ok(())
     })
 }
 
@@ -4655,6 +4775,7 @@ pub fn prepare_resolution_owned(parsed: Arc<ParsedProgram>) -> Result<Resolution
     }
     let mut modules = Vec::new();
     let mut functions: Vec<Vec<usize>> = Vec::new();
+    let mut impls: Vec<Vec<usize>> = Vec::new();
     // Anonymous adapters establish capture descriptors before parent bodies.
     for index in 0..program.functions.len() {
         if closures::anonymous_path(&program.functions[index].name, resolver.names())? {
@@ -4667,10 +4788,26 @@ pub fn prepare_resolution_owned(parsed: Arc<ParsedProgram>) -> Result<Resolution
                 } else {
                     modules.push(module);
                     functions.push(Vec::new());
+                    impls.push(Vec::new());
                     modules.len() - 1
                 };
             functions[ordinal].push(index);
         }
+    }
+    for (index, block) in program.impls.iter().enumerate() {
+        let ordinal = match modules
+            .iter()
+            .position(|candidate| *candidate == block.module)
+        {
+            Some(ordinal) => ordinal,
+            None => {
+                modules.push(block.module);
+                functions.push(Vec::new());
+                impls.push(Vec::new());
+                modules.len() - 1
+            }
+        };
+        impls[ordinal].push(index);
     }
     let state = ResolutionState::capture(&resolver);
     Ok(ResolutionNamespace {
@@ -4680,6 +4817,7 @@ pub fn prepare_resolution_owned(parsed: Arc<ParsedProgram>) -> Result<Resolution
         state,
         modules,
         functions,
+        impls,
         associated_boundary,
         equality_boundary,
         associated_bound_sources,
@@ -4748,10 +4886,35 @@ fn finish_resolution_with<T>(
         {
             return Err("foreign resolved module inventory".into());
         }
+        let expected = &namespace.impls[ordinal];
+        let prefix = match (&item.error, &item.impl_error) {
+            (Some(_), None) => &expected[..0],
+            (Some(_), Some(_)) => return Err("foreign resolved module error inventory".into()),
+            (None, Some((index, _))) if expected.get(item.impls.len()) == Some(index) => {
+                &expected[..item.impls.len()]
+            }
+            (None, Some(_)) => return Err("foreign resolved module error inventory".into()),
+            (None, None) => expected.as_slice(),
+        };
+        if !item
+            .impls
+            .iter()
+            .map(|(index, _)| *index)
+            .eq(prefix.iter().copied())
+        {
+            return Err("foreign resolved module inventory".into());
+        }
     }
     if let Some((_, diagnostic)) = items
         .iter()
         .filter_map(|item| item.error.as_ref())
+        .min_by_key(|(index, _)| *index)
+    {
+        return Err(diagnostic.clone());
+    }
+    if let Some((_, diagnostic)) = items
+        .iter()
+        .filter_map(|item| item.impl_error.as_ref())
         .min_by_key(|(index, _)| *index)
     {
         return Err(diagnostic.clone());
@@ -4766,6 +4929,9 @@ fn finish_resolution_with<T>(
         for (index, function) in item.functions {
             program.functions[index] = function;
         }
+        for (index, block) in item.impls {
+            program.impls[index] = block;
+        }
         for (key, source) in item.closures {
             if resolver.resolved_closures.insert(key, source).is_some() {
                 return Err("duplicate resolved closure source".into());
@@ -4778,92 +4944,6 @@ fn finish_resolution_with<T>(
                 .or_default()
                 .extend(children);
         }
-    }
-    let primitive_issuers = program.embedded_issuers.clone();
-    for (source_index, block) in program.impls.iter_mut().enumerate() {
-        let owner = if block.trait_path.is_some() {
-            SourceOwnerContext::TraitImpl { source_index }
-        } else {
-            SourceOwnerContext::None
-        };
-        resolver.with_source_owner(owner, |resolver| {
-            resolver.type_params = block.type_params.clone();
-            resolver.bounds(&mut block.bounds, block.module)?;
-            // `impl Trait<Self> for T` means `impl Trait<T> for T`: `Self` in
-            // the header's trait arguments denotes the written self type.
-            if let Some(TraitPath::Source(path)) = &mut block.trait_path {
-                for segment in &mut path.segments {
-                    for argument in segment.args.iter_mut().chain(
-                        segment
-                            .associated_types
-                            .iter_mut()
-                            .map(|binding| &mut binding.value),
-                    ) {
-                        replace_self_type(argument, &block.self_ty, &resolver.alias_budget, 0)?;
-                    }
-                }
-            }
-            if let Some(path) = &mut block.trait_path {
-                resolver.trait_path(path, block.module)?;
-            }
-            resolver.ty(&mut block.self_ty, block.module)?;
-            if resolver.contains_projection(&block.self_ty, 0)? {
-                return Err("unsupported: projection-bearing impl heads are unsupported".into());
-            }
-            resolver.self_nominal = match &block.self_ty {
-                Type::Named(path) => Some(path.clone()),
-                Type::Apply(path) => Some(path.path(resolver.names())?),
-                // Trait impls may target any type (primitives, references,
-                // tuples, slices); `Self` then has no nominal namespace.
-                _ if block.trait_path.is_some() => None,
-                _ => {
-                    let receipt = block.primitive_source.as_ref()
-                        .ok_or("E0390: cannot define inherent impl for primitive types outside their authenticated source issuer")?;
-                    receipt.replay_source(block, source_index, resolver.names(), &primitive_issuers)?;
-                    None
-                },
-            };
-            resolver.self_allowed = true;
-            for associated in &mut block.associated_types {
-                validate_depth(DepthNode::Type(&associated.value))?;
-                resolver.ty(&mut associated.value, block.module)?;
-            }
-            for constant in &mut block.associated_constants {
-                clone_vector(&block.type_params, &resolver.alias_budget)?;
-                resolver.type_params = block.type_params.clone();
-                resolver.ty(&mut constant.ty, block.module)?;
-                if let Some(value) = &mut constant.initializer {
-                    resolver.expr(
-                        value,
-                        block.module,
-                        &mut vec![std::collections::HashSet::new()],
-                    )?;
-                }
-            }
-            for (item_index, item) in block.items.iter_mut().enumerate() {
-                resolver.current_callable = Some(CallableSource::Associated {
-                    implementation: source_index,
-                    item: item_index,
-                });
-                let function = &mut item.function;
-                resolver.type_params = block.type_params.clone();
-                for name in &function.type_params {
-                    if resolver.param_contains(*name)? {
-                        return Err("duplicate visible generic parameter".into());
-                    }
-                    resolver.type_params.push(*name);
-                }
-                resolver.bounds(&mut function.bounds, block.module)?;
-                resolver.ty(&mut function.result, block.module)?;
-                for (_, ty) in &mut function.params {
-                    resolver.ty(ty, block.module)?;
-                }
-                let names = resolver.function_locals(function, item.receiver)?;
-                validate_depth(DepthNode::Block(&function.body))?;
-                resolver.block(&mut function.body, block.module, &mut vec![names])?;
-            }
-            Ok(())
-        })?;
     }
     let derived_debug = generated_metadata::materialize_debug(&mut program, derived_debug_source)?;
     for index in derived_debug {
