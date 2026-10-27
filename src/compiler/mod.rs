@@ -2766,10 +2766,17 @@ impl Provider for CompilerProvider {
                 CHECK | BUILD => {
                     // Demand independently of signatures, then consume only at
                     // the success boundary. The source graph owns this evidence.
-                    let runtime = this.0.source_options.source_snapshot.as_ref().map(|_| {
-                        cx.request(keys::ResolveDebtRoot.key())
-                            .get(SOURCE_ACCOUNTING_OUTPUT)
-                    });
+                    // Runtime evidence is a snapshot input, not a resolution
+                    // output: validate it directly at the success boundary.
+                    let runtime =
+                        this.0
+                            .source_options
+                            .source_snapshot
+                            .as_ref()
+                            .map(|_| SourceAccounting {
+                                compiler_image: this.0.source_options.compiler_image.clone(),
+                                ..SourceAccounting::default()
+                            });
                     // Closed source roots are keyed by callable index;
                     // BUILD discovers the generic frontier per instance.
                     let types = facts.types().await?;
@@ -2864,9 +2871,8 @@ impl Provider for CompilerProvider {
                             > = cx.read_fact(handle).await?;
                             checked.validate(&types, declaration, &this.0.budget)?;
                         }
-                        if let Some(runtime) = runtime {
-                            let accounting: Arc<SourceAccounting> = cx.read_fact(runtime).await?;
-                            accounting.validate_runtime()?;
+                        if let Some(runtime) = &runtime {
+                            runtime.validate_runtime()?;
                         }
                         return cx.publish(0, 1);
                     }
@@ -3027,9 +3033,8 @@ impl Provider for CompilerProvider {
                         backend::link(&objects)
                     }
                     .map_err(Error::new)?;
-                    if let Some(runtime) = runtime {
-                        let accounting: Arc<SourceAccounting> = cx.read_fact(runtime).await?;
-                        accounting.validate_runtime()?;
+                    if let Some(runtime) = &runtime {
+                        runtime.validate_runtime()?;
                     }
                     cx.publish_fact(0, bytes)
                 }
