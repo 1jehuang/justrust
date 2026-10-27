@@ -4114,8 +4114,6 @@ pub struct ResolutionNamespace {
     paths: Vec<AstPath>,
     /// Positions in `paths` validated by each module ordinal.
     declared: Vec<Vec<usize>>,
-    /// First alias, entry or inline-constant error, ranked after path errors.
-    prepare_error: Option<String>,
     /// First trait-import or derived-header error, ranked after constants.
     header_error: Option<String>,
     /// Anonymous adapter function indices per module ordinal, in source order.
@@ -4197,6 +4195,8 @@ pub struct ResolvedModuleItems {
     /// First failing anonymous adapter. Ranked after nominal errors.
     adapter_error: Option<(usize, String)>,
     adapters: Vec<(usize, Function)>,
+    /// Root-module entry-point error. Ranked after aliases.
+    entry_error: Option<String>,
     /// First failing inline constant (parsed index). Ranked after entry checks.
     inline_error: Option<(usize, String)>,
     /// Trait imports declared in this module, keyed by declared-path order.
@@ -4309,6 +4309,7 @@ pub fn resolve_module_items(
             break;
         }
     }
+    let entry_error = check_root_entry(namespace, ordinal, &mut resolver).err();
     let mut adapters = Vec::new();
     let mut adapter_error = None;
     for &index in namespace
@@ -4457,6 +4458,7 @@ pub fn resolve_module_items(
         trait_imports,
         adapter_error,
         adapters,
+        entry_error,
         inline_error,
         path_error,
         constant_error,
@@ -4888,42 +4890,6 @@ pub fn prepare_resolution_owned(parsed: Arc<ParsedProgram>) -> Result<Resolution
         let module = items.first().ok_or("empty source item bucket")?.module;
         path_sources.push((module, order));
     }
-    let prepare_error = (|| -> Result<(), String> {
-    let root = parsed
-        .program
-        .modules
-        .source_root()
-        .map_err(module_diagnostic)?;
-    let mut declared_entry = false;
-    for function in &parsed.program.functions {
-        if function.module == root && resolver.is_entry_path(&function.name)? {
-            declared_entry = true;
-        }
-    }
-    if !declared_entry {
-        for path in &paths {
-            if !resolver.is_entry_path(path)? {
-                continue;
-            }
-            if let Some(target) = resolver.item(path, root, false, false)?
-                && target.kind == ResolvedKind::Function
-            {
-                let key = resolver.key(target.source()?)?;
-                for function in &parsed.program.functions {
-                    if resolver.key(&function.name)? == key
-                        && function.type_params.is_empty()
-                        && function.params.is_empty()
-                        && matches!(function.result, Type::Unit)
-                    {
-                        return Err("imported main entry points are unsupported; declare a root main function".into());
-                    }
-                }
-            }
-        }
-    }
-        Ok(())
-    })()
-    .err();
     let mut program = parsed.program.clone();
     // Inlined constants have no CONST_VALUE fact; their uses carry the value.
     // Each is still resolved and qualified once so unused bad items reject.
@@ -5158,7 +5124,6 @@ pub fn prepare_resolution_owned(parsed: Arc<ParsedProgram>) -> Result<Resolution
         globs,
         paths,
         declared,
-        prepare_error,
         parsed: source,
         token: Arc::new(ResolutionToken {}),
         program,
@@ -5203,6 +5168,61 @@ fn collect_trait_imports(
                 }
             };
             imports.push((order, item.module, path));
+        }
+    }
+    Ok(())
+}
+
+/// The crate entry must be a root `main` declaration. Only the root module's
+/// fact checks this, from its own functions and declared paths.
+fn check_root_entry(
+    namespace: &ResolutionNamespace,
+    ordinal: usize,
+    resolver: &mut Resolver<'_>,
+) -> Result<(), String> {
+    let program = &namespace.parsed.program;
+    let root = program.modules.source_root().map_err(module_diagnostic)?;
+    if namespace.modules.get(ordinal) != Some(&root) {
+        return Ok(());
+    }
+    for &index in &namespace.functions[ordinal] {
+        if resolver.is_entry_path(&program.functions[index].name)? {
+            return Ok(());
+        }
+    }
+    for &order in &namespace.declared[ordinal] {
+        let path = &namespace.paths[order];
+        if !resolver.is_entry_path(path)? {
+            continue;
+        }
+        if let Some(target) = resolver.item(path, root, false, false)?
+            && target.kind == ResolvedKind::Function
+        {
+            let key = resolver.key(target.source()?)?;
+            let Some(module) = resolver
+                .items
+                .get(&key)
+                .and_then(|items| items.first())
+                .map(|item| item.module)
+            else {
+                continue;
+            };
+            let Some(target_ordinal) = namespace.modules.iter().position(|m| *m == module) else {
+                continue;
+            };
+            for &index in &namespace.functions[target_ordinal] {
+                let function = &program.functions[index];
+                if resolver.key(&function.name)? == key
+                    && function.type_params.is_empty()
+                    && function.params.is_empty()
+                    && matches!(function.result, Type::Unit)
+                {
+                    return Err(
+                        "imported main entry points are unsupported; declare a root main function"
+                            .into(),
+                    );
+                }
+            }
         }
     }
     Ok(())
@@ -5459,7 +5479,7 @@ fn finish_resolution_with<T>(
     if let Some(diagnostic) = items.iter().find_map(|item| item.alias_error.as_ref()) {
         return Err(diagnostic.clone());
     }
-    if let Some(diagnostic) = &namespace.prepare_error {
+    if let Some(diagnostic) = items.iter().find_map(|item| item.entry_error.as_ref()) {
         return Err(diagnostic.clone());
     }
     for item in &items {
