@@ -64,6 +64,8 @@ enum SourceOwnerContext {
 type PreludeMemoKey = (PathKey, ModuleId, bool, bool, bool);
 
 struct Resolver<'a> {
+    /// Associated member names across impls and traits (built once).
+    members: Arc<HashMap<NameKey, AssociatedMember>>,
     program: &'a Program,
     type_depth: usize,
     alias_cache: HashMap<PathKey, Type>,
@@ -287,44 +289,11 @@ impl Resolver<'_> {
     /// member name and no associated constant shares it. Selection of the exact
     /// owner and declaration happens during checking.
     fn names_associated_function(&self, name: AstIdent) -> Result<bool, String> {
-        let names = self.names();
-        let key = names
+        let key = self
+            .names()
             .key(name, LookupClass::Member)
             .map_err(native_adapter::name_diagnostic)?;
-        let same = |other: AstIdent| -> Result<bool, String> {
-            Ok(names
-                .key(other, LookupClass::Member)
-                .map_err(native_adapter::name_diagnostic)?
-                == key)
-        };
-        let mut function = false;
-        for block in &self.program.impls {
-            for constant in &block.associated_constants {
-                if same(constant.name)? {
-                    return Ok(false);
-                }
-            }
-            for item in &block.items {
-                if let Some(last) = item.function.name.segments().last()
-                    && same(*last)?
-                {
-                    function = true;
-                }
-            }
-        }
-        for declaration in &self.program.traits {
-            for constant in &declaration.associated_constants {
-                if same(constant.name)? {
-                    return Ok(false);
-                }
-            }
-            for item in &declaration.items {
-                if same(item.signature.name)? {
-                    function = true;
-                }
-            }
-        }
-        Ok(function)
+        Ok(self.members.get(&key) == Some(&AssociatedMember::Function))
     }
     fn key(&self, path: &AstPath) -> Result<PathKey, String> {
         name_scope::path_key(self.names(), path, Namespace::Type)
@@ -4070,8 +4039,53 @@ fn defer_equality_boundary(
     }
 }
 
+/// What an associated member name denotes across impls and traits. Any
+/// associated constant with the name wins, matching value-namespace rules.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AssociatedMember {
+    Function,
+    Constant,
+}
+/// Index every associated function and constant member name once.
+fn associated_members(program: &Program) -> Result<HashMap<NameKey, AssociatedMember>, String> {
+    let names = program.names.as_ref();
+    let key = |name: AstIdent| {
+        names
+            .key(name, LookupClass::Member)
+            .map_err(native_adapter::name_diagnostic)
+    };
+    let mut members = HashMap::new();
+    let mut add = |name: AstIdent, member: AssociatedMember| -> Result<(), String> {
+        let entry = members.entry(key(name)?).or_insert(member);
+        if member == AssociatedMember::Constant {
+            *entry = member;
+        }
+        Ok(())
+    };
+    for block in program.impls.iter() {
+        for constant in &block.associated_constants {
+            add(constant.name, AssociatedMember::Constant)?;
+        }
+        for item in &block.items {
+            if let Some(last) = item.function.name.segments().last() {
+                add(*last, AssociatedMember::Function)?;
+            }
+        }
+    }
+    for declaration in program.traits.iter() {
+        for constant in &declaration.associated_constants {
+            add(constant.name, AssociatedMember::Constant)?;
+        }
+        for item in &declaration.items {
+            add(item.signature.name, AssociatedMember::Function)?;
+        }
+    }
+    Ok(members)
+}
+
 #[derive(Clone, Debug)]
 struct ResolutionState {
+    members: Arc<HashMap<NameKey, AssociatedMember>>,
     alias_cache: HashMap<PathKey, Type>,
     nominal_arity: HashMap<PathKey, usize>,
     imports: HashMap<(PathKey, usize, bool), Option<ResolvedItem>>,
@@ -4083,6 +4097,7 @@ struct ResolutionState {
 impl ResolutionState {
     fn capture(resolver: &Resolver<'_>) -> Self {
         Self {
+            members: resolver.members.clone(),
             alias_cache: resolver.alias_cache.clone(),
             nominal_arity: resolver.nominal_arity.clone(),
             imports: resolver.imports.clone(),
@@ -4094,6 +4109,7 @@ impl ResolutionState {
     }
     fn resolver<'a>(&self, parsed: &'a ParsedProgram) -> Resolver<'a> {
         Resolver {
+            members: self.members.clone(),
             static_muts: self.static_muts.clone(),
             globs: &parsed.glob_imports,
             active_globs: std::collections::HashSet::new(),
@@ -4851,6 +4867,7 @@ pub fn prepare_resolution_owned(parsed: Arc<ParsedProgram>) -> Result<Resolution
         )?);
     }
     let mut resolver = Resolver {
+        members: Arc::new(associated_members(&parsed.program)?),
         static_muts,
         globs: &parsed.glob_imports,
         active_globs: std::collections::HashSet::new(),
@@ -5928,6 +5945,7 @@ mod associated_projection_tests {
         .unwrap();
         let items = HashMap::new();
         let mut resolver = Resolver {
+            members: Arc::new(associated_members(&program).unwrap()),
             program: &program,
             type_depth: 0,
             alias_cache: HashMap::new(),
