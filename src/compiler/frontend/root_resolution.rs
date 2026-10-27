@@ -513,9 +513,9 @@ impl Resolver<'_> {
             })
             .ok_or_else(|| "missing checked type alias declaration".into())
     }
-    fn resolve_aliases(&mut self) -> Result<(), String> {
-        // Source spans supply deterministic traversal order, never name identity.
-        let roots = self.ordered_paths()?;
+    /// Resolve every alias declared at `roots` (and its dependencies) so
+    /// unused cyclic aliases still reject. Roots come in source order.
+    fn resolve_aliases(&mut self, roots: Vec<AstPath>) -> Result<(), String> {
         #[expect(
             clippy::mutable_key_type,
             reason = "PathKey hashes immutable owner/anchor/namespace/name keys only; its shared resource ledger is not semantic identity"
@@ -4104,10 +4104,22 @@ pub struct ResolutionNamespace {
     traits: Vec<Vec<usize>>,
     /// Constant declarations per module ordinal, in source order.
     constants: Vec<Vec<usize>>,
+    /// Parsed inline-constant indices per module ordinal, in source order.
+    inline_constants: Vec<Vec<usize>>,
+    /// Empty use-group prefixes per module ordinal, in parse order.
+    prefixes: Vec<Vec<usize>>,
+    /// Glob imports per module ordinal, in parse order.
+    globs: Vec<Vec<usize>>,
+    /// Declared paths in crate source order.
+    paths: Vec<AstPath>,
+    /// Positions in `paths` validated by each module ordinal.
+    declared: Vec<Vec<usize>>,
+    /// First alias, entry or inline-constant error, ranked after path errors.
+    prepare_error: Option<String>,
     /// First trait-import or derived-header error, ranked after constants.
     header_error: Option<String>,
-    /// First anonymous-adapter body error, ranked after nominal errors.
-    adapter_error: Option<String>,
+    /// Anonymous adapter function indices per module ordinal, in source order.
+    adapters: Vec<Vec<usize>>,
     derived_debug_source: Option<usize>,
 }
 
@@ -4180,6 +4192,21 @@ pub struct ResolvedModuleItems {
     /// First failing trait of this module. Ranked before every other error.
     trait_error: Option<(usize, String)>,
     traits: Vec<(usize, TraitDecl, TraitResolution)>,
+    /// First failing empty use-group prefix. Ranked first.
+    prefix_error: Option<(usize, String)>,
+    /// First failing anonymous adapter. Ranked after nominal errors.
+    adapter_error: Option<(usize, String)>,
+    adapters: Vec<(usize, Function)>,
+    /// First failing inline constant (parsed index). Ranked after entry checks.
+    inline_error: Option<(usize, String)>,
+    /// Trait imports declared in this module, keyed by declared-path order.
+    trait_imports: Vec<(usize, ModuleId, TraitPath)>,
+    /// First alias error of this module. Ranked after declared paths.
+    alias_error: Option<String>,
+    /// First failing glob import. Ranked after prefixes.
+    glob_error: Option<(usize, String)>,
+    /// First failing declared path, by crate source order. Ranked after globs.
+    path_error: Option<(usize, String)>,
     /// First failing constant. Ranked before every other error.
     constant_error: Option<(usize, String)>,
     constants: Vec<(usize, ConstDecl)>,
@@ -4219,6 +4246,104 @@ pub fn resolve_module_items(
     let parsed = namespace.parsed.as_ref();
     let indices = resolution_module_indices(namespace, ordinal)?;
     let mut resolver = namespace.state.resolver(parsed);
+    let mut prefix_error = None;
+    for &index in namespace
+        .prefixes
+        .get(ordinal)
+        .ok_or("foreign resolution module ordinal")?
+    {
+        let (module, path) = parsed
+            .empty_use_prefixes
+            .get(index)
+            .ok_or("foreign use prefix")?;
+        if let Err(diagnostic) = validate_empty_use_prefix(&mut resolver, *module, path) {
+            prefix_error = Some((index, diagnostic));
+            break;
+        }
+    }
+    let mut glob_error = None;
+    for &index in namespace
+        .globs
+        .get(ordinal)
+        .ok_or("foreign resolution module ordinal")?
+    {
+        let glob = parsed
+            .glob_imports
+            .get(index)
+            .ok_or("foreign glob import")?;
+        if let Err(diagnostic) = validate_glob_import(&mut resolver, glob) {
+            glob_error = Some((index, diagnostic));
+            break;
+        }
+    }
+    let mut alias_error = None;
+    let roots = namespace.declared[ordinal]
+        .iter()
+        .map(|&order| namespace.paths[order].clone())
+        .collect::<Vec<_>>();
+    if let Err(diagnostic) = resolver.resolve_aliases(roots) {
+        alias_error = Some(diagnostic);
+    }
+    let mut path_error = None;
+    for &order in namespace
+        .declared
+        .get(ordinal)
+        .ok_or("foreign resolution module ordinal")?
+    {
+        let path = namespace.paths.get(order).ok_or("foreign declared path")?;
+        if let Err(diagnostic) = validate_declared_path(&mut resolver, path) {
+            path_error = Some((order, diagnostic));
+            break;
+        }
+    }
+    let mut trait_imports = Vec::new();
+    for &order in &namespace.declared[ordinal] {
+        if path_error.is_some() || alias_error.is_some() {
+            break;
+        }
+        let path = &namespace.paths[order];
+        if let Err(diagnostic) =
+            collect_trait_imports(&mut resolver, order, path, &mut trait_imports)
+        {
+            path_error = Some((order, diagnostic));
+            break;
+        }
+    }
+    let mut adapters = Vec::new();
+    let mut adapter_error = None;
+    for &index in namespace
+        .adapters
+        .get(ordinal)
+        .ok_or("foreign resolution module ordinal")?
+    {
+        let mut function = namespace.program.functions[index].clone();
+        if let Err(diagnostic) = resolve_free_function(&mut resolver, index, &mut function) {
+            adapter_error = Some((index, diagnostic));
+            break;
+        }
+        adapters.push((index, function));
+    }
+    resolver.type_params.clear();
+    resolver.current_callable = None;
+    let mut inline_error = None;
+    for &index in namespace
+        .inline_constants
+        .get(ordinal)
+        .ok_or("foreign resolution module ordinal")?
+    {
+        let declaration = parsed
+            .program
+            .constants
+            .get(index)
+            .ok_or("foreign inline constant")?;
+        let mut probe = Expr::Var(declaration.name.clone());
+        if let Err(diagnostic) =
+            resolver.inline_constant(&mut probe, &declaration.name, &mut vec![])
+        {
+            inline_error = Some((index, diagnostic));
+            break;
+        }
+    }
     let constant_sources = namespace
         .constants
         .get(ordinal)
@@ -4326,6 +4451,14 @@ pub fn resolve_module_items(
         nominals,
         trait_error,
         traits,
+        prefix_error,
+        glob_error,
+        alias_error,
+        trait_imports,
+        adapter_error,
+        adapters,
+        inline_error,
+        path_error,
         constant_error,
         constants,
         ordinal,
@@ -4745,71 +4878,17 @@ pub fn prepare_resolution_owned(parsed: Arc<ParsedProgram>) -> Result<Resolution
     {
         resolver.nominal_arity.insert(resolver.key(path)?, arity);
     }
-    for (module, path) in &parsed.empty_use_prefixes {
-        let target = resolver
-            .path(path, *module, true, false)?
-            .ok_or_else(|| "unresolved empty use group prefix".to_owned())?;
-        if !matches!(
-            target.kind,
-            ResolvedKind::Module | ResolvedKind::Enum | ResolvedKind::Trait
-        ) {
-            return Err("resolved declaration is not a module in empty use group".into());
-        }
-    }
-    // A glob is a declaration even when none of its members are used. Resolve
-    // its owner eagerly so unused self imports cannot disappear behind lazy
-    // candidate lookup. Compare canonical module paths, not written aliases.
-    for glob in &parsed.glob_imports {
-        let Some(target) = resolver.path(&glob.target, glob.module, true, true)? else {
-            return Err(format!(
-                "unresolved glob import {}",
-                resolver.display(&glob.target)?
-            ));
-        };
-        if target.kind == ResolvedKind::Module
-            && let ResolvedPath::Source(source) = &target.path
-            && resolver.key(source)? == resolver.key(&resolver.module_path(glob.module)?)?
-        {
-            return Err("cannot glob-import a module into itself".into());
-        }
-    }
     let paths = resolver.ordered_paths()?;
-    for path in &paths {
+    // Declared paths and import bindings validate in their module facts,
+    // ranked by source order ahead of every crate-wide pass error below.
+    let mut path_sources = Vec::with_capacity(paths.len());
+    for (order, path) in paths.iter().enumerate() {
         let key = resolver.key(path)?;
         let items = parsed.items.get(&key).ok_or("missing source item bucket")?;
-        for (index, item) in items.iter().enumerate() {
-            if matches!(item.kind, ItemKind::Import(_, _)) {
-                let type_target = resolver.import(path, index, true)?;
-                let value_target = resolver.import(path, index, false)?;
-                if type_target.is_none() && value_target.is_none() {
-                    return Err(format!(
-                        "unresolved or cyclic import {}",
-                        resolver.display(path)?
-                    ));
-                }
-                let mut permits = false;
-                for target in [type_target.as_ref(), value_target.as_ref()]
-                    .into_iter()
-                    .flatten()
-                {
-                    permits |= target
-                        .visibility
-                        .allows_reexport(&parsed.program.modules, &item.visibility)
-                        .map_err(module_diagnostic)?;
-                }
-                if !permits {
-                    return Err(format!(
-                        "private item or import cannot be publicly reexported as {}",
-                        resolver.display(path)?
-                    ));
-                }
-            }
-        }
-        let requester = items.first().ok_or("empty source item bucket")?.module;
-        resolver.item(path, requester, true, false)?;
-        resolver.item(path, requester, false, false)?;
+        let module = items.first().ok_or("empty source item bucket")?.module;
+        path_sources.push((module, order));
     }
-    resolver.resolve_aliases()?;
+    let prepare_error = (|| -> Result<(), String> {
     let root = parsed
         .program
         .modules
@@ -4842,15 +4921,12 @@ pub fn prepare_resolution_owned(parsed: Arc<ParsedProgram>) -> Result<Resolution
             }
         }
     }
+        Ok(())
+    })()
+    .err();
     let mut program = parsed.program.clone();
     // Inlined constants have no CONST_VALUE fact; their uses carry the value.
     // Each is still resolved and qualified once so unused bad items reject.
-    for declaration in &parsed.program.constants {
-        if const_inline::needs_inline(declaration) {
-            let mut probe = Expr::Var(declaration.name.clone());
-            resolver.inline_constant(&mut probe, &declaration.name, &mut vec![])?;
-        }
-    }
     program
         .constants
         .retain(|declaration| !const_inline::needs_inline(declaration));
@@ -4867,37 +4943,6 @@ pub fn prepare_resolution_owned(parsed: Arc<ParsedProgram>) -> Result<Resolution
     // remaining crate-wide header passes rank after constant errors, so they
     // are deferred, never returned ahead of them.
     let header_error = (|| -> Result<Option<usize>, String> {
-        for path in &paths {
-            let key = resolver.key(path)?;
-            for (index, item) in parsed
-                .items
-                .get(&key)
-                .ok_or("missing source import bucket")?
-                .iter()
-                .enumerate()
-            {
-                if matches!(item.kind, ItemKind::Import(_, _))
-                    && let Some(target) = resolver.import(path, index, true)?
-                    && target.kind == ResolvedKind::Trait
-                {
-                    resolver.charge_entries::<(ModuleId, TraitPath)>(1)?;
-                    program
-                        .trait_imports
-                        .try_reserve(1)
-                        .map_err(|_| "trait import allocation failed")?;
-                    let path = match &target.path {
-                        ResolvedPath::Source(path) => {
-                            TraitPath::Source(resolver.alias_source_path(path)?)
-                        }
-                        ResolvedPath::Builtin(id) => TraitPath::Builtin(*id),
-                        ResolvedPath::CatalogModule(_) => {
-                            return Err("trait import names a module".into());
-                        }
-                    };
-                    program.trait_imports.push((item.module, path));
-                }
-            }
-        }
         let mut derived_debug_source = None;
         for (source_index, declaration) in program.traits.iter().enumerate() {
             if generated_debug::canonical_source(&parsed.program, declaration)?
@@ -4918,13 +4963,18 @@ pub fn prepare_resolution_owned(parsed: Arc<ParsedProgram>) -> Result<Resolution
     let mut nominals: Vec<Vec<NominalSource>> = Vec::new();
     let mut traits: Vec<Vec<usize>> = Vec::new();
     let mut constants: Vec<Vec<usize>> = Vec::new();
-    let mut ordinal_of = |module: ModuleId,
-                          modules: &mut Vec<ModuleId>,
-                          functions: &mut Vec<Vec<usize>>,
-                          impls: &mut Vec<Vec<usize>>,
-                          nominals: &mut Vec<Vec<NominalSource>>,
-                          traits: &mut Vec<Vec<usize>>,
-                          constants: &mut Vec<Vec<usize>>| {
+    let mut declared: Vec<Vec<usize>> = Vec::new();
+    let mut inline_constants: Vec<Vec<usize>> = Vec::new();
+    let mut prefixes: Vec<Vec<usize>> = Vec::new();
+    let mut globs: Vec<Vec<usize>> = Vec::new();
+    let ordinal_of = |module: ModuleId,
+                      modules: &mut Vec<ModuleId>,
+                      functions: &mut Vec<Vec<usize>>,
+                      impls: &mut Vec<Vec<usize>>,
+                      nominals: &mut Vec<Vec<NominalSource>>,
+                      traits: &mut Vec<Vec<usize>>,
+                      constants: &mut Vec<Vec<usize>>,
+                      declared: &mut Vec<Vec<usize>>| {
         match modules.iter().position(|candidate| *candidate == module) {
             Some(ordinal) => ordinal,
             None => {
@@ -4934,21 +4984,29 @@ pub fn prepare_resolution_owned(parsed: Arc<ParsedProgram>) -> Result<Resolution
                 nominals.push(Vec::new());
                 traits.push(Vec::new());
                 constants.push(Vec::new());
+                declared.push(Vec::new());
                 modules.len() - 1
             }
         }
     };
     // Anonymous adapters establish capture descriptors before parent bodies.
-    // Their diagnostic is deferred: nominal field errors rank first.
-    let mut adapter_error = None;
+    // The parser mints them in their parent's module, so each resolves first
+    // inside that module fact. Their errors rank after nominal field errors.
+    let mut adapters: Vec<Vec<usize>> = Vec::new();
     for index in 0..program.functions.len() {
         if closures::anonymous_path(&program.functions[index].name, resolver.names())? {
-            if adapter_error.is_none()
-                && let Err(error) =
-                    resolve_free_function(&mut resolver, index, &mut program.functions[index])
-            {
-                adapter_error = Some(error);
-            }
+            let ordinal = ordinal_of(
+                program.functions[index].module,
+                &mut modules,
+                &mut functions,
+                &mut impls,
+                &mut nominals,
+                &mut traits,
+                &mut constants,
+                &mut declared,
+            );
+            adapters.resize_with(modules.len(), Vec::new);
+            adapters[ordinal].push(index);
         } else {
             let module = program.functions[index].module;
             let ordinal = ordinal_of(
@@ -4959,6 +5017,7 @@ pub fn prepare_resolution_owned(parsed: Arc<ParsedProgram>) -> Result<Resolution
                 &mut nominals,
                 &mut traits,
                 &mut constants,
+                &mut declared,
             );
             functions[ordinal].push(index);
         }
@@ -4972,6 +5031,7 @@ pub fn prepare_resolution_owned(parsed: Arc<ParsedProgram>) -> Result<Resolution
             &mut nominals,
             &mut traits,
             &mut constants,
+            &mut declared,
         );
         constants[ordinal].push(index);
     }
@@ -4984,6 +5044,7 @@ pub fn prepare_resolution_owned(parsed: Arc<ParsedProgram>) -> Result<Resolution
             &mut nominals,
             &mut traits,
             &mut constants,
+            &mut declared,
         );
         traits[ordinal].push(index);
     }
@@ -4996,6 +5057,7 @@ pub fn prepare_resolution_owned(parsed: Arc<ParsedProgram>) -> Result<Resolution
             &mut nominals,
             &mut traits,
             &mut constants,
+            &mut declared,
         );
         nominals[ordinal].push(NominalSource::Enum(index));
     }
@@ -5008,6 +5070,7 @@ pub fn prepare_resolution_owned(parsed: Arc<ParsedProgram>) -> Result<Resolution
             &mut nominals,
             &mut traits,
             &mut constants,
+            &mut declared,
         );
         nominals[ordinal].push(NominalSource::Struct(index));
     }
@@ -5020,11 +5083,82 @@ pub fn prepare_resolution_owned(parsed: Arc<ParsedProgram>) -> Result<Resolution
             &mut nominals,
             &mut traits,
             &mut constants,
+            &mut declared,
         );
         impls[ordinal].push(index);
     }
+    // Inlined constants have no CONST_VALUE fact; their uses carry the value.
+    // Each is still resolved once, in its module fact, so unused bad items reject.
+    for (index, declaration) in parsed.program.constants.iter().enumerate() {
+        if !const_inline::needs_inline(declaration) {
+            continue;
+        }
+        let ordinal = ordinal_of(
+            declaration.module,
+            &mut modules,
+            &mut functions,
+            &mut impls,
+            &mut nominals,
+            &mut traits,
+            &mut constants,
+            &mut declared,
+        );
+        inline_constants.resize_with(modules.len(), Vec::new);
+        inline_constants[ordinal].push(index);
+    }
+    for (index, (module, _)) in parsed.empty_use_prefixes.iter().enumerate() {
+        let ordinal = ordinal_of(
+            *module,
+            &mut modules,
+            &mut functions,
+            &mut impls,
+            &mut nominals,
+            &mut traits,
+            &mut constants,
+            &mut declared,
+        );
+        prefixes.resize_with(modules.len(), Vec::new);
+        prefixes[ordinal].push(index);
+    }
+    for (index, glob) in parsed.glob_imports.iter().enumerate() {
+        let ordinal = ordinal_of(
+            glob.module,
+            &mut modules,
+            &mut functions,
+            &mut impls,
+            &mut nominals,
+            &mut traits,
+            &mut constants,
+            &mut declared,
+        );
+        globs.resize_with(modules.len(), Vec::new);
+        globs[ordinal].push(index);
+    }
+    for (module, order) in path_sources {
+        let ordinal = ordinal_of(
+            module,
+            &mut modules,
+            &mut functions,
+            &mut impls,
+            &mut nominals,
+            &mut traits,
+            &mut constants,
+            &mut declared,
+        );
+        declared[ordinal].push(order);
+    }
+    prefixes.resize_with(modules.len(), Vec::new);
+    globs.resize_with(modules.len(), Vec::new);
+    inline_constants.resize_with(modules.len(), Vec::new);
+    adapters.resize_with(modules.len(), Vec::new);
     let state = ResolutionState::capture(&resolver);
     Ok(ResolutionNamespace {
+        inline_constants,
+        prefixes,
+        globs,
+        paths,
+        declared,
+        prepare_error,
         parsed: source,
         token: Arc::new(ResolutionToken {}),
         program,
@@ -5036,9 +5170,121 @@ pub fn prepare_resolution_owned(parsed: Arc<ParsedProgram>) -> Result<Resolution
         traits,
         constants,
         header_error,
-        adapter_error,
+        adapters,
         derived_debug_source,
     })
+}
+
+/// Collect the trait imports declared at one path, in binding order.
+fn collect_trait_imports(
+    resolver: &mut Resolver<'_>,
+    order: usize,
+    path: &AstPath,
+    imports: &mut Vec<(usize, ModuleId, TraitPath)>,
+) -> Result<(), String> {
+    let key = resolver.key(path)?;
+    for (index, item) in resolver
+        .items
+        .get(&key)
+        .ok_or("missing source import bucket")?
+        .iter()
+        .enumerate()
+    {
+        if matches!(item.kind, ItemKind::Import(_, _))
+            && let Some(target) = resolver.import(path, index, true)?
+            && target.kind == ResolvedKind::Trait
+        {
+            resolver.charge_entries::<(ModuleId, TraitPath)>(1)?;
+            let path = match &target.path {
+                ResolvedPath::Source(path) => TraitPath::Source(resolver.alias_source_path(path)?),
+                ResolvedPath::Builtin(id) => TraitPath::Builtin(*id),
+                ResolvedPath::CatalogModule(_) => {
+                    return Err("trait import names a module".into());
+                }
+            };
+            imports.push((order, item.module, path));
+        }
+    }
+    Ok(())
+}
+
+/// An empty `use p::{}` still names a module, enum or trait.
+fn validate_empty_use_prefix(
+    resolver: &mut Resolver<'_>,
+    module: ModuleId,
+    path: &AstPath,
+) -> Result<(), String> {
+    let target = resolver
+        .path(path, module, true, false)?
+        .ok_or_else(|| "unresolved empty use group prefix".to_owned())?;
+    if !matches!(
+        target.kind,
+        ResolvedKind::Module | ResolvedKind::Enum | ResolvedKind::Trait
+    ) {
+        return Err("resolved declaration is not a module in empty use group".into());
+    }
+    Ok(())
+}
+
+/// A glob is a declaration even when none of its members are used. Resolve
+/// its owner eagerly so unused self imports cannot disappear behind lazy
+/// candidate lookup. Compare canonical module paths, not written aliases.
+fn validate_glob_import(resolver: &mut Resolver<'_>, glob: &GlobImport) -> Result<(), String> {
+    let Some(target) = resolver.path(&glob.target, glob.module, true, true)? else {
+        return Err(format!(
+            "unresolved glob import {}",
+            resolver.display(&glob.target)?
+        ));
+    };
+    if target.kind == ResolvedKind::Module
+        && let ResolvedPath::Source(source) = &target.path
+        && resolver.key(source)? == resolver.key(&resolver.module_path(glob.module)?)?
+    {
+        return Err("cannot glob-import a module into itself".into());
+    }
+    Ok(())
+}
+
+/// Validate one declared path bucket: every import binding resolves and may be
+/// reexported, and the item resolves in both namespaces.
+fn validate_declared_path(resolver: &mut Resolver<'_>, path: &AstPath) -> Result<(), String> {
+    let key = resolver.key(path)?;
+    let items = resolver
+        .items
+        .get(&key)
+        .ok_or("missing source item bucket")?;
+    for (index, item) in items.iter().enumerate() {
+        if matches!(item.kind, ItemKind::Import(_, _)) {
+            let type_target = resolver.import(path, index, true)?;
+            let value_target = resolver.import(path, index, false)?;
+            if type_target.is_none() && value_target.is_none() {
+                return Err(format!(
+                    "unresolved or cyclic import {}",
+                    resolver.display(path)?
+                ));
+            }
+            let mut permits = false;
+            for target in [type_target.as_ref(), value_target.as_ref()]
+                .into_iter()
+                .flatten()
+            {
+                permits |= target
+                    .visibility
+                    .allows_reexport(&resolver.program.modules, &item.visibility)
+                    .map_err(module_diagnostic)?;
+            }
+            if !permits {
+                return Err(format!(
+                    "private item or import cannot be publicly reexported as {}",
+                    resolver.display(path)?
+                ));
+            }
+        }
+    }
+    let requester = items.first().ok_or("empty source item bucket")?.module;
+    resolver.item(path, requester, true, false)?;
+    resolver.item(path, requester, false, false)?;
+    Ok(())
 }
 
 pub fn finish_resolution(
@@ -5169,6 +5415,67 @@ fn finish_resolution_with<T>(
             return Err("foreign resolved module inventory".into());
         }
     }
+    for item in &items {
+        if let Some((order, _)) = &item.path_error
+            && !namespace.declared[item.ordinal].contains(order)
+        {
+            return Err("foreign resolved module error inventory".into());
+        }
+    }
+    for item in &items {
+        if let Some((index, _)) = &item.prefix_error
+            && !namespace.prefixes[item.ordinal].contains(index)
+        {
+            return Err("foreign resolved module error inventory".into());
+        }
+        if let Some((index, _)) = &item.glob_error
+            && !namespace.globs[item.ordinal].contains(index)
+        {
+            return Err("foreign resolved module error inventory".into());
+        }
+    }
+    for error in [
+        items
+            .iter()
+            .filter_map(|item| item.prefix_error.as_ref())
+            .min_by_key(|(index, _)| *index),
+        items
+            .iter()
+            .filter_map(|item| item.glob_error.as_ref())
+            .min_by_key(|(index, _)| *index),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        return Err(error.1.clone());
+    }
+    if let Some((_, diagnostic)) = items
+        .iter()
+        .filter_map(|item| item.path_error.as_ref())
+        .min_by_key(|(order, _)| *order)
+    {
+        return Err(diagnostic.clone());
+    }
+    if let Some(diagnostic) = items.iter().find_map(|item| item.alias_error.as_ref()) {
+        return Err(diagnostic.clone());
+    }
+    if let Some(diagnostic) = &namespace.prepare_error {
+        return Err(diagnostic.clone());
+    }
+    for item in &items {
+        if let Some((index, _)) = &item.inline_error
+            && !namespace.inline_constants[item.ordinal].contains(index)
+        {
+            return Err("foreign resolved module error inventory".into());
+        }
+    }
+    if let Some((_, diagnostic)) = items
+        .iter()
+        .filter_map(|item| item.inline_error.as_ref())
+        .min_by_key(|(index, _)| *index)
+    {
+        return Err(diagnostic.clone());
+    }
     if let Some((_, diagnostic)) = items
         .iter()
         .filter_map(|item| item.constant_error.as_ref())
@@ -5193,7 +5500,23 @@ fn finish_resolution_with<T>(
     {
         return Err(diagnostic.clone());
     }
-    if let Some(diagnostic) = &namespace.adapter_error {
+    for item in &items {
+        let expected = &namespace.adapters[item.ordinal];
+        let done = item.adapters.len() + usize::from(item.adapter_error.is_some());
+        let found = item
+            .adapters
+            .iter()
+            .map(|(index, _)| *index)
+            .chain(item.adapter_error.iter().map(|(index, _)| *index));
+        if done > expected.len() || !found.eq(expected[..done].iter().copied()) {
+            return Err("foreign resolved module inventory".into());
+        }
+    }
+    if let Some((_, diagnostic)) = items
+        .iter()
+        .filter_map(|item| item.adapter_error.as_ref())
+        .min_by_key(|(index, _)| *index)
+    {
         return Err(diagnostic.clone());
     }
     if let Some((_, diagnostic)) = items
@@ -5211,6 +5534,20 @@ fn finish_resolution_with<T>(
         return Err(diagnostic.clone());
     }
     let mut program = namespace.program.clone();
+    let mut trait_imports = items
+        .iter_mut()
+        .flat_map(|item| std::mem::take(&mut item.trait_imports))
+        .collect::<Vec<_>>();
+    trait_imports.sort_by_key(|(order, _, _)| *order);
+    program
+        .trait_imports
+        .try_reserve(trait_imports.len())
+        .map_err(|_| "trait import allocation failed")?;
+    program.trait_imports.extend(
+        trait_imports
+            .into_iter()
+            .map(|(_, module, path)| (module, path)),
+    );
     let mut resolver = namespace.state.resolver(parsed);
     let mut trait_results = items
         .iter_mut()
@@ -5232,6 +5569,9 @@ fn finish_resolution_with<T>(
     }
     let derived_debug_source = namespace.derived_debug_source;
     for item in items {
+        for (index, function) in item.adapters {
+            program.functions[index] = function;
+        }
         for (index, function) in item.functions {
             program.functions[index] = function;
         }
@@ -5412,7 +5752,8 @@ mod item_resolution_tests {
     #[test]
     fn namespace_prerequisite_still_rejects_unused_alias_cycles() {
         let parsed = parse_unresolved("type A=B;type B=A;fn main(){}").unwrap();
-        assert!(prepare_resolution(&parsed).unwrap_err().contains("E0391"));
+        // Deferred to finish so per-module path errors rank first.
+        assert!(resolve(&parsed).unwrap_err().contains("E0391"));
     }
 
     #[test]
