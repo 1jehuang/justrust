@@ -128,7 +128,7 @@ impl SourceSnapshot {
             if !root.is_absolute() {
                 return Err("source snapshot root must be absolute".into());
             }
-            let root = normalize(&root).map_err(|e| e.to_string())?;
+            let root = normalize(root).map_err(|e| e.to_string())?;
             if root == Path::new("/") || root.starts_with(super::source_prelude::PRELUDE_DIR) {
                 return Err("source snapshot root must be a private non-root namespace".into());
             }
@@ -281,7 +281,8 @@ mod tests {
         )
         .unwrap();
         assert_eq!(first.digest(), reordered.digest());
-        let fewer = SourceSnapshot::with_roots(app.clone(), &[dep.clone()], files()).unwrap();
+        let fewer =
+            SourceSnapshot::with_roots(app.clone(), std::slice::from_ref(&dep), files()).unwrap();
         assert_ne!(first.digest(), fewer.digest());
         assert!(first.reader().canonicalize(&extra).is_ok());
         assert!(fewer.reader().canonicalize(&extra).is_err());
@@ -302,7 +303,7 @@ mod tests {
         assert!(
             SourceSnapshot::with_roots(
                 app.clone(),
-                &[dep.clone()],
+                std::slice::from_ref(&dep),
                 [(PathBuf::from("/frozen/unowned"), vec![])]
             )
             .is_err()

@@ -153,6 +153,11 @@ fn observe(
                             .read_to_end(&mut bytes)
                             .map_err(infrastructure)?;
                         if bytes.starts_with(b"Signature: 8a477f597d28d172789f06886806bc55") {
+                            if stamps.len() >= MAX_ENTRIES {
+                                return Err(ManifestError(
+                                    "native input capture entry limit exceeded".into(),
+                                ));
+                            }
                             stamps.insert(tag, stamp(&metadata));
                             continue;
                         }
@@ -245,6 +250,32 @@ fn observe(
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
+    #[test]
+    fn cache_markers_cannot_overrun_the_aggregate_entry_limit() {
+        let root =
+            std::env::temp_dir().join(format!("jr-capture-marker-limit-{}", std::process::id()));
+        let cache = root.join("aaa-cache");
+        std::fs::create_dir_all(&cache).unwrap();
+        std::fs::write(
+            cache.join("CACHEDIR.TAG"),
+            b"Signature: 8a477f597d28d172789f06886806bc55\n",
+        )
+        .unwrap();
+        // Sorted traversal visits this cache last. Without charging its marker,
+        // the acquisition would silently record MAX_ENTRIES + 1 observations.
+        for index in 0..MAX_ENTRIES - 2 {
+            std::fs::write(root.join(format!("zzz-{index}")), "").unwrap();
+        }
+        let root = root.canonicalize().unwrap();
+        assert!(
+            directory(&root, &root.join("target"))
+                .unwrap_err()
+                .0
+                .contains("entry limit")
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn multi_root_capture_is_closed_bounded_and_rejects_cross_root_mutation() {
         use crate::compiler::source::SourceReader;
