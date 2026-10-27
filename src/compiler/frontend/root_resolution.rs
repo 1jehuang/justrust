@@ -4118,8 +4118,8 @@ pub struct ResolutionNamespace {
     prepare_error: Option<String>,
     /// First trait-import or derived-header error, ranked after constants.
     header_error: Option<String>,
-    /// First anonymous-adapter body error, ranked after nominal errors.
-    adapter_error: Option<String>,
+    /// Anonymous adapter function indices per module ordinal, in source order.
+    adapters: Vec<Vec<usize>>,
     derived_debug_source: Option<usize>,
 }
 
@@ -4194,6 +4194,9 @@ pub struct ResolvedModuleItems {
     traits: Vec<(usize, TraitDecl, TraitResolution)>,
     /// First failing empty use-group prefix. Ranked first.
     prefix_error: Option<(usize, String)>,
+    /// First failing anonymous adapter. Ranked after nominal errors.
+    adapter_error: Option<(usize, String)>,
+    adapters: Vec<(usize, Function)>,
     /// First failing inline constant (parsed index). Ranked after entry checks.
     inline_error: Option<(usize, String)>,
     /// Trait imports declared in this module, keyed by declared-path order.
@@ -4306,6 +4309,22 @@ pub fn resolve_module_items(
             break;
         }
     }
+    let mut adapters = Vec::new();
+    let mut adapter_error = None;
+    for &index in namespace
+        .adapters
+        .get(ordinal)
+        .ok_or("foreign resolution module ordinal")?
+    {
+        let mut function = namespace.program.functions[index].clone();
+        if let Err(diagnostic) = resolve_free_function(&mut resolver, index, &mut function) {
+            adapter_error = Some((index, diagnostic));
+            break;
+        }
+        adapters.push((index, function));
+    }
+    resolver.type_params.clear();
+    resolver.current_callable = None;
     let mut inline_error = None;
     for &index in namespace
         .inline_constants
@@ -4436,6 +4455,8 @@ pub fn resolve_module_items(
         glob_error,
         alias_error,
         trait_imports,
+        adapter_error,
+        adapters,
         inline_error,
         path_error,
         constant_error,
@@ -4969,16 +4990,23 @@ pub fn prepare_resolution_owned(parsed: Arc<ParsedProgram>) -> Result<Resolution
         }
     };
     // Anonymous adapters establish capture descriptors before parent bodies.
-    // Their diagnostic is deferred: nominal field errors rank first.
-    let mut adapter_error = None;
+    // The parser mints them in their parent's module, so each resolves first
+    // inside that module fact. Their errors rank after nominal field errors.
+    let mut adapters: Vec<Vec<usize>> = Vec::new();
     for index in 0..program.functions.len() {
         if closures::anonymous_path(&program.functions[index].name, resolver.names())? {
-            if adapter_error.is_none()
-                && let Err(error) =
-                    resolve_free_function(&mut resolver, index, &mut program.functions[index])
-            {
-                adapter_error = Some(error);
-            }
+            let ordinal = ordinal_of(
+                program.functions[index].module,
+                &mut modules,
+                &mut functions,
+                &mut impls,
+                &mut nominals,
+                &mut traits,
+                &mut constants,
+                &mut declared,
+            );
+            adapters.resize_with(modules.len(), Vec::new);
+            adapters[ordinal].push(index);
         } else {
             let module = program.functions[index].module;
             let ordinal = ordinal_of(
@@ -5122,6 +5150,7 @@ pub fn prepare_resolution_owned(parsed: Arc<ParsedProgram>) -> Result<Resolution
     prefixes.resize_with(modules.len(), Vec::new);
     globs.resize_with(modules.len(), Vec::new);
     inline_constants.resize_with(modules.len(), Vec::new);
+    adapters.resize_with(modules.len(), Vec::new);
     let state = ResolutionState::capture(&resolver);
     Ok(ResolutionNamespace {
         inline_constants,
@@ -5141,7 +5170,7 @@ pub fn prepare_resolution_owned(parsed: Arc<ParsedProgram>) -> Result<Resolution
         traits,
         constants,
         header_error,
-        adapter_error,
+        adapters,
         derived_debug_source,
     })
 }
@@ -5471,7 +5500,23 @@ fn finish_resolution_with<T>(
     {
         return Err(diagnostic.clone());
     }
-    if let Some(diagnostic) = &namespace.adapter_error {
+    for item in &items {
+        let expected = &namespace.adapters[item.ordinal];
+        let done = item.adapters.len() + usize::from(item.adapter_error.is_some());
+        let found = item
+            .adapters
+            .iter()
+            .map(|(index, _)| *index)
+            .chain(item.adapter_error.iter().map(|(index, _)| *index));
+        if done > expected.len() || !found.eq(expected[..done].iter().copied()) {
+            return Err("foreign resolved module inventory".into());
+        }
+    }
+    if let Some((_, diagnostic)) = items
+        .iter()
+        .filter_map(|item| item.adapter_error.as_ref())
+        .min_by_key(|(index, _)| *index)
+    {
         return Err(diagnostic.clone());
     }
     if let Some((_, diagnostic)) = items
@@ -5524,6 +5569,9 @@ fn finish_resolution_with<T>(
     }
     let derived_debug_source = namespace.derived_debug_source;
     for item in items {
+        for (index, function) in item.adapters {
+            program.functions[index] = function;
+        }
         for (index, function) in item.functions {
             program.functions[index] = function;
         }
