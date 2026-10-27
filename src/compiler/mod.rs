@@ -1018,6 +1018,11 @@ impl Provider for CompilerProvider {
                     // from the root file: [0] is the root, [0, i] its i-th
                     // external child module, and so on.
                     let options = &this.0.source_options;
+                    if options.source_snapshot.is_some() && options.compiler_image.is_none() {
+                        return Err(Error::new(
+                            "infrastructure: immutable source compilation requires running compiler identity",
+                        ));
+                    }
                     let budget = expansion_budget::ExpansionBudget::default();
                     let file = keys::SourceFile::from_words(&key.params)?;
                     let unit = match key.params.as_slice() {
@@ -2961,6 +2966,9 @@ impl Provider for CompilerProvider {
                         || !native.objects.is_empty()
                         || !native.libraries.is_empty()
                     {
+                        if this.0.source_options.source_snapshot.is_some() && !native.emit_object {
+                            return Err(Error::new("unsupported: immutable source compilation cannot invoke the uncontrolled native linker"));
+                        }
                         c_abi::elf::link(&objects, native, &this.0.budget)
                     } else {
                         backend::link(&objects)

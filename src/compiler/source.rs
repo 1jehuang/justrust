@@ -12,6 +12,9 @@ pub mod source_cfg;
 mod source_derive;
 #[path = "source_inputs.rs"]
 pub mod source_inputs;
+#[path = "source_snapshot.rs"]
+pub mod source_snapshot;
+pub use source_snapshot::SourceSnapshot;
 #[path = "source_lex.rs"]
 pub mod source_lex;
 #[path = "source_map.rs"]
@@ -44,6 +47,9 @@ pub struct SourceOptions {
     pub compiler_image: Option<Arc<super::procfs::CompilerImage>>,
     /// Frozen native project-discovery inputs, when invoked by the project driver.
     pub project_inputs: Option<Arc<crate::project::inputs::DiscoveryInputs>>,
+    /// Closed immutable source namespace. When set, source IO never falls back
+    /// to the host and uncontrolled external linkers are rejected.
+    pub source_snapshot: Option<Arc<SourceSnapshot>>,
     /// Explicit language input. Unsupported editions reject before source IO.
     pub edition: Edition,
     /// Native ELF object emission/link inputs, frozen before graph execution.
@@ -99,6 +105,7 @@ impl Default for SourceOptions {
         Self {
             compiler_image: None,
             project_inputs: None,
+            source_snapshot: None,
             edition: Edition::E2024,
             native_link: super::c_abi::elf::LinkOptions::default(),
             cfg: CfgSet::native_x86_64_linux(),
@@ -545,14 +552,22 @@ pub fn load(path: &Path) -> Result<LoadedSource, String> {
         .map_err(|e| e.to_string())
 }
 pub fn prepare_file(path: &Path, options: &SourceOptions) -> Result<PreparedSource, SourceError> {
-    prepare_with_reader(path, options, &mut FsReader)
+    if let Some(snapshot) = &options.source_snapshot {
+        prepare_with_reader(path, options, &mut snapshot.reader())
+    } else {
+        prepare_with_reader(path, options, &mut FsReader)
+    }
 }
 pub(super) fn prepare_file_with_budget(
     path: &Path,
     options: &SourceOptions,
     budget: &super::expansion_budget::ExpansionBudget,
 ) -> Result<PreparedSource, SourceError> {
-    prepare_with_reader_budget(path, options, &mut FsReader, budget)
+    if let Some(snapshot) = &options.source_snapshot {
+        prepare_with_reader_budget(path, options, &mut snapshot.reader(), budget)
+    } else {
+        prepare_with_reader_budget(path, options, &mut FsReader, budget)
+    }
 }
 fn prepare_with_reader(
     path: &Path,
@@ -732,7 +747,11 @@ pub fn prepare_root_unit(
     options: &SourceOptions,
     budget: &super::expansion_budget::ExpansionBudget,
 ) -> UnitResult {
-    root_unit_with(path, options, Some(&mut FsReader), budget)
+    if let Some(snapshot) = &options.source_snapshot {
+        root_unit_with(path, options, Some(&mut snapshot.reader()), budget)
+    } else {
+        root_unit_with(path, options, Some(&mut FsReader), budget)
+    }
 }
 fn root_unit_with(
     path: &Path,
@@ -791,7 +810,11 @@ pub fn prepare_child_unit(
         }
         return Ok(child);
     }
-    child_unit_with(parent, index, options, &mut FsReader, budget)
+    if let Some(snapshot) = &options.source_snapshot {
+        child_unit_with(parent, index, options, &mut snapshot.reader(), budget)
+    } else {
+        child_unit_with(parent, index, options, &mut FsReader, budget)
+    }
 }
 /// Attachment unit of the embedded native prelude library, graph ordinal
 /// `[1]`. Its children are the library's own files, read only from the
@@ -901,9 +924,15 @@ fn file_unit(
         budget,
     );
     let inputs = tracked.finish();
-    result.map(|mut unit| {
+    result.and_then(|mut unit| {
+        inputs
+            .validate_snapshot(options)
+            .map_err(|message| UnitFailure {
+                error: Loader::error(SourceErrorKind::Unsupported, None, message),
+                anchored: false,
+            })?;
         unit.inputs = inputs;
-        unit
+        Ok(unit)
     })
 }
 #[allow(clippy::too_many_arguments)]

@@ -33,6 +33,7 @@ pub(super) enum InputDomain {
     Untracked,
     Filesystem,
     EmbeddedPrelude,
+    Snapshot,
 }
 
 /// Immutable evidence retained by the existing per-file graph fact.
@@ -42,6 +43,7 @@ pub struct SourceInputs {
     domain: InputDomain,
     compiler_image: Option<std::sync::Arc<crate::compiler::procfs::CompilerImage>>,
     project: Option<std::sync::Arc<crate::project::inputs::DiscoveryInputs>>,
+    snapshot: Option<std::sync::Arc<super::SourceSnapshot>>,
     observations: Vec<Observation>,
     options: Option<[u8; 32]>,
     complete: bool,
@@ -59,6 +61,7 @@ impl SourceInputs {
             domain: InputDomain::Untracked,
             compiler_image: None,
             project: None,
+            snapshot: None,
             observations: Vec::new(),
             options: None,
             complete: false,
@@ -95,6 +98,10 @@ impl SourceInputs {
         match self.domain {
             InputDomain::Untracked => false,
             InputDomain::Filesystem => self.matches_reader(&mut super::FsReader),
+            InputDomain::Snapshot => self
+                .snapshot
+                .as_ref()
+                .is_some_and(|snapshot| self.matches_reader(&mut snapshot.reader())),
             InputDomain::EmbeddedPrelude => {
                 self.matches_reader(&mut super::source_prelude::PreludeReader)
             }
@@ -131,6 +138,35 @@ impl SourceInputs {
             && self.matches_reader(&mut super::source_prelude::PreludeReader)
     }
 
+    /// Validate the source-only closed namespace contract without touching the
+    /// host filesystem. This is used before publishing a snapshot-backed unit.
+    pub(super) fn validate_snapshot(&self, options: &SourceOptions) -> Result<(), &'static str> {
+        if options.source_snapshot.is_none() {
+            return Ok(());
+        }
+        if self.project.is_some() {
+            return Err(
+                "unsupported: live project discovery is not part of an immutable source snapshot",
+            );
+        }
+        if !self.complete || self.options.is_none() || self.options != option_identity(options) {
+            return Err("immutable source snapshot observation or option identity is incomplete");
+        }
+        let valid = match self.domain {
+            InputDomain::Snapshot => self
+                .snapshot
+                .as_ref()
+                .is_some_and(|snapshot| self.matches_reader(&mut snapshot.reader())),
+            InputDomain::EmbeddedPrelude => {
+                self.matches_reader(&mut super::source_prelude::PreludeReader)
+            }
+            InputDomain::Untracked | InputDomain::Filesystem => false,
+        };
+        valid
+            .then_some(())
+            .ok_or("source read escaped the immutable snapshot")
+    }
+
     /// Source evidence alone never proves complete compilation input identity.
     /// In particular no arbitrary build-script/proc-macro execution is tracked.
     pub fn shareability_blockers(&self) -> &'static [&'static str] {
@@ -161,6 +197,7 @@ impl<'a> TrackingReader<'a> {
             InputDomain::Untracked => false,
             InputDomain::Filesystem => cwd.is_some(),
             InputDomain::EmbeddedPrelude => true,
+            InputDomain::Snapshot => options.source_snapshot.is_some(),
         };
         Self {
             inner,
@@ -168,6 +205,7 @@ impl<'a> TrackingReader<'a> {
                 domain,
                 compiler_image: options.compiler_image.clone(),
                 project: options.project_inputs.clone(),
+                snapshot: options.source_snapshot.clone(),
                 observations: Vec::new(),
                 options: option_identity(options),
                 complete,
@@ -301,6 +339,7 @@ fn option_identity(options: &SourceOptions) -> Option<[u8; 32]> {
     let SourceOptions {
         compiler_image,
         project_inputs,
+        source_snapshot,
         edition,
         native_link,
         cfg,
@@ -317,7 +356,14 @@ fn option_identity(options: &SourceOptions) -> Option<[u8; 32]> {
         remaining: MAX_IDENTITY_BYTES,
         valid: true,
     };
-    id.bytes(b"justrust-source-input-v3");
+    id.bytes(b"justrust-source-input-v4");
+    match source_snapshot {
+        Some(snapshot) => {
+            id.flag(true);
+            id.bytes(snapshot.digest());
+        }
+        None => id.flag(false),
+    }
     match compiler_image {
         Some(image) => {
             id.flag(true);

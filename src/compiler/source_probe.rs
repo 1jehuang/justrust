@@ -275,7 +275,15 @@ fn verify(
     options: &SourceOptions,
 ) -> Result<VerifiedProvider, SourceError> {
     let mut filesystem = super::FsReader;
-    let mut reader = super::source_inputs::TrackingReader::new(&mut filesystem, options);
+    let mut frozen = options
+        .source_snapshot
+        .as_ref()
+        .map(|snapshot| snapshot.reader());
+    let inner: &mut dyn super::SourceReader = match frozen.as_mut() {
+        Some(reader) => reader,
+        None => &mut filesystem,
+    };
+    let mut reader = super::source_inputs::TrackingReader::new(inner, options);
     if request.item != ITEM {
         return Err(error("unregistered reviewed probe item"));
     }
