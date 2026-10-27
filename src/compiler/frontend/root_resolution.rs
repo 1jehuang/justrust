@@ -4192,6 +4192,8 @@ pub struct ResolvedModuleItems {
     traits: Vec<(usize, TraitDecl, TraitResolution)>,
     /// First failing empty use-group prefix. Ranked first.
     prefix_error: Option<(usize, String)>,
+    /// Trait imports declared in this module, keyed by declared-path order.
+    trait_imports: Vec<(usize, ModuleId, TraitPath)>,
     /// First alias error of this module. Ranked after declared paths.
     alias_error: Option<String>,
     /// First failing glob import. Ranked after prefixes.
@@ -4283,6 +4285,19 @@ pub fn resolve_module_items(
     {
         let path = namespace.paths.get(order).ok_or("foreign declared path")?;
         if let Err(diagnostic) = validate_declared_path(&mut resolver, path) {
+            path_error = Some((order, diagnostic));
+            break;
+        }
+    }
+    let mut trait_imports = Vec::new();
+    for &order in &namespace.declared[ordinal] {
+        if path_error.is_some() || alias_error.is_some() {
+            break;
+        }
+        let path = &namespace.paths[order];
+        if let Err(diagnostic) =
+            collect_trait_imports(&mut resolver, order, path, &mut trait_imports)
+        {
             path_error = Some((order, diagnostic));
             break;
         }
@@ -4397,6 +4412,7 @@ pub fn resolve_module_items(
         prefix_error,
         glob_error,
         alias_error,
+        trait_imports,
         path_error,
         constant_error,
         constants,
@@ -4890,37 +4906,6 @@ pub fn prepare_resolution_owned(parsed: Arc<ParsedProgram>) -> Result<Resolution
     // remaining crate-wide header passes rank after constant errors, so they
     // are deferred, never returned ahead of them.
     let header_error = (|| -> Result<Option<usize>, String> {
-        for path in &paths {
-            let key = resolver.key(path)?;
-            for (index, item) in parsed
-                .items
-                .get(&key)
-                .ok_or("missing source import bucket")?
-                .iter()
-                .enumerate()
-            {
-                if matches!(item.kind, ItemKind::Import(_, _))
-                    && let Some(target) = resolver.import(path, index, true)?
-                    && target.kind == ResolvedKind::Trait
-                {
-                    resolver.charge_entries::<(ModuleId, TraitPath)>(1)?;
-                    program
-                        .trait_imports
-                        .try_reserve(1)
-                        .map_err(|_| "trait import allocation failed")?;
-                    let path = match &target.path {
-                        ResolvedPath::Source(path) => {
-                            TraitPath::Source(resolver.alias_source_path(path)?)
-                        }
-                        ResolvedPath::Builtin(id) => TraitPath::Builtin(*id),
-                        ResolvedPath::CatalogModule(_) => {
-                            return Err("trait import names a module".into());
-                        }
-                    };
-                    program.trait_imports.push((item.module, path));
-                }
-            }
-        }
         let mut derived_debug_source = None;
         for (source_index, declaration) in program.traits.iter().enumerate() {
             if generated_debug::canonical_source(&parsed.program, declaration)?
@@ -5121,6 +5106,39 @@ pub fn prepare_resolution_owned(parsed: Arc<ParsedProgram>) -> Result<Resolution
         adapter_error,
         derived_debug_source,
     })
+}
+
+/// Collect the trait imports declared at one path, in binding order.
+fn collect_trait_imports(
+    resolver: &mut Resolver<'_>,
+    order: usize,
+    path: &AstPath,
+    imports: &mut Vec<(usize, ModuleId, TraitPath)>,
+) -> Result<(), String> {
+    let key = resolver.key(path)?;
+    for (index, item) in resolver
+        .items
+        .get(&key)
+        .ok_or("missing source import bucket")?
+        .iter()
+        .enumerate()
+    {
+        if matches!(item.kind, ItemKind::Import(_, _))
+            && let Some(target) = resolver.import(path, index, true)?
+            && target.kind == ResolvedKind::Trait
+        {
+            resolver.charge_entries::<(ModuleId, TraitPath)>(1)?;
+            let path = match &target.path {
+                ResolvedPath::Source(path) => TraitPath::Source(resolver.alias_source_path(path)?),
+                ResolvedPath::Builtin(id) => TraitPath::Builtin(*id),
+                ResolvedPath::CatalogModule(_) => {
+                    return Err("trait import names a module".into());
+                }
+            };
+            imports.push((order, item.module, path));
+        }
+    }
+    Ok(())
 }
 
 /// An empty `use p::{}` still names a module, enum or trait.
@@ -5419,6 +5437,20 @@ fn finish_resolution_with<T>(
         return Err(diagnostic.clone());
     }
     let mut program = namespace.program.clone();
+    let mut trait_imports = items
+        .iter_mut()
+        .flat_map(|item| std::mem::take(&mut item.trait_imports))
+        .collect::<Vec<_>>();
+    trait_imports.sort_by_key(|(order, _, _)| *order);
+    program
+        .trait_imports
+        .try_reserve(trait_imports.len())
+        .map_err(|_| "trait import allocation failed")?;
+    program.trait_imports.extend(
+        trait_imports
+            .into_iter()
+            .map(|(_, module, path)| (module, path)),
+    );
     let mut resolver = namespace.state.resolver(parsed);
     let mut trait_results = items
         .iter_mut()
