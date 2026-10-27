@@ -1,3 +1,4 @@
+#[allow(dead_code)]
 #[path = "support/native_prelude.rs"]
 mod native_prelude;
 

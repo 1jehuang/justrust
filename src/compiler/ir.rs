@@ -4306,13 +4306,13 @@ fn canonicalize_call_metadata_with_scratch(
     _cx: &mut impl SubstitutionCx,
     source_cap: Option<&super::frontend::CanonicalSourceCapability>,
     budget: &PlanBudget,
-    mut scratch: &mut super::traits::TraitScratch,
+    scratch: &mut super::traits::TraitScratch,
 ) -> Result<CheckedFunction, super::traits::FactsError> {
     use super::traits::FactsError;
     // A single node-local proof scratch spans source preflight and canonical
     // call replay. All cache entries retain their exact facts/world authority.
     source
-        .preflight_plan_with_scratch(FactsCtx::from_validated(facts), budget, &mut scratch)
+        .preflight_plan_with_scratch(FactsCtx::from_validated(facts), budget, scratch)
         .map_err(|e| FactsError::from_message(budget, &e))?;
     let mut output = source.clone();
     for (expression_index, expression) in output.exprs.iter_mut().enumerate() {
@@ -4323,11 +4323,7 @@ fn canonicalize_call_metadata_with_scratch(
             target, signature, ..
         } = &mut expression.kind
         {
-            facts.validate_signature_with(
-                SignatureSubject::Call(target),
-                signature,
-                &mut scratch,
-            )?;
+            facts.validate_signature_with(SignatureSubject::Call(target), signature, scratch)?;
             budget
                 .retain_bytes(
                     signature
@@ -4343,20 +4339,18 @@ fn canonicalize_call_metadata_with_scratch(
             let selection = target.clone();
             let (callee, canonical) = match target {
                 Callee::Direct(target) => {
-                    let proof =
-                        facts
-                            .service()
-                            .discharge_direct_with(target, facts, &mut scratch)?;
+                    let proof = facts
+                        .service()
+                        .discharge_direct_with(target, facts, scratch)?;
                     (
                         Callee::Direct(proof.target().clone()),
                         proof.signature().clone(),
                     )
                 }
                 Callee::TraitItem(call) => {
-                    let proof =
-                        facts
-                            .service()
-                            .resolve_trait_call_with(call, facts, &mut scratch)?;
+                    let proof = facts
+                        .service()
+                        .resolve_trait_call_with(call, facts, scratch)?;
                     (proof.callee().clone(), proof.signature().clone())
                 }
                 // Dynamic dispatch stays virtual in every phase. Its canonical
@@ -4389,7 +4383,7 @@ fn canonicalize_call_metadata_with_scratch(
                     &callee,
                     &canonical,
                     signature,
-                    &mut scratch,
+                    scratch,
                 )?
                 .unwrap_or(canonical)
             } else if facts.phase() == super::traits::FactsPhase::Closed {
@@ -6095,20 +6089,20 @@ fn type_metadata_walk(
             Ty::Enum(value) => value.realization(),
             _ => None,
         };
-        if let Some(capability) = capability {
-            if let Some(height) = capability.component_metadata_height() {
-                capability.check_definition(ty).map_err(|e| e.to_string())?;
-                let deepest = depth
-                    .checked_add(height)
-                    .ok_or("associated type traversal depth overflow")?;
-                if deepest > MAX_PATTERN_PROJECTION_DEPTH {
-                    return Err("associated type traversal depth limit exceeded".into());
-                }
-                if let Some(budget) = budget {
-                    budget.check_depth(deepest)?;
-                }
-                return Ok((false, height));
+        if let Some(capability) = capability
+            && let Some(height) = capability.component_metadata_height()
+        {
+            capability.check_definition(ty).map_err(|e| e.to_string())?;
+            let deepest = depth
+                .checked_add(height)
+                .ok_or("associated type traversal depth overflow")?;
+            if deepest > MAX_PATTERN_PROJECTION_DEPTH {
+                return Err("associated type traversal depth limit exceeded".into());
             }
+            if let Some(budget) = budget {
+                budget.check_depth(deepest)?;
+            }
+            return Ok((false, height));
         }
         let key = match ty {
             Ty::Opaque(opaque) => (9, Arc::as_ptr(opaque) as usize),
@@ -12739,7 +12733,7 @@ mod tests {
         let mut builder = ModuleArenaBuilder::for_source(
             &names,
             crate::compiler::owner_path::standalone_issued(
-                &names.budget(),
+                names.budget(),
                 crate::compiler::owner_path::OwnerDomain::ModuleArena,
             )
             .unwrap(),

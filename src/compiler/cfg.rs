@@ -2159,7 +2159,7 @@ impl Function {
         scratch: &mut TraitScratch,
     ) -> Result<(), String> {
         let got = self.operand_ty_with_facts(value, facts, scratch)?;
-        if coerces(&got, &want) {
+        if coerces(&got, want) {
             Ok(())
         } else {
             Err("CFG operand type mismatch".into())
@@ -2470,8 +2470,8 @@ impl Function {
                 let Ty::Array { element, len } = ty else {
                     return Err("CFG repeat requires array type".into());
                 };
-                self.require_operand_with_facts(value, &element, facts, scratch)?;
-                if *len > 1 && !facts.must_copy_scratch(&element, scratch)? {
+                self.require_operand_with_facts(value, element, facts, scratch)?;
+                if *len > 1 && !facts.must_copy_scratch(element, scratch)? {
                     return Err(
                         "CFG array repeat requires Copy element for length greater than one".into(),
                     );
@@ -6547,7 +6547,7 @@ mod tests {
         let modules = ModuleArenaBuilder::for_source(
             &names,
             crate::compiler::owner_path::standalone_issued(
-                &names.budget(),
+                names.budget(),
                 crate::compiler::owner_path::OwnerDomain::ModuleArena,
             )
             .unwrap(),

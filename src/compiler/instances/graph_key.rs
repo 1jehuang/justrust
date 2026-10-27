@@ -37,7 +37,7 @@ pub(in crate::compiler) fn encode(
 }
 
 fn declaration(words: &mut Vec<u64>, id: ir::DeclId) {
-    words.extend([id.snapshot.graph_word(), u64::from(id.index)]);
+    words.extend([id.snapshot.graph_word(), id.index]);
 }
 fn types(
     words: &mut Vec<u64>,

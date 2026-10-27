@@ -1121,6 +1121,7 @@ impl ValidatedTraitWorld {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn instantiate_owner_projected_type(
         &self,
         ty: &Ty,

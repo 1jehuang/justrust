@@ -802,7 +802,7 @@ pub(super) fn direct_demands(
     let mut demands = DirectDemands::default();
     let schema = context.function_schema(target.declaration)?;
     let env = schema.env;
-    let closed_facts = context.instance_facts(&target)?;
+    let closed_facts = context.instance_facts(target)?;
     let mut scratch = traits::TraitScratch::default();
     // Implicit cleanup is part of the same closed demand frontier as an
     // explicit call. Do not rely on nongeneric source-root enumeration.

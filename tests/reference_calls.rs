@@ -1,5 +1,6 @@
 // B2 noescape reference-call acceptance. Stock-classified corpus is frozen.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#![allow(clippy::duplicate_mod)]
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;

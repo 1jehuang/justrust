@@ -478,7 +478,7 @@ mod tests {
         let modules = ModuleArenaBuilder::for_source(
             &names,
             crate::compiler::owner_path::standalone_issued(
-                &names.budget(),
+                names.budget(),
                 crate::compiler::owner_path::OwnerDomain::ModuleArena,
             )
             .unwrap(),
@@ -487,7 +487,7 @@ mod tests {
         let mut scopes = ScopeArenaBuilder::for_names(
             &names,
             crate::compiler::owner_path::standalone_issued(
-                &names.budget(),
+                names.budget(),
                 crate::compiler::owner_path::OwnerDomain::ScopeArena,
             )
             .unwrap(),
@@ -596,7 +596,7 @@ mod tests {
         let modules = ModuleArenaBuilder::for_source(
             &names,
             crate::compiler::owner_path::standalone_issued(
-                &names.budget(),
+                names.budget(),
                 crate::compiler::owner_path::OwnerDomain::ModuleArena,
             )
             .unwrap(),
@@ -606,7 +606,7 @@ mod tests {
         let mut scopes = ScopeArenaBuilder::for_names(
             &names,
             crate::compiler::owner_path::standalone_issued(
-                &names.budget(),
+                names.budget(),
                 crate::compiler::owner_path::OwnerDomain::ScopeArena,
             )
             .unwrap(),

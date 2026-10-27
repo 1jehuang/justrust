@@ -622,7 +622,7 @@ fn native_heap_carrier_coordinate_uses_exact_nominal_read() {
             ir::carrier_locations(&root, facts.budget())
                 .unwrap()
                 .as_ref(),
-            &[location.clone()]
+            std::slice::from_ref(&location)
         );
         assert_eq!(
             ir::carrier_at(&root, &location, facts.budget()).unwrap(),
@@ -1002,7 +1002,7 @@ fn native_heap_carrier_coordinate_uses_exact_nominal_read() {
         let source_closed = plan
             .intern_nominal(
                 nominal.def().source_decl,
-                &[leaf.clone()],
+                std::slice::from_ref(&leaf),
                 ir::FactsCtx::Concrete,
                 facts.budget(),
             )
@@ -1012,7 +1012,7 @@ fn native_heap_carrier_coordinate_uses_exact_nominal_read() {
         let transported = ir::substitute_ty(
             &source_application,
             foreign_facts.env(),
-            &[leaf.clone()],
+            std::slice::from_ref(&leaf),
             ir::FactsCtx::Concrete,
             &mut substitution_context,
             facts.budget(),
@@ -1027,7 +1027,7 @@ fn native_heap_carrier_coordinate_uses_exact_nominal_read() {
             ir::carrier_locations(&transported, facts.budget())
                 .unwrap()
                 .as_ref(),
-            &[location.clone()]
+            std::slice::from_ref(&location)
         );
         let ir::Ty::Struct(transported_owner) = &transported else {
             panic!("native source transport")
@@ -1139,7 +1139,7 @@ fn native_heap_carrier_coordinate_uses_exact_nominal_read() {
             ir::substitute_ty(
                 &source_application,
                 foreign_facts.env(),
-                &[leaf.clone()],
+                std::slice::from_ref(&leaf),
                 ir::FactsCtx::Concrete,
                 &mut substitution_context,
                 facts.budget(),

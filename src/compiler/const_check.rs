@@ -433,6 +433,12 @@ fn integer_bits(magnitude: u128, ty: ir::IntTy, negative: bool) -> Result<u128, 
     })
 }
 
+impl crate::engine::Fact for BodyFact {}
+
+impl crate::engine::Fact for QualificationFact {}
+
+impl crate::engine::Fact for ValueFact {}
+
 #[cfg(test)]
 mod storage_tests {
     use super::*;
@@ -518,9 +524,3 @@ mod storage_tests {
         assert_eq!(exact.usage_snapshot().bytes, proof_bytes);
     }
 }
-
-impl crate::engine::Fact for BodyFact {}
-
-impl crate::engine::Fact for QualificationFact {}
-
-impl crate::engine::Fact for ValueFact {}

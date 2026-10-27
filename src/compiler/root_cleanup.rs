@@ -130,6 +130,8 @@ impl RootCleanupDemand {
     }
 }
 
+impl crate::engine::Fact for RootCleanupDemand {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -303,5 +305,3 @@ mod tests {
         assert!(RootCleanupDemand::derive(&owner, &body, &publication, &budget).is_err());
     }
 }
-
-impl crate::engine::Fact for RootCleanupDemand {}

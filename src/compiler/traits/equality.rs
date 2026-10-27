@@ -2316,7 +2316,7 @@ mod tests {
         for _ in 0..2 {
             world.require_in(&predicate, context, &mut proving).unwrap();
         }
-        assert!(proving.checked.as_ref().unwrap().closedness.len() > 0);
+        assert!(!proving.checked.as_ref().unwrap().closedness.is_empty());
         let ActiveEqualityCase { facts: foreign, .. } = active_equality_fixture();
         assert!(
             foreign

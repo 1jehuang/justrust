@@ -17,7 +17,7 @@ fn names(text: &str, budget: &ExpansionBudget) -> (NameStoreBuilder, Vec<AstIden
         text,
         budget,
         justrust_engine::compiler::owner_path::standalone_issued(
-            &budget,
+            budget,
             justrust_engine::compiler::owner_path::OwnerDomain::SourceSnapshot,
         )
         .unwrap(),
@@ -49,7 +49,7 @@ fn source_and_catalog_roots_are_real_disjoint_checked_modules() {
     let builder = ModuleArenaBuilder::for_source(
         &names,
         justrust_engine::compiler::owner_path::standalone_issued(
-            &names.budget(),
+            names.budget(),
             justrust_engine::compiler::owner_path::OwnerDomain::ModuleArena,
         )
         .unwrap(),
@@ -122,7 +122,7 @@ fn child_identity_is_parent_plus_checked_name_not_occurrence_or_spelling_alone()
     let mut modules = ModuleArenaBuilder::for_source(
         &names,
         justrust_engine::compiler::owner_path::standalone_issued(
-            &names.budget(),
+            names.budget(),
             justrust_engine::compiler::owner_path::OwnerDomain::ModuleArena,
         )
         .unwrap(),
@@ -165,7 +165,7 @@ fn same_source_name_owner_does_not_merge_independent_module_arenas() {
     let mut first = ModuleArenaBuilder::for_source(
         &names,
         justrust_engine::compiler::owner_path::standalone_issued(
-            &names.budget(),
+            names.budget(),
             justrust_engine::compiler::owner_path::OwnerDomain::ModuleArena,
         )
         .unwrap(),
@@ -174,7 +174,7 @@ fn same_source_name_owner_does_not_merge_independent_module_arenas() {
     let mut second = ModuleArenaBuilder::for_source(
         &names,
         justrust_engine::compiler::owner_path::standalone_issued(
-            &names.budget(),
+            names.budget(),
             justrust_engine::compiler::owner_path::OwnerDomain::ModuleArena,
         )
         .unwrap(),
@@ -223,7 +223,7 @@ fn foreign_name_store_cannot_supply_same_spelling_module_authority() {
     let mut modules = ModuleArenaBuilder::for_source(
         &own,
         justrust_engine::compiler::owner_path::standalone_issued(
-            &own.budget(),
+            own.budget(),
             justrust_engine::compiler::owner_path::OwnerDomain::ModuleArena,
         )
         .unwrap(),
@@ -267,7 +267,7 @@ fn source_children_cannot_attach_to_catalog_roots_or_descendants() {
     let mut modules = ModuleArenaBuilder::for_source(
         &names,
         justrust_engine::compiler::owner_path::standalone_issued(
-            &names.budget(),
+            names.budget(),
             justrust_engine::compiler::owner_path::OwnerDomain::ModuleArena,
         )
         .unwrap(),
@@ -297,7 +297,7 @@ fn privacy_restrictions_require_same_root_ancestor_at_schema_admission() {
     let mut modules = ModuleArenaBuilder::for_source(
         &names,
         justrust_engine::compiler::owner_path::standalone_issued(
-            &names.budget(),
+            names.budget(),
             justrust_engine::compiler::owner_path::OwnerDomain::ModuleArena,
         )
         .unwrap(),
@@ -350,7 +350,7 @@ fn reexport_cannot_widen_restricted_audience_or_cross_roots() {
     let mut modules = ModuleArenaBuilder::for_source(
         &names,
         justrust_engine::compiler::owner_path::standalone_issued(
-            &names.budget(),
+            names.budget(),
             justrust_engine::compiler::owner_path::OwnerDomain::ModuleArena,
         )
         .unwrap(),
@@ -446,7 +446,7 @@ fn deep_flat_ancestry_has_no_new_semantic_depth_cap() {
     let mut modules = ModuleArenaBuilder::for_source(
         &names,
         justrust_engine::compiler::owner_path::standalone_issued(
-            &names.budget(),
+            names.budget(),
             justrust_engine::compiler::owner_path::OwnerDomain::ModuleArena,
         )
         .unwrap(),

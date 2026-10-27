@@ -40,7 +40,7 @@ fn generic_slice_family_keeps_exact_path_and_bounded_substitution() {
         let result = substitute_ty(
             &slice,
             facts.env(),
-            &[element.clone()],
+            std::slice::from_ref(&element),
             FactsCtx::Concrete,
             &mut plan,
             &budget,

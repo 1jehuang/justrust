@@ -189,29 +189,19 @@ impl Term {
                 t.write(out, b, d + 1)?;
             }
             Self::Nominal(id, ts) => {
-                out.extend([
-                    13,
-                    id.snapshot.graph_word(),
-                    u64::from(id.index),
-                    ts.len() as u64,
-                ]);
+                out.extend([13, id.snapshot.graph_word(), id.index, ts.len() as u64]);
                 for t in ts {
                     t.write(out, b, d + 1)?;
                 }
             }
             Self::Dyn(id, args, assigned) => {
-                out.extend([
-                    14,
-                    id.snapshot.graph_word(),
-                    u64::from(id.index),
-                    args.len() as u64,
-                ]);
+                out.extend([14, id.snapshot.graph_word(), id.index, args.len() as u64]);
                 for t in args {
                     t.write(out, b, d + 1)?;
                 }
                 out.push(assigned.len() as u64);
                 for (item, t) in assigned {
-                    out.extend([item.snapshot.graph_word(), u64::from(item.index)]);
+                    out.extend([item.snapshot.graph_word(), item.index]);
                     t.write(out, b, d + 1)?;
                 }
             }

@@ -1792,6 +1792,7 @@ impl<T> MeteredReplayRows<T> {
 /// Failures are never recorded, so a failing replay is always re-reported.
 /// Bounded by the distinct nominal facts the node itself read.
 #[derive(Default)]
+#[allow(clippy::type_complexity)]
 pub(in crate::compiler) struct NominalReplays {
     /// Local canonical reconstruction only, never a replacement for payload replay.
     nominal_session: Option<Box<dyn NominalValidationSession>>,
@@ -14022,7 +14023,7 @@ mod tests {
         world
             .validate_ty_metadata_with(&c.leaf, facts.env(), 0, &mut replays)
             .unwrap();
-        assert!(replays.types.len() > 0);
+        assert!(!replays.types.is_empty());
         // Fill both buffers to the same actual bound using completed genuine
         // metadata roots; duplicate hashes are legitimate completed entries.
         while replays.types.len() < replays.types.values.capacity()
@@ -14639,7 +14640,7 @@ mod tests {
                 assert!(grew);
                 assert_eq!(observed_peak, budget.limits().bytes);
                 assert_eq!(budget.usage_snapshot().work, budget.limits().work);
-                assert!(rows.values.capacity() >= count + 1);
+                assert!(rows.values.capacity() > count);
                 assert_ne!(rows.values.as_ptr(), old_buffer);
                 for (row, child) in rows.values.iter().zip(&old_children) {
                     assert_eq!(std::ptr::from_ref(row.child.as_ref()), *child);

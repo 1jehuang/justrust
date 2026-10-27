@@ -274,14 +274,14 @@ impl CompilerProvider {
                 .request(crate::compiler::keys::params(
                     ASSOCIATED_CONST_HEADER,
                     member.snapshot.graph_word(),
-                    vec![u64::from(member.index)],
+                    vec![member.index],
                 ))
                 .get(0);
             let selected_handle = cx
                 .request(crate::compiler::keys::params(
                     ASSOCIATED_CONST_HEADER,
                     declaration.snapshot.graph_word(),
-                    vec![u64::from(declaration.index)],
+                    vec![declaration.index],
                 ))
                 .get(0);
             let required: Arc<AssociatedConstantHeaderFact> = cx.read_fact(member_handle).await?;
@@ -301,7 +301,7 @@ impl CompilerProvider {
                     cx.request(crate::compiler::keys::params(
                         ASSOCIATED_CONST_HEADER,
                         declaration.snapshot.graph_word(),
-                        vec![u64::from(declaration.index)],
+                        vec![declaration.index],
                     ))
                     .get(1),
                 )
@@ -529,6 +529,12 @@ impl CompilerProvider {
     }
 }
 
+impl crate::engine::Fact for AssociatedConstantCheckedFact {}
+
+impl crate::engine::Fact for AssociatedConstantHeaderFact {}
+
+impl crate::engine::Fact for AssociatedConstantValueFact {}
+
 #[cfg(test)]
 mod caller_tests {
     use super::*;
@@ -580,9 +586,3 @@ mod caller_tests {
         assert!(!same_caller_computation(&original, &foreign, &budget).unwrap());
     }
 }
-
-impl crate::engine::Fact for AssociatedConstantCheckedFact {}
-
-impl crate::engine::Fact for AssociatedConstantHeaderFact {}
-
-impl crate::engine::Fact for AssociatedConstantValueFact {}

@@ -6,6 +6,7 @@ mod oracle;
 mod stock_rustc;
 use oracle::{Case, Expect};
 
+#[allow(dead_code)]
 #[path = "support/closure_oracle.rs"]
 mod closure_oracle;
 

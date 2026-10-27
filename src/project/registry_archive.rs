@@ -236,7 +236,7 @@ pub(crate) mod tests {
                 "{name}"
             );
         }
-        for kind in [b'1', b'2', b'3', b'4', b'6', b'L', b'x', b'g', b'S'] {
+        for kind in *b"12346LxgS" {
             assert!(files(&archive(&[("dep-1/Cargo.toml", b"", kind)]), "dep-1").is_err());
         }
         let mut joined = bytes.clone();

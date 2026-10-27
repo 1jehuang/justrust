@@ -236,6 +236,8 @@ impl ValidatedTraitWorld {
     }
 }
 
+impl crate::engine::Fact for NominalDeclarationProof {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -319,5 +321,3 @@ mod tests {
         );
     }
 }
-
-impl crate::engine::Fact for NominalDeclarationProof {}

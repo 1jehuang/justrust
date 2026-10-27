@@ -1,4 +1,6 @@
 //! Bounded configured source preparation and original-file byte provenance.
+// SourceError carries full provenance; it is returned once per unit, not on hot paths.
+#![allow(clippy::result_large_err)]
 use std::fs::File;
 use std::io::Read;
 use std::ops::Range;
@@ -2318,6 +2320,12 @@ fn tokens(text: &str) -> Result<Vec<Token>, String> {
     Ok(out)
 }
 
+impl crate::engine::Fact for PreparedSource {}
+
+impl crate::engine::Fact for FileUnit {}
+
+impl crate::engine::Fact for UnitFailure {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3599,9 +3607,3 @@ fn main(){println!("mod absent; }"); let x = r##"mod raw; {"##; let c = '}';}
         assert!(tree.load().unwrap_err().contains("UTF-8"));
     }
 }
-
-impl crate::engine::Fact for PreparedSource {}
-
-impl crate::engine::Fact for FileUnit {}
-
-impl crate::engine::Fact for UnitFailure {}

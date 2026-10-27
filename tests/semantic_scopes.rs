@@ -22,7 +22,7 @@ fn scanned(text: &str, budget: &ExpansionBudget) -> (NameStoreBuilder, Vec<Token
         text,
         budget,
         justrust_engine::compiler::owner_path::standalone_issued(
-            &budget,
+            budget,
             justrust_engine::compiler::owner_path::OwnerDomain::SourceSnapshot,
         )
         .unwrap(),
@@ -996,7 +996,7 @@ fn public_name_gate_cannot_mint_unproved_marked_or_expanded_scope_occurrences() 
     let mut scopes = ScopeArenaBuilder::for_names(
         &names,
         justrust_engine::compiler::owner_path::standalone_issued(
-            &names.budget(),
+            names.budget(),
             justrust_engine::compiler::owner_path::OwnerDomain::ScopeArena,
         )
         .unwrap(),

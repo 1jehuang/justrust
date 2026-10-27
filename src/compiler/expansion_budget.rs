@@ -113,7 +113,7 @@ impl fmt::Display for BudgetFailure {
     }
 }
 impl std::error::Error for BudgetFailure {}
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct BudgetSnapshot {
     pub counters: [u64; 10],
     pub retained_bytes: u64,
@@ -128,18 +128,6 @@ pub struct BudgetSnapshot {
 #[derive(Debug, Default)]
 struct State {
     snapshot: BudgetSnapshot,
-}
-impl Default for BudgetSnapshot {
-    fn default() -> Self {
-        Self {
-            counters: [0; 10],
-            retained_bytes: 0,
-            temporary_bytes: 0,
-            peak_bytes: 0,
-            reservations: ReservationAccounting::default(),
-            failure: None,
-        }
-    }
 }
 impl State {
     fn latch(&mut self, failure: BudgetFailure) -> BudgetFailure {
@@ -808,6 +796,8 @@ impl Drop for StateLease {
         });
     }
 }
+
+impl crate::engine::Fact for RetainedBytes {}
 
 #[cfg(test)]
 mod tests {
@@ -1649,5 +1639,3 @@ mod tests {
         b.check().unwrap();
     }
 }
-
-impl crate::engine::Fact for RetainedBytes {}

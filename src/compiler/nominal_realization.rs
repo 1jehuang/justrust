@@ -89,7 +89,7 @@ fn source_key(declaration: ir::DeclId) -> Key {
         vec![
             SOURCE_SCHEMA,
             declaration.snapshot.graph_word(),
-            u64::from(declaration.index),
+            declaration.index,
         ],
     )
 }
@@ -119,7 +119,7 @@ pub(super) async fn run(cx: &Context, key: Key) -> Result<(), Error> {
                 .request(crate::compiler::keys::params(
                     super::NOMINAL_DECL_WELL_FORMED,
                     declaration.snapshot.graph_word(),
-                    vec![u64::from(declaration.index)],
+                    vec![declaration.index],
                 ))
                 .get(0);
             let types: Arc<super::frontend::PlanCtx> = cx.read_fact(types_handle).await?;
@@ -243,7 +243,7 @@ impl RealizationKey {
             CLOSED_REALIZATION,
             world,
             declaration.snapshot.graph_word(),
-            u64::from(declaration.index),
+            declaration.index,
             arguments.len() as u64,
         ]);
         for argument in arguments {
@@ -730,10 +730,11 @@ impl AcyclicRead {
     }
 }
 
-/// Async frontier shared by BODY and future layout-free source preparation.
-/// All independent requests are issued before the first await. It reads only
-/// the caller-supplied per-item manifest, never a registry-wide application set.
-/// Facts remain keyed by exact ordered coordinate words even under collisions.
+impl crate::engine::Fact for NominalSourceFact {}
+
+impl crate::engine::Fact for RealizedNominal {}
+
+impl crate::engine::Fact for ReadNominal {}
 
 #[cfg(test)]
 mod tests {
@@ -1345,9 +1346,3 @@ mod tests {
         assert!(RealizationKey::encode(7, declaration, &[vec![1; 32]], 32).is_err());
     }
 }
-
-impl crate::engine::Fact for NominalSourceFact {}
-
-impl crate::engine::Fact for RealizedNominal {}
-
-impl crate::engine::Fact for ReadNominal {}

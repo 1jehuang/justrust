@@ -107,75 +107,6 @@ impl<'f> ProjectionMetadata<'f> {
     }
 }
 
-#[cfg(test)]
-mod projection_metadata_tests {
-    use super::*;
-
-    fn facts() -> Arc<tr::ValidatedFacts> {
-        let program = super::super::parse("fn probe<T>(x:T){}fn main(){}").unwrap();
-        let plan =
-            super::super::PlanCtx::from_program(&program, &ir::PlanBudget::default()).unwrap();
-        plan.trait_world()
-            .unwrap()
-            .callable_facts(plan.function_decl(0).unwrap())
-            .unwrap()
-    }
-
-    #[test]
-    fn solver_projection_metadata_header_exact_short_drop_and_poison() {
-        for short in [false, true] {
-            let facts = facts();
-            let budget = facts.budget();
-            let paid = std::mem::size_of::<Option<ProjectionMetadata<'_>>>();
-            let before = budget.usage_snapshot().bytes;
-            let filler_bytes = budget.limits().bytes - before - paid + usize::from(short);
-            let filler = budget.reserve_bytes(filler_bytes).unwrap();
-            let before_owner = budget.usage_snapshot().bytes;
-            let result = ProjectionMetadata::new(&facts);
-            assert_eq!(result.is_err(), short);
-            if let Ok(owner) = result {
-                assert_eq!(budget.usage_snapshot().bytes, before_owner + paid);
-                drop(owner);
-                assert_eq!(budget.usage_snapshot().bytes, before_owner);
-            } else {
-                assert_eq!(
-                    budget.first_resource_failure().unwrap().kind,
-                    ir::ResourceBudgetKind::Bytes
-                );
-                assert_eq!(budget.usage_snapshot().bytes, before_owner);
-            }
-            let failure = budget.first_resource_failure();
-            drop(filler);
-            assert_eq!(budget.usage_snapshot().bytes, before);
-            assert_eq!(budget.first_resource_failure(), failure);
-        }
-        let facts = facts();
-        let before = facts.budget().usage_snapshot().bytes;
-        let owner = ProjectionMetadata::new(&facts).unwrap();
-        let ty = ir::Ty::Tuple(Arc::from([ir::Ty::Bool, ir::Ty::Int(ir::IntTy::I32)]));
-        facts
-            .validate_ty_metadata_scratch(&ty, facts.budget(), &mut owner.scratch.borrow_mut())
-            .unwrap();
-        assert!(facts.budget().usage_snapshot().bytes > before);
-        drop(owner);
-        assert_eq!(facts.budget().usage_snapshot().bytes, before);
-
-        let owner = ProjectionMetadata::new(&facts).unwrap();
-        let parent = facts.budget().reserve_bytes(64).unwrap();
-        let live = facts.budget().usage_snapshot().bytes;
-        facts.budget().poison_ledger_for_tests();
-        assert!(
-            owner
-                .normalize(&facts, &ir::Ty::Unit, facts.budget())
-                .is_err()
-        );
-        assert!(ProjectionMetadata::new(&facts).is_err());
-        drop(owner);
-        drop(parent);
-        assert_eq!(facts.budget().usage_snapshot().bytes, live);
-    }
-}
-
 struct Solver<'a: 's, 'b: 's, 's> {
     checker: &'a Checker<'b>,
     projection_metadata: Option<ProjectionMetadata<'b>>,
@@ -257,10 +188,6 @@ pub(super) fn hints_with_inputs<'a: 's, 'b: 's, 's>(
 }
 
 fn finalized_hints(solver: Solver<'_, '_, '_>) -> Result<Hints, String> {
-    #[expect(
-        clippy::mutable_key_type,
-        reason = "PathKey equality and hashing use immutable path identity, never the retained allocation budget"
-    )]
     let closures = solver.closure_hints()?;
     let mut hints = HashMap::new();
     for (site, term) in solver.sites.clone() {
@@ -1466,28 +1393,28 @@ impl<'s> Solver<'_, '_, 's> {
                                 // Stock's final probe step unsizes `[T; N]` to
                                 // `[T]`. Checked lowering admits only the shared
                                 // `&[T]` carrier and reselects the same method.
-                                if let Some(carrier) = type_check::array_unsize_carrier(&ty) {
-                                    if let Ok(selected) = plan.select_method(
+                                if let Some(carrier) = type_check::array_unsize_carrier(&ty)
+                                    && let Ok(selected) = plan.select_method(
                                         &carrier,
                                         &method.name,
                                         &[],
                                         self.checker.facts(),
                                         &self.checker.module,
                                         &plan.budget,
-                                    ) {
-                                        for (arg, param) in method
-                                            .args
-                                            .iter()
-                                            .zip(selected.signature.params.iter().skip(1))
-                                        {
-                                            let param = self.fixed(param.clone())?;
-                                            self.coerce(*arg, param)?;
-                                        }
-                                        let result = self.fixed(selected.signature.result)?;
-                                        self.unify(result, method.result)?;
-                                        progress = true;
-                                        continue;
+                                    )
+                                {
+                                    for (arg, param) in method
+                                        .args
+                                        .iter()
+                                        .zip(selected.signature.params.iter().skip(1))
+                                    {
+                                        let param = self.fixed(param.clone())?;
+                                        self.coerce(*arg, param)?;
                                     }
+                                    let result = self.fixed(selected.signature.result)?;
+                                    self.unify(result, method.result)?;
+                                    progress = true;
+                                    continue;
                                 }
                                 // Once an exact scalar's ordinary method lookup
                                 // has failed, a known primitive name is not an
@@ -2514,14 +2441,14 @@ impl<'s> Solver<'_, '_, 's> {
                                     .flatten();
                             }
                         }
-                        if let Some((_, signature, _)) = selected {
-                            if signature.params.len() == args.len() {
-                                for (argument, parameter) in args.iter().zip(&signature.params) {
-                                    let parameter = self.fixed(parameter.clone())?;
-                                    self.coerce(*argument, parameter)?;
-                                }
-                                return self.fixed(signature.result);
+                        if let Some((_, signature, _)) = selected
+                            && signature.params.len() == args.len()
+                        {
+                            for (argument, parameter) in args.iter().zip(&signature.params) {
+                                let parameter = self.fixed(parameter.clone())?;
+                                self.coerce(*argument, parameter)?;
                             }
+                            return self.fixed(signature.result);
                         }
                         // Several applications whose results agree (every
                         // `u32: From<_>` returns u32): the result is known
@@ -3000,5 +2927,74 @@ fn generic_nominal(ty: &ir::Ty) -> bool {
         | ir::Ty::Array { element: t, .. }
         | ir::Ty::Slice { element: t } => generic_nominal(t),
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod projection_metadata_tests {
+    use super::*;
+
+    fn facts() -> Arc<tr::ValidatedFacts> {
+        let program = super::super::parse("fn probe<T>(x:T){}fn main(){}").unwrap();
+        let plan =
+            super::super::PlanCtx::from_program(&program, &ir::PlanBudget::default()).unwrap();
+        plan.trait_world()
+            .unwrap()
+            .callable_facts(plan.function_decl(0).unwrap())
+            .unwrap()
+    }
+
+    #[test]
+    fn solver_projection_metadata_header_exact_short_drop_and_poison() {
+        for short in [false, true] {
+            let facts = facts();
+            let budget = facts.budget();
+            let paid = std::mem::size_of::<Option<ProjectionMetadata<'_>>>();
+            let before = budget.usage_snapshot().bytes;
+            let filler_bytes = budget.limits().bytes - before - paid + usize::from(short);
+            let filler = budget.reserve_bytes(filler_bytes).unwrap();
+            let before_owner = budget.usage_snapshot().bytes;
+            let result = ProjectionMetadata::new(&facts);
+            assert_eq!(result.is_err(), short);
+            if let Ok(owner) = result {
+                assert_eq!(budget.usage_snapshot().bytes, before_owner + paid);
+                drop(owner);
+                assert_eq!(budget.usage_snapshot().bytes, before_owner);
+            } else {
+                assert_eq!(
+                    budget.first_resource_failure().unwrap().kind,
+                    ir::ResourceBudgetKind::Bytes
+                );
+                assert_eq!(budget.usage_snapshot().bytes, before_owner);
+            }
+            let failure = budget.first_resource_failure();
+            drop(filler);
+            assert_eq!(budget.usage_snapshot().bytes, before);
+            assert_eq!(budget.first_resource_failure(), failure);
+        }
+        let facts = facts();
+        let before = facts.budget().usage_snapshot().bytes;
+        let owner = ProjectionMetadata::new(&facts).unwrap();
+        let ty = ir::Ty::Tuple(Arc::from([ir::Ty::Bool, ir::Ty::Int(ir::IntTy::I32)]));
+        facts
+            .validate_ty_metadata_scratch(&ty, facts.budget(), &mut owner.scratch.borrow_mut())
+            .unwrap();
+        assert!(facts.budget().usage_snapshot().bytes > before);
+        drop(owner);
+        assert_eq!(facts.budget().usage_snapshot().bytes, before);
+
+        let owner = ProjectionMetadata::new(&facts).unwrap();
+        let parent = facts.budget().reserve_bytes(64).unwrap();
+        let live = facts.budget().usage_snapshot().bytes;
+        facts.budget().poison_ledger_for_tests();
+        assert!(
+            owner
+                .normalize(&facts, &ir::Ty::Unit, facts.budget())
+                .is_err()
+        );
+        assert!(ProjectionMetadata::new(&facts).is_err());
+        drop(owner);
+        drop(parent);
+        assert_eq!(facts.budget().usage_snapshot().bytes, live);
     }
 }

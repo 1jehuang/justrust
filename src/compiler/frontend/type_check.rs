@@ -12575,6 +12575,7 @@ pub(super) fn type_callable_source_outputs(
 }
 
 /// Consume the same borrowed graph-read inputs as preparation.
+#[allow(clippy::too_many_arguments)]
 pub(in crate::compiler) fn type_callable_source_with_nominal_inputs(
     program: &Program,
     declaration: ir::DeclId,

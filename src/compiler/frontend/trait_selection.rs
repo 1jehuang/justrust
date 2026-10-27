@@ -960,6 +960,28 @@ impl PlanCtx {
     }
 }
 
+/// Whether a type mentions any generic parameter (conservatively: anything
+/// not a closed primitive or closed composite counts as open).
+fn mentions_param(ty: &ir::Ty) -> bool {
+    match ty {
+        ir::Ty::Param(_) | ir::Ty::AssociatedType(_) => true,
+        ir::Ty::Ref { referent, .. } => mentions_param(referent),
+        ir::Ty::RawPtr { pointee, .. } => mentions_param(pointee),
+        ir::Ty::Slice { element } | ir::Ty::Array { element, .. } => mentions_param(element),
+        ir::Ty::Tuple(parts) => parts.iter().any(mentions_param),
+        ir::Ty::Int(_)
+        | ir::Ty::Float(_)
+        | ir::Ty::Bool
+        | ir::Ty::Char
+        | ir::Ty::Str
+        | ir::Ty::Unit
+        | ir::Ty::Never => false,
+        ir::Ty::Struct(s) => s.def().type_args.iter().any(mentions_param),
+        ir::Ty::Enum(e) => e.def().type_args.iter().any(mentions_param),
+        _ => true,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1061,27 +1083,5 @@ mod tests {
             let result = parse(source).and_then(|program| check(&program));
             assert!(result.is_err(), "accepted {source}");
         }
-    }
-}
-
-/// Whether a type mentions any generic parameter (conservatively: anything
-/// not a closed primitive or closed composite counts as open).
-fn mentions_param(ty: &ir::Ty) -> bool {
-    match ty {
-        ir::Ty::Param(_) | ir::Ty::AssociatedType(_) => true,
-        ir::Ty::Ref { referent, .. } => mentions_param(referent),
-        ir::Ty::RawPtr { pointee, .. } => mentions_param(pointee),
-        ir::Ty::Slice { element } | ir::Ty::Array { element, .. } => mentions_param(element),
-        ir::Ty::Tuple(parts) => parts.iter().any(mentions_param),
-        ir::Ty::Int(_)
-        | ir::Ty::Float(_)
-        | ir::Ty::Bool
-        | ir::Ty::Char
-        | ir::Ty::Str
-        | ir::Ty::Unit
-        | ir::Ty::Never => false,
-        ir::Ty::Struct(s) => s.def().type_args.iter().any(mentions_param),
-        ir::Ty::Enum(e) => e.def().type_args.iter().any(mentions_param),
-        _ => true,
     }
 }

@@ -596,10 +596,10 @@ fn read_cell_cover(
                         }
                     }
                     Ty::Struct(value) => {
-                        if let Some(element) = ty.owned_sequence_element() {
-                            if !child(&[Projection::DynamicIndex(LocalId(usize::MAX))], element)? {
-                                return Ok(false);
-                            }
+                        if let Some(element) = ty.owned_sequence_element()
+                            && !child(&[Projection::DynamicIndex(LocalId(usize::MAX))], element)?
+                        {
+                            return Ok(false);
                         }
                         for (index, field) in value
                             .def()
@@ -747,6 +747,7 @@ fn probe_projected_shape(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn resolve_cells<'a>(
     original_locals: &[Ty],
     cover_locals: &[Ty],
@@ -1276,6 +1277,7 @@ fn body_signature(f: &cfg::Function, budget: &mut Budget) -> Result<ir::Signatur
 
 /// Shape evidence only. The caller must additionally prove every retained
 /// family has a closed, carrier-free actual before admitting an affine pair.
+#[allow(clippy::type_complexity)]
 fn independent_slice_pair_rows(
     contract: &ir::CarrierContract,
     budget: &mut Budget,
@@ -7779,7 +7781,7 @@ mod parameter_equality_tests {
         };
         assert_eq!(
             count(&[], &[]),
-            size_of::<CarrierEffects>() + 8 * size_of::<usize>()
+            size_of::<CarrierEffects>() + usize::BITS as usize
         );
         let input = InputCarrier {
             param: 0,

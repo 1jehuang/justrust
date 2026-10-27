@@ -70,10 +70,6 @@ impl<'a: 's, 'b: 's, 's> Solver<'a, 'b, 's> {
     }
 
     pub(super) fn closure_hints(&self) -> Result<HashMap<PathKey, ir::Signature>, String> {
-        #[expect(
-            clippy::mutable_key_type,
-            reason = "PathKey equality and hashing use immutable path identity, never the retained allocation budget"
-        )]
         let mut output = HashMap::new();
         for (key, term) in &self.closure_terms {
             let Domain::Callable(callable) = self.domain(*term) else {

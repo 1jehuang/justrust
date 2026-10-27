@@ -1,6 +1,7 @@
 //! Stock-first normal Drop integration. No rejection of a Rust-valid unsupported
 //! program counts as language conformance. Run this same target in bootstrap
 //! debug and release profiles; the native compiler never delegates to rustc.
+#![allow(clippy::duplicate_mod)]
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[path = "support/stock_rustc.rs"]
 mod stock_rustc;

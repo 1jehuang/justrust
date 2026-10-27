@@ -61,6 +61,7 @@ fn audit_arguments(
 }
 
 impl Checker<'_> {
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn restricted_closure_result(
         &self,
         owner: ir::DeclId,
@@ -411,10 +412,8 @@ fn argument_str_origin(
         {
             return Err("closure argument result parameter belongs to another tuple".into());
         }
-        if *local == place.local {
-            if argument.replace(*index).is_some() {
-                return Err("closure argument result repeats parameter entry".into());
-            }
+        if *local == place.local && argument.replace(*index).is_some() {
+            return Err("closure argument result repeats parameter entry".into());
         }
     }
     let fields_only = place

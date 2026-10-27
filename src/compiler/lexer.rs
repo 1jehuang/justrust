@@ -593,7 +593,7 @@ mod tests {
             text,
             budget,
             crate::compiler::owner_path::standalone_issued(
-                &budget,
+                budget,
                 crate::compiler::owner_path::OwnerDomain::SourceSnapshot,
             )
             .unwrap(),

@@ -232,6 +232,336 @@ fn enters(terminator: &Terminator, destination: BlockId) -> bool {
         Terminator::Return | Terminator::Panic(_) | Terminator::Unreachable => false,
     }
 }
+
+impl CarrierBuilder<'_, '_> {
+    pub(super) fn prepare_native_exchange(&mut self) -> Result<(), Exhausted> {
+        let FactsCtx::Validated(facts) = self.facts else {
+            return Ok(());
+        };
+        if facts.phase() != super::super::traits::FactsPhase::Universal {
+            return Ok(());
+        }
+        let Some(body) = self.body.clone() else {
+            return Ok(());
+        };
+        let source = match facts.native_sequence_swap(facts.declaration()) {
+            Ok(Some(source)) => source,
+            Ok(None) => return Ok(()),
+            Err(error) if error.is_resource() => return Err(Exhausted),
+            Err(error) => {
+                let message = error
+                    .into_diagnostic(facts.budget())
+                    .map_err(|_| Exhausted)?;
+                self.problem(self.f.entry, None, Problem::Invalid(message))?;
+                return Ok(());
+            }
+        };
+        let f = self.f;
+        if let Err(message) = f.validate_provenance(facts, &self.ledger) {
+            let error = super::super::traits::FactsError::from_message(&self.ledger, &message);
+            if error.is_resource() {
+                return Err(Exhausted);
+            }
+            self.problem(f.entry, None, Problem::Invalid(message))?;
+            return Ok(());
+        }
+        let [receiver, _, _] = f.params.as_slice() else {
+            return Ok(());
+        };
+        let Ty::Ref {
+            kind: BorrowKind::Mut,
+            referent,
+        } = &f.locals[receiver.0].ty
+        else {
+            return Ok(());
+        };
+        let Ty::Struct(owner) = referent.as_ref() else {
+            return Ok(());
+        };
+        let Some(Ty::Param(parameter)) = referent.owned_sequence_element() else {
+            return Ok(());
+        };
+        let parameter = *parameter;
+        // Canonical source has exactly two calls. No unrelated call is covered
+        // by this receipt and neither a partial nor extra raw operation passes.
+        let mut calls = [None, None];
+        let mut count = 0;
+        let mut raw_reads = 0usize;
+        let mut raw_writes = 0usize;
+        for (block_index, block) in f.blocks.iter().enumerate() {
+            self.budget
+                .spend(block.statements.len().saturating_add(1))?;
+            if let Terminator::Call {
+                target: ir::Callee::Direct(target),
+                signature,
+                args,
+                destination,
+                ..
+            } = &block.terminator.value
+            {
+                if count == 2
+                    || !source.matches_owner(facts.declaration(), owner, target.declaration)
+                    || target.type_args.as_ref() != [Ty::Param(parameter)]
+                    || args.len() != 2
+                    || !destination.projection.is_empty()
+                    || self
+                        .calls
+                        .get(block_index)
+                        .and_then(Option::as_ref)
+                        .is_none()
+                    || !matches!(signature.params.as_slice(),[Ty::RawPtr {kind:BorrowKind::Mut,pointee},Ty::Int(ir::IntTy::Usize)] if pointee.as_ref()==&Ty::Param(parameter))
+                    || !matches!(&signature.result,Ty::RawPtr {kind:BorrowKind::Mut,pointee} if pointee.as_ref()==&Ty::Param(parameter))
+                {
+                    return Ok(());
+                }
+                calls[count] = Some(BlockId(block_index));
+                count += 1;
+            } else if matches!(block.terminator.value, Terminator::Call { .. }) {
+                return Ok(());
+            }
+            for statement in &block.statements {
+                let mut failure = false;
+                let budget = &mut self.budget;
+                visit_rvalue_for_statement(f, &statement.value, |place, _| {
+                    if budget
+                        .spend(place.projection.len().saturating_add(1))
+                        .is_err()
+                    {
+                        failure = true;
+                        return;
+                    }
+                    match ir::raw_deref_index_optional(
+                        &f.locals[place.local.0].ty,
+                        &place.projection,
+                        Some(&self.ledger),
+                    ) {
+                        Ok(Some(_)) => raw_reads = raw_reads.saturating_add(1),
+                        Ok(None) => {}
+                        Err(_) => failure = true,
+                    }
+                });
+                if failure {
+                    return Err(Exhausted);
+                }
+                if let Statement::Assign { destination, .. } = &statement.value
+                    && ir::raw_deref_index_optional(
+                        &f.locals[destination.local.0].ty,
+                        &destination.projection,
+                        Some(&self.ledger),
+                    )
+                    .map_err(|_| Exhausted)?
+                    .is_some()
+                {
+                    raw_writes = raw_writes.saturating_add(1)
+                }
+            }
+        }
+        if count != 2 || raw_reads != 2 || raw_writes != 2 {
+            return Ok(());
+        }
+        let [Some(first), Some(second)] = calls else {
+            return Ok(());
+        };
+        let Some(mut trace) = Trace::new(f.locals.len(), &f.params, &self.ledger, self.budget)?
+        else {
+            return Ok(());
+        };
+        let mut current = first;
+        for ordinal in 0..3 {
+            let block = &f.blocks[current.0];
+            for (index, statement) in block.statements.iter().enumerate() {
+                if !trace.statement(&statement.value, current, index, &self.ledger, self.budget)? {
+                    return Ok(());
+                }
+            }
+            if ordinal == 2 {
+                if !matches!(block.terminator.value, Terminator::Return) || trace.stage != 4 {
+                    return Ok(());
+                }
+            } else {
+                let Terminator::Call {
+                    args,
+                    destination,
+                    next,
+                    ..
+                } = &block.terminator.value
+                else {
+                    return Ok(());
+                };
+                let expected = if ordinal == 0 {
+                    Token::IndexA
+                } else {
+                    Token::IndexB
+                };
+                if trace.stage != 0
+                    || trace.operand(&args[0]) != Some(Token::Buffer)
+                    || trace.operand(&args[1]) != Some(expected)
+                    || !trace.define(
+                        destination.local,
+                        if ordinal == 0 {
+                            Token::SlotA
+                        } else {
+                            Token::SlotB
+                        },
+                    )
+                    || (ordinal == 0 && *next != second)
+                {
+                    return Ok(());
+                }
+                // Neither successor may be entered through another path.
+                let mut predecessors = 0usize;
+                for candidate in &f.blocks {
+                    self.budget.spend(1)?;
+                    if enters(&candidate.terminator.value, *next) {
+                        predecessors += 1
+                    }
+                }
+                if predecessors != 1 {
+                    return Ok(());
+                }
+                current = *next;
+            }
+        }
+        let mut cell = None;
+        for (index, candidate) in self.cells.iter().enumerate() {
+            self.budget.spend(
+                candidate
+                    .input
+                    .as_ref()
+                    .map_or(1, |input| input.location.path.0.len().saturating_add(1)),
+            )?;
+            let Some(input) = &candidate.input else {
+                continue;
+            };
+            if input.param == 0
+                && input.location.path.0.as_ref()
+                    == [CarrierStep::Referent, CarrierStep::SliceElement]
+                && input.location.channel
+                    == (CarrierChannel::ParamTail {
+                        parameter,
+                        prefix: 0,
+                    })
+                && cell.replace(index).is_some()
+            {
+                return Ok(());
+            }
+        }
+        let Some(cell) = cell else { return Ok(()) };
+        let input = self.cells[cell].input.as_ref().ok_or(Exhausted)?;
+        self.budget.spend(
+            body.original_contract()
+                .inputs
+                .len()
+                .saturating_mul(3)
+                .saturating_add(1),
+        )?;
+        if !body.original_contract().inputs.contains(input) {
+            return Ok(());
+        }
+        self.retain(size_of::<NativeStorageExchange>(), 1)?;
+        checked_vec_growth(&mut self.native_exchanges, self.budget)?;
+        self.native_exchanges.push(NativeStorageExchange {
+            cell,
+            parameter,
+            reads: trace.reads,
+            writes: trace.writes,
+            _source: source,
+        });
+        Ok(())
+    }
+
+    pub(super) fn read_native_exchange(
+        &mut self,
+        state: &FlowState,
+        block: BlockId,
+        statement: usize,
+    ) -> Result<Option<Vec<(CarrierLocation, CarrierOrigins)>>, Exhausted> {
+        self.ledger.charge_work(1).map_err(|_| Exhausted)?;
+        self.budget
+            .spend(self.native_exchanges.len().saturating_add(1))?;
+        let Some(receipt) = self
+            .native_exchanges
+            .iter()
+            .find(|receipt| receipt.reads.contains(&(block, statement)))
+        else {
+            return Ok(None);
+        };
+        let (cell, parameter) = (receipt.cell, receipt.parameter);
+        let mut origins = self.empty_origins()?;
+        origins.union(&state.cells[cell], self.budget)?;
+        if origins.count() == 0 {
+            self.problem(
+                block,
+                Some(statement),
+                Problem::Invalid("native exchange read has no initialized owner origins".into()),
+            )?;
+            return Ok(Some(Vec::new()));
+        }
+        self.retain(
+            4 * size_of::<(CarrierLocation, CarrierOrigins)>() + 2 * size_of::<usize>(),
+            1,
+        )?;
+        Ok(Some(vec![(
+            CarrierLocation {
+                path: CarrierPath(Arc::from([])),
+                channel: CarrierChannel::ParamTail {
+                    parameter,
+                    prefix: 0,
+                },
+            },
+            origins,
+        )]))
+    }
+    pub(super) fn write_native_exchange(
+        &mut self,
+        state: &mut FlowState,
+        value: &[(CarrierLocation, CarrierOrigins)],
+        block: BlockId,
+        statement: Option<usize>,
+        diagnose: bool,
+    ) -> Result<(), Exhausted> {
+        self.ledger.charge_work(1).map_err(|_| Exhausted)?;
+        self.budget
+            .spend(self.native_exchanges.len().saturating_add(1))?;
+        let Some(statement) = statement else {
+            return Ok(());
+        };
+        let Some(receipt) = self
+            .native_exchanges
+            .iter()
+            .find(|receipt| receipt.writes(block, statement))
+        else {
+            return Ok(());
+        };
+        let (cell, parameter) = (receipt.cell, receipt.parameter);
+        self.budget.spend(
+            self.targets
+                .len()
+                .saturating_add(self.family_inputs.len())
+                .saturating_add(value.len())
+                .saturating_add(1),
+        )?;
+        let valid = matches!(value,[(location,origins)] if location.path.0.is_empty()
+            && location.channel==(CarrierChannel::ParamTail {parameter,prefix:0})
+            && origins.count()!=0 && *origins==state.cells[cell]);
+        if !valid {
+            if diagnose {
+                self.problem(
+                    block,
+                    Some(statement),
+                    Problem::Invalid(
+                        "native exchange changed its initialized owner origins".into(),
+                    ),
+                )?
+            }
+            return Ok(());
+        }
+        // SAME-only monotone union. No overwrite, imported source or envelope.
+        state.cells[cell].union(&value[0].1, self.budget)?;
+        self.membership(value[0].1.count())?;
+        Ok(())
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -417,337 +747,5 @@ mod tests {
                 .statement(&exchange()[0], BlockId(0), 0, &ledger, &mut budget)
                 .is_err()
         );
-    }
-}
-
-impl CarrierBuilder<'_, '_> {
-    pub(super) fn prepare_native_exchange(&mut self) -> Result<(), Exhausted> {
-        let FactsCtx::Validated(facts) = self.facts else {
-            return Ok(());
-        };
-        if facts.phase() != super::super::traits::FactsPhase::Universal {
-            return Ok(());
-        }
-        let Some(body) = self.body.clone() else {
-            return Ok(());
-        };
-        let source = match facts.native_sequence_swap(facts.declaration()) {
-            Ok(Some(source)) => source,
-            Ok(None) => return Ok(()),
-            Err(error) if error.is_resource() => return Err(Exhausted),
-            Err(error) => {
-                let message = error
-                    .into_diagnostic(facts.budget())
-                    .map_err(|_| Exhausted)?;
-                self.problem(self.f.entry, None, Problem::Invalid(message))?;
-                return Ok(());
-            }
-        };
-        let f = self.f;
-        if let Err(message) = f.validate_provenance(facts, &self.ledger) {
-            let error = super::super::traits::FactsError::from_message(&self.ledger, &message);
-            if error.is_resource() {
-                return Err(Exhausted);
-            }
-            self.problem(f.entry, None, Problem::Invalid(message))?;
-            return Ok(());
-        }
-        let [receiver, _, _] = f.params.as_slice() else {
-            return Ok(());
-        };
-        let Ty::Ref {
-            kind: BorrowKind::Mut,
-            referent,
-        } = &f.locals[receiver.0].ty
-        else {
-            return Ok(());
-        };
-        let Ty::Struct(owner) = referent.as_ref() else {
-            return Ok(());
-        };
-        let Some(Ty::Param(parameter)) = referent.owned_sequence_element() else {
-            return Ok(());
-        };
-        let parameter = *parameter;
-        // Canonical source has exactly two calls. No unrelated call is covered
-        // by this receipt and neither a partial nor extra raw operation passes.
-        let mut calls = [None, None];
-        let mut count = 0;
-        let mut raw_reads = 0usize;
-        let mut raw_writes = 0usize;
-        for (block_index, block) in f.blocks.iter().enumerate() {
-            self.budget
-                .spend(block.statements.len().saturating_add(1))?;
-            if let Terminator::Call {
-                target: ir::Callee::Direct(target),
-                signature,
-                args,
-                destination,
-                ..
-            } = &block.terminator.value
-            {
-                if count == 2
-                    || !source.matches_owner(facts.declaration(), owner, target.declaration)
-                    || target.type_args.as_ref() != [Ty::Param(parameter)]
-                    || args.len() != 2
-                    || !destination.projection.is_empty()
-                    || self
-                        .calls
-                        .get(block_index)
-                        .and_then(Option::as_ref)
-                        .is_none()
-                    || !matches!(signature.params.as_slice(),[Ty::RawPtr {kind:BorrowKind::Mut,pointee},Ty::Int(ir::IntTy::Usize)] if pointee.as_ref()==&Ty::Param(parameter))
-                    || !matches!(&signature.result,Ty::RawPtr {kind:BorrowKind::Mut,pointee} if pointee.as_ref()==&Ty::Param(parameter))
-                {
-                    return Ok(());
-                }
-                calls[count] = Some(BlockId(block_index));
-                count += 1;
-            } else if matches!(block.terminator.value, Terminator::Call { .. }) {
-                return Ok(());
-            }
-            for statement in &block.statements {
-                let mut failure = false;
-                let budget = &mut self.budget;
-                visit_rvalue_for_statement(f, &statement.value, |place, _| {
-                    if budget
-                        .spend(place.projection.len().saturating_add(1))
-                        .is_err()
-                    {
-                        failure = true;
-                        return;
-                    }
-                    match ir::raw_deref_index_optional(
-                        &f.locals[place.local.0].ty,
-                        &place.projection,
-                        Some(&self.ledger),
-                    ) {
-                        Ok(Some(_)) => raw_reads = raw_reads.saturating_add(1),
-                        Ok(None) => {}
-                        Err(_) => failure = true,
-                    }
-                });
-                if failure {
-                    return Err(Exhausted);
-                }
-                if let Statement::Assign { destination, .. } = &statement.value {
-                    if ir::raw_deref_index_optional(
-                        &f.locals[destination.local.0].ty,
-                        &destination.projection,
-                        Some(&self.ledger),
-                    )
-                    .map_err(|_| Exhausted)?
-                    .is_some()
-                    {
-                        raw_writes = raw_writes.saturating_add(1)
-                    }
-                }
-            }
-        }
-        if count != 2 || raw_reads != 2 || raw_writes != 2 {
-            return Ok(());
-        }
-        let [Some(first), Some(second)] = calls else {
-            return Ok(());
-        };
-        let Some(mut trace) = Trace::new(f.locals.len(), &f.params, &self.ledger, self.budget)?
-        else {
-            return Ok(());
-        };
-        let mut current = first;
-        for ordinal in 0..3 {
-            let block = &f.blocks[current.0];
-            for (index, statement) in block.statements.iter().enumerate() {
-                if !trace.statement(&statement.value, current, index, &self.ledger, self.budget)? {
-                    return Ok(());
-                }
-            }
-            if ordinal == 2 {
-                if !matches!(block.terminator.value, Terminator::Return) || trace.stage != 4 {
-                    return Ok(());
-                }
-            } else {
-                let Terminator::Call {
-                    args,
-                    destination,
-                    next,
-                    ..
-                } = &block.terminator.value
-                else {
-                    return Ok(());
-                };
-                let expected = if ordinal == 0 {
-                    Token::IndexA
-                } else {
-                    Token::IndexB
-                };
-                if trace.stage != 0
-                    || trace.operand(&args[0]) != Some(Token::Buffer)
-                    || trace.operand(&args[1]) != Some(expected)
-                    || !trace.define(
-                        destination.local,
-                        if ordinal == 0 {
-                            Token::SlotA
-                        } else {
-                            Token::SlotB
-                        },
-                    )
-                    || (ordinal == 0 && *next != second)
-                {
-                    return Ok(());
-                }
-                // Neither successor may be entered through another path.
-                let mut predecessors = 0usize;
-                for candidate in &f.blocks {
-                    self.budget.spend(1)?;
-                    if enters(&candidate.terminator.value, *next) {
-                        predecessors += 1
-                    }
-                }
-                if predecessors != 1 {
-                    return Ok(());
-                }
-                current = *next;
-            }
-        }
-        let mut cell = None;
-        for (index, candidate) in self.cells.iter().enumerate() {
-            self.budget.spend(
-                candidate
-                    .input
-                    .as_ref()
-                    .map_or(1, |input| input.location.path.0.len().saturating_add(1)),
-            )?;
-            let Some(input) = &candidate.input else {
-                continue;
-            };
-            if input.param == 0
-                && input.location.path.0.as_ref()
-                    == [CarrierStep::Referent, CarrierStep::SliceElement]
-                && input.location.channel
-                    == (CarrierChannel::ParamTail {
-                        parameter,
-                        prefix: 0,
-                    })
-            {
-                if cell.replace(index).is_some() {
-                    return Ok(());
-                }
-            }
-        }
-        let Some(cell) = cell else { return Ok(()) };
-        let input = self.cells[cell].input.as_ref().ok_or(Exhausted)?;
-        self.budget.spend(
-            body.original_contract()
-                .inputs
-                .len()
-                .saturating_mul(3)
-                .saturating_add(1),
-        )?;
-        if !body.original_contract().inputs.contains(input) {
-            return Ok(());
-        }
-        self.retain(size_of::<NativeStorageExchange>(), 1)?;
-        checked_vec_growth(&mut self.native_exchanges, self.budget)?;
-        self.native_exchanges.push(NativeStorageExchange {
-            cell,
-            parameter,
-            reads: trace.reads,
-            writes: trace.writes,
-            _source: source,
-        });
-        Ok(())
-    }
-
-    pub(super) fn read_native_exchange(
-        &mut self,
-        state: &FlowState,
-        block: BlockId,
-        statement: usize,
-    ) -> Result<Option<Vec<(CarrierLocation, CarrierOrigins)>>, Exhausted> {
-        self.ledger.charge_work(1).map_err(|_| Exhausted)?;
-        self.budget
-            .spend(self.native_exchanges.len().saturating_add(1))?;
-        let Some(receipt) = self
-            .native_exchanges
-            .iter()
-            .find(|receipt| receipt.reads.contains(&(block, statement)))
-        else {
-            return Ok(None);
-        };
-        let (cell, parameter) = (receipt.cell, receipt.parameter);
-        let mut origins = self.empty_origins()?;
-        origins.union(&state.cells[cell], self.budget)?;
-        if origins.count() == 0 {
-            self.problem(
-                block,
-                Some(statement),
-                Problem::Invalid("native exchange read has no initialized owner origins".into()),
-            )?;
-            return Ok(Some(Vec::new()));
-        }
-        self.retain(
-            4 * size_of::<(CarrierLocation, CarrierOrigins)>() + 2 * size_of::<usize>(),
-            1,
-        )?;
-        Ok(Some(vec![(
-            CarrierLocation {
-                path: CarrierPath(Arc::from([])),
-                channel: CarrierChannel::ParamTail {
-                    parameter,
-                    prefix: 0,
-                },
-            },
-            origins,
-        )]))
-    }
-    pub(super) fn write_native_exchange(
-        &mut self,
-        state: &mut FlowState,
-        value: &[(CarrierLocation, CarrierOrigins)],
-        block: BlockId,
-        statement: Option<usize>,
-        diagnose: bool,
-    ) -> Result<(), Exhausted> {
-        self.ledger.charge_work(1).map_err(|_| Exhausted)?;
-        self.budget
-            .spend(self.native_exchanges.len().saturating_add(1))?;
-        let Some(statement) = statement else {
-            return Ok(());
-        };
-        let Some(receipt) = self
-            .native_exchanges
-            .iter()
-            .find(|receipt| receipt.writes(block, statement))
-        else {
-            return Ok(());
-        };
-        let (cell, parameter) = (receipt.cell, receipt.parameter);
-        self.budget.spend(
-            self.targets
-                .len()
-                .saturating_add(self.family_inputs.len())
-                .saturating_add(value.len())
-                .saturating_add(1),
-        )?;
-        let valid = matches!(value,[(location,origins)] if location.path.0.is_empty()
-            && location.channel==(CarrierChannel::ParamTail {parameter,prefix:0})
-            && origins.count()!=0 && *origins==state.cells[cell]);
-        if !valid {
-            if diagnose {
-                self.problem(
-                    block,
-                    Some(statement),
-                    Problem::Invalid(
-                        "native exchange changed its initialized owner origins".into(),
-                    ),
-                )?
-            }
-            return Ok(());
-        }
-        // SAME-only monotone union. No overwrite, imported source or envelope.
-        state.cells[cell].union(&value[0].1, self.budget)?;
-        self.membership(value[0].1.count())?;
-        Ok(())
     }
 }

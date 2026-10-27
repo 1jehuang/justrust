@@ -183,6 +183,7 @@ impl<'a> Inputs<'a> {
     }
 }
 
+#[allow(clippy::large_enum_variant)]
 pub(in crate::compiler) enum PreparedHints {
     Ready(Hints),
     Blocked(Preparation),

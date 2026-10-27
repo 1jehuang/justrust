@@ -1,6 +1,7 @@
 //! Prelude slice methods (`swap`, `to_vec`, `contains`, `first`, `last`,
 //! `is_empty`), `Vec::extend_from_slice` and Vec range views `&v[a..b]`.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#![allow(clippy::duplicate_mod)]
 #[path = "support/oracle.rs"]
 mod oracle;
 #[path = "support/stock_rustc.rs"]
@@ -120,8 +121,7 @@ fn main(){
     for workers in [1, 8] {
         for check in [true, false] {
             let result =
-                justrust_engine::compiler::compile(native_source.clone().into(), workers, check)
-                    .unwrap();
+                justrust_engine::compiler::compile(native_source.clone(), workers, check).unwrap();
             if check {
                 assert!(result.executable.is_none());
                 assert!(

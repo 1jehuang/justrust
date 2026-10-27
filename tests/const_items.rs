@@ -1,6 +1,7 @@
 //! General const/static items, const fn, inline const blocks and const-expression
 //! array lengths: native run output matches stock rustc semantics.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#![allow(clippy::duplicate_mod)]
 use justrust_engine::compiler;
 #[path = "support/stock_rustc.rs"]
 mod stock_rustc;

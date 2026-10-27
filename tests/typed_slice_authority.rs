@@ -1,5 +1,6 @@
 //! Shared typed-slice authority uses actual source, canonical facts and real loans.
 //! Universal templates are never passed to Closed-only CFG entry points.
+#![allow(clippy::duplicate_mod)]
 use frontend::{Expr, PlanCtx, Program, Type};
 use ir::{BorrowKind, CheckedFunction, ExprKind, FactsCtx, Ty};
 use justrust_engine::compiler::traits::ValidatedFacts;

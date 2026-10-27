@@ -24,7 +24,7 @@ fn scanned(
         text,
         budget,
         justrust_engine::compiler::owner_path::standalone_issued(
-            &budget,
+            budget,
             justrust_engine::compiler::owner_path::OwnerDomain::SourceSnapshot,
         )
         .unwrap(),
@@ -154,7 +154,8 @@ fn equal_spelling_and_allocation_order_do_not_merge_foreign_owners() {
 
 #[test]
 fn lexical_validity_does_not_silently_admit_new_name_classes() {
-    for (text, reason) in [("β", UnsupportedName::UnicodeIdentifier)] {
+    {
+        let (text, reason) = ("β", UnsupportedName::UnicodeIdentifier);
         let (mut names, tokens) = scanned(text, Edition::E2024, &ExpansionBudget::default());
         assert!(
             matches!(names.from_token(tokens[0], Edition::E2024), Err(NameError::Unsupported(actual)) if actual == reason)

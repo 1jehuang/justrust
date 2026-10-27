@@ -265,9 +265,9 @@ pub(super) fn key(
         occurrence.0 as u64,
         0, // ordinary source-call capability, not a closure invocation mode
         call.trait_ref.declaration.snapshot.graph_word(),
-        u64::from(call.trait_ref.declaration.index),
+        call.trait_ref.declaration.index,
         call.item.snapshot.graph_word(),
-        u64::from(call.item.index),
+        call.item.index,
         receiver.len() as u64,
     ]);
     words.extend(receiver);
@@ -303,18 +303,16 @@ pub(super) async fn extend_instance_demands(
             .map_err(Error::new)?;
     }
     let mut has_source_receiver = false;
-    if !has_opaque_actual {
-        if let Some(publication) = template.publication.as_ref() {
-            for expression in &publication.source().exprs {
-                if let ir::ExprKind::Call {
-                    target: ir::Callee::TraitItem(call),
-                    ..
-                } = &expression.kind
-                    && opaque_receiver(&call.trait_ref.self_ty, &provider.0.budget)?.is_some()
-                {
-                    has_source_receiver = true;
-                    break;
-                }
+    if !has_opaque_actual && let Some(publication) = template.publication.as_ref() {
+        for expression in &publication.source().exprs {
+            if let ir::ExprKind::Call {
+                target: ir::Callee::TraitItem(call),
+                ..
+            } = &expression.kind
+                && opaque_receiver(&call.trait_ref.self_ty, &provider.0.budget)?.is_some()
+            {
+                has_source_receiver = true;
+                break;
             }
         }
     }

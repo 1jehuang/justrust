@@ -4092,6 +4092,8 @@ fn analyze_with_context(
     }
 }
 
+impl crate::engine::Fact for Analysis {}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -4238,7 +4240,7 @@ mod tests {
         let modules = ModuleArenaBuilder::for_source(
             &names,
             crate::compiler::owner_path::standalone_issued(
-                &names.budget(),
+                names.budget(),
                 crate::compiler::owner_path::OwnerDomain::ModuleArena,
             )
             .unwrap(),
@@ -10573,5 +10575,3 @@ mod tests {
         assert_eq!(result.stats.worklist_pops, 0);
     }
 }
-
-impl crate::engine::Fact for Analysis {}

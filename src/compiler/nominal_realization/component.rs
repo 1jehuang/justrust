@@ -199,11 +199,11 @@ fn validate(
         let mut edge = |declaration, actuals: &[Term], by_value| -> Result<(), Error> {
             let key = producer::key(member_world, declaration, actuals, b)?;
             let mut target = keys.iter().position(|k| k == &key);
-            if target.is_none() {
-                if let Some(external) = fact.external.iter().position(|(k, _)| k == &key) {
-                    used[external] = true;
-                    target = Some(fact.members.len() + external);
-                }
+            if target.is_none()
+                && let Some(external) = fact.external.iter().position(|(k, _)| k == &key)
+            {
+                used[external] = true;
+                target = Some(fact.members.len() + external);
             }
             let target = target
                 .ok_or_else(|| Error::new("component omitted exact nominal dependency receipt"))?;

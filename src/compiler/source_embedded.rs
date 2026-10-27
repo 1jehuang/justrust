@@ -140,6 +140,7 @@ impl EmbeddedFile {
 /// public for ordinary source tooling, so an embedded issuer is imported only
 /// after this private immutable receipt replays the complete assembled stream.
 #[derive(Clone, Debug)]
+#[allow(clippy::type_complexity)]
 pub(super) struct AssemblyTransport {
     edition: Edition,
     text: Arc<str>,

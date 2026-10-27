@@ -2780,14 +2780,14 @@ impl Provider for CompilerProvider {
                         nominal_keys.extend(inventory.nominals.iter().map(|d| {
                             keys::Params::<NOMINAL_DECL_WELL_FORMED>(
                                 d.snapshot.graph_word(),
-                                vec![u64::from(d.index)],
+                                vec![d.index],
                             )
                         }));
                         associated.extend(inventory.associated_constants.iter().copied());
                     }
                     let associated_keys: Vec<keys::Params<ASSOCIATED_CONST_HEADER>> = associated
                         .iter()
-                        .map(|d| keys::Params(d.snapshot.graph_word(), vec![u64::from(d.index)]))
+                        .map(|d| keys::Params(d.snapshot.graph_word(), vec![d.index]))
                         .collect();
                     let constant_handles = cx.request_all(&constant_keys, 0);
                     let associated_handles = cx.request_all(&associated_keys, 1);
@@ -2811,9 +2811,7 @@ impl Provider for CompilerProvider {
                         let impl_keys: Vec<keys::Params<IMPL_COHERENCE>> = inventories
                             .iter()
                             .flat_map(|inventory| inventory.impls.iter())
-                            .map(|d| {
-                                keys::Params(d.snapshot.graph_word(), vec![u64::from(d.index)])
-                            })
+                            .map(|d| keys::Params(d.snapshot.graph_word(), vec![d.index]))
                             .collect();
                         let impl_handles = cx.request_all(&impl_keys, 0);
                         for handle in item_handles

@@ -304,7 +304,7 @@ mod tests {
         let mut scopes = ScopeArenaBuilder::for_names(
             &names,
             crate::compiler::owner_path::standalone_issued(
-                &names.budget(),
+                names.budget(),
                 crate::compiler::owner_path::OwnerDomain::ScopeArena,
             )
             .unwrap(),

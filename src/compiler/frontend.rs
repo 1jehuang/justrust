@@ -10276,7 +10276,7 @@ mod local_macro_parser_tests {
             source,
             budget,
             crate::compiler::owner_path::standalone_issued(
-                &budget,
+                budget,
                 crate::compiler::owner_path::OwnerDomain::SourceSnapshot,
             )
             .unwrap(),
@@ -17435,6 +17435,7 @@ fn parse_syntax_tokens_policy(
         child_entries: unit.child_entries,
     })
 }
+#[allow(clippy::too_many_arguments)]
 fn parse_syntax_unit(
     tokens: NativeParserInput,
     purpose: ParserPurpose,
@@ -18980,12 +18981,9 @@ pub(super) fn merge_crate_file_refs(
                 return Err("duplicate anonymous source declaration across files".into());
             }
         }
-        c_abi.functions.extend(
-            p.c_abi
-                .functions
-                .iter()
-                .map(|(k, v)| (k.clone(), v.clone())),
-        );
+        c_abi
+            .functions
+            .extend(p.c_abi.functions.iter().map(|(k, v)| (*k, v.clone())));
         c_abi.repr_c.extend(p.c_abi.repr_c.iter().cloned());
         generated_metadata.extend(metadata);
         generated_owners.extend(owners);
@@ -23521,12 +23519,11 @@ impl PlanCtx {
         budget: &ir::PlanBudget,
     ) -> Result<ir::Ty, String> {
         self.check_budget(budget)?;
-        if let ir::FactsCtx::Validated(facts) = caller {
-            if !facts.budget().same_authority(budget)
-                || !Arc::ptr_eq(facts.world(), &self.trait_world()?)
-            {
-                return Err("nominal interning changed validated caller authority".into());
-            }
+        if let ir::FactsCtx::Validated(facts) = caller
+            && (!facts.budget().same_authority(budget)
+                || !Arc::ptr_eq(facts.world(), &self.trait_world()?))
+        {
+            return Err("nominal interning changed validated caller authority".into());
         }
         for argument in args {
             caller.validate_ty_metadata_with_budget(argument, budget)?;
@@ -23613,10 +23610,6 @@ impl PlanCtx {
             None => self.finish_environment(&self.build_shared_env()?, decl),
         }
     }
-    #[expect(
-        clippy::mutable_key_type,
-        reason = "PathKey hashes immutable owner/anchor/namespace/name keys only; its shared resource ledger is not semantic identity"
-    )]
     fn build_shared_env(&self) -> Result<SharedTypeEnv, String> {
         let mut environment_bytes = 0usize;
         for info in &self.registry.declarations {
@@ -25725,11 +25718,11 @@ impl NominalValidationMemo {
         budget: &ir::PlanBudget,
     ) -> Result<(), String> {
         budget.charge_work(1)?;
-        if let Some(slot) = Self::slot(&self.entries, &id, budget)? {
-            if self.entries[slot].is_some() {
-                self.entries[slot] = Some((id, height));
-                return Ok(());
-            }
+        if let Some(slot) = Self::slot(&self.entries, &id, budget)?
+            && self.entries[slot].is_some()
+        {
+            self.entries[slot] = Some((id, height));
+            return Ok(());
         }
         // Power-of-two logical bucket count, at most three quarters full.
         if self.entries.is_empty() || self.len >= self.entries.len() / 4 * 3 {
@@ -25852,11 +25845,11 @@ impl ArgumentMemo {
             return Err("generic argument memo resource limit exceeded".into());
         }
         budget.charge_work(1)?;
-        if let Some(slot) = Self::slot(&self.entries, &id, budget)? {
-            if self.entries[slot].is_some() {
-                self.entries[slot] = Some((id, height));
-                return Ok(());
-            }
+        if let Some(slot) = Self::slot(&self.entries, &id, budget)?
+            && self.entries[slot].is_some()
+        {
+            self.entries[slot] = Some((id, height));
+            return Ok(());
         }
         // Power-of-two logical bucket count, at most three quarters full.
         if self.entries.is_empty() || self.len >= self.entries.len() / 4 * 3 {

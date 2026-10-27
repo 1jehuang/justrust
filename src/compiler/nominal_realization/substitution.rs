@@ -98,6 +98,7 @@ pub(in crate::compiler) fn substitute_ty(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(in crate::compiler) fn substitute_ty_with_scratch(
     ty: &ir::Ty,
     env: &ir::GenericEnv,
@@ -112,6 +113,7 @@ pub(in crate::compiler) fn substitute_ty_with_scratch(
     ir::substitute_ty_with_scratch(ty, env, arguments, caller, &mut adapter, budget, scratch)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(in crate::compiler) fn substitute_callee_with_scratch(
     callee: &ir::Callee,
     env: &ir::GenericEnv,

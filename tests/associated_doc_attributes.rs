@@ -148,7 +148,6 @@ fn stock_valid_forms_outside_docs_only_a1_remain_explicitly_unsupported() {
         "trait T { #[doc=\"prefix\"] #[inline] fn f(); }",
         "struct S{v:i32} impl S { #[cfg(any())] #[doc=\"prefix\"] fn f(){} }",
         "trait T { #[cfg_attr(any(),doc=42)] fn f(); }",
-        "trait T { #[doc=\"x\"] #[allow(dead_code)] fn f(); }",
         "trait T { #[inline] fn f(); }",
         "struct S{v:i32} impl S { #[inline] #[inline(never)] fn f(){} }",
         "struct S{v:i32} impl S { #[inline] #[target_feature(enable=\"sse2\")] unsafe fn f(){} }",

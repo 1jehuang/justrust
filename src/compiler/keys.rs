@@ -155,6 +155,13 @@ pub(crate) fn words(kind: u32, words: Vec<u64>) -> Result<Key, crate::engine::Er
     Ok(params(kind, head, words.collect()))
 }
 
+/// Test-only fixture key with an arbitrary kind and possibly no parameters,
+/// for engine fixtures that are not compiler node kinds.
+#[cfg(test)]
+pub(crate) fn test_key(kind: u32, params: Vec<u64>) -> Key {
+    Key::new(kind, params)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -210,11 +217,4 @@ mod tests {
         );
         assert!(SourceFile::from_words(&[]).is_err());
     }
-}
-
-/// Test-only fixture key with an arbitrary kind and possibly no parameters,
-/// for engine fixtures that are not compiler node kinds.
-#[cfg(test)]
-pub(crate) fn test_key(kind: u32, params: Vec<u64>) -> Key {
-    Key::new(kind, params)
 }

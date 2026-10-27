@@ -2,67 +2,6 @@
 //! Checked types are comparison targets, never an inference source.
 use super::*;
 
-#[cfg(test)]
-mod literal_context_tests {
-    use super::*;
-
-    #[test]
-    fn source_field_integer_context_rejects_forged_literal() {
-        let program = parse("struct Count<'a> { n: usize, r: &'a i32 } fn consume<T>(value: T) {} fn main() { let n = 7i32; consume(Count { n: 0, r: &n }); }").unwrap();
-        let budget = ir::PlanBudget::default();
-        let plan = PlanCtx::from_program(&program, &budget).unwrap();
-        let declaration = plan.function_decl(1).unwrap();
-        let PublishedCallableBody::Source(publication) =
-            plan.publish_callable_body(declaration, &budget).unwrap()
-        else {
-            panic!("expected original source");
-        };
-        sr::replay_original_calls(
-            publication.source().clone(),
-            publication.original(),
-            publication.facts(),
-            &budget,
-        )
-        .unwrap();
-        let checked = publication.source();
-        let constructor = checked
-            .exprs
-            .iter()
-            .find_map(|expression| match &expression.kind {
-                ir::ExprKind::Call { args, .. } => args.first().copied(),
-                _ => None,
-            })
-            .unwrap();
-        let ir::ExprKind::Struct { fields, .. } = &checked.exprs[constructor.0].kind else {
-            panic!("expected Count")
-        };
-        let integer = fields[0].1.0;
-        for change_type in [false, true] {
-            let mut forged = checked.as_ref().clone();
-            let expression = &mut forged.exprs[integer];
-            let ir::ExprKind::Int(value) = &mut expression.kind else {
-                panic!("expected integer")
-            };
-            assert_eq!(value.ty, ir::IntTy::Usize);
-            if change_type {
-                value.ty = ir::IntTy::U32;
-                expression.ty = ir::Ty::Int(ir::IntTy::U32);
-            } else {
-                value.bits = 1;
-            }
-            let error = sr::replay_original_calls(
-                Arc::new(forged),
-                publication.original(),
-                publication.facts(),
-                &budget,
-            )
-            .err()
-            .expect("forged literal must fail source replay");
-            assert_eq!(error.kind(), tr::FactsErrorKind::InvalidMetadata);
-        }
-    }
-}
-
 // Navigate the immutable AST through the same general walker used by source
 // validation. The transient pointer index only selects an exact SourceNode,
 // never a spelling or an assumed enclosing-expression shape.
@@ -1388,21 +1327,21 @@ impl Replay<'_> {
                 ));
             }
         };
-        if let ir::ExprKind::Struct { ty: tag, .. } = &actual.kind {
-            if !self.equal(&ty, &ir::Ty::Struct(tag.clone()))? {
-                return Err(FactsError::invalid(
-                    self.budget,
-                    "input nominal constructor tag changed",
-                ));
-            }
+        if let ir::ExprKind::Struct { ty: tag, .. } = &actual.kind
+            && !self.equal(&ty, &ir::Ty::Struct(tag.clone()))?
+        {
+            return Err(FactsError::invalid(
+                self.budget,
+                "input nominal constructor tag changed",
+            ));
         }
-        if let ir::ExprKind::EnumVariant { ty: tag, .. } = &actual.kind {
-            if !self.equal(&ty, &ir::Ty::Enum(tag.clone()))? {
-                return Err(FactsError::invalid(
-                    self.budget,
-                    "input enum constructor tag changed",
-                ));
-            }
+        if let ir::ExprKind::EnumVariant { ty: tag, .. } = &actual.kind
+            && !self.equal(&ty, &ir::Ty::Enum(tag.clone()))?
+        {
+            return Err(FactsError::invalid(
+                self.budget,
+                "input enum constructor tag changed",
+            ));
         }
         if actual.completion != ir::Completion::Returns || !self.equal(&ty, &actual.ty)? {
             return Err(FactsError::invalid(
@@ -1600,5 +1539,66 @@ impl Replay<'_> {
             .get(index)
             .ok_or_else(|| FactsError::invalid(self.budget, "input enum field missing"))?;
         Ok((index, field.ty.clone()))
+    }
+}
+
+#[cfg(test)]
+mod literal_context_tests {
+    use super::*;
+
+    #[test]
+    fn source_field_integer_context_rejects_forged_literal() {
+        let program = parse("struct Count<'a> { n: usize, r: &'a i32 } fn consume<T>(value: T) {} fn main() { let n = 7i32; consume(Count { n: 0, r: &n }); }").unwrap();
+        let budget = ir::PlanBudget::default();
+        let plan = PlanCtx::from_program(&program, &budget).unwrap();
+        let declaration = plan.function_decl(1).unwrap();
+        let PublishedCallableBody::Source(publication) =
+            plan.publish_callable_body(declaration, &budget).unwrap()
+        else {
+            panic!("expected original source");
+        };
+        sr::replay_original_calls(
+            publication.source().clone(),
+            publication.original(),
+            publication.facts(),
+            &budget,
+        )
+        .unwrap();
+        let checked = publication.source();
+        let constructor = checked
+            .exprs
+            .iter()
+            .find_map(|expression| match &expression.kind {
+                ir::ExprKind::Call { args, .. } => args.first().copied(),
+                _ => None,
+            })
+            .unwrap();
+        let ir::ExprKind::Struct { fields, .. } = &checked.exprs[constructor.0].kind else {
+            panic!("expected Count")
+        };
+        let integer = fields[0].1.0;
+        for change_type in [false, true] {
+            let mut forged = checked.as_ref().clone();
+            let expression = &mut forged.exprs[integer];
+            let ir::ExprKind::Int(value) = &mut expression.kind else {
+                panic!("expected integer")
+            };
+            assert_eq!(value.ty, ir::IntTy::Usize);
+            if change_type {
+                value.ty = ir::IntTy::U32;
+                expression.ty = ir::Ty::Int(ir::IntTy::U32);
+            } else {
+                value.bits = 1;
+            }
+            let error = sr::replay_original_calls(
+                Arc::new(forged),
+                publication.original(),
+                publication.facts(),
+                &budget,
+            )
+            .err()
+            .expect("forged literal must fail source replay");
+            assert_eq!(error.kind(), tr::FactsErrorKind::InvalidMetadata);
+        }
     }
 }

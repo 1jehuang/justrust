@@ -1,6 +1,7 @@
 //! External-file module acceptance through the native CLI, with bounded children.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
 
+#[allow(dead_code)]
 #[path = "support/native_prelude.rs"]
 mod native_prelude;
 

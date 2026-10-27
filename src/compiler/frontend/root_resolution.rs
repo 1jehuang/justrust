@@ -516,10 +516,6 @@ impl Resolver<'_> {
     /// Resolve every alias declared at `roots` (and its dependencies) so
     /// unused cyclic aliases still reject. Roots come in source order.
     fn resolve_aliases(&mut self, roots: Vec<AstPath>) -> Result<(), String> {
-        #[expect(
-            clippy::mutable_key_type,
-            reason = "PathKey hashes immutable owner/anchor/namespace/name keys only; its shared resource ledger is not semantic identity"
-        )]
         let mut active = std::collections::HashSet::new();
         for root in roots {
             if !self.path_items(&root)?.is_some_and(|items| {
@@ -4661,7 +4657,7 @@ fn resolve_impl_block(
             _ => {
                 let receipt = block.primitive_source.as_ref()
                     .ok_or("E0390: cannot define inherent impl for primitive types outside their authenticated source issuer")?;
-                receipt.replay_source(block, source_index, resolver.names(), &primitive_issuers)?;
+                receipt.replay_source(block, source_index, resolver.names(), primitive_issuers)?;
                 None
             },
         };
@@ -4802,10 +4798,6 @@ pub fn prepare_resolution_owned(parsed: Arc<ParsedProgram>) -> Result<Resolution
         .program
         .symbols
         .check(parsed.program.names.as_ref())?;
-    #[expect(
-        clippy::mutable_key_type,
-        reason = "PathKey hashes immutable owner/anchor/namespace/name keys only; its shared resource ledger is not semantic identity"
-    )]
     let mut static_muts = std::collections::HashSet::new();
     for function in parsed.program.functions.iter().filter(|f| f.static_mut) {
         static_muts.insert(name_scope::path_key(
@@ -4959,10 +4951,10 @@ pub fn prepare_resolution_owned(parsed: Arc<ParsedProgram>) -> Result<Resolution
     // The parser mints them in their parent's module, so each resolves first
     // inside that module fact. Their errors rank after nominal field errors.
     let mut adapters: Vec<Vec<usize>> = Vec::new();
-    for index in 0..program.functions.len() {
-        if closures::anonymous_path(&program.functions[index].name, resolver.names())? {
+    for (index, function) in program.functions.iter().enumerate() {
+        if closures::anonymous_path(&function.name, resolver.names())? {
             let ordinal = ordinal_of(
-                program.functions[index].module,
+                function.module,
                 &mut modules,
                 &mut functions,
                 &mut impls,
@@ -4974,9 +4966,8 @@ pub fn prepare_resolution_owned(parsed: Arc<ParsedProgram>) -> Result<Resolution
             adapters.resize_with(modules.len(), Vec::new);
             adapters[ordinal].push(index);
         } else {
-            let module = program.functions[index].module;
             let ordinal = ordinal_of(
-                module,
+                function.module,
                 &mut modules,
                 &mut functions,
                 &mut impls,
@@ -5454,7 +5445,7 @@ fn finish_resolution_with<T>(
             return Err("foreign resolved module error inventory".into());
         }
     }
-    for error in [
+    if let Some(error) = [
         items
             .iter()
             .filter_map(|item| item.prefix_error.as_ref())
@@ -5466,6 +5457,7 @@ fn finish_resolution_with<T>(
     ]
     .into_iter()
     .flatten()
+    .next()
     {
         return Err(error.1.clone());
     }
@@ -5890,10 +5882,6 @@ mod associated_projection_tests {
             "trait Apply{fn call(&self);}mod foreign{pub trait Other{fn call(&self);}}fn main(){}",
         )
         .unwrap();
-        #[expect(
-            clippy::mutable_key_type,
-            reason = "PathKey equality and hashing use immutable path identity, never the retained allocation budget"
-        )]
         let items = HashMap::new();
         let mut resolver = Resolver {
             program: &program,

@@ -3,251 +3,6 @@
 //! permission follows, and every unmatched raw store still suppresses effects.
 use super::*;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    fn local(index: usize) -> Place {
-        Place {
-            local: LocalId(index),
-            projection: Vec::new(),
-        }
-    }
-    fn copy(to: Place, from: Place) -> cfg::Located<Statement> {
-        cfg::Located {
-            value: Statement::Assign {
-                destination: to,
-                value: Rvalue::Use(Operand::Copy(from)),
-            },
-            origin: None,
-        }
-    }
-    fn moved(to: Place, from: Place) -> cfg::Located<Statement> {
-        cfg::Located {
-            value: Statement::Assign {
-                destination: to,
-                value: Rvalue::Use(Operand::Move(from)),
-            },
-            origin: None,
-        }
-    }
-    fn storage(value: Statement) -> cfg::Located<Statement> {
-        cfg::Located {
-            value,
-            origin: None,
-        }
-    }
-
-    #[test]
-    fn native_storage_lineage_temporal_parameter_and_future_definition_reject() {
-        let ledger = ir::PlanBudget::default();
-        let mut work = Budget::new(100_000);
-        let parameters = [LocalId(0), LocalId(3)];
-        let root = local(0);
-        let output = local(2);
-        // The reaching chain is 2 <- 1 <- incoming 0, with a legal StorageLive
-        // before its definition. Unrelated local reassignments are not roots.
-        let chronological = [
-            storage(Statement::StorageLive(LocalId(1))),
-            copy(local(1), root.clone()),
-            copy(local(4), local(3)),
-            copy(local(4), root.clone()),
-            copy(output.clone(), local(1)),
-        ];
-        assert_eq!(
-            prefix_source(&chronological, &output, &parameters, &ledger, &mut work).unwrap(),
-            Some(&root)
-        );
-        // A copied entry value cannot acquire param3's identity from a later
-        // reassignment of param0. Entry definitions count even without a stmt.
-        let late_parameter = [
-            copy(local(1), root.clone()),
-            moved(root.clone(), local(3)),
-            copy(output.clone(), local(1)),
-        ];
-        assert!(
-            prefix_source(&late_parameter, &output, &parameters, &ledger, &mut work)
-                .unwrap()
-                .is_none()
-        );
-        let early_parameter = [
-            moved(root.clone(), local(3)),
-            copy(output.clone(), root.clone()),
-        ];
-        assert!(
-            prefix_source(&early_parameter, &output, &parameters, &ledger, &mut work)
-                .unwrap()
-                .is_none()
-        );
-        // This copy graph would resolve to param0 only by reading forward from
-        // the first statement. Such a future definition is never a proof.
-        let future_definition = [
-            copy(local(1), local(4)),
-            copy(local(4), root.clone()),
-            copy(output.clone(), local(1)),
-        ];
-        assert!(
-            prefix_source(&future_definition, &output, &parameters, &ledger, &mut work)
-                .unwrap()
-                .is_none()
-        );
-    }
-
-    #[test]
-    fn native_storage_lineage_late_base_index_mutation_and_storage_kills_reject() {
-        let ledger = ir::PlanBudget::default();
-        let mut work = Budget::new(100_000);
-        let parameters = [LocalId(0), LocalId(3)];
-        let output = local(2);
-        for field in [0, 1] {
-            let owner_field = Place {
-                local: LocalId(0),
-                projection: vec![Projection::Deref, Projection::Field(field)],
-            };
-            let chronological = [
-                copy(local(1), owner_field.clone()),
-                copy(output.clone(), local(1)),
-            ];
-            assert_eq!(
-                prefix_source(&chronological, &output, &parameters, &ledger, &mut work).unwrap(),
-                Some(&owner_field)
-            );
-            let late_owner = [
-                copy(local(1), owner_field.clone()),
-                moved(local(0), local(3)),
-                copy(output.clone(), local(1)),
-            ];
-            assert!(
-                prefix_source(&late_owner, &output, &parameters, &ledger, &mut work)
-                    .unwrap()
-                    .is_none()
-            );
-            let after_slot = [copy(output.clone(), local(20))];
-            assert_eq!(
-                prefix_source(&after_slot, &owner_field, &parameters, &ledger, &mut work).unwrap(),
-                Some(&owner_field)
-            );
-            let changed_after_slot = [copy(output.clone(), local(20)), moved(local(0), local(3))];
-            assert_eq!(
-                prefix_source(
-                    &changed_after_slot,
-                    &output,
-                    &parameters,
-                    &ledger,
-                    &mut work
-                )
-                .unwrap(),
-                Some(&local(20))
-            );
-            assert!(
-                prefix_source(
-                    &changed_after_slot,
-                    &owner_field,
-                    &parameters,
-                    &ledger,
-                    &mut work
-                )
-                .unwrap()
-                .is_none()
-            );
-            let late_field = [
-                copy(local(1), owner_field.clone()),
-                copy(owner_field, local(3)),
-                copy(output.clone(), local(1)),
-            ];
-            assert!(
-                prefix_source(&late_field, &output, &parameters, &ledger, &mut work)
-                    .unwrap()
-                    .is_none()
-            );
-        }
-        for killed in [LocalId(0), LocalId(1)] {
-            for kill in [
-                Statement::StorageDead(killed),
-                Statement::StorageLive(killed),
-            ] {
-                let changed_storage = [
-                    copy(local(1), local(0)),
-                    storage(kill),
-                    copy(output.clone(), local(1)),
-                ];
-                assert!(
-                    prefix_source(&changed_storage, &output, &parameters, &ledger, &mut work)
-                        .unwrap()
-                        .is_none()
-                );
-            }
-        }
-        let restarted = [
-            copy(local(1), local(0)),
-            storage(Statement::StorageDead(LocalId(1))),
-            storage(Statement::StorageLive(LocalId(1))),
-            copy(output.clone(), local(1)),
-        ];
-        assert!(
-            prefix_source(&restarted, &output, &parameters, &ledger, &mut work)
-                .unwrap()
-                .is_none()
-        );
-        let live_uninitialized = [
-            storage(Statement::StorageLive(LocalId(1))),
-            copy(output.clone(), local(1)),
-        ];
-        assert!(
-            prefix_source(
-                &live_uninitialized,
-                &output,
-                &parameters,
-                &ledger,
-                &mut work
-            )
-            .unwrap()
-            .is_none()
-        );
-    }
-    #[test]
-    fn native_storage_lineage_exact_copies_mutation_cycles_and_poison() {
-        let ledger = ir::PlanBudget::default();
-        let mut work = Budget::new(100_000);
-        let root = local(0);
-        let output = local(2);
-        let copies = [copy(local(1), root.clone()), copy(output.clone(), local(1))];
-        assert_eq!(
-            prefix_source(&copies, &output, &[LocalId(0)], &ledger, &mut work).unwrap(),
-            Some(&root)
-        );
-        let duplicate = [
-            copy(output.clone(), root.clone()),
-            copy(output.clone(), local(1)),
-        ];
-        assert!(
-            prefix_source(&duplicate, &output, &[LocalId(0)], &ledger, &mut work)
-                .unwrap()
-                .is_none()
-        );
-        let cyclic = [
-            copy(output.clone(), local(1)),
-            copy(local(1), output.clone()),
-        ];
-        assert!(
-            prefix_source(&cyclic, &output, &[LocalId(0)], &ledger, &mut work)
-                .unwrap()
-                .is_none()
-        );
-        let field = Place {
-            local: LocalId(0),
-            projection: vec![Projection::Deref, Projection::Field(0)],
-        };
-        let mutation = [copy(field.clone(), root.clone())];
-        assert!(
-            prefix_source(&mutation, &field, &[LocalId(0)], &ledger, &mut work)
-                .unwrap()
-                .is_none()
-        );
-        ledger.poison_ledger_for_tests();
-        assert!(prefix_source(&[], &root, &[LocalId(0)], &ledger, &mut work).is_err());
-    }
-}
-
 #[derive(Clone, Debug)]
 pub(super) struct NativeStorageTransfer {
     pub(super) block: BlockId,
@@ -352,10 +107,10 @@ fn prefix_source<'a>(
                 _ => {}
             }
         }
-        if let Some(live) = live {
-            if !definition.is_some_and(|(definition, _)| live < definition) {
-                return Ok(None);
-            }
+        if let Some(live) = live
+            && !definition.is_some_and(|(definition, _)| live < definition)
+        {
+            return Ok(None);
         }
         if !place.projection.is_empty() {
             // A field belongs to this exact unmodified incoming root. Following
@@ -468,10 +223,10 @@ impl CarrierBuilder<'_, '_> {
                 let mut unique = true;
                 for (index, candidate) in f.blocks.iter().enumerate() {
                     self.budget.spend(1)?;
-                    if enters(&candidate.terminator.value, BlockId(block_index)) {
-                        if predecessor.replace(index).is_some() {
-                            unique = false;
-                        }
+                    if enters(&candidate.terminator.value, BlockId(block_index))
+                        && predecessor.replace(index).is_some()
+                    {
+                        unique = false;
                     }
                 }
                 if !unique {
@@ -734,5 +489,250 @@ impl CarrierBuilder<'_, '_> {
             self.membership(origins.count())?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn local(index: usize) -> Place {
+        Place {
+            local: LocalId(index),
+            projection: Vec::new(),
+        }
+    }
+    fn copy(to: Place, from: Place) -> cfg::Located<Statement> {
+        cfg::Located {
+            value: Statement::Assign {
+                destination: to,
+                value: Rvalue::Use(Operand::Copy(from)),
+            },
+            origin: None,
+        }
+    }
+    fn moved(to: Place, from: Place) -> cfg::Located<Statement> {
+        cfg::Located {
+            value: Statement::Assign {
+                destination: to,
+                value: Rvalue::Use(Operand::Move(from)),
+            },
+            origin: None,
+        }
+    }
+    fn storage(value: Statement) -> cfg::Located<Statement> {
+        cfg::Located {
+            value,
+            origin: None,
+        }
+    }
+
+    #[test]
+    fn native_storage_lineage_temporal_parameter_and_future_definition_reject() {
+        let ledger = ir::PlanBudget::default();
+        let mut work = Budget::new(100_000);
+        let parameters = [LocalId(0), LocalId(3)];
+        let root = local(0);
+        let output = local(2);
+        // The reaching chain is 2 <- 1 <- incoming 0, with a legal StorageLive
+        // before its definition. Unrelated local reassignments are not roots.
+        let chronological = [
+            storage(Statement::StorageLive(LocalId(1))),
+            copy(local(1), root.clone()),
+            copy(local(4), local(3)),
+            copy(local(4), root.clone()),
+            copy(output.clone(), local(1)),
+        ];
+        assert_eq!(
+            prefix_source(&chronological, &output, &parameters, &ledger, &mut work).unwrap(),
+            Some(&root)
+        );
+        // A copied entry value cannot acquire param3's identity from a later
+        // reassignment of param0. Entry definitions count even without a stmt.
+        let late_parameter = [
+            copy(local(1), root.clone()),
+            moved(root.clone(), local(3)),
+            copy(output.clone(), local(1)),
+        ];
+        assert!(
+            prefix_source(&late_parameter, &output, &parameters, &ledger, &mut work)
+                .unwrap()
+                .is_none()
+        );
+        let early_parameter = [
+            moved(root.clone(), local(3)),
+            copy(output.clone(), root.clone()),
+        ];
+        assert!(
+            prefix_source(&early_parameter, &output, &parameters, &ledger, &mut work)
+                .unwrap()
+                .is_none()
+        );
+        // This copy graph would resolve to param0 only by reading forward from
+        // the first statement. Such a future definition is never a proof.
+        let future_definition = [
+            copy(local(1), local(4)),
+            copy(local(4), root.clone()),
+            copy(output.clone(), local(1)),
+        ];
+        assert!(
+            prefix_source(&future_definition, &output, &parameters, &ledger, &mut work)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn native_storage_lineage_late_base_index_mutation_and_storage_kills_reject() {
+        let ledger = ir::PlanBudget::default();
+        let mut work = Budget::new(100_000);
+        let parameters = [LocalId(0), LocalId(3)];
+        let output = local(2);
+        for field in [0, 1] {
+            let owner_field = Place {
+                local: LocalId(0),
+                projection: vec![Projection::Deref, Projection::Field(field)],
+            };
+            let chronological = [
+                copy(local(1), owner_field.clone()),
+                copy(output.clone(), local(1)),
+            ];
+            assert_eq!(
+                prefix_source(&chronological, &output, &parameters, &ledger, &mut work).unwrap(),
+                Some(&owner_field)
+            );
+            let late_owner = [
+                copy(local(1), owner_field.clone()),
+                moved(local(0), local(3)),
+                copy(output.clone(), local(1)),
+            ];
+            assert!(
+                prefix_source(&late_owner, &output, &parameters, &ledger, &mut work)
+                    .unwrap()
+                    .is_none()
+            );
+            let after_slot = [copy(output.clone(), local(20))];
+            assert_eq!(
+                prefix_source(&after_slot, &owner_field, &parameters, &ledger, &mut work).unwrap(),
+                Some(&owner_field)
+            );
+            let changed_after_slot = [copy(output.clone(), local(20)), moved(local(0), local(3))];
+            assert_eq!(
+                prefix_source(
+                    &changed_after_slot,
+                    &output,
+                    &parameters,
+                    &ledger,
+                    &mut work
+                )
+                .unwrap(),
+                Some(&local(20))
+            );
+            assert!(
+                prefix_source(
+                    &changed_after_slot,
+                    &owner_field,
+                    &parameters,
+                    &ledger,
+                    &mut work
+                )
+                .unwrap()
+                .is_none()
+            );
+            let late_field = [
+                copy(local(1), owner_field.clone()),
+                copy(owner_field, local(3)),
+                copy(output.clone(), local(1)),
+            ];
+            assert!(
+                prefix_source(&late_field, &output, &parameters, &ledger, &mut work)
+                    .unwrap()
+                    .is_none()
+            );
+        }
+        for killed in [LocalId(0), LocalId(1)] {
+            for kill in [
+                Statement::StorageDead(killed),
+                Statement::StorageLive(killed),
+            ] {
+                let changed_storage = [
+                    copy(local(1), local(0)),
+                    storage(kill),
+                    copy(output.clone(), local(1)),
+                ];
+                assert!(
+                    prefix_source(&changed_storage, &output, &parameters, &ledger, &mut work)
+                        .unwrap()
+                        .is_none()
+                );
+            }
+        }
+        let restarted = [
+            copy(local(1), local(0)),
+            storage(Statement::StorageDead(LocalId(1))),
+            storage(Statement::StorageLive(LocalId(1))),
+            copy(output.clone(), local(1)),
+        ];
+        assert!(
+            prefix_source(&restarted, &output, &parameters, &ledger, &mut work)
+                .unwrap()
+                .is_none()
+        );
+        let live_uninitialized = [
+            storage(Statement::StorageLive(LocalId(1))),
+            copy(output.clone(), local(1)),
+        ];
+        assert!(
+            prefix_source(
+                &live_uninitialized,
+                &output,
+                &parameters,
+                &ledger,
+                &mut work
+            )
+            .unwrap()
+            .is_none()
+        );
+    }
+    #[test]
+    fn native_storage_lineage_exact_copies_mutation_cycles_and_poison() {
+        let ledger = ir::PlanBudget::default();
+        let mut work = Budget::new(100_000);
+        let root = local(0);
+        let output = local(2);
+        let copies = [copy(local(1), root.clone()), copy(output.clone(), local(1))];
+        assert_eq!(
+            prefix_source(&copies, &output, &[LocalId(0)], &ledger, &mut work).unwrap(),
+            Some(&root)
+        );
+        let duplicate = [
+            copy(output.clone(), root.clone()),
+            copy(output.clone(), local(1)),
+        ];
+        assert!(
+            prefix_source(&duplicate, &output, &[LocalId(0)], &ledger, &mut work)
+                .unwrap()
+                .is_none()
+        );
+        let cyclic = [
+            copy(output.clone(), local(1)),
+            copy(local(1), output.clone()),
+        ];
+        assert!(
+            prefix_source(&cyclic, &output, &[LocalId(0)], &ledger, &mut work)
+                .unwrap()
+                .is_none()
+        );
+        let field = Place {
+            local: LocalId(0),
+            projection: vec![Projection::Deref, Projection::Field(0)],
+        };
+        let mutation = [copy(field.clone(), root.clone())];
+        assert!(
+            prefix_source(&mutation, &field, &[LocalId(0)], &ledger, &mut work)
+                .unwrap()
+                .is_none()
+        );
+        ledger.poison_ledger_for_tests();
+        assert!(prefix_source(&[], &root, &[LocalId(0)], &ledger, &mut work).is_err());
     }
 }
