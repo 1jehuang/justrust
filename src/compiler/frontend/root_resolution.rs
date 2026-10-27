@@ -2675,10 +2675,18 @@ impl Resolver<'_> {
             .semantic_parent(self.names())
             .map_err(native_adapter::name_diagnostic)?;
         let owner_key = self.key(&owner)?;
-        for declaration in &self.program.enums {
-            self.alias_budget.charge_work(1)?;
+        let enum_index = self.declaration_index(&owner, |kind| match kind {
+            ItemKind::Enum(index) => Some(*index),
+            _ => None,
+        })?;
+        if let Some(index) = enum_index {
+            let declaration = self
+                .program
+                .enums
+                .get(index)
+                .ok_or("enum binding names no declaration")?;
             if self.key(&declaration.name)? != owner_key {
-                continue;
+                return Err("enum binding disagrees with its declaration".into());
             }
             for variant in &declaration.variants {
                 self.alias_budget.charge_work(1)?;
