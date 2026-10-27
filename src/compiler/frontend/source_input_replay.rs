@@ -2,6 +2,67 @@
 //! Checked types are comparison targets, never an inference source.
 use super::*;
 
+#[cfg(test)]
+mod literal_context_tests {
+    use super::*;
+
+    #[test]
+    fn source_field_integer_context_rejects_forged_literal() {
+        let program = parse("struct Count<'a> { n: usize, r: &'a i32 } fn consume<T>(value: T) {} fn main() { let n = 7i32; consume(Count { n: 0, r: &n }); }").unwrap();
+        let budget = ir::PlanBudget::default();
+        let plan = PlanCtx::from_program(&program, &budget).unwrap();
+        let declaration = plan.function_decl(1).unwrap();
+        let PublishedCallableBody::Source(publication) =
+            plan.publish_callable_body(declaration, &budget).unwrap()
+        else {
+            panic!("expected original source");
+        };
+        sr::replay_original_calls(
+            publication.source().clone(),
+            publication.original(),
+            publication.facts(),
+            &budget,
+        )
+        .unwrap();
+        let checked = publication.source();
+        let constructor = checked
+            .exprs
+            .iter()
+            .find_map(|expression| match &expression.kind {
+                ir::ExprKind::Call { args, .. } => args.first().copied(),
+                _ => None,
+            })
+            .unwrap();
+        let ir::ExprKind::Struct { fields, .. } = &checked.exprs[constructor.0].kind else {
+            panic!("expected Count")
+        };
+        let integer = fields[0].1.0;
+        for change_type in [false, true] {
+            let mut forged = checked.as_ref().clone();
+            let expression = &mut forged.exprs[integer];
+            let ir::ExprKind::Int(value) = &mut expression.kind else {
+                panic!("expected integer")
+            };
+            assert_eq!(value.ty, ir::IntTy::Usize);
+            if change_type {
+                value.ty = ir::IntTy::U32;
+                expression.ty = ir::Ty::Int(ir::IntTy::U32);
+            } else {
+                value.bits = 1;
+            }
+            let error = sr::replay_original_calls(
+                Arc::new(forged),
+                publication.original(),
+                publication.facts(),
+                &budget,
+            )
+            .err()
+            .expect("forged literal must fail source replay");
+            assert_eq!(error.kind(), tr::FactsErrorKind::InvalidMetadata);
+        }
+    }
+}
+
 // Navigate the immutable AST through the same general walker used by source
 // validation. The transient pointer index only selects an exact SourceNode,
 // never a spelling or an assumed enclosing-expression shape.
@@ -748,7 +809,48 @@ impl Replay<'_> {
             }
             Ok(ty)
         } else {
-            self.expression(source, node, id, expected, depth)
+            // Inferred calls still provide concrete parameter context, such
+            // as the usize argument of `split<T>(slice, index)`. Recover it
+            // from the original declaration, never the checked call's actuals.
+            let declared = if expected.is_none() {
+                sr::work(self.budget, self.original.call_mapping.len())?;
+                let (source_index, _, target) = self
+                    .original
+                    .call_mapping
+                    .iter()
+                    .find(|(_, expression, _)| *expression == call)
+                    .ok_or_else(|| {
+                        FactsError::invalid(self.budget, "input call source mapping missing")
+                    })?;
+                let site = self.inventory.calls.get(*source_index).ok_or_else(|| {
+                    FactsError::invalid(self.budget, "input call source occurrence missing")
+                })?;
+                if site.node.child(9, index, self.budget)? != *node {
+                    return Err(FactsError::invalid(
+                        self.budget,
+                        "input argument source occurrence changed",
+                    ));
+                }
+                let ir::Callee::Direct(target) = target else {
+                    return Err(FactsError::invalid(
+                        self.budget,
+                        "input call source target is not direct",
+                    ));
+                };
+                let view = self.original.facts.original_callable_schema(
+                    tr::OriginalCallableSubject::Direct(target.declaration),
+                )?;
+                let parameter = view.signature().params.get(index).ok_or_else(|| {
+                    FactsError::invalid(self.budget, "input source parameter missing")
+                })?;
+                // Rigid declaration parameters are not inferred actuals. In
+                // particular E<T> must not become an expected E<actual> while
+                // reconstructing a generic aggregate argument.
+                parameter.is_closed_shallow().then(|| parameter.clone())
+            } else {
+                None
+            };
+            self.expression(source, node, id, expected.or(declared.as_ref()), depth)
         }
     }
     fn equal(&self, a: &ir::Ty, b: &ir::Ty) -> Result<bool, FactsError> {
@@ -1420,7 +1522,11 @@ impl Replay<'_> {
                 source,
                 &node.child(14, position, self.budget)?,
                 *value,
-                hint.as_ref(),
+                // A concrete field type is source-authenticated context even
+                // when the constructor itself has no written annotation.
+                // Never use the checked constructor tag to recover this hint.
+                hint.as_ref()
+                    .or_else(|| formal.is_closed_shallow().then_some(&formal)),
                 depth + 1,
             )?;
             state.constrain_input(&formal, &input)?;
