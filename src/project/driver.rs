@@ -255,6 +255,62 @@ fn kind_label(unit: &Unit) -> &'static str {
 }
 
 impl Driver {
+    /// Acquire a bounded namespace for ordinary project commands. Discovery
+    /// chooses the root, then is replayed solely from the captured bytes.
+    /// Legacy registry/configuration paths remain explicitly unproven.
+    pub fn capture(
+        manifest_path: Option<&Path>,
+        start: &Path,
+        sel: Selection,
+    ) -> Result<Self, ManifestError> {
+        let selected = match manifest_path {
+            Some(path) => path.to_owned(),
+            None => manifest::find_manifest(start)?,
+        };
+        let ws = manifest::load(&selected)?;
+        if ws.inputs.identity().is_none()
+            || ws.packages.iter().any(|package| {
+                package
+                    .dependencies
+                    .iter()
+                    .any(|dep| !matches!(dep.source, manifest::DependencySource::Path(_)))
+            })
+        {
+            eprintln!(
+                "warning: native input capture is unproven for this legacy configuration; artifact reuse is disabled"
+            );
+            return Ok(Self::from_workspace(ws, sel));
+        }
+        let selected = selected.canonicalize().map_err(|e| err(e.to_string()))?;
+        let environment = ["CARGO_HOME", "HOME", "CARGO_TARGET_DIR"]
+            .into_iter()
+            .filter_map(|name| {
+                ws.inputs
+                    .environment(name)
+                    .map(|value| (name.to_owned(), value.to_owned()))
+            })
+            .collect();
+        let output = ws
+            .inputs
+            .environment("CARGO_TARGET_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| ws.root.join("target"));
+        let output = output.canonicalize().unwrap_or_else(|_| {
+            if output.is_absolute() {
+                output.clone()
+            } else {
+                start.join(&output)
+            }
+        });
+        let snapshot = super::capture::directory(&ws.root, &output)?;
+        if !ws.inputs.matches_current() {
+            return Err(err("input changed during native project discovery/capture"));
+        }
+        let driver = Self::from_snapshot(snapshot, &selected, environment, sel)?;
+        eprintln!("Input capture: immutable native project namespace (artifact sharing disabled)");
+        Ok(driver)
+    }
+
     /// Construct a supported native project from one immutable discovery/source
     /// namespace. No source or manifest read falls back to the host filesystem.
     pub fn from_snapshot(

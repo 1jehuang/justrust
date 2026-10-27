@@ -1998,8 +1998,15 @@ PlanCtx/interner/source-context debt and wide adapter activation remain held.
       immutable namespace; graph source receipts reject a different discovery
       snapshot. Frozen projects reject Cargo configuration files, registry/git
       acquisition, uncontrolled environment settings and build scripts, while
-      native linking rejects uncontrolled external linkers. Acceptance:
-      `justrust test --lib source_snapshot` includes stock/native CHECK/BUILD/run
+      native linking rejects uncontrolled external linkers. Ordinary project
+      CLI commands now acquire a bounded regular-file namespace twice, reject
+      observed byte/metadata changes, revalidate discovery and compile only the
+      owned snapshot. Symlinks/special files reject; target and cache-tagged
+      output directories are excluded and cannot satisfy source reads. Legacy
+      registry/config paths remain explicitly unproven. Acceptance:
+      `justrust test --lib project::capture` and `--test projects` cover ordinary
+      CLI CHECK/BUILD/run at workers 1/8, missing inputs, symlinks and mutation
+      between capture passes. `justrust test --lib source_snapshot` includes stock/native CHECK/BUILD/run
       at workers 1/8 after host files are changed or removed, workspace globs,
       missing/changed inputs and unsupported configuration/tool boundaries.
       This is not an atomic capture of a live host directory, runtime-process

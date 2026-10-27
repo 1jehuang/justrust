@@ -24,6 +24,61 @@ fn stock_command() -> Command {
 
 const CRATES_IO_CACHE_ID: &str = "index.crates.io-1949cf8c6b5b557f";
 
+#[test]
+fn ordinary_cli_captures_one_namespace_for_check_build_and_run() {
+    let root = target_dir("captured-cli");
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::create_dir_all(root.join("home")).unwrap();
+    std::fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname='captured_cli'\nversion='0.1.0'\nedition='2024'\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("src/main.rs"),
+        "mod child; fn main() { assert_eq!(child::value(), 42); }",
+    )
+    .unwrap();
+    std::fs::write(root.join("src/child.rs"), "pub fn value() -> i32 { 42 }").unwrap();
+    let stock = stock_command()
+        .arg("run")
+        .arg("--quiet")
+        .current_dir(&root)
+        .env("CARGO_TARGET_DIR", root.join("stock"))
+        .output()
+        .unwrap();
+    assert!(stock.status.success(), "{stock:?}");
+    let invoke = |command: &str, workers: &str| {
+        Command::new(env!("CARGO_BIN_EXE_jr-rust"))
+            .args([command, "-j", workers])
+            .current_dir(&root)
+            .env("CARGO_HOME", root.join("home"))
+            .env("CARGO_TARGET_DIR", root.join("native"))
+            .output()
+            .unwrap()
+    };
+    for workers in ["1", "8"] {
+        for command in ["check", "build", "run"] {
+            let output = invoke(command, workers);
+            assert!(output.status.success(), "{output:?}");
+            assert!(
+                String::from_utf8_lossy(&output.stderr)
+                    .contains("Input capture: immutable native project namespace")
+            );
+            assert_eq!(output.stdout, stock.stdout);
+        }
+    }
+    std::fs::remove_file(root.join("src/child.rs")).unwrap();
+    let missing = invoke("build", "8");
+    assert!(!missing.status.success());
+    assert!(!String::from_utf8_lossy(&missing.stderr).contains("Finished"));
+    std::os::unix::fs::symlink("missing.rs", root.join("src/child.rs")).unwrap();
+    let unsupported = invoke("check", "1");
+    assert!(!unsupported.status.success());
+    assert!(String::from_utf8_lossy(&unsupported.stderr).contains("does not follow symlinks"));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/projects")

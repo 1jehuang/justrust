@@ -99,9 +99,6 @@ fn run(command: &str, args: &[String]) -> Result<i32, Box<dyn std::error::Error>
     if sel.release && sel.profile.is_some() {
         return Err("--release and --profile cannot be used together".into());
     }
-    let driver = match manifest_path {
-        Some(path) => Driver::new(&path, sel)?,
-        None => Driver::from_directory(&std::env::current_dir()?, sel)?,
-    };
+    let driver = Driver::capture(manifest_path.as_deref(), &std::env::current_dir()?, sel)?;
     Ok(driver.run(command)?)
 }
