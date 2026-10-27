@@ -4102,6 +4102,10 @@ pub struct ResolutionNamespace {
     nominals: Vec<Vec<NominalSource>>,
     /// Trait declarations per module ordinal, in source order.
     traits: Vec<Vec<usize>>,
+    /// Constant declarations per module ordinal, in source order.
+    constants: Vec<Vec<usize>>,
+    /// First trait-import or derived-header error, ranked after constants.
+    header_error: Option<String>,
     /// First anonymous-adapter body error, ranked after nominal errors.
     adapter_error: Option<String>,
     derived_debug_source: Option<usize>,
@@ -4176,6 +4180,9 @@ pub struct ResolvedModuleItems {
     /// First failing trait of this module. Ranked before every other error.
     trait_error: Option<(usize, String)>,
     traits: Vec<(usize, TraitDecl, TraitResolution)>,
+    /// First failing constant. Ranked before every other error.
+    constant_error: Option<(usize, String)>,
+    constants: Vec<(usize, ConstDecl)>,
     ordinal: usize,
     functions: Vec<(usize, Function)>,
     impls: Vec<(usize, ImplDecl)>,
@@ -4212,6 +4219,32 @@ pub fn resolve_module_items(
     let parsed = namespace.parsed.as_ref();
     let indices = resolution_module_indices(namespace, ordinal)?;
     let mut resolver = namespace.state.resolver(parsed);
+    let constant_sources = namespace
+        .constants
+        .get(ordinal)
+        .ok_or("foreign resolution module ordinal")?;
+    let mut constants = Vec::with_capacity(constant_sources.len());
+    let mut constant_error = None;
+    for &index in constant_sources {
+        let mut declaration = namespace.program.constants[index].clone();
+        resolver.type_params.clear();
+        let result = resolver
+            .ty(&mut declaration.ty, declaration.module)
+            .and_then(|()| {
+                resolver.expr(
+                    &mut declaration.initializer,
+                    declaration.module,
+                    &mut vec![std::collections::HashSet::new()],
+                )
+            });
+        match result {
+            Ok(_) => constants.push((index, declaration)),
+            Err(diagnostic) => {
+                constant_error = Some((index, diagnostic));
+                break;
+            }
+        }
+    }
     let trait_sources = namespace
         .traits
         .get(ordinal)
@@ -4293,6 +4326,8 @@ pub fn resolve_module_items(
         nominals,
         trait_error,
         traits,
+        constant_error,
+        constants,
         ordinal,
         functions,
         impls,
@@ -4828,65 +4863,68 @@ pub fn prepare_resolution_owned(parsed: Arc<ParsedProgram>) -> Result<Resolution
                 .push(const_inline::checked_body(declaration));
         }
     }
-    for declaration in &mut program.constants {
-        resolver.type_params.clear();
-        resolver.ty(&mut declaration.ty, declaration.module)?;
-        resolver.expr(
-            &mut declaration.initializer,
-            declaration.module,
-            &mut vec![std::collections::HashSet::new()],
-        )?;
-    }
-    for path in &paths {
-        let key = resolver.key(path)?;
-        for (index, item) in parsed
-            .items
-            .get(&key)
-            .ok_or("missing source import bucket")?
-            .iter()
-            .enumerate()
-        {
-            if matches!(item.kind, ItemKind::Import(_, _))
-                && let Some(target) = resolver.import(path, index, true)?
-                && target.kind == ResolvedKind::Trait
+    // Constant declarations resolve in their module facts. Errors from the
+    // remaining crate-wide header passes rank after constant errors, so they
+    // are deferred, never returned ahead of them.
+    let header_error = (|| -> Result<Option<usize>, String> {
+        for path in &paths {
+            let key = resolver.key(path)?;
+            for (index, item) in parsed
+                .items
+                .get(&key)
+                .ok_or("missing source import bucket")?
+                .iter()
+                .enumerate()
             {
-                resolver.charge_entries::<(ModuleId, TraitPath)>(1)?;
-                program
-                    .trait_imports
-                    .try_reserve(1)
-                    .map_err(|_| "trait import allocation failed")?;
-                let path = match &target.path {
-                    ResolvedPath::Source(path) => {
-                        TraitPath::Source(resolver.alias_source_path(path)?)
-                    }
-                    ResolvedPath::Builtin(id) => TraitPath::Builtin(*id),
-                    ResolvedPath::CatalogModule(_) => {
-                        return Err("trait import names a module".into());
-                    }
-                };
-                program.trait_imports.push((item.module, path));
+                if matches!(item.kind, ItemKind::Import(_, _))
+                    && let Some(target) = resolver.import(path, index, true)?
+                    && target.kind == ResolvedKind::Trait
+                {
+                    resolver.charge_entries::<(ModuleId, TraitPath)>(1)?;
+                    program
+                        .trait_imports
+                        .try_reserve(1)
+                        .map_err(|_| "trait import allocation failed")?;
+                    let path = match &target.path {
+                        ResolvedPath::Source(path) => {
+                            TraitPath::Source(resolver.alias_source_path(path)?)
+                        }
+                        ResolvedPath::Builtin(id) => TraitPath::Builtin(*id),
+                        ResolvedPath::CatalogModule(_) => {
+                            return Err("trait import names a module".into());
+                        }
+                    };
+                    program.trait_imports.push((item.module, path));
+                }
             }
         }
-    }
-    let mut derived_debug_source = None;
-    for (source_index, declaration) in program.traits.iter().enumerate() {
-        if generated_debug::canonical_source(&parsed.program, declaration)?
-            && derived_debug_source.replace(source_index).is_some()
-        {
-            return Err("duplicate canonical native Debug trait".into());
+        let mut derived_debug_source = None;
+        for (source_index, declaration) in program.traits.iter().enumerate() {
+            if generated_debug::canonical_source(&parsed.program, declaration)?
+                && derived_debug_source.replace(source_index).is_some()
+            {
+                return Err("duplicate canonical native Debug trait".into());
+            }
         }
-    }
+        Ok(derived_debug_source)
+    })();
+    let (derived_debug_source, header_error) = match header_error {
+        Ok(source) => (source, None),
+        Err(error) => (None, Some(error)),
+    };
     let mut modules = Vec::new();
     let mut functions: Vec<Vec<usize>> = Vec::new();
     let mut impls: Vec<Vec<usize>> = Vec::new();
     let mut nominals: Vec<Vec<NominalSource>> = Vec::new();
     let mut traits: Vec<Vec<usize>> = Vec::new();
+    let mut constants: Vec<Vec<usize>> = Vec::new();
     let mut ordinal_of = |module: ModuleId,
                           modules: &mut Vec<ModuleId>,
                           functions: &mut Vec<Vec<usize>>,
                           impls: &mut Vec<Vec<usize>>,
                           nominals: &mut Vec<Vec<NominalSource>>,
-                          traits: &mut Vec<Vec<usize>>| {
+                          traits: &mut Vec<Vec<usize>>,
+                          constants: &mut Vec<Vec<usize>>| {
         match modules.iter().position(|candidate| *candidate == module) {
             Some(ordinal) => ordinal,
             None => {
@@ -4895,6 +4933,7 @@ pub fn prepare_resolution_owned(parsed: Arc<ParsedProgram>) -> Result<Resolution
                 impls.push(Vec::new());
                 nominals.push(Vec::new());
                 traits.push(Vec::new());
+                constants.push(Vec::new());
                 modules.len() - 1
             }
         }
@@ -4919,9 +4958,22 @@ pub fn prepare_resolution_owned(parsed: Arc<ParsedProgram>) -> Result<Resolution
                 &mut impls,
                 &mut nominals,
                 &mut traits,
+                &mut constants,
             );
             functions[ordinal].push(index);
         }
+    }
+    for (index, declaration) in program.constants.iter().enumerate() {
+        let ordinal = ordinal_of(
+            declaration.module,
+            &mut modules,
+            &mut functions,
+            &mut impls,
+            &mut nominals,
+            &mut traits,
+            &mut constants,
+        );
+        constants[ordinal].push(index);
     }
     for (index, declaration) in program.traits.iter().enumerate() {
         let ordinal = ordinal_of(
@@ -4931,6 +4983,7 @@ pub fn prepare_resolution_owned(parsed: Arc<ParsedProgram>) -> Result<Resolution
             &mut impls,
             &mut nominals,
             &mut traits,
+            &mut constants,
         );
         traits[ordinal].push(index);
     }
@@ -4942,6 +4995,7 @@ pub fn prepare_resolution_owned(parsed: Arc<ParsedProgram>) -> Result<Resolution
             &mut impls,
             &mut nominals,
             &mut traits,
+            &mut constants,
         );
         nominals[ordinal].push(NominalSource::Enum(index));
     }
@@ -4953,6 +5007,7 @@ pub fn prepare_resolution_owned(parsed: Arc<ParsedProgram>) -> Result<Resolution
             &mut impls,
             &mut nominals,
             &mut traits,
+            &mut constants,
         );
         nominals[ordinal].push(NominalSource::Struct(index));
     }
@@ -4964,6 +5019,7 @@ pub fn prepare_resolution_owned(parsed: Arc<ParsedProgram>) -> Result<Resolution
             &mut impls,
             &mut nominals,
             &mut traits,
+            &mut constants,
         );
         impls[ordinal].push(index);
     }
@@ -4978,6 +5034,8 @@ pub fn prepare_resolution_owned(parsed: Arc<ParsedProgram>) -> Result<Resolution
         impls,
         nominals,
         traits,
+        constants,
+        header_error,
         adapter_error,
         derived_debug_source,
     })
@@ -5044,6 +5102,22 @@ fn finish_resolution_with<T>(
         {
             return Err("foreign resolved module inventory".into());
         }
+        let expected = &namespace.constants[ordinal];
+        let prefix = match &item.constant_error {
+            Some((index, _)) if expected.get(item.constants.len()) == Some(index) => {
+                &expected[..item.constants.len()]
+            }
+            Some(_) => return Err("foreign resolved module error inventory".into()),
+            None => expected.as_slice(),
+        };
+        if !item
+            .constants
+            .iter()
+            .map(|(index, _)| *index)
+            .eq(prefix.iter().copied())
+        {
+            return Err("foreign resolved module inventory".into());
+        }
         let expected = &namespace.traits[ordinal];
         let prefix = match &item.trait_error {
             Some((index, _)) if expected.get(item.traits.len()) == Some(index) => {
@@ -5094,6 +5168,16 @@ fn finish_resolution_with<T>(
         {
             return Err("foreign resolved module inventory".into());
         }
+    }
+    if let Some((_, diagnostic)) = items
+        .iter()
+        .filter_map(|item| item.constant_error.as_ref())
+        .min_by_key(|(index, _)| *index)
+    {
+        return Err(diagnostic.clone());
+    }
+    if let Some(diagnostic) = &namespace.header_error {
+        return Err(diagnostic.clone());
     }
     if let Some((_, diagnostic)) = items
         .iter()
@@ -5153,6 +5237,9 @@ fn finish_resolution_with<T>(
         }
         for (index, block) in item.impls {
             program.impls[index] = block;
+        }
+        for (index, declaration) in item.constants {
+            program.constants[index] = declaration;
         }
         for nominal in item.nominals {
             match nominal {
