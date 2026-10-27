@@ -119,16 +119,19 @@ stay distinct and never publish a successful executable.
 not feature counts, lines changed, or documents produced. Every language change
 needs stock-differential CHECK/BUILD/run acceptance at workers 1 and 8, relevant
 forged-fact and invalid-input rejection, and graph-shape coverage. Extend existing
-suites and feature contracts by default; do not create a new Markdown file or
-three new test files for each small fix. A new feature document is warranted only
-for a substantial contract not already covered by an existing one. Treat executable
+suites by default; do not create a new Markdown file or three new test files for
+each small fix. Documentation changes are not a feature-completion requirement.
+Read the relevant design contracts, but write docs only when explicitly requested
+or needed to correct materially stale usage or design information. Do not add
+progress reports, blocker diaries, audit narratives, or routine test results to
+docs. Treat executable
 regression tests and machine-readable expectations as the source of truth for
 progress. Run the affected acceptance suites and graph gate on the actual change;
 rerun them whenever confidence is needed. Keep ordinary results in the test runner
 or CI output associated with the tested revision, not hand-copied receipts or
-per-run Markdown narratives. Update docs/compiler/IMPLEMENTATION.md only when an
-actual capability, gate status or tracked blocker changes, with a short description
-and the relevant test command/name. Routine correctness runs do not require
+per-run Markdown narratives. Do not update docs/compiler/IMPLEMENTATION.md for
+each capability, gate result, or blocker. Use tests, issue tracking, and concise
+commit messages instead. Routine correctness runs do not require
 `justrust export`, committed logs, run IDs, or a second documentation-only commit.
 Preserve existing historical records. Retain selected historical measurements for
 performance claims and hard-to-reproduce failures as described under Measuring.
@@ -275,7 +278,7 @@ You may change the live system without asking: deploy the worker
 (`wrangler deploy` in `~/justrust-cloud`), upload fleet files to S3, trigger
 prebuild fleet runs, update hosted machines, run D1 migrations, cut releases.
 Do it, verify it worked (logs, a real build, the index), and note what you
-changed in the commit or FINDINGS. Still never destroy user data (accounts,
+changed in the commit message. Still never destroy user data (accounts,
 billing, private caches) and never weaken the security invariants in
 `~/justrust-cloud/AGENTS.md`.
 
@@ -321,8 +324,8 @@ billing, private caches) and never weaken the security invariants in
   (see `bench/synth/README.md`, Known gaps). If the broad gate is blocked,
   report it as blocked rather than substituting `desktop-test-edit`.
 - For a performance claim, retain the comparable before/after benchmark results
-  and the conditions needed to reproduce them. Record a concise finding when it
-  explains a regression or a decision. Selected run summaries may be exported
+  and the conditions needed to reproduce them. Explain the conclusion in the
+  commit message, not a separate findings narrative. Selected run summaries may be exported
   with `justrust export --out <scratch-directory>` and copied into `data/runs/`
   when the claim needs them; do not commit the entire rolling run archive.
 - For a hard-to-reproduce correctness or infrastructure failure, retain only the
