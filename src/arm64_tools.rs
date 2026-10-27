@@ -79,7 +79,77 @@ pub fn validate(args: &[String], target_flags: &str, global_flags: &str) -> Resu
 /// compiler. This helper never changes the requested Rust target.
 pub fn configure(cmd: &mut Command, args: &[String]) -> Result<()> {
     configure_flags(cmd, args)?;
+    ensure_rust_src(cmd)?;
     apply(cmd, &ensure()?)
+}
+
+/// Provision on the executing host, not the submitting runner. Resolve rustc
+/// with the build's environment so rustup overrides and owned compilers retain
+/// their exact selection. Never install stock sources into an owned sysroot.
+fn ensure_rust_src(build: &Command) -> Result<()> {
+    let rustc = environment(build, "RUSTC").unwrap_or_else(|| "rustc".into());
+    let mut probe = Command::new(rustc);
+    probe.args(["--print", "sysroot"]);
+    probe.envs(build.get_envs().filter_map(|(k, v)| v.map(|v| (k, v))));
+    for (key, value) in build.get_envs() {
+        if value.is_none() {
+            probe.env_remove(key);
+        }
+    }
+    if let Some(cwd) = build.get_current_dir() {
+        probe.current_dir(cwd);
+    }
+    let output = probe
+        .output()
+        .context("resolve ARM64 build-std compiler sysroot")?;
+    if !output.status.success() {
+        bail!(
+            "resolving ARM64 compiler sysroot failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let root = PathBuf::from(String::from_utf8(output.stdout)?.trim());
+    let lock = root.join("lib/rustlib/src/rust/library/Cargo.lock");
+    if lock.is_file() {
+        return Ok(());
+    }
+    let toolchain = rustup_source_toolchain(&root).with_context(|| {
+        format!(
+            "selected compiler is missing {}; provision matching rust-src in its owned toolchain",
+            lock.display()
+        )
+    })?;
+    let mut install = Command::new("rustup");
+    install
+        .args(["component", "add", "rust-src", "--toolchain"])
+        .arg(toolchain);
+    install.envs(build.get_envs().filter_map(|(k, v)| v.map(|v| (k, v))));
+    let status = install
+        .status()
+        .context("install matching hosted rust-src")?;
+    if !status.success() || !lock.is_file() {
+        bail!(
+            "matching rust-src provisioning failed: {} is missing (rustup {status})",
+            lock.display()
+        );
+    }
+    Ok(())
+}
+
+fn rustup_source_toolchain(root: &Path) -> Option<&std::ffi::OsStr> {
+    let parent = root.parent()?;
+    if parent.file_name()? != "toolchains" {
+        return None;
+    }
+    // Only distribution toolchains support rust-src components. Linked custom
+    // toolchains and justrust's private formats must not borrow stock sources.
+    let name = root.file_name()?;
+    let text = name.to_str()?;
+    (text.starts_with("nightly-")
+        || text.starts_with("beta-")
+        || text.starts_with("stable-")
+        || text.as_bytes().first()?.is_ascii_digit())
+    .then_some(name)
 }
 
 fn configure_flags(cmd: &mut Command, args: &[String]) -> Result<()> {
@@ -466,6 +536,74 @@ pub fn apply(cmd: &mut Command, root: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sources_only_use_the_selected_distribution_toolchain() {
+        assert_eq!(
+            rustup_source_toolchain(Path::new(
+                "/account/.rustup/toolchains/nightly-2026-10-08-x86_64-unknown-linux-gnu"
+            )),
+            Some(std::ffi::OsStr::new(
+                "nightly-2026-10-08-x86_64-unknown-linux-gnu"
+            ))
+        );
+        for root in [
+            "/owned/jr-nightly",
+            "/owned/toolchains/jr-custom",
+            "/owned/toolchains/custom",
+        ] {
+            assert!(rustup_source_toolchain(Path::new(root)).is_none());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn missing_host_sources_are_installed_and_verified_once() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("jr-rust-src-{}", std::process::id()));
+        let bin = dir.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let root = dir.join("toolchains/nightly-2026-10-08-x86_64-unknown-linux-gnu");
+        let lock = root.join("lib/rustlib/src/rust/library/Cargo.lock");
+        let log = dir.join("install.log");
+        for (name, script) in [
+            ("rustc", "#!/bin/sh\nprintf '%s\\n' \"$TEST_SYSROOT\"\n"),
+            (
+                "rustup",
+                "#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$TEST_LOG\"\nif [ \"$TEST_FAIL\" = 1 ]; then exit 1; fi\nmkdir -p \"$TEST_SYSROOT/lib/rustlib/src/rust/library\"\ntouch \"$TEST_SYSROOT/lib/rustlib/src/rust/library/Cargo.lock\"\n",
+            ),
+        ] {
+            let path = bin.join(name);
+            std::fs::write(&path, script).unwrap();
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let mut build = Command::new("cargo");
+        build
+            .env("RUSTC", bin.join("rustc"))
+            .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+            .env("TEST_SYSROOT", &root)
+            .env("TEST_LOG", &log);
+        ensure_rust_src(&build).unwrap();
+        assert!(lock.is_file());
+        let installed = std::fs::read_to_string(&log).unwrap();
+        assert_eq!(
+            installed,
+            "component\nadd\nrust-src\n--toolchain\nnightly-2026-10-08-x86_64-unknown-linux-gnu\n"
+        );
+        ensure_rust_src(&build).unwrap();
+        assert_eq!(std::fs::read_to_string(&log).unwrap(), installed);
+        std::fs::remove_file(lock).unwrap();
+        build.env("TEST_FAIL", "1");
+        assert!(ensure_rust_src(&build).is_err());
+        build.env("TEST_SYSROOT", dir.join("owned/jr-nightly"));
+        assert!(
+            ensure_rust_src(&build)
+                .unwrap_err()
+                .to_string()
+                .contains("owned toolchain")
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
     fn args(values: &[&str]) -> Vec<String> {
         values.iter().map(|s| (*s).into()).collect()
     }
