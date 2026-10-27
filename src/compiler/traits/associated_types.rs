@@ -1292,7 +1292,24 @@ impl ValidatedTraitWorld {
                     self.validate_universal_projection(projection, context.proof.env())?;
                     return Ok(ty.clone());
                 }
-                let evidence = self.normalize_projection_in(projection, context, stack)?;
+                let evidence = match self.normalize_projection_in(projection, context, stack) {
+                    Ok(evidence) => evidence,
+                    // A concrete self type with open trait arguments (`<Unit as
+                    // Per<T>>::Output` under `where Unit: Per<T>`) stays rigid in
+                    // the universal body when an exact declared membership exists.
+                    Err(error)
+                        if context.proof.phase == FactsPhase::Universal
+                            && error.kind() == FactsErrorKind::Unproved
+                            && !self
+                                .goal_is_closed(&projection.trait_ref, context.proof.env())?
+                            && self
+                                .validate_universal_projection(projection, context.proof.env())
+                                .is_ok() =>
+                    {
+                        return Ok(ty.clone());
+                    }
+                    Err(error) => return Err(error),
+                };
                 let normal = evidence.normal.clone();
                 push(&self.budget, dependencies, evidence)?;
                 Ok(normal)
