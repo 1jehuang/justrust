@@ -1988,6 +1988,9 @@ PlanCtx/interner/source-context debt and wide adapter activation remain held.
       canonical, duplicate names and bounded-capture exhaustion reject. Frozen
       CHECK/BUILD roots consume the graph's runtime receipt and revalidate it
       before publishing success, rejecting absent/forged runtime evidence.
+      Legacy discovery observes both Cargo config spellings through invocation
+      ancestors and CARGO_HOME, including negative probes; present unsupported
+      configuration disables input identity (`--lib project::inputs`).
       These identities do not seal arbitrary in-memory code or process state.
       Caller-owned `SourceSnapshot` namespaces can now supply both source reads and
       native manifest/path-dependency discovery through `Driver::from_snapshot`.

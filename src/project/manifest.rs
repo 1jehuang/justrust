@@ -431,6 +431,7 @@ fn load_with_inputs(
         path.to_owned()
     };
     let mut workspace = load_observed(&manifest, &mut inputs)?;
+    inputs.observe_live_configuration();
     workspace.inputs = inputs.finish();
     if workspace.inputs.source_snapshot().is_some() && workspace.inputs.identity().is_none() {
         return err("unsupported: immutable project discovery did not capture all inputs");

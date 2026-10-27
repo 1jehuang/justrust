@@ -447,6 +447,50 @@ impl Recorder {
     pub(crate) fn uncontrolled(&mut self) {
         self.uncontrolled = true;
     }
+    /// Legacy discovery does not interpret Cargo configuration. Observe both
+    /// spellings, including absence, but never authorize reuse when one exists.
+    pub(crate) fn observe_live_configuration(&mut self) {
+        if self.is_frozen() {
+            return;
+        }
+        let Some(cwd) = self.cwd.clone() else {
+            self.complete = false;
+            return;
+        };
+        let home = self.env("CARGO_HOME").map(PathBuf::from).or_else(|| {
+            self.env("HOME")
+                .map(|home| PathBuf::from(home).join(".cargo"))
+        });
+        let mut directories = std::collections::BTreeSet::new();
+        for ancestor in cwd.ancestors() {
+            if directories.len() >= MAX_ENTRIES / 2 {
+                self.complete = false;
+                return;
+            }
+            directories.insert(ancestor.join(".cargo"));
+        }
+        if let Some(home) = home {
+            directories.insert(if home.is_absolute() {
+                home
+            } else {
+                cwd.join(home)
+            });
+        } else {
+            // Without a known Cargo home its configuration cannot be excluded.
+            self.complete = false;
+        }
+        for directory in directories {
+            for name in ["config", "config.toml"] {
+                let path = directory.join(name);
+                if self.canonicalize(&path).is_ok() {
+                    self.uncontrolled();
+                    if self.is_file(&path) {
+                        let _ = self.read_to_string(&path);
+                    }
+                }
+            }
+        }
+    }
     pub(crate) fn finish(self) -> Arc<DiscoveryInputs> {
         Arc::new(DiscoveryInputs {
             snapshot: self.snapshot,
@@ -538,6 +582,31 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn live_configuration_appearance_invalidates_and_disables_identity() {
+        let f = Fixture::new();
+        f.package();
+        let capture = || {
+            let mut inputs = Recorder::new();
+            inputs.cwd = Some(f.0.clone());
+            inputs.observe_live_configuration();
+            inputs.finish()
+        };
+        let absent = capture();
+        assert!(absent.matches_current());
+        for name in ["config", "config.toml"] {
+            f.write(&format!(".cargo/{name}"), "[build]\njobs=2\n");
+            assert!(!absent.matches_current());
+            let present = capture();
+            assert!(present.identity().is_none());
+            assert!(!present.matches_current());
+            std::fs::remove_file(f.0.join(".cargo").join(name)).unwrap();
+            assert!(absent.matches_current());
+        }
+        std::fs::create_dir(f.0.join(".cargo/config.toml")).unwrap();
+        assert!(capture().identity().is_none());
     }
 
     #[test]
@@ -644,6 +713,56 @@ mod tests {
         assert!(absent.matches_current());
         std::fs::create_dir(f.0.join("absent")).unwrap();
         assert!(!absent.matches_current());
+    }
+
+    #[test]
+    fn configuration_child_probe() {
+        let Some(expected) = std::env::var_os("JR_CONFIG_CHILD") else {
+            return;
+        };
+        let workspace = manifest::load(Path::new("Cargo.toml")).unwrap();
+        assert_eq!(
+            workspace.inputs.identity().is_some(),
+            expected == "eligible"
+        );
+        assert_eq!(workspace.inputs.matches_current(), expected == "eligible");
+    }
+
+    #[test]
+    fn production_configuration_observes_ancestors_and_cargo_home() {
+        let f = Fixture::new();
+        f.write("app/Cargo.toml", MANIFEST);
+        f.write("app/src/main.rs", "fn main() {}\n");
+        std::fs::create_dir(f.0.join("home")).unwrap();
+        let check = |eligible| {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "project::inputs::tests::configuration_child_probe",
+                    "--nocapture",
+                ])
+                .current_dir(f.0.join("app"))
+                .env("CARGO_HOME", "../home")
+                .env(
+                    "JR_CONFIG_CHILD",
+                    if eligible { "eligible" } else { "ineligible" },
+                )
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{output:?}");
+        };
+        check(true);
+        for path in [
+            ".cargo/config",
+            ".cargo/config.toml",
+            "home/config",
+            "home/config.toml",
+        ] {
+            f.write(path, "[build]\njobs=2\n");
+            check(false);
+            std::fs::remove_file(f.0.join(path)).unwrap();
+            check(true);
+        }
     }
 
     #[test]
