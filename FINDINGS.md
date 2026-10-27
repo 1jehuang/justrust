@@ -8542,3 +8542,35 @@ was attempted because it is outside the blocker change. Warm follow-up run
 in 2.9s client wall time, mostly its 2.14s sync. These are observations, not a
 controlled speedup comparison. Investigate the hosted reflink probe/slot fallback
 to avoid shared-target lock serialization before restructuring Jcode crates.
+
+## Hosted ARM build-std sources are host-local (2026-10-27 UTC)
+
+Jcode native-handoff GitHub Actions run `40429328779` failed because the
+submitting runner installed nightly-2026-10-08 with rust-src, but the hosted
+machine auto-installed only rustup's minimal compiler profile. Cargo rejected
+the missing `lib/rustlib/src/rust/library/Cargo.lock` before compiling any unit.
+Installing rust-src on the runner does not provision the executing host.
+
+Fix `a7e7d02cb` provisions matching rust-src while configuring native GNU ARM64
+build-std on the executing machine. It resolves the selected compiler's sysroot,
+uses its exact rustup distribution toolchain name, skips an already complete
+installation, and verifies Cargo.lock after installation. Owned/custom compiler
+sysroots without sources fail with an explicit diagnostic instead of borrowing
+stock sources. Regression fixtures cover exact selection, idempotence, install
+failure and rejection of owned/custom source provisioning.
+
+Hosted validation passed: check `20261026-183824528-1929852` (7.4s build,
+56.5s client), full test `20261026-183926987-1936533` (821 passed, 6 ignored,
+23.7s build/test, 25.2s client), clippy with `-D warnings`
+`20261026-183952204-1936531` (7.5s build, 9.0s client). Reinstalled locally.
+These are correctness observations, not a controlled speedup claim.
+
+Jcode commit `30b451186` synchronizes the workflow checkout and provenance pin
+to the fix, with all 25 native-handoff Python tests passing. Its real dispatch
+`40434055378`, `lane=linux-arm64`, `sign_macos=false`, succeeded. Hosted logs
+at 01:43:41 UTC explicitly show `downloading component rust-src`; the release
+build finished in 159.5s (178.8s hosted client wall), returned one 52.5 MB
+artifact, and provenance sealing passed. Same-run artifact `12703870249` was
+downloaded on `ubuntu-24.04-arm`; native architecture/provenance checks and
+binary smoke passed at 01:46:49 UTC. The entire run succeeded and sign-macos
+was skipped. No release publication, signing change or secret change occurred.
