@@ -4104,6 +4104,12 @@ pub struct ResolutionNamespace {
     traits: Vec<Vec<usize>>,
     /// Constant declarations per module ordinal, in source order.
     constants: Vec<Vec<usize>>,
+    /// Declared paths in crate source order.
+    paths: Vec<AstPath>,
+    /// Positions in `paths` validated by each module ordinal.
+    declared: Vec<Vec<usize>>,
+    /// First alias, entry or inline-constant error, ranked after path errors.
+    prepare_error: Option<String>,
     /// First trait-import or derived-header error, ranked after constants.
     header_error: Option<String>,
     /// First anonymous-adapter body error, ranked after nominal errors.
@@ -4180,6 +4186,8 @@ pub struct ResolvedModuleItems {
     /// First failing trait of this module. Ranked before every other error.
     trait_error: Option<(usize, String)>,
     traits: Vec<(usize, TraitDecl, TraitResolution)>,
+    /// First failing declared path, by crate source order. Ranked first.
+    path_error: Option<(usize, String)>,
     /// First failing constant. Ranked before every other error.
     constant_error: Option<(usize, String)>,
     constants: Vec<(usize, ConstDecl)>,
@@ -4219,6 +4227,18 @@ pub fn resolve_module_items(
     let parsed = namespace.parsed.as_ref();
     let indices = resolution_module_indices(namespace, ordinal)?;
     let mut resolver = namespace.state.resolver(parsed);
+    let mut path_error = None;
+    for &order in namespace
+        .declared
+        .get(ordinal)
+        .ok_or("foreign resolution module ordinal")?
+    {
+        let path = namespace.paths.get(order).ok_or("foreign declared path")?;
+        if let Err(diagnostic) = validate_declared_path(&mut resolver, path) {
+            path_error = Some((order, diagnostic));
+            break;
+        }
+    }
     let constant_sources = namespace
         .constants
         .get(ordinal)
@@ -4326,6 +4346,7 @@ pub fn resolve_module_items(
         nominals,
         trait_error,
         traits,
+        path_error,
         constant_error,
         constants,
         ordinal,
@@ -4774,41 +4795,16 @@ pub fn prepare_resolution_owned(parsed: Arc<ParsedProgram>) -> Result<Resolution
         }
     }
     let paths = resolver.ordered_paths()?;
-    for path in &paths {
+    // Declared paths and import bindings validate in their module facts,
+    // ranked by source order ahead of every crate-wide pass error below.
+    let mut path_sources = Vec::with_capacity(paths.len());
+    for (order, path) in paths.iter().enumerate() {
         let key = resolver.key(path)?;
         let items = parsed.items.get(&key).ok_or("missing source item bucket")?;
-        for (index, item) in items.iter().enumerate() {
-            if matches!(item.kind, ItemKind::Import(_, _)) {
-                let type_target = resolver.import(path, index, true)?;
-                let value_target = resolver.import(path, index, false)?;
-                if type_target.is_none() && value_target.is_none() {
-                    return Err(format!(
-                        "unresolved or cyclic import {}",
-                        resolver.display(path)?
-                    ));
-                }
-                let mut permits = false;
-                for target in [type_target.as_ref(), value_target.as_ref()]
-                    .into_iter()
-                    .flatten()
-                {
-                    permits |= target
-                        .visibility
-                        .allows_reexport(&parsed.program.modules, &item.visibility)
-                        .map_err(module_diagnostic)?;
-                }
-                if !permits {
-                    return Err(format!(
-                        "private item or import cannot be publicly reexported as {}",
-                        resolver.display(path)?
-                    ));
-                }
-            }
-        }
-        let requester = items.first().ok_or("empty source item bucket")?.module;
-        resolver.item(path, requester, true, false)?;
-        resolver.item(path, requester, false, false)?;
+        let module = items.first().ok_or("empty source item bucket")?.module;
+        path_sources.push((module, order));
     }
+    let prepare_error = (|| -> Result<(), String> {
     resolver.resolve_aliases()?;
     let root = parsed
         .program
@@ -4842,15 +4838,20 @@ pub fn prepare_resolution_owned(parsed: Arc<ParsedProgram>) -> Result<Resolution
             }
         }
     }
+        // Inlined constants have no CONST_VALUE fact; their uses carry the
+        // value. Each is still resolved once so unused bad items reject.
+        for declaration in &parsed.program.constants {
+            if const_inline::needs_inline(declaration) {
+                let mut probe = Expr::Var(declaration.name.clone());
+                resolver.inline_constant(&mut probe, &declaration.name, &mut vec![])?;
+            }
+        }
+        Ok(())
+    })()
+    .err();
     let mut program = parsed.program.clone();
     // Inlined constants have no CONST_VALUE fact; their uses carry the value.
     // Each is still resolved and qualified once so unused bad items reject.
-    for declaration in &parsed.program.constants {
-        if const_inline::needs_inline(declaration) {
-            let mut probe = Expr::Var(declaration.name.clone());
-            resolver.inline_constant(&mut probe, &declaration.name, &mut vec![])?;
-        }
-    }
     program
         .constants
         .retain(|declaration| !const_inline::needs_inline(declaration));
@@ -4918,13 +4919,15 @@ pub fn prepare_resolution_owned(parsed: Arc<ParsedProgram>) -> Result<Resolution
     let mut nominals: Vec<Vec<NominalSource>> = Vec::new();
     let mut traits: Vec<Vec<usize>> = Vec::new();
     let mut constants: Vec<Vec<usize>> = Vec::new();
-    let mut ordinal_of = |module: ModuleId,
-                          modules: &mut Vec<ModuleId>,
-                          functions: &mut Vec<Vec<usize>>,
-                          impls: &mut Vec<Vec<usize>>,
-                          nominals: &mut Vec<Vec<NominalSource>>,
-                          traits: &mut Vec<Vec<usize>>,
-                          constants: &mut Vec<Vec<usize>>| {
+    let mut declared: Vec<Vec<usize>> = Vec::new();
+    let ordinal_of = |module: ModuleId,
+                      modules: &mut Vec<ModuleId>,
+                      functions: &mut Vec<Vec<usize>>,
+                      impls: &mut Vec<Vec<usize>>,
+                      nominals: &mut Vec<Vec<NominalSource>>,
+                      traits: &mut Vec<Vec<usize>>,
+                      constants: &mut Vec<Vec<usize>>,
+                      declared: &mut Vec<Vec<usize>>| {
         match modules.iter().position(|candidate| *candidate == module) {
             Some(ordinal) => ordinal,
             None => {
@@ -4934,6 +4937,7 @@ pub fn prepare_resolution_owned(parsed: Arc<ParsedProgram>) -> Result<Resolution
                 nominals.push(Vec::new());
                 traits.push(Vec::new());
                 constants.push(Vec::new());
+                declared.push(Vec::new());
                 modules.len() - 1
             }
         }
@@ -4959,6 +4963,7 @@ pub fn prepare_resolution_owned(parsed: Arc<ParsedProgram>) -> Result<Resolution
                 &mut nominals,
                 &mut traits,
                 &mut constants,
+                &mut declared,
             );
             functions[ordinal].push(index);
         }
@@ -4972,6 +4977,7 @@ pub fn prepare_resolution_owned(parsed: Arc<ParsedProgram>) -> Result<Resolution
             &mut nominals,
             &mut traits,
             &mut constants,
+            &mut declared,
         );
         constants[ordinal].push(index);
     }
@@ -4984,6 +4990,7 @@ pub fn prepare_resolution_owned(parsed: Arc<ParsedProgram>) -> Result<Resolution
             &mut nominals,
             &mut traits,
             &mut constants,
+            &mut declared,
         );
         traits[ordinal].push(index);
     }
@@ -4996,6 +5003,7 @@ pub fn prepare_resolution_owned(parsed: Arc<ParsedProgram>) -> Result<Resolution
             &mut nominals,
             &mut traits,
             &mut constants,
+            &mut declared,
         );
         nominals[ordinal].push(NominalSource::Enum(index));
     }
@@ -5008,6 +5016,7 @@ pub fn prepare_resolution_owned(parsed: Arc<ParsedProgram>) -> Result<Resolution
             &mut nominals,
             &mut traits,
             &mut constants,
+            &mut declared,
         );
         nominals[ordinal].push(NominalSource::Struct(index));
     }
@@ -5020,11 +5029,28 @@ pub fn prepare_resolution_owned(parsed: Arc<ParsedProgram>) -> Result<Resolution
             &mut nominals,
             &mut traits,
             &mut constants,
+            &mut declared,
         );
         impls[ordinal].push(index);
     }
+    for (module, order) in path_sources {
+        let ordinal = ordinal_of(
+            module,
+            &mut modules,
+            &mut functions,
+            &mut impls,
+            &mut nominals,
+            &mut traits,
+            &mut constants,
+            &mut declared,
+        );
+        declared[ordinal].push(order);
+    }
     let state = ResolutionState::capture(&resolver);
     Ok(ResolutionNamespace {
+        paths,
+        declared,
+        prepare_error,
         parsed: source,
         token: Arc::new(ResolutionToken {}),
         program,
@@ -5039,6 +5065,48 @@ pub fn prepare_resolution_owned(parsed: Arc<ParsedProgram>) -> Result<Resolution
         adapter_error,
         derived_debug_source,
     })
+}
+
+/// Validate one declared path bucket: every import binding resolves and may be
+/// reexported, and the item resolves in both namespaces.
+fn validate_declared_path(resolver: &mut Resolver<'_>, path: &AstPath) -> Result<(), String> {
+    let key = resolver.key(path)?;
+    let items = resolver
+        .items
+        .get(&key)
+        .ok_or("missing source item bucket")?;
+    for (index, item) in items.iter().enumerate() {
+        if matches!(item.kind, ItemKind::Import(_, _)) {
+            let type_target = resolver.import(path, index, true)?;
+            let value_target = resolver.import(path, index, false)?;
+            if type_target.is_none() && value_target.is_none() {
+                return Err(format!(
+                    "unresolved or cyclic import {}",
+                    resolver.display(path)?
+                ));
+            }
+            let mut permits = false;
+            for target in [type_target.as_ref(), value_target.as_ref()]
+                .into_iter()
+                .flatten()
+            {
+                permits |= target
+                    .visibility
+                    .allows_reexport(&resolver.program.modules, &item.visibility)
+                    .map_err(module_diagnostic)?;
+            }
+            if !permits {
+                return Err(format!(
+                    "private item or import cannot be publicly reexported as {}",
+                    resolver.display(path)?
+                ));
+            }
+        }
+    }
+    let requester = items.first().ok_or("empty source item bucket")?.module;
+    resolver.item(path, requester, true, false)?;
+    resolver.item(path, requester, false, false)?;
+    Ok(())
 }
 
 pub fn finish_resolution(
@@ -5168,6 +5236,23 @@ fn finish_resolution_with<T>(
         {
             return Err("foreign resolved module inventory".into());
         }
+    }
+    for item in &items {
+        if let Some((order, _)) = &item.path_error
+            && !namespace.declared[item.ordinal].contains(order)
+        {
+            return Err("foreign resolved module error inventory".into());
+        }
+    }
+    if let Some((_, diagnostic)) = items
+        .iter()
+        .filter_map(|item| item.path_error.as_ref())
+        .min_by_key(|(order, _)| *order)
+    {
+        return Err(diagnostic.clone());
+    }
+    if let Some(diagnostic) = &namespace.prepare_error {
+        return Err(diagnostic.clone());
     }
     if let Some((_, diagnostic)) = items
         .iter()
@@ -5412,7 +5497,8 @@ mod item_resolution_tests {
     #[test]
     fn namespace_prerequisite_still_rejects_unused_alias_cycles() {
         let parsed = parse_unresolved("type A=B;type B=A;fn main(){}").unwrap();
-        assert!(prepare_resolution(&parsed).unwrap_err().contains("E0391"));
+        // Deferred to finish so per-module path errors rank first.
+        assert!(resolve(&parsed).unwrap_err().contains("E0391"));
     }
 
     #[test]
