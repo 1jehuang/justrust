@@ -2259,6 +2259,13 @@ ResourceLimit. Root cause: `resolve_cells` (borrow.rs, DynamicIndex arm) project
 is mapped to `Exhausted`. Fix belongs in normalizing family-cover locals for the
 instance, not in a fallback (falling back to original locals fails identically).
 
+`HashMap<&str, _>`/`BTreeMap<&str, _>` `insert` from a caller fails the callee
+`insert` body plan: borrow.rs call-carrier binding (rigid relation check) sees
+`Fixed(RegionParamId(1)) -> Fixed(RegionParamId(0))` and
+`Fixed(1) -> Family(K)` entailed by the occurrence but not by the rigid
+declaration. The implied `K: '&mut self` well-formedness bound of
+`&'0 mut HashMap<K, V>` is missing from the rigid relation.
+
 Closed nominal field realization (`NOMINAL-PROJECTIONS.md`): associated factory
 receiver hints now reuse full canonical Call signature realization before result
 extraction, preserving strict method selection and original/mapped source receipts.
