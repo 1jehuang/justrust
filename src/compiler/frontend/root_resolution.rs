@@ -4104,6 +4104,10 @@ pub struct ResolutionNamespace {
     traits: Vec<Vec<usize>>,
     /// Constant declarations per module ordinal, in source order.
     constants: Vec<Vec<usize>>,
+    /// Empty use-group prefixes per module ordinal, in parse order.
+    prefixes: Vec<Vec<usize>>,
+    /// Glob imports per module ordinal, in parse order.
+    globs: Vec<Vec<usize>>,
     /// Declared paths in crate source order.
     paths: Vec<AstPath>,
     /// Positions in `paths` validated by each module ordinal.
@@ -4186,7 +4190,11 @@ pub struct ResolvedModuleItems {
     /// First failing trait of this module. Ranked before every other error.
     trait_error: Option<(usize, String)>,
     traits: Vec<(usize, TraitDecl, TraitResolution)>,
-    /// First failing declared path, by crate source order. Ranked first.
+    /// First failing empty use-group prefix. Ranked first.
+    prefix_error: Option<(usize, String)>,
+    /// First failing glob import. Ranked after prefixes.
+    glob_error: Option<(usize, String)>,
+    /// First failing declared path, by crate source order. Ranked after globs.
     path_error: Option<(usize, String)>,
     /// First failing constant. Ranked before every other error.
     constant_error: Option<(usize, String)>,
@@ -4227,6 +4235,36 @@ pub fn resolve_module_items(
     let parsed = namespace.parsed.as_ref();
     let indices = resolution_module_indices(namespace, ordinal)?;
     let mut resolver = namespace.state.resolver(parsed);
+    let mut prefix_error = None;
+    for &index in namespace
+        .prefixes
+        .get(ordinal)
+        .ok_or("foreign resolution module ordinal")?
+    {
+        let (module, path) = parsed
+            .empty_use_prefixes
+            .get(index)
+            .ok_or("foreign use prefix")?;
+        if let Err(diagnostic) = validate_empty_use_prefix(&mut resolver, *module, path) {
+            prefix_error = Some((index, diagnostic));
+            break;
+        }
+    }
+    let mut glob_error = None;
+    for &index in namespace
+        .globs
+        .get(ordinal)
+        .ok_or("foreign resolution module ordinal")?
+    {
+        let glob = parsed
+            .glob_imports
+            .get(index)
+            .ok_or("foreign glob import")?;
+        if let Err(diagnostic) = validate_glob_import(&mut resolver, glob) {
+            glob_error = Some((index, diagnostic));
+            break;
+        }
+    }
     let mut path_error = None;
     for &order in namespace
         .declared
@@ -4346,6 +4384,8 @@ pub fn resolve_module_items(
         nominals,
         trait_error,
         traits,
+        prefix_error,
+        glob_error,
         path_error,
         constant_error,
         constants,
@@ -4766,34 +4806,6 @@ pub fn prepare_resolution_owned(parsed: Arc<ParsedProgram>) -> Result<Resolution
     {
         resolver.nominal_arity.insert(resolver.key(path)?, arity);
     }
-    for (module, path) in &parsed.empty_use_prefixes {
-        let target = resolver
-            .path(path, *module, true, false)?
-            .ok_or_else(|| "unresolved empty use group prefix".to_owned())?;
-        if !matches!(
-            target.kind,
-            ResolvedKind::Module | ResolvedKind::Enum | ResolvedKind::Trait
-        ) {
-            return Err("resolved declaration is not a module in empty use group".into());
-        }
-    }
-    // A glob is a declaration even when none of its members are used. Resolve
-    // its owner eagerly so unused self imports cannot disappear behind lazy
-    // candidate lookup. Compare canonical module paths, not written aliases.
-    for glob in &parsed.glob_imports {
-        let Some(target) = resolver.path(&glob.target, glob.module, true, true)? else {
-            return Err(format!(
-                "unresolved glob import {}",
-                resolver.display(&glob.target)?
-            ));
-        };
-        if target.kind == ResolvedKind::Module
-            && let ResolvedPath::Source(source) = &target.path
-            && resolver.key(source)? == resolver.key(&resolver.module_path(glob.module)?)?
-        {
-            return Err("cannot glob-import a module into itself".into());
-        }
-    }
     let paths = resolver.ordered_paths()?;
     // Declared paths and import bindings validate in their module facts,
     // ranked by source order ahead of every crate-wide pass error below.
@@ -4920,6 +4932,8 @@ pub fn prepare_resolution_owned(parsed: Arc<ParsedProgram>) -> Result<Resolution
     let mut traits: Vec<Vec<usize>> = Vec::new();
     let mut constants: Vec<Vec<usize>> = Vec::new();
     let mut declared: Vec<Vec<usize>> = Vec::new();
+    let mut prefixes: Vec<Vec<usize>> = Vec::new();
+    let mut globs: Vec<Vec<usize>> = Vec::new();
     let ordinal_of = |module: ModuleId,
                       modules: &mut Vec<ModuleId>,
                       functions: &mut Vec<Vec<usize>>,
@@ -5033,6 +5047,34 @@ pub fn prepare_resolution_owned(parsed: Arc<ParsedProgram>) -> Result<Resolution
         );
         impls[ordinal].push(index);
     }
+    for (index, (module, _)) in parsed.empty_use_prefixes.iter().enumerate() {
+        let ordinal = ordinal_of(
+            *module,
+            &mut modules,
+            &mut functions,
+            &mut impls,
+            &mut nominals,
+            &mut traits,
+            &mut constants,
+            &mut declared,
+        );
+        prefixes.resize_with(modules.len(), Vec::new);
+        prefixes[ordinal].push(index);
+    }
+    for (index, glob) in parsed.glob_imports.iter().enumerate() {
+        let ordinal = ordinal_of(
+            glob.module,
+            &mut modules,
+            &mut functions,
+            &mut impls,
+            &mut nominals,
+            &mut traits,
+            &mut constants,
+            &mut declared,
+        );
+        globs.resize_with(modules.len(), Vec::new);
+        globs[ordinal].push(index);
+    }
     for (module, order) in path_sources {
         let ordinal = ordinal_of(
             module,
@@ -5046,8 +5088,12 @@ pub fn prepare_resolution_owned(parsed: Arc<ParsedProgram>) -> Result<Resolution
         );
         declared[ordinal].push(order);
     }
+    prefixes.resize_with(modules.len(), Vec::new);
+    globs.resize_with(modules.len(), Vec::new);
     let state = ResolutionState::capture(&resolver);
     Ok(ResolutionNamespace {
+        prefixes,
+        globs,
         paths,
         declared,
         prepare_error,
@@ -5065,6 +5111,43 @@ pub fn prepare_resolution_owned(parsed: Arc<ParsedProgram>) -> Result<Resolution
         adapter_error,
         derived_debug_source,
     })
+}
+
+/// An empty `use p::{}` still names a module, enum or trait.
+fn validate_empty_use_prefix(
+    resolver: &mut Resolver<'_>,
+    module: ModuleId,
+    path: &AstPath,
+) -> Result<(), String> {
+    let target = resolver
+        .path(path, module, true, false)?
+        .ok_or_else(|| "unresolved empty use group prefix".to_owned())?;
+    if !matches!(
+        target.kind,
+        ResolvedKind::Module | ResolvedKind::Enum | ResolvedKind::Trait
+    ) {
+        return Err("resolved declaration is not a module in empty use group".into());
+    }
+    Ok(())
+}
+
+/// A glob is a declaration even when none of its members are used. Resolve
+/// its owner eagerly so unused self imports cannot disappear behind lazy
+/// candidate lookup. Compare canonical module paths, not written aliases.
+fn validate_glob_import(resolver: &mut Resolver<'_>, glob: &GlobImport) -> Result<(), String> {
+    let Some(target) = resolver.path(&glob.target, glob.module, true, true)? else {
+        return Err(format!(
+            "unresolved glob import {}",
+            resolver.display(&glob.target)?
+        ));
+    };
+    if target.kind == ResolvedKind::Module
+        && let ResolvedPath::Source(source) = &target.path
+        && resolver.key(source)? == resolver.key(&resolver.module_path(glob.module)?)?
+    {
+        return Err("cannot glob-import a module into itself".into());
+    }
+    Ok(())
 }
 
 /// Validate one declared path bucket: every import binding resolves and may be
@@ -5243,6 +5326,33 @@ fn finish_resolution_with<T>(
         {
             return Err("foreign resolved module error inventory".into());
         }
+    }
+    for item in &items {
+        if let Some((index, _)) = &item.prefix_error
+            && !namespace.prefixes[item.ordinal].contains(index)
+        {
+            return Err("foreign resolved module error inventory".into());
+        }
+        if let Some((index, _)) = &item.glob_error
+            && !namespace.globs[item.ordinal].contains(index)
+        {
+            return Err("foreign resolved module error inventory".into());
+        }
+    }
+    for error in [
+        items
+            .iter()
+            .filter_map(|item| item.prefix_error.as_ref())
+            .min_by_key(|(index, _)| *index),
+        items
+            .iter()
+            .filter_map(|item| item.glob_error.as_ref())
+            .min_by_key(|(index, _)| *index),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        return Err(error.1.clone());
     }
     if let Some((_, diagnostic)) = items
         .iter()
