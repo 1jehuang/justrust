@@ -293,12 +293,65 @@ fn open_mapping(mapping: &ExecutableMapping) -> io::Result<File> {
     let dev = metadata.dev();
     let major = ((dev >> 8) & 0xfff) | ((dev >> 32) & 0xfffff000);
     let minor = (dev & 0xff) | ((dev >> 12) & 0xffffff00);
-    if metadata.ino() != mapping.inode || major != mapping.major || minor != mapping.minor {
+    // btrfs subvolumes report a per-subvolume st_dev, while /proc/self/maps
+    // reports the superblock device recorded in mountinfo. Accept either, but
+    // always require the exact inode; contents are hashed independently.
+    let device_matches = (major == mapping.major && minor == mapping.minor)
+        || mount_device(&mapping.path)? == Some((mapping.major, mapping.minor));
+    if metadata.ino() != mapping.inode || !device_matches {
         return Err(invalid(
             "executable mapping path no longer identifies mapped file",
         ));
     }
     Ok(file)
+}
+
+/// Superblock device of the mount containing `path` (longest mount point
+/// prefix in /proc/self/mountinfo).
+#[cfg(target_os = "linux")]
+fn mount_device(path: &str) -> io::Result<Option<(u64, u64)>> {
+    let mut text = String::new();
+    File::open("/proc/self/mountinfo")?
+        .take(1024 * 1024 + 1)
+        .read_to_string(&mut text)?;
+    if text.len() > 1024 * 1024 {
+        return Err(invalid("mount list exceeds limit"));
+    }
+    Ok(mount_device_in(&text, path))
+}
+
+#[cfg(target_os = "linux")]
+fn mount_device_in(mountinfo: &str, path: &str) -> Option<(u64, u64)> {
+    let mut best: Option<(usize, (u64, u64))> = None;
+    for line in mountinfo.lines() {
+        let mut fields = line.split(' ');
+        let (Some(_), Some(_), Some(device), Some(_), Some(point)) = (
+            fields.next(),
+            fields.next(),
+            fields.next(),
+            fields.next(),
+            fields.next(),
+        ) else {
+            continue;
+        };
+        // Mount points with escaped characters never prefix-match plain paths.
+        let inside = point == "/"
+            || path == point
+            || path
+                .strip_prefix(point)
+                .is_some_and(|rest| rest.starts_with('/'));
+        if !inside || best.is_some_and(|(len, _)| len >= point.len()) {
+            continue;
+        }
+        let Some((major, minor)) = device.split_once(':') else {
+            continue;
+        };
+        let (Ok(major), Ok(minor)) = (major.parse(), minor.parse()) else {
+            continue;
+        };
+        best = Some((point.len(), (major, minor)));
+    }
+    best.map(|(_, device)| device)
 }
 
 #[cfg(target_os = "linux")]
@@ -367,6 +420,17 @@ fn capture(mut file: File, limit: u64) -> io::Result<CompilerImage> {
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
+    #[test]
+    fn mount_device_uses_longest_mount_prefix() {
+        let info = "31 2 0:28 /@ / rw shared:1 - btrfs /dev/nvme0n1p2 rw\n\
+                    56 31 0:29 /@home /home rw shared:141 - btrfs /dev/nvme0n1p2 rw\n\
+                    43 31 0:39 / /tmp rw shared:18 - tmpfs tmpfs rw\n";
+        assert_eq!(mount_device_in(info, "/usr/lib/libc.so.6"), Some((0, 28)));
+        assert_eq!(mount_device_in(info, "/home/u/jr-rust"), Some((0, 29)));
+        assert_eq!(mount_device_in(info, "/homework/x"), Some((0, 28)));
+        assert_eq!(mount_device_in(info, "/tmp"), Some((0, 39)));
+        assert_eq!(mount_device_in("garbage", "/x"), None);
+    }
     #[test]
     fn frozen_graph_rejects_forged_runtime_before_success_publication() {
         use crate::compiler::{

@@ -222,7 +222,7 @@ fn f(p:(bool,bool))->i32{match p{(true,_)=>1,(true,false)=>2,(false,_)=>3}}fn ma
             source: r#"fn f(p:(bool,bool))->i32{match p{(a,b) if a=>1,_=>2}}fn main(){if f((false,true))==2{println!("ok");}}"#,
             stdout: Some("ok\n"),
             stock_diagnostic: None,
-            outcome: Outcome::Unsupported,
+            outcome: Outcome::Runtime,
         },
         Case {
             name: "reference_boundary",
@@ -426,7 +426,7 @@ fn stock_all() {
         }
     }
     assert_eq!(counts, (24, 8));
-    assert_eq!(partition, (23, 6, 1, 2));
+    assert_eq!(partition, (24, 6, 0, 2));
 }
 #[test]
 fn stock_nested_pattern_usefulness_oracle_edition2024_actual_toolchain() {
@@ -565,7 +565,11 @@ fn checked_product_rows_preserve_real_domains_predicates_and_universal_ownership
     for case in cases()
         .into_iter()
         // `(ref a, _)` is an irrefutable borrowing aggregate, not a decision.
-        .filter(|c| c.outcome == Outcome::Runtime && c.name != "reference_boundary")
+        // `(a, b) if a` binds an irrefutable aggregate; only the guard decides.
+        .filter(|c| {
+            c.outcome == Outcome::Runtime
+                && !matches!(c.name, "reference_boundary" | "guard_boundary")
+        })
     {
         let prepared = source::prepare_text(
             "usefulness.rs",
@@ -690,7 +694,7 @@ fn closed_parser_lint_and_plain_let_boundaries_keep_distinct_stock_classificatio
             counts.2 += 1;
         }
     }
-    assert_eq!(counts, (1, 1, 1));
+    assert_eq!(counts, (1, 1, 0));
 }
 #[test]
 fn native_pattern_usefulness_workers1_8_check_build_no_compiler_fallback() {
@@ -781,8 +785,8 @@ fn native_pattern_usefulness_workers1_8_check_build_no_compiler_fallback() {
         }
     }
     assert_eq!(gates, 128);
-    assert_eq!(modes, (46, 46, 12, 12, 2, 2, 4, 4));
+    assert_eq!(modes, (48, 48, 12, 12, 0, 0, 4, 4));
     eprintln!(
-        "NATIVE PATTERN USEFULNESS:128 cells, modes{modes:?};{nonempty_images} nonempty-output main images;4 stock-valid Unsupported cells and8 stock-invalid/native-Unsupported cells are distinct boundaries, not ordinary-invalid parity or full Rust support"
+        "NATIVE PATTERN USEFULNESS:128 cells, modes{modes:?};{nonempty_images} nonempty-output main images;0 stock-valid Unsupported cells and8 stock-invalid/native-Unsupported cells are distinct boundaries, not ordinary-invalid parity or full Rust support"
     );
 }

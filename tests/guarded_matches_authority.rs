@@ -428,9 +428,9 @@ fn candidate_guard_edit_does_not_replace_retained_checked_body() {
 }
 
 #[test]
-fn ordinary_match_guards_remain_unsupported() {
+fn ordinary_match_guards_parse() {
     assert!(
         frontend::parse("fn f()->bool {match 1 {1 if true => true, _ => false}} fn main(){}")
-            .is_err()
+            .is_ok()
     );
 }

@@ -54,12 +54,12 @@ fn array_methods_cannot_fall_back_after_selection_or_deferral() {
 }
 
 #[test]
-fn temporary_destructor_receiver_remains_explicitly_unsupported() {
-    let source = "struct S{x:i32}impl Drop for S{fn drop(&mut self){}}fn make()->[S;1]{[S{x:1}]}fn main(){let n=make().len();}";
+fn temporary_destructor_receiver_is_admitted() {
+    // Stock rustc prints "drop 1" then "n=1" for the runtime variant of this
+    // source; the native CLI matches at workers 1 and 8.
+    let source = "struct S{x:i32}impl Drop for S{fn drop(&mut self){}}fn make()->[S;1]{[S{x:1}]}fn main(){let _n=make().len();}";
     for workers in [1, 8] {
-        match compiler::compile(source.into(), workers, true) {
-            Ok(_) => panic!("temporary destructor boundary unexpectedly admitted"),
-            Err(error) => assert!(error.0.to_lowercase().contains("unsupported"), "{error}"),
-        }
+        compiler::compile(source.into(), workers, true)
+            .unwrap_or_else(|error| panic!("temporary destructor receiver: {error}"));
     }
 }
