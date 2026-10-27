@@ -71,6 +71,15 @@ Cargo configuration recorded in commands and provenance, not a compiler flag.
 
 ## Failure-heavy rewrite test diagnostic
 
+`python3 bench/suite.py run test-retry-contention -n 3` measures contention
+between eight test binaries. Each has nine deterministic 400 ms failures and
+one passing control. It disables splitting, fixes the pool at eight jobs and
+libtest at 16 threads, and preserves all 72 failures and eight passes. This
+isolates exclusive confirmation serialization, not compiler performance.
+Compare the installed baseline and candidate with `JUSTRUST=/absolute/path`
+and `bench/suite.py compare`, keeping execution mode identical. Local execution
+is intentional for this controlled scheduler diagnostic.
+
 `python3 bench/suite.py run test-retry-storm -n 5` isolates confirmation
 overhead with a pinned, dependency-free fixture: 32 intentionally failing
 tests each sleep 200 ms, plus one passing test. The fixed libtest thread count

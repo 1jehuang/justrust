@@ -131,6 +131,10 @@ SNAPSHOTS = {
 # Loaded only when explicitly selected. The rewrite checkout is not required
 # for the normal benchmark suite or the session-weighted synthetic workload.
 OPTIONAL_SNAPSHOTS = {
+    "retry-contention": {
+        "repos": {"retry-contention": (ROOT, "73d295045677e43a370205458091b60487fe4e47")},
+        "cwd": "retry-contention",
+    },
     "public-cache-cap": {
         "repos": {"justrust": (ROOT, "96f0e239bc105f798b0e8001fb63f3ddad66a2e7")},
         "cwd": "justrust",
@@ -182,6 +186,21 @@ DESKTOP_TEST = ["test", "-p", "jcode-desktop-ui", "--lib", "--", "fps_counter"]
 DESKTOP_CHECK = ["check", "-p", "jcode-desktop-ui"]
 
 SCENARIOS = [
+    Scenario(
+        "test-retry-contention",
+        "retry-contention",
+        ["test", "--tests", "--no-fail-fast"],
+        None,
+        "eight expensive deterministic failure groups, preserving all 72 failures and eight passing controls",
+        expect_test_fail=True,
+        env={
+            "JUSTRUST_TEST_PARALLEL": "1",
+            "JUSTRUST_TEST_SPLIT": "0",
+            "JUSTRUST_TEST_JOBS": "8",
+            "RUST_TEST_THREADS": "16",
+        },
+        opt_in=True,
+    ),
     Scenario(
         "justrust-public-cache-cap",
         "public-cache-cap",
