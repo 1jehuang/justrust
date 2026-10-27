@@ -71,7 +71,6 @@ struct Resolver<'a> {
     alias_cache: HashMap<PathKey, Type>,
     alias_active: std::collections::HashSet<PathKey>,
     alias_budget: ir::PlanBudget,
-    nominal_arity: HashMap<PathKey, usize>,
     self_nominal: Option<AstPath>,
     self_allowed: bool,
     source_owner: SourceOwnerContext,
@@ -342,6 +341,32 @@ impl Resolver<'_> {
             return Err("struct binding disagrees with its declaration".into());
         }
         Ok(declaration)
+    }
+    /// Type parameter count of the struct or enum declared at `path`, read
+    /// from its bound declaration (no crate-wide arity table).
+    fn nominal_arity(&self, path: &AstPath) -> Result<Option<usize>, String> {
+        if let Some(index) = self.declaration_index(path, |kind| match kind {
+            ItemKind::Struct(index) => Some(*index),
+            _ => None,
+        })? {
+            return Ok(Some(self.struct_decl(index, path)?.type_params.len()));
+        }
+        let Some(index) = self.declaration_index(path, |kind| match kind {
+            ItemKind::Enum(index) => Some(*index),
+            _ => None,
+        })?
+        else {
+            return Ok(None);
+        };
+        let declaration = self
+            .program
+            .enums
+            .get(index)
+            .ok_or("enum binding names no declaration")?;
+        if self.key(&declaration.name)? != self.key(path)? {
+            return Err("enum binding disagrees with its declaration".into());
+        }
+        Ok(Some(declaration.type_params.len()))
     }
     /// The declaration index bound at the source path `path`, by kind.
     fn declaration_index(
@@ -2209,11 +2234,7 @@ impl Resolver<'_> {
                 Type::Apply(prefix)
             } else {
                 let named = self.resolved_use(resolved.source()?, &owner_path)?;
-                let arity = self
-                    .nominal_arity
-                    .get(&self.key(&named)?)
-                    .copied()
-                    .unwrap_or(0);
+                let arity = self.nominal_arity(&named)?.unwrap_or(0);
                 if arity > 0 {
                     // `Vec::new()`: impl arguments are inferred by the checker.
                     let mut generic = self.alias_source_path(&named)?;
@@ -2275,8 +2296,8 @@ impl Resolver<'_> {
                         .any(|item| matches!(item.kind, ItemKind::TypeAlias(_)))
                 }) {
                     *ty = self.expand_alias(&name, args, &name)?;
-                } else if let Some(expected) = self.nominal_arity.get(&key) {
-                    if *expected != args.len() {
+                } else if let Some(expected) = self.nominal_arity(&name)? {
+                    if expected != args.len() {
                         return Err(format!(
                             "E0107: {} expects {expected} type arguments, got {}",
                             self.display(&name)?,
@@ -2338,11 +2359,7 @@ impl Resolver<'_> {
                     ));
                 }
                 *name = self.resolved_use(item.source()?, name)?;
-                if self
-                    .nominal_arity
-                    .get(&self.key(name)?)
-                    .is_some_and(|arity| *arity != 0)
-                {
+                if self.nominal_arity(name)?.is_some_and(|arity| arity != 0) {
                     return Err(format!(
                         "E0107: missing type arguments for {}",
                         self.display(name)?
@@ -4087,7 +4104,6 @@ fn associated_members(program: &Program) -> Result<HashMap<NameKey, AssociatedMe
 struct ResolutionState {
     members: Arc<HashMap<NameKey, AssociatedMember>>,
     alias_cache: HashMap<PathKey, Type>,
-    nominal_arity: HashMap<PathKey, usize>,
     imports: HashMap<(PathKey, usize, bool), Option<ResolvedItem>>,
     prelude_memo: HashMap<PreludeMemoKey, Option<Option<ResolvedItem>>>,
     static_muts: std::collections::HashSet<PathKey>,
@@ -4099,7 +4115,6 @@ impl ResolutionState {
         Self {
             members: resolver.members.clone(),
             alias_cache: resolver.alias_cache.clone(),
-            nominal_arity: resolver.nominal_arity.clone(),
             imports: resolver.imports.clone(),
             prelude_memo: resolver.prelude_memo.clone(),
             static_muts: resolver.static_muts.clone(),
@@ -4118,7 +4133,6 @@ impl ResolutionState {
             alias_cache: self.alias_cache.clone(),
             alias_active: std::collections::HashSet::new(),
             alias_budget: ir::PlanBudget::default(),
-            nominal_arity: self.nominal_arity.clone(),
             self_nominal: None,
             self_allowed: false,
             source_owner: SourceOwnerContext::None,
@@ -4866,7 +4880,7 @@ pub fn prepare_resolution_owned(parsed: Arc<ParsedProgram>) -> Result<Resolution
             Namespace::Type,
         )?);
     }
-    let mut resolver = Resolver {
+    let resolver = Resolver {
         members: Arc::new(associated_members(&parsed.program)?),
         static_muts,
         globs: &parsed.glob_imports,
@@ -4876,7 +4890,6 @@ pub fn prepare_resolution_owned(parsed: Arc<ParsedProgram>) -> Result<Resolution
         alias_cache: HashMap::new(),
         alias_active: std::collections::HashSet::new(),
         alias_budget: ir::PlanBudget::default(),
-        nominal_arity: HashMap::new(),
         self_nominal: None,
         self_allowed: false,
         source_owner: SourceOwnerContext::None,
@@ -4910,28 +4923,6 @@ pub fn prepare_resolution_owned(parsed: Arc<ParsedProgram>) -> Result<Resolution
                     .map_err(module_diagnostic)?;
             }
         }
-    }
-    resolver.charge_entries::<(PathKey, usize)>(
-        parsed.program.structs.len() + parsed.program.enums.len(),
-    )?;
-    resolver
-        .nominal_arity
-        .try_reserve(parsed.program.structs.len() + parsed.program.enums.len())
-        .map_err(|_| "nominal arity allocation failed")?;
-    for (path, arity) in parsed
-        .program
-        .structs
-        .iter()
-        .map(|item| (&item.name, item.type_params.len()))
-        .chain(
-            parsed
-                .program
-                .enums
-                .iter()
-                .map(|item| (&item.name, item.type_params.len())),
-        )
-    {
-        resolver.nominal_arity.insert(resolver.key(path)?, arity);
     }
     let paths = resolver.ordered_paths()?;
     // Declared paths and import bindings validate in their module facts,
@@ -5951,7 +5942,6 @@ mod associated_projection_tests {
             alias_cache: HashMap::new(),
             alias_active: Default::default(),
             alias_budget: ir::PlanBudget::default(),
-            nominal_arity: HashMap::new(),
             self_nominal: None,
             self_allowed: false,
             source_owner: SourceOwnerContext::Trait { source_index: 0 },
