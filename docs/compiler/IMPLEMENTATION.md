@@ -2251,6 +2251,14 @@ uncommitted `libraries/prelude/iter.rs` edit seen at 03:46 fails
 argument arity mismatch"); HEAD's iter.rs passes. Semantic-core status and the
 cutover design are in `SEMANTIC-CORE.md`.
 
+Program 17 (`HashMap<&str, usize>` `into_iter().collect::<Vec<_>>()`, repro
+shape: `u32` keys work) fails the `from_iter` borrow plan with a
+ResourceLimit. Root cause: `resolve_cells` (borrow.rs, DynamicIndex arm) projects
+`Field(0)` through a cover/original local whose type is still the unnormalized
+`<I as IntoIterator>::IntoIter` projection, so `projected_ty_optional` errors and
+is mapped to `Exhausted`. Fix belongs in normalizing family-cover locals for the
+instance, not in a fallback (falling back to original locals fails identically).
+
 Closed nominal field realization (`NOMINAL-PROJECTIONS.md`): associated factory
 receiver hints now reuse full canonical Call signature realization before result
 extraction, preserving strict method selection and original/mapped source receipts.
