@@ -1,6 +1,100 @@
 use super::*;
 use std::fmt::Write as _;
 
+/// Node-local syntax receipts. Only fields of the retained immutable schema
+/// enter this cache, never caller-owned syntax or IR type payloads.
+#[derive(Debug, Default)]
+pub(super) struct SourceMetadataCache {
+    registry: Option<Arc<DeclRegistry>>,
+    parameters: HashMap<ir::DeclId, Arc<[GenericBindingKey]>>,
+    fields: HashMap<(ir::DeclId, usize), Arc<SourceMetadata>>,
+    active: Option<Arc<SourceMetadata>>,
+}
+
+#[derive(Debug)]
+struct SourceMetadata {
+    declaration: ir::DeclId,
+    _schema: Arc<NominalSchema>,
+    nodes: HashMap<usize, SourceNodeMetadata>,
+    bindings: Vec<GenericBindingKey>,
+}
+
+/// Resolved syntax coordinates only, never a substituted IR type or proof.
+#[derive(Clone, Copy, Debug)]
+enum SourceNodeMetadata {
+    Other,
+    Parameter(GenericBindingKey),
+    Nominal(ir::DeclId),
+}
+
+/// Stack-local evidence for this exact immutable binding map, caller and meter.
+/// This is deliberately not retained in the syntax cache. In particular,
+/// `validate_argument` is weaker than metadata authentication for some carriers
+/// and cannot mint this evidence.
+struct SourceBindingMetadata<'a> {
+    bindings: &'a HashMap<GenericBindingKey, ir::Ty>,
+    caller: ir::FactsCtx<'a>,
+    budget: &'a ir::PlanBudget,
+}
+
+impl<'a> SourceBindingMetadata<'a> {
+    fn validate(
+        bindings: &'a HashMap<GenericBindingKey, ir::Ty>,
+        caller: ir::FactsCtx<'a>,
+        budget: &'a ir::PlanBudget,
+    ) -> Result<Self, String> {
+        for actual in bindings.values() {
+            budget.charge_work(1)?;
+            caller.validate_ty_metadata_with_budget(actual, budget)?;
+        }
+        Ok(Self {
+            bindings,
+            caller,
+            budget,
+        })
+    }
+}
+
+impl SourceMetadataCache {
+    pub(super) fn new(registry: Arc<DeclRegistry>) -> Self {
+        Self {
+            registry: Some(registry),
+            parameters: HashMap::new(),
+            fields: HashMap::new(),
+            active: None,
+        }
+    }
+
+    fn covers(
+        &self,
+        registry: &DeclRegistry,
+        context: Option<SourceTypeContext>,
+        ty: &Type,
+    ) -> bool {
+        self.node(registry, context, ty).is_some()
+    }
+
+    fn node(
+        &self,
+        registry: &DeclRegistry,
+        context: Option<SourceTypeContext>,
+        ty: &Type,
+    ) -> Option<SourceNodeMetadata> {
+        if !self
+            .registry
+            .as_ref()
+            .is_some_and(|cached| std::ptr::eq(cached.as_ref(), registry))
+        {
+            return None;
+        }
+        let metadata = self.active.as_ref()?;
+        if !context.is_some_and(|context| context.declaration == metadata.declaration) {
+            return None;
+        }
+        metadata.nodes.get(&(ty as *const Type as usize)).copied()
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum SchemaFieldKey {
     Named(NameKey),
@@ -19,6 +113,202 @@ fn schema_field_key(names: &NameStore, name: FieldName) -> Result<SchemaFieldKey
 }
 
 impl PlanState {
+    fn schema_param_bindings(
+        &mut self,
+        registry: &DeclRegistry,
+        info: &DeclInfo,
+        args: &[ir::Ty],
+        budget: &ir::PlanBudget,
+    ) -> Result<
+        (
+            HashMap<GenericBindingKey, ir::Ty>,
+            Option<ir::PlanReservation>,
+        ),
+        String,
+    > {
+        if !self
+            .source_metadata
+            .registry
+            .as_ref()
+            .is_some_and(|cached| std::ptr::eq(cached.as_ref(), registry))
+        {
+            return Ok((param_bindings(registry, info, args)?, None));
+        }
+        if info.type_params.len() != args.len() {
+            return Err(format!(
+                "wrong generic arity for {}; omitted generic inference is unsupported",
+                info.name
+            ));
+        }
+        let keys = if let Some(keys) = self.source_metadata.parameters.get(&info.id) {
+            keys.clone()
+        } else {
+            self.retain(
+                budget,
+                info.type_params
+                    .len()
+                    .checked_mul(4 * std::mem::size_of::<GenericBindingKey>())
+                    .and_then(|bytes| bytes.checked_add(256))
+                    .ok_or("source parameter allocation overflow")?,
+            )?;
+            let mut keys = Vec::new();
+            keys.try_reserve_exact(info.type_params.len())
+                .map_err(|_| "source parameter allocation failed")?;
+            for name in info.type_params.iter() {
+                budget.charge_work(1)?;
+                keys.push(registry.parameter_key(*name)?);
+            }
+            let keys: Arc<[GenericBindingKey]> = keys.into();
+            self.source_metadata
+                .parameters
+                .try_reserve(1)
+                .map_err(|_| "source parameter cache allocation failed")?;
+            self.source_metadata
+                .parameters
+                .insert(info.id, keys.clone());
+            keys
+        };
+        let storage = budget.reserve_bytes(
+            args.len()
+                .checked_mul(4 * std::mem::size_of::<(GenericBindingKey, ir::Ty)>())
+                .and_then(|bytes| bytes.checked_add(128))
+                .ok_or("source binding allocation overflow")?,
+        )?;
+        let mut bindings = HashMap::new();
+        bindings
+            .try_reserve(args.len())
+            .map_err(|_| "source binding allocation failed")?;
+        for (key, actual) in keys.iter().zip(args) {
+            budget.charge_work(1)?;
+            bindings.insert(*key, actual.clone());
+        }
+        Ok((bindings, Some(storage)))
+    }
+
+    /// The caller supplies a field borrowed directly from `self.schemas`.
+    /// Its allocation remains live for this scratch's entire lifetime. The
+    /// receipt authenticates syntax only. The stack-local binding evidence
+    /// separately checks current actuals against their exact current caller.
+    #[cfg(test)]
+    #[allow(clippy::too_many_arguments)]
+    fn source_field_metadata(
+        &mut self,
+        registry: &DeclRegistry,
+        declaration: ir::DeclId,
+        schema: &Arc<NominalSchema>,
+        ty: &Type,
+        bindings: &HashMap<GenericBindingKey, ir::Ty>,
+        caller: ir::FactsCtx<'_>,
+        budget: &ir::PlanBudget,
+    ) -> Result<Arc<SourceMetadata>, String> {
+        let bindings = SourceBindingMetadata::validate(bindings, caller, budget)?;
+        self.source_field_metadata_with_bindings(registry, declaration, schema, ty, &bindings)
+    }
+
+    fn source_field_metadata_with_bindings(
+        &mut self,
+        registry: &DeclRegistry,
+        declaration: ir::DeclId,
+        schema: &Arc<NominalSchema>,
+        ty: &Type,
+        authenticated: &SourceBindingMetadata<'_>,
+    ) -> Result<Arc<SourceMetadata>, String> {
+        let SourceBindingMetadata {
+            bindings,
+            caller,
+            budget,
+        } = authenticated;
+        if !self
+            .source_metadata
+            .registry
+            .as_ref()
+            .is_some_and(|cached| std::ptr::eq(cached.as_ref(), registry))
+        {
+            return Err("nominal source metadata belongs to a different registry".into());
+        }
+        let key = (declaration, ty as *const Type as usize);
+        budget.charge_work(1)?;
+        if let Some(metadata) = self.source_metadata.fields.get(&key) {
+            for key in &metadata.bindings {
+                budget.charge_work(1)?;
+                // Every value in this exact map was authenticated by the
+                // evidence constructor. Existence is still syntax authority.
+                bindings.get(key).ok_or("missing source type binding")?;
+            }
+            return Ok(metadata.clone());
+        }
+        self.validate_source_type_metadata(registry, ty, bindings, *caller, budget)?;
+        self.retain(budget, 256)?;
+        let mut metadata = SourceMetadata {
+            declaration,
+            _schema: schema.clone(),
+            nodes: HashMap::new(),
+            bindings: Vec::new(),
+        };
+        let mut inspect = |node: &DepthNode<'_>, depth| {
+            budget.check_depth(depth)?;
+            budget.charge_work(1)?;
+            if let DepthNode::Type(ty) = node {
+                self.retain(budget, 128)?;
+                metadata
+                    .nodes
+                    .try_reserve(1)
+                    .map_err(|_| "source metadata allocation failed")?;
+                let key = match ty {
+                    Type::Param(parameter) => Some(registry.parameter_key(*parameter)?),
+                    Type::SelfType => Some(GenericBindingKey::SelfType),
+                    _ => None,
+                };
+                let coordinate = if let Some(key) = key {
+                    SourceNodeMetadata::Parameter(key)
+                } else {
+                    let name = match ty {
+                        Type::Named(path) => Some(name_scope::path_key(
+                            registry.names.as_ref(),
+                            path,
+                            Namespace::Type,
+                        )?),
+                        Type::Apply(path) => Some(name_scope::path_key(
+                            registry.names.as_ref(),
+                            &path.path(registry.names.as_ref())?,
+                            Namespace::Type,
+                        )?),
+                        _ => None,
+                    };
+                    if let Some(name) = name {
+                        SourceNodeMetadata::Nominal(
+                            *registry.nominals.get(&name).ok_or("unknown nominal type")?,
+                        )
+                    } else {
+                        SourceNodeMetadata::Other
+                    }
+                };
+                metadata
+                    .nodes
+                    .insert(*ty as *const Type as usize, coordinate);
+                if let Some(key) = key {
+                    // Preserve occurrences rather than performing an unmetered
+                    // search. Repeated actual authentication is conservative.
+                    self.retain(budget, 64)?;
+                    metadata
+                        .bindings
+                        .try_reserve(1)
+                        .map_err(|_| "source binding allocation failed")?;
+                    metadata.bindings.push(key);
+                }
+            }
+            Ok(())
+        };
+        walk_depth_inspecting(DepthNode::Type(ty), None, None, Some(&mut inspect))?;
+        let metadata = Arc::new(metadata);
+        self.source_metadata
+            .fields
+            .try_reserve(1)
+            .map_err(|_| "source metadata cache allocation failed")?;
+        self.source_metadata.fields.insert(key, metadata.clone());
+        Ok(metadata)
+    }
+
     pub(super) fn retain(&mut self, budget: &ir::PlanBudget, bytes: usize) -> Result<(), String> {
         let reservation = budget.reserve_bytes(
             bytes
@@ -290,12 +580,23 @@ impl PlanState {
                 )?;
                 ir::Ty::AssociatedType(Arc::new(ir::AssociatedTypeProjection { trait_ref, item }))
             }
-            Type::Param(p) => bindings
-                .get(&registry.parameter_key(*p)?)
-                .cloned()
-                .ok_or_else(|| "unknown generic parameter".to_owned())?,
+            Type::Param(p) => {
+                let key = match self.source_metadata.node(registry, self.source_context, ty) {
+                    Some(SourceNodeMetadata::Parameter(key)) => key,
+                    _ => registry.parameter_key(*p)?,
+                };
+                bindings
+                    .get(&key)
+                    .cloned()
+                    .ok_or_else(|| "unknown generic parameter".to_owned())?
+            }
             Type::Apply(path) => {
-                self.validate_source_type_metadata(registry, ty, bindings, caller, budget)?;
+                if !self
+                    .source_metadata
+                    .covers(registry, self.source_context, ty)
+                {
+                    self.validate_source_type_metadata(registry, ty, bindings, caller, budget)?;
+                }
                 if path
                     .segments
                     .iter()
@@ -314,15 +615,20 @@ impl PlanState {
                 if at + 1 != path.segments.len() {
                     return Err("generic associated types are unsupported".into());
                 }
-                let name = name_scope::path_key(
-                    registry.names.as_ref(),
-                    &path.path(registry.names.as_ref())?,
-                    Namespace::Type,
-                )?;
-                let decl = *registry
-                    .nominals
-                    .get(&name)
-                    .ok_or_else(|| "unknown nominal type".to_owned())?;
+                let decl = match self.source_metadata.node(registry, self.source_context, ty) {
+                    Some(SourceNodeMetadata::Nominal(declaration)) => declaration,
+                    _ => {
+                        let name = name_scope::path_key(
+                            registry.names.as_ref(),
+                            &path.path(registry.names.as_ref())?,
+                            Namespace::Type,
+                        )?;
+                        *registry
+                            .nominals
+                            .get(&name)
+                            .ok_or_else(|| "unknown nominal type".to_owned())?
+                    }
+                };
                 let args = segment
                     .args
                     .iter()
@@ -361,14 +667,17 @@ impl PlanState {
                 .cloned()
                 .ok_or("Self is not in an impl scope")?,
             Type::Named(name) => {
-                let decl = *registry
-                    .nominals
-                    .get(&name_scope::path_key(
-                        registry.names.as_ref(),
-                        name,
-                        Namespace::Type,
-                    )?)
-                    .ok_or_else(|| "unknown nominal type".to_owned())?;
+                let decl = match self.source_metadata.node(registry, self.source_context, ty) {
+                    Some(SourceNodeMetadata::Nominal(declaration)) => declaration,
+                    _ => *registry
+                        .nominals
+                        .get(&name_scope::path_key(
+                            registry.names.as_ref(),
+                            name,
+                            Namespace::Type,
+                        )?)
+                        .ok_or_else(|| "unknown nominal type".to_owned())?,
+                };
                 self.intern_with_transport(
                     registry,
                     decl,
@@ -668,7 +977,8 @@ impl PlanState {
             // by-value cycle is rejected once the outer definition completes.
             return Ok(back.clone());
         }
-        let bindings = param_bindings(registry, info, args)?;
+        let (bindings, _bindings_storage) =
+            self.schema_param_bindings(registry, info, args, budget)?;
         if self.nominals.active.contains(&decl) {
             return Err(format!(
                 "unsupported: polymorphically recursive nominal {}",
@@ -697,6 +1007,12 @@ impl PlanState {
             .map_err(|_| "nominal active allocation failed")?;
         self.nominals.active.push(decl);
         let result = (|| -> Result<ir::Ty, String> {
+            let source_bindings = self
+                .source_metadata
+                .registry
+                .as_ref()
+                .map(|_| SourceBindingMetadata::validate(&bindings, caller, budget))
+                .transpose()?;
             let schema = self
                 .schemas
                 .get(&decl)
@@ -742,16 +1058,32 @@ impl PlanState {
                     }
                     let previous_context = state.source_context;
                     state.source_context = Some(registry.source_type_context(decl)?);
-                    let ty = state.source_ty_with_transport(
-                        registry,
-                        &field.ty,
-                        &bindings,
-                        caller,
-                        budget,
-                        depth + 1,
-                        false,
-                        transport,
-                    );
+                    let previous_metadata = state.source_metadata.active.take();
+                    let ty = (|| {
+                        // Construction scratch has a mutable, not-yet-sealed
+                        // registry and deliberately cannot mint reusable receipts.
+                        if let Some(source_bindings) = &source_bindings {
+                            state.source_metadata.active =
+                                Some(state.source_field_metadata_with_bindings(
+                                    registry,
+                                    decl,
+                                    &schema,
+                                    &field.ty,
+                                    source_bindings,
+                                )?);
+                        }
+                        state.source_ty_with_transport(
+                            registry,
+                            &field.ty,
+                            &bindings,
+                            caller,
+                            budget,
+                            depth + 1,
+                            false,
+                            transport,
+                        )
+                    })();
+                    state.source_metadata.active = previous_metadata;
                     state.source_context = previous_context;
                     let ty = ty?;
                     result.push(ir::FieldDef {
@@ -1179,6 +1511,281 @@ mod tests {
             before,
             "arity rejection needs no parameter lookup"
         );
+    }
+
+    #[test]
+    fn source_metadata_reuses_only_retained_syntax_and_rechecks_actuals() {
+        let program =
+            parse("struct Leaf<T>{value:T} struct Wrap<T>{value:Leaf<T>} fn main(){}").unwrap();
+        let budget = ir::PlanBudget::default();
+        let plan = PlanCtx::from_program(&program, &budget).unwrap();
+        let key = name_scope::path_key(
+            program.names.as_ref(),
+            &program.structs[1].name,
+            Namespace::Type,
+        )
+        .unwrap();
+        let declaration = plan.registry.nominals[&key];
+        let info = plan.registry.declaration(declaration).unwrap();
+        let mut state = plan.scratch();
+        let retained = state.schemas[&declaration].clone();
+        let NominalSchema::Struct(schema) = retained.as_ref() else {
+            panic!("expected struct")
+        };
+        let ty = &schema.fields[0].ty;
+        state.source_context = Some(plan.registry.source_type_context(declaration).unwrap());
+        let bindings = param_bindings(&plan.registry, info, &[ir::Ty::Bool]).unwrap();
+        let before = budget.usage_snapshot().work;
+        let metadata = state
+            .source_field_metadata(
+                &plan.registry,
+                declaration,
+                &retained,
+                ty,
+                &bindings,
+                ir::FactsCtx::Concrete,
+                &budget,
+            )
+            .unwrap();
+        let cold = budget.usage_snapshot().work - before;
+        let name_work = || {
+            program.names.budget().snapshot().counters
+                [crate::compiler::expansion_budget::Counter::Work as usize]
+        };
+        let before_names = name_work();
+        let before = budget.usage_snapshot().work;
+        let again = state
+            .source_field_metadata(
+                &plan.registry,
+                declaration,
+                &retained,
+                ty,
+                &bindings,
+                ir::FactsCtx::Concrete,
+                &budget,
+            )
+            .unwrap();
+        let warm = budget.usage_snapshot().work - before;
+        assert!(Arc::ptr_eq(&metadata, &again));
+        assert!(warm < cold, "syntax was not reused: {warm}/{cold}");
+        assert_eq!(
+            name_work(),
+            before_names,
+            "a hit must not rebuild source names"
+        );
+
+        let authenticated =
+            SourceBindingMetadata::validate(&bindings, ir::FactsCtx::Concrete, &budget).unwrap();
+        let before = budget.usage_snapshot().work;
+        state
+            .source_field_metadata_with_bindings(
+                &plan.registry,
+                declaration,
+                &retained,
+                ty,
+                &authenticated,
+            )
+            .unwrap();
+        let shared_work = budget.usage_snapshot().work - before;
+        assert!(
+            shared_work < warm,
+            "same-application binding authentication was repeated: {shared_work}/{warm}"
+        );
+
+        state.source_metadata.active = Some(metadata);
+        assert!(
+            state
+                .source_metadata
+                .covers(&plan.registry, state.source_context, ty)
+        );
+        assert!(!state.source_metadata.covers(&plan.registry, None, ty));
+        let copied_syntax = (*ty).clone();
+        assert!(!state.source_metadata.covers(
+            &plan.registry,
+            state.source_context,
+            &copied_syntax
+        ));
+
+        let lowered = state
+            .source_ty(
+                &plan.registry,
+                ty,
+                &bindings,
+                ir::FactsCtx::Concrete,
+                &budget,
+                0,
+                false,
+            )
+            .unwrap();
+        let before_names = name_work();
+        let repeated = state
+            .source_ty(
+                &plan.registry,
+                ty,
+                &bindings,
+                ir::FactsCtx::Concrete,
+                &budget,
+                0,
+                false,
+            )
+            .unwrap();
+        assert_eq!(lowered, repeated);
+        assert_eq!(
+            name_work(),
+            before_names,
+            "warm source conversion rebuilt resolved paths or parameter names"
+        );
+
+        // Same retained syntax, different actual: a syntax receipt does not
+        // authorize an out-of-scope parameter or missing binding.
+        let symbolic = symbolic_args(&info.param_env, &budget).unwrap();
+        let forged = param_bindings(&plan.registry, info, &symbolic).unwrap();
+        assert!(
+            state
+                .source_field_metadata(
+                    &plan.registry,
+                    declaration,
+                    &retained,
+                    ty,
+                    &forged,
+                    ir::FactsCtx::Concrete,
+                    &budget,
+                )
+                .is_err()
+        );
+        assert!(
+            state
+                .source_field_metadata(
+                    &plan.registry,
+                    declaration,
+                    &retained,
+                    ty,
+                    &HashMap::new(),
+                    ir::FactsCtx::Concrete,
+                    &budget,
+                )
+                .is_err()
+        );
+
+        let hidden_foreign = ir::Ty::RawPtr {
+            kind: ir::BorrowKind::Shared,
+            pointee: Arc::new(symbolic[0].clone()),
+        };
+        assert!(validate_argument(&hidden_foreign, ir::FactsCtx::Concrete, &budget, 0).is_ok());
+        let hidden_bindings = param_bindings(&plan.registry, info, &[hidden_foreign]).unwrap();
+        assert!(
+            SourceBindingMetadata::validate(&hidden_bindings, ir::FactsCtx::Concrete, &budget)
+                .is_err()
+        );
+
+        let foreign_program =
+            parse("struct Leaf<T>{value:T} struct Wrap<T>{value:Leaf<T>} fn main(){}").unwrap();
+        let foreign = PlanCtx::from_program(&foreign_program, &budget).unwrap();
+        assert!(
+            !state
+                .source_metadata
+                .covers(&foreign.registry, state.source_context, ty)
+        );
+        assert!(
+            state
+                .source_field_metadata(
+                    &foreign.registry,
+                    declaration,
+                    &retained,
+                    ty,
+                    &bindings,
+                    ir::FactsCtx::Concrete,
+                    &budget,
+                )
+                .unwrap_err()
+                .contains("different registry")
+        );
+    }
+
+    #[test]
+    fn source_metadata_parameter_keys_reuse_names_not_actuals() {
+        let program = parse("struct Pair<T,U>(T,U);fn main(){}").unwrap();
+        let budget = ir::PlanBudget::default();
+        let plan = PlanCtx::from_program(&program, &budget).unwrap();
+        let name = name_scope::path_key(
+            program.names.as_ref(),
+            &program.structs[0].name,
+            Namespace::Type,
+        )
+        .unwrap();
+        let declaration = plan.registry.nominals[&name];
+        let info = plan.registry.declaration(declaration).unwrap();
+        let first_key = plan.registry.parameter_key(info.type_params[0]).unwrap();
+        let second_key = plan.registry.parameter_key(info.type_params[1]).unwrap();
+        let mut state = plan.scratch();
+        let (first, first_storage) = state
+            .schema_param_bindings(&plan.registry, info, &[ir::Ty::Bool, ir::Ty::Unit], &budget)
+            .unwrap();
+        assert_eq!(first[&first_key], ir::Ty::Bool);
+        assert_eq!(first[&second_key], ir::Ty::Unit);
+        drop(first);
+        drop(first_storage);
+        let name_work = || {
+            program.names.budget().snapshot().counters
+                [crate::compiler::expansion_budget::Counter::Work as usize]
+        };
+        let before = name_work();
+        let (second, _) = state
+            .schema_param_bindings(&plan.registry, info, &[ir::Ty::Unit, ir::Ty::Bool], &budget)
+            .unwrap();
+        assert_eq!(
+            name_work(),
+            before,
+            "ordered parameter keys were reconstructed"
+        );
+        assert_eq!(second[&first_key], ir::Ty::Unit);
+        assert_eq!(second[&second_key], ir::Ty::Bool);
+        assert!(
+            state
+                .schema_param_bindings(&plan.registry, info, &[ir::Ty::Bool], &budget)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn source_metadata_scope_is_restored_after_nested_nominal_lowering() {
+        let program =
+            parse("struct Leaf<T>{value:T} struct Wrap<T>{value:Leaf<T>} fn main(){}").unwrap();
+        let budget = ir::PlanBudget::default();
+        let plan = PlanCtx::from_program(&program, &budget).unwrap();
+        let key = name_scope::path_key(
+            program.names.as_ref(),
+            &program.structs[1].name,
+            Namespace::Type,
+        )
+        .unwrap();
+        let declaration = plan.registry.nominals[&key];
+        let mut state = plan.scratch();
+        state
+            .intern(
+                &plan.registry,
+                declaration,
+                &[ir::Ty::Bool],
+                ir::FactsCtx::Concrete,
+                &budget,
+                0,
+            )
+            .unwrap();
+        assert!(state.source_metadata.active.is_none());
+        assert!(state.source_context.is_none());
+        assert!(!state.source_metadata.fields.is_empty());
+        state
+            .intern(
+                &plan.registry,
+                declaration,
+                &[ir::Ty::Unit],
+                ir::FactsCtx::Concrete,
+                &budget,
+                0,
+            )
+            .unwrap();
+        assert!(state.source_metadata.active.is_none());
+        assert!(state.source_context.is_none());
     }
 
     #[test]

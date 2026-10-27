@@ -356,6 +356,22 @@ impl ValidatedTraitWorld {
             )?;
             return Ok(height);
         }
+        // The recursive metadata walk below visits every child itself. Reuse
+        // canonical construction across those nodes instead of reconstructing
+        // and revalidating every complete subtree at every nominal ancestor.
+        if matches!(ty, Ty::Struct(_) | Ty::Enum(_)) {
+            if replays.nominal_session.is_none() {
+                replays.nominal_session = self.schema.nominal_validation_session()?;
+            }
+            if let Some(session) = replays.nominal_session.as_mut() {
+                session.validate_node(ty, env, facts, &self.budget)?;
+            } else if let Some(facts) = facts {
+                self.schema
+                    .validate_nominal_with_facts(ty, facts, &self.budget)?;
+            } else {
+                self.schema.validate_nominal(ty, env, &self.budget)?;
+            }
+        }
         let mut height = 0usize;
         let mut child = |value: &Ty, replays: &mut NominalReplays| -> Result<()> {
             height = height.max(
@@ -498,12 +514,6 @@ impl ValidatedTraitWorld {
                     ));
                 }
                 validate_nominal_modules(ty, self.catalog.modules(), &self.budget)?;
-                if let Some(facts) = facts {
-                    self.schema
-                        .validate_nominal_with_facts(ty, facts, &self.budget)?;
-                } else {
-                    self.schema.validate_nominal(ty, env, &self.budget)?;
-                }
                 if let Some(capability) = value.realization() {
                     capability.replay_with(ty, self, replays).map_err(|error| {
                         FactsError::from_message(&self.budget, &error.to_string())
@@ -526,12 +536,6 @@ impl ValidatedTraitWorld {
                     ));
                 }
                 validate_nominal_modules(ty, self.catalog.modules(), &self.budget)?;
-                if let Some(facts) = facts {
-                    self.schema
-                        .validate_nominal_with_facts(ty, facts, &self.budget)?;
-                } else {
-                    self.schema.validate_nominal(ty, env, &self.budget)?;
-                }
                 if let Some(capability) = value.realization() {
                     capability.replay_with(ty, self, replays).map_err(|error| {
                         FactsError::from_message(&self.budget, &error.to_string())

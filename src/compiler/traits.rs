@@ -590,7 +590,24 @@ pub struct InstantiatedSchema {
     pub signature: Signature,
     pub predicates: Arc<[Predicate]>,
 }
+/// Private-to-the-computation canonical reconstruction scratch. It never
+/// supplies proof on its own: every node still authenticates its exact payload
+/// and caller. Keeping it across one walk avoids rebuilding every descendant
+/// application independently for each enclosing nominal.
+pub trait NominalValidationSession {
+    fn validate_node(
+        &mut self,
+        ty: &Ty,
+        env: &GenericEnv,
+        caller: Option<&ValidatedFacts>,
+        budget: &PlanBudget,
+    ) -> Result<()>;
+}
+
 pub trait SchemaCx {
+    fn nominal_validation_session(&self) -> Result<Option<Box<dyn NominalValidationSession>>> {
+        Ok(None)
+    }
     /// An alternate adapter cannot manufacture paired raw exchange authority.
     fn native_sequence_swap(
         &self,
@@ -1776,6 +1793,8 @@ impl<T> MeteredReplayRows<T> {
 /// Bounded by the distinct nominal facts the node itself read.
 #[derive(Default)]
 pub(in crate::compiler) struct NominalReplays {
+    /// Local canonical reconstruction only, never a replacement for payload replay.
+    nominal_session: Option<Box<dyn NominalValidationSession>>,
     /// Metadata answers belong to one exact world and original caller context.
     metadata_context: Option<(WorldId, Option<(usize, usize, FactsPhase, DeclId)>)>,
     /// Pin the exact outer environment allocation used by the context key.
@@ -2567,6 +2586,7 @@ enum TypeNode {
 }
 #[derive(Default)]
 struct TypeWalk {
+    nominal_session: Option<Box<dyn NominalValidationSession>>,
     caller_context: Option<Option<(usize, usize, FactsPhase, DeclId)>>,
     _caller_env: Option<Arc<GenericEnv>>,
     caller_world: Option<WorldId>,
@@ -3637,6 +3657,31 @@ impl ValidatedTraitWorld {
             )?;
             return Ok(height);
         }
+        let nominal = match ty {
+            Ty::Struct(t) => Some((t.def().id.snapshot, t.def().source_decl.snapshot)),
+            Ty::Enum(t) => Some((t.def().id.snapshot, t.def().source_decl.snapshot)),
+            _ => None,
+        };
+        if let Some((snapshot, declaration_snapshot)) = nominal {
+            if snapshot != self.registry || declaration_snapshot != self.registry {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "foreign nominal identity",
+                ));
+            }
+            validate_nominal_modules(ty, self.catalog.modules(), &self.budget)?;
+            if walk.nominal_session.is_none() {
+                walk.nominal_session = self.schema.nominal_validation_session()?;
+            }
+            if let Some(session) = &mut walk.nominal_session {
+                session.validate_node(ty, env, caller, &self.budget)?;
+            } else if let Some(caller) = caller {
+                self.schema
+                    .validate_nominal_node_with_facts(ty, caller, &self.budget)?;
+            } else {
+                self.schema.validate_nominal_node(ty, env, &self.budget)?;
+            }
+        }
         let maybe_unsized = walk.maybe_unsized;
         let mut height = 0usize;
         let mut child = |t: &Ty, next_use: TypeUse| -> Result<()> {
@@ -3765,21 +3810,6 @@ impl ValidatedTraitWorld {
                 child(pointee, TypeUse::Root)?;
             }
             Ty::Struct(t) => {
-                if t.def().id.snapshot != self.registry
-                    || t.def().source_decl.snapshot != self.registry
-                {
-                    return Err(FactsError::invalid(
-                        &self.budget,
-                        "foreign nominal identity",
-                    ));
-                }
-                validate_nominal_modules(ty, self.catalog.modules(), &self.budget)?;
-                if let Some(caller) = caller {
-                    self.schema
-                        .validate_nominal_node_with_facts(ty, caller, &self.budget)?;
-                } else {
-                    self.schema.validate_nominal_node(ty, env, &self.budget)?;
-                }
                 for t in t.def().type_args.iter() {
                     child(
                         t,
@@ -3795,21 +3825,6 @@ impl ValidatedTraitWorld {
                 }
             }
             Ty::Enum(t) => {
-                if t.def().id.snapshot != self.registry
-                    || t.def().source_decl.snapshot != self.registry
-                {
-                    return Err(FactsError::invalid(
-                        &self.budget,
-                        "foreign nominal identity",
-                    ));
-                }
-                validate_nominal_modules(ty, self.catalog.modules(), &self.budget)?;
-                if let Some(caller) = caller {
-                    self.schema
-                        .validate_nominal_node_with_facts(ty, caller, &self.budget)?;
-                } else {
-                    self.schema.validate_nominal_node(ty, env, &self.budget)?;
-                }
                 for t in t.def().type_args.iter() {
                     child(
                         t,

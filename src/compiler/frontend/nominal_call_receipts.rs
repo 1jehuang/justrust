@@ -369,6 +369,7 @@ pub(super) fn replay(
     checked: &ir::CheckedFunction,
     facts: &tr::ValidatedFacts,
     budget: &ir::PlanBudget,
+    scratch: &mut tr::TraitScratch,
 ) -> Result<(), FactsError> {
     let Some(rows) = &source.nominal_call_realizations else {
         // Legacy publications legitimately have no realization inventory. A
@@ -405,7 +406,6 @@ pub(super) fn replay(
         ));
     }
     // One proof/replay scratch for this replay computation only.
-    let mut scratch = tr::TraitScratch::default();
     for (row, (_, expression, target)) in rows.iter().zip(&source.call_mapping) {
         sr::work(budget, 1)?;
         if row.expression != *expression {
@@ -430,7 +430,7 @@ pub(super) fn replay(
             ));
         };
         validate_original_callee(target, &row.target, budget)?;
-        validate(row, facts, budget, &mut scratch)?;
+        validate(row, facts, budget, scratch)?;
         if !structurally_same_call(&row.target, &row.mapped, actual_target, signature, budget)? {
             return Err(FactsError::invalid(
                 budget,

@@ -1212,14 +1212,36 @@ impl ReplayedOriginalCalls {
         &self.validated
     }
 }
+#[cfg(test)]
 pub(super) fn replay_original_calls(
     source: Arc<ir::CheckedFunction>,
     original: &Arc<OriginalBody>,
     facts: &Arc<tr::ValidatedFacts>,
     budget: &ir::PlanBudget,
 ) -> Result<ReplayedOriginalCalls, FactsError> {
+    replay_original_calls_with_scratch(
+        source,
+        original,
+        facts,
+        budget,
+        &mut tr::TraitScratch::default(),
+    )
+}
+fn replay_original_calls_with_scratch(
+    source: Arc<ir::CheckedFunction>,
+    original: &Arc<OriginalBody>,
+    facts: &Arc<tr::ValidatedFacts>,
+    budget: &ir::PlanBudget,
+    scratch: &mut tr::TraitScratch,
+) -> Result<ReplayedOriginalCalls, FactsError> {
     frontend::validate_original_context(&original.source, facts, budget)?;
-    let calls = frontend::replay_source_body(&original.source, &source, facts, budget)?;
+    let calls = frontend::replay_source_body_with_scratch(
+        &original.source,
+        &source,
+        facts,
+        budget,
+        scratch,
+    )?;
     budget
         .charge_nodes(2)
         .map_err(|e| FactsError::resource(budget, &e))?;
@@ -1309,11 +1331,18 @@ pub(super) fn publish_canonical_source(
     original: Arc<OriginalBody>,
     facts: Arc<tr::ValidatedFacts>,
     budget: &ir::PlanBudget,
+    scratch: &mut tr::TraitScratch,
 ) -> Result<Arc<CanonicalSourcePublication>, FactsError> {
     cap.validate_original(&original.source, budget)?;
     cap.validate_runtime_sites(&final_source)?;
-    let replayed = replay_original_calls(final_source.clone(), &original, &facts, budget)?;
-    ir::validate_source_candidate(&final_source, &facts, &replayed, budget)?;
+    let replayed = replay_original_calls_with_scratch(
+        final_source.clone(),
+        &original,
+        &facts,
+        budget,
+        scratch,
+    )?;
+    ir::validate_source_candidate(&final_source, &facts, &replayed, budget, scratch)?;
     budget
         .charge_nodes(1)
         .map_err(|e| FactsError::resource(budget, &e))?;

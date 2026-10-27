@@ -1202,11 +1202,12 @@ pub(super) fn validate_source_candidate(
     facts: &Arc<super::traits::ValidatedFacts>,
     replayed: &super::source_replay::ReplayedOriginalCalls,
     budget: &PlanBudget,
+    scratch: &mut super::traits::TraitScratch,
 ) -> Result<(), super::traits::FactsError> {
     use super::traits::FactsError;
     replayed.validate_binding(source, facts, budget)?;
     source
-        .preflight_plan(FactsCtx::from_validated(facts), budget)
+        .preflight_plan_with_scratch(FactsCtx::from_validated(facts), budget, scratch)
         .map_err(|error| FactsError::from_message(budget, &error))?;
     if source.body_substitution.is_some() {
         return Err(FactsError::invalid(
@@ -4172,6 +4173,7 @@ pub(super) fn canonicalize_source_calls(
     cx: &mut impl SubstitutionCx,
     cap: &super::frontend::CanonicalSourceCapability,
     budget: &PlanBudget,
+    scratch: &mut super::traits::TraitScratch,
 ) -> Result<CheckedFunction, super::traits::FactsError> {
     if facts.phase() == super::traits::FactsPhase::Schema
         || !facts.budget().same_authority(budget)
@@ -4215,10 +4217,27 @@ fn canonicalize_call_metadata(
     source_cap: Option<&super::frontend::CanonicalSourceCapability>,
     budget: &PlanBudget,
 ) -> Result<CheckedFunction, super::traits::FactsError> {
+    canonicalize_call_metadata_with_scratch(
+        source,
+        facts,
+        _cx,
+        source_cap,
+        budget,
+        &mut super::traits::TraitScratch::default(),
+    )
+}
+
+fn canonicalize_call_metadata_with_scratch(
+    source: &CheckedFunction,
+    facts: &super::traits::ValidatedFacts,
+    _cx: &mut impl SubstitutionCx,
+    source_cap: Option<&super::frontend::CanonicalSourceCapability>,
+    budget: &PlanBudget,
+    mut scratch: &mut super::traits::TraitScratch,
+) -> Result<CheckedFunction, super::traits::FactsError> {
     use super::traits::FactsError;
     // A single node-local proof scratch spans source preflight and canonical
     // call replay. All cache entries retain their exact facts/world authority.
-    let mut scratch = super::traits::TraitScratch::default();
     source
         .preflight_plan_with_scratch(FactsCtx::from_validated(facts), budget, &mut scratch)
         .map_err(|e| FactsError::from_message(budget, &e))?;
@@ -10584,8 +10603,19 @@ impl CheckedFunction {
         facts: FactsCtx<'_>,
         policy: CallEvidencePolicy<'_>,
     ) -> Result<(), String> {
-        // Proof/type memo local to this validation only.
-        let scratch = &mut super::traits::TraitScratch::default();
+        self.validate_with_evidence_scratch(
+            facts,
+            policy,
+            &mut super::traits::TraitScratch::default(),
+        )
+    }
+    fn validate_with_evidence_scratch(
+        &self,
+        facts: FactsCtx<'_>,
+        policy: CallEvidencePolicy<'_>,
+        scratch: &mut super::traits::TraitScratch,
+    ) -> Result<(), String> {
+        // Proof/type memo remains local to the enclosing validation operation.
         self.validate_all_type_metadata_with_scratch(
             facts,
             facts.validated().map(|f| f.budget()),

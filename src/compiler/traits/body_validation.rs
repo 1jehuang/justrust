@@ -9,6 +9,7 @@ use super::*;
 pub(super) struct RawFormations {
     entries: Vec<RawFormation>,
     storage: Vec<ir::PlanReservation>,
+    nominal_session: Option<Box<dyn NominalValidationSession>>,
 }
 
 struct RawFormation {
@@ -85,11 +86,16 @@ impl RawFormations {
                 }
             }
         }
+        // Reuse only canonical construction, not a full-validation answer.
+        // Each root still owns its own complete formation walk and flags.
         let mut walk = TypeWalk {
             maybe_unsized,
+            nominal_session: self.nominal_session.take(),
             ..TypeWalk::default()
         };
-        let height = world.validate_ty_inner(ty, env, depth, usage, &mut walk)?;
+        let result = world.validate_ty_inner(ty, env, depth, usage, &mut walk);
+        self.nominal_session = walk.nominal_session.take();
+        let height = result?;
         if let Some(key) = key
             && self.entries.len() < MAX_SCRATCH_OBLIGATIONS
         {
