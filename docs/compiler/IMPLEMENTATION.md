@@ -1996,14 +1996,34 @@ PlanCtx/interner/source-context debt and wide adapter activation remain held.
       native manifest/path-dependency discovery through `Driver::from_snapshot`.
       Directory/target discovery and explicit environment values use that same
       immutable namespace; graph source receipts reject a different discovery
-      snapshot. Frozen projects reject Cargo configuration files, registry/git
+      snapshot. Frozen projects reject Cargo configuration files, git/network
       acquisition, uncontrolled environment settings and build scripts, while
-      native linking rejects uncontrolled external linkers. Ordinary project
+      native linking rejects uncontrolled external linkers. Checksum-locked
+      crates.io packages in canonical local caches now enter the same snapshot:
+      selected archive files and source directories are captured together under
+      the aggregate namespace limits, without sweeping unrelated cache entries.
+      Authentication compares every source byte with the owned SHA-256-locked
+      archive using bounded in-process gzip/tar decoding, never external tar.
+      Archive decoding admits regular files/directories in basic GNU/ustar headers,
+      caps compressed bytes at 16 MiB, decoded bytes at 32 MiB and entries at 4,096,
+      and explicitly rejects links, sparse/PAX/long-name extensions, duplicate or
+      escaping paths, corruption and trailing payloads. Unauthenticated Cargo
+      extraction markers are absent from captured source namespaces and cannot
+      supply module bytes. Frozen planning reauthenticates only snapshot bytes.
+      `project::registry_archive`, `project::inputs::immutable_registry_capture_survives_source_archive_and_manifest_deletion`
+      and `project::capture::selected_archives_are_owned_without_sweeping_the_cache`
+      cover corruption, limits, forged archive/marker facts, cross-pass mutation,
+      negative probes and transitive CHECK/BUILD/run after host inputs disappear.
+      `authenticated_registry_capture_checks_builds_runs_transitively_without_tar`
+      compares production CLI CHECK/BUILD/run at workers 1/8 with stock execution,
+      with no external tools in the native process PATH. Noncanonical cache aliases
+      retain an explicitly unproven legacy path, chosen before acquisition.
+      Ordinary project
       CLI commands now acquire a bounded regular-file namespace twice, reject
       observed byte/metadata changes, revalidate discovery and compile only the
       owned snapshot. Symlinks/special files reject; target and cache-tagged
-      output directories are excluded and cannot satisfy source reads. Legacy
-      registry/config paths remain explicitly unproven. Standalone
+      output directories are excluded and cannot satisfy source reads. Unsupported
+      configuration and registry acquisition paths remain explicitly unproven. Standalone
       `jr-rust SOURCE` also captures native source directories and explicitly supplied
       extern source directories, including outside-root siblings. Project capture
       admits the discovered native path-package roots, including transitive siblings,
@@ -2026,16 +2046,17 @@ PlanCtx/interner/source-context debt and wide adapter activation remain held.
       at workers 1/8 after host files are changed or removed, workspace globs,
       missing/changed inputs and unsupported configuration/tool boundaries.
       This is not an atomic capture of a live host directory, runtime-process
-      sealing or authorization to share artifacts. Live registry planning IO,
-      unsupported configuration sources, in-memory/process state, external tool
+      sealing or authorization to share artifacts. Network/unlocked/alternate-registry
+      acquisition, noncanonical cache aliases, unsupported configuration sources,
+      in-memory/process state, external tool
       identity and uncontrolled build scripts/proc macros remain explicit gaps.
       Exhaustion or uncontrolled discovery cannot issue an input identity.
 
       | Input boundary | Supported capture / remaining status |
       | --- | --- |
-      | Native projects, path dependencies, standalone source/extern roots | Bounded repeated acquisition into immutable owned bytes, closed discovery/source reads; CHECK/BUILD/run tested at workers 1/8. |
+      | Native projects, path dependencies, canonical checksum-locked cached crates.io packages, standalone source/extern roots | Bounded repeated acquisition into immutable owned bytes, closed discovery/source/archive reads; CHECK/BUILD/run tested at workers 1/8. |
       | Missing candidates and paths outside authorized roots | Immutable absence / rejection, never ambient host fallback. Symlinks, special files and exhausted limits reject. |
-      | Registry/git planning, Cargo configuration, reviewed probes, external tools/linkers | Legacy compatibility remains explicitly unproven or frozen mode rejects. |
+      | Network/unlocked/alternate registry acquisition, noncanonical cache aliases, Cargo configuration, reviewed probes, external tools/linkers | Legacy compatibility remains explicitly unproven or frozen mode rejects. Archive links and unsupported header extensions reject. |
       | Build scripts, proc macros, arbitrary process/in-memory state, atomic host snapshots | Not closed by this namespace capture. Complete-input-capture remains incomplete. |
       | Artifact reuse and global sharing | Disabled. No persistent or global private cache is enabled by this foundation. |
 - [ ] Add bounded asynchronous persistence, atomic manifests, durable checkpoint

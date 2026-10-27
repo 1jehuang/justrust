@@ -26,6 +26,33 @@ pub(crate) fn directories(
     capture_roots_between(root, additional, excluded_output, || {})
 }
 
+#[cfg(test)]
+fn directories_and_files(
+    root: &Path,
+    additional: &[PathBuf],
+    files: &[PathBuf],
+    excluded_output: &Path,
+) -> Result<Arc<SourceSnapshot>, ManifestError> {
+    capture_inputs_between(root, additional, files, excluded_output, || {})
+}
+
+pub(crate) fn directories_files_excluding(
+    root: &Path,
+    additional: &[PathBuf],
+    files: &[PathBuf],
+    excluded_inputs: &[PathBuf],
+    excluded_output: &Path,
+) -> Result<Arc<SourceSnapshot>, ManifestError> {
+    capture_filtered_between(
+        root,
+        additional,
+        files,
+        excluded_inputs,
+        excluded_output,
+        || {},
+    )
+}
+
 #[cfg(all(test, target_os = "linux"))]
 fn capture_between(
     root: &Path,
@@ -35,16 +62,37 @@ fn capture_between(
     capture_roots_between(root, &[], excluded_output, between)
 }
 
-#[cfg(target_os = "linux")]
 fn capture_roots_between(
     root: &Path,
     additional: &[PathBuf],
     excluded_output: &Path,
     between: impl FnOnce(),
 ) -> Result<Arc<SourceSnapshot>, ManifestError> {
-    let first = observe(root, additional, excluded_output)?;
+    capture_inputs_between(root, additional, &[], excluded_output, between)
+}
+
+fn capture_inputs_between(
+    root: &Path,
+    additional: &[PathBuf],
+    files: &[PathBuf],
+    excluded_output: &Path,
+    between: impl FnOnce(),
+) -> Result<Arc<SourceSnapshot>, ManifestError> {
+    capture_filtered_between(root, additional, files, &[], excluded_output, between)
+}
+
+#[cfg(target_os = "linux")]
+fn capture_filtered_between(
+    root: &Path,
+    additional: &[PathBuf],
+    files: &[PathBuf],
+    excluded_inputs: &[PathBuf],
+    excluded_output: &Path,
+    between: impl FnOnce(),
+) -> Result<Arc<SourceSnapshot>, ManifestError> {
+    let first = observe(root, additional, files, excluded_inputs, excluded_output)?;
     between();
-    let second = observe(root, additional, excluded_output)?;
+    let second = observe(root, additional, files, excluded_inputs, excluded_output)?;
     if first.stamps != second.stamps || first.snapshot.digest() != second.snapshot.digest() {
         return Err(ManifestError(
             "input changed during native namespace capture; retry the command".into(),
@@ -54,8 +102,10 @@ fn capture_roots_between(
 }
 
 #[cfg(not(target_os = "linux"))]
-fn capture_roots_between(
+fn capture_filtered_between(
     _: &Path,
+    _: &[PathBuf],
+    _: &[PathBuf],
     _: &[PathBuf],
     _: &Path,
     _: impl FnOnce(),
@@ -90,6 +140,8 @@ fn stamp(metadata: &std::fs::Metadata) -> [u64; 8] {
 fn observe(
     root: &Path,
     additional: &[PathBuf],
+    selected_files: &[PathBuf],
+    excluded_inputs: &[PathBuf],
     excluded_output: &Path,
 ) -> Result<Observation, ManifestError> {
     use std::io::Read;
@@ -97,6 +149,21 @@ fn observe(
     let infrastructure =
         |error| ManifestError(format!("infrastructure: native input capture: {error}"));
     let roots = SourceSnapshot::normalized_roots(root, additional).map_err(ManifestError)?;
+    if selected_files.len() > MAX_ENTRIES {
+        return Err(ManifestError(
+            "native input capture entry limit exceeded".into(),
+        ));
+    }
+    let mut namespace_roots: std::collections::BTreeSet<_> = additional.iter().cloned().collect();
+    for file in selected_files {
+        namespace_roots.insert(
+            file.parent()
+                .ok_or_else(|| ManifestError("capture file has no parent".into()))?
+                .to_owned(),
+        );
+    }
+    let namespace_roots: Vec<_> = namespace_roots.into_iter().collect();
+    SourceSnapshot::normalized_roots(root, &namespace_roots).map_err(ManifestError)?;
     for root in std::iter::once(root).chain(additional.iter().map(PathBuf::as_path)) {
         let canonical = root.canonicalize().map_err(infrastructure)?;
         if canonical != root
@@ -116,6 +183,26 @@ fn observe(
         .iter()
         .map(|root| (root.clone(), root.clone()))
         .collect();
+    for file in selected_files {
+        if roots.iter().any(|root| file.starts_with(root)) {
+            continue;
+        }
+        if file.canonicalize().map_err(infrastructure)? != *file
+            || !std::fs::symlink_metadata(file)
+                .map_err(infrastructure)?
+                .is_file()
+        {
+            return Err(ManifestError(
+                "unsupported: capture files must be canonical regular files".into(),
+            ));
+        }
+        let parent = file.parent().unwrap().to_owned();
+        stamps.insert(
+            parent.clone(),
+            stamp(&std::fs::symlink_metadata(&parent).map_err(infrastructure)?),
+        );
+        pending.push((parent, file.clone()));
+    }
     while let Some((capture_root, path)) = pending.pop() {
         if stamps.len() >= MAX_ENTRIES {
             return Err(ManifestError(
@@ -171,6 +258,7 @@ fn observe(
             for entry in std::fs::read_dir(&path).map_err(infrastructure)? {
                 let entry = entry.map_err(infrastructure)?.path();
                 if entry == excluded_output
+                    || excluded_inputs.contains(&entry)
                     || entry == capture_root.join(".git")
                     || entry == capture_root.join("target")
                 {
@@ -242,14 +330,67 @@ fn observe(
             ));
         }
     }
-    let snapshot =
-        SourceSnapshot::with_roots(root.to_owned(), additional, files).map_err(ManifestError)?;
+    let snapshot = SourceSnapshot::with_roots(root.to_owned(), &namespace_roots, files)
+        .map_err(ManifestError)?;
     Ok(Observation { snapshot, stamps })
 }
 
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
+    #[test]
+    fn selected_archives_are_owned_without_sweeping_the_cache() {
+        use crate::compiler::source::SourceReader;
+        let base = std::env::temp_dir().join(format!("jr-capture-archives-{}", std::process::id()));
+        let root = base.join("app");
+        let cache = base.join("cache");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&cache).unwrap();
+        let root = root.canonicalize().unwrap();
+        let file = cache.canonicalize().unwrap().join("dep.crate");
+        std::fs::write(root.join("main.rs"), "fn main() {}").unwrap();
+        std::fs::write(&file, b"owned archive").unwrap();
+        std::os::unix::fs::symlink("missing", cache.join("unrelated")).unwrap();
+        let files = [file.clone()];
+        let output = root.join("target");
+        let frozen = directories_and_files(&root, &[], &files, &output).unwrap();
+        assert!(!frozen.reader().exists(&cache.join("unrelated")).unwrap());
+        assert!(
+            capture_inputs_between(&root, &[], &files, &output, || {
+                std::fs::write(&file, b"changed archive").unwrap();
+            })
+            .is_err()
+        );
+        assert!(
+            capture_inputs_between(&root, &[], &files, &output, || {
+                std::fs::remove_file(&file).unwrap();
+            })
+            .is_err()
+        );
+        assert_eq!(
+            frozen.reader().read(&file, MAX_BYTES).unwrap(),
+            b"owned archive"
+        );
+        std::os::unix::fs::symlink(root.join("main.rs"), &file).unwrap();
+        assert!(directories_and_files(&root, &[], &files, &output).is_err());
+        std::fs::remove_file(&file).unwrap();
+        std::fs::File::create(&file)
+            .unwrap()
+            .set_len((MAX_BYTES / 2) as u64)
+            .unwrap();
+        std::fs::File::create(root.join("large"))
+            .unwrap()
+            .set_len((MAX_BYTES / 2) as u64)
+            .unwrap();
+        assert!(
+            directories_and_files(&root, &[], &files, &output)
+                .unwrap_err()
+                .0
+                .contains("byte limit")
+        );
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
     #[test]
     fn cache_markers_cannot_overrun_the_aggregate_entry_limit() {
         let root =

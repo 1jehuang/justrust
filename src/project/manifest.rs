@@ -524,9 +524,14 @@ fn load_observed(manifest: &Path, inputs: &mut Recorder) -> Result<Workspace, Ma
     while i < loader.packages.len() {
         let deps: Vec<_> = loader.packages[i].dependencies.clone();
         for dep in deps {
-            if loader.inputs.is_frozen() && !matches!(dep.source, DependencySource::Path(_)) {
+            if loader.inputs.is_frozen()
+                && matches!(
+                    dep.source,
+                    DependencySource::Git | DependencySource::UnresolvedRegistry
+                )
+            {
                 return err(
-                    "unsupported: immutable native projects require path dependencies; registry/git acquisition and archive tools are not admitted",
+                    "unsupported: immutable native projects require path or checksum-locked cached registry dependencies; git/unlocked acquisition is not admitted",
                 );
             }
             // Path declarations must still name a real package, as Cargo
@@ -554,15 +559,9 @@ fn load_observed(manifest: &Path, inputs: &mut Recorder) -> Result<Workspace, Ma
                     }
                 }
                 DependencySource::Registry(registry) => {
-                    if loader.inputs.is_frozen() {
-                        return err(
-                            "unsupported: immutable native projects cannot acquire registry packages or run archive tools",
-                        );
-                    }
-                    loader.inputs.uncontrolled();
                     // Freeze successful discovery once. Missing optional sources
                     // remain unavailable in this workspace even if installed later.
-                    let selected = registry_source_root(registry);
+                    let selected = registry_source_root(registry, loader.inputs);
                     if dep.optional && selected.is_err() {
                         continue;
                     }
@@ -924,7 +923,6 @@ impl Loader<'_> {
         package: &LockedRegistryPackage,
         selected: (PathBuf, PathBuf),
     ) -> Result<usize, ManifestError> {
-        self.inputs.uncontrolled();
         let (root, archive) = selected;
         let index = self
             .find_lock_package(&package.name, &package.version, Some(&package.source))
@@ -1479,7 +1477,10 @@ pub fn visible_dependencies(
             DependencySource::Registry(registry) => ws
                 .inputs
                 .registry_package(registry)
-                .filter(|binding| authenticate_registry_binding(registry, binding).is_ok())
+                .filter(|binding| {
+                    authenticate_registry_binding(registry, binding, ws.inputs.source_snapshot())
+                        .is_ok()
+                })
                 .map(|binding| binding.index),
             DependencySource::UnresolvedRegistry | DependencySource::Git => None,
         };
@@ -1511,8 +1512,9 @@ pub fn visible_dependencies(
 
 fn registry_source_root(
     package: &LockedRegistryPackage,
+    inputs: &mut Recorder,
 ) -> Result<(PathBuf, PathBuf), ManifestError> {
-    let cargo_home = cargo_home();
+    let cargo_home = cargo_home(inputs);
     let registry = cargo_home.join("registry");
     if package.source != "registry+https://github.com/rust-lang/crates.io-index" {
         return err(format!(
@@ -1542,22 +1544,18 @@ fn registry_source_root(
     let src_root = registry.join("src");
     let cache_root = registry.join("cache");
     let mut candidates = Vec::new();
-    let entries = std::fs::read_dir(&src_root)
-        .map_err(|e| ManifestError(format!("{}: {e}", src_root.display())))?;
-    for entry in entries.flatten() {
-        let registry_dir = entry.path();
-        let Some(name) = registry_dir.file_name().and_then(|name| name.to_str()) else {
-            continue;
-        };
-        if !matches!(
-            name,
-            "index.crates.io-1949cf8c6b5b557f" | "github.com-1ecc6299db9ec823"
-        ) {
-            continue;
-        }
+    for name in [
+        "index.crates.io-1949cf8c6b5b557f",
+        "github.com-1ecc6299db9ec823",
+    ] {
+        let registry_dir = src_root.join(name);
         let source_dir = registry_dir.join(&stem);
         let archive = cache_root.join(name).join(format!("{stem}.crate"));
-        if source_dir.join("Cargo.toml").is_file() && archive.is_file() {
+        if inputs.within_namespace(&source_dir.join("Cargo.toml"))
+            && inputs.within_namespace(&archive)
+            && inputs.is_file(&source_dir.join("Cargo.toml"))
+            && inputs.is_file(&archive)
+        {
             candidates.push((source_dir, archive));
         }
     }
@@ -1572,23 +1570,24 @@ fn registry_source_root(
     }
     let mut matched = Vec::new();
     for (source_dir, archive) in candidates {
-        let bytes = std::fs::read(&archive)
+        let bytes = inputs
+            .read_bytes(&archive)
             .map_err(|e| ManifestError(format!("{}: {e}", archive.display())))?;
         if sha256(&bytes) == package.checksum {
-            verify_registry_sources(&source_dir, &archive, &stem)?;
-            matched.push((source_dir, archive));
+            let root = inputs
+                .canonicalize(&source_dir)
+                .map_err(|e| ManifestError(e.to_string()))?;
+            let archive = inputs
+                .canonicalize(&archive)
+                .map_err(|e| ManifestError(e.to_string()))?;
+            verify_registry_sources(&root, &bytes, &stem, inputs)?;
+            matched.push((root, archive));
         }
     }
     match matched.len() {
         1 => {
             let (root, archive) = matched.pop().unwrap();
-            Ok((
-                root.canonicalize()
-                    .map_err(|e| ManifestError(e.to_string()))?,
-                archive
-                    .canonicalize()
-                    .map_err(|e| ManifestError(e.to_string()))?,
-            ))
+            Ok((root, archive))
         }
         0 => err(format!(
             "locked registry package `{}` {} from {} failed checksum validation against every cached archive",
@@ -1604,21 +1603,29 @@ fn registry_source_root(
 fn authenticate_registry_binding(
     package: &LockedRegistryPackage,
     binding: &RegistryBinding,
+    snapshot: Option<&Arc<crate::compiler::source::SourceSnapshot>>,
 ) -> Result<(), ManifestError> {
-    if binding.root.canonicalize().ok().as_ref() != Some(&binding.root)
-        || binding.archive.canonicalize().ok().as_ref() != Some(&binding.archive)
+    let mut inputs = match snapshot {
+        Some(snapshot) => Recorder::frozen(snapshot.clone(), BTreeMap::new())
+            .map_err(|e| ManifestError(e.into()))?,
+        None => Recorder::new(),
+    };
+    if inputs.canonicalize(&binding.root).ok().as_ref() != Some(&binding.root)
+        || inputs.canonicalize(&binding.archive).ok().as_ref() != Some(&binding.archive)
     {
         return err("frozen registry source or archive path changed");
     }
-    let bytes = std::fs::read(&binding.archive)
+    let bytes = inputs
+        .read_bytes(&binding.archive)
         .map_err(|e| ManifestError(format!("{}: {e}", binding.archive.display())))?;
     if sha256(&bytes) != package.checksum {
         return err("frozen registry archive checksum changed");
     }
     verify_registry_sources(
         &binding.root,
-        &binding.archive,
+        &bytes,
         &format!("{}-{}", package.name, package.version),
+        &mut inputs,
     )
 }
 
@@ -1671,61 +1678,21 @@ fn validate_locked_version(requirement: &str, locked: &str) -> Result<(), Manife
     Ok(())
 }
 
-/// Compare every extracted file against the checksum-authenticated archive.
-/// Cargo's extraction marker and checksum JSON are not source authority.
-/// This read-only bootstrap uses system tar, never Cargo, rustc, or a fetcher.
-fn verify_registry_sources(root: &Path, archive: &Path, stem: &str) -> Result<(), ManifestError> {
-    use std::collections::BTreeSet;
-    use std::process::Command;
-    let listing = Command::new("tar")
-        .env_remove("TAR_OPTIONS")
-        .env_remove("GZIP")
-        .arg("-tzf")
-        .arg(archive)
-        .output()
-        .map_err(|e| ManifestError(format!("registry archive inspection failed: {e}")))?;
-    if !listing.status.success() {
-        return err("registry archive inspection failed");
-    }
-    let listing = std::str::from_utf8(&listing.stdout)
-        .map_err(|_| ManifestError("registry archive has non-UTF-8 paths".into()))?;
-    let mut expected = BTreeSet::new();
-    for entry in listing.lines() {
-        let path = Path::new(entry);
-        if !path
-            .components()
-            .all(|c| matches!(c, std::path::Component::Normal(_)))
-        {
-            return err("registry archive has unsafe paths");
-        }
-        let relative = path
-            .strip_prefix(stem)
-            .map_err(|_| ManifestError("registry archive package identity mismatch".into()))?;
-        if relative.as_os_str().is_empty() || entry.ends_with('/') {
-            continue;
-        }
-        if !expected.insert(relative.to_path_buf()) {
-            return err("registry archive has duplicate file paths");
-        }
+/// Compare recorded source bytes against the owned checksum-authenticated archive.
+/// Extraction markers are not source authority. Nothing is executed or extracted.
+fn verify_registry_sources(
+    root: &Path,
+    archive: &[u8],
+    stem: &str,
+    inputs: &mut Recorder,
+) -> Result<(), ManifestError> {
+    let expected = super::registry_archive::files(archive, stem)?;
+    for (relative, original) in &expected {
         let local = root.join(relative);
-        if !std::fs::symlink_metadata(&local).is_ok_and(|m| m.file_type().is_file()) {
-            return err(format!(
-                "registry source checksum validation failed at `{}`",
-                local.display()
-            ));
-        }
-        let original = Command::new("tar")
-            .env_remove("TAR_OPTIONS")
-            .env_remove("GZIP")
-            .arg("-xOzf")
-            .arg(archive)
-            .arg("--")
-            .arg(entry)
-            .output()
-            .map_err(|e| ManifestError(format!("registry archive inspection failed: {e}")))?;
-        let bytes = std::fs::read(&local)
-            .map_err(|e| ManifestError(format!("{}: {e}", local.display())))?;
-        if !original.status.success() || original.stdout != bytes {
+        if inputs.canonicalize(&local).ok().as_ref() != Some(&local)
+            || !inputs.is_file(&local)
+            || inputs.read_bytes(&local).ok().as_ref() != Some(original)
+        {
             return err(format!(
                 "registry source checksum validation failed at `{}`",
                 local.display()
@@ -1733,44 +1700,54 @@ fn verify_registry_sources(root: &Path, archive: &Path, stem: &str) -> Result<()
         }
     }
     let mut dirs = vec![root.to_path_buf()];
+    let mut entries = 0usize;
     while let Some(dir) = dirs.pop() {
-        if !std::fs::symlink_metadata(&dir).is_ok_and(|m| m.file_type().is_dir()) {
+        if inputs.canonicalize(&dir).ok().as_ref() != Some(&dir) {
             return err("registry source contains a symlink or non-directory");
         }
-        for entry in std::fs::read_dir(&dir).map_err(|e| ManifestError(e.to_string()))? {
-            let entry = entry.map_err(|e| ManifestError(e.to_string()))?;
-            let path = entry.path();
-            let kind = entry
-                .file_type()
-                .map_err(|e| ManifestError(e.to_string()))?;
-            if kind.is_dir() {
+        for path in inputs
+            .read_dir(&dir)
+            .map_err(|e| ManifestError(e.to_string()))?
+        {
+            entries += 1;
+            if entries > 4096 {
+                return err("registry source entry limit exceeded");
+            }
+            if inputs.canonicalize(&path).ok().as_ref() != Some(&path) {
+                return err("registry source contains a symlink or non-directory");
+            }
+            if inputs.is_file(&path) {
+                if !expected.contains_key(path.strip_prefix(root).unwrap())
+                    && (inputs.is_frozen()
+                        || (path != root.join(".cargo-ok")
+                            && path != root.join(".cargo-checksum.json")))
+                {
+                    return err(format!(
+                        "registry source has unauthenticated file `{}`",
+                        path.display()
+                    ));
+                }
+            } else {
                 dirs.push(path);
-            } else if !kind.is_file()
-                || (!expected.contains(path.strip_prefix(root).unwrap())
-                    && path != root.join(".cargo-ok")
-                    && path != root.join(".cargo-checksum.json"))
-            {
-                return err(format!(
-                    "registry source has unauthenticated file `{}`",
-                    path.display()
-                ));
             }
         }
-    }
-    if !expected.contains(Path::new("Cargo.toml")) {
-        return err("registry archive lacks Cargo.toml");
     }
     Ok(())
 }
 
-fn cargo_home() -> PathBuf {
-    std::env::var_os("CARGO_HOME")
+fn cargo_home(inputs: &mut Recorder) -> PathBuf {
+    inputs
+        .env("CARGO_HOME")
         .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cargo")))
+        .or_else(|| {
+            inputs
+                .env("HOME")
+                .map(|home| PathBuf::from(home).join(".cargo"))
+        })
         .unwrap_or_else(|| PathBuf::from(".cargo"))
 }
 
-fn sha256(input: &[u8]) -> String {
+pub(super) fn sha256(input: &[u8]) -> String {
     const K: [u32; 64] = [
         0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
         0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,

@@ -25,6 +25,167 @@ fn stock_command() -> Command {
 const CRATES_IO_CACHE_ID: &str = "index.crates.io-1949cf8c6b5b557f";
 
 #[test]
+fn authenticated_registry_capture_checks_builds_runs_transitively_without_tar() {
+    let base = target_dir("immutable-registry-cli");
+    let app = base.join("app");
+    let home = base.join("home");
+    let src = home.join("registry/src").join(CRATES_IO_CACHE_ID);
+    let cache = home.join("registry/cache").join(CRATES_IO_CACHE_ID);
+    std::fs::create_dir_all(app.join("src")).unwrap();
+    std::fs::create_dir_all(&cache).unwrap();
+    std::fs::create_dir_all(base.join("no-tools")).unwrap();
+    std::fs::write(
+        app.join("Cargo.toml"),
+        "[package]\nname='app'\nversion='0.1.0'\nedition='2024'\n[dependencies]\ndep='=0.1.0'\n",
+    )
+    .unwrap();
+    std::fs::write(
+        app.join("src/main.rs"),
+        "fn main() { assert_eq!(dep::value(), 42); }",
+    )
+    .unwrap();
+    let mut lock =
+        "version=4\n[[package]]\nname='app'\nversion='0.1.0'\ndependencies=['dep']\n".to_owned();
+    for (name, dependencies, code) in [
+        (
+            "dep",
+            "[dependencies]\nleaf='=0.1.0'\n",
+            "pub fn value() -> i32 { leaf::value() }",
+        ),
+        ("leaf", "", "pub fn value() -> i32 { 42 }"),
+    ] {
+        let stem = format!("{name}-0.1.0");
+        let root = src.join(&stem);
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(
+            root.join("Cargo.toml"),
+            format!("[package]\nname='{name}'\nversion='0.1.0'\nedition='2024'\n{dependencies}"),
+        )
+        .unwrap();
+        std::fs::write(root.join("src/lib.rs"), code).unwrap();
+        let archive = cache.join(format!("{stem}.crate"));
+        // Fixture construction only. The compiler invocation below has no tar,
+        // gzip, shell or checksum utility available in PATH.
+        let generated = Command::new("tar")
+            .args(["-czf"])
+            .arg(&archive)
+            .arg("-C")
+            .arg(&src)
+            .arg(&stem)
+            .output()
+            .unwrap();
+        assert!(generated.status.success(), "{generated:?}");
+        let sum = Command::new("sha256sum").arg(&archive).output().unwrap();
+        assert!(sum.status.success());
+        let sum = String::from_utf8(sum.stdout).unwrap();
+        let sum = sum.split_whitespace().next().unwrap();
+        let deps = if name == "dep" {
+            "dependencies=['leaf']\n"
+        } else {
+            ""
+        };
+        lock.push_str(&format!("[[package]]\nname='{name}'\nversion='0.1.0'\nsource='registry+https://github.com/rust-lang/crates.io-index'\nchecksum='{sum}'\n{deps}"));
+    }
+    std::fs::write(app.join("Cargo.lock"), &lock).unwrap();
+    // Compile exactly these unchanged sources with stock, without a network
+    // resolver or fixture-specific source replacement in the native manifest.
+    for name in ["leaf", "dep"] {
+        let mut stock = Command::new(stock_rustc::stock_rustc());
+        stock
+            .args(["--edition=2024", "--crate-type=rlib", "--crate-name", name])
+            .arg(src.join(format!("{name}-0.1.0/src/lib.rs")))
+            .arg("-o")
+            .arg(base.join(format!("lib{name}.rlib")));
+        if name == "dep" {
+            stock
+                .arg("--extern")
+                .arg(format!("leaf={}", base.join("libleaf.rlib").display()));
+        }
+        let output = stock.output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+    }
+    let stock = Command::new(stock_rustc::stock_rustc())
+        .arg("--edition=2024")
+        .arg(app.join("src/main.rs"))
+        .arg("--extern")
+        .arg(format!("dep={}", base.join("libdep.rlib").display()))
+        .arg("-L")
+        .arg(format!("dependency={}", base.display()))
+        .arg("-o")
+        .arg(base.join("stock"))
+        .output()
+        .unwrap();
+    assert!(stock.status.success(), "{stock:?}");
+    let expected = Command::new(base.join("stock")).output().unwrap();
+    assert!(expected.status.success());
+    // This unrelated cache content must never be swept into the capture.
+    std::os::unix::fs::symlink("missing", cache.join("unrelated")).unwrap();
+    let invoke = |command: &str, workers: &str, output: &str| {
+        Command::new(env!("CARGO_BIN_EXE_jr-rust"))
+            .args([command, "-j", workers])
+            .current_dir(&app)
+            .env("CARGO_HOME", &home)
+            .env("CARGO_TARGET_DIR", base.join(output))
+            .env("PATH", base.join("no-tools"))
+            .output()
+            .unwrap()
+    };
+    for workers in ["1", "8"] {
+        for command in ["check", "build", "run"] {
+            let output = invoke(command, workers, "native");
+            assert!(output.status.success(), "{output:?}");
+            assert!(
+                String::from_utf8_lossy(&output.stderr)
+                    .contains("Input capture: immutable native project namespace")
+            );
+            assert_eq!(output.stdout, expected.stdout);
+        }
+    }
+    // Noncanonical cache spellings retain legacy compatibility without making
+    // a false immutable-capture claim or retrying after an acquisition failure.
+    let alias = base.join("home-alias");
+    std::os::unix::fs::symlink(&home, &alias).unwrap();
+    let legacy = Command::new(env!("CARGO_BIN_EXE_jr-rust"))
+        .arg("check")
+        .current_dir(&app)
+        .env("CARGO_HOME", alias)
+        .env("CARGO_TARGET_DIR", base.join("alias-native"))
+        .env("PATH", base.join("no-tools"))
+        .output()
+        .unwrap();
+    assert!(legacy.status.success(), "{legacy:?}");
+    assert!(String::from_utf8_lossy(&legacy.stderr).contains("input capture is unproven"));
+    assert!(!String::from_utf8_lossy(&legacy.stderr).contains("Input capture: immutable"));
+    let archive = cache.join("leaf-0.1.0.crate");
+    let original = std::fs::read(&archive).unwrap();
+    std::fs::write(&archive, b"corrupt archive").unwrap();
+    for workers in ["1", "8"] {
+        let output = invoke("build", workers, "invalid-archive");
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("checksum validation"));
+        assert!(!base.join("invalid-archive/debug/app").exists());
+    }
+    std::fs::remove_file(&archive).unwrap();
+    let missing = invoke("check", "8", "missing-archive");
+    assert!(!missing.status.success());
+    assert!(String::from_utf8_lossy(&missing.stderr).contains("not cached"));
+    std::fs::write(&archive, original).unwrap();
+    let source = src.join("leaf-0.1.0/src/lib.rs");
+    std::fs::write(&source, "pub fn value() -> i32 { 99 }").unwrap();
+    let modified = invoke("build", "1", "modified-source");
+    assert!(!modified.status.success());
+    assert!(String::from_utf8_lossy(&modified.stderr).contains("source checksum validation"));
+    assert!(!base.join("modified-source/debug/app").exists());
+    std::fs::write(&source, "pub fn value() -> i32 { 42 }").unwrap();
+    std::fs::write(src.join("leaf-0.1.0/src/extra.rs"), "").unwrap();
+    let extra = invoke("build", "8", "extra-source");
+    assert!(!extra.status.success());
+    assert!(String::from_utf8_lossy(&extra.stderr).contains("unauthenticated file"));
+    assert!(!base.join("extra-source/debug/app").exists());
+    std::fs::remove_dir_all(base).unwrap();
+}
+
+#[test]
 fn sibling_path_dependencies_are_captured_for_cli_check_build_run() {
     let base = target_dir("captured-siblings-cli");
     let root = base.join("app");

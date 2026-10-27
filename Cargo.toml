@@ -7,6 +7,7 @@ publish = false
 
 [dependencies]
 blake3 = { version = "=1.8.7", default-features = false }
+flate2 = { version = "=1.1.10", default-features = false, features = ["rust_backend"] }
 unicode-ident = "=1.0.24"
 
 [features]

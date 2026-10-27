@@ -24,8 +24,8 @@ struct Observation {
     value: Observed,
 }
 
-/// Discovery evidence is separate from whole-build completeness. Registry
-/// tools, registry planning IO and atomic snapshots remain outside this scope.
+/// Discovery evidence is separate from whole-build completeness.
+/// Runtime/process sealing and atomic snapshots remain outside this scope.
 #[derive(Clone, Debug)]
 pub struct DiscoveryInputs {
     snapshot: Option<Arc<SourceSnapshot>>,
@@ -67,6 +67,40 @@ impl DiscoveryInputs {
         package: &super::manifest::LockedRegistryPackage,
     ) -> Option<&RegistryBinding> {
         self.registry_packages.get(package)
+    }
+    pub(crate) fn registry_archives(&self) -> Vec<PathBuf> {
+        self.registry_packages
+            .values()
+            .map(|binding| binding.archive.clone())
+            .collect()
+    }
+    pub(crate) fn registry_capture_is_canonical(&self) -> bool {
+        let home = self
+            .environment("CARGO_HOME")
+            .map(PathBuf::from)
+            .or_else(|| {
+                self.environment("HOME")
+                    .map(|home| PathBuf::from(home).join(".cargo"))
+            });
+        self.registry_packages.iter().all(|(key, binding)| {
+            home.as_ref().is_some_and(|home| {
+                home.is_absolute()
+                    && [
+                        "index.crates.io-1949cf8c6b5b557f",
+                        "github.com-1ecc6299db9ec823",
+                    ]
+                    .iter()
+                    .any(|id| {
+                        let stem = format!("{}-{}", key.name, key.version);
+                        binding.root == home.join("registry/src").join(id).join(&stem)
+                            && binding.archive
+                                == home
+                                    .join("registry/cache")
+                                    .join(id)
+                                    .join(format!("{stem}.crate"))
+                    })
+            })
+        })
     }
     pub fn observation_count(&self) -> usize {
         self.observations.len()
@@ -324,6 +358,10 @@ impl Recorder {
         r.unwrap_or(false)
     }
     pub(crate) fn read_to_string(&mut self, path: &Path) -> io::Result<String> {
+        String::from_utf8(self.read_bytes(path)?)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+    }
+    pub(crate) fn read_bytes(&mut self, path: &Path) -> io::Result<Vec<u8>> {
         let r = match &self.snapshot {
             Some(snapshot) => snapshot.reader().read(path, MAX_BYTES + 1),
             None => read_bounded(path),
@@ -339,7 +377,13 @@ impl Recorder {
         if let Err(e) = &r {
             self.error(e.kind());
         }
-        String::from_utf8(r?).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+        let bytes = r?;
+        if bytes.len() > MAX_BYTES {
+            return Err(io::Error::other(
+                "project discovery input byte limit exceeded",
+            ));
+        }
+        Ok(bytes)
     }
     pub(crate) fn read_dir(&mut self, path: &Path) -> io::Result<Vec<PathBuf>> {
         let r = match &self.snapshot {
@@ -408,17 +452,17 @@ impl Recorder {
         Ok(())
     }
     /// Freeze an authenticated selection, not permission to reuse its mutable bytes.
-    /// Registry inspection still invokes an uncontrolled external tool.
+    /// Source and archive observations are independently recorded and bounded.
     pub(crate) fn bind_registry_package(
         &mut self,
         package: &super::manifest::LockedRegistryPackage,
         binding: RegistryBinding,
     ) -> Result<(), &'static str> {
-        self.uncontrolled();
         if let Some(previous) = self.registry_packages.get(package) {
             return if previous == &binding {
                 Ok(())
             } else {
+                self.complete = false;
                 Err("registry selection changed during project discovery")
             };
         }
@@ -441,6 +485,24 @@ impl Recorder {
             return Err("exceeded project discovery registry identity limits");
         }
         self.binding_remaining -= cost;
+        if cost > self.remaining {
+            self.complete = false;
+        } else if self.complete {
+            self.remaining -= cost;
+            self.identity.update(&[6]);
+            for value in [
+                package.name.as_bytes(),
+                package.version.as_bytes(),
+                package.source.as_bytes(),
+                package.checksum.as_bytes(),
+                binding.root.as_os_str().as_encoded_bytes(),
+                binding.archive.as_os_str().as_encoded_bytes(),
+            ] {
+                self.identity.update(&(value.len() as u64).to_le_bytes());
+                self.identity.update(value);
+            }
+            self.identity.update(&(binding.index as u64).to_le_bytes());
+        }
         self.registry_packages.insert(package.clone(), binding);
         Ok(())
     }
@@ -938,7 +1000,7 @@ mod tests {
     }
 
     #[test]
-    fn registry_bindings_are_bounded_and_never_authorize_sharing() {
+    fn registry_bindings_are_bounded_and_bound_in_discovery_identity() {
         let key = manifest::LockedRegistryPackage {
             name: "dep".into(),
             version: "0.1.0".into(),
@@ -968,6 +1030,167 @@ mod tests {
         exhausted.binding_remaining = 0;
         assert!(exhausted.bind_registry_package(&key, binding).is_err());
         assert!(exhausted.finish().registry_package(&key).is_none());
+    }
+
+    #[test]
+    fn immutable_registry_capture_survives_source_archive_and_manifest_deletion() {
+        let f = Fixture::new();
+        f.write("app/Cargo.toml", "[package]\nname='app'\nversion='0.1.0'\nedition='2024'\n[dependencies]\ndep='=0.1.0'\n");
+        f.write(
+            "app/src/main.rs",
+            "fn main() { assert_eq!(dep::value(), 42); }",
+        );
+        let mut lock =
+            "version=4\n[[package]]\nname='app'\nversion='0.1.0'\ndependencies=['dep']\n"
+                .to_owned();
+        for (name, dependencies, source) in [
+            (
+                "dep",
+                "[dependencies]\nleaf='=0.1.0'\n",
+                "pub fn value() -> i32 { leaf::value() }",
+            ),
+            ("leaf", "", "pub fn value() -> i32 { 42 }"),
+        ] {
+            let manifest = format!(
+                "[package]\nname='{name}'\nversion='0.1.0'\nedition='2024'\n{dependencies}"
+            );
+            let stem = format!("{name}-0.1.0");
+            let base = format!("home/registry/src/index.crates.io-1949cf8c6b5b557f/{stem}");
+            f.write(&format!("{base}/Cargo.toml"), &manifest);
+            f.write(&format!("{base}/src/lib.rs"), source);
+            let archive = super::super::registry_archive::tests::archive(&[
+                (&format!("{stem}/Cargo.toml"), manifest.as_bytes(), b'0'),
+                (&format!("{stem}/src/lib.rs"), source.as_bytes(), b'0'),
+            ]);
+            let archive_path = f.0.join(format!(
+                "home/registry/cache/index.crates.io-1949cf8c6b5b557f/{stem}.crate"
+            ));
+            std::fs::create_dir_all(archive_path.parent().unwrap()).unwrap();
+            std::fs::write(archive_path, &archive).unwrap();
+            f.write(
+                &format!("{base}/.cargo-ok"),
+                "pub fn forged_source() -> i32 { 99 }",
+            );
+            let deps = if name == "dep" {
+                "dependencies=['leaf']\n"
+            } else {
+                ""
+            };
+            lock.push_str(&format!("[[package]]\nname='{name}'\nversion='0.1.0'\nsource='registry+https://github.com/rust-lang/crates.io-index'\nchecksum='{}'\n{deps}", manifest::sha256(&archive)));
+        }
+        f.write("app/Cargo.lock", &lock);
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "project::inputs::tests::immutable_registry_capture_child",
+                "--nocapture",
+            ])
+            .env("JR_FROZEN_REGISTRY_CHILD", &f.0)
+            .env("CARGO_HOME", f.0.join("home"))
+            .env("CARGO_TARGET_DIR", f.0.join("output"))
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+    }
+
+    #[test]
+    fn immutable_registry_capture_child() {
+        let Some(root) = std::env::var_os("JR_FROZEN_REGISTRY_CHILD") else {
+            return;
+        };
+        let root = PathBuf::from(root);
+        let app = root.join("app");
+        let mut driver = crate::project::driver::Driver::capture(
+            Some(&app.join("Cargo.toml")),
+            &app,
+            Default::default(),
+        )
+        .unwrap();
+        assert!(driver.ws.inputs.source_snapshot().is_some());
+        assert_eq!(driver.ws.inputs.registry_archives().len(), 2);
+        let frozen = driver.ws.inputs.source_snapshot().unwrap().clone();
+        for package in driver.ws.packages.iter().filter(|package| package.registry) {
+            assert!(
+                !frozen
+                    .reader()
+                    .exists(&package.root.join(".cargo-ok"))
+                    .unwrap()
+            );
+        }
+        // Host source, lock, archives and new candidates cannot affect this driver.
+        std::fs::remove_dir_all(&app).unwrap();
+        std::fs::remove_dir_all(root.join("home/registry")).unwrap();
+        for workers in [1, 8] {
+            driver.sel.workers = workers;
+            for command in [
+                crate::project::driver::Command::Check,
+                crate::project::driver::Command::Build,
+                crate::project::driver::Command::Run,
+            ] {
+                assert_eq!(driver.run(command).unwrap(), 0);
+            }
+        }
+        // Frozen discovery reauthenticates the retained archive, not merely a
+        // caller assertion that its extracted source used to be valid.
+        let archive = driver.ws.inputs.registry_archives().remove(0);
+        let files: Vec<_> = frozen
+            .paths()
+            .map(|path| {
+                (
+                    path.to_owned(),
+                    if path == archive {
+                        b"forged".to_vec()
+                    } else {
+                        frozen.reader().read(path, MAX_BYTES).unwrap()
+                    },
+                )
+            })
+            .collect();
+        let roots: Vec<_> = driver
+            .ws
+            .packages
+            .iter()
+            .map(|p| p.root.clone())
+            .chain(
+                driver
+                    .ws
+                    .inputs
+                    .registry_archives()
+                    .iter()
+                    .map(|p| p.parent().unwrap().to_owned()),
+            )
+            .collect();
+        let forged = SourceSnapshot::with_roots(app.clone(), &roots, files).unwrap();
+        let mut environment = std::collections::BTreeMap::new();
+        environment.insert("CARGO_HOME".into(), root.join("home").into_os_string());
+        assert!(
+            manifest::load_snapshot(forged, &app.join("Cargo.toml"), environment.clone()).is_err()
+        );
+        let marker = driver
+            .ws
+            .packages
+            .iter()
+            .find(|package| package.registry)
+            .unwrap()
+            .root
+            .join(".cargo-ok");
+        let mut files: Vec<_> = frozen
+            .paths()
+            .map(|path| {
+                (
+                    path.to_owned(),
+                    frozen.reader().read(path, MAX_BYTES).unwrap(),
+                )
+            })
+            .collect();
+        files.push((marker, b"pub fn forged_source() {}".to_vec()));
+        let forged = SourceSnapshot::with_roots(app.clone(), &roots, files).unwrap();
+        assert!(
+            manifest::load_snapshot(forged, &app.join("Cargo.toml"), environment)
+                .unwrap_err()
+                .0
+                .contains("unauthenticated file")
+        );
     }
 
     #[test]
@@ -1038,7 +1261,7 @@ mod tests {
         };
         let binding = ws.inputs.registry_package(&key).unwrap().clone();
         assert_eq!(binding.index, index);
-        assert!(ws.inputs.identity().is_none());
+        assert!(ws.inputs.identity().is_some());
         let plan = |ws: &manifest::Workspace, available: bool| {
             let resolved = manifest::resolve_features(
                 ws,

@@ -257,7 +257,7 @@ fn kind_label(unit: &Unit) -> &'static str {
 impl Driver {
     /// Acquire a bounded namespace for ordinary project commands. Discovery
     /// chooses the root, then is replayed solely from the captured bytes.
-    /// Legacy registry/configuration paths remain explicitly unproven.
+    /// Noncanonical registry caches and unsupported configuration stay unproven.
     pub fn capture(
         manifest_path: Option<&Path>,
         start: &Path,
@@ -269,11 +269,15 @@ impl Driver {
         };
         let ws = manifest::load(&selected)?;
         if ws.inputs.identity().is_none()
+            || !ws.inputs.registry_capture_is_canonical()
             || ws.packages.iter().any(|package| {
-                package
-                    .dependencies
-                    .iter()
-                    .any(|dep| !matches!(dep.source, manifest::DependencySource::Path(_)))
+                package.dependencies.iter().any(|dep| {
+                    !matches!(
+                        dep.source,
+                        manifest::DependencySource::Path(_)
+                            | manifest::DependencySource::Registry(_)
+                    )
+                })
             })
         {
             eprintln!(
@@ -307,7 +311,24 @@ impl Driver {
             .iter()
             .map(|package| package.root.clone())
             .collect();
-        let snapshot = super::capture::directories(&ws.root, &roots, &output)?;
+        let excluded_markers: Vec<_> = ws
+            .packages
+            .iter()
+            .filter(|package| package.registry)
+            .flat_map(|package| {
+                [
+                    package.root.join(".cargo-ok"),
+                    package.root.join(".cargo-checksum.json"),
+                ]
+            })
+            .collect();
+        let snapshot = super::capture::directories_files_excluding(
+            &ws.root,
+            &roots,
+            &ws.inputs.registry_archives(),
+            &excluded_markers,
+            &output,
+        )?;
         if !ws.inputs.matches_current() {
             return Err(err("input changed during native project discovery/capture"));
         }
