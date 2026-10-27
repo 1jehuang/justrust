@@ -211,7 +211,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     let mut source = source.ok_or("missing Rust source file, use --help")?;
-    let probe = match (source_lock, source_item) {
+    let mut probe = match (source_lock, source_item) {
         (Some(lock_path), Some(item)) => {
             Some(compiler::source::SourceProbeRequest { lock_path, item })
         }
@@ -239,8 +239,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
     let legacy_options = source_options.clone();
     let mut captured = false;
-    if probe.is_none()
-        && source_options.native_link.objects.is_empty()
+    if source_options.native_link.objects.is_empty()
         && source_options.native_link.libraries.is_empty()
     {
         source = source.canonicalize()?;
@@ -256,6 +255,19 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     .to_owned(),
             );
         }
+        // Freeze reviewed-probe inputs into the same immutable namespace. The
+        // lock and its provider source (a relative lexical path beneath the
+        // lock directory) are read only through the snapshot reader in verify().
+        if let Some(request) = &mut probe {
+            request.lock_path = request.lock_path.canonicalize()?;
+            roots.push(
+                request
+                    .lock_path
+                    .parent()
+                    .ok_or("source lock has no parent directory")?
+                    .to_owned(),
+            );
+        }
         let excluded = output.clone().unwrap_or_else(|| root.join("target"));
         source_options.source_snapshot = Some(
             compiler::source::SourceSnapshot::capture_directories(root, &roots, &excluded)?,
@@ -264,7 +276,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
     if !captured {
         eprintln!(
-            "warning: native source input capture is unproven for this probe/external-input compatibility path; artifact reuse is disabled"
+            "warning: native source input capture is unproven for this external-input compatibility path; artifact reuse is disabled"
         );
     }
     let mut compiled = match probe {
