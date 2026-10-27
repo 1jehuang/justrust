@@ -112,27 +112,6 @@ pub(in crate::compiler) fn substitute_ty_with_scratch(
     ir::substitute_ty_with_scratch(ty, env, arguments, caller, &mut adapter, budget, scratch)
 }
 
-pub(in crate::compiler) fn substitute_callee(
-    callee: &ir::Callee,
-    env: &ir::GenericEnv,
-    arguments: &[ir::Ty],
-    closed_facts: &crate::compiler::traits::ValidatedFacts,
-    context: &mut frontend::PlanCtx,
-    budget: &ir::PlanBudget,
-    engine: Option<EngineAuthority>,
-) -> Result<ir::Callee, String> {
-    substitute_callee_with_scratch(
-        callee,
-        env,
-        arguments,
-        closed_facts,
-        context,
-        budget,
-        engine,
-        &mut crate::compiler::traits::TraitScratch::default(),
-    )
-}
-
 pub(in crate::compiler) fn substitute_callee_with_scratch(
     callee: &ir::Callee,
     env: &ir::GenericEnv,

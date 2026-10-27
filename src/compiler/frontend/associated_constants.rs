@@ -180,15 +180,6 @@ impl PlanCtx {
             .flatten()
             .copied()
     }
-    pub(in crate::compiler) fn associated_constant_count(&self) -> usize {
-        self.registry
-            .associated_constants
-            .traits
-            .iter()
-            .chain(&self.registry.associated_constants.impls)
-            .map(Vec::len)
-            .sum()
-    }
     pub(in crate::compiler) fn associated_constant_source(
         &self,
         declaration: ir::DeclId,

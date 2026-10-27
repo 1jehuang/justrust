@@ -187,6 +187,7 @@ fn borrow(kind: ir::BorrowKind) -> u64 {
     }
 }
 
+#[cfg(test)]
 pub(in crate::compiler) fn decode(
     words: &[u64],
     context: &frontend::PlanCtx,
@@ -287,6 +288,7 @@ pub(in crate::compiler) fn encode_opaque(
     Ok(words)
 }
 
+#[cfg(test)]
 pub(in crate::compiler) fn decode_opaque(
     words: &[u64],
     context: &frontend::PlanCtx,

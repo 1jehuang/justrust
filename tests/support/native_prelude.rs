@@ -1,5 +1,6 @@
 //! Exact graph expectations from the same real embedded source files.
 //! Direct frontend/authority tests intentionally remain user-only.
+#![allow(dead_code)]
 use justrust_engine::Key;
 use justrust_engine::compiler::{frontend, source, token_primitives::ExpansionBudget};
 use std::sync::Arc;

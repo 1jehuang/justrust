@@ -41,12 +41,6 @@ impl ModuleDeclarations {
 /// Bits of the module-path key carried inside a source `DeclId`.
 pub const MODULE_KEY_MASK: u64 = (1 << 43) - 1;
 
-/// Module-path key bits of a source declaration index, or `None` for
-/// catalog and other non-source declarations.
-pub fn owning_module(index: u64) -> Option<u64> {
-    (index & ir::DeclId::SOURCE_BIT != 0).then_some((index >> 20) & MODULE_KEY_MASK)
-}
-
 /// Canonical module-path key of `module`.
 pub fn module_key(program: &Program, module: ModuleId) -> Result<u64, String> {
     canonical_module_key(&program.modules, &program.names, module)

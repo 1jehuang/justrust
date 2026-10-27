@@ -119,23 +119,6 @@ impl ValidatedTraitWorld {
         Ok(())
     }
 
-    pub(super) fn validate_predicate_ref_in(
-        &self,
-        goal: &TraitRef,
-        env: &GenericEnv,
-        maybe_unsized: Option<ParamId>,
-    ) -> Result<()> {
-        self.validate_predicate_ref_with(goal, env, maybe_unsized, &mut NominalReplays::default())
-    }
-    pub(super) fn validate_predicate_ref_with(
-        &self,
-        goal: &TraitRef,
-        env: &GenericEnv,
-        maybe_unsized: Option<ParamId>,
-        replays: &mut NominalReplays,
-    ) -> Result<()> {
-        self.validate_predicate_ref_with_facts(goal, env, maybe_unsized, replays, None)
-    }
     pub(super) fn validate_predicate_ref_with_facts(
         &self,
         goal: &TraitRef,

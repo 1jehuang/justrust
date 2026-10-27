@@ -8349,6 +8349,7 @@ pub(super) struct ChildEntry {
 }
 impl ParsedProgram {
     /// Child file entries of a single-file view parse, in child-site order.
+    #[cfg(test)]
     pub(super) fn child_entries(&self) -> &[ChildEntry] {
         &self.child_entries
     }
@@ -10159,6 +10160,7 @@ fn native_input(
 ) -> Result<NativeParserInput, ParseError> {
     native_input_for_edition(projection, budget, owner, super::token::Edition::E2024)
 }
+#[cfg(test)]
 fn native_input_for_edition(
     projection: &super::source::PreparedLexInput<'_>,
     budget: super::expansion_budget::ExpansionBudget,
@@ -25474,40 +25476,6 @@ impl PlanCtx {
             }
         }
         Ok(())
-    }
-    #[allow(clippy::too_many_arguments)]
-    fn select_associated(
-        &self,
-        owner: &ir::Ty,
-        name: &AstIdent,
-        args: &[ir::Ty],
-        caller: ir::FactsCtx<'_>,
-        module: &ModuleId,
-        dot: bool,
-        budget: &ir::PlanBudget,
-    ) -> Result<(ir::Callee, ir::Signature, ReceiverKind), String> {
-        for traits_only in [false, true] {
-            if let Some(found) = self.lookup_associated(
-                owner,
-                name,
-                args,
-                caller,
-                module,
-                dot,
-                None,
-                traits_only,
-                budget,
-            )? {
-                return Ok(found);
-            }
-        }
-        Err(format!(
-            "no applicable associated item {}",
-            self.program
-                .names
-                .spelling(*name)
-                .map_err(native_adapter::name_diagnostic)?
-        ))
     }
     fn select_method(
         &self,

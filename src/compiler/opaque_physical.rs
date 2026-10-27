@@ -169,7 +169,6 @@ pub(super) struct PhysicalValidation<'a> {
     sealed_shape: Option<Arc<cfg::GeneratedCfgShape>>,
     original: &'a cfg::Function,
     representations: &'a opaque_instances::Representations,
-    context: &'a frontend::PlanCtx,
     budget: &'a ir::PlanBudget,
 }
 impl<'a> PhysicalValidation<'a> {
@@ -202,7 +201,6 @@ impl<'a> PhysicalValidation<'a> {
             sealed_shape: None,
             original,
             representations,
-            context,
             budget,
         })
     }

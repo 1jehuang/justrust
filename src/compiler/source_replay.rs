@@ -1369,12 +1369,15 @@ pub(super) struct CallInputTrace {
     binder: Option<ir::BinderId>,
     schemas: Arc<[InferTerm]>,
     result_schema: InferTerm,
+    // Compared only by the test-side replay validator.
+    #[cfg_attr(not(test), allow(dead_code))]
     expected: Option<InferTerm>,
     evidence: Arc<[InferTerm]>,
     slots: Arc<[InferTerm]>,
     actuals: Arc<[ir::Ty]>,
 }
 impl CallInputTrace {
+    #[cfg(test)]
     pub(super) fn actuals(&self) -> &[ir::Ty] {
         &self.actuals
     }
@@ -1461,6 +1464,7 @@ impl CallInputTrace {
         Ok(())
     }
 
+    #[cfg(test)]
     /// `other` must be independently reconstructed from original source.
     pub(super) fn validate_replayed(
         &self,

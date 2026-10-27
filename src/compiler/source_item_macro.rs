@@ -79,6 +79,7 @@ pub(super) struct ModuleMacroCheckpoint {
 }
 impl ModuleMacroCheckpoint {
     /// Textual definitions visible at this checkpoint.
+    #[cfg(test)]
     pub(super) fn definitions(&self) -> usize {
         self.len
     }

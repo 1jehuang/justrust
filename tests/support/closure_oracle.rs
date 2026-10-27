@@ -1,6 +1,7 @@
 //! Closure-specific stock differential acceptance with explicit engine workers.
 //! Unlike the general oracle, every native case exercises CHECK and BUILD at
 //! workers 1 and 8. CHECK must publish no image and demand no code generation.
+#![allow(dead_code)]
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};

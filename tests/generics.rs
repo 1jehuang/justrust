@@ -174,9 +174,6 @@ fn runs(source: &str, expected: &str) {
     runs_with_exit(source, expected, 0);
 }
 
-fn rejects_resource(source: &str) {
-    rejects_resource_modes(source, &[true, false]);
-}
 fn rejects_resource_build(source: &str) {
     rejects_resource_modes(source, &[false]);
 }

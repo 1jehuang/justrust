@@ -14,7 +14,6 @@ pub(super) struct CandidateMember {
 
 pub(super) struct Discovery {
     pub(super) members: Vec<CandidateMember>,
-    pub(super) applications: Vec<topology::Application>,
     pub(super) components: Vec<topology::Component>,
 }
 
@@ -261,7 +260,6 @@ pub(super) async fn discover(
     let components = topology::components(&applications, b)?;
     Ok(Discovery {
         members,
-        applications,
         components,
     })
 }

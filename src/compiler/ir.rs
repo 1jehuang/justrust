@@ -9662,17 +9662,6 @@ impl CheckedFunction {
 
     /// Validate all retained type metadata before any executable admission check.
     /// Arena rows and statement annotations are authoritative even when dead.
-    fn validate_all_type_metadata(
-        &self,
-        facts: FactsCtx<'_>,
-        budget: Option<&PlanBudget>,
-    ) -> Result<(), String> {
-        self.validate_all_type_metadata_with_scratch(
-            facts,
-            budget,
-            &mut super::traits::TraitScratch::default(),
-        )
-    }
     fn validate_all_type_metadata_with_scratch(
         &self,
         facts: FactsCtx<'_>,

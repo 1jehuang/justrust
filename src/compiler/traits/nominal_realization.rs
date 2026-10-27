@@ -138,13 +138,6 @@ impl ValidatedTraitWorld {
         )
     }
 
-    pub(in crate::compiler) fn replay_closed_nominal_input(
-        &self,
-        input: &ClosedNominalInput,
-    ) -> Result<()> {
-        self.replay_closed_nominal_input_with(&mut NominalReplays::default(), input)
-    }
-
     fn replay_closed_nominal_input_with(
         &self,
         replays: &mut NominalReplays,

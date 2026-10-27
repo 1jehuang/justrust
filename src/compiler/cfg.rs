@@ -1051,6 +1051,7 @@ fn concrete_carrier_count(ty: &Ty, facts: ir::FactsCtx<'_>) -> Result<usize, Str
     }
 }
 
+#[cfg(test)]
 fn validate_type(ty: &Ty, depth: usize) -> Result<(), String> {
     validate_type_with_budget(ty, depth, None)
 }

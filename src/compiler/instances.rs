@@ -708,10 +708,6 @@ impl Plan {
         }
         Ok(())
     }
-    /// Plan slot of `target`, if it is a planned instance.
-    pub fn slot(&self, target: &ir::CallTarget) -> Option<usize> {
-        self.lookup.get(target).copied()
-    }
     pub fn symbol(&self, target: &ir::CallTarget) -> Result<String, String> {
         charge_target_lookup(target, &self.budget)?;
         let index = self

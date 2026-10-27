@@ -600,33 +600,6 @@ impl PlanCtx {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn lookup_associated(
-        &self,
-        owner: &ir::Ty,
-        name: &AstIdent,
-        method_args: &[ir::Ty],
-        caller: ir::FactsCtx<'_>,
-        module: &ModuleId,
-        dot: bool,
-        filter: Option<ReceiverKind>,
-        traits_only: bool,
-        budget: &ir::PlanBudget,
-    ) -> Result<Option<(ir::Callee, ir::Signature, ReceiverKind)>, String> {
-        self.lookup_associated_with_scratch(
-            owner,
-            name,
-            method_args,
-            caller,
-            module,
-            dot,
-            filter,
-            traits_only,
-            budget,
-            &mut tr::TraitScratch::default(),
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn lookup_associated_with_scratch(
         &self,
         owner: &ir::Ty,

@@ -28,6 +28,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Native {
     Live,
+    // Partition slot retained after every frozen unsupported case became Live.
+    #[allow(dead_code)]
     Unsupported,
     Invalid,
     // Partition slot retained after `range` became Live; no frozen case uses it now.

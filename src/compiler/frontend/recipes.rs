@@ -152,6 +152,7 @@ pub(super) fn counts(
     Ok(c)
 }
 
+#[cfg(test)]
 pub(super) fn inventory(
     program: &Program,
     budget: &ir::PlanBudget,
