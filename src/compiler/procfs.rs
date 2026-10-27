@@ -45,7 +45,21 @@ impl CompilerImage {
         &self.digest
     }
     pub fn matches_current(&self) -> bool {
-        Self::current().is_ok_and(|current| current.as_ref() == self)
+        self.validate_current().is_ok()
+    }
+    pub fn validate_current(&self) -> io::Result<()> {
+        let current = Self::current()?;
+        if current.as_ref() == self {
+            Ok(())
+        } else {
+            Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "compiler runtime identity changed ({} bytes to {} bytes)",
+                    self.bytes, current.bytes
+                ),
+            ))
+        }
     }
 }
 

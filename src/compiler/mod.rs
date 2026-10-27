@@ -489,17 +489,12 @@ struct SourceAccounting {
 impl crate::engine::Fact for SourceAccounting {}
 impl SourceAccounting {
     fn validate_runtime(&self) -> Result<(), Error> {
-        if self
-            .compiler_image
-            .as_ref()
-            .is_some_and(|image| image.matches_current())
-        {
-            Ok(())
-        } else {
-            Err(Error::new(
-                "infrastructure: compiler runtime inputs changed or could not be revalidated",
-            ))
-        }
+        let image = self.compiler_image.as_ref().ok_or_else(|| Error::new(
+            "infrastructure: compiler runtime inputs changed or could not be revalidated: missing evidence"
+        ))?;
+        image.validate_current().map_err(|error| Error::new(format!(
+            "infrastructure: compiler runtime inputs changed or could not be revalidated: {error}"
+        )))
     }
 }
 const SOURCE_ACCOUNTING_OUTPUT: usize = 3;
