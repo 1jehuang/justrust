@@ -130,7 +130,7 @@ impl ValidatedTraitWorld {
                 return Ok(());
             }
         }
-        if matches!(projection.trait_ref.self_ty, Ty::Struct(_) | Ty::Enum(_)) {
+        if associated_types::nominal_application_self(&projection.trait_ref.self_ty) {
             let caller = self.predicate_env(declaration)?;
             if matches!(
                 self.prove_in(

@@ -1336,9 +1336,15 @@ impl ValidatedTraitWorld {
             ));
         }
         let opaque_reference = matches!(&goal.self_ty, Ty::Ref { referent, .. } if matches!(referent.as_ref(), Ty::Opaque(_)));
-        if !self.goal_is_closed(goal, context.env())?
+        let closed = self.goal_is_closed(goal, context.env())?;
+        // A rigid nominal reference (`&'a Vec<K>`) selects its implementation by
+        // head constructor; its generic actuals are proved in the caller env.
+        let nominal_reference = !closed
+            && matches!(&goal.self_ty, Ty::Ref { referent, .. } if matches!(referent.as_ref(), Ty::Struct(_) | Ty::Enum(_)));
+        if !closed
             && !matches!(&goal.self_ty, Ty::Dyn(_) | Ty::Opaque(_))
             && !opaque_reference
+            && !nominal_reference
         {
             return Err(FactsError::unsupported(
                 &self.budget,
@@ -1347,7 +1353,10 @@ impl ValidatedTraitWorld {
         }
         let selection = self.require_in(
             &Predicate::Implements(goal.clone()),
-            if matches!(&goal.self_ty, Ty::Dyn(_) | Ty::Opaque(_)) || opaque_reference {
+            if matches!(&goal.self_ty, Ty::Dyn(_) | Ty::Opaque(_))
+                || opaque_reference
+                || nominal_reference
+            {
                 context
             } else {
                 ProofContext {

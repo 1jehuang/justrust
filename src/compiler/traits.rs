@@ -9230,6 +9230,7 @@ impl ValidatedTraitWorld {
             && self.schema_contains_projection(&self.item_header(call.item)?.schema)?
             && !self.trait_call_is_closed(call, facts.env())?
             && !matches!(&call.trait_ref.self_ty, Ty::Dyn(_))
+            && !matches!(&call.trait_ref.self_ty, Ty::Ref { referent, .. } if matches!(referent.as_ref(), Ty::Struct(_) | Ty::Enum(_)))
         {
             return Ok(self
                 .instantiate_universal_required_item(call, facts)?

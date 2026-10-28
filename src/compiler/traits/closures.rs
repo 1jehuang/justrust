@@ -228,7 +228,8 @@ impl ValidatedTraitWorld {
                         active,
                     )?;
                     Ok(ty)
-                } else if matches!(projection.trait_ref.self_ty, Ty::Struct(_) | Ty::Enum(_)) {
+                } else if associated_types::nominal_application_self(&projection.trait_ref.self_ty)
+                {
                     self.normalize_closed_projected_type_with(
                         &Ty::AssociatedType(Arc::new(projection.clone())),
                         context,

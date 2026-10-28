@@ -79,7 +79,7 @@ impl ValidatedFacts {
                     return self.world.normalize_equality_type(&raw, self);
                 }
                 if !self.world.raw_associated_ty_is_closed(&raw, 0)? {
-                    if matches!(projection.trait_ref.self_ty, Ty::Struct(_) | Ty::Enum(_)) {
+                    if associated_types::nominal_application_self(&projection.trait_ref.self_ty) {
                         let (normal, dependencies) = self
                             .world
                             .normalize_closed_projected_type(&raw, context, false)?;
@@ -268,7 +268,7 @@ impl ValidatedTraitWorld {
             }
             if !self.raw_associated_ty_is_closed(&raw, 0)?
                 && !self.checked_closure_projection(projection, context.env())?
-                && !matches!(projection.trait_ref.self_ty, Ty::Struct(_) | Ty::Enum(_))
+                && !associated_types::nominal_application_self(&projection.trait_ref.self_ty)
             {
                 return Ok(raw);
             }
@@ -317,7 +317,7 @@ impl ValidatedTraitWorld {
             }
             if !self.raw_associated_ty_is_closed(&raw, 0)?
                 && !self.checked_closure_projection(projection, context.env())?
-                && !matches!(projection.trait_ref.self_ty, Ty::Struct(_) | Ty::Enum(_))
+                && !associated_types::nominal_application_self(&projection.trait_ref.self_ty)
             {
                 return Ok(raw);
             }
@@ -435,6 +435,15 @@ impl ValidatedTraitWorld {
         }
         let mut instantiated =
             self.substitute_projected_schema(&item.schema, &arguments, facts.env())?;
+        // A reference Self actual (`IntoIterator for &'a Vec<K>` in a generic
+        // caller) expands the raw Self tail into exact input regions, derived
+        // from the original schema as in `instantiate_projected_item`.
+        instantiated.signature.ref_contract = self.realize_ref_contract(
+            &item.schema,
+            &arguments,
+            &instantiated.signature,
+            Some(item.declaration),
+        )?;
         let mut dependencies = Vec::new();
         let mut implementation_dependencies = Vec::new();
         let mut reduce = |projection: &ir::AssociatedTypeProjection| -> Result<Ty> {
@@ -443,7 +452,7 @@ impl ValidatedTraitWorld {
                     .opaque_associated_binding(projection, facts.env())?
                     .is_some()
                 || self.goal_is_closed(&projection.trait_ref, facts.env())?
-                || matches!(projection.trait_ref.self_ty, Ty::Struct(_) | Ty::Enum(_))
+                || associated_types::nominal_application_self(&projection.trait_ref.self_ty)
                 || self
                     .declared_equality_rhs(projection, &facts.predicates.predicates, facts.env())?
                     .is_some()

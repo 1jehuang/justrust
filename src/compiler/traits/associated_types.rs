@@ -1596,7 +1596,7 @@ impl ValidatedTraitWorld {
             context.proof.env(),
         )?;
         let opaque_reference = matches!(&selected_goal.self_ty, Ty::Ref { referent, .. } if matches!(referent.as_ref(), Ty::Opaque(_)));
-        let nominal_application = matches!(selected_goal.self_ty, Ty::Struct(_) | Ty::Enum(_));
+        let nominal_application = nominal_application_self(&selected_goal.self_ty);
         if !closed_goal && !builtin_closure && !opaque_reference && !nominal_application {
             return Err(FactsError::unsupported(
                 &self.budget,
@@ -2104,7 +2104,7 @@ impl ValidatedTraitWorld {
             || ((matches!(
                 &evidence.membership.0.origin,
                 ProofOrigin::Closure { .. } | ProofOrigin::FnItem { .. }
-            ) || matches!(evidence.selected_goal.self_ty, Ty::Struct(_) | Ty::Enum(_)))
+            ) || nominal_application_self(&evidence.selected_goal.self_ty))
                 && !self.goal_is_closed_with(
                     &evidence.selected_goal,
                     context.proof.env(),
@@ -3579,5 +3579,16 @@ mod tests {
             // change the independent Copy decision above.
             facts.carrier_contract(SignatureSubject::Body).unwrap();
         }
+    }
+}
+
+/// A nominal application `Self`, or a reference to one (`&'a Vec<K>` in
+/// `IntoIterator for &'a Vec<T>`), selects its implementation from its head
+/// constructor under the caller environment. Producer and validator share it.
+pub(super) fn nominal_application_self(ty: &Ty) -> bool {
+    match ty {
+        Ty::Struct(_) | Ty::Enum(_) => true,
+        Ty::Ref { referent, .. } => matches!(referent.as_ref(), Ty::Struct(_) | Ty::Enum(_)),
+        _ => false,
     }
 }

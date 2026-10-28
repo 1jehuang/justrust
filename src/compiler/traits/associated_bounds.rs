@@ -171,7 +171,9 @@ impl ValidatedTraitWorld {
                 if let Some(implementation) = implementation {
                     return self.normalize_owner_type(&raw, implementation, &mut Vec::new(), 0);
                 }
-                if self.goal_is_closed_with(&projection.trait_ref, context.env(), active)? {
+                if self.goal_is_closed_with(&projection.trait_ref, context.env(), active)?
+                    || associated_types::nominal_application_self(&projection.trait_ref.self_ty)
+                {
                     let (normal, dependencies) = self.normalize_closed_projected_type_with(
                         &raw,
                         context,

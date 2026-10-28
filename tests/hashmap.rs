@@ -215,6 +215,16 @@ fn main() {
                 source: r#"use std::collections::HashMap;fn unused(c:&HashMap<String,u32>)->u32{c[&5u8]}fn main(){}"#,
                 expect: Expect::Invalid("E0277"),
             },
+            Case {
+                name: "generic_for_over_vec_reference",
+                source: r#"fn count<K>(v:&Vec<K>)->usize{let mut n=0;for _k in v{n+=1;}n}fn main(){println!("{}",count(&vec![1u8,2,3]));}"#,
+                expect: Expect::Run("3\n"),
+            },
+            Case {
+                name: "generic_map_loop_returns_key_as_value_in_unused_fn",
+                source: r#"use std::collections::HashMap;use std::hash::Hash;fn bad<'a,K:Hash+Eq,V>(map:&'a HashMap<K,V>)->&'a V{for(key,_)in map{return key;}panic!("empty")}fn main(){}"#,
+                expect: Expect::Invalid("E0308"),
+            },
         ],
     );
 }
