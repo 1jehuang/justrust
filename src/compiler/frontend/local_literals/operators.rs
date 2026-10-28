@@ -23,13 +23,17 @@ impl Operation {
     /// Indexing and binary operators may wait on a lazy element coercion.
     /// Others keep the conservative quiescence barrier.
     pub(super) fn lazy_frontier_inputs(&self) -> Option<(Term, Option<Term>)> {
-        matches!(self.kind, Kind::Index(_) | Kind::Binary(_)).then_some((self.left, self.right))
+        matches!(
+            self.kind,
+            Kind::Index(_) | Kind::Binary(_) | Kind::Unary(_) | Kind::Deref
+        )
+        .then_some((self.left, self.right))
     }
 
-    /// The element produced by a pending index, which only the lazy
+    /// The value produced by a pending index or deref, which only the lazy
     /// coercion of its receiver can reveal.
     pub(super) fn index_result(&self) -> Option<Term> {
-        matches!(self.kind, Kind::Index(_)).then_some(self.result)
+        matches!(self.kind, Kind::Index(_) | Kind::Deref).then_some(self.result)
     }
 }
 

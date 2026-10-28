@@ -271,9 +271,18 @@ impl Checker<'_> {
                     }
                 } else if matches!(argument, Expr::Deref { .. }) {
                     // `*owner`: format the reference Deref::deref returned.
+                    // `*v[i]` with `v: Vec<&T>`: the dereferenced operand is
+                    // itself an already-evaluated reference value; format
+                    // through it rather than copying the referent.
                     match self.exprs[id.0].kind {
                         ir::ExprKind::Deref { value }
-                            if matches!(self.exprs[value.0].kind, ir::ExprKind::Call { .. }) =>
+                            if matches!(self.exprs[value.0].kind, ir::ExprKind::Call { .. })
+                                || (matches!(self.exprs[value.0].ty, ir::Ty::Ref { .. })
+                                    && matches!(
+                                        &self.exprs[value.0].kind,
+                                        ir::ExprKind::Deref { value: inner }
+                                            if matches!(self.exprs[inner.0].kind, ir::ExprKind::Call { .. })
+                                    )) =>
                         {
                             Some(value)
                         }
