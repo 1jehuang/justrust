@@ -4179,8 +4179,13 @@ impl ValidatedTraitWorld {
         if !self.same_regions(required, provided)? {
             return Ok(false);
         }
+        let provided_contract = provided;
         for (required, provided) in required.results.iter().zip(provided.results.iter()) {
-            if !self.return_origin_refines(&required.returns, &provided.returns)? {
+            if !self.return_origin_refines(
+                &required.returns,
+                &provided.returns,
+                provided_contract,
+            )? {
                 return Ok(false);
             }
         }
@@ -4374,28 +4379,52 @@ impl ValidatedTraitWorld {
         &self,
         required: &ir::ReturnContract,
         provided: &ir::ReturnContract,
+        contract: &ir::RefContract,
     ) -> Result<bool> {
         use ir::ReturnContract::*;
         self.charge_returns(required)?;
         self.charge_returns(provided)?;
-        let allowed = match required {
+        let (allowed, shared) = match required {
             SharedInputEnvelopes(inputs)
                 if matches!(provided, SharedInputPaths(_) | SharedInputEnvelopes(_)) =>
             {
-                inputs
+                (inputs, true)
             }
             MutInputEnvelopes(inputs)
                 if matches!(provided, MutInputPaths(_) | MutInputEnvelopes(_)) =>
             {
-                inputs
+                (inputs, false)
             }
             _ => return Ok(required == provided),
         };
+        let region_of = |reference: ir::InputReference| {
+            contract
+                .input_regions
+                .iter()
+                .find(|row| row.input == reference)
+                .map(|row| row.region)
+        };
+        // A shared result may come from a reference whose declared region
+        // outlives the region of an allowed input: `&'0 &'1 T` with `'1: '0`
+        // returning the `'1` referent is a valid `'0` borrow.
         let contains = |reference: ir::InputReference| -> Result<bool> {
             for input in allowed.iter() {
                 charged(&self.budget, self.budget.charge_work(1))?;
                 if input.input == reference {
                     return Ok(true);
+                }
+            }
+            if shared && let Some(region) = region_of(reference) {
+                for input in allowed.iter() {
+                    charged(
+                        &self.budget,
+                        self.budget.charge_work(contract.outlives.len() + 1),
+                    )?;
+                    if let Some(target) = region_of(input.input)
+                        && contract.outlives.contains(&(region, target))
+                    {
+                        return Ok(true);
+                    }
                 }
             }
             Ok(false)

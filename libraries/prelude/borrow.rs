@@ -9,3 +9,9 @@ impl<T> Borrow<T> for T {
         self
     }
 }
+
+impl<T: ?Sized> Borrow<T> for &T {
+    fn borrow(&self) -> &T {
+        *self
+    }
+}

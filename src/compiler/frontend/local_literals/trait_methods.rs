@@ -138,7 +138,7 @@ impl Solver<'_, '_, '_> {
     /// do not select an implementation: checked lowering must prove it later.
     /// Competing or specialized heads leave inference pending rather than bind
     /// an unknown actual merely to make one implementation applicable.
-    fn structural_impl(
+    pub(super) fn structural_impl(
         &self,
         receiver: Term,
         trait_id: ir::DeclId,
@@ -184,7 +184,7 @@ impl Solver<'_, '_, '_> {
         Ok(selected)
     }
 
-    fn structural_impl_parameters(
+    pub(super) fn structural_impl_parameters(
         &mut self,
         receiver: Term,
         header: &tr::ImplHeader,

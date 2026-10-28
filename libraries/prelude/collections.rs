@@ -387,3 +387,25 @@ impl<K, V> super::iter::IntoIterator for HashMap<K, V> {
         IntoIter { keys: self.keys, values: self.values }
     }
 }
+
+impl<K: Hash + Eq + super::borrow::Borrow<Q>, Q: ?Sized + Hash + Eq, V> super::ops::Index<&Q>
+    for HashMap<K, V>
+{
+    type Output = V;
+    fn index(&self, key: &Q) -> &V {
+        match self.find(key) {
+            Option::Some(i) => self.values.get_ref(i),
+            Option::None => panic!("key not found in HashMap"),
+        }
+    }
+}
+
+impl<K: super::cmp::Ord, V> super::ops::Index<&K> for BTreeMap<K, V> {
+    type Output = V;
+    fn index(&self, key: &K) -> &V {
+        match self.search(key) {
+            super::result::Result::Ok(i) => self.values.get_ref(i),
+            super::result::Result::Err(_) => panic!("key not found in BTreeMap"),
+        }
+    }
+}

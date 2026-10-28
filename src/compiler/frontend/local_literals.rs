@@ -2666,7 +2666,15 @@ impl<'s> Solver<'_, '_, 's> {
             }
             Expr::DynamicIndex { base, index, .. } => {
                 let base = self.expr(base, depth + 1)?;
+                let index_site = index.as_ref() as *const Expr as usize;
                 let index = self.expr(index, depth + 1)?;
+                // `map[&7]`: the borrowed literal's type may come from the
+                // selected `Index` impl's where-clauses; publish the solved
+                // operand type so the checked call sees it.
+                if matches!(self.domain(index), Domain::Ref(..)) {
+                    self.checker.infer_storage(1)?;
+                    self.receiver_sites.push((index_site, index));
+                }
                 self.operator_index(base, index, false)
             }
             Expr::Index { base, .. } => {

@@ -13,6 +13,20 @@ impl type_check::Checker<'_> {
         module: &str,
         float: bool,
     ) -> Result<Option<ir::Ty>, String> {
+        self.numeric_operator_rhs_hint_at(receiver, declaration, method, module, float, false)
+    }
+
+    /// `referenced`: the operand is `&{literal}` (`map[&7]`), so the formal
+    /// must be a shared reference to the numeric type, which is returned.
+    pub(in crate::compiler::frontend) fn numeric_operator_rhs_hint_at(
+        &self,
+        receiver: &ir::Ty,
+        declaration: ir::DeclId,
+        method: &AstIdent,
+        module: &str,
+        float: bool,
+        referenced: bool,
+    ) -> Result<Option<ir::Ty>, String> {
         let Some(facts) = self.facts().validated() else {
             return Ok(None);
         };
@@ -48,6 +62,17 @@ impl type_check::Checker<'_> {
             } else {
                 argument
             };
+            let argument = match (referenced, argument) {
+                (false, argument) => argument,
+                (
+                    true,
+                    ir::Ty::Ref {
+                        kind: ir::BorrowKind::Shared,
+                        referent,
+                    },
+                ) => referent.as_ref(),
+                (true, _) => continue,
+            };
             if !matches!(
                 (float, argument),
                 (false, ir::Ty::Int(_)) | (true, ir::Ty::Float(_))
@@ -79,6 +104,38 @@ impl type_check::Checker<'_> {
             Expr::Float(literal) if literal.suffix.is_none() => {
                 self.numeric_operator_rhs_hint(receiver, declaration, method, module, true)
             }
+            Expr::BorrowValue {
+                kind: ir::BorrowKind::Shared,
+                value,
+            } => match value.as_ref() {
+                Expr::Integer(literal) if literal.suffix.is_none() => Ok(self
+                    .numeric_operator_rhs_hint_at(
+                        receiver,
+                        declaration,
+                        method,
+                        module,
+                        false,
+                        true,
+                    )?
+                    .map(|ty| ir::Ty::Ref {
+                        kind: ir::BorrowKind::Shared,
+                        referent: ty.into(),
+                    })),
+                Expr::Float(literal) if literal.suffix.is_none() => Ok(self
+                    .numeric_operator_rhs_hint_at(
+                        receiver,
+                        declaration,
+                        method,
+                        module,
+                        true,
+                        true,
+                    )?
+                    .map(|ty| ir::Ty::Ref {
+                        kind: ir::BorrowKind::Shared,
+                        referent: ty.into(),
+                    })),
+                _ => Ok(None),
+            },
             _ => Ok(None),
         }
     }

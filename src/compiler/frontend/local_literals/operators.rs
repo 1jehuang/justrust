@@ -271,6 +271,58 @@ impl Solver<'_, '_, '_> {
         let arguments = match (arity, right) {
             (1, _) => Vec::new(),
             (2, Some(right)) => {
+                // `map[&7]`: a borrowed unsuffixed literal takes its type from
+                // the unique `Index<&Int>` impl of the receiver.
+                if matches!(kind, Kind::Index(_))
+                    && let Domain::Ref(ir::BorrowKind::Shared, inner) = self.domain(right)
+                    && matches!(self.domain(inner), Domain::Integer | Domain::Float)
+                    && let Some(argument) = self.checker.numeric_operator_rhs_hint_at(
+                        &receiver,
+                        declaration,
+                        &method,
+                        module,
+                        matches!(self.domain(inner), Domain::Float),
+                        true,
+                    )?
+                {
+                    let formal = self.fixed(argument)?;
+                    self.unify(inner, formal)?;
+                }
+                // `map[&7]` with `impl<K: Borrow<Q>, Q> Index<&Q> for
+                // HashMap<K, V>`: the unique structural impl contributes its
+                // argument pattern and where-clauses as equations, so `Q`
+                // is fixed by `K: Borrow<Q>` before literal defaulting.
+                // Selection below still proves the final application.
+                if matches!(kind, Kind::Index(_))
+                    && let Domain::Ref(_, inner) = self.domain(right)
+                    && matches!(self.domain(inner), Domain::Integer | Domain::Float)
+                    && let Some(header) = self.structural_impl(left, declaration)?
+                    && header.trait_ref.args.len() == 1
+                {
+                    let params = self.structural_impl_parameters(left, &header, 0)?;
+                    let pattern = self.schema(&header.trait_ref.args[0], &params, 0)?;
+                    self.unify(pattern, right)?;
+                    // `K: Borrow<Q>` with `Q` an unsuffixed literal: for a
+                    // numeric `K` only the reflexive `Borrow<T> for T`
+                    // applies, so stock fixes `Q = K`.
+                    let (borrow, _) = self.checker.operator_trait("borrow", "Borrow", "borrow")?;
+                    for predicate in header.predicates.iter() {
+                        if let ir::Predicate::Implements(t) = predicate
+                            && t.declaration == borrow
+                            && let ir::Ty::Param(k) = &t.self_ty
+                            && let Some(ir::Ty::Param(q)) = t.args.first()
+                            && let (Some(&k), Some(&q)) = (params.get(k), params.get(q))
+                            && matches!(self.domain(q), Domain::Integer | Domain::Float)
+                            && matches!(
+                                self.resolve(k, 0)?,
+                                Some(ir::Ty::Int(_) | ir::Ty::Float(_))
+                            )
+                        {
+                            self.unify(q, k)?;
+                        }
+                    }
+                    return Ok(false);
+                }
                 if matches!(self.domain(right), Domain::Integer | Domain::Float) {
                     // `guard[1]`: the literal's type comes from the `Index`
                     // impl of the first autoderef step that has one, exactly
@@ -388,6 +440,13 @@ impl Solver<'_, '_, '_> {
             receiver = next;
         }
         let Some((_, signature, _)) = selected else {
+            // Stock reports an unsatisfied `Index` bound as E0277; the
+            // other operators use E0369.
+            if matches!(kind, Kind::Index(_)) {
+                return Err(
+                    self.user_error("E0277: the type cannot be indexed by this operand type")
+                );
+            }
             return Err(self.user_error(
                 "E0369: no implementation of the canonical operator trait for these operand types",
             ));
