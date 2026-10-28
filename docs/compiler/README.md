@@ -5,6 +5,7 @@ compiler on `main`. The released client remains on the `stable` branch.
 
 ## Start here
 
+- [GOALS](GOALS.md)
 - [ARCHITECTURE](ARCHITECTURE.md)
 - [PROTOTYPE](PROTOTYPE.md)
 - [ENGINE](ENGINE.md)
