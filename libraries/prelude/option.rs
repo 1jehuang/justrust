@@ -155,7 +155,7 @@ impl<T> Option<T> {
         }
     }
 
-    pub fn iter_disabled<'a>(&'a self) -> OptionIter<'a, T> {
+    pub fn iter<'a>(&'a self) -> OptionIter<'a, T> {
         match self {
             Option::Some(value) => OptionIter {
                 inner: Option::Some(value),
@@ -182,6 +182,13 @@ impl<'a, T> super::iter::Iterator for OptionIter<'a, T> {
     }
 }
 
+impl<'a, T> super::iter::IntoIterator for OptionIter<'a, T> {
+    type Item = &'a T;
+    type IntoIter = OptionIter<'a, T>;
+    fn into_iter(self) -> OptionIter<'a, T> {
+        self
+    }
+}
 
 impl<'a, T: Copy> Option<&'a T> {
     pub fn copied(self) -> Option<T> {

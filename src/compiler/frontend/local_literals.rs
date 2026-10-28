@@ -1186,6 +1186,10 @@ impl<'s> Solver<'_, '_, 's> {
             targets.push(*expected);
         }
         targets.extend(self.operators.iter().filter_map(|o| o.index_result()));
+        // A receiver that is itself the unresolved result of another pending
+        // method in this body (`Some(&a).cloned().unwrap()`) waits on the
+        // same local cycle, never on a missing graph producer.
+        targets.extend(methods.iter().map(|method| method.result));
         for operator in &self.operators {
             let Some((left, right)) = operator.lazy_frontier_inputs() else {
                 return Ok(false);
@@ -1614,7 +1618,14 @@ impl<'s> Solver<'_, '_, 's> {
             }
             if !progress
                 && self.preparation.is_some()
-                && projections.is_empty()
+                && projections.iter().all(|projection| {
+                    // Field reads of a still-pending local method result
+                    // (`x.cloned().unwrap().n`) wait on the same local cycle.
+                    matches!(self.domain(projection.base), Domain::Unknown)
+                        && methods
+                            .iter()
+                            .any(|m| self.root(m.result) == self.root(projection.base))
+                })
                 && self.local_lazy_inputs_ready(&methods)?
             {
                 for (actual, expected) in std::mem::take(&mut self.lazy_coercions) {
