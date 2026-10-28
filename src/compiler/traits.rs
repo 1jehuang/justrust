@@ -6614,21 +6614,24 @@ impl ValidatedTraitWorld {
             charged(&self.budget, self.budget.charge_work(1))?;
             let Some(Ty::Ref {
                 kind: ir::BorrowKind::Mut,
-                referent,
+                ..
             }) = signature.params.get(storage.param)
             else {
                 continue;
             };
-            let Some(Ty::Param(parameter)) = referent.owned_sequence_element() else {
+            // `&mut A` makes every type parameter owned by `A` invariant:
+            // a same-family input may be stored anywhere in `A`'s owned
+            // structure (`Vec<T>` elements, `HashMap<K, V>` field vectors).
+            // Only owned paths below the single mutable referent qualify;
+            // a further reference step would be covariant storage.
+            let ir::CarrierChannel::ParamTail { prefix: 0, .. } = storage.location.channel else {
                 continue;
             };
-            if storage.location.path.0.as_ref()
-                != [ir::CarrierStep::Referent, ir::CarrierStep::SliceElement]
-                || storage.location.channel
-                    != (ir::CarrierChannel::ParamTail {
-                        parameter: *parameter,
-                        prefix: 0,
-                    })
+            let path = storage.location.path.0.as_ref();
+            if path.first() != Some(&ir::CarrierStep::Referent)
+                || path[1..]
+                    .iter()
+                    .any(|step| matches!(step, ir::CarrierStep::Referent))
             {
                 continue;
             }
