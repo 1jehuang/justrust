@@ -236,6 +236,11 @@ fn main() {
                 expect: Expect::Run("Some(3) 2\n"),
             },
             Case {
+                name: "vector_reference_infers_generic_slice_element",
+                source: r#"fn first<K>(v:&[K])->Option<&K>{let mut it=v.iter();it.next()}fn main(){let v=vec![3u8,4];let r=first(&v);let a=[97u8];let n:Option<&u8>=first(&a);println!("{:?} {:?}",r,n);}"#,
+                expect: Expect::Run("Some(3) Some(97)\n"),
+            },
+            Case {
                 name: "generic_slice_iterator_next_returns_element_reference",
                 source: r#"fn first<'a,K>(v:&'a Vec<K>)->Option<&'a K>{let mut it=v.iter();it.next()}fn second<K>(v:&Vec<K>)->Option<&K>{let mut it=v.into_iter();it.next();it.next()}fn main(){let v=vec![3u8,4];println!("{:?} {:?}",first(&v),second(&v));}"#,
                 expect: Expect::Run("Some(3) Some(4)\n"),

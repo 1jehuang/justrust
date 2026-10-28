@@ -958,10 +958,24 @@ impl<'s> Solver<'_, '_, 's> {
                 {
                     return Ok(());
                 }
-                if let Domain::Nominal(actual, _) = self.domain(a) {
+                if let Domain::Nominal(actual, arguments) = self.domain(a) {
                     match self.domain(b) {
                         Domain::Nominal(expected, _) if actual == expected => {}
                         Domain::Unknown => {}
+                        // `&Vec<u8>` to `&[K]`: the exact `Deref::Target` of a
+                        // fully known carrier determines the slice element.
+                        Domain::Slice(_) | Domain::Fixed(ir::Ty::Str)
+                            if self.manifest_ready(&arguments, 0)? =>
+                        {
+                            if let Some(ty) = self.resolve(a, 0)?
+                                && let Some(target) = self.checker.deref_target_hint(&ty)?
+                                && matches!(target, ir::Ty::Slice { .. } | ir::Ty::Str)
+                            {
+                                let target = self.fixed(target)?;
+                                return self.unify(target, b);
+                            }
+                            return Ok(());
+                        }
                         _ => return Ok(()),
                     }
                 }
