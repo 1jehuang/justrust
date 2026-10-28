@@ -11,6 +11,11 @@ data/runs/public-repos.txt          repos allowed to keep details
 data/runs/<machine>/<YYYY-MM>.jsonl one line per run, sorted by id
 ```
 
+Large monthly files may have `<YYYY-MM>-archive-N.jsonl` siblings to stay
+below GitHub's 100 MB file limit. The exporter deduplicates IDs across every
+JSONL sibling and appends new records to the ordinary monthly file. Readers
+must include all JSONL files, not just exact monthly filenames.
+
 Fields added by the export: `machine`, `repo`, and `kind`:
 
 - `agent`: an agent session in a real checkout (the workload to optimize)

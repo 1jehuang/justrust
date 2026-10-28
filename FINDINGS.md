@@ -8574,3 +8574,74 @@ artifact, and provenance sealing passed. Same-run artifact `12703870249` was
 downloaded on `ubuntu-24.04-arm`; native architecture/provenance checks and
 binary smoke passed at 01:46:49 UTC. The entire run succeeded and sign-macos
 was skipped. No release publication, signing change or secret change occurred.
+
+## Expensive failure confirmations serialized a 2,861.5s test call (2026-10-27)
+
+The reported operation is exactly `20261027-093514646-611705`,
+`cargo test --no-fail-fast` in the rewrite checkout. Its hosted summary records
+`remote.client_wall=2861.465543838s`, `sync_ms=60027.733419`, and
+`wall=2798.482s`. This is the complete suite command, not an individual test
+or a "fail-fast" phase. The run reported 4,843 passes and 178 failures.
+Only 115.44s was attributed to rustc, with 2,304.35s labeled build gaps and
+376.76s attributed to tests. The gaps are not proof that the host was idle:
+test-pool confirmation work is not all represented by those top-level phases.
+
+The output explicitly shows exclusive whole-group confirmations for
+`full_programs`, `vec_algorithms`, `projected_callable_bounds`,
+`generated_doc_metadata`, `payload_enums`, `projected_reference_returns`,
+`projection_defaults`, and `temp_places`. Every expensive failure group
+previously acquired a writer-preferring exclusive gate immediately, blocking
+other tests and serializing even deterministic failures. Cheap failure sets
+already had a shared quick-check path.
+
+Expensive groups now replay their original arguments and libtest parallelism
+under the shared gate first. If every initially failed name fails again, retain
+the original failure and diagnostics without taking the exclusive gate. If any
+failure disappears, retain the existing isolated confirmation. Crashes with no
+named failures still go directly to isolated replay. The bounded shared-holder
+regression test verifies that a repeatable expensive failure completes without
+waiting for unrelated work, and the existing large-group test verifies original
+filters, exit status, filtered counts, and isolated fallback.
+
+Pinned `bench/suite.py compare` results, local controlled scheduler execution:
+
+- `20261027-retry-contention-before.json` versus `...-after.json`, three samples:
+  median **3.666s -> 0.852s**, displayed **-77%**. Every sample preserves all
+  **72 failures and eight passing controls**. Representative recorded runs:
+  `20261027-165801153-1971556209` and `20261027-165818795-1993697720`.
+- `20261027-shared-confirm-before.json` versus `...-after.json`, one sample:
+  retry-storm **0.853s -> 0.916s**, preserving 32 failures and one pass.
+  Pinned rewrite library suite **129.528s -> 150.128s**, preserving 1,932 passes,
+  three failures and one ignored test. Runs `20261027-165543813-1939540911`
+  and `20261027-170113601-1993693849`. No improvement is established for this
+  real-workload diagnostic, and the observed regression must not be omitted.
+
+All comparisons are explicitly **uncontrolled (noisy or unknown samples)**:
+other agents were using the machine, with different contention on each side.
+The contention fixture isolates the removed serialization mechanism, not a
+prediction that the original 47-minute invocation will improve by 77%.
+The exact full invocation was not rerun against the actively edited rewrite.
+The comprehensive session-weighted synthetic comparison was not run, so this
+is a scoped retry-scheduling fix, not a general justrust speedup claim.
+
+Hosted correctness: check `20261027-165253796-1937504`, test-pool regression
+suite `20261027-165402408-1937440` (13 passed), full suite
+`20261027-165441404-1956988` (822 passed, six ignored), warning-free clippy
+`20261027-165452950-1958972`, and release build
+`20261027-165505143-1956983` all passed. Benchmark infrastructure's 33 Python
+tests and `cargo fmt --check` passed. Exported run summaries accompany the
+four committed benchmark result files.
+
+Reinstalled with `cargo install --path . --locked`. A subsequent forced-hosted
+contention smoke attempt (`20261027-170626197-2067747668`) was blocked before
+the build by `cannot protect source activity: No such file or directory`.
+There was no summary and no hosted performance result. Activity protection
+was not bypassed or weakened. Earlier hosted source tests/builds above passed,
+but acceptance of the newly installed client on this fixture is blocked by
+that separate source-root registry problem.
+
+The first push was rejected because October's exported JSONL crossed GitHub's
+100 MB limit. Split its first 20,000 complete lines into
+`2026-10-archive-1.jsonl`, keeping later lines in `2026-10.jsonl`. Concatenation
+was byte-for-byte identical to the pre-split backup. Export deduplication
+already reads all JSONL siblings, so no run records were dropped or duplicated.

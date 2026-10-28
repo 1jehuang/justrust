@@ -1,0 +1,213 @@
+{
+ "started": "2026-10-27T16:58:20-0700",
+ "env": {
+  "host": "xps14",
+  "cpu": "Intel(R) Core(TM) Ultra X9 388H",
+  "ncpu": 16,
+  "mem_gb": 62.3,
+  "kernel": "7.2.11-arch1-1",
+  "foreign_rustc_policy": "proc-stat-live-excluding-Z-X-x-fail-closed-v1",
+  "justrust": "justrust 0.1.0-alpha.19",
+  "justrust_rev": "b5e75d6b33a4",
+  "benchmark_repo_rev": "b5e75d6b33a4",
+  "justrust_binary_revision": null,
+  "justrust_revision_source": "repository HEAD, not binary revision",
+  "justrust_binary_sha256": "35b7300448ad8140b0874bea77357abadb7669e81d1d7abb90f443e8d1727548",
+  "justrust_dirty": true,
+  "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13) (Arch Linux rust 1:1.99.1-1)",
+  "toolchain": "system",
+  "optimization_env": {},
+  "rustc_threads": null,
+  "workspace_threads": null,
+  "pass_times": false,
+  "miniz_opt_level": null,
+  "cargo": "cargo 1.99.1 (5f94df478 2026-08-27) (Arch Linux rust 1:1.99.1-1)",
+  "governor": "powersave",
+  "on_ac": "0",
+  "snapshots": {
+   "desktop": {
+    "jcode-desktop": "7d38fb7",
+    "jcode": "abff94eeb"
+   },
+   "justrust": {
+    "justrust": "f97fcc2"
+   },
+   "retry-storm": {
+    "retry-storm": "10d9c88270859a93825e36a48dd2d27733425ae6"
+   },
+   "rewrite": {
+    "justrust-clean-room": "c7bda805f8886369571bc41e3309f4fd36c0bebb"
+   }
+  },
+  "execution": "local",
+  "hosted_early": false
+ },
+ "runs_per_scenario": 1,
+ "scenarios": {
+  "test-retry-storm": {
+   "what": "32 deterministic failures plus one passing shard; isolates serial confirmation overhead",
+   "cmd": [
+    "test",
+    "--lib"
+   ],
+   "samples": [
+    {
+     "id": "20261027-165821632-1993693610",
+     "wall": 0.916,
+     "first_error": 0.888,
+     "first_fail": 0.888,
+     "early": null,
+     "recorded_wall": 0.867,
+     "cpu": 0.04,
+     "startup": 0.038,
+     "compile": 0.0,
+     "test_run": 0.413,
+     "units": 0,
+     "local_units": 0,
+     "dep_units": 0,
+     "reuse": {
+      "compiled": 0,
+      "fresh": 1,
+      "depcache_hits": 0,
+      "depcache_misses": 0,
+      "depcache_saved_secs": 0.0,
+      "script_hits": 0,
+      "script_saved_secs": 0.0,
+      "slot_refreshed_units": 0,
+      "local_hits": 0,
+      "local_saved_secs": -0.0
+     },
+     "split": {
+      "frontend": 0.0,
+      "codegen": 0.0,
+      "link": 0.0,
+      "incremental": 0.0,
+      "other": 0.0
+     },
+     "link_secs": 0.0,
+     "hotpatch": null,
+     "tests_passed": 1,
+     "tests_failed": 32,
+     "other_cores": 14.34,
+     "foreign_rustc_before": 2,
+     "load_before": 17.02,
+     "noisy": true,
+     "top_unit": null,
+     "workspace_frontend_threads": null
+    }
+   ],
+   "stats": {
+    "first_fail": 0.888,
+    "first_fail_min": 0.888,
+    "first_fail_max": 0.888,
+    "n": 1,
+    "first_error": 0.888,
+    "first_error_min": 0.888,
+    "first_error_max": 0.888,
+    "median": 0.916,
+    "min": 0.916,
+    "max": 0.916,
+    "quiet_n": 0,
+    "quiet_median": 0.0,
+    "phases": {
+     "startup": 0.038,
+     "compile": 0.0,
+     "test_run": 0.413,
+     "cpu": 0.04,
+     "link_secs": 0.0
+    },
+    "split": {
+     "frontend": 0.0,
+     "codegen": 0.0,
+     "link": 0.0,
+     "incremental": 0.0,
+     "other": 0.0
+    },
+    "units": 0
+   }
+  },
+  "rewrite-lib-tests": {
+   "what": "pinned rewrite library suite, including failure confirmation after parallel splitting",
+   "cmd": [
+    "test",
+    "--lib"
+   ],
+   "samples": [
+    {
+     "id": "20261027-170113601-1993693849",
+     "wall": 150.128,
+     "first_error": 7.381,
+     "first_fail": 7.38,
+     "early": null,
+     "recorded_wall": 150.092,
+     "cpu": 1030.97,
+     "startup": 0.038,
+     "compile": 0.0,
+     "test_run": 149.922,
+     "units": 0,
+     "local_units": 0,
+     "dep_units": 0,
+     "reuse": {
+      "compiled": 0,
+      "fresh": 10,
+      "depcache_hits": 0,
+      "depcache_misses": 0,
+      "depcache_saved_secs": 0.0,
+      "script_hits": 0,
+      "script_saved_secs": 0.0,
+      "slot_refreshed_units": 0,
+      "local_hits": 0,
+      "local_saved_secs": -0.0
+     },
+     "split": {
+      "frontend": 0.0,
+      "codegen": 0.0,
+      "link": 0.0,
+      "incremental": 0.0,
+      "other": 0.0
+     },
+     "link_secs": 0.0,
+     "hotpatch": null,
+     "tests_passed": 1932,
+     "tests_failed": 3,
+     "other_cores": 6.88,
+     "foreign_rustc_before": 0,
+     "load_before": 19.21,
+     "noisy": true,
+     "top_unit": null,
+     "workspace_frontend_threads": null
+    }
+   ],
+   "stats": {
+    "first_fail": 7.38,
+    "first_fail_min": 7.38,
+    "first_fail_max": 7.38,
+    "n": 1,
+    "first_error": 7.381,
+    "first_error_min": 7.381,
+    "first_error_max": 7.381,
+    "median": 150.128,
+    "min": 150.128,
+    "max": 150.128,
+    "quiet_n": 0,
+    "quiet_median": 0.0,
+    "phases": {
+     "startup": 0.038,
+     "compile": 0.0,
+     "test_run": 149.922,
+     "cpu": 1030.97,
+     "link_secs": 0.0
+    },
+    "split": {
+     "frontend": 0.0,
+     "codegen": 0.0,
+     "link": 0.0,
+     "incremental": 0.0,
+     "other": 0.0
+    },
+    "units": 0
+   }
+  }
+ },
+ "finished": "2026-10-27T17:03:43-0700"
+}

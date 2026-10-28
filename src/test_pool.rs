@@ -26,10 +26,11 @@
 //! applied, so together they run exactly the requested tests; libtest's
 //! "filtered out" counts are adjusted to match one plain run.
 //!
-//! Faithfulness: a process that fails while other test processes ran waits
-//! until nothing else runs, then its failed tests are rerun alone by exact
-//! name. If they fail again, the failure is reported as it first happened.
-//! If they pass (or the process crashed), the process is run again alone
+//! Faithfulness: failures observed while other test processes ran are
+//! checked again under the shared gate, selectively for cheap failure sets
+//! or as the original group for expensive ones. Repeated failures retain
+//! their original diagnostics. If failures disappear (or the process crashed),
+//! the process is checked again alone
 //! and that result is reported, with a note. Anything unexpected (unknown
 //! libtest flags, `--nocapture`, one test thread, doc tests, benchmarks, no
 //! socket) runs the binary the way cargo would. `JUSTRUST_TEST_PARALLEL=0`
@@ -611,7 +612,8 @@ fn selective_retry_is_cheap(first: &Finished) -> bool {
 /// with no other test process running; the ones that still pass are
 /// reported as failing only in parallel, the rest as failures. A
 /// process that died without naming a failed test (a crash) is run again
-/// whole and alone, as is a group with many or expensive failures: serial
+/// whole and alone. Groups with many or expensive failures first replay
+/// together under the shared gate, then alone only if a failure disappears: serial
 /// confirmation of 120 failures added 84s to a 15s rewrite test group.
 /// Small failure sets remain selective: rerunning a 2,500-test binary to
 /// settle three flaky names doubled `test -p jcode-tui --lib` (FINDINGS 41).
@@ -680,6 +682,19 @@ fn confirm_alone(
         }
     }
     if !failed.is_empty() && !selective {
+        // A large failure set is not evidence of interference. First replay
+        // the original group under the shared gate, retaining its libtest
+        // parallelism and filters. Only failures that disappear need an
+        // exclusive confirmation. Going straight to the exclusive gate made
+        // hundreds of deterministic compiler failures serialize the pool.
+        let repeated = {
+            let _shared = inner.gate.shared();
+            execute(inner, req, args, stem)
+        };
+        let still_failed: HashSet<&str> = failed_names(&repeated).into_iter().collect();
+        if failed.iter().all(|name| still_failed.contains(name)) {
+            return first;
+        }
         let note = format!(
             "justrust: {stem}: confirming {} failures by replaying the original test group alone instead of retrying each test serially",
             failed.len()
@@ -1533,8 +1548,52 @@ mod tests {
         assert_eq!(failed_names(&replay), ["t0"]);
         assert_eq!(
             std::fs::read_to_string(calls).unwrap(),
-            "group --skip excluded\n"
+            "group --skip excluded\ngroup --skip excluded\n"
         );
+        pool.finish();
+    }
+
+    /// Repeatable expensive failures must not wait for an unrelated shared
+    /// holder to drain. Release it on timeout too so regressions cannot hang.
+    #[cfg(unix)]
+    #[test]
+    fn expensive_repeatable_failure_keeps_shared_gate() {
+        let dir =
+            TmpDir(std::env::temp_dir().join(format!("jr-shared-retry-{}", std::process::id())));
+        std::fs::create_dir_all(dir.path()).unwrap();
+        let bin = dir.path().join("retry");
+        std::fs::write(&bin, "#!/bin/sh\necho 'test slow ... FAILED'\nexit 101\n").unwrap();
+        crate::sys::set_mode(&bin, 0o755).unwrap();
+        let sink = Arc::new(VecSink(Mutex::new(Vec::new())));
+        let pool = Pool::start(dir.path(), dir.path(), Path::new("jr"), sink, true).unwrap();
+        let req = Request {
+            bin: bin.to_string_lossy().into_owned(),
+            args: s(&["group", "--skip", "excluded"]),
+            cwd: dir.path().to_string_lossy().into_owned(),
+            env: Vec::new(),
+        };
+        let mut first = fin(&[]);
+        first.exit = 101;
+        first.hide_filtered = Some(7);
+        first.outcomes = vec![TestOutcome {
+            name: "slow".into(),
+            passed: false,
+            secs: Some(100.0),
+        }];
+        let shared = pool.inner.gate.shared();
+        let inner = pool.inner.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let result = confirm_alone(&inner, &req, "retry", &req.args, first);
+            tx.send(result).unwrap();
+        });
+        let result = rx.recv_timeout(std::time::Duration::from_secs(2));
+        drop(shared);
+        worker.join().unwrap();
+        let result = result.expect("repeatable failure waited for the exclusive gate");
+        assert_eq!(result.exit, 101);
+        assert_eq!(result.hide_filtered, Some(7));
+        assert_eq!(failed_names(&result), ["slow"]);
         pool.finish();
     }
 
