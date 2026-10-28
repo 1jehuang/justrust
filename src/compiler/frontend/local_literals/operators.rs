@@ -19,6 +19,14 @@ pub(super) struct Operation {
     result: Term,
 }
 
+impl Operation {
+    /// Only an indexing operator's receiver may wait on a lazy element
+    /// coercion. Other operators keep the conservative quiescence barrier.
+    pub(super) fn index_inputs(&self) -> Option<(Term, Option<Term>)> {
+        matches!(self.kind, Kind::Index(_)).then_some((self.left, self.right))
+    }
+}
+
 fn comparison(op: BinaryOp) -> bool {
     matches!(
         op,

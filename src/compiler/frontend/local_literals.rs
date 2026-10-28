@@ -1157,7 +1157,10 @@ impl<'s> Solver<'_, '_, 's> {
             || self.missing_source_schemas.get()
             || !self.missing_nominals.borrow().is_empty()
             || !self.missing_declarations.borrow().is_empty()
-            || !self.operators.is_empty()
+            || self
+                .operators
+                .iter()
+                .any(|operator| operator.index_inputs().is_none())
             || !self.iterator_items.is_empty()
             || !self.associated_equalities.is_empty()
             || !self.patterns.is_empty()
@@ -1179,11 +1182,37 @@ impl<'s> Solver<'_, '_, 's> {
             }
             targets.push(*expected);
         }
-        for method in methods {
-            for input in std::iter::once(&method.receiver)
-                .chain(&method.args)
-                .chain(&method.actuals)
+        for operator in &self.operators {
+            let Some((base, index)) = operator.index_inputs() else {
+                return Ok(false);
+            };
+            if !self.lazy_input_frontier(base, &targets, 0)? {
+                return Ok(false);
+            }
+            if let Some(index) = index
+                && !matches!(self.domain(index), Domain::Integer)
+                && !self.lazy_input_frontier(index, &targets, 0)?
             {
+                return Ok(false);
+            }
+        }
+        for method in methods {
+            for (index, input) in std::iter::once(&method.receiver)
+                .chain(&method.actuals)
+                .chain(&method.args)
+                .enumerate()
+            {
+                // An unsuffixed literal argument cannot reveal a Deref or
+                // array carrier for any lazy coercion: it only ever becomes a
+                // scalar. Receivers and explicit generic actuals stay strict.
+                if index > method.actuals.len()
+                    && matches!(
+                        self.domain(self.peel_refs(*input)),
+                        Domain::Integer | Domain::Float
+                    )
+                {
+                    continue;
+                }
                 if !self.lazy_input_frontier(*input, &targets, 0)? {
                     return Ok(false);
                 }
