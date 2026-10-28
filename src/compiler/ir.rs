@@ -2184,6 +2184,20 @@ impl BodySubstitutionProof {
                     }
                     Ok(Some(actual.clone()))
                 }
+                // A projection's actual was fixed by the same verified
+                // substitution; only its shared cell shape is exposed.
+                (Ty::AssociatedType(_), _) => {
+                    let mut leaf = actual;
+                    while let Ty::Ref {
+                        kind: BorrowKind::Shared,
+                        referent,
+                    } = leaf
+                    {
+                        budget.charge_work(1)?;
+                        leaf = referent;
+                    }
+                    Ok(shared_shape(leaf, budget, depth + 1)?.then(|| actual.clone()))
+                }
                 (Ty::Struct(before), Ty::Struct(after))
                     if before.def().source_decl == after.def().source_decl
                         && before.def().fields.len() == after.def().fields.len() =>

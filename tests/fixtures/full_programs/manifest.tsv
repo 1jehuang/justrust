@@ -30,7 +30,7 @@
 14_generic_container	pass
 15_error_handling	pass
 16_sorting	pass
-17_hashmap_word_count	fail	fmt-display,fmt-debug,str,string,for,vec,iter,closure,std-paths,hashmap,option-result
+17_hashmap_word_count	pass
 18_tokenizer_calculator	pass
 19_operator_overloading	pass
-20_inventory_system	fail	fmt-display,fmt-debug,fmt-spec,str,string,for,vec,iter,closure,derive,std-paths,user-fmt,hashmap,rc-refcell,dyn,unsize,format-macro,option-result,try,match-ergonomics,slice,array-iter
+20_inventory_system	pass
