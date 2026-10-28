@@ -229,16 +229,10 @@ fn legal_unsupported_nested_writes_stay_explicit() {
 // Stock accepts these; they stay explicit Unsupported in this slice.
 #[test]
 fn legal_unsupported_nested_forms_stay_explicit() {
-    for (label, body) in [
-        (
-            "through_reference",
-            "fn main() { let m = [[1i64; 2]; 2]; let r = &m; let i = 1usize; let x = r[i][0]; }",
-        ),
-        (
-            "non_scalar_leaf",
-            "struct P { x: i64 } fn main() { let m = [[P { x: 1 }, P { x: 2 }]]; let i = 0usize; let j = 1usize; let v = m[i][j].x; }",
-        ),
-    ] {
+    for (label, body) in [(
+        "non_scalar_leaf",
+        "struct P { x: i64 } fn main() { let m = [[P { x: 1 }, P { x: 2 }]]; let i = 0usize; let j = 1usize; let v = m[i][j].x; }",
+    )] {
         rejects(label, body, "nsupported");
     }
 }

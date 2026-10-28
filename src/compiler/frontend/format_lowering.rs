@@ -253,8 +253,12 @@ impl Checker<'_> {
                     ir::validate_format_ty(mode, &flow.ty, Some(&self.signatures.plan()?.budget))?;
                 }
             }
-            let through_deref = (matches!(&self.exprs[id.0].kind, ir::ExprKind::Field { .. })
-                && self.field_chain_call_rooted(id))
+            let through_deref = (matches!(
+                &self.exprs[id.0].kind,
+                ir::ExprKind::Field { .. }
+                    | ir::ExprKind::Index { .. }
+                    | ir::ExprKind::DynamicIndex { .. }
+            ) && self.field_chain_call_rooted(id))
                 || matches!(
                     &self.exprs[id.0].kind,
                     ir::ExprKind::Field { base, .. }
@@ -568,7 +572,10 @@ impl Checker<'_> {
     fn field_chain_call_rooted(&self, mut id: ir::ExprId) -> bool {
         for _ in 0..ir::MAX_PATTERN_PROJECTION_DEPTH {
             match self.exprs[id.0].kind {
-                ir::ExprKind::Field { base, .. } | ir::ExprKind::Deref { value: base } => id = base,
+                ir::ExprKind::Field { base, .. }
+                | ir::ExprKind::Deref { value: base }
+                | ir::ExprKind::Index { base, .. }
+                | ir::ExprKind::DynamicIndex { base, .. } => id = base,
                 ir::ExprKind::Call { .. } => return true,
                 _ => return false,
             }

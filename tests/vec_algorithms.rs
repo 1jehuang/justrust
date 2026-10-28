@@ -139,6 +139,9 @@ fn static_string_vector_seed_replays_all_closed_inputs() {
         "fn main(){let mut v=vec![vec![1,2],vec![3,4]];v[0][1]+=5;let i=1;v[i][0]=7;v[i][i]*=3;let j=0usize;println!(\"{} {} {} {}\",v[0][1],v[1][0],v[i][1],v[j][j]);}",
         "fn main(){let mut a=1i32;let mut b=5i32;let mut v:Vec<&mut i32>=vec![&mut a,&mut b];let i=1;*v[i]+=10;*v[i-1]=3;let x=*v[i];println!(\"{} {} {}\",x,v[0],*v[i]);}",
         "fn main(){let v=vec![vec![1.5,2.0]];let mut m=[[0;3];2];let i=1;m[i][2]=5;m[i][0]+=m[i][2];println!(\"{} {:?}\",v[0][1]+1.0,m);}",
+        "fn main(){let mut v=vec![[1i32,2],[3,4]];let i=1;v[i][0]=9;v[0][i]*=4;println!(\"{} {} {}\",v[0][1],v[i][0],v[1][i]);let w=vec![(1u8,true)];println!(\"{} {}\",w[0].0,w[0].1);}",
+        "#[derive(Clone,Copy)]struct P{x:i32}fn main(){let mut v=vec![[P{x:1},P{x:2}]];let i=1;v[0][i].x+=5;v[0][0].x=7;println!(\"{} {}\",v[0][1].x,v[0][0].x);}",
+        "fn main(){let m=[[1i64,2],[3,4]];let r=&m;let i=1usize;let x=r[i][0];let y=r[0][i];let mut n=[[1u8;2];2];n[1][i]=5;n[0][i]+=1;println!(\"{} {} {:?}\",x,y,n);}",
         "struct Holder<T>{value:T}fn keep<T>(value:T,_capacity:usize)->Holder<T>{println!(\"called\");Holder{value}}fn main(){let held=keep(\"abc\",2usize);println!(\"{}\",held.value);}",
     ] {
         iterator_oracle::stock_native(source);

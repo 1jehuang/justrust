@@ -62,13 +62,24 @@ impl type_check::Checker<'_> {
         if self.exprs[evaluated.0].completion == ir::Completion::Never {
             return Ok(Some(evaluated));
         }
-        let carrier = match self.exprs[evaluated.0].kind {
+        // `v[0][1].f`: builtin constant array steps on the returned reference.
+        let mut outer = evaluated;
+        let mut array_steps = Vec::new();
+        while let ir::ExprKind::Index { base, index } = self.exprs[outer.0].kind {
+            if array_steps.len() >= ir::MAX_PATTERN_PROJECTION_DEPTH {
+                return Err("place projection nesting exceeds limit128".into());
+            }
+            array_steps.push(index);
+            outer = base;
+        }
+        let carrier = match self.exprs[outer.0].kind {
             ir::ExprKind::Deref { value }
                 if matches!(self.exprs[value.0].kind, ir::ExprKind::Call { .. }) =>
             {
                 value
             }
-            _ if type_check::genuine_call(root)
+            _ if array_steps.is_empty()
+                && type_check::genuine_call(root)
                 && matches!(self.exprs[evaluated.0].ty, ir::Ty::Ref { .. }) =>
             {
                 evaluated
@@ -78,6 +89,24 @@ impl type_check::Checker<'_> {
         let carrier_ty = self.exprs[carrier.0].ty.clone();
         let mut ty = carrier_ty.clone();
         let mut projection = Vec::new();
+        if !array_steps.is_empty() {
+            let ir::Ty::Ref {
+                kind: layer,
+                referent,
+            } = &ty
+            else {
+                return Ok(None);
+            };
+            if kind == ir::BorrowKind::Mut && *layer == ir::BorrowKind::Shared {
+                return Err("cannot borrow as mutable through a shared reference".into());
+            }
+            projection.push(ir::Projection::Deref);
+            ty = referent.as_ref().clone();
+            for index in array_steps.into_iter().rev() {
+                ty = self.index_type(&ty, index)?;
+                projection.push(ir::Projection::ConstantIndex(index));
+            }
+        }
         for field in fields.into_iter().rev() {
             for _ in 0..ir::MAX_PATTERN_PROJECTION_DEPTH {
                 let ir::Ty::Ref {

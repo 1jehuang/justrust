@@ -193,7 +193,12 @@ impl Solver<'_, '_, '_> {
                     _ => return Err(self.user_error("E0608: cannot index this type")),
                 };
                 let usize = self.fixed(ir::Ty::Int(ir::IntTy::Usize))?;
-                self.unify(right.ok_or("index constraint omitted operand")?, usize)?;
+                let index = right.ok_or("index constraint omitted operand")?;
+                if self.unify(index, usize).is_err() {
+                    return Err(self.user_error(
+                        "E0277: the type cannot be indexed by this integer; builtin indexes must be `usize`",
+                    ));
+                }
                 self.unify(result, element)?;
                 return Ok(true);
             }
@@ -370,7 +375,12 @@ impl Solver<'_, '_, '_> {
                     _ => unreachable!(),
                 };
                 let usize = self.fixed(ir::Ty::Int(ir::IntTy::Usize))?;
-                self.unify(right.ok_or("index constraint omitted operand")?, usize)?;
+                let index = right.ok_or("index constraint omitted operand")?;
+                if self.unify(index, usize).is_err() {
+                    return Err(self.user_error(
+                        "E0277: the type cannot be indexed by this integer; builtin indexes must be `usize`",
+                    ));
+                }
                 let element = self.fixed(element)?;
                 self.unify(result, element)?;
                 return Ok(true);

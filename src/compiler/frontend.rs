@@ -10065,6 +10065,11 @@ struct Token {
 /// A single outermost runtime index (`a[i] = v`) keeps `AssignIndex`.
 fn nested_runtime_target(target: &Expr) -> bool {
     match target {
+        // `v[0][i] = x`: a runtime final index under a constant-index row may
+        // cross an overloaded `IndexMut`, so it uses the nested lowering too.
+        Expr::DynamicIndex { base, .. } if matches!(base.as_ref(), Expr::Index { .. }) => {
+            nested_runtime_base(base) || index_chain_rooted(base)
+        }
         Expr::DynamicIndex { base, .. } | Expr::Index { base, .. } | Expr::Field { base, .. } => {
             nested_runtime_base(base)
         }
@@ -10077,6 +10082,17 @@ fn nested_runtime_target(target: &Expr) -> bool {
         },
         _ => false,
     }
+}
+/// A local-rooted chain of constant indexes and fields, e.g. `v[0].a[1]`.
+fn index_chain_rooted(mut base: &Expr) -> bool {
+    for _ in 0..128 {
+        match base {
+            Expr::Var(_) => return true,
+            Expr::Index { base: inner, .. } | Expr::Field { base: inner, .. } => base = inner,
+            _ => return false,
+        }
+    }
+    false
 }
 /// An array base that contains a runtime index and is rooted at a local
 /// through indexes and fields only, e.g. the `m[i]` of `m[i][j] = v`.

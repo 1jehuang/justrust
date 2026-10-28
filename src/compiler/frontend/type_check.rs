@@ -6719,19 +6719,51 @@ impl<'a> Checker<'a> {
         statements: &mut Vec<ir::TypedStmt>,
     ) -> Result<Option<(ir::TypedStmt, bool)>, String> {
         // `*v[i] = x` writes through the `&mut T` element that IndexMut selects.
-        let (target, through_element) = match target {
+        let (mut target, through_element) = match target {
             Expr::Deref { value } => (value.as_ref(), true),
             target => (target, false),
         };
-        let (Expr::DynamicIndex { base, .. } | Expr::Index { base, .. }) = target else {
-            return Ok(None);
-        };
-        let Some(owner) = self.method_receiver_hint(base)? else {
-            return Ok(None);
-        };
-        if !matches!(owner, ir::Ty::Struct(_) | ir::Ty::Enum(_)) {
+        // `v[i][0].x = e` with `v: Vec<[S; N]>`: trailing builtin field and
+        // array steps project from the reference IndexMut returns.
+        enum Trailing<'e> {
+            Field(&'e FieldSelector),
+            Const(usize),
+            Runtime(&'e Expr, &'e Expr),
+        }
+        let mut trailing = Vec::new();
+        loop {
+            if trailing.len() >= ir::MAX_PATTERN_PROJECTION_DEPTH {
+                return Err("place projection nesting exceeds limit128".into());
+            }
+            let next = match target {
+                Expr::DynamicIndex { base, .. } | Expr::Index { base, .. } => {
+                    if matches!(
+                        self.method_receiver_hint(base)?,
+                        Some(ir::Ty::Struct(_) | ir::Ty::Enum(_))
+                    ) {
+                        break;
+                    }
+                    match target {
+                        Expr::DynamicIndex { index, .. } => {
+                            trailing.push(Trailing::Runtime(index, target))
+                        }
+                        Expr::Index { index, .. } => trailing.push(Trailing::Const(*index)),
+                        _ => unreachable!(),
+                    }
+                    base
+                }
+                Expr::Field { base, field } => {
+                    trailing.push(Trailing::Field(field));
+                    base
+                }
+                _ => return Ok(None),
+            };
+            target = next;
+        }
+        if through_element && !trailing.is_empty() {
             return Ok(None);
         }
+        trailing.reverse();
         // Built as expressions now; the statement order below (right
         // operand first, then the IndexMut chain) is the evaluation order.
         let Some(reference) = self.overloaded_index_reference(
@@ -6762,7 +6794,18 @@ impl<'a> Checker<'a> {
             projection.push(ir::Projection::Deref);
             element.as_ref().clone()
         } else {
-            referent.as_ref().clone()
+            let mut ty = referent.as_ref().clone();
+            for step in &trailing {
+                ty = match step {
+                    Trailing::Field(field) => self.field_type(&ty, field)?.1,
+                    Trailing::Const(index) => self.index_type(&ty, *index)?,
+                    Trailing::Runtime(..) => match &ty {
+                        ir::Ty::Array { element, .. } => element.as_ref().clone(),
+                        _ => return Ok(None),
+                    },
+                };
+            }
+            ty
         };
         let (rhs, rhs_flow) = match op {
             Some(op) => self.compound_value(op, &destination, value)?,
@@ -6788,17 +6831,88 @@ impl<'a> Checker<'a> {
             local: saved,
             value: rhs,
         });
-        let completes = rhs_flow.completes && self.flow(reference).completes;
+        let mut completes = rhs_flow.completes && self.flow(reference).completes;
+        let mut place_ty = referent.as_ref().clone();
         let carrier = self.temporary(&format!("$nc{}", self.locals.len()), carrier_ty, false)?;
         statements.push(ir::TypedStmt::Let {
             local: carrier,
             value: reference,
         });
-        let loaded = self.for_expr(saved_ty, ir::ExprKind::Local(saved))?;
-        let place = ir::Place {
+        let mut place = ir::Place {
             local: carrier,
             projection,
         };
+        let usize_ty = ir::Ty::Int(ir::IntTy::Usize);
+        let mut final_index = None;
+        let last = trailing.len().wrapping_sub(1);
+        for (position, step) in trailing.iter().enumerate() {
+            match step {
+                Trailing::Field(field) => {
+                    let (index, field_ty) = self.field_type(&place_ty, field)?;
+                    place.projection.push(ir::Projection::Field(index));
+                    place_ty = field_ty;
+                }
+                Trailing::Const(index) => {
+                    place_ty = self.index_type(&place_ty, *index)?;
+                    place.projection.push(ir::Projection::ConstantIndex(*index));
+                }
+                Trailing::Runtime(index, original) => {
+                    let index = self.expr_expected_when(
+                        index,
+                        self.reachable && completes,
+                        Some(&usize_ty),
+                    )?;
+                    let index_flow = self.flow(index);
+                    self.require_index(&index_flow)?;
+                    completes &= index_flow.completes;
+                    let saved_index = self.temporary(
+                        &format!("$ni{}", self.locals.len()),
+                        usize_ty.clone(),
+                        false,
+                    )?;
+                    self.charge_node(std::mem::size_of::<ir::TypedStmt>() * 2)?;
+                    statements.push(ir::TypedStmt::Let {
+                        local: saved_index,
+                        value: index,
+                    });
+                    let probe_index =
+                        self.for_expr(usize_ty.clone(), ir::ExprKind::Local(saved_index))?;
+                    self.index_bounds_probe(&place, probe_index, original, statements)?;
+                    if position == last {
+                        final_index = Some(
+                            self.for_expr(usize_ty.clone(), ir::ExprKind::Local(saved_index))?,
+                        );
+                        break;
+                    }
+                    let ir::Ty::Array { element, .. } = &place_ty else {
+                        return Err("runtime index assignment requires an array".into());
+                    };
+                    place_ty = element.as_ref().clone();
+                    place
+                        .projection
+                        .push(ir::Projection::DynamicIndex(saved_index));
+                }
+            }
+        }
+        let loaded = self.for_expr(saved_ty, ir::ExprKind::Local(saved))?;
+        if let Some(index) = final_index {
+            return Ok(Some((
+                match op {
+                    Some(op) => ir::TypedStmt::AssignIndexOp {
+                        array: place,
+                        index,
+                        op,
+                        value: loaded,
+                    },
+                    None => ir::TypedStmt::AssignIndex {
+                        array: place,
+                        index,
+                        value: loaded,
+                    },
+                },
+                completes,
+            )));
+        }
         Ok(Some((
             match op {
                 Some(op) => ir::TypedStmt::AssignOp {
@@ -11369,6 +11483,19 @@ impl<'a> Checker<'a> {
                     return self.slice_index(base, index);
                 }
                 if self.deref_source(base) {
+                    // `v[k][i]` with `v: Vec<[T; N]>`: index the array behind the
+                    // shared reference Index::index returned, as a checked slice.
+                    if let ir::ExprKind::Deref { value: reference } = self.exprs[base.0].kind
+                        && matches!(self.exprs[reference.0].kind, ir::ExprKind::Call { .. })
+                        && matches!(
+                            &self.exprs[reference.0].ty,
+                            ir::Ty::Ref { kind: ir::BorrowKind::Shared, referent }
+                                if matches!(referent.as_ref(), ir::Ty::Array { .. })
+                        )
+                    {
+                        let slice = self.array_reference_as_slice(reference)?;
+                        return self.slice_index(slice, index);
+                    }
                     return Err("runtime indexed access through references is unsupported in B1; snapshot a Copy referent first".into());
                 }
                 let source = self.flow(base);
