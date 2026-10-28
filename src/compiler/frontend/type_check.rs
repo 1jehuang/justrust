@@ -6707,6 +6707,96 @@ impl<'a> Checker<'a> {
     /// Lowered to existing IR: `Let $v`, per-level `Let $iN` plus an ignored
     /// runtime read (a bounds probe that lowers to IndexInspect), then
     /// AssignIndex/AssignIndexOp on a place with DynamicIndex($iN) steps.
+    /// `v[i][j] (op)= x` where the indexed owner is a nominal `IndexMut`
+    /// type (`Vec<Vec<T>>`): stock evaluates the right operand, then the
+    /// `IndexMut::index_mut` chain in source order, and writes through the
+    /// final `&mut` destination.
+    fn overloaded_nested_assignment(
+        &mut self,
+        target: &Expr,
+        op: Option<BinaryOp>,
+        value: &Expr,
+        statements: &mut Vec<ir::TypedStmt>,
+    ) -> Result<Option<(ir::TypedStmt, bool)>, String> {
+        let (Expr::DynamicIndex { base, .. } | Expr::Index { base, .. }) = target else {
+            return Ok(None);
+        };
+        let Some(owner) = self.method_receiver_hint(base)? else {
+            return Ok(None);
+        };
+        if !matches!(owner, ir::Ty::Struct(_) | ir::Ty::Enum(_)) {
+            return Ok(None);
+        }
+        // Built as expressions now; the statement order below (right
+        // operand first, then the IndexMut chain) is the evaluation order.
+        let Some(reference) = self.overloaded_index_reference(
+            ir::BorrowKind::Mut,
+            target,
+            target as *const Expr as usize,
+        )?
+        else {
+            return Ok(None);
+        };
+        let carrier_ty = self.exprs[reference.0].ty.clone();
+        let ir::Ty::Ref {
+            kind: ir::BorrowKind::Mut,
+            referent,
+        } = &carrier_ty
+        else {
+            return Err("IndexMut must return a mutable reference".into());
+        };
+        let destination = referent.as_ref().clone();
+        let (rhs, rhs_flow) = match op {
+            Some(op) => self.compound_value(op, &destination, value)?,
+            None => {
+                let rhs = self.expr_expected(value, Some(&destination))?;
+                let flow = self.flow(rhs);
+                self.require(&flow, &destination)?;
+                (rhs, flow)
+            }
+        };
+        let saved_ty = if rhs_flow.ty == ir::Ty::Never {
+            destination.clone()
+        } else {
+            rhs_flow.ty.clone()
+        };
+        let saved = self.temporary(
+            &format!("$nv{}", self.locals.len()),
+            saved_ty.clone(),
+            false,
+        )?;
+        self.charge_node(std::mem::size_of::<ir::TypedStmt>() * 2)?;
+        statements.push(ir::TypedStmt::Let {
+            local: saved,
+            value: rhs,
+        });
+        let completes = rhs_flow.completes && self.flow(reference).completes;
+        let carrier = self.temporary(&format!("$nc{}", self.locals.len()), carrier_ty, false)?;
+        statements.push(ir::TypedStmt::Let {
+            local: carrier,
+            value: reference,
+        });
+        let loaded = self.for_expr(saved_ty, ir::ExprKind::Local(saved))?;
+        let place = ir::Place {
+            local: carrier,
+            projection: vec![ir::Projection::Deref],
+        };
+        Ok(Some((
+            match op {
+                Some(op) => ir::TypedStmt::AssignOp {
+                    place,
+                    op,
+                    value: loaded,
+                },
+                None => ir::TypedStmt::AssignPlace {
+                    place,
+                    value: loaded,
+                },
+            },
+            completes,
+        )))
+    }
+    /// Nested runtime index assignment into local-rooted arrays.
     fn nested_index_assignment(
         &mut self,
         target: &Expr,
@@ -6714,6 +6804,9 @@ impl<'a> Checker<'a> {
         value: &Expr,
         statements: &mut Vec<ir::TypedStmt>,
     ) -> Result<(ir::TypedStmt, bool), String> {
+        if let Some(result) = self.overloaded_nested_assignment(target, op, value, statements)? {
+            return Ok(result);
+        }
         // Written path from the root local outward, including the final step.
         enum NestedStep<'e> {
             Static(&'e FieldSelector),

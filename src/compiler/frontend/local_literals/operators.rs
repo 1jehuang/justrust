@@ -25,7 +25,7 @@ impl Operation {
     pub(super) fn lazy_frontier_inputs(&self) -> Option<(Term, Option<Term>)> {
         matches!(
             self.kind,
-            Kind::Index(_) | Kind::Binary(_) | Kind::Unary(_) | Kind::Deref
+            Kind::Index(_) | Kind::Binary(_) | Kind::Unary(_) | Kind::Deref | Kind::Assign(_)
         )
         .then_some((self.left, self.right))
     }

@@ -3553,6 +3553,12 @@ impl SourceInventory {
                         &here.child(41, 1, budget)?,
                         budget,
                     )?;
+                    // Nested `IndexMut` inside the first destination.
+                    self.operator_site(
+                        statement as *const Stmt as usize | 5,
+                        &here.child(41, 2, budget)?,
+                        budget,
+                    )?;
                     self.expr(
                         value,
                         &here.child(4, 0, budget)?,
@@ -3583,6 +3589,12 @@ impl SourceInventory {
                     self.operator_site(
                         statement as *const Stmt as usize | 3,
                         &here.child(41, 1, budget)?,
+                        budget,
+                    )?;
+                    // Nested `IndexMut` inside the first destination.
+                    self.operator_site(
+                        statement as *const Stmt as usize | 5,
+                        &here.child(41, 2, budget)?,
                         budget,
                     )?;
                     self.expr(

@@ -647,7 +647,44 @@ impl type_check::Checker<'_> {
         let mut rest = Vec::with_capacity(fields.len() - at);
         rest.push(FieldSelector::Deref);
         rest.extend(fields[at + 1..].iter().cloned());
-        let (projection, destination, writable) = self.call_place_projection(&carrier_ty, &rest)?;
+        // A second overloaded index inside the first destination
+        // (`v[0][1] = x` on `Vec<Vec<T>>`) gets its own `IndexMut` call.
+        let mut inner = None;
+        for split in 1..rest.len() {
+            let FieldSelector::ConstantIndex(index) = rest[split] else {
+                continue;
+            };
+            let (prefix, owner, _) = self.call_place_projection(&carrier_ty, &rest[..split])?;
+            if overloadable(&owner) && !matches!(owner, ir::Ty::Tuple(_)) {
+                inner = Some((split, prefix, owner, index));
+            }
+            break;
+        }
+        let outer_rest = match &inner {
+            Some((split, ..)) => rest[..*split].to_vec(),
+            None => rest.clone(),
+        };
+        let (projection, destination, writable) = match &inner {
+            Some((split, _, owner, index)) => {
+                let index = Expr::Integer(IntegerLiteral {
+                    magnitude: *index as u128,
+                    suffix: None,
+                });
+                let Some(ir::Ty::Ref { referent, .. }) =
+                    self.index_reference_hint(owner, &index)?
+                else {
+                    return Ok(None);
+                };
+                let inner_carrier = ir::Ty::Ref {
+                    kind: ir::BorrowKind::Mut,
+                    referent,
+                };
+                let mut tail = vec![FieldSelector::Deref];
+                tail.extend(rest[*split + 1..].iter().cloned());
+                self.call_place_projection(&inner_carrier, &tail)?
+            }
+            None => self.call_place_projection(&carrier_ty, &outer_rest)?,
+        };
         if !writable {
             return Err("E0594: cannot assign to data behind a shared reference".into());
         }
@@ -690,6 +727,35 @@ impl type_check::Checker<'_> {
             local: carrier,
             value: call,
         });
+        let carrier = match inner {
+            None => carrier,
+            Some((_, prefix, owner, index)) => {
+                let place = ir::Place {
+                    local: carrier,
+                    projection: prefix,
+                };
+                let receiver = self.borrow_expression(ir::BorrowKind::Mut, place)?;
+                let index = Expr::Integer(IntegerLiteral {
+                    magnitude: index as u128,
+                    suffix: None,
+                });
+                let call = self.operator_call(
+                    ("ops", "IndexMut", "index_mut"),
+                    owner,
+                    Some(ir::Ty::Int(ir::IntTy::Usize)),
+                    First::Lowered(receiver),
+                    std::slice::from_ref(&index),
+                )?;
+                self.record_operator(statement as *const Stmt as usize | 5, call)?;
+                let next =
+                    self.temporary("$index_carrier", self.exprs[call.0].ty.clone(), false)?;
+                statements.push(ir::TypedStmt::Let {
+                    local: next,
+                    value: call,
+                });
+                next
+            }
+        };
         let loaded = ir::ExprId(self.exprs.len());
         self.exprs.push(ir::TypedExpr {
             ty: rhs_ty,
@@ -815,7 +881,22 @@ impl type_check::Checker<'_> {
                 let first = match first {
                     First::Value(value) => self.expr_expected(value, signature.params.first())?,
                     First::Borrow(kind, value) => {
-                        if let Ok(place) = type_check::static_source_place(value)
+                        // `v[i][j]`: the receiver `v[i]` is itself an
+                        // overloaded index; borrow through the reference
+                        // `Index::index` returns instead of copying it.
+                        let nested =
+                            if matches!(value, Expr::Index { .. } | Expr::DynamicIndex { .. }) {
+                                self.overloaded_index_reference(
+                                    kind,
+                                    value,
+                                    value as *const Expr as usize,
+                                )?
+                            } else {
+                                None
+                            };
+                        if let Some(reference) = nested {
+                            reference
+                        } else if let Ok(place) = type_check::static_source_place(value)
                             && type_check::place_expression(value)
                         {
                             let (place, _, _) = self.checked_place(&place)?;

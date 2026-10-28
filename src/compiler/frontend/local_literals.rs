@@ -1121,7 +1121,10 @@ impl<'s> Solver<'_, '_, 's> {
                 }
                 false
             }
-            Domain::Integer | Domain::Float | Domain::Callable(_) => false,
+            // An unsuffixed literal only ever becomes a scalar: it can never
+            // reveal a Deref or array carrier for a lazy coercion.
+            Domain::Integer | Domain::Float => true,
+            Domain::Callable(_) => false,
             Domain::Nominal(_, children)
             | Domain::Tuple(children)
             | Domain::Opaque(_, children) => {
@@ -1175,7 +1178,8 @@ impl<'s> Solver<'_, '_, 's> {
             if !matches!(self.domain(*expected), Domain::Unknown)
                 || self.deferred_coercion(*expected)?
                 || !self.lazy_input_frontier(*actual, &[], 0)?
-                || self.resolve(*actual, 0)?.is_none()
+                || !self.manifest_ready_with_defaults(&[*actual], 0, true)?
+                || (self.manifest_ready(&[*actual], 0)? && self.resolve(*actual, 0)?.is_none())
             {
                 return Ok(false);
             }
@@ -2173,6 +2177,16 @@ impl<'s> Solver<'_, '_, 's> {
                         }
                     ) {
                         self.coerce(value, target)?;
+                    }
+                }
+                Stmt::AssignNestedIndex { target, op, value } => {
+                    // The target is a place: index operands type as `usize`
+                    // and the written element constrains the value.
+                    let target = self.expr(target, depth + 1)?;
+                    let value = self.expr(value, depth + 1)?;
+                    match op {
+                        Some(op) => self.operator_assignment(*op, target, value)?,
+                        None => self.coerce(value, target)?,
                     }
                 }
                 Stmt::Expr(expr) | Stmt::ImplicitExpr(expr) => {
