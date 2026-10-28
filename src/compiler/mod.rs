@@ -134,6 +134,34 @@ fn scale_task_work_by_callable(types: &frontend::PlanCtx, declaration: ir::DeclI
             .saturating_mul(WORK_PER_CALLABLE_UNIT),
     );
 }
+/// Bound on the type-tree size one instance may claim for its allowance.
+const TYPE_SIZE_CAP: usize = 4096;
+/// Nodes in one type tree, counting nominal and callable arguments, capped.
+fn type_tree_size(ty: &ir::Ty, cap: usize) -> usize {
+    let mut stack = vec![ty];
+    let mut count = 0usize;
+    while let Some(ty) = stack.pop() {
+        count += 1;
+        if count >= cap {
+            return cap;
+        }
+        match ty {
+            ir::Ty::Ref { referent, .. } => stack.push(referent),
+            ir::Ty::RawPtr { pointee, .. } => stack.push(pointee),
+            ir::Ty::Array { element, .. } | ir::Ty::Slice { element } => stack.push(element),
+            ir::Ty::Tuple(fields) => stack.extend(fields.iter()),
+            ir::Ty::Struct(value) => stack.extend(value.def().type_args.iter()),
+            ir::Ty::Enum(value) => stack.extend(value.def().type_args.iter()),
+            ir::Ty::FnItem(target) => stack.extend(target.type_args.iter()),
+            ir::Ty::AssociatedType(projection) => {
+                stack.push(&projection.trait_ref.self_ty);
+                stack.extend(projection.trait_ref.args.iter())
+            }
+            _ => {}
+        }
+    }
+    count
+}
 /// Work units granted per lowered CFG element of one instance.
 const WORK_PER_CFG_UNIT: u64 = 16 * 1024;
 fn scale_task_work_by_cfg(function: &cfg::Function) {
@@ -2158,6 +2186,24 @@ impl Provider for CompilerProvider {
                         }
                     } else {
                         let closed = types.instance_facts(&instance_target).map_err(Error::new)?;
+                        // Re-validating this instance re-proves the template's
+                        // expressions under its own actual arguments, whose
+                        // nested trees (iterator adapter chains) are walked
+                        // per proof: grant work for expressions x argument size.
+                        let argument_size = instance_target
+                            .type_args
+                            .iter()
+                            .map(|ty| type_tree_size(ty, TYPE_SIZE_CAP))
+                            .fold(1usize, usize::saturating_add);
+                        crate::engine::scale_task_work(
+                            u64::try_from(
+                                (source.exprs.len() + 1)
+                                    .saturating_mul(argument_size)
+                                    .saturating_mul(argument_size),
+                            )
+                            .unwrap_or(u64::MAX)
+                            .saturating_mul(WORK_PER_CALLABLE_UNIT),
+                        );
                         let mut context = types.as_ref().clone();
                         let proof_handle = cx.request(proof_key).get(0);
                         let count = source
