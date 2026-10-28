@@ -2,9 +2,17 @@
 //! Only bytes retained in this value are materialized in the linker's root.
 use std::{
     collections::BTreeMap,
+    fs::File,
+    io::{self, Read},
     path::{Path, PathBuf},
     process::Command,
 };
+
+// The complete capsule's option-identity framing fits beneath this bound,
+// leaving 4 MiB for other fields in the existing 16 MiB source option identity.
+// Acquisition retains the bytes actually read, not an atomic host snapshot.
+const MAX_CAPSULE_IDENTITY_BYTES: usize = 12 * 1024 * 1024;
+const MAX_EXECUTABLE_BYTES: usize = 256 * 1024 * 1024;
 
 #[derive(Clone, Debug)]
 pub struct ControlledToolchain {
@@ -28,6 +36,9 @@ impl ControlledToolchain {
     pub fn capture(libraries: &[String]) -> Result<Self, String> {
         if !cfg!(all(target_os = "linux", target_arch = "x86_64")) {
             return Err("unsupported: controlled native linking requires Linux x86-64".into());
+        }
+        if libraries.len() > 4096 {
+            return Err("resource limit: native library selection exceeds 4096 entries".into());
         }
         for name in libraries {
             if !matches!(name.as_str(), "c" | "m") {
@@ -69,6 +80,23 @@ impl ControlledToolchain {
             .iter()
             .map(|(path, bytes)| (path.as_path(), bytes.as_slice()))
     }
+    fn identity_bytes(&self) -> Option<usize> {
+        // Matches SourceInputs' capsule field framing: presence flag, policy,
+        // selected directory, library count/names, file count and path/bytes.
+        let mut size = 57usize
+            .checked_add(self.policy().len())?
+            .checked_add(self.library_dir.as_os_str().as_encoded_bytes().len())?;
+        for name in &self.libraries {
+            size = size.checked_add(8)?.checked_add(name.len())?;
+        }
+        for (path, bytes) in &self.files {
+            size = size
+                .checked_add(16)?
+                .checked_add(path.as_os_str().as_encoded_bytes().len())?
+                .checked_add(bytes.len())?;
+        }
+        Some(size)
+    }
     fn capture_file(&mut self, path: &Path) -> Result<(), String> {
         if !path.is_absolute()
             || path.components().any(|part| {
@@ -84,25 +112,15 @@ impl ControlledToolchain {
             return Ok(());
         }
         if self.files.len() >= 128 {
-            return Err("unsupported: native toolchain closure exceeds 128 files".into());
+            return Err("resource limit: native toolchain closure exceeds 128 files".into());
         }
-        let metadata = std::fs::metadata(path).map_err(|e| {
-            format!(
-                "unsupported: capture native toolchain {}: {e}",
-                path.display()
-            )
-        })?;
-        if !metadata.is_file() || metadata.len() > 64 * 1024 * 1024 {
-            return Err(format!(
-                "unsupported: native toolchain input size/type: {}",
-                path.display()
-            ));
-        }
-        let bytes = std::fs::read(path)
-            .map_err(|e| format!("infrastructure: capture {}: {e}", path.display()))?;
-        if bytes.len() > 64 * 1024 * 1024 {
-            return Err("unsupported: growing native toolchain input".into());
-        }
+        let remaining = self
+            .identity_bytes()
+            .and_then(|size| size.checked_add(16))
+            .and_then(|size| size.checked_add(path.as_os_str().as_encoded_bytes().len()))
+            .and_then(|size| MAX_CAPSULE_IDENTITY_BYTES.checked_sub(size))
+            .ok_or("resource limit: native toolchain capsule identity exceeds 12 MiB")?;
+        let bytes = acquire_regular(path, remaining, "native toolchain capsule input")?;
         let dependencies = elf_dependencies(&bytes)?;
         self.files.insert(path.to_owned(), bytes);
         for dependency in dependencies {
@@ -213,12 +231,69 @@ impl ControlledToolchain {
                 String::from_utf8_lossy(&output.stderr)
             ));
         }
-        let path = root.join("out/program");
-        if std::fs::metadata(&path).map_err(infrastructure)?.len() > 256 * 1024 * 1024 {
-            return Err("resource limit: native executable exceeds 256 MiB".into());
-        }
-        std::fs::read(path).map_err(infrastructure)
+        acquire_regular(
+            &root.join("out/program"),
+            MAX_EXECUTABLE_BYTES,
+            "native executable",
+        )
     }
+}
+
+#[derive(Debug)]
+enum AcquisitionError {
+    Io(io::Error),
+    NotRegular,
+    Limit,
+}
+fn open_regular(path: &Path, limit: usize) -> Result<File, AcquisitionError> {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        // A FIFO substituted before open must reject, not block waiting for a
+        // writer. Regular files ignore O_NONBLOCK. Validate the opened handle,
+        // never metadata from a separate path lookup.
+        options.custom_flags(0x800);
+    }
+    let file = options.open(path).map_err(AcquisitionError::Io)?;
+    let metadata = file.metadata().map_err(AcquisitionError::Io)?;
+    if !metadata.is_file() {
+        return Err(AcquisitionError::NotRegular);
+    }
+    if metadata.len() > limit as u64 {
+        return Err(AcquisitionError::Limit);
+    }
+    Ok(file)
+}
+fn bounded_read(reader: impl Read, limit: usize) -> Result<Vec<u8>, AcquisitionError> {
+    let probe = limit.checked_add(1).ok_or(AcquisitionError::Limit)?;
+    let mut bytes = Vec::new();
+    reader
+        .take(probe as u64)
+        .read_to_end(&mut bytes)
+        .map_err(AcquisitionError::Io)?;
+    if bytes.len() > limit {
+        return Err(AcquisitionError::Limit);
+    }
+    Ok(bytes)
+}
+fn acquire_regular(path: &Path, limit: usize, context: &str) -> Result<Vec<u8>, String> {
+    open_regular(path, limit)
+        .and_then(|file| bounded_read(file, limit))
+        .map_err(|error| match error {
+            AcquisitionError::Io(error) => {
+                format!("infrastructure: read {context} {}: {error}", path.display())
+            }
+            AcquisitionError::NotRegular => format!(
+                "unsupported: {context} must be a regular file: {}",
+                path.display()
+            ),
+            AcquisitionError::Limit => format!(
+                "resource limit: {context} exceeds {limit} byte acquisition limit: {}",
+                path.display()
+            ),
+        })
 }
 fn infrastructure(error: std::io::Error) -> String {
     format!("infrastructure: controlled native link: {error}")

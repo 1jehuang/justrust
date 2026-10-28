@@ -25,6 +25,159 @@ impl Drop for Temp {
     }
 }
 #[test]
+fn controlled_link_bounded_reader_probes_growth_and_propagates_errors() {
+    struct Growing(usize);
+    impl Read for Growing {
+        fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+            bytes.fill(1);
+            self.0 += bytes.len();
+            Ok(bytes.len())
+        }
+    }
+    struct Broken;
+    impl Read for Broken {
+        fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+            Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "injected read failure",
+            ))
+        }
+    }
+    assert_eq!(bounded_read(&b"abc"[..], 3).unwrap(), b"abc");
+    assert_eq!(bounded_read(&b"ab"[..], 3).unwrap(), b"ab");
+    assert!(bounded_read(&b""[..], 0).unwrap().is_empty());
+    assert!(matches!(
+        bounded_read(&b"x"[..], 0),
+        Err(AcquisitionError::Limit)
+    ));
+    assert!(matches!(
+        bounded_read(Broken, usize::MAX),
+        Err(AcquisitionError::Limit)
+    ));
+    let mut growing = Growing(0);
+    assert!(matches!(
+        bounded_read(&mut growing, 3),
+        Err(AcquisitionError::Limit)
+    ));
+    assert_eq!(growing.0, 4);
+    assert!(
+        matches!(bounded_read(Broken, 3), Err(AcquisitionError::Io(error)) if error.kind() == io::ErrorKind::PermissionDenied)
+    );
+}
+
+#[test]
+fn controlled_link_regular_handle_bounds_growth_and_ignores_path_replacement() {
+    use std::io::Write;
+    let temp = Temp::new();
+    unsafe extern "C" {
+        fn mkfifo(path: *const std::ffi::c_char, mode: u32) -> i32;
+    }
+    let fifo = temp.0.join("fifo");
+    let fifo_name = std::ffi::CString::new(fifo.as_os_str().as_encoded_bytes()).unwrap();
+    assert_eq!(unsafe { mkfifo(fifo_name.as_ptr(), 0o600) }, 0);
+    assert!(matches!(
+        open_regular(&fifo, 3),
+        Err(AcquisitionError::NotRegular)
+    ));
+    let path = temp.0.join("input");
+    fs::write(&path, b"abc").unwrap();
+    let opened = open_regular(&path, 3).unwrap();
+    fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap()
+        .write_all(b"x")
+        .unwrap();
+    assert!(matches!(
+        bounded_read(opened, 3),
+        Err(AcquisitionError::Limit)
+    ));
+    fs::write(&path, b"abc").unwrap();
+    let opened = open_regular(&path, 3).unwrap();
+    fs::rename(&path, temp.0.join("original")).unwrap();
+    fs::write(&path, b"replacement exceeds limit").unwrap();
+    assert_eq!(bounded_read(opened, 3).unwrap(), b"abc");
+    assert!(matches!(
+        open_regular(&temp.0, 3),
+        Err(AcquisitionError::NotRegular)
+    ));
+    assert!(matches!(
+        open_regular(Path::new("/dev/null"), 3),
+        Err(AcquisitionError::NotRegular)
+    ));
+    assert!(
+        matches!(open_regular(&temp.0.join("missing"), 3), Err(AcquisitionError::Io(error)) if error.kind() == io::ErrorKind::NotFound)
+    );
+    let output = temp.0.join("program");
+    fs::write(&output, b"abc").unwrap();
+    assert_eq!(
+        acquire_regular(&output, 3, "native executable").unwrap(),
+        b"abc"
+    );
+    File::options()
+        .write(true)
+        .open(&output)
+        .unwrap()
+        .set_len(MAX_EXECUTABLE_BYTES as u64 + 1)
+        .unwrap();
+    assert!(
+        acquire_regular(&output, MAX_EXECUTABLE_BYTES, "native executable")
+            .unwrap_err()
+            .starts_with("resource limit:")
+    );
+}
+
+#[test]
+fn controlled_link_capsule_aggregate_budget_includes_all_identity_framing() {
+    use std::io::Write;
+    fn empty() -> ControlledToolchain {
+        ControlledToolchain {
+            files: BTreeMap::new(),
+            library_dir: "/libs".into(),
+            libraries: vec!["c".into(), "m".into()],
+        }
+    }
+    fn archive(path: &Path, size: usize) {
+        let mut file = File::create(path).unwrap();
+        file.write_all(b"!<arch>\n").unwrap();
+        file.set_len(size as u64).unwrap();
+    }
+    let temp = Temp::new();
+    let mut capsule = empty();
+    let framing = 9 + 8 + capsule.policy().len() + 8 + 5 + 16 + 2 * (8 + 1) + 16;
+    assert_eq!(capsule.identity_bytes(), Some(framing));
+    let first = temp.0.join("first.a");
+    let second = temp.0.join("second.a");
+    archive(&first, 7 * 1024 * 1024);
+    archive(&second, 7 * 1024 * 1024);
+    capsule.capture_file(&first).unwrap();
+    assert!(
+        capsule
+            .capture_file(&second)
+            .unwrap_err()
+            .starts_with("resource limit:")
+    );
+    assert_eq!(capsule.files.len(), 1);
+    assert!(capsule.identity_bytes().unwrap() < MAX_CAPSULE_IDENTITY_BYTES);
+    let mut exact = empty();
+    let path = temp.0.join("exact.a");
+    let remaining =
+        MAX_CAPSULE_IDENTITY_BYTES - framing - 16 - path.as_os_str().as_encoded_bytes().len();
+    archive(&path, remaining);
+    exact.capture_file(&path).unwrap();
+    assert_eq!(exact.identity_bytes(), Some(MAX_CAPSULE_IDENTITY_BYTES));
+    exact.capture_file(&path).unwrap();
+    assert!(
+        exact
+            .capture_file(&second)
+            .unwrap_err()
+            .starts_with("resource limit:")
+    );
+    assert_eq!(exact.files.len(), 1);
+    let real = ControlledToolchain::capture(&["c".into(), "m".into()]).unwrap();
+    assert!(real.identity_bytes().unwrap() < MAX_CAPSULE_IDENTITY_BYTES);
+}
+#[test]
 fn controlled_link_input_receipt_rejects_capsule_byte_path_and_selection_mutation() {
     use crate::compiler::{
         expansion_budget::ExpansionBudget,
