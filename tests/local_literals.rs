@@ -210,7 +210,7 @@ fn unused_scalar_conflicts_are_user_errors() {
                 // Stock may classify an unsupported operator as E0277;
                 // native inference reports the conflicting domains as E0308.
                 assert!(diagnostic.starts_with("E0308:"), "{diagnostic}");
-                assert!(diagnostic.contains("does not match"), "{diagnostic}");
+                assert!(diagnostic.contains("mismatched types"), "{diagnostic}");
                 assert!(!diagnostic.contains("InvalidMetadata"), "{diagnostic}");
                 assert!(diagnostic.contains(left), "{diagnostic}");
                 assert!(diagnostic.contains(right), "{diagnostic}");
