@@ -8688,3 +8688,36 @@ contention in the identical pinned compiler test binary, not proof of a cause.
 The prior caveat remains: no full-suite speedup or comprehensive synthetic
 promotion is claimed. The installed hosted retry path is now validated, and the
 previous source-placement acceptance blocker is closed.
+
+### Hosted TUI test stall: project lock inversion and hidden warnings (2026-10-28)
+
+At 01:55 UTC the active Jcode TUI library run
+`20261027-185045233-2600539` had one test process alive for over four minutes,
+with 197 threads: 96 Tokio workers and 96 waiting test threads, plus service
+threads. The host had about 366 GiB available memory and load below one.
+This was a blocked test process, not evidence of insufficient hosted CPU or RAM.
+
+A bounded full-binary reproduction under an unprivileged debugger established
+an environment/render-state mutex inversion. The app test
+`test_remote_hydrated_catalog_restores_missing_direct_bedrock_route` held the
+test environment lock through `with_temp_jcode_home`, then waited for the render
+lock in `create_test_app` / `clear_test_render_state_for_tests`. Meanwhile,
+`justrust_status_is_below_todos_and_never_wraps` held the render lock and waited
+for the environment lock in `with_pinned_todos_config`. That repair belongs in
+Jcode's test harness, not the cloud scheduler or tenant resource limits. The
+original invocation was left intact while the separate reproduction was bounded
+and stopped. No user data or tenant isolation settings were changed.
+
+There was also a justrust diagnostics defect: `test_pool::execute` retained
+every output line until the child exited, hiding libtest's long-running test
+warnings precisely when a child could not exit. Commit `78b364990` emits
+attributed process-start diagnostics and standalone libtest timeout warnings
+while the process is alive, without publishing provisional failures or replaying
+the warning in the final block. Normal authoritative results remain buffered.
+
+Hosted regression run `20261027-190148464-2677748` passed all 824 tests, with
+six ignored: 12.1s host wall, 4.33s test execution, 13.9s client hosted wall.
+Focused pool tests, check, and clippy also passed in runs
+`20261027-190025678-2669713`, `20261027-185917324-2663293`, and
+`20261027-190037104-2671086`. These are correctness and diagnostic observations,
+not a benchmark speedup claim or a comprehensive default-promotion comparison.
