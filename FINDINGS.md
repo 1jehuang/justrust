@@ -8708,6 +8708,21 @@ Jcode's test harness, not the cloud scheduler or tenant resource limits. The
 original invocation was left intact while the separate reproduction was bounded
 and stopped. No user data or tenant isolation settings were changed.
 
+By 02:03 UTC both the local caller and remote agent had exited, leaving the
+recorder reparented to PID 1. After checking both parent PID and exact executable,
+sent SIGTERM to that orphan only. Its deadlocked test child exited, but the
+recorder incorrectly began failure confirmation before exiting. The recorder
+and original child were both gone by 02:04 UTC. This additionally exposed a
+service lifecycle bug: disconnected agents must not orphan build recorders,
+and cancellation must not initiate test retries. Follow-through is tracked
+separately from the project's mutex-order repair.
+
+Recovered the completed host summary into the original local run directory
+after its caller disappeared, preserving the local hosted metadata, then
+exported it. The canceled original ran for 783.61s, including 765.63s attributed
+to its test binary. This is a censored hang observation, not a comparable
+before/after benchmark sample.
+
 There was also a justrust diagnostics defect: `test_pool::execute` retained
 every output line until the child exited, hiding libtest's long-running test
 warnings precisely when a child could not exit. Commit `78b364990` emits
@@ -8721,3 +8736,27 @@ Focused pool tests, check, and clippy also passed in runs
 `20261027-190025678-2669713`, `20261027-185917324-2663293`, and
 `20261027-190037104-2671086`. These are correctness and diagnostic observations,
 not a benchmark speedup claim or a comprehensive default-promotion comparison.
+
+Jcode fix `56f901a32` is pushed to its primary branch. The pinned-todo helper
+now acquires environment before render state, matching app construction.
+Shared app fixtures use two Tokio workers rather than expanding each runtime
+to all 96 hosted CPUs, retaining multithreaded runtime semantics. The bounded
+cross-thread regression passed, and temporarily restoring the reverse lock
+order triggered its ten-second failure deadline. Restored-code hosted check
+passed in `20261027-190842537-2713718`; all five pinned-todo tests passed in
+`20261027-190851878-2714766`; the originally blocked Bedrock test passed in
+`20261027-190639874-2703249`.
+
+The full unsharded serialized TUI run `20261027-190642838-2703531` finished its
+tests in 28.27s: 3,070 passed, three failed, 19 ignored. Those three failures
+were independently reproduced with the original fixture runtimes: Muse
+subscription success notice, structured session-preview alignment, and prompt
+shimmer movement. The full TUI suite is therefore **not green**; eliminating
+the deadlock does not establish correctness of those unrelated assertions.
+Default-parallel runs also finished, but exposed additional shared-state races.
+
+Installed-client forced-hosted acceptance `20261027-190917542-2717063` exercised
+a genuine 63-second Rust test and a quick passing control. Exactly one libtest
+timeout warning reached the caller at 61.52s while its process was still alive;
+both tests then passed, with caller exit zero at 64.65s. This validates live
+delivery across the actual hosted transport, not just an in-process sink stub.
