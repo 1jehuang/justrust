@@ -181,6 +181,20 @@ class SigningTests(unittest.TestCase):
         self.assertNotIn('/p', sign)
         self.assertNotIn('/f', sign)
 
+    def test_macos_requirement_uses_inline_mode_and_preserves_checks(self):
+        for identity in ['Developer ID Application: Example (TESTTEAM)', 'AB' * 20]:
+            with self.subTest(identity=identity):
+                a = self.args('--identifier', 'com.example.signed-cli')
+                a.identity = identity
+                sign, verify = signing.commands(a, '<artifact>')
+                self.assertEqual(sign[sign.index('--sign') + 1], identity)
+                self.assertEqual(verify, [
+                    '/usr/bin/codesign', '--verify', '--strict', '--verbose=2', '-R',
+                    '=anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists '
+                    'and certificate leaf[field.1.2.840.113635.100.6.1.13] exists '
+                    'and identifier "com.example.signed-cli"', '<artifact>',
+                ])
+
     def test_fingerprint_keeps_developer_id_chain_requirement(self):
         a = self.args()
         a.identity = 'AB' * 20

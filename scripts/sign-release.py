@@ -80,7 +80,8 @@ def commands(a, artifact):
             raise ValueError('Windows signing arguments cannot be used for macOS')
         if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9.-]*', a.identifier):
             raise ValueError('invalid signing identifier')
-        requirement = ('anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists '
+        # codesign treats -R arguments as filenames unless prefixed with '='.
+        requirement = ('=anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists '
                        'and certificate leaf[field.1.2.840.113635.100.6.1.13] exists '
                        f'and identifier "{a.identifier}"')
         return [
