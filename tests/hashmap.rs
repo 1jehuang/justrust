@@ -236,6 +236,16 @@ fn main() {
                 expect: Expect::Run("Some(3) 2\n"),
             },
             Case {
+                name: "generic_slice_iterator_next_returns_element_reference",
+                source: r#"fn first<'a,K>(v:&'a Vec<K>)->Option<&'a K>{let mut it=v.iter();it.next()}fn second<K>(v:&Vec<K>)->Option<&K>{let mut it=v.into_iter();it.next();it.next()}fn main(){let v=vec![3u8,4];println!("{:?} {:?}",first(&v),second(&v));}"#,
+                expect: Expect::Run("Some(3) Some(4)\n"),
+            },
+            Case {
+                name: "generic_slice_iterator_item_keeps_owner_borrowed",
+                source: r#"fn f<K:Copy>(v:&mut Vec<K>,k:K)->bool{let mut it=v.iter();let x=it.next();v.push(k);x.is_some()}fn main(){}"#,
+                expect: Expect::Invalid("E0502"),
+            },
+            Case {
                 name: "clone_vector_of_borrowed_str_and_slice_refs",
                 source: r#"fn main(){let v:Vec<&str>=vec!["a","b"];let w=v.clone();let a=[1u8,2];let s:&[u8]=&a;let t=s.clone();println!("{} {:?} {}",w.len(),w,t.len());}"#,
                 expect: Expect::Run("2 [\"a\", \"b\"] 2\n"),

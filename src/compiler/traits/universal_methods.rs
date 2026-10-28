@@ -557,6 +557,53 @@ impl ValidatedTraitWorld {
         Ok(Arc::new(view))
     }
 
+    /// Carriers of a universal required application. An associated type is
+    /// fixed by the trait reference alone, so a required item whose declared
+    /// result names no reference of its own cannot return through the
+    /// method's own parameter borrows (`fn next(&mut self) -> Option<Self::Item>`).
+    /// Only carriers reached through a parameter's referent stay eligible.
+    pub(super) fn derive_universal_required_carriers(
+        &self,
+        item: DeclId,
+        signature: &Signature,
+        source: &ir::SourceRegionEnv,
+    ) -> Result<(ir::CarrierContract, ir::CarrierRegionSchema)> {
+        let (mut contract, regions) = self.derive_carriers(signature, source)?;
+        let raw = &self.item_header(item)?.schema.signature;
+        let declared_reference = charged(
+            &self.budget,
+            ir::carrier_locations(&raw.result, &self.budget),
+        )?
+        .iter()
+        .any(|location| matches!(location.channel, ir::CarrierChannel::Fixed(_)));
+        if declared_reference {
+            return Ok((contract, regions));
+        }
+        let mut results = Vec::new();
+        for result in contract.results.iter() {
+            let mut sources = Vec::new();
+            for input in result.sources.iter() {
+                charged(&self.budget, self.budget.charge_work(1))?;
+                let own_borrow = input.location.path.0.is_empty()
+                    && matches!(input.location.channel, ir::CarrierChannel::Fixed(_))
+                    && matches!(raw.params.get(input.param), Some(Ty::Ref { .. }));
+                if !own_borrow {
+                    push(&self.budget, &mut sources, input.clone())?;
+                }
+            }
+            push(
+                &self.budget,
+                &mut results,
+                ir::CarrierReturn {
+                    location: result.location.clone(),
+                    sources: sources.into(),
+                },
+            )?;
+        }
+        contract.results = results.into();
+        Ok((contract, regions))
+    }
+
     fn universal_required_carrier_parts(
         &self,
         application: InstantiatedSchema,
@@ -569,7 +616,11 @@ impl ValidatedTraitWorld {
             &self.budget,
             ir::derive_signature_origin_schema(&signature, facts.env(), &self.budget),
         )?;
-        let (contract, regions) = self.derive_carriers(&signature, &source_regions)?;
+        let (contract, regions) = self.derive_universal_required_carriers(
+            authority.call.item,
+            &signature,
+            &source_regions,
+        )?;
         let mut arguments = Vec::new();
         let mut components = Vec::new();
         for parameter in facts.env().ordered_params() {

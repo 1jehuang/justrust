@@ -666,7 +666,8 @@ impl ValidatedTraitWorld {
             let source = self.validate_source_regions(call.item, &raw.signature)?;
             let (application, _) = self.instantiate_universal_required_item(call, facts)?;
             let signature = &application.signature;
-            let (contract, regions) = self.derive_carriers(signature, &source)?;
+            let (contract, regions) =
+                self.derive_universal_required_carriers(call.item, signature, &source)?;
             let origin = charged(
                 &self.budget,
                 ir::derive_signature_origin_schema(signature, facts.env(), &self.budget),
