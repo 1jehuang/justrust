@@ -66,12 +66,12 @@ impl<T: ?Sized> super::ops::DerefMut for Box<T> {
 
 impl<T: super::fmt::Debug + ?Sized> super::fmt::Debug for Box<T> {
     fn fmt(&self, f: &mut super::fmt::Formatter) -> super::fmt::Result {
-        super::fmt::Debug::fmt(&**self, f)
+        <T as super::fmt::Debug>::fmt(unsafe { &*self.ptr }, f)
     }
 }
 
 impl<T: super::fmt::Display + ?Sized> super::fmt::Display for Box<T> {
     fn fmt(&self, f: &mut super::fmt::Formatter) -> super::fmt::Result {
-        super::fmt::Display::fmt(&**self, f)
+        <T as super::fmt::Display>::fmt(unsafe { &*self.ptr }, f)
     }
 }

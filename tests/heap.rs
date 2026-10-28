@@ -192,6 +192,26 @@ fn heap_case(name: &str, body: &str) {
 }
 
 #[test]
+fn box_debug_display_forward_to_unsized_payload() {
+    // Stock rustc 1.98 (edition 2024, panic=abort) stdout.
+    runs_source(
+        "box_debug_display",
+        r#"#[derive(Debug)]
+enum List { Cons(i32, Box<List>), Nil }
+#[derive(Debug)]
+struct N { v: i32, b: Option<Box<N>> }
+fn main() {
+    let b = Box::new(3);
+    println!("{} {:?}", b, b);
+    println!("{:?}", List::Cons(1, Box::new(List::Cons(2, Box::new(List::Nil)))));
+    println!("{:?}", N { v: 1, b: Some(Box::new(N { v: 2, b: None })) });
+}
+"#,
+        "3 3\nCons(1, Cons(2, Nil))\nN { v: 1, b: Some(N { v: 2, b: None }) }\n",
+    );
+}
+
+#[test]
 fn recursive_box_traversal_converges_without_losing_loans() {
     heap_case(
         "shared_loop_reborrow",
