@@ -508,7 +508,14 @@ fn execute(inner: &Inner, req: &Request, args: &[String], stem: &str) -> Finishe
     let pid = child.id() as i32;
     LIVE_PIDS.lock().unwrap().push(pid);
     track_signal_pid(pid, true);
+    inner.sink.emit_block(&[(
+        start,
+        "e",
+        format!("justrust: test process started: {stem} (pid {pid})").into_bytes(),
+    )]);
     let read = |r: Box<dyn Read + Send>, s: &'static str| {
+        let sink = inner.sink.clone();
+        let stem = stem.to_owned();
         std::thread::spawn(move || {
             let mut out = Vec::new();
             let mut r = BufReader::new(r);
@@ -520,7 +527,17 @@ fn execute(inner: &Inner, req: &Request, args: &[String], stem: &str) -> Finishe
                     Ok(_) => {}
                 }
                 let line = buf.strip_suffix(b"\n").unwrap_or(&buf).to_vec();
-                out.push((paths::now(), s, line));
+                let now = paths::now();
+                if long_running_warning(&line) {
+                    // These are diagnostics, not outcomes. Send them while the
+                    // child is alive, including during confirmation retries.
+                    // Do not replay them in the final authoritative block.
+                    let mut diagnostic = format!("justrust: {stem} (pid {pid}): ").into_bytes();
+                    diagnostic.extend_from_slice(&line);
+                    sink.emit_block(&[(now, "e", diagnostic)]);
+                } else {
+                    out.push((now, s, line));
+                }
             }
             out
         })
@@ -549,6 +566,24 @@ fn execute(inner: &Inner, req: &Request, args: &[String], stem: &str) -> Finishe
         outcomes,
         hide_filtered: None,
     }
+}
+
+/// Only libtest's standalone timeout warning is safe to publish before
+/// confirmation. In particular, never expose a provisional FAILED outcome.
+fn long_running_warning(line: &[u8]) -> bool {
+    let Ok(text) = std::str::from_utf8(line) else {
+        return false;
+    };
+    let Some(rest) = text.trim_end_matches('\r').strip_prefix("test ") else {
+        return false;
+    };
+    let Some((name, seconds)) = rest.rsplit_once(" has been running for over ") else {
+        return false;
+    };
+    !name.is_empty()
+        && seconds
+            .strip_suffix(" seconds")
+            .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
 }
 
 /// Print one finished process as a block: a `Running` header (the summary
@@ -1609,6 +1644,105 @@ mod tests {
                     .map(|l| String::from_utf8_lossy(&l.2).into_owned()),
             );
         }
+    }
+
+    #[test]
+    fn timeout_warning_is_not_a_test_outcome() {
+        assert!(long_running_warning(
+            b"test module::slow has been running for over 60 seconds"
+        ));
+        assert!(long_running_warning(
+            b"test module::slow has been running for over 120 seconds\r"
+        ));
+        for line in [
+            &b"test module::slow ... FAILED"[..],
+            b"test module::slow ... ok",
+            b"test result: FAILED. 0 passed; 1 failed",
+            b"test x has been running for over many seconds",
+            b"test x has been running for over 60 seconds trailing output",
+            b"\xfftest x has been running for over 60 seconds",
+        ] {
+            assert!(!long_running_warning(line));
+        }
+    }
+
+    /// A child waits for the sink to acknowledge its warning. Buffering until
+    /// exit cannot pass this test, even on a fast machine.
+    #[cfg(unix)]
+    #[test]
+    fn timeout_warning_is_live_and_not_replayed() {
+        struct AcknowledgeSink {
+            lines: Mutex<Vec<String>>,
+            release: PathBuf,
+        }
+        impl Sink for AcknowledgeSink {
+            fn emit_block(&self, lines: &[(f64, &'static str, Vec<u8>)]) {
+                for (_, _, raw) in lines {
+                    let text = String::from_utf8_lossy(raw).into_owned();
+                    if text.contains("has been running for over") {
+                        std::fs::write(&self.release, "ack").unwrap();
+                    }
+                    self.lines.lock().unwrap().push(text);
+                }
+            }
+        }
+        let dir = TmpDir(std::env::temp_dir().join(format!("jr-live-{}", std::process::id())));
+        std::fs::create_dir_all(dir.path()).unwrap();
+        let sink = Arc::new(AcknowledgeSink {
+            lines: Mutex::new(Vec::new()),
+            release: dir.path().join("release"),
+        });
+        let pool =
+            Pool::start(dir.path(), dir.path(), Path::new("jr"), sink.clone(), false).unwrap();
+        let req = Request {
+            bin: "/bin/sh".into(),
+            args: vec![],
+            cwd: dir.path().to_string_lossy().into_owned(),
+            env: vec![],
+        };
+        for stream in ["", " >&2"] {
+            let _ = std::fs::remove_file(&sink.release);
+            let script = format!(
+                "echo 'test module::slow has been running for over 60 seconds'{stream}; \
+                 i=0; while [ ! -f release ] && [ $i -lt 100 ]; do /bin/sleep 0.02; i=$((i+1)); done; \
+                 [ -f release ] || exit 99; \
+                 echo 'test module::slow ... FAILED'; echo 'failure details' >&2; exit 101"
+            );
+            let result = execute(&pool.inner, &req, &["-c".into(), script], "fixture");
+            assert_eq!(result.exit, 101, "warning was not delivered before exit");
+            assert_eq!(failed_names(&result), ["module::slow"]);
+            assert!(
+                result
+                    .lines
+                    .iter()
+                    .any(|(_, s, l)| *s == "e" && l == b"failure details")
+            );
+            assert!(!result.lines.iter().any(|(_, _, l)| long_running_warning(l)));
+            report(&pool.inner, &result);
+        }
+        let lines = sink.lines.lock().unwrap();
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|l| l.contains("has been running for over"))
+                .count(),
+            2
+        );
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|l| *l == "test module::slow ... FAILED")
+                .count(),
+            2
+        );
+        assert!(
+            lines
+                .iter()
+                .filter(|l| l.contains("has been running for over"))
+                .all(|l| l.starts_with("justrust: fixture (pid "))
+        );
+        drop(lines);
+        pool.finish();
     }
 
     /// Cargo stops at the first failing test binary unless --no-fail-fast.
