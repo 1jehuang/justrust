@@ -1161,7 +1161,6 @@ impl<'s> Solver<'_, '_, 's> {
                 .operators
                 .iter()
                 .any(|operator| operator.lazy_frontier_inputs().is_none())
-            || !self.iterator_items.is_empty()
             || !self.associated_equalities.is_empty()
             || !self.patterns.is_empty()
             || !self.pending_referents.is_empty()
@@ -1215,6 +1214,17 @@ impl<'s> Solver<'_, '_, 's> {
                 if !self.lazy_input_frontier(*input, &targets, 0)? {
                     return Ok(false);
                 }
+            }
+        }
+        // A loop source waiting on a lazily coerced value (`for x in b.iter()`
+        // with `b = Box::new(v)`) is a local cycle like a method receiver.
+        for pending in &self.iterator_items {
+            let source = match pending {
+                iteration::Pending::Ordinary(source, _) => *source,
+                iteration::Pending::ArrayMethod { receiver, .. } => *receiver,
+            };
+            if !self.lazy_input_frontier(source, &targets, 0)? {
+                return Ok(false);
             }
         }
         Ok(!self.missing_source_schemas.get()

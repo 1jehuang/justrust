@@ -140,9 +140,15 @@ impl<'s> Solver<'_, '_, 's> {
                             ir::Ty::Ref { referent, .. } => referent.as_ref().clone(),
                             other => other.clone(),
                         };
-                        if !matches!(owner, ir::Ty::Struct(_) | ir::Ty::Enum(_))
-                            || owner.owned_box_pointee().is_some()
-                        {
+                        if let Some(pointee) = owner.owned_box_pointee() {
+                            // Box<T> derefs to T natively (no Deref impl hop).
+                            ty = ir::Ty::Ref {
+                                kind: ir::BorrowKind::Shared,
+                                referent: Arc::new(pointee.clone()),
+                            };
+                            continue;
+                        }
+                        if !matches!(owner, ir::Ty::Struct(_) | ir::Ty::Enum(_)) {
                             break;
                         }
                         if plan
