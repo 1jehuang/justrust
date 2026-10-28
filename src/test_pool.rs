@@ -229,6 +229,11 @@ pub struct Outcome {
 }
 
 static LIVE_PIDS: Mutex<Vec<i32>> = Mutex::new(Vec::new());
+static CANCEL_SIGNAL: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+
+pub(crate) fn cancellation_signal() -> i32 {
+    CANCEL_SIGNAL.load(std::sync::atomic::Ordering::SeqCst)
+}
 
 /// The same pids, readable from a signal handler (no lock). macOS has no
 /// `PR_SET_PDEATHSIG`: the recorder forwards a SIGTERM it gets to these.
@@ -252,6 +257,7 @@ fn track_signal_pid(pid: i32, add: bool) {
 /// Send `sig` to every test process the pool is running. Async-signal-safe.
 #[cfg(unix)]
 pub fn signal_live(sig: libc::c_int) {
+    CANCEL_SIGNAL.store(sig, std::sync::atomic::Ordering::SeqCst);
     for slot in &SIGNAL_PIDS {
         let pid = slot.load(std::sync::atomic::Ordering::SeqCst);
         if pid > 0 {
@@ -426,12 +432,15 @@ fn dispatch(inner: &Arc<Inner>) {
 }
 
 fn run_job(inner: &Arc<Inner>, job: Job) {
-    let groups = plan(inner, &job).unwrap_or_else(|| {
-        vec![Group {
-            args: job.req.args.clone(),
-            hide_filtered: None,
-        }]
-    });
+    let groups = (cancellation_signal() == 0)
+        .then(|| plan(inner, &job))
+        .flatten()
+        .unwrap_or_else(|| {
+            vec![Group {
+                args: job.req.args.clone(),
+                hide_filtered: None,
+            }]
+        });
     if groups.len() > 1 {
         // Processes of one binary overlap each other.
         inner.state.lock().unwrap().overlapped.insert(job.id);
@@ -446,7 +455,7 @@ fn run_job(inner: &Arc<Inner>, job: Job) {
                 };
                 fin.hide_filtered = g.hide_filtered;
                 let overlapped = inner.state.lock().unwrap().overlapped.contains(&job.id);
-                if fin.exit != 0 && overlapped {
+                if should_confirm(fin.exit, overlapped, cancellation_signal()) {
                     // It ran next to other test processes: confirm alone.
                     fin = confirm_alone(inner, &job.req, &job.stem, &g.args, fin);
                 }
@@ -469,6 +478,23 @@ fn run_job(inner: &Arc<Inner>, job: Job) {
 /// Run one process of a test binary, capturing its output with timestamps.
 fn execute(inner: &Inner, req: &Request, args: &[String], stem: &str) -> Finished {
     let start = paths::now();
+    if let sig @ 1.. = cancellation_signal() {
+        return Finished {
+            bin: req.bin.clone(),
+            stem: stem.to_owned(),
+            exit: 128 + sig,
+            start,
+            end: start,
+            lines: vec![(
+                start,
+                "e",
+                format!("justrust: {stem}: not started after cancellation (signal {sig})")
+                    .into_bytes(),
+            )],
+            outcomes: Vec::new(),
+            hide_filtered: None,
+        };
+    }
     let mut cmd = Command::new(&req.bin);
     cmd.args(args)
         .current_dir(&req.cwd)
@@ -508,6 +534,14 @@ fn execute(inner: &Inner, req: &Request, args: &[String], stem: &str) -> Finishe
     let pid = child.id() as i32;
     LIVE_PIDS.lock().unwrap().push(pid);
     track_signal_pid(pid, true);
+    // Close the race between the cancellation check and publishing this PID.
+    #[cfg(unix)]
+    if let sig @ 1.. = cancellation_signal() {
+        // SAFETY: this is our still-owned child, not yet reaped.
+        unsafe {
+            libc::kill(pid, sig);
+        }
+    }
     inner.sink.emit_block(&[(
         start,
         "e",
@@ -640,6 +674,10 @@ fn selective_retry_is_cheap(first: &Finished) -> bool {
             <= (first.end - first.start).max(0.0) * 2.0
 }
 
+fn should_confirm(exit: i32, overlapped: bool, cancelled: i32) -> bool {
+    exit != 0 && overlapped && cancelled == 0
+}
+
 /// A process failed while other test processes ran. Rerun its failed
 /// tests by exact name, one at a time (some tests fail only next to another
 /// test of the same process): if every one fails again, the first result
@@ -659,6 +697,9 @@ fn confirm_alone(
     args: &[String],
     first: Finished,
 ) -> Finished {
+    if !should_confirm(first.exit, true, cancellation_signal()) {
+        return first;
+    }
     let failed_owned: Vec<String> = failed_names(&first)
         .into_iter()
         .map(str::to_owned)
@@ -677,6 +718,9 @@ fn confirm_alone(
             inner.gate.shared()
         };
         let r = execute(inner, req, &again, stem);
+        if cancellation_signal() != 0 {
+            return None;
+        }
         Some(failed_names(&r).into_iter().map(str::to_owned).collect())
     };
     let selective = selective_retry_is_cheap(&first);
@@ -726,6 +770,9 @@ fn confirm_alone(
             let _shared = inner.gate.shared();
             execute(inner, req, args, stem)
         };
+        if cancellation_signal() != 0 {
+            return first;
+        }
         let still_failed: HashSet<&str> = failed_names(&repeated).into_iter().collect();
         if failed.iter().all(|name| still_failed.contains(name)) {
             return first;
@@ -737,6 +784,9 @@ fn confirm_alone(
         inner
             .sink
             .emit_block(&[(paths::now(), "e", note.into_bytes())]);
+    }
+    if cancellation_signal() != 0 {
+        return first;
     }
     let _alone = inner.gate.exclusive();
     let mut alone = execute(inner, req, args, stem);
@@ -1664,6 +1714,73 @@ mod tests {
         ] {
             assert!(!long_running_warning(line));
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cancellation_does_not_spawn_or_confirm_tests() {
+        const FLAG: &str = "JUSTRUST_TEST_CANCEL_FIXTURE";
+        if std::env::var_os(FLAG).is_some() {
+            let dir =
+                TmpDir(std::env::temp_dir().join(format!("jr-cancel-{}", std::process::id())));
+            std::fs::create_dir_all(dir.path()).unwrap();
+            let sink = Arc::new(VecSink(Mutex::new(Vec::new())));
+            let pool = Pool::start(dir.path(), dir.path(), Path::new("jr"), sink, false).unwrap();
+            let req = Request {
+                bin: "/bin/sh".into(),
+                args: s(&["-c", "echo unexpected > spawned"]),
+                cwd: dir.path().to_string_lossy().into_owned(),
+                env: vec![],
+            };
+            let ready = dir.path().join("ready");
+            let cancel = std::thread::spawn(move || {
+                for _ in 0..250 {
+                    if ready.exists() {
+                        signal_live(libc::SIGTERM);
+                        return;
+                    }
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                panic!("test process did not become ready");
+            });
+            let first = execute(
+                &pool.inner,
+                &req,
+                &s(&[
+                    "-c",
+                    "echo 'test failed ... FAILED'; echo ready > ready; exec /bin/sleep 5",
+                ]),
+                "cancelled",
+            );
+            cancel.join().unwrap();
+            assert_eq!(first.exit, 128 + libc::SIGTERM);
+            let result = confirm_alone(&pool.inner, &req, "cancelled", &req.args, first);
+            assert_eq!(failed_names(&result), ["failed"]);
+            assert_ne!(result.exit, 0);
+            let pending = execute(&pool.inner, &req, &req.args, "pending");
+            assert_eq!(pending.exit, 128 + libc::SIGTERM);
+            assert!(!dir.path().join("spawned").exists());
+            pool.finish();
+            return;
+        }
+        assert!(should_confirm(101, true, 0));
+        assert!(
+            should_confirm(134, true, 0),
+            "crashes still need confirmation"
+        );
+        assert!(!should_confirm(101, true, libc::SIGTERM));
+        assert!(!should_confirm(101, true, libc::SIGINT));
+        assert!(!should_confirm(0, true, 0));
+        let status = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "test_pool::tests::cancellation_does_not_spawn_or_confirm_tests",
+                "--nocapture",
+            ])
+            .env(FLAG, "1")
+            .status()
+            .unwrap();
+        assert!(status.success());
     }
 
     /// A child waits for the sink to acknowledge its warning. Buffering until

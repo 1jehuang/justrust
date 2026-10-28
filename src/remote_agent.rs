@@ -701,6 +701,7 @@ fn start_run(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .detached();
+    own_run_lifetime(&mut c);
     if let Some((_, value)) = env
         .iter()
         .find(|(k, _)| k == crate::remote_proto::CLIENT_UMASK)
@@ -847,9 +848,81 @@ fn start_run(
     Ok(st.code().unwrap_or_else(|| 128 + st.signal().unwrap_or(0)))
 }
 
+/// A detached recorder is still owned by this agent. Normal disconnects
+/// signal the run group, but SIGKILL (or an early fatal exit before PID
+/// publication) cannot execute that cleanup.
+fn own_run_lifetime(command: &mut Command) {
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::process::CommandExt;
+        let owner = std::process::id() as libc::pid_t;
+        // SAFETY: only async-signal-safe operations run between fork and exec.
+        unsafe {
+            command.pre_exec(move || {
+                if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                // The parent may have died before prctl armed the signal.
+                if libc::getppid() != owner {
+                    libc::_exit(128 + libc::SIGTERM);
+                }
+                Ok(())
+            });
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = command;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn detached_run_dies_with_its_agent() {
+        const FLAG: &str = "JUSTRUST_TEST_OWNER_FIXTURE";
+        if let Some(dir) = std::env::var_os(FLAG) {
+            let dir = PathBuf::from(dir);
+            let mut command = Command::new("/bin/sh");
+            command.args(["-c", "trap 'echo stopped > stopped; exit 0' TERM; echo ready > ready; i=0; while [ $i -lt 250 ]; do /bin/sleep 0.02; i=$((i+1)); done"])
+                .current_dir(&dir).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).detached();
+            own_run_lifetime(&mut command);
+            let _child = command.spawn().unwrap();
+            for _ in 0..250 {
+                if dir.join("ready").exists() {
+                    // Deliberately skip normal __agent cleanup.
+                    std::process::exit(0);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            panic!("owned child did not become ready");
+        }
+        let dir = std::env::temp_dir().join(format!("jr-owner-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let status = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "remote_agent::tests::detached_run_dies_with_its_agent",
+                "--nocapture",
+            ])
+            .env(FLAG, &dir)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        for _ in 0..250 {
+            if dir.join("stopped").exists() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let stopped = dir.join("stopped").exists();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(
+            stopped,
+            "detached recorder survived its owner without receiving SIGTERM"
+        );
+    }
 
     #[test]
     fn disk_full_errors_are_classified() {

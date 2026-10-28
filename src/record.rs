@@ -139,7 +139,7 @@ static CHILD_PID: AtomicI32 = AtomicI32::new(0);
 #[cfg(unix)]
 extern "C" fn forward_signal(sig: libc::c_int) {
     let pid = CHILD_PID.load(Ordering::SeqCst);
-    if pid > 0 {
+    if pid > 0 && sig != libc::SIGINT {
         // SAFETY: kill is async-signal-safe.
         unsafe {
             libc::kill(pid, sig);
@@ -156,12 +156,12 @@ fn install_signal_forwarding() {
         sa.sa_sigaction = forward_signal as *const () as usize;
         sa.sa_flags = libc::SA_RESTART;
         libc::sigemptyset(&mut sa.sa_mask);
-        for sig in [libc::SIGTERM, libc::SIGHUP, libc::SIGQUIT] {
+        for sig in [libc::SIGTERM, libc::SIGHUP, libc::SIGQUIT, libc::SIGINT] {
             libc::sigaction(sig, &sa, std::ptr::null_mut());
         }
-        // The terminal already delivers SIGINT to cargo (same process group).
-        // Ignore it here so the summary still gets written.
-        libc::signal(libc::SIGINT, libc::SIG_IGN);
+        // The terminal already delivers SIGINT to cargo. The handler marks
+        // cancellation and signals pooled tests without interrupting summary
+        // writing or allowing confirmation retries after Ctrl-C.
     }
 }
 
@@ -849,6 +849,7 @@ fn record(
     } else {
         None
     };
+    install_signal_forwarding();
     let mut child = cmd
         .spawn()
         .with_context(|| format!("spawning {}", real_cargo.display()))?;
@@ -856,7 +857,11 @@ fn record(
     let pid = child.id() as i32;
     lifecycle.running();
     CHILD_PID.store(pid, Ordering::SeqCst);
-    install_signal_forwarding();
+    // A signal can arrive while spawn is publishing the cargo PID.
+    #[cfg(unix)]
+    if let sig @ 1.. = crate::test_pool::cancellation_signal() {
+        forward_signal(sig);
+    }
 
     let out = child.stdout.take().context("stdout")?;
     let err = crate::live::SniffReader::new(
@@ -900,6 +905,9 @@ fn record(
     };
 
     let (mut code, mut cpu_user, cpu_sys) = wait_child(&mut child, job.as_ref());
+    // Cargo may finish long before its pooled tests. Do not retain a reaped
+    // PID that the OS could reuse while those tests are still running.
+    CHILD_PID.store(0, Ordering::SeqCst);
     let _ = t_out.join();
     let _ = t_err.join();
     if let Some(p) = pool {
@@ -912,7 +920,6 @@ fn record(
     }
     let end = paths::now();
     let sched = scope.map(crate::sched::Scope::finish);
-    CHILD_PID.store(0, Ordering::SeqCst);
     {
         let (lock, cv) = &*done;
         *lock.lock().unwrap() = true;
