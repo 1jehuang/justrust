@@ -142,6 +142,7 @@ fn static_string_vector_seed_replays_all_closed_inputs() {
         "fn main(){let mut v=vec![[1i32,2],[3,4]];let i=1;v[i][0]=9;v[0][i]*=4;println!(\"{} {} {}\",v[0][1],v[i][0],v[1][i]);let w=vec![(1u8,true)];println!(\"{} {}\",w[0].0,w[0].1);}",
         "#[derive(Clone,Copy)]struct P{x:i32}fn main(){let mut v=vec![[P{x:1},P{x:2}]];let i=1;v[0][i].x+=5;v[0][0].x=7;println!(\"{} {}\",v[0][1].x,v[0][0].x);}",
         "fn main(){let m=[[1i64,2],[3,4]];let r=&m;let i=1usize;let x=r[i][0];let y=r[0][i];let mut n=[[1u8;2];2];n[1][i]=5;n[0][i]+=1;println!(\"{} {} {:?}\",x,y,n);}",
+        "fn main(){let o=Some(3i32);let mut s=0;for x in o.iter(){s+=*x;}let n:Option<i32>=None;println!(\"{} {}\",s,n.iter().count());}",
         "struct Holder<T>{value:T}fn keep<T>(value:T,_capacity:usize)->Holder<T>{println!(\"called\");Holder{value}}fn main(){let held=keep(\"abc\",2usize);println!(\"{}\",held.value);}",
     ] {
         iterator_oracle::stock_native(source);

@@ -154,7 +154,34 @@ impl<T> Option<T> {
             Option::None => Option::None,
         }
     }
+
+    pub fn iter_disabled<'a>(&'a self) -> OptionIter<'a, T> {
+        match self {
+            Option::Some(value) => OptionIter {
+                inner: Option::Some(value),
+            },
+            Option::None => OptionIter { inner: Option::None },
+        }
+    }
 }
+
+pub struct OptionIter<'a, T> {
+    inner: Option<&'a T>,
+}
+
+impl<'a, T> super::iter::Iterator for OptionIter<'a, T> {
+    type Item = &'a T;
+    fn next(&mut self) -> Option<&'a T> {
+        match self.inner {
+            Option::Some(value) => {
+                self.inner = Option::None;
+                Option::Some(value)
+            }
+            Option::None => Option::None,
+        }
+    }
+}
+
 
 impl<'a, T: Copy> Option<&'a T> {
     pub fn copied(self) -> Option<T> {
