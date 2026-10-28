@@ -1259,6 +1259,10 @@ impl<'s> Checker<'s> {
                 let schema = plan.function_schema(declaration)?;
                 if !schema.env.is_generic() {
                     self.infer_type_term(&schema.signature.result, None, depth + 1)?
+                } else if let Some(ty) = self.scalar_hint(expr)? {
+                    // Generic free calls (`__jr_vec_seed(x, n)` from `vec!`):
+                    // the same argument-only inference the call hint uses.
+                    self.infer_type_term(&ty, None, depth + 1)?
                 } else {
                     self.infer_node(InferKind::Unknown(false))?
                 }

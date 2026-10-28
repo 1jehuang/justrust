@@ -132,6 +132,7 @@ fn static_string_vector_seed_replays_all_closed_inputs() {
     for source in [
         "fn main(){let values=vec![\"ccc\",\"a\",\"bb\"];println!(\"{:?}\",values);}",
         "fn main(){let values=vec![\"éx\"];println!(\"{}\",values[0]);}",
+        "fn main(){let e;e=vec![1u32];let z;z=vec![0u8;3];println!(\"{} {:?}\",e[0],z);}",
         "struct Holder<T>{value:T}fn keep<T>(value:T,_capacity:usize)->Holder<T>{println!(\"called\");Holder{value}}fn main(){let held=keep(\"abc\",2usize);println!(\"{}\",held.value);}",
     ] {
         iterator_oracle::stock_native(source);
