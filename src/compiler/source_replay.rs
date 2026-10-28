@@ -891,7 +891,20 @@ fn nominal_replay_identity_equal(
         // Neither source nor graph coordinates may be weakened within their
         // own domain. In particular, equal source provenance does not authorize
         // a graph output from a foreign engine (or another node/output).
-        (None, None) => Ok(left.0 == right.0),
+        (None, None) => {
+            if left.0 == right.0 {
+                return Ok(true);
+            }
+            // Two source slots for one application can differ only in how
+            // nested nominal actuals were identified (source slot versus
+            // typed graph realization). Authenticate each slot against its
+            // own ordered actuals. The caller has already proved those
+            // actuals replay-equal, so both name the same application.
+            Ok(left.0.snapshot == declaration.snapshot
+                && right.0.snapshot == declaration.snapshot
+                && left.0 == frontend::replay_nominal_source_id(declaration, left_args, budget)?
+                && right.0 == frontend::replay_nominal_source_id(declaration, right_args, budget)?)
+        }
         (Some(a), Some(b)) => Ok(a == b),
         _ => {
             let (source, source_args, template) = if left.1.is_some() {

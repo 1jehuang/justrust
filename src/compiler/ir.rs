@@ -2167,7 +2167,9 @@ impl BodySubstitutionProof {
                     if !matches!(
                         leaf,
                         Ty::Str | Ty::Int(_) | Ty::Bool | Ty::Char | Ty::Float(_) | Ty::Unit
-                    ) {
+                    ) && !(matches!(leaf, Ty::Struct(_) | Ty::Tuple(_))
+                        && shared_shape(leaf, budget, depth + 1)?)
+                    {
                         return Ok(None);
                     }
                     Ok(Some(actual.clone()))

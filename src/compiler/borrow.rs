@@ -1254,6 +1254,59 @@ fn borrowed_slice_family_result(
     Ok(false)
 }
 
+/// Whether returned fixed `location` lies inside a substituted type-parameter
+/// family result: the original contract declares a family result row with
+/// family sources, and the substituted contract has a row at `location` whose
+/// every source is the same parameter path as a declared family source.
+fn substituted_family_result(
+    view: &super::traits::CarrierContractView,
+    location: &CarrierLocation,
+    budget: &mut Budget,
+) -> Result<bool, Exhausted> {
+    let CarrierChannel::Fixed(position) = location.channel else {
+        return Ok(false);
+    };
+    if !location.path.0.is_empty() {
+        return Ok(false);
+    }
+    for original in view.original_contract().results.iter() {
+        budget.spend(1)?;
+        let CarrierChannel::ParamTail { prefix, .. } = original.location.channel else {
+            continue;
+        };
+        if !original.location.path.0.is_empty()
+            || usize::from(prefix) > usize::from(position.depth)
+            || original.sources.is_empty()
+            || !original
+                .sources
+                .iter()
+                .all(|source| matches!(source.location.channel, CarrierChannel::ParamTail { .. }))
+        {
+            continue;
+        }
+        for result in view.contract().results.iter() {
+            budget.spend(result.sources.len() + 1)?;
+            if result.location != *location || result.sources.is_empty() {
+                continue;
+            }
+            let mut mapped = true;
+            for source in result.sources.iter() {
+                budget.spend(original.sources.len() + view.contract().inputs.len() + 1)?;
+                mapped &= matches!(source.location.channel, CarrierChannel::Fixed(_))
+                    && view.contract().inputs.contains(source)
+                    && original.sources.iter().any(|declared| {
+                        declared.param == source.param
+                            && declared.location.path == source.location.path
+                    });
+            }
+            if mapped {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
 fn body_signature(f: &cfg::Function, budget: &mut Budget) -> Result<ir::Signature, Exhausted> {
     budget.spend(f.params.len() + 1)?;
     budget.reserve_bytes(mul(f.params.len(), size_of::<Ty>())?)?;
@@ -7205,6 +7258,16 @@ impl Plan {
             }) {
                 // The generalized carrier check above already proved the source
                 // lifetime against exact declaration-owned source occurrences.
+                continue;
+            }
+            if let Some(body) = &self.body
+                && authority.is_some()
+                && substituted_family_result(body, &fixed_location(result.position), budget)?
+            {
+                // A reference layer inside a substituted type-parameter
+                // family: the universal body already proved it against the
+                // declared family result row, and callers check the
+                // substituted row. The instance adds no new lifetime facts.
                 continue;
             }
             if let Some(problem) = self.check_return_position(f, block, result, facts, budget)? {

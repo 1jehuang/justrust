@@ -175,16 +175,78 @@ impl ValidatedTraitWorld {
     /// After normalizing a projected declaration (`&Self::Target`), derive the
     /// return origins the raw schema deliberately left unresolved.
     fn complete_projected_contract(&self, signature: &mut Signature) -> Result<()> {
+        let layers = charged(&self.budget, ir::root_reference_layers(&signature.result))?;
         if !charged(
             &self.budget,
             ir::contains_associated_types(&signature.result, &self.budget),
-        )? && charged(&self.budget, ir::root_reference_layers(&signature.result))?
-            > signature.ref_contract.results.len()
+        )? && layers > signature.ref_contract.results.len()
         {
-            return Err(FactsError::unsupported(
+            // A normalized projection substituted reference layers below the
+            // declared outer reference (`&Self::Output` with `Output = &T`).
+            // Each substituted layer is a value stored inside the borrowed
+            // input: give it a fresh region that outlives the layer above,
+            // exactly the well-formedness bound (`&'a &'b T` implies 'b: 'a)
+            // that the implementation's own signature derives.
+            let Some(outer) = signature
+                .ref_contract
+                .results
+                .iter()
+                .find(|row| row.position.depth == 0)
+                .cloned()
+            else {
+                return Err(FactsError::unsupported(
+                    &self.budget,
+                    "unsupported: projected result introduces reference layers without source lifetime authority",
+                ));
+            };
+            let base = usize::from(signature.ref_contract.region_count);
+            if signature.ref_contract.results.len() != 1 || base + layers > 64 {
+                return Err(FactsError::unsupported(
+                    &self.budget,
+                    "unsupported: projected result introduces reference layers without source lifetime authority",
+                ));
+            }
+            retain::<ir::ResultReference>(&self.budget, layers)?;
+            retain::<(ir::RegionParamId, ir::RegionParamId)>(&self.budget, layers)?;
+            let mut results = Vec::new();
+            let mut outlives = signature.ref_contract.outlives.to_vec();
+            results.try_reserve_exact(layers).map_err(|_| {
+                FactsError::resource(&self.budget, "projected result layer allocation")
+            })?;
+            results.push(outer.clone());
+            let mut above = outer.region;
+            for depth in 1..layers {
+                let region = ir::RegionParamId((base + depth - 1) as u16);
+                outlives.push((region, above));
+                results.push(ir::ResultReference {
+                    position: ir::ReferencePosition { depth: depth as u8 },
+                    region,
+                    returns: ir::ReturnContract::NoReference,
+                });
+                above = region;
+            }
+            let raw = ir::RefContract {
+                region_count: (base + layers - 1) as u16,
+                input_regions: signature.ref_contract.input_regions.clone(),
+                results: results.into(),
+                outlives: outlives.into(),
+            };
+            signature.ref_contract =
+                charged(&self.budget, ir::normalize_ref_contract(&raw, &self.budget))?;
+            let results = charged(
                 &self.budget,
-                "unsupported: projected result introduces reference layers without source lifetime authority",
-            ));
+                ir::derive_return_contracts(
+                    &signature.params,
+                    &signature.result,
+                    &signature.ref_contract,
+                    &self.budget,
+                ),
+            )?;
+            retain::<ir::RefContract>(&self.budget, 1)?;
+            signature.ref_contract = Arc::new(ir::RefContract {
+                results,
+                ..(*signature.ref_contract).clone()
+            });
         }
         if !signature
             .ref_contract

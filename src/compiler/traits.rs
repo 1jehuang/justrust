@@ -5705,14 +5705,8 @@ impl ValidatedTraitWorld {
             for output in
                 self.expand_carrier(&result.location, &raw.env, &arguments, &nominals, facts)?
             {
-                let sources = self.expand_carrier_sources(
-                    &result.location.channel,
-                    &result.sources,
-                    output.component.as_ref(),
-                    &raw.env,
-                    &arguments,
-                    &nominals,
-                    facts,
+                let sources = self.expand_result_sources(
+                    result, &output, &inputs, &raw.env, &arguments, &nominals, facts,
                 )?;
                 push(
                     &self.budget,
@@ -5912,7 +5906,44 @@ impl ValidatedTraitWorld {
             "transport lost an original fixed region",
         ))
     }
+    /// Sources of one expanded result carrier. A type-parameter family result
+    /// with no tracked source (values of `T` obtained through trait calls such
+    /// as `Iterator::next`) may still contain any lifetime the caller's actual
+    /// for `T` shares with an input, so its substituted reference carriers
+    /// conservatively depend on every substituted input carrier: more loans,
+    /// never fewer.
     #[allow(clippy::too_many_arguments)]
+    fn expand_result_sources(
+        &self,
+        result: &ir::CarrierReturn,
+        output: &ExpandedCarrier,
+        inputs: &[ir::InputCarrier],
+        env: &GenericEnv,
+        args: &[Ty],
+        nominals: &[ir::NominalCarrierMapping],
+        facts: &ValidatedFacts,
+    ) -> Result<Arc<[ir::InputCarrier]>> {
+        if result.sources.is_empty()
+            && matches!(
+                result.location.channel,
+                ir::CarrierChannel::ParamTail { .. }
+            )
+            && matches!(output.location.channel, ir::CarrierChannel::Fixed(_))
+        {
+            charged(&self.budget, self.budget.charge_work(inputs.len() + 1))?;
+            retain::<ir::InputCarrier>(&self.budget, inputs.len())?;
+            return Ok(Arc::from(inputs));
+        }
+        self.expand_carrier_sources(
+            &result.location.channel,
+            &result.sources,
+            output.component.as_ref(),
+            env,
+            args,
+            nominals,
+            facts,
+        )
+    }
     fn expand_carrier_sources(
         &self,
         destination: &ir::CarrierChannel,

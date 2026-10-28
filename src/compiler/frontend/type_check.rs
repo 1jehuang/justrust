@@ -11673,7 +11673,15 @@ impl<'a> Checker<'a> {
                     let mut base = self.expr(base)?;
                     let mut flow = self.flow(base);
                     if let ir::Ty::Ref { referent, .. } = &flow.ty {
-                        if !matches!(receiver, Expr::Var(_)) && !genuine_call(receiver) {
+                        // An overloaded `Index` receiver (`v[0].f` with
+                        // `v: Vec<&T>`) is already a typed `*Index::index`
+                        // read, not a builtin place path.
+                        let builtin_place = static_source_place(receiver)
+                            .is_ok_and(|place| self.checked_place(&place).is_ok());
+                        if !matches!(receiver, Expr::Var(_))
+                            && !genuine_call(receiver)
+                            && (builtin_place || !matches!(receiver, Expr::Index { .. }))
+                        {
                             // A projected carrier has the same authority as any other
                             // static place. Validate its dereference without creating a
                             // local or borrow, then read the already evaluated base once.

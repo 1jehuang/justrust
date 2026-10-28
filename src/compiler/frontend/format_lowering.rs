@@ -230,26 +230,32 @@ impl Checker<'_> {
                     ir::validate_format_ty(mode, &flow.ty, Some(&self.signatures.plan()?.budget))?;
                 }
             }
-            let through_deref = matches!(
-                &self.exprs[id.0].kind,
-                ir::ExprKind::Field { base, .. }
-                    if matches!(&self.exprs[base.0].kind, ir::ExprKind::Deref { value }
-                        if matches!(self.exprs[value.0].kind, ir::ExprKind::Call { .. }))
-            ) || matches!(
-                // `*owner` through Deref::deref: a value, not a static place.
-                &self.exprs[id.0].kind,
-                ir::ExprKind::Deref { value }
-                    if matches!(self.exprs[value.0].kind, ir::ExprKind::Call { .. })
-            ) || matches!(
-                // `boxed[i]` through Deref to a builtin array: the checked
-                // slice read is already a copied value.
-                &self.exprs[id.0].kind,
-                ir::ExprKind::SliceIndex { slice, .. }
-                    if self.deref_call_rooted(*slice)
-            );
+            let through_deref = (matches!(&self.exprs[id.0].kind, ir::ExprKind::Field { .. })
+                && self.field_chain_call_rooted(id))
+                || matches!(
+                    &self.exprs[id.0].kind,
+                    ir::ExprKind::Field { base, .. }
+                        if matches!(&self.exprs[base.0].kind, ir::ExprKind::Deref { value }
+                            if matches!(self.exprs[value.0].kind, ir::ExprKind::Call { .. }))
+                )
+                || matches!(
+                    // `*owner` through Deref::deref: a value, not a static place.
+                    &self.exprs[id.0].kind,
+                    ir::ExprKind::Deref { value }
+                        if matches!(self.exprs[value.0].kind, ir::ExprKind::Call { .. })
+                )
+                || matches!(
+                    // `boxed[i]` through Deref to a builtin array: the checked
+                    // slice read is already a copied value.
+                    &self.exprs[id.0].kind,
+                    ir::ExprKind::SliceIndex { slice, .. }
+                        if self.deref_call_rooted(*slice)
+                );
             let place = static_source_place(argument)
                 .ok()
-                .filter(|_| place_expression(argument) && !through_deref);
+                .filter(|_| place_expression(argument) && !through_deref)
+                // `v[0].f` with overloaded Index is a value, not a builtin place.
+                .filter(|place| self.checked_place(place).is_ok());
             let indexed_reference = checked_index_reference.or_else(|| {
                 if matches!(argument, Expr::Index { .. } | Expr::DynamicIndex { .. }) {
                     match self.exprs[id.0].kind {
@@ -520,5 +526,18 @@ impl Checker<'_> {
             _ => slice,
         };
         matches!(self.exprs[slice.0].kind, ir::ExprKind::Call { .. })
+    }
+    /// `(*Index::index(&v, 0)).f.g`: a field read through a reference a call
+    /// returned (possibly several reference layers deep). It is a value, not
+    /// a static source place.
+    fn field_chain_call_rooted(&self, mut id: ir::ExprId) -> bool {
+        for _ in 0..ir::MAX_PATTERN_PROJECTION_DEPTH {
+            match self.exprs[id.0].kind {
+                ir::ExprKind::Field { base, .. } | ir::ExprKind::Deref { value: base } => id = base,
+                ir::ExprKind::Call { .. } => return true,
+                _ => return false,
+            }
+        }
+        false
     }
 }
