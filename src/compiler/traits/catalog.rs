@@ -656,11 +656,24 @@ fn recipe_schema(
         RecipeDescriptor::CloneArray { .. } | RecipeDescriptor::CloneSharedRef => 1,
         _ => 0,
     };
-    let env = environment(&[scope(declaration, arity, budget)?], budget)?;
+    let own = if matches!(descriptor, RecipeDescriptor::CloneSharedRef) {
+        retain::<ParamEnv>(budget, 1)?;
+        Arc::new(charged(
+            budget,
+            ParamEnv::with_relaxed_sized(BinderId { declaration }, arity, 1),
+        )?)
+    } else {
+        scope(declaration, arity, budget)?
+    };
+    let env = environment(&[own], budget)?;
     let mut types = Vec::new();
     let mut predicates = Vec::new();
     for p in env.ordered_params() {
         push(budget, &mut types, Ty::Param(p))?;
+        // `impl<T: ?Sized> Clone for &T`: the referent need not be Sized.
+        if matches!(descriptor, RecipeDescriptor::CloneSharedRef) {
+            continue;
+        }
         push(
             budget,
             &mut predicates,
@@ -670,7 +683,7 @@ fn recipe_schema(
                 args: Arc::from([]),
             }),
         )?;
-        if !matches!(descriptor, RecipeDescriptor::CloneSharedRef) {
+        {
             push(
                 budget,
                 &mut predicates,

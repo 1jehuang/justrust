@@ -231,6 +231,11 @@ fn main() {
                 expect: Expect::Run("3 Some([\"x\"])\n"),
             },
             Case {
+                name: "clone_vector_of_borrowed_str_and_slice_refs",
+                source: r#"fn main(){let v:Vec<&str>=vec!["a","b"];let w=v.clone();let a=[1u8,2];let s:&[u8]=&a;let t=s.clone();println!("{} {:?} {}",w.len(),w,t.len());}"#,
+                expect: Expect::Run("2 [\"a\", \"b\"] 2\n"),
+            },
+            Case {
                 name: "constant_index_through_reference_returns_local_borrow_in_unused_fn",
                 source: r#"fn unused()->&'static str{let s=String::from("t");let v=vec![s.as_str()];let r=&v;return r[0];}fn main(){}"#,
                 expect: Expect::Invalid("E0515"),
