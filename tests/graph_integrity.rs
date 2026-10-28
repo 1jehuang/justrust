@@ -1848,6 +1848,87 @@ fn optimizer_graph(source: String) -> Graph {
     Graph::from_report(&compilation.report)
 }
 
+/// SUMMARY's direct input contract makes no claim about transitive minimality.
+#[test]
+fn optimizer_summary_direct_input_is_only_matching_local_opt() {
+    for workers in [1, 8] {
+        let mut previous = None;
+        for unrelated in [0, 16, 32] {
+            // Append outside the driver's call graph, preserving its item identities.
+            let mut source = optimizer_source(16);
+            for i in 0..unrelated {
+                source.push_str(&format!("\nfn unrelated{i}(x:i32)->i32 {{ x + {i} }}"));
+            }
+            let options = compiler::source::SourceOptions {
+                opt: compiler::ssa::OptMode::Adaptive,
+                ..compiler::source::SourceOptions::default()
+            };
+            let compilation =
+                compiler::compile_observed_with_options(source, workers, false, options)
+                    .unwrap_or_else(|failure| {
+                        panic!("workers={workers}, unrelated={unrelated}: {failure}")
+                    });
+            assert!(compilation.optimizer.optimized > 0, "optimizer did not run");
+            let graph = Graph::from_report(&compilation.report);
+            let mut inputs = HashMap::new();
+            for (id, (kind, params)) in &graph.keys {
+                if kind != "summary" {
+                    continue;
+                }
+                let direct: BTreeSet<_> = graph
+                    .deps
+                    .get(id)
+                    .into_iter()
+                    .flatten()
+                    .map(|dep| graph.keys[dep].clone())
+                    .collect();
+                assert_eq!(
+                    direct,
+                    BTreeSet::from([("local_opt".to_string(), params.clone())]),
+                    "workers={workers}, unrelated={unrelated}: SUMMARY{params:?} direct producers"
+                );
+                inputs.insert(params.clone(), direct);
+            }
+            assert!(
+                inputs.len() >= 16,
+                "workers={workers}, unrelated={unrelated}: driver callees' SUMMARY nodes not exercised"
+            );
+            if let Some(previous) = previous {
+                for (params, direct) in previous {
+                    assert_eq!(
+                        inputs.get(&params),
+                        Some(&direct),
+                        "workers={workers}, unrelated={unrelated}: SUMMARY{params:?} direct inputs changed"
+                    );
+                }
+            }
+            previous = Some(inputs);
+        }
+    }
+}
+
+#[test]
+fn optimizer_check_never_creates_summary_nodes() {
+    for workers in [1, 8] {
+        let options = compiler::source::SourceOptions {
+            opt: compiler::ssa::OptMode::Adaptive,
+            ..compiler::source::SourceOptions::default()
+        };
+        let compilation =
+            compiler::compile_observed_with_options(optimizer_source(16), workers, true, options)
+                .unwrap_or_else(|failure| panic!("CHECK workers={workers}: {failure}"));
+        let graph = Graph::from_report(&compilation.report);
+        assert!(
+            graph.keys.values().any(|(kind, _)| kind == "check"),
+            "CHECK workers={workers}: check root not exercised"
+        );
+        assert!(
+            graph.keys.values().all(|(kind, _)| kind != "summary"),
+            "CHECK workers={workers}: SUMMARY must not be demanded"
+        );
+    }
+}
+
 /// The same shape gates as `no_new_whole_program_barriers`, with the optimizer
 /// on, so SSA/LOCAL_OPT/SUMMARY/IPO_OPT are inside the measured graph. Uses
 /// the existing constants unchanged; adds no recorded debt.

@@ -55,6 +55,7 @@ mod source_macro;
 mod source_macro_binding;
 mod source_replay;
 pub mod ssa;
+mod summary_node;
 mod token;
 pub mod token_primitives;
 mod token_session;
@@ -2527,28 +2528,8 @@ impl Provider for CompilerProvider {
                     cx.publish_fact(0, fact)
                 }
                 SUMMARY => {
-                    let body: Arc<SsaFact> = facts.get(sibling(LOCAL_OPT)?).await?;
-                    let meter = ssa::meter::Meter::new(&this.0.budget);
-                    // Summary is Copy and owns no heap storage; its fact
-                    // envelope is admitted before publication and kept as
-                    // the fact's own receipt.
-                    let summary = match body.lowered.as_deref() {
-                        Some(lowered) => {
-                            Some(ssa::inline::Summary::of(lowered, &meter).map_err(Error::new)?)
-                        }
-                        None => None,
-                    };
-                    let receipt = meter
-                        .lease(envelope::<SummaryFact>())
-                        .and_then(|lease| lease.seal(&meter))
-                        .map_err(Error::new)?;
-                    cx.publish_fact(
-                        0,
-                        SummaryFact {
-                            summary,
-                            _receipt: receipt,
-                        },
-                    )
+                    let summary = summary_node::produce(&cx, &key, &this.0.budget).await?;
+                    cx.publish_fact(0, summary)
                 }
                 IPO_OPT => {
                     let body: Arc<SsaFact> = facts.get(sibling(LOCAL_OPT)?).await?;
