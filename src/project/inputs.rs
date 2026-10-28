@@ -17,6 +17,11 @@ enum Observed {
     File(Result<(usize, [u8; 32]), io::ErrorKind>),
     Directory(Result<Vec<OsString>, io::ErrorKind>),
     Environment(Option<OsString>),
+    /// Sorted inventory of the build-affecting environment variable names that
+    /// are currently present. Recorded even when empty so that the later
+    /// appearance of any member, including an open-ended family name that was
+    /// not individually observed at capture, is caught on revalidation.
+    EnvironmentNames(Vec<OsString>),
 }
 #[derive(Clone, Debug)]
 struct Observation {
@@ -143,6 +148,9 @@ impl DiscoveryInputs {
                         Observed::Directory(list_bounded(&o.name).map_err(|e| e.kind()))
                     }
                     Observed::Environment(_) => Observed::Environment(std::env::var_os(&o.name)),
+                    Observed::EnvironmentNames(_) => {
+                        Observed::EnvironmentNames(current_build_affecting_env_names())
+                    }
                 };
                 actual == o.value
             })
@@ -227,7 +235,11 @@ impl Recorder {
         if !self.complete {
             return;
         }
-        let name = if matches!(value, Observed::Environment(_)) || path.is_absolute() {
+        let name = if matches!(
+            value,
+            Observed::Environment(_) | Observed::EnvironmentNames(_)
+        ) || path.is_absolute()
+        {
             path.to_owned()
         } else {
             self.cwd.as_ref().unwrap().join(path)
@@ -302,6 +314,13 @@ impl Recorder {
                         bytes(&mut encoded, v.as_encoded_bytes());
                     }
                     None => encoded.push(0),
+                }
+            }
+            Observed::EnvironmentNames(names) => {
+                encoded.push(5);
+                encoded.extend_from_slice(&(names.len() as u64).to_le_bytes());
+                for n in names {
+                    bytes(&mut encoded, n.as_encoded_bytes());
                 }
             }
         }
@@ -557,23 +576,42 @@ impl Recorder {
     /// Cargo also reads build-affecting configuration from the environment, not
     /// only `.cargo/config`. Legacy discovery does not interpret it, so observe
     /// the well-known names (including absence, so a later appearance
-    /// invalidates) and refuse to authorize reuse whenever any is present. The
-    /// exact names give replay-based revalidation; the prefix scan covers the
-    /// open-ended families (`CARGO_BUILD_*`, `CARGO_TARGET_*`, `CARGO_PROFILE_*`,
-    /// `CARGO_REGISTRIES_*`, `CARGO_NET_*`) that silently alter a build.
+    /// invalidates), record the present-name inventory for the open-ended
+    /// families (`CARGO_BUILD_*`, `CARGO_TARGET_*`, `CARGO_PROFILE_*`,
+    /// `CARGO_REGISTRIES_*`, `CARGO_REGISTRY_*`, `CARGO_NET_*`) so a later member
+    /// appearance is caught on revalidation, and refuse to authorize reuse
+    /// whenever any is present.
+    ///
+    /// `RUSTC` is handled separately. The managed toolchain always injects it
+    /// into every discovery process (verified: the top-level process sees
+    /// `RUSTC=<justrust>/bin/shim/.../rustc`), and the native path compiles with
+    /// its own `compiler_image` rather than reading `RUSTC`. Treating its
+    /// presence as uncontrolled would therefore refuse an identity on every real
+    /// build for no soundness gain. Instead its value is bound into the identity
+    /// (and the revalidation replay), so a change of selected compiler
+    /// invalidates reuse while the normal injected value stays controlled.
+    /// `CARGO_BUILD_RUSTC` is not injected, so a set value is a genuine user
+    /// compiler override the native path ignores and stays fail-closed.
     fn observe_live_environment_configuration(&mut self) {
         for name in BUILD_AFFECTING_ENV_EXACT {
             if self.env(name).is_some() {
                 self.uncontrolled();
             }
         }
-        if self.snapshot.is_none()
-            && std::env::vars_os().any(|(name, _)| {
-                name.to_str()
-                    .is_some_and(env_name_is_build_affecting_prefix)
-            })
-        {
-            self.uncontrolled();
+        // Bind the selected compiler's value into the identity without
+        // disabling reuse: the managed toolchain injects this on every build.
+        self.env("RUSTC");
+        if self.snapshot.is_none() {
+            let names = current_build_affecting_env_names();
+            if !names.is_empty() {
+                self.uncontrolled();
+            }
+            // Record even when empty: the inventory's own replay detects the
+            // later appearance of any family member not individually observed.
+            self.record(
+                Path::new("<build-affecting-env-inventory>"),
+                Observed::EnvironmentNames(names),
+            );
         }
     }
     pub(crate) fn finish(self) -> Arc<DiscoveryInputs> {
@@ -599,6 +637,7 @@ const BUILD_AFFECTING_ENV_EXACT: &[&str] = &[
     "CARGO_BUILD_RUSTFLAGS",
     "CARGO_BUILD_TARGET",
     "CARGO_BUILD_JOBS",
+    "CARGO_BUILD_RUSTC",
     "CARGO_BUILD_RUSTC_WRAPPER",
     "CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER",
     "CARGO_INCREMENTAL",
@@ -622,6 +661,21 @@ fn env_name_is_build_affecting_prefix(name: &str) -> bool {
     ];
     const BENIGN: &[&str] = &["CARGO_TARGET_DIR", "CARGO_TARGET_TMPDIR"];
     !BENIGN.contains(&name) && PREFIXES.iter().any(|p| name.starts_with(p))
+}
+/// The sorted inventory of currently-present open-ended build-affecting
+/// environment names. The exact names are observed individually; this inventory
+/// covers the prefix families so a later-appearing member on a previously-clean
+/// host is caught on revalidation rather than only at capture.
+fn current_build_affecting_env_names() -> Vec<OsString> {
+    let mut names: Vec<OsString> = std::env::vars_os()
+        .filter(|(name, _)| {
+            name.to_str()
+                .is_some_and(env_name_is_build_affecting_prefix)
+        })
+        .map(|(name, _)| name)
+        .collect();
+    names.sort();
+    names
 }
 fn encode_error(out: &mut Vec<u8>, kind: io::ErrorKind) {
     // Only ordinary negative-path observations are eligible. Other errors invalidate the
@@ -669,6 +723,23 @@ mod tests {
     use crate::project::manifest;
     use std::sync::atomic::{AtomicUsize, Ordering};
     const MANIFEST: &str = "[package]\nname='tracked'\nversion='0.1.0'\nedition='2024'\n";
+    /// Represent a clean host by removing every build-affecting environment
+    /// variable the Cargo/libtest harness injects into this process (notably
+    /// RUSTC and CARGO_TARGET_* family members) before spawning a probe child,
+    /// so inherited harness values do not masquerade as user configuration.
+    fn scrub_build_affecting_env(command: &mut std::process::Command) {
+        for name in BUILD_AFFECTING_ENV_EXACT {
+            command.env_remove(name);
+        }
+        for (name, _) in std::env::vars_os() {
+            if name
+                .to_str()
+                .is_some_and(env_name_is_build_affecting_prefix)
+            {
+                command.env_remove(name);
+            }
+        }
+    }
     struct Fixture(PathBuf);
     impl Fixture {
         fn new() -> Self {
@@ -903,7 +974,8 @@ mod tests {
         f.write("app/src/main.rs", "fn main() {}\n");
         std::fs::create_dir(f.0.join("home")).unwrap();
         let check = |eligible| {
-            let output = std::process::Command::new(std::env::current_exe().unwrap())
+            let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+            command
                 .args([
                     "--exact",
                     "project::inputs::tests::configuration_child_probe",
@@ -914,9 +986,9 @@ mod tests {
                 .env(
                     "JR_CONFIG_CHILD",
                     if eligible { "eligible" } else { "ineligible" },
-                )
-                .output()
-                .unwrap();
+                );
+            scrub_build_affecting_env(&mut command);
+            let output = command.output().unwrap();
             assert!(output.status.success(), "{output:?}");
         };
         check(true);
@@ -931,6 +1003,105 @@ mod tests {
             std::fs::remove_file(f.0.join(path)).unwrap();
             check(true);
         }
+    }
+
+    /// Runs alone in a scrubbed (clean-host) child, so mutating its own
+    /// environment is safe. Proves the receipt revalidation catches the later
+    /// appearance of an arbitrary open-ended family member that was not present
+    /// (and so not individually observed) at capture, not only known names.
+    #[test]
+    fn env_inventory_appearance_child_probe() {
+        if std::env::var_os("JR_ENV_INVENTORY_CHILD").is_none() {
+            return;
+        }
+        // A family name deliberately not in BUILD_AFFECTING_ENV_EXACT.
+        let late = "CARGO_PROFILE_RELEASE_CODEGEN_UNITS";
+        assert!(!BUILD_AFFECTING_ENV_EXACT.contains(&late));
+        assert!(env_name_is_build_affecting_prefix(late));
+        let workspace = manifest::load(Path::new("Cargo.toml")).unwrap();
+        // Clean host: identity issued and revalidates.
+        assert!(workspace.inputs.identity().is_some());
+        assert!(workspace.inputs.matches_current());
+        // The family member now appears; the recorded inventory must notice.
+        unsafe { std::env::set_var(late, "16") };
+        assert!(!workspace.inputs.matches_current());
+        unsafe { std::env::remove_var(late) };
+        assert!(workspace.inputs.matches_current());
+    }
+
+    #[test]
+    fn env_inventory_revalidation_detects_new_family_member() {
+        let f = Fixture::new();
+        f.write("Cargo.toml", MANIFEST);
+        f.write("src/main.rs", "fn main() {}\n");
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        command
+            .args([
+                "--exact",
+                "project::inputs::tests::env_inventory_appearance_child_probe",
+                "--nocapture",
+            ])
+            .current_dir(&f.0)
+            .env("CARGO_HOME", "home")
+            .env("JR_ENV_INVENTORY_CHILD", "1");
+        scrub_build_affecting_env(&mut command);
+        let output = command.output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+    }
+
+    /// Runs alone in a scrubbed child; mutating its own environment is safe.
+    /// A user-supplied compiler override (`CARGO_BUILD_RUSTC`, which the managed
+    /// toolchain never injects) must fail closed because the native legacy path
+    /// does not honor it. A changed `RUSTC` (always injected) must instead stay
+    /// eligible but invalidate reuse, since its value is bound into the identity.
+    #[test]
+    fn user_compiler_override_child_probe() {
+        if std::env::var_os("JR_OVERRIDE_CHILD").is_none() {
+            return;
+        }
+        // Clean host: identity issued and revalidates.
+        let clean = manifest::load(Path::new("Cargo.toml")).unwrap();
+        assert!(clean.inputs.identity().is_some());
+        assert!(clean.inputs.matches_current());
+
+        // CARGO_BUILD_RUSTC is a genuine user override: fail closed.
+        unsafe { std::env::set_var("CARGO_BUILD_RUSTC", "/opt/custom/rustc") };
+        let overridden = manifest::load(Path::new("Cargo.toml")).unwrap();
+        assert!(overridden.inputs.identity().is_none());
+        assert!(!overridden.inputs.matches_current());
+        unsafe { std::env::remove_var("CARGO_BUILD_RUSTC") };
+
+        // RUSTC is injected on every build: its value binds into the identity,
+        // so a different compiler invalidates reuse without refusing an identity.
+        unsafe { std::env::set_var("RUSTC", "/opt/toolchain-a/rustc") };
+        let bound = manifest::load(Path::new("Cargo.toml")).unwrap();
+        assert!(bound.inputs.identity().is_some());
+        assert!(bound.inputs.matches_current());
+        unsafe { std::env::set_var("RUSTC", "/opt/toolchain-b/rustc") };
+        assert!(!bound.inputs.matches_current());
+        unsafe { std::env::set_var("RUSTC", "/opt/toolchain-a/rustc") };
+        assert!(bound.inputs.matches_current());
+        unsafe { std::env::remove_var("RUSTC") };
+    }
+
+    #[test]
+    fn user_compiler_override_disables_reuse() {
+        let f = Fixture::new();
+        f.write("Cargo.toml", MANIFEST);
+        f.write("src/main.rs", "fn main() {}\n");
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        command
+            .args([
+                "--exact",
+                "project::inputs::tests::user_compiler_override_child_probe",
+                "--nocapture",
+            ])
+            .current_dir(&f.0)
+            .env("CARGO_HOME", "home")
+            .env("JR_OVERRIDE_CHILD", "1");
+        scrub_build_affecting_env(&mut command);
+        let output = command.output().unwrap();
+        assert!(output.status.success(), "{output:?}");
     }
 
     #[test]
