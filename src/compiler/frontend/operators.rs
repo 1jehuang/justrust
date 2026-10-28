@@ -1072,6 +1072,21 @@ impl type_check::Checker<'_> {
                 let Some(mut ty) = self.method_receiver_hint(base)? else {
                     return Ok(None);
                 };
+                // Stock index autoderef, as for runtime indices: `r[0]` with
+                // `r: &Vec<T>` indexes `*r` through the nominal's `Index` impl.
+                let explicit;
+                let mut base: &Expr = base;
+                if let ir::Ty::Ref { referent, .. } = &ty
+                    && overloadable(referent)
+                    && !matches!(referent.as_ref(), ir::Ty::Tuple(_))
+                {
+                    let referent = referent.as_ref().clone();
+                    explicit = Expr::Deref {
+                        value: Box::new(base.clone()),
+                    };
+                    base = &explicit;
+                    ty = referent;
+                }
                 if !overloadable(&ty) || matches!(ty, ir::Ty::Tuple(_)) {
                     return Ok(None);
                 }

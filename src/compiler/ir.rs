@@ -2155,8 +2155,10 @@ impl BodySubstitutionProof {
                     {
                         return Err("original family cover changed its canonical actual".into());
                     }
-                    if matches!(actual, Ty::Struct(_) | Ty::Closure(_) | Ty::Tuple(_))
-                        && shared_shape(actual, budget, depth + 1)?
+                    if matches!(
+                        actual,
+                        Ty::Struct(_) | Ty::Enum(_) | Ty::Closure(_) | Ty::Tuple(_)
+                    ) && shared_shape(actual, budget, depth + 1)?
                     {
                         return Ok(Some(actual.clone()));
                     }
@@ -2233,6 +2235,36 @@ impl BodySubstitutionProof {
                         }
                         changed |= expand(&before.ty, &after.ty, proof, facts, budget, depth + 1)?
                             .is_some();
+                    }
+                    Ok((changed && shared_shape(actual, budget, depth + 1)?)
+                        .then(|| actual.clone()))
+                }
+                (Ty::Enum(before), Ty::Enum(after))
+                    if before.def().source_decl == after.def().source_decl
+                        && before.def().variants.len() == after.def().variants.len() =>
+                {
+                    let mut changed = false;
+                    for (before, after) in before
+                        .def()
+                        .variants
+                        .iter()
+                        .zip(after.def().variants.iter())
+                    {
+                        if before.name != after.name {
+                            return Err(
+                                "original family cover changed nominal variant identity".into()
+                            );
+                        }
+                        for (before, after) in before
+                            .fields
+                            .read(budget)?
+                            .iter()
+                            .zip(after.fields.read(budget)?.iter())
+                        {
+                            changed |=
+                                expand(&before.ty, &after.ty, proof, facts, budget, depth + 1)?
+                                    .is_some();
+                        }
                     }
                     Ok((changed && shared_shape(actual, budget, depth + 1)?)
                         .then(|| actual.clone()))

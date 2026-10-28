@@ -1247,6 +1247,28 @@ impl<'s> Checker<'s> {
             Expr::Block(block) if block.statements.is_empty() && block.tail.is_none() => {
                 self.infer_node(InferKind::Rigid(ir::Ty::Unit))?
             }
+            // `{ let t = seed; ...; t }` (the `vec![a, b, ..]` expansion): the
+            // tail names the first binding, whose type is its initializer's.
+            Expr::Block(block)
+                if let (
+                    Some(Stmt::Let {
+                        name: BindingName::Named(bound),
+                        ty: Type::Infer,
+                        value,
+                        ..
+                    }),
+                    Some(tail),
+                ) = (block.statements.first(), block.tail.as_deref())
+                    && let Expr::Var(path) = tail
+                    && matches!(path.anchor(), PathAnchor::Relative)
+                    && path.segments().len() == 1
+                    && path.checked_key(self.names()?)? == bound.checked_key(self.names()?)?
+                    && !block.statements[1..]
+                        .iter()
+                        .any(|stmt| matches!(stmt, Stmt::Let { .. })) =>
+            {
+                self.inference_evidence(value, depth + 1)?
+            }
             Expr::Cast { target, .. } => {
                 self.infer_type_term(&checked_local_ty(target, self.signatures)?, None, depth + 1)?
             }

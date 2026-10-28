@@ -221,6 +221,21 @@ fn main() {
                 expect: Expect::Run("3\n"),
             },
             Case {
+                name: "debug_option_of_borrowed_str_vectors",
+                source: r#"fn f(v:&Vec<&str>)->usize{let x=v[0];x.len()+v[1].len()}fn main(){let v=vec!["a","bc"];let o=Some(&v);println!("{:?} {}",o,f(&v));}"#,
+                expect: Expect::Run("Some([\"a\", \"bc\"]) 3\n"),
+            },
+            Case {
+                name: "generic_call_with_inline_vec_argument",
+                source: r#"fn count<K>(v:&Vec<K>)->usize{let mut n=0;for _k in v{n+=1;}n}fn main(){let o=Some(vec!["x"]);println!("{} {:?}",count(&vec![1u8,2,3]),o);}"#,
+                expect: Expect::Run("3 Some([\"x\"])\n"),
+            },
+            Case {
+                name: "constant_index_through_reference_returns_local_borrow_in_unused_fn",
+                source: r#"fn unused()->&'static str{let s=String::from("t");let v=vec![s.as_str()];let r=&v;return r[0];}fn main(){}"#,
+                expect: Expect::Invalid("E0515"),
+            },
+            Case {
                 name: "generic_map_loop_returns_key_as_value_in_unused_fn",
                 source: r#"use std::collections::HashMap;use std::hash::Hash;fn bad<'a,K:Hash+Eq,V>(map:&'a HashMap<K,V>)->&'a V{for(key,_)in map{return key;}panic!("empty")}fn main(){}"#,
                 expect: Expect::Invalid("E0308"),

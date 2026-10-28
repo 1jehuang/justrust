@@ -815,6 +815,31 @@ fn resolve_cells<'a>(
                 } else {
                     original_locals
                 };
+                // A carrier location of a generic body instance (`__jr_fmt<T>`
+                // with T = Option<&Vec<&str>>) is written against the exact
+                // substituted shape; the generic source local (`&T`) cannot
+                // follow its variant steps. Project such a location through the
+                // instance cover instead of misreporting exhaustion.
+                let follows = |locals: &[Ty]| -> bool {
+                    let Some(ty) = locals.get(local.0) else {
+                        return true;
+                    };
+                    let ty = match location {
+                        Some(location) => {
+                            match ir::projected_ty_optional(ty, &value_projection(location), None) {
+                                Ok(Ty::Ref { referent, .. }) => referent.as_ref().clone(),
+                                _ => return false,
+                            }
+                        }
+                        None => ty.clone(),
+                    };
+                    ir::projected_ty_optional(&ty, &candidate.place.projection, None).is_ok()
+                };
+                let locals = if !follows(locals) && follows(cover_locals) {
+                    cover_locals
+                } else {
+                    locals
+                };
                 let Some(ty) = locals.get(local.0) else {
                     return Err(Exhausted);
                 };
