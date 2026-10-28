@@ -206,6 +206,11 @@ fn main() {
                 expect: Expect::Run("3 3 9 5\n"),
             },
             Case {
+                name: "map_index_str_key_reference",
+                source: r#"use std::collections::HashMap;fn main(){let mut c:HashMap<&str,usize>=HashMap::new();c.insert("a",5);println!("{} {}",c.get("a").unwrap(),c[&"a"]);}"#,
+                expect: Expect::Run("5 5\n"),
+            },
+            Case {
                 name: "map_index_wrong_key_in_unused_fn",
                 source: r#"use std::collections::HashMap;fn unused(c:&HashMap<String,u32>)->u32{c[&5u8]}fn main(){}"#,
                 expect: Expect::Invalid("E0277"),

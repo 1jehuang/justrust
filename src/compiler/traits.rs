@@ -4171,6 +4171,59 @@ impl ValidatedTraitWorld {
                 .all(|(a, b)| a.position == b.position && a.region == b.region)
             && a.outlives == b.outlives)
     }
+    // Required results whose region was freshly introduced by substituting an
+    // erased reference type argument (bound to no input, origin-free) carry
+    // no claim the provider can contradict. Every other result must refine
+    // exactly, input regions must agree, and the provider may only add the
+    // outlives facts implied by its own input nesting.
+    fn erased_result_regions_refine(
+        &self,
+        required: &ir::RefContract,
+        provided: &ir::RefContract,
+    ) -> Result<bool> {
+        if required.input_regions != provided.input_regions
+            || required.results.len() != provided.results.len()
+            || required.static_regions != provided.static_regions
+        {
+            return Ok(false);
+        }
+        charged(
+            &self.budget,
+            self.budget
+                .charge_work(required.results.len() * (required.input_regions.len() + 1) + 1),
+        )?;
+        let mut erased_any = false;
+        for (want, have) in required.results.iter().zip(provided.results.iter()) {
+            if want.position != have.position {
+                return Ok(false);
+            }
+            let fresh = !required
+                .input_regions
+                .iter()
+                .any(|row| row.region == want.region);
+            let empty = matches!(
+                &want.returns,
+                ir::ReturnContract::SharedInputEnvelopes(inputs) if inputs.is_empty()
+            );
+            if fresh && empty {
+                if !matches!(
+                    have.returns,
+                    ir::ReturnContract::SharedInputEnvelopes(_)
+                        | ir::ReturnContract::SharedInputPaths(_)
+                ) {
+                    return Ok(false);
+                }
+                erased_any = true;
+                continue;
+            }
+            if want.region != have.region
+                || !self.return_origin_refines(&want.returns, &have.returns, provided)?
+            {
+                return Ok(false);
+            }
+        }
+        Ok(erased_any)
+    }
     fn return_refines(
         &self,
         required: &ir::RefContract,
@@ -10201,6 +10254,15 @@ impl TraitCx for ValidatedTraitWorld {
                 ..(*signature.ref_contract).clone()
             };
             return_matches = self.return_refines(&required, &direct.signature.ref_contract)?;
+            if !return_matches && !target.type_args.is_empty() {
+                // Substituting an erased reference type argument (`Borrowed =
+                // &str`) gives its inner region a fresh identity bound to no
+                // input. Generic bodies were already region-checked, so an
+                // input-free required region at an equal type position is an
+                // erasure artifact: only those positions may differ.
+                return_matches =
+                    self.erased_result_regions_refine(&required, &direct.signature.ref_contract)?;
+            }
         }
         if !types_match || !return_matches {
             return Err(FactsError::invalid(
