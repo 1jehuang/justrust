@@ -676,3 +676,152 @@ fn native_probe_cli_and_lock_fail_closed() {
         cases.len() * 4
     );
 }
+
+const RUNTIME_CLIENT: &str = "fn main(){if identity(42i32)==42i32{println!(\"identity ok\");}}";
+const NAMESPACE_DIAGNOSTIC: &str = "immutable native source namespace";
+const UNPROVEN_WARNING: &str = "native source input capture is unproven";
+
+/// The reviewed probe CLI path must run under the same immutable, bounded,
+/// mutation-checked namespace as ordinary files: it prints the namespace
+/// diagnostic, never the unproven-capture warning, and both client and lock
+/// roots are authorized even when they are disjoint directories.
+#[test]
+fn native_probe_runs_under_immutable_namespace_without_unproven_warning() {
+    for workers in [1, 8] {
+        for check in [true, false] {
+            // Disjoint layout: client lives under app/, the reviewed lock and
+            // its provider live under a separate pinned/ tree. Neither root is
+            // an ancestor of the other, so both must be authorized explicitly.
+            let scratch = Scratch::new();
+            scratch.write("app/client.rs", RUNTIME_CLIENT.as_bytes());
+            scratch.write("pinned/libraries/source-lock.json", LOCK.as_bytes());
+            scratch.write("pinned/libraries/probes/identity/convert.rs", PROVIDER);
+            let mut command = Command::new(env!("CARGO_BIN_EXE_jr-rust"));
+            command
+                .current_dir(&scratch.0)
+                .env_remove("RUSTC_BOOTSTRAP")
+                .env("RUSTC", scratch.path("no-rustc"))
+                .env("PATH", scratch.path("no-tools"))
+                .arg(scratch.path("app/client.rs"))
+                .args(["--workers", &workers.to_string()])
+                .arg("--source-lock")
+                .arg(scratch.path("pinned/libraries/source-lock.json"))
+                .args(["--source-item", ITEM_NAME]);
+            let native = scratch.path("app/native");
+            if check {
+                command.arg("--check");
+            } else {
+                command.arg("-o").arg(&native);
+            }
+            let result = capture(&mut command, &scratch, Duration::from_secs(20));
+            let diagnostic = String::from_utf8_lossy(&result.stderr);
+            assert_eq!(
+                result.code, 0,
+                "disjoint probe workers={workers} check={check}: {diagnostic}"
+            );
+            assert!(
+                diagnostic.contains(NAMESPACE_DIAGNOSTIC),
+                "missing immutable namespace diagnostic workers={workers} check={check}: {diagnostic}"
+            );
+            assert!(
+                !diagnostic.contains(UNPROVEN_WARNING),
+                "reviewed probe still prints unproven-capture warning: {diagnostic}"
+            );
+            assert!(!diagnostic.contains("panicked at"), "{diagnostic}");
+            if check {
+                assert!(!native.exists(), "CHECK published executable");
+            } else {
+                assert!(is_elf(&fs::read(&native).unwrap()), "probe build not ELF64");
+                let run = capture(&mut Command::new(&native), &scratch, Duration::from_secs(5));
+                assert_eq!(run.code, 0, "probe runtime workers={workers}: {run:?}");
+                assert_eq!(run.stdout, EXPECTED);
+                assert!(run.stderr.is_empty());
+            }
+        }
+    }
+    eprintln!("identity probe immutable-namespace acceptance: disjoint client/lock roots, 1/8 workers, CHECK+BUILD+run");
+}
+
+#[derive(Clone, Copy, Debug)]
+enum CaptureCase {
+    MissingProvider,
+    MissingLock,
+    SymlinkProvider,
+    SymlinkLock,
+    ProviderOutsideAuthorizedRoots,
+}
+
+/// Capture-time rejections for reviewed probes. Each must fail closed with a
+/// diagnostic, no stdout, no panic, and no published artifact. These exercise
+/// the immutable namespace boundary itself (absent entries stay absent, no host
+/// fallback, symlinks unsupported, provider confined to an authorized root).
+#[test]
+fn native_probe_namespace_boundary_fails_closed() {
+    use CaptureCase::*;
+    for case in [
+        MissingProvider,
+        MissingLock,
+        SymlinkProvider,
+        SymlinkLock,
+        ProviderOutsideAuthorizedRoots,
+    ] {
+        for workers in [1, 8] {
+            for check in [true, false] {
+                let scratch = Scratch::new();
+                scratch.probe_files(RUNTIME_CLIENT, LOCK, PROVIDER);
+                let lock = scratch.path("libraries/source-lock.json");
+                let provider = scratch.path("libraries/probes/identity/convert.rs");
+                match case {
+                    MissingProvider => fs::remove_file(&provider).unwrap(),
+                    MissingLock => fs::remove_file(&lock).unwrap(),
+                    SymlinkProvider => {
+                        // Replace the provider with a symlink to identical bytes
+                        // outside the captured tree. Capture must not follow it.
+                        let target = scratch.path("outside-convert.rs");
+                        fs::write(&target, PROVIDER).unwrap();
+                        fs::remove_file(&provider).unwrap();
+                        std::os::unix::fs::symlink(&target, &provider).unwrap();
+                    }
+                    SymlinkLock => {
+                        let target = scratch.path("outside-lock.json");
+                        fs::write(&target, LOCK).unwrap();
+                        fs::remove_file(&lock).unwrap();
+                        std::os::unix::fs::symlink(&target, &lock).unwrap();
+                    }
+                    ProviderOutsideAuthorizedRoots => {
+                        // A lock that points its provider outside both the
+                        // client root and the lock-directory root via parent
+                        // traversal must be rejected rather than reaching the
+                        // host. The provider is placed where only an escaping
+                        // path could find it.
+                        fs::remove_file(&provider).unwrap();
+                        let escaped = scratch.path("escaped-convert.rs");
+                        fs::write(&escaped, PROVIDER).unwrap();
+                        let rewritten = LOCK.replace(
+                            "\"path\": \"probes/identity/convert.rs\"",
+                            "\"path\": \"../../escaped-convert.rs\"",
+                        );
+                        assert_ne!(rewritten, LOCK, "lock path substitution failed");
+                        fs::write(&lock, rewritten).unwrap();
+                    }
+                }
+                let mut command = native_command(&scratch, workers, check);
+                add_probe(&mut command, &scratch);
+                let result = capture(&mut command, &scratch, Duration::from_secs(20));
+                let diagnostic = String::from_utf8_lossy(&result.stderr);
+                assert_eq!(
+                    result.code, 1,
+                    "capture {case:?} workers={workers} check={check}: {diagnostic}"
+                );
+                assert!(
+                    result.stdout.is_empty()
+                        && !diagnostic.is_empty()
+                        && !diagnostic.contains("panicked at"),
+                    "capture {case:?}: {result:?}"
+                );
+                no_artifact(&scratch);
+            }
+        }
+    }
+    eprintln!("identity probe namespace boundary: 5 capture-time rejections x 1/8 workers x CHECK+BUILD, fail closed");
+}
