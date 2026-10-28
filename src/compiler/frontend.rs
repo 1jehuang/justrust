@@ -20379,6 +20379,25 @@ impl DeclRegistry {
                 .saturating_add(1)
         })
     }
+    /// Syntax nodes in one callable's body plus its parameters.
+    pub fn source_callable_node_count(&self, decl: ir::DeclId) -> usize {
+        let Some(function) = self.source_callable(decl) else {
+            return 0;
+        };
+        let mut nodes = 0usize;
+        let mut count = |_: &DepthNode<'_>, _: usize| -> Result<(), String> {
+            nodes = nodes.saturating_add(1);
+            Ok(())
+        };
+        // A malformed tree is rejected elsewhere; a partial count only lowers the allowance.
+        let _ = walk_depth_inspecting(
+            DepthNode::Block(&function.body),
+            None,
+            None,
+            Some(&mut count),
+        );
+        nodes.saturating_add(function.params.len())
+    }
     /// Explicit generic arguments may name only the written parameters, never
     /// anonymous argument-position `impl Trait` parameters (stock E0107/E0632).
     pub(super) fn check_explicit_impl_params(
@@ -23341,6 +23360,9 @@ impl PlanCtx {
     }
     pub fn source_callable_input_size(&self, decl: ir::DeclId) -> usize {
         self.registry.source_callable_input_size(decl)
+    }
+    pub fn source_callable_node_count(&self, decl: ir::DeclId) -> usize {
+        self.registry.source_callable_node_count(decl)
     }
     pub fn callable_decl(&self, index: usize) -> Result<ir::DeclId, String> {
         self.function_decl(index)

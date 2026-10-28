@@ -2103,6 +2103,16 @@ impl BodySubstitutionProof {
                     }
                     Ok(true)
                 }
+                Ty::Enum(value) => {
+                    for variant in value.def().variants.iter() {
+                        for field in variant.fields.read(budget)?.iter() {
+                            if !shared_shape(&field.ty, budget, depth + 1)? {
+                                return Ok(false);
+                            }
+                        }
+                    }
+                    Ok(true)
+                }
                 Ty::Closure(value) => {
                     for field in value.captures() {
                         if !shared_shape(field, budget, depth + 1)? {

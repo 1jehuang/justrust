@@ -1081,6 +1081,8 @@ pub(super) fn preflight_recipe_counts(
 
 #[derive(Debug)]
 pub(super) struct Exhausted;
+/// Task work granted per (block, move path) dataflow cell of one analysis.
+const WORK_PER_DATAFLOW_CELL: u64 = 1024;
 pub(super) struct Budget {
     remaining: usize,
     work_limit: usize,
@@ -3994,6 +3996,13 @@ fn analyze_with_context(
         }
         drop(verification_scratch);
         let paths = Paths::with_facts(f, limits.paths, facts, &mut budget)?;
+        // Per task: the fixed-point state is one path set per block, so the
+        // dataflow's own input is blocks x move paths, not CFG length alone.
+        crate::engine::scale_task_work(
+            u64::try_from(f.blocks.len().saturating_mul(paths.nodes.len()))
+                .unwrap_or(u64::MAX)
+                .saturating_mul(WORK_PER_DATAFLOW_CELL),
+        );
         report.stats.move_paths = paths.nodes.len();
         // Account for retained entry states and transient states up front,
         // including sparse variant-selection storage and Vec headers. No

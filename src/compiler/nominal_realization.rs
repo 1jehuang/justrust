@@ -15,6 +15,9 @@ pub(super) use materialization::SymbolicFields;
 use reads::NominalPublication;
 pub(super) use reads::{ReadNominal, read_manifest};
 
+/// Work units granted per callable syntax node for one source-check attempt.
+const WORK_PER_ATTEMPT_NODE: u64 = 64 * 1024;
+
 /// Real source checking suspends only on explicit typed input demands. The
 /// transient attempt keeps its original constant/source inventory across reads.
 pub(super) async fn publish_callable(
@@ -35,7 +38,16 @@ pub(super) async fn publish_callable(
     // Exact successful proofs remain node-local across missing-input retries.
     // No source-check result or unavailable graph capability is cached here.
     let mut scratch = traits::TraitScratch::default();
+    // Each attempt rechecks the body once, bounded by its syntax size; every
+    // retry adds at least one new typed input, so the attempt count is input-
+    // derived too. Grant this task work for exactly the attempts it makes.
+    let per_attempt = u64::try_from(types.source_callable_node_count(declaration))
+        .unwrap_or(u64::MAX)
+        .saturating_mul(WORK_PER_ATTEMPT_NODE);
+    let mut attempts = 0u64;
     loop {
+        attempts = attempts.saturating_add(1);
+        crate::engine::scale_task_work(per_attempt.saturating_mul(attempts));
         let attempt = inputs
             .with_inputs(types, declaration, |borrowed| {
                 types
