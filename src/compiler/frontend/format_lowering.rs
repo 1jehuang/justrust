@@ -226,6 +226,22 @@ impl Checker<'_> {
             } else {
                 self.expr_expected(argument, None)?
             };
+            // `{}` of a `&mut T` scalar prints the referent, exactly like `&T`:
+            // read through the mutable reference instead of coercing it.
+            let mut_scalar_referent = match &self.exprs[id.0].ty {
+                ir::Ty::Ref {
+                    kind: ir::BorrowKind::Mut,
+                    referent,
+                } if Self::native_format(spec, referent) => Some(referent.as_ref().clone()),
+                _ => None,
+            };
+            let id = if let Some(referent) = mut_scalar_referent.clone() {
+                let read = self.format_lit(referent, ir::ExprKind::Deref { value: id })?;
+                self.exprs[read.0].completion = self.exprs[id.0].completion;
+                read
+            } else {
+                id
+            };
             let flow = self.flow(id);
             completes &= flow.completes;
             let native = Self::native_format(spec, &flow.ty);
@@ -292,7 +308,10 @@ impl Checker<'_> {
                     None
                 }
             });
-            let operand = if let Some(reference) = indexed_reference {
+            let operand = if mut_scalar_referent.is_some() {
+                // The scalar was already read through the `&mut`.
+                id
+            } else if let Some(reference) = indexed_reference {
                 reference
             } else if let Some(place) = &place {
                 let (place, _, _) = self.checked_place(place)?;
