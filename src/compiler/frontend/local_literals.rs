@@ -1366,6 +1366,7 @@ impl<'s> Solver<'_, '_, 's> {
                         method.name,
                         &method.args,
                         &method.actuals,
+                        receiver != method.receiver,
                     )?
                 {
                     self.bind_declared_method_result(result, method.result)?;
@@ -1374,6 +1375,14 @@ impl<'s> Solver<'_, '_, 's> {
                 }
                 // A concrete receiver can also select trait or primitive methods.
                 if let Some(mut ty) = self.resolve(receiver, 0)? {
+                    // Exact selection autoderefs itself; start from the
+                    // written receiver so `&Vec` probes `IntoIterator for &Vec`.
+                    if receiver != method.receiver
+                        && self.reference_impl_shadows(receiver, method.name)?
+                        && let Some(original) = self.resolve(method.receiver, 0)?
+                    {
+                        ty = original;
+                    }
                     if matches!(ty, ir::Ty::Array { .. }) {
                         let Some(original) = self.resolve(method.receiver, 0)? else {
                             pending.push(method);

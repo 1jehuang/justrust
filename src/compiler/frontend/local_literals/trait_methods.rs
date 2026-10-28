@@ -298,12 +298,54 @@ impl Solver<'_, '_, '_> {
         Ok(true)
     }
 
+    /// Whether `trait_id` has an impl whose self type is a reference to the
+    /// receiver's nominal (`impl IntoIterator for &Vec<T>`).
+    fn reference_impl_for(&self, receiver: Term, trait_id: ir::DeclId) -> Result<bool, String> {
+        let Domain::Nominal(nominal, _) = self.domain(receiver) else {
+            return Ok(false);
+        };
+        let plan = self.checker.signatures.plan()?;
+        for candidate in plan.trait_world()?.impl_headers() {
+            self.checker.infer_work(0)?;
+            if candidate.trait_ref.declaration == trait_id
+                && let ir::Ty::Ref { referent, .. } = &candidate.trait_ref.self_ty
+                && nominal_parts(referent).is_some_and(|(owner, _)| owner == nominal)
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// Whether a by-value trait method named `name` on the receiver's nominal
+    /// is shadowed by the same trait implemented for a reference to it.
+    pub(super) fn reference_impl_shadows(
+        &self,
+        receiver: Term,
+        name: AstIdent,
+    ) -> Result<bool, String> {
+        let plan = self.checker.signatures.plan()?;
+        for trait_id in &plan.registry.trait_ids {
+            self.checker.infer_work(0)?;
+            let Some(item) = plan.trait_item(*trait_id, &name, &plan.budget)? else {
+                continue;
+            };
+            if matches!(plan.declaration(item)?.receiver, ReceiverKind::Value { .. })
+                && self.reference_impl_for(receiver, *trait_id)?
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     pub(super) fn structural_trait_method_constraints(
         &mut self,
         receiver: Term,
         name: AstIdent,
         arguments: &[Term],
         explicit: &[Term],
+        peeled: bool,
     ) -> Result<Option<Term>, String> {
         let plan = self.checker.signatures.plan()?;
         let implicit = plan.program.implicit_prelude(self.checker.module)?;
@@ -360,6 +402,15 @@ impl Solver<'_, '_, '_> {
         let Some((header, trait_id, item)) = selected else {
             return Ok(None);
         };
+        // A by-value item on the referent of a borrowed receiver is not the
+        // first probe step: the reference itself may implement the trait
+        // (`IntoIterator for &Vec<T>`). Leave it to exact selection.
+        if peeled
+            && matches!(plan.declaration(item)?.receiver, ReceiverKind::Value { .. })
+            && self.reference_impl_for(receiver, trait_id)?
+        {
+            return Ok(None);
+        }
         let schema = plan.raw_schema(item)?;
         let own = plan.param_env(item)?;
         if schema.signature.params.len() != arguments.len() + 1

@@ -231,6 +231,11 @@ fn main() {
                 expect: Expect::Run("3 Some([\"x\"])\n"),
             },
             Case {
+                name: "into_iter_on_vector_reference_yields_element_references",
+                source: r#"fn first<'a>(v:&'a Vec<u8>)->Option<&'a u8>{let mut it=v.into_iter();it.next()}fn main(){let v=vec![3u8,4];let r=&v;let it=r.into_iter();println!("{:?} {}",first(&v),it.count());}"#,
+                expect: Expect::Run("Some(3) 2\n"),
+            },
+            Case {
                 name: "clone_vector_of_borrowed_str_and_slice_refs",
                 source: r#"fn main(){let v:Vec<&str>=vec!["a","b"];let w=v.clone();let a=[1u8,2];let s:&[u8]=&a;let t=s.clone();println!("{} {:?} {}",w.len(),w,t.len());}"#,
                 expect: Expect::Run("2 [\"a\", \"b\"] 2\n"),
