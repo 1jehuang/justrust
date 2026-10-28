@@ -6718,6 +6718,11 @@ impl<'a> Checker<'a> {
         value: &Expr,
         statements: &mut Vec<ir::TypedStmt>,
     ) -> Result<Option<(ir::TypedStmt, bool)>, String> {
+        // `*v[i] = x` writes through the `&mut T` element that IndexMut selects.
+        let (target, through_element) = match target {
+            Expr::Deref { value } => (value.as_ref(), true),
+            target => (target, false),
+        };
         let (Expr::DynamicIndex { base, .. } | Expr::Index { base, .. }) = target else {
             return Ok(None);
         };
@@ -6745,7 +6750,20 @@ impl<'a> Checker<'a> {
         else {
             return Err("IndexMut must return a mutable reference".into());
         };
-        let destination = referent.as_ref().clone();
+        let mut projection = vec![ir::Projection::Deref];
+        let destination = if through_element {
+            let ir::Ty::Ref {
+                kind: ir::BorrowKind::Mut,
+                referent: element,
+            } = referent.as_ref()
+            else {
+                return Err("cannot assign through `*` of an element that is not `&mut`".into());
+            };
+            projection.push(ir::Projection::Deref);
+            element.as_ref().clone()
+        } else {
+            referent.as_ref().clone()
+        };
         let (rhs, rhs_flow) = match op {
             Some(op) => self.compound_value(op, &destination, value)?,
             None => {
@@ -6779,7 +6797,7 @@ impl<'a> Checker<'a> {
         let loaded = self.for_expr(saved_ty, ir::ExprKind::Local(saved))?;
         let place = ir::Place {
             local: carrier,
-            projection: vec![ir::Projection::Deref],
+            projection,
         };
         Ok(Some((
             match op {
@@ -11210,9 +11228,16 @@ impl<'a> Checker<'a> {
                             );
                     // An overloaded `Index` operand (`*v[0]` with `v: Vec<&T>`)
                     // is already a typed `*Index::index` read.
-                    let overloaded_index = matches!(root, Expr::Index { .. })
-                        && !static_source_place(root)
-                            .is_ok_and(|place| self.checked_place(&place).is_ok());
+                    let overloaded_index = match root {
+                        Expr::Index { .. } => !static_source_place(root)
+                            .is_ok_and(|place| self.checked_place(&place).is_ok()),
+                        // `*v[i]` with `v: Vec<&T>` is a typed `*Index::index` read.
+                        Expr::DynamicIndex { base, .. } => matches!(
+                            self.method_receiver_hint(base)?,
+                            Some(ir::Ty::Struct(_) | ir::Ty::Enum(_))
+                        ),
+                        _ => false,
+                    };
                     if !matches!(root, Expr::Var(_))
                         && !genuine_call(root)
                         && !slice_carrier

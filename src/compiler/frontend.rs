@@ -10068,6 +10068,13 @@ fn nested_runtime_target(target: &Expr) -> bool {
         Expr::DynamicIndex { base, .. } | Expr::Index { base, .. } | Expr::Field { base, .. } => {
             nested_runtime_base(base)
         }
+        // `*v[i] = x`: write through a reference element selected at runtime.
+        Expr::Deref { value } => match value.as_ref() {
+            Expr::DynamicIndex { base, .. } => {
+                matches!(base.as_ref(), Expr::Var(_)) || nested_runtime_base(base)
+            }
+            inner => nested_runtime_target(inner),
+        },
         _ => false,
     }
 }
