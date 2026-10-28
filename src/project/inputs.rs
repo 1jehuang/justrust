@@ -552,6 +552,29 @@ impl Recorder {
                 }
             }
         }
+        self.observe_live_environment_configuration();
+    }
+    /// Cargo also reads build-affecting configuration from the environment, not
+    /// only `.cargo/config`. Legacy discovery does not interpret it, so observe
+    /// the well-known names (including absence, so a later appearance
+    /// invalidates) and refuse to authorize reuse whenever any is present. The
+    /// exact names give replay-based revalidation; the prefix scan covers the
+    /// open-ended families (`CARGO_BUILD_*`, `CARGO_TARGET_*`, `CARGO_PROFILE_*`,
+    /// `CARGO_REGISTRIES_*`, `CARGO_NET_*`) that silently alter a build.
+    fn observe_live_environment_configuration(&mut self) {
+        for name in BUILD_AFFECTING_ENV_EXACT {
+            if self.env(name).is_some() {
+                self.uncontrolled();
+            }
+        }
+        if self.snapshot.is_none()
+            && std::env::vars_os().any(|(name, _)| {
+                name.to_str()
+                    .is_some_and(env_name_is_build_affecting_prefix)
+            })
+        {
+            self.uncontrolled();
+        }
     }
     pub(crate) fn finish(self) -> Arc<DiscoveryInputs> {
         Arc::new(DiscoveryInputs {
@@ -565,6 +588,40 @@ impl Recorder {
             identity: *self.identity.finalize().as_bytes(),
         })
     }
+}
+/// Exact environment variable names that reconfigure a Cargo/rustc build.
+/// Observed by name (including absence) so a later appearance invalidates.
+const BUILD_AFFECTING_ENV_EXACT: &[&str] = &[
+    "RUSTFLAGS",
+    "RUSTDOCFLAGS",
+    "CARGO_ENCODED_RUSTFLAGS",
+    "CARGO_ENCODED_RUSTDOCFLAGS",
+    "CARGO_BUILD_RUSTFLAGS",
+    "CARGO_BUILD_TARGET",
+    "CARGO_BUILD_JOBS",
+    "CARGO_BUILD_RUSTC_WRAPPER",
+    "CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER",
+    "CARGO_INCREMENTAL",
+    "RUSTC_WRAPPER",
+    "RUSTC_WORKSPACE_WRAPPER",
+];
+
+/// The open-ended Cargo configuration families whose any member silently alters
+/// a build. `CARGO_TARGET_DIR`/`CARGO_TARGET_TMPDIR` select output and
+/// test-scratch locations rather than compilation configuration (the former is
+/// allow-listed in the frozen path, the latter injected by the Cargo/libtest
+/// harness), so they are excluded despite sharing the `CARGO_TARGET_` prefix.
+fn env_name_is_build_affecting_prefix(name: &str) -> bool {
+    const PREFIXES: &[&str] = &[
+        "CARGO_BUILD_",
+        "CARGO_TARGET_",
+        "CARGO_PROFILE_",
+        "CARGO_REGISTRIES_",
+        "CARGO_REGISTRY_",
+        "CARGO_NET_",
+    ];
+    const BENIGN: &[&str] = &["CARGO_TARGET_DIR", "CARGO_TARGET_TMPDIR"];
+    !BENIGN.contains(&name) && PREFIXES.iter().any(|p| name.starts_with(p))
 }
 fn encode_error(out: &mut Vec<u8>, kind: io::ErrorKind) {
     // Only ordinary negative-path observations are eligible. Other errors invalidate the
@@ -669,6 +726,55 @@ mod tests {
         }
         std::fs::create_dir(f.0.join(".cargo/config.toml")).unwrap();
         assert!(capture().identity().is_none());
+    }
+
+    #[test]
+    fn live_environment_configuration_classifier_covers_build_affecting_names() {
+        // Pure classification; no process-environment mutation, so this is safe
+        // under parallel discovery tests that replay env in matches_current.
+        // Exact names that reconfigure the build are observed by name.
+        for name in [
+            "RUSTFLAGS",
+            "RUSTDOCFLAGS",
+            "CARGO_ENCODED_RUSTFLAGS",
+            "CARGO_BUILD_RUSTFLAGS",
+            "CARGO_BUILD_TARGET",
+            "CARGO_INCREMENTAL",
+            "RUSTC_WRAPPER",
+        ] {
+            assert!(
+                BUILD_AFFECTING_ENV_EXACT.contains(&name),
+                "{name} must be observed as build-affecting"
+            );
+        }
+        // Open-ended configuration families disable reuse via the prefix scan.
+        for name in [
+            "CARGO_BUILD_JOBS",
+            "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER",
+            "CARGO_PROFILE_DEV_OPT_LEVEL",
+            "CARGO_REGISTRIES_CRATES_IO_PROTOCOL",
+            "CARGO_NET_OFFLINE",
+        ] {
+            assert!(
+                env_name_is_build_affecting_prefix(name),
+                "{name} must be treated as build-affecting"
+            );
+        }
+        // Output/scratch path selectors and unrelated vars must not trip it, or
+        // every build under Cargo/libtest would refuse to issue an identity.
+        for name in [
+            "CARGO_TARGET_DIR",
+            "CARGO_TARGET_TMPDIR",
+            "CARGO_HOME",
+            "HOME",
+            "PATH",
+            "CARGO_PKG_NAME",
+        ] {
+            assert!(
+                !env_name_is_build_affecting_prefix(name),
+                "{name} must not be treated as build-affecting"
+            );
+        }
     }
 
     #[test]
