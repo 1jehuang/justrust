@@ -26044,6 +26044,21 @@ fn argument_height(
     if let Some(capability) = capability.filter(|capability| capability.is_component()) {
         capability.check_definition(ty).map_err(|e| e.to_string())?;
         let ir::FactsCtx::Validated(facts) = caller else {
+            // A closed (Concrete) caller has no local predicates to replay.
+            // The authenticated graph realization already carries the
+            // component's closed-world proof; use its verified height.
+            if matches!(caller, ir::FactsCtx::Concrete) {
+                let height = capability
+                    .component_metadata_height()
+                    .ok_or("component argument lacks verified metadata height")?;
+                let deepest = depth
+                    .checked_add(height)
+                    .ok_or("generic type nesting depth overflow")?;
+                budget
+                    .check_depth(deepest)
+                    .map_err(|e| format!("generic type nesting resource limit: {e}"))?;
+                return Ok(height);
+            }
             return Err("component argument requires validated facts".into());
         };
         if !facts.budget().same_authority(budget) {
