@@ -888,7 +888,7 @@ mod tests {
             command.args(["-c", "trap 'echo stopped > stopped; exit 0' TERM; echo ready > ready; i=0; while [ $i -lt 250 ]; do /bin/sleep 0.02; i=$((i+1)); done"])
                 .current_dir(&dir).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).detached();
             own_run_lifetime(&mut command);
-            let _child = command.spawn().unwrap();
+            let mut child = command.spawn().unwrap();
             for _ in 0..250 {
                 if dir.join("ready").exists() {
                     // Deliberately skip normal __agent cleanup.
@@ -896,6 +896,10 @@ mod tests {
                 }
                 std::thread::sleep(std::time::Duration::from_millis(20));
             }
+            // The successful branch intentionally exits to exercise parent death.
+            // On timeout we still own the child and must reap it before panicking.
+            let _ = child.kill();
+            let _ = child.wait();
             panic!("owned child did not become ready");
         }
         let dir = std::env::temp_dir().join(format!("jr-owner-{}", std::process::id()));
