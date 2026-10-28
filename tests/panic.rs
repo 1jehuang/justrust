@@ -109,7 +109,7 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
             source_bytes: 86,
             source_fingerprint: 1414309745764810560,
             source_sha256: r###"c3bd04b4e8319558d97ecb6cb55e1523587ef996db5143f29c0b7e01db9159fc"###,
-            native: Native::Unsupported,
+            native: Native::Live,
             boundary: r###"only {} and {:?} formatting placeholders are supported"###,
             stock_compile_code: 0,
             stock_code: Some(0),
@@ -129,7 +129,7 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
             source_bytes: 87,
             source_fingerprint: 2899173439825184039,
             source_sha256: r###"0057f5f2956c3aeb3b1f30bec6d316b0a11228bbf6a09299ae396d55f39c65c1"###,
-            native: Native::Unsupported,
+            native: Native::Abort,
             boundary: r###"only {} and {:?} formatting placeholders are supported"###,
             stock_compile_code: 0,
             stock_code: Some(-6),
@@ -349,7 +349,7 @@ For more information about this error, try `rustc --explain E0308`.
             source_bytes: 92,
             source_fingerprint: 13424131026726461316,
             source_sha256: r###"0e466991326ba820709d87c153af6f1d2741a01e774687fcd7440b7a26f691cf"###,
-            native: Native::Unsupported,
+            native: Native::Live,
             boundary: r###"only {} and {:?} formatting placeholders are supported"###,
             stock_compile_code: 0,
             stock_code: Some(0),
@@ -463,7 +463,7 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
             source_bytes: 35,
             source_fingerprint: 14463825328469055243,
             source_sha256: r###"2370cb3bbc862e772788a4e95ff5c60fe2fca6d1d5c269034f741e6e2dd9d5e0"###,
-            native: Native::Unsupported,
+            native: Native::Abort,
             boundary: r###"panic! formatting"###,
             stock_compile_code: 0,
             stock_code: Some(-6),
@@ -518,7 +518,7 @@ error: aborting due to 1 previous error
             source_bytes: 119,
             source_fingerprint: 320947439098334438,
             source_sha256: r###"772a046b47d4afe5407292161ed9492d75a743e2f2bf089e7f4c47428fb1aaeb"###,
-            native: Native::Unsupported,
+            native: Native::Abort,
             boundary: r###"unsupported: normal Drop requires a scalar-field struct"###,
             stock_compile_code: 0,
             stock_code: Some(-6),
@@ -757,7 +757,7 @@ fn main() { let a = forward(Wrap(42i32)); let b = forward(Wrap(true)); if a != 4
             source_bytes: 337,
             source_fingerprint: 4060936354597546651,
             source_sha256: r###"ab87023553b8fd6dfbef14d702725c4862f9c9145de75b76ae5d7bc287920a58"###,
-            native: Native::Unsupported,
+            native: Native::Live,
             boundary: r###"unsupported: rigid generic associated projection"###,
             stock_compile_code: 0,
             stock_code: Some(0),
@@ -1518,7 +1518,7 @@ fn frozen_panic_source_and_receipt_partitions() {
     assert_eq!(stock_core, [3, 10, 3]);
     assert_eq!(
         native,
-        [[1, 9, 3, 3], [6, 0, 0, 1], [0, 0, 0, 6], [6, 10, 2, 0]]
+        [[3, 10, 3, 0], [7, 0, 0, 0], [0, 2, 0, 4], [6, 10, 2, 0]]
     );
 }
 #[test]
@@ -1659,7 +1659,7 @@ fn diagnostic(case: &Case, text: &str) {
             }
         }
         Native::Unsupported => {
-            // Six historical controls remain unsupported. Their earlier parser/
+            // Four historical controls remain unsupported. Their earlier parser/
             // resolution failure is NOT evidence of unwind or formatting support.
             assert!(
                 text.contains(case.boundary),
@@ -1818,7 +1818,7 @@ fn cli_all() {
         }
     }
     assert_eq!(cells, 188);
-    failures.check("runtime count", || assert_eq!(runtimes, 64));
+    failures.check("runtime count", || assert_eq!(runtimes, 76));
     failures.finish();
 }
 fn graph_all() {
@@ -1878,7 +1878,7 @@ fn graph_all() {
         }
     }
     assert_eq!(cells, 188);
-    failures.check("graph runtime count", || assert_eq!(runtimes, 64));
+    failures.check("graph runtime count", || assert_eq!(runtimes, 76));
     failures.finish();
 }
 fn isolated(name: &str, marker: &str, run: fn()) {

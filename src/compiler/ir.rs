@@ -3678,9 +3678,10 @@ pub(in crate::compiler) fn instantiate_checked_with_constants(
         FactsCtx::from_validated(closed_facts).validate_ty_with_budget(ty, budget)?;
         validate_root_reference_actual(ty, budget)?;
         if matches!(ty, Ty::Ref { .. }) && template.carrier_effects().is_none() {
-            return Err(
-                "unsupported: reference actual requires exact universal carrier proof".into(),
-            );
+            return Err(format!(
+                "unsupported: reference actual requires exact universal carrier proof (in {})",
+                template.function().name
+            ));
         }
     }
     let source = template.source();

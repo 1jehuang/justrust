@@ -12935,8 +12935,9 @@ pub fn check(program: &Program) -> Result<(), String> {
         // This graph-free checker lacks sealed graph facts (constants, derived
         // impl obligations) that native prelude bodies rely on. Those bodies
         // are checked by the graph CHECK root; user source is never exempt.
-        if let Err(error) = &result
-            && error.starts_with("in callable crate::__justrust_std::")
+        if result.is_err()
+            && let Some(plan) = signatures.plan.as_ref()
+            && plan.is_prelude_decl(plan.callable_decl(i)?)?
         {
             continue;
         }

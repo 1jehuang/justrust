@@ -182,58 +182,43 @@ impl<T> Vec<T> {
         if index > self.len {
             panic!("insertion index out of bounds");
         }
-        if self.len == self.cap {
-            self.reserve(1usize);
-        }
-        let mut i = self.len;
+        // Append then rotate into place with modeled exchanges, so element
+        // moves keep exact carrier proofs.
+        self.push(value);
+        let mut i = self.len - 1usize;
         while i > index {
-            let src = slot(self.ptr, i - 1usize);
-            let dst = slot(self.ptr, i);
-            unsafe {
-                *dst = *src;
-            }
+            self.swap(i - 1usize, i);
             i -= 1usize;
         }
-        let dst = slot(self.ptr, index);
-        unsafe {
-            *dst = value;
-        }
-        self.len += 1usize;
     }
 
     pub fn remove(&mut self, index: usize) -> T {
         if index >= self.len {
             panic!("removal index out of bounds");
         }
-        let src = slot(self.ptr, index);
-        let value = unsafe { *src };
+        // Built from the exchange and pop operations so the element move keeps
+        // their exact carrier proofs; no unmodeled raw store remains.
         let mut i = index;
         while i + 1usize < self.len {
-            let from = slot(self.ptr, i + 1usize);
-            let to = slot(self.ptr, i);
-            unsafe {
-                *to = *from;
-            }
+            self.swap(i, i + 1usize);
             i += 1usize;
         }
-        self.len -= 1usize;
-        value
+        match self.pop() {
+            Option::Some(value) => value,
+            Option::None => panic!("removal index out of bounds"),
+        }
     }
 
     pub fn swap_remove(&mut self, index: usize) -> T {
         if index >= self.len {
             panic!("swap_remove index out of bounds");
         }
-        let at = slot(self.ptr, index);
-        let value = unsafe { *at };
-        self.len -= 1usize;
-        if index != self.len {
-            let last = slot(self.ptr, self.len);
-            unsafe {
-                *at = *last;
-            }
+        let last = self.len - 1usize;
+        self.swap(index, last);
+        match self.pop() {
+            Option::Some(value) => value,
+            Option::None => panic!("swap_remove index out of bounds"),
         }
-        value
     }
 
     pub fn truncate(&mut self, len: usize) {
