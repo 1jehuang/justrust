@@ -53,6 +53,77 @@ fn fixture(name: &str) -> PathBuf {
         .join(name)
 }
 #[test]
+fn captured_native_link_ignores_ambient_path_driver_specs_and_library_environment() {
+    use std::os::unix::fs::PermissionsExt;
+    let scratch = Scratch::new();
+    let source = scratch.file("ambient.rs");
+    fs::write(&source, "unsafe extern \"C\"{fn labs(x:isize)->isize;}fn main(){assert_eq!(unsafe{labs(-42)},42);println!(\"closed native link\");}").unwrap();
+    let poison = scratch.file("poison");
+    fs::create_dir(&poison).unwrap();
+    let marker = scratch.file("ambient-tool-was-executed");
+    for name in ["cc", "gcc", "ld", "collect2", "as"] {
+        let file = poison.join(name);
+        fs::write(
+            &file,
+            format!(
+                "#!/bin/sh\nprintf poisoned > '{}'\nexit 73\n",
+                marker.display()
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(file, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let mut baseline = None;
+    for workers in [1, 8] {
+        for hostile in [false, true] {
+            let executable = scratch.file(&format!("ambient-{workers}-{hostile}"));
+            let mut command = Command::new(cli());
+            command
+                .arg(&source)
+                .args([
+                    "--workers",
+                    &workers.to_string(),
+                    "--native-library",
+                    "c",
+                    "-o",
+                ])
+                .arg(&executable);
+            if hostile {
+                command
+                    .env("PATH", &poison)
+                    .env("COMPILER_PATH", &poison)
+                    .env("GCC_EXEC_PREFIX", &poison)
+                    .env("LIBRARY_PATH", &poison)
+                    .env("LD_LIBRARY_PATH", &poison)
+                    .env("LD_RUN_PATH", &poison)
+                    .env("GNUTARGET", "not-an-object-format")
+                    .env("LDEMULATION", "not-an-emulation")
+                    .env("COLLECT_GCC_OPTIONS", "-specs=/not-a-captured-input");
+            }
+            let output = command.output().unwrap();
+            assert!(
+                output.status.success(),
+                "{command:?}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let bytes = fs::read(&executable).unwrap();
+            if let Some(expected) = &baseline {
+                assert_eq!(&bytes, expected);
+            } else {
+                baseline = Some(bytes);
+            }
+            assert_eq!(
+                run(&mut Command::new(executable)).stdout,
+                b"closed native link\n"
+            );
+            assert!(
+                !marker.exists(),
+                "ambient driver/linker execution escaped the capsule"
+            );
+        }
+    }
+}
+#[test]
 fn optimized_imports_keep_real_external_call_bodies_at_workers_1_8() {
     let scratch = Scratch::new();
     let source = scratch.file("optimized.rs");

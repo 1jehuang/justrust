@@ -397,6 +397,7 @@ fn option_identity(options: &SourceOptions) -> Option<[u8; 32]> {
         emit_object,
         objects,
         libraries,
+        toolchain,
     } = native_link;
     id.flag(*emit_object);
     id.count(objects.len());
@@ -408,6 +409,25 @@ fn option_identity(options: &SourceOptions) -> Option<[u8; 32]> {
         id.bytes(object);
     }
     id.strings(libraries);
+    match toolchain {
+        None => id.flag(false),
+        Some(toolchain) => {
+            id.flag(true);
+            id.bytes(toolchain.policy());
+            id.bytes(toolchain.library_directory().as_os_str().as_encoded_bytes());
+            id.strings(toolchain.libraries());
+            let count = toolchain.inputs().count();
+            id.count(count);
+            id.valid &= count <= MAX_OBSERVATIONS;
+            for (path, bytes) in toolchain.inputs().take(MAX_OBSERVATIONS) {
+                if !id.valid {
+                    break;
+                }
+                id.bytes(path.as_os_str().as_encoded_bytes());
+                id.bytes(bytes);
+            }
+        }
+    }
     id.cfg(cfg);
     id.flag(*prelude);
     id.bytes(&[match opt {

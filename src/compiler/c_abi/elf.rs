@@ -1,5 +1,7 @@
 //! ELF64 relocatable objects and explicit native-link inputs. No assembler or
-//! Rust compiler is involved. `cc` is used only as a system linker driver.
+//! Rust compiler is involved. Native linking uses an immutable toolchain capsule
+//! behind an enforced filesystem and process boundary, never an ambient driver.
+pub use super::controlled_link::ControlledToolchain;
 use crate::compiler::{backend::Object, ir};
 use std::collections::{BTreeMap, BTreeSet};
 #[derive(Clone, Debug, Default)]
@@ -8,6 +10,8 @@ pub struct LinkOptions {
     /// Immutable object/archive snapshots captured by the caller before graph execution.
     pub objects: Vec<Vec<u8>>,
     pub libraries: Vec<String>,
+    /// Captured before graph execution. Missing capsules fail closed for linking.
+    pub toolchain: Option<ControlledToolchain>,
 }
 fn u16_(v: &mut [u8], at: usize, n: u16) {
     v[at..at + 2].copy_from_slice(&n.to_le_bytes());
@@ -306,7 +310,13 @@ fn scratch() -> Result<Scratch, String> {
             "jr-native-link-{}-{time}-{attempt}",
             std::process::id()
         ));
-        match std::fs::create_dir(&path) {
+        let mut builder = std::fs::DirBuilder::new();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            builder.mode(0o700);
+        }
+        match builder.create(&path) {
             Ok(()) => return Ok(Scratch(path)),
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
             Err(e) => return Err(format!("infrastructure: native linker scratch: {e}")),
@@ -323,51 +333,12 @@ pub fn link(
     if options.emit_object {
         return Ok(bytes);
     }
+    let toolchain = options
+        .toolchain
+        .as_ref()
+        .ok_or("unsupported: native linking requires a captured controlled toolchain")?;
     let scratch = scratch()?;
-    let own = scratch.0.join("native.o");
-    let output = scratch.0.join("program");
-    std::fs::write(&own, bytes).map_err(|e| format!("infrastructure: write linker input: {e}"))?;
-    let mut command = std::process::Command::new("cc");
-    command
-        .args(["-no-pie", "-Wl,-z,noexecstack", "-o"])
-        .arg(&output)
-        .arg(own);
-    for (index, bytes) in options.objects.iter().enumerate() {
-        if !bytes.starts_with(b"\x7fELF") && !bytes.starts_with(b"!<arch>\n") {
-            return Err(
-                "unsupported: native input must be an ELF object or ar archive snapshot".into(),
-            );
-        }
-        let path = scratch.0.join(format!("input-{index}.o"));
-        std::fs::write(&path, bytes)
-            .map_err(|e| format!("infrastructure: write native snapshot: {e}"))?;
-        command.arg(path);
-    }
-    for library in &options.libraries {
-        if library.is_empty()
-            || !library
-                .bytes()
-                .all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-')
-        {
-            return Err("unsupported: invalid native library name".into());
-        }
-        command.arg(format!("-l{library}"));
-    }
-    let status = command
-        .output()
-        .map_err(|e| format!("infrastructure: invoke native linker: {e}"))?;
-    if !status.status.success() {
-        return Err(format!(
-            "native link failed ({}):\n{}{}",
-            status.status,
-            String::from_utf8_lossy(&status.stdout),
-            String::from_utf8_lossy(&status.stderr)
-        ));
-    }
-    let metadata =
-        std::fs::metadata(&output).map_err(|e| format!("infrastructure: linked output: {e}"))?;
-    budget.retain_bytes(
-        usize::try_from(metadata.len()).map_err(|_| "native executable too large")?,
-    )?;
-    std::fs::read(output).map_err(|e| format!("infrastructure: read linked executable: {e}"))
+    let executable = toolchain.execute(&scratch.0, &options.objects, &bytes, &options.libraries)?;
+    budget.retain_bytes(executable.len())?;
+    Ok(executable)
 }

@@ -1,0 +1,294 @@
+use super::*;
+use std::{
+    fs,
+    os::unix::{fs::PermissionsExt, io::AsRawFd},
+};
+struct Temp(PathBuf);
+impl Temp {
+    fn new() -> Self {
+        let path = std::env::temp_dir().join(format!(
+            "jr-controlled-link-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir(&path).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+        Self(path)
+    }
+}
+impl Drop for Temp {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+#[test]
+fn controlled_link_input_receipt_rejects_capsule_byte_path_and_selection_mutation() {
+    use crate::compiler::{
+        expansion_budget::ExpansionBudget,
+        source::{self, SourceOptions, SourceSnapshot},
+    };
+    let mut options = SourceOptions {
+        source_snapshot: Some(
+            SourceSnapshot::new(
+                "/frozen".into(),
+                [("main.rs".into(), b"fn main() {}".to_vec())],
+            )
+            .unwrap(),
+        ),
+        prelude: false,
+        ..SourceOptions::default()
+    };
+    options.native_link.toolchain = Some(ControlledToolchain::capture(&[]).unwrap());
+    let unit = source::prepare_root_unit(
+        Path::new("/frozen/main.rs"),
+        &options,
+        &ExpansionBudget::default(),
+    )
+    .unwrap();
+    assert!(unit.inputs.matches_current_source(&options));
+    let mut changed = options.clone();
+    changed.native_link.toolchain = None;
+    assert!(!unit.inputs.matches_current_source(&changed));
+    let mut changed = options.clone();
+    changed
+        .native_link
+        .toolchain
+        .as_mut()
+        .unwrap()
+        .files
+        .get_mut(Path::new("/usr/bin/ld"))
+        .unwrap()[0] ^= 1;
+    assert!(!unit.inputs.matches_current_source(&changed));
+    let mut changed = options.clone();
+    let capsule = changed.native_link.toolchain.as_mut().unwrap();
+    let bytes = capsule.files.remove(Path::new("/usr/bin/ld")).unwrap();
+    capsule.files.insert("/usr/bin/other-ld".into(), bytes);
+    assert!(!unit.inputs.matches_current_source(&changed));
+    let mut changed = options.clone();
+    changed.native_link.toolchain.as_mut().unwrap().library_dir =
+        "/not-the-captured-selection".into();
+    assert!(!unit.inputs.matches_current_source(&changed));
+    let mut changed = options.clone();
+    changed
+        .native_link
+        .toolchain
+        .as_mut()
+        .unwrap()
+        .libraries
+        .push("c".into());
+    assert!(!unit.inputs.matches_current_source(&changed));
+    let mut changed = options.clone();
+    changed
+        .native_link
+        .toolchain
+        .as_mut()
+        .unwrap()
+        .files
+        .insert("/oversize".into(), vec![0; 16 * 1024 * 1024]);
+    assert!(!unit.inputs.matches_current_source(&changed));
+    assert!(unit.inputs.matches_current_source(&options));
+}
+#[test]
+fn controlled_link_capture_is_immutable_and_rejects_untracked_library_and_paths() {
+    let directory = Temp::new();
+    let path = directory.0.join("captured.o");
+    let bytes = fs::read("/usr/bin/ld").unwrap();
+    fs::write(&path, &bytes).unwrap();
+    let mut captured = ControlledToolchain::capture(&[]).unwrap();
+    captured.capture_file(&path).unwrap();
+    fs::write(&path, b"changed after capture").unwrap();
+    fs::remove_file(&path).unwrap();
+    assert_eq!(captured.files[&path], bytes);
+    assert!(
+        ControlledToolchain::capture(&["pthread".into()])
+            .unwrap_err()
+            .contains("unsupported")
+    );
+    assert!(
+        captured
+            .capture_file(Path::new("/usr/../etc/passwd"))
+            .unwrap_err()
+            .contains("noncanonical")
+    );
+    assert!(
+        captured
+            .capture_file(Path::new("relative.o"))
+            .unwrap_err()
+            .contains("noncanonical")
+    );
+    for size in 0..64 {
+        assert!(elf_dependencies(&vec![0; size]).is_err());
+    }
+    assert!(elf_dependencies(b"!<thin>\n").is_err());
+}
+#[test]
+fn controlled_link_boundary_denies_host_files_mutation_descriptors_network_and_processes() {
+    let directory = Temp::new();
+    let root = directory.0.join("root");
+    fs::create_dir(&root).unwrap();
+    fs::create_dir(root.join("out")).unwrap();
+    fs::write(root.join("input"), b"frozen").unwrap();
+    let secret = directory.0.join("secret");
+    fs::write(&secret, b"not an input").unwrap();
+    let leaked = fs::File::open(&secret).unwrap();
+    unsafe extern "C" {
+        fn fcntl(fd: i32, command: i32, ...) -> i32;
+    }
+    // Deliberately leak a non-CLOEXEC host descriptor. The boundary, not
+    // cooperation by the invoking process, must close it before tool exec.
+    assert_eq!(unsafe { fcntl(leaked.as_raw_fd(), 2, 0) }, 0);
+    let source = directory.0.join("probe.c");
+    fs::write(&source, format!(r#"
+static long call(long n,long a,long b,long c){{long r;__asm__ volatile("syscall":"=a"(r):"a"(n),"D"(a),"S"(b),"d"(c):"rcx","r11","memory");return r;}}
+static void die(long code){{call(60,code,0,0);__builtin_unreachable();}}
+void _start(void){{
+ char byte;
+ if(call(2,(long){secret:?},0,0)!=-2)die(1);
+ if(call(2,(long)"/input",1,0)!=-30)die(2);
+ if(call(0,{leaked},(long)&byte,1)!=-9)die(4);
+ long fd=call(2,(long)"/input",0,0);if(fd<0||call(0,fd,(long)&byte,1)!=1||byte!='f')die(3);
+ if(call(57,0,0,0)!=-1)die(5);
+ if(call(435,0,0,0)!=-1)die(6);
+ if(call(41,2,1,0)!=-1)die(7);
+ if(call(101,0,0,0)!=-1)die(8);
+ if(call(272,0x10000000,0,0)!=-1)die(9);
+ if(call(161,(long)"/",0,0)!=-1)die(10);
+ if(call(0x40000000+39,0,0,0)!=-1)die(11);
+ if(call(302,1,0,0)!=-1)die(13);
+ if(call(72,1,8,1)!=-1)die(14);
+ fd=call(2,(long)"/out/allowed",65,0600);if(fd<0||call(1,fd,(long)"ok",2)!=2)die(12);
+ call(1,1,(long)"confined\n",9);die(0);
+}}
+"#, secret = secret.to_str().unwrap(), leaked = leaked.as_raw_fd())).unwrap();
+    let compiled = Command::new("cc")
+        .args([
+            "-nostdlib",
+            "-static",
+            "-fno-stack-protector",
+            "-no-pie",
+            "-O2",
+        ])
+        .arg(&source)
+        .arg("-o")
+        .arg(root.join("probe"))
+        .output()
+        .unwrap();
+    assert!(
+        compiled.status.success(),
+        "{}",
+        String::from_utf8_lossy(&compiled.stderr)
+    );
+    let mut command = Command::new("/probe");
+    command.env_clear();
+    super::super::link_sandbox::confine(&mut command, &root).unwrap();
+    let output = command
+        .output()
+        .unwrap_or_else(|error| panic!("{}", super::super::link_sandbox::setup_error(&error)));
+    assert!(
+        output.status.success(),
+        "boundary probe {}: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.stdout, b"confined\n");
+    assert_eq!(fs::read(root.join("out/allowed")).unwrap(), b"ok");
+    assert_eq!(fs::read(root.join("input")).unwrap(), b"frozen");
+    assert_eq!(fs::read(secret).unwrap(), b"not an input");
+}
+#[test]
+fn controlled_link_fails_closed_without_capsule_and_on_invalid_native_inputs() {
+    use crate::compiler::{
+        c_abi::elf::{self, LinkOptions},
+        ir::PlanBudget,
+    };
+    let budget = PlanBudget::default();
+    // Object emission is independent of host toolchain availability.
+    let functions = vec![(
+        "main".into(),
+        crate::compiler::backend::Object {
+            code: vec![0xc3],
+            calls: vec![],
+            strings: vec![],
+            exports: vec![],
+            vtables: vec![],
+            receipt: None,
+        },
+    )];
+    assert!(
+        elf::link(&functions, &LinkOptions::default(), &budget)
+            .unwrap_err()
+            .contains("captured controlled toolchain")
+    );
+    let directory = Temp::new();
+    let toolchain = ControlledToolchain::capture(&[]).unwrap();
+    let error = toolchain
+        .execute(
+            &directory.0,
+            &[b"!<thin>\n/tmp/host.o".to_vec()],
+            b"invalid own object",
+            &[],
+        )
+        .unwrap_err();
+    assert!(error.contains("regular ar archive snapshot"), "{error}");
+}
+
+#[test]
+fn controlled_link_rejects_plugin_only_lto_instead_of_discarding_native_constructor() {
+    use crate::compiler::{
+        c_abi::elf::{self, LinkOptions},
+        ir::PlanBudget,
+    };
+    let directory = Temp::new();
+    let source = directory.0.join("constructor.c");
+    let object = directory.0.join("constructor.o");
+    fs::write(&source, "extern void side_effect(void); __attribute__((constructor)) static void initialize(void){side_effect();}\n").unwrap();
+    let compiled = Command::new("cc")
+        .args(["-flto", "-fno-fat-lto-objects", "-c"])
+        .arg(&source)
+        .arg("-o")
+        .arg(&object)
+        .output()
+        .unwrap();
+    assert!(
+        compiled.status.success(),
+        "{}",
+        String::from_utf8_lossy(&compiled.stderr)
+    );
+    let functions = vec![
+        (
+            "main".into(),
+            crate::compiler::backend::Object {
+                code: vec![0xc3],
+                calls: vec![],
+                strings: vec![],
+                exports: vec![],
+                vtables: vec![],
+                receipt: None,
+            },
+        ),
+        (
+            "side_effect".into(),
+            crate::compiler::backend::Object {
+                code: vec![0xc3],
+                calls: vec![],
+                strings: vec![],
+                exports: vec![],
+                vtables: vec![],
+                receipt: None,
+            },
+        ),
+    ];
+    let options = LinkOptions {
+        objects: vec![fs::read(object).unwrap()],
+        toolchain: Some(ControlledToolchain::capture(&[]).unwrap()),
+        ..LinkOptions::default()
+    };
+    let error = elf::link(&functions, &options, &PlanBudget::default()).unwrap_err();
+    assert!(
+        error.contains("plugin") || error.contains("native input must"),
+        "{error}"
+    );
+}

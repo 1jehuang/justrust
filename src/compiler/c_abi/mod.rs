@@ -1,8 +1,10 @@
 //! Linux x86-64 System V C interoperability. Private carriers are never C layout.
 mod bridge;
 pub mod classify;
+mod controlled_link;
 pub mod elf;
 pub mod layout;
+mod link_sandbox;
 pub use bridge::{export, import};
 
 pub(crate) fn attach_export(

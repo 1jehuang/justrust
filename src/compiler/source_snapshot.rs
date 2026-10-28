@@ -660,7 +660,7 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_rejects_missing_inputs_bad_unused_items_and_external_linking() {
+    fn snapshot_rejects_missing_inputs_and_bad_unused_items_but_admits_controlled_linking() {
         use crate::compiler::{self, source::SourceOptions};
         for workers in [1, 8] {
             for check_only in [true, false] {
@@ -692,20 +692,20 @@ mod tests {
                 },
                 ..Default::default()
             };
-            let failure = match compiler::compile_file_observed_with_options(
+            let linked = compiler::compile_file_observed_with_options(
                 "/frozen/main.rs".into(),
                 workers,
                 false,
                 options,
-            ) {
-                Ok(_) => panic!("uncontrolled linker was admitted"),
-                Err(failure) => failure,
-            };
+            )
+            .unwrap();
             assert!(
-                failure.to_string().contains("uncontrolled native linker"),
-                "{failure}"
+                linked
+                    .executable
+                    .as_ref()
+                    .is_some_and(|bytes| bytes.starts_with(b"\x7fELF"))
             );
-            assert!(failure.requires_uncontrolled_linker());
+            assert!(linked.report.capture_complete);
         }
     }
 

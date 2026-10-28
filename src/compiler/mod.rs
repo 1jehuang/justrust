@@ -499,8 +499,6 @@ impl SourceAccounting {
     }
 }
 const SOURCE_ACCOUNTING_OUTPUT: usize = 3;
-const UNCONTROLLED_NATIVE_LINKER: &str =
-    "unsupported: immutable source compilation cannot invoke the uncontrolled native linker";
 
 #[derive(Debug)]
 struct ParseFileFailure {
@@ -3025,9 +3023,6 @@ impl Provider for CompilerProvider {
                         || !native.objects.is_empty()
                         || !native.libraries.is_empty()
                     {
-                        if this.0.source_options.source_snapshot.is_some() && !native.emit_object {
-                            return Err(Error::new(UNCONTROLLED_NATIVE_LINKER));
-                        }
                         c_abi::elf::link(&objects, native, &this.0.budget)
                     } else {
                         backend::link(&objects)
@@ -3194,28 +3189,6 @@ impl std::fmt::Display for Failure {
     }
 }
 impl std::error::Error for Failure {}
-
-impl Failure {
-    /// A compatibility decision needs the completed graph's failure origin,
-    /// never an input-controlled diagnostic substring. This is not cache or
-    /// artifact-reuse authorization.
-    pub fn requires_uncontrolled_linker(&self) -> bool {
-        let Some(report) = &self.report else {
-            return false;
-        };
-        let [(node, error)] = report.node_errors.as_slice() else {
-            return false;
-        };
-        report.capture_complete
-            && error.0 == UNCONTROLLED_NATIVE_LINKER
-            && self.error.0 == UNCONTROLLED_NATIVE_LINKER
-            && report
-                .node_ids
-                .iter()
-                .zip(&report.node_evaluations)
-                .any(|(id, (key, _))| id == node && *key == keys::BuildRoot.key())
-    }
-}
 
 pub fn compile(source: String, workers: usize, check_only: bool) -> Result<Compilation, Error> {
     compile_observed(source, workers, check_only).map_err(|failure| failure.error)
@@ -3388,6 +3361,25 @@ fn compile_input_configured(
     budget: ir::PlanBudget,
     mut source_options: source::SourceOptions,
 ) -> Result<Compilation, Failure> {
+    // Native ABI requirements can emerge from a module/include/macro expansion
+    // inside the graph. Capture the optional linker closure before constructing
+    // any BUILD graph rather than sniffing source syntax or doing a second,
+    // untracked frontend/link pass. CHECK and relocatable object emission never
+    // execute a native linker and need no capsule. Capture errors remain errors.
+    if !check_only
+        && !source_options.native_link.emit_object
+        && source_options.native_link.toolchain.is_none()
+    {
+        source_options.native_link.toolchain = Some(
+            c_abi::elf::ControlledToolchain::capture(&source_options.native_link.libraries)
+                .map_err(|message| Failure {
+                    error: Error::new(message),
+                    report: None,
+                    analyses: Vec::new(),
+                    resource_usage: Box::new(budget.usage_snapshot()),
+                })?,
+        );
+    }
     // Always capture the actual running image, never trust caller-supplied stamps.
     // Synthetic Program fixtures make no external compiler-input claim.
     source_options.compiler_image = if matches!(&input, Input::Program(_)) {
