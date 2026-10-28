@@ -29,6 +29,95 @@ impl type_check::Checker<'_> {
         self.indexed_place_borrow(kind, value, true)
     }
 
+    /// `&v[0].f` with an overloaded `Index` (or `&call().f` through a returned
+    /// reference): the reference the call returns is held in a temporary and
+    /// the borrow names `(*tmp).f`, autodereferencing reference layers, so it
+    /// aliases the original storage and keeps its loan provenance.
+    pub(super) fn borrow_call_rooted_field(
+        &mut self,
+        kind: ir::BorrowKind,
+        value: &Expr,
+    ) -> Result<Option<ir::ExprId>, String> {
+        let mut fields = Vec::new();
+        let mut root = value;
+        while let Expr::Field { base, field } = root {
+            if fields.len() >= ir::MAX_PATTERN_PROJECTION_DEPTH {
+                return Err("place projection nesting exceeds limit128".into());
+            }
+            fields.push(field);
+            root = base;
+        }
+        if fields.is_empty()
+            || !(matches!(root, Expr::Index { .. }) || type_check::genuine_call(root))
+        {
+            return Ok(None);
+        }
+        if matches!(root, Expr::Index { .. })
+            && type_check::static_source_place(root)
+                .is_ok_and(|place| self.checked_place(&place).is_ok())
+        {
+            return Ok(None);
+        }
+        let evaluated = self.expr(root)?;
+        if self.exprs[evaluated.0].completion == ir::Completion::Never {
+            return Ok(Some(evaluated));
+        }
+        let carrier = match self.exprs[evaluated.0].kind {
+            ir::ExprKind::Deref { value }
+                if matches!(self.exprs[value.0].kind, ir::ExprKind::Call { .. }) =>
+            {
+                value
+            }
+            _ if type_check::genuine_call(root)
+                && matches!(self.exprs[evaluated.0].ty, ir::Ty::Ref { .. }) =>
+            {
+                evaluated
+            }
+            _ => return Ok(None),
+        };
+        let carrier_ty = self.exprs[carrier.0].ty.clone();
+        let mut ty = carrier_ty.clone();
+        let mut projection = Vec::new();
+        for field in fields.into_iter().rev() {
+            for _ in 0..ir::MAX_PATTERN_PROJECTION_DEPTH {
+                let ir::Ty::Ref {
+                    kind: layer,
+                    referent,
+                } = &ty
+                else {
+                    break;
+                };
+                if kind == ir::BorrowKind::Mut && *layer == ir::BorrowKind::Shared {
+                    return Err("cannot borrow as mutable through a shared reference".into());
+                }
+                projection.push(ir::Projection::Deref);
+                ty = referent.as_ref().clone();
+            }
+            let (index, field_ty) = self.field_type(&ty, field)?;
+            projection.push(ir::Projection::Field(index));
+            ty = field_ty;
+        }
+        let local = self.temporary("$reborrow_call", carrier_ty, true)?;
+        self.charge_node(std::mem::size_of::<ir::LocalId>() + projection.len() * 16)?;
+        self.borrow_temporaries.push((local, false));
+        let borrowed = self.borrow_expression(kind, ir::Place { local, projection })?;
+        let ty = self.exprs[borrowed.0].ty.clone();
+        self.charge_node(std::mem::size_of::<ir::TypedExpr>() + 64)?;
+        let id = ir::ExprId(self.exprs.len());
+        self.exprs.push(ir::TypedExpr {
+            ty,
+            completion: ir::Completion::Returns,
+            kind: ir::ExprKind::Block(ir::TypedBlock {
+                statements: vec![ir::TypedStmt::Assign {
+                    local,
+                    value: carrier,
+                }],
+                tail: Some(borrowed),
+            }),
+        });
+        Ok(Some(id))
+    }
+
     /// `&*call()` reborrows the returned reference. Storing the referent would
     /// copy or move it and lose both aliasing and its original loan provenance.
     fn borrow_call_referent(

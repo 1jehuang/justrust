@@ -2472,6 +2472,15 @@ impl CarrierContractView {
     pub fn arguments(&self) -> &[Ty] {
         &self.arguments
     }
+    /// The exact direct closure-provider call this closure-result view was
+    /// replayed for, if any. Its arguments are the provider's own identity
+    /// parameters, not the instantiated call target's.
+    pub(in crate::compiler) fn closure_result_call(&self) -> Option<&CallTarget> {
+        match (&self.closure_result, &self.result_subject) {
+            (Some(_), parameter_equality::EqualityResultSubject::Direct(call)) => Some(call),
+            _ => None,
+        }
+    }
     pub fn parameter_actual(&self, parameter: ParamId) -> Result<Option<(usize, &Ty)>> {
         for (index, candidate) in self.original_env.ordered_params().enumerate() {
             charged(&self.budget, self.budget.charge_work(1))?;
@@ -5706,7 +5715,13 @@ impl ValidatedTraitWorld {
                 self.expand_carrier(&result.location, &raw.env, &arguments, &nominals, facts)?
             {
                 let sources = self.expand_result_sources(
-                    result, &output, &inputs, &raw.env, &arguments, &nominals, facts,
+                    result,
+                    &output,
+                    &retained.contract.inputs,
+                    &raw.env,
+                    &arguments,
+                    &nominals,
+                    facts,
                 )?;
                 push(
                     &self.budget,
@@ -5910,14 +5925,16 @@ impl ValidatedTraitWorld {
     /// with no tracked source (values of `T` obtained through trait calls such
     /// as `Iterator::next`) may still contain any lifetime the caller's actual
     /// for `T` shares with an input, so its substituted reference carriers
-    /// conservatively depend on every substituted input carrier: more loans,
-    /// never fewer.
+    /// conservatively depend on every substituted input carrier reached
+    /// through a type-family position: more loans, never fewer. A declared
+    /// fixed reference layer (`&mut self`) carries a lifetime chosen
+    /// independently of `T`, so a `T` value cannot borrow from it.
     #[allow(clippy::too_many_arguments)]
     fn expand_result_sources(
         &self,
         result: &ir::CarrierReturn,
         output: &ExpandedCarrier,
-        inputs: &[ir::InputCarrier],
+        declared_inputs: &[ir::InputCarrier],
         env: &GenericEnv,
         args: &[Ty],
         nominals: &[ir::NominalCarrierMapping],
@@ -5930,9 +5947,30 @@ impl ValidatedTraitWorld {
             )
             && matches!(output.location.channel, ir::CarrierChannel::Fixed(_))
         {
-            charged(&self.budget, self.budget.charge_work(inputs.len() + 1))?;
-            retain::<ir::InputCarrier>(&self.budget, inputs.len())?;
-            return Ok(Arc::from(inputs));
+            let mut sources = Vec::new();
+            for input in declared_inputs {
+                charged(&self.budget, self.budget.charge_work(1))?;
+                if matches!(input.location.channel, ir::CarrierChannel::Fixed(_)) {
+                    continue;
+                }
+                for expanded in self.expand_carrier(&input.location, env, args, nominals, facts)? {
+                    if sources.len() >= ir::MAX_LOAN_SITES {
+                        return Err(FactsError::resource(
+                            &self.budget,
+                            "carrier input origin limit exceeded",
+                        ));
+                    }
+                    push(
+                        &self.budget,
+                        &mut sources,
+                        ir::InputCarrier {
+                            param: input.param,
+                            location: expanded.location,
+                        },
+                    )?;
+                }
+            }
+            return Ok(Arc::from(sources));
         }
         self.expand_carrier_sources(
             &result.location.channel,

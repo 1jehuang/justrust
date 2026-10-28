@@ -823,7 +823,7 @@ impl ValidatedTraitWorld {
                 let sources = self.expand_result_sources(
                     result,
                     &output,
-                    &view.contract.inputs,
+                    &retained.contract.inputs,
                     &canonical.env,
                     &view.arguments,
                     &view.nominals,

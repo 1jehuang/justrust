@@ -260,15 +260,27 @@ impl CarrierEffectTable {
         let super::ir::Callee::Direct(target) = target else {
             return Ok(None);
         };
-        if target.declaration != view.declaration()
-            || !facts
-                .world()
-                .types_equal(&target.type_args, view.arguments())?
+        // A closure-result view keys on its validated exact source call
+        // (`validate_for` above replayed it), not on provider-domain arguments.
+        let closure_call = view
+            .closure_result_call()
+            .is_some_and(|call| call == target);
+        if !closure_call
+            && (target.declaration != view.declaration()
+                || !facts
+                    .world()
+                    .types_equal(&target.type_args, view.arguments())?)
         {
             return Err(super::traits::FactsError::invalid(
                 budget,
                 "effect lookup selected a different canonical declaration",
             ));
+        }
+        if closure_call {
+            // A closure-result view is a separately replayed source-call
+            // contract over the closure's own binder environment; callers use
+            // its declared writes rather than a universal body summary.
+            return Ok(None);
         }
         for template in self.templates.iter() {
             budget

@@ -203,6 +203,13 @@ impl Checker<'_> {
             let checked_index_reference =
                 if matches!(argument, Expr::Index { .. } | Expr::DynamicIndex { .. }) {
                     self.format_indexed_place_borrow(argument)?
+                } else if matches!(argument, Expr::Field { .. })
+                    && !static_source_place(argument)
+                        .is_ok_and(|place| self.checked_place(&place).is_ok())
+                {
+                    // `v[0].name` through an overloaded Index: borrow the
+                    // field behind the returned reference instead of moving it.
+                    self.borrow_call_rooted_field(ir::BorrowKind::Shared, argument)?
                 } else {
                     None
                 };

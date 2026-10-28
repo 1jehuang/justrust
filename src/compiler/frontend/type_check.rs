@@ -5477,6 +5477,9 @@ impl<'a> Checker<'a> {
         if let Some(id) = self.borrow_indexed_place(kind, value)? {
             return Ok(id);
         }
+        if let Some(id) = self.borrow_call_rooted_field(kind, value)? {
+            return Ok(id);
+        }
         if place_expression(value) {
             return Err(
                 "unsupported: borrowing runtime indexed or dereferenced places is unsupported"
@@ -11108,7 +11111,16 @@ impl<'a> Checker<'a> {
                                     ..
                                 }
                             );
-                    if !matches!(root, Expr::Var(_)) && !genuine_call(root) && !slice_carrier {
+                    // An overloaded `Index` operand (`*v[0]` with `v: Vec<&T>`)
+                    // is already a typed `*Index::index` read.
+                    let overloaded_index = matches!(root, Expr::Index { .. })
+                        && !static_source_place(root)
+                            .is_ok_and(|place| self.checked_place(&place).is_ok());
+                    if !matches!(root, Expr::Var(_))
+                        && !genuine_call(root)
+                        && !slice_carrier
+                        && !overloaded_index
+                    {
                         // Static component carriers use the same checked projection
                         // authority as field receivers. SliceIndex already yields
                         // a checked value carrying the selected element's origins,
