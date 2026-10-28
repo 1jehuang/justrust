@@ -25,7 +25,7 @@
 09_vec_stack	pass
 10_string_processing	pass
 11_closures_iterators	pass
-12_linked_list	fail	fmt-display,fmt-debug,derive,for,vec,closure,box,option-result,match-ergonomics,ref-ops
+12_linked_list	pass
 13_trait_objects	pass
 14_generic_container	pass
 15_error_handling	pass

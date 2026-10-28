@@ -259,6 +259,35 @@ fn main() {
 }
 
 #[test]
+fn shared_reference_switch_selects_variant_across_reassigned_carrier() {
+    heap_case(
+        "shared_switch_reassigned",
+        r#"
+fn first_then_other(a: &Option<i32>, b: &Option<i32>) -> i32 {
+    let mut c = a;
+    let mut t = 0;
+    if let Some(x) = c { t += *x; c = b; }
+    if let Some(y) = c { t += *y; }
+    t
+}
+fn walk<'a>(a: &'a Option<i32>, b: &'a Option<i32>, k: bool) -> i32 {
+    let mut c = if k { a } else { b };
+    let mut t = 0;
+    while let Some(x) = c { t += *x; c = b; if t > 10 { break; } }
+    t
+}
+fn main() {
+    assert!(first_then_other(&Some(2), &Some(3)) == 5);
+    assert!(first_then_other(&None, &Some(3)) == 0);
+    assert!(walk(&Some(1), &Some(2), true) == 11);
+    assert!(walk(&None, &Some(5), false) == 15);
+    println!("ok");
+}
+"#,
+    );
+}
+
+#[test]
 fn generic_functions_drop_concrete_owning_roots() {
     heap_case("generic_owner", &fixture("generic_owner.rs"));
 }

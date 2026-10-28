@@ -2350,10 +2350,13 @@ impl Paths {
         let mut projection = path.iter();
         while let Some(step) = projection.next() {
             let index = match step {
+                // An unexpanded owning Box (recursive layouts stop at a
+                // bounded depth) is one footprint, like an unexpanded variant.
                 Projection::Deref => {
-                    node = self.nodes[node]
-                        .owned_deref
-                        .expect("canonical owning Box dereference");
+                    let Some(target) = self.nodes[node].owned_deref else {
+                        return node;
+                    };
+                    node = target;
                     continue;
                 }
                 // A runtime element has a whole-array initialization
@@ -2408,6 +2411,39 @@ fn switch_node(
         }
         _ => Ok(None),
     }
+}
+
+/// A dereferenced scrutinee whose first dereference reads through a shared
+/// reference held in the local's own storage (field projections only before
+/// it). Its referent cannot change while that carrier is unchanged, so a
+/// place-keyed proof is sound until the carrier local is written. Shared
+/// carriers of interior-mutable payloads never reach an enum switch here
+/// because the subset has no `UnsafeCell` projection.
+fn shared_switch_place(f: &cfg::Function, place: &Place, budget: &Budget) -> Option<()> {
+    let first = place
+        .projection
+        .iter()
+        .position(|p| *p == Projection::Deref)?;
+    if !place.projection[..first]
+        .iter()
+        .all(|p| matches!(p, Projection::Field(_)))
+    {
+        return None;
+    }
+    let base = super::ir::projected_ty_optional(
+        &f.locals[place.local.0].ty,
+        &place.projection[..first],
+        budget.plan_budget(),
+    )
+    .ok()?;
+    matches!(
+        base,
+        Ty::Ref {
+            kind: super::ir::BorrowKind::Shared,
+            ..
+        }
+    )
+    .then_some(())
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -2503,6 +2539,10 @@ struct State {
     /// Variant index or usize::MAX (unknown), indexed by actual enum path.
     /// Owner identity is fixed by the structurally verified path type.
     selected: Selected,
+    /// Variant proofs for scrutinees read through a shared reference, keyed
+    /// by the exact switched place. The referent is frozen while the carrier
+    /// is usable, so only writes into the carrier local's storage kill them.
+    place_selected: Vec<(Place, usize)>,
 }
 /// Known variant selections, sparse and sorted by path node. Absence means
 /// unknown (`usize::MAX`). Dense per-path storage made every block state copy
@@ -2562,10 +2602,14 @@ impl State {
             may_init: Bits::new(paths),
             ever_written: Bits::new(paths),
             selected: Selected::default(),
+            place_selected: Vec::new(),
         }
     }
     fn words(&self) -> usize {
-        self.must_live.0.len() * 2 + self.must_init.0.len() * 3 + self.selected.len()
+        self.must_live.0.len() * 2
+            + self.must_init.0.len() * 3
+            + self.selected.len()
+            + self.place_selected.len()
     }
     fn merge(&mut self, other: &Self, budget: &mut Budget) -> Result<bool, Exhausted> {
         let mut changed = self.must_live.merge(&other.must_live, true, budget)?;
@@ -2577,6 +2621,11 @@ impl State {
             .merge(&other.ever_written, false, budget)?;
         budget.spend(self.selected.len())?;
         changed |= self.selected.meet(&other.selected);
+        budget.spend(self.place_selected.len() * (other.place_selected.len() + 1))?;
+        let before = self.place_selected.len();
+        self.place_selected
+            .retain(|entry| other.place_selected.contains(entry));
+        changed |= self.place_selected.len() != before;
         Ok(changed)
     }
 }
@@ -2595,6 +2644,17 @@ struct Transfer<'a> {
     phase: Phase,
     const_context: bool,
     normal_drop_cache: &'a mut [Option<bool>],
+    /// Downcasts (as offsets from the projection end) proven by a place
+    /// proof for the place whose targets are being checked.
+    proven: Vec<usize>,
+    /// For a place read through a reference: its projection after the last
+    /// reference dereference. Canonical downcasts before that suffix belong
+    /// to the loan's provenance and were authorized when the loan was
+    /// issued; a live loan keeps that variant (shared freezes, unique
+    /// excludes others). When the canonical place does not end with the
+    /// suffix (a summarized footprint), only a downcast-free suffix keeps
+    /// the exemption, otherwise every downcast is checked (fail closed).
+    loan_suffix: Option<Vec<Projection>>,
 }
 struct Report {
     stats: AnalysisStats,
@@ -2636,7 +2696,48 @@ impl Transfer<'_> {
         }
         Ok(true)
     }
-    fn targets(&mut self, place: &Place) -> Result<Vec<Target>, Exhausted> {
+    fn targets(&mut self, state: &State, place: &Place) -> Result<Vec<Target>, Exhausted> {
+        self.prove(state, place)?;
+        self.resolve_targets(place)
+    }
+    /// Record which downcasts of `place` a place-keyed shared proof covers,
+    /// as offsets from the projection end (stable across canonicalization).
+    fn prove(&mut self, state: &State, place: &Place) -> Result<(), Exhausted> {
+        // Only a reference dereference replaces the prefix with loan
+        // provenance. Owning Box dereferences keep the owned prefix (and its
+        // downcasts) in the canonical place, so they must stay checked.
+        self.loan_suffix = None;
+        for (index, projection) in place.projection.iter().enumerate().rev() {
+            if *projection != Projection::Deref {
+                continue;
+            }
+            self.budget.spend(index + 1)?;
+            let base = super::ir::projected_ty_optional(
+                &self.f.locals[place.local.0].ty,
+                &place.projection[..index],
+                self.budget.plan_budget(),
+            )
+            .map_err(|_| Exhausted)?;
+            if matches!(base, Ty::Ref { .. }) {
+                self.loan_suffix = Some(place.projection[index + 1..].to_vec());
+                break;
+            }
+        }
+        self.budget.spend(state.place_selected.len() + 1)?;
+        self.proven.clear();
+        for (proof, variant) in &state.place_selected {
+            let k = proof.projection.len();
+            if proof.local == place.local
+                && place.projection.len() > k
+                && place.projection[..k] == proof.projection[..]
+                && matches!(place.projection[k], Projection::Downcast(v) if v.index == *variant)
+            {
+                self.proven.push(place.projection.len() - k);
+            }
+        }
+        Ok(())
+    }
+    fn resolve_targets(&mut self, place: &Place) -> Result<Vec<Target>, Exhausted> {
         if self.raw_deref(place)?.is_some() {
             return Ok(vec![]);
         }
@@ -2714,7 +2815,7 @@ impl Transfer<'_> {
                 }
                 continue;
             }
-            for target in self.targets(&carrier)? {
+            for target in self.targets(state, &carrier)? {
                 self.check_access(&target, Access::Read)?;
                 self.read_canonical(state, &target.place)?;
             }
@@ -2776,7 +2877,7 @@ impl Transfer<'_> {
             return self.read_raw(state, place);
         }
         self.carrier_read(state, place)?;
-        for target in self.targets(place)? {
+        for target in self.targets(state, place)? {
             self.check_access(&target, access)?;
             self.read_canonical(state, &target.place)?;
         }
@@ -2805,7 +2906,7 @@ impl Transfer<'_> {
                 report.stats.writes += 1;
             }
         }
-        for target in self.targets(place)? {
+        for target in self.targets(state, place)? {
             self.check_access(&target, Access::Write)?;
             if deref && !owned {
                 // Every alternative must already be initialized. A may-alias
@@ -2821,6 +2922,8 @@ impl Transfer<'_> {
         Ok(())
     }
     fn authorize(&mut self, state: &State, place: &Place) -> Result<bool, Exhausted> {
+        self.proven.clear();
+        self.loan_suffix = None;
         self.authorize_canonical(state, &CanonicalPlace::owned(place))
     }
     fn authorize_canonical(
@@ -2832,14 +2935,27 @@ impl Transfer<'_> {
         // moves and writes. Structural typing was checked for every CFG block.
         self.budget
             .spend(place.projection.len().checked_mul(3).ok_or(Exhausted)? + 1)?;
+        // Downcasts before `provenance` are exempt; `aligned` says whether
+        // proof offsets (from the end of the source place) are meaningful.
+        let (provenance, aligned) = match &self.loan_suffix {
+            None => (0, true),
+            Some(suffix) if place.projection.ends_with(suffix) => {
+                (place.projection.len() - suffix.len(), true)
+            }
+            Some(suffix) if !suffix.iter().any(|p| matches!(p, Projection::Downcast(_))) => {
+                (place.projection.len(), false)
+            }
+            Some(_) => (0, false),
+        };
         let mut node = self.paths.canonical_root(&place.root);
         let mut projection = place.projection.iter();
         while let Some(step) = projection.next() {
             let index = match step {
                 Projection::Deref => {
-                    node = self.paths.nodes[node]
-                        .owned_deref
-                        .expect("canonical owning Box dereference");
+                    let Some(target) = self.paths.nodes[node].owned_deref else {
+                        return Ok(true);
+                    };
+                    node = target;
                     continue;
                 }
                 // A runtime element has a whole-array initialization
@@ -2850,8 +2966,12 @@ impl Transfer<'_> {
                     if let Some(report) = &mut self.report {
                         report.stats.variant_proof_checks += 1;
                     }
+                    let offset = projection.len() + 1;
+                    let position = place.projection.len() - offset;
                     if self.paths.nodes[node].variant_offsets.len() != 1
                         && state.selected[node] != variant.index
+                        && !(aligned && self.proven.contains(&offset))
+                        && position >= provenance
                     {
                         self.diagnostic(
                             ErrorKind::VariantNotDefinitelySelected,
@@ -2909,6 +3029,11 @@ impl Transfer<'_> {
         let end = self.paths.nodes[node].end;
         self.budget.spend(state.selected.len() + 1)?;
         let killed = state.selected.clear_range(node, end);
+        let paths = self.paths;
+        state.place_selected.retain(|(proof, _)| {
+            let root = paths.roots[proof.local.0];
+            !(root <= node && node < paths.nodes[root].end)
+        });
         if let Some(report) = &mut self.report {
             report.stats.variant_proofs_killed += killed;
         }
@@ -3060,7 +3185,7 @@ impl Transfer<'_> {
                 if let Some(report) = &mut self.report {
                     report.stats.moves += 1;
                 }
-                for target in self.targets(place)? {
+                for target in self.targets(state, place)? {
                     self.initialize(state, self.paths.resolve_canonical(&target.place), false)?;
                 }
             }
@@ -3130,7 +3255,7 @@ impl Transfer<'_> {
         if deref {
             self.mut_authority(array)?;
         }
-        for target in self.targets(array)? {
+        for target in self.targets(state, array)? {
             self.check_access(&target, Access::Write)?;
             self.read_canonical(state, &target.place)?;
             let node = self.paths.resolve_canonical(&target.place);
@@ -3180,9 +3305,10 @@ impl Transfer<'_> {
                 {
                     self.problem(
                         Problem::Invalid("borrow issuance has no canonical provenance".into()),
-                        source,
+                        source.clone(),
                     );
                 }
+                self.prove(state, &source)?;
                 for target in targets {
                     self.check_access(
                         &target,
@@ -3646,7 +3772,7 @@ impl Transfer<'_> {
                         let mut deref = carrier.clone();
                         deref.projection.push(Projection::Deref);
                         self.carrier_read(state, &deref)?;
-                        for target in self.targets(&deref)? {
+                        for target in self.targets(state, &deref)? {
                             self.check_access(
                                 &target,
                                 if *kind == super::ir::BorrowKind::Mut {
@@ -3985,6 +4111,8 @@ fn analyze_with_context(
                     loans: loans.as_ref(),
                     phase: Phase::Read,
                     normal_drop_cache: &mut normal_drop_cache,
+                    proven: Vec::new(),
+                    loan_suffix: None,
                     const_context,
                 }
                 .block(&mut output)
@@ -4008,7 +4136,13 @@ fn analyze_with_context(
                             .map(|node| {
                                 let old = output.selected[node];
                                 output.selected.set(node, variant.index);
-                                (node, old)
+                                Ok((node, old))
+                            })
+                            .or_else(|| {
+                                shared_switch_place(f, place, &budget).map(|()| {
+                                    output.place_selected.push((place.clone(), variant.index));
+                                    Err(output.place_selected.len() - 1)
+                                })
                             })
                     } else {
                         None
@@ -4024,8 +4158,12 @@ fn analyze_with_context(
                     report.stats.blocks_reachable += 1;
                     true
                 };
-                if let Some((node, old)) = previous {
-                    output.selected.set(node, old);
+                match previous {
+                    Some(Ok((node, old))) => output.selected.set(node, old),
+                    Some(Err(index)) => {
+                        output.place_selected.remove(index);
+                    }
+                    None => {}
                 }
                 if changed {
                     report.stats.state_changes += 1;
@@ -4058,6 +4196,8 @@ fn analyze_with_context(
                     loans: loans.as_ref(),
                     phase: Phase::Read,
                     normal_drop_cache: &mut normal_drop_cache,
+                    proven: Vec::new(),
+                    loan_suffix: None,
                     const_context,
                 }
                 .block(&mut state)?;
@@ -7388,6 +7528,8 @@ mod tests {
                 loans: Some(&plan),
                 phase: Phase::Write,
                 normal_drop_cache: &mut [],
+                proven: Vec::new(),
+                loan_suffix: None,
                 const_context: false,
             }
             .write(&mut state, &destination)
@@ -8394,6 +8536,8 @@ mod tests {
                 loans: None,
                 phase: Phase::Read,
                 normal_drop_cache: &mut [],
+                proven: Vec::new(),
+                loan_suffix: None,
                 const_context: false,
             }
             .block(&mut state)
@@ -8754,6 +8898,8 @@ mod tests {
             loans: None,
             phase: Phase::Read,
             normal_drop_cache: &mut [],
+            proven: Vec::new(),
+            loan_suffix: None,
             const_context: false,
         }
         .index_write(&mut state, &place(1))
@@ -10128,6 +10274,8 @@ mod tests {
             loans: None,
             phase: Phase::Read,
             normal_drop_cache: &mut [],
+            proven: Vec::new(),
+            loan_suffix: None,
             const_context: false,
         };
         transfer.initialize(&mut state, sibling, true).unwrap();
