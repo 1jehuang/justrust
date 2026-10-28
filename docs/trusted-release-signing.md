@@ -118,6 +118,20 @@ They do not use real signing credentials and are **not evidence of a real signed
 release**, notarization, or OS trust acceptance. Validate native signing separately
 on an explicitly authorized disposable artifact before adopting a release flow.
 
+### Installed CLI checks on October 28, 2026
+
+After reinstalling fix `17c344f2e`, the installed `justrust sign-release` command
+produced a non-mutating macOS signing plan for the trusted signed Jcode ARM64
+artifact from Actions run `40628778548` (SHA256
+`2a60e86c2d2a75888bcc40e3c9ede3663817778afab53dbbad2bc9338068e127`).
+Its verifier argument begins with `=anchor apple generic`, selecting inline
+requirement syntax rather than a requirement filename. No requested output was
+created. The same installed CLI with `--execute` on Linux refused with status 1,
+`execution requires the target operating system`, and still created no output.
+These checks validate the installed dispatch and wrong-host boundary, not native
+macOS signing by this helper. The separate Jcode signing/notarization workflow's
+acceptance is recorded in [platform rollout](hosted-platform-rollout.md).
+
 ## Primary references
 
 Syntax and policy references consulted 2026-10-26:
