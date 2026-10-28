@@ -89,6 +89,7 @@ impl ValidatedTraitWorld {
                             input_regions: Arc::from([]),
                             results: Arc::from([]),
                             outlives: Arc::from([]),
+                            static_regions: 0,
                         }),
                         params: Vec::new(),
                         result: Ty::Tuple(raw.into()),

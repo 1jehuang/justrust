@@ -230,6 +230,7 @@ impl ValidatedTraitWorld {
                 input_regions: signature.ref_contract.input_regions.clone(),
                 results: results.into(),
                 outlives: outlives.into(),
+                static_regions: signature.ref_contract.static_regions,
             };
             signature.ref_contract =
                 charged(&self.budget, ir::normalize_ref_contract(&raw, &self.budget))?;

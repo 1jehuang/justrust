@@ -259,6 +259,7 @@ fn schema(
         input_regions: inputs.into(),
         results: rows.into(),
         outlives: edges.into(),
+        static_regions: 0,
     };
     let normalized = charged(budget, ir::normalize_ref_contract(&raw, budget))?;
     let results = charged(

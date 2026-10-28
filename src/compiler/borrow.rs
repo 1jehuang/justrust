@@ -1791,6 +1791,30 @@ impl CarrierBuilder<'_, '_> {
                 },
             )?;
             let sources = self.origin_regions(&actual)?;
+            // A `'static` parameter admits only data that itself outlives
+            // every region: static program data, loan-free values, or the
+            // caller's own `'static` inputs. Local loans and non-static
+            // caller parameters are rejected.
+            if view.ref_contract().static_regions & (1u64 << input.region.0) != 0 && self.diagnosing
+            {
+                let own_static = self
+                    .body
+                    .as_ref()
+                    .map_or(0, |body| body.ref_contract().static_regions);
+                let escapes = sources.iter().any(|region| {
+                    !matches!(self.regions.keys[region.0], RegionKey::Fixed(id)
+                        if own_static & (1u64 << id.0) != 0)
+                });
+                if escapes {
+                    self.problem(
+                        block,
+                        None,
+                        Problem::Invalid(
+                            "borrowed value does not live long enough: argument requires that it is borrowed for `'static`".into(),
+                        ),
+                    )?;
+                }
+            }
             let source_keys: Vec<_> = sources
                 .iter()
                 .map(|region| self.regions.keys[region.0].clone())

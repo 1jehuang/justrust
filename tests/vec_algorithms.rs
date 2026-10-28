@@ -177,8 +177,18 @@ fn nested_shared_str_len_preserves_builtin_and_method_authority() {
         "fn main(){let text=\"éx\";let a=&text;let b=&a;println!(\"{} {} {}\",text.len(),a.len(),b.len());}",
         "trait Custom{fn len(&self)->usize;}impl Custom for &&str{fn len(&self)->usize{99}}fn main(){let text=\"abc\";let nested=&text;println!(\"{} {}\",text.len(),nested.len());}",
         "fn observe<'a>(value:&'a &'static str)->&'a &'static str{println!(\"receiver\");value}fn main(){let text=\"éx\";println!(\"len {}\",observe(&text).len());}",
+        "fn f(x:&'static str)->&'static str{x}fn main(){let r;{r=f(\"lit\");}println!(\"{}\",r);}",
+        "fn f<'a>(x:&'a str,y:&'static str)->&'a str{if x.len()>1{y}else{x}}fn main(){let s=String::from(\"hi\");println!(\"{}\",f(&s,\"z\"));}",
+        "fn f(x:&'static str)->usize{x.len()}fn h(t:&'static str)->usize{let u=t;f(u)}fn main(){const C:&str=\"abc\";println!(\"{} {}\",h(\"x\"),f(C));}",
     ] {
         iterator_oracle::stock_native(source);
+    }
+    for source in [
+        "fn f(x:&'static i32)->i32{*x}fn main(){let a=3;println!(\"{}\",f(&a));}",
+        "fn f(x:&'static str)->usize{x.len()}fn main(){let s=String::from(\"hi\");println!(\"{}\",f(&s));}",
+        "fn f(x:&'static str)->usize{x.len()}fn h(t:&str)->usize{f(t)}fn main(){println!(\"{}\",h(\"x\"));}",
+    ] {
+        iterator_oracle::stock_and_native_reject(source);
     }
     for source in [
         "fn main(){let text=\"abc\";let nested=&text;let _=nested.len(0);}",

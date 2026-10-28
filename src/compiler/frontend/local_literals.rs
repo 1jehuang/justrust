@@ -1283,6 +1283,27 @@ impl<'s> Solver<'_, '_, 's> {
                 if matches!(
                     self.domain(receiver),
                     Domain::Slice(_) | Domain::Fixed(ir::Ty::Str)
+                ) && self
+                    .checker
+                    .names()?
+                    .spelling(method.name)
+                    .map_err(native_adapter::name_diagnostic)?
+                    == "len"
+                {
+                    // The inherent `len` is selected before any trait method,
+                    // so malformed calls are errors, not trait lookups.
+                    if !method.actuals.is_empty() {
+                        return Err(
+                            self.user_error("E0107: method `len` takes 0 generic arguments")
+                        );
+                    }
+                    if !method.args.is_empty() {
+                        return Err(self.user_error("E0061: method `len` takes 0 arguments"));
+                    }
+                }
+                if matches!(
+                    self.domain(receiver),
+                    Domain::Slice(_) | Domain::Fixed(ir::Ty::Str)
                 ) && slice_len_method_candidate(
                     method.name,
                     method.actuals.len(),

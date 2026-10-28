@@ -7680,6 +7680,9 @@ pub struct RefContract {
     pub input_regions: Arc<[InputRegion]>,
     pub results: Arc<[ResultReference]>,
     pub outlives: Arc<[(RegionParamId, RegionParamId)]>,
+    /// Regions written `'static` on parameter references. Callers must supply
+    /// storage-free (static) data at every input in one of these regions.
+    pub static_regions: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -7752,6 +7755,9 @@ fn contract_rows(contract: &RefContract, budget: &PlanBudget) -> Result<[u64; 64
             return Err("outlives region is outside declaration".into());
         }
         rows[usize::from(longer.0)] |= 1u64 << shorter.0;
+    }
+    if count < 64 && contract.static_regions >> count != 0 {
+        return Err("static region is outside declaration".into());
     }
     close_region_rows(&mut rows, count);
     Ok(rows)
@@ -7908,11 +7914,19 @@ pub fn normalize_ref_contract(
             returns: row.returns.clone(),
         });
     }
+    let mut static_regions = 0u64;
+    for (index, region) in map.iter().enumerate() {
+        if raw.static_regions & (1u64 << index) != 0 {
+            let region = region.ok_or("static region has no reference occurrence")?;
+            static_regions |= 1u64 << region.0;
+        }
+    }
     Ok(Arc::new(RefContract {
         region_count: count as u16,
         input_regions: input_regions.into(),
         results: results.into(),
         outlives: outlives.into(),
+        static_regions,
     }))
 }
 
@@ -13477,6 +13491,7 @@ mod tests {
         let inner = ReferencePosition { depth: 1 };
         let input = |position| InputReference { param: 0, position };
         let raw = RefContract {
+            static_regions: 0,
             region_count: 2,
             input_regions: Arc::from([
                 InputRegion {
@@ -13594,6 +13609,7 @@ mod tests {
             position: ReferencePosition { depth },
         };
         let raw = RefContract {
+            static_regions: 0,
             region_count: 2,
             input_regions: Arc::from([
                 InputRegion {
@@ -13746,6 +13762,7 @@ mod tests {
         use super::*;
         let budget = PlanBudget::default();
         let mut raw = RefContract {
+            static_regions: 0,
             results: fixture_result_regions(
                 Some(RegionParamId(0)),
                 ReturnContract::SharedInputPaths(Arc::from([])),
@@ -13829,6 +13846,7 @@ mod tests {
             referent: Arc::new(ty),
         };
         let contract = RefContract {
+            static_regions: 0,
             results: fixture_result_regions(Some(RegionParamId(0)), ReturnContract::NoReference),
             input_regions: fixture_input_regions(Arc::from([
                 Some(RegionParamId(0)),
@@ -13868,6 +13886,7 @@ mod tests {
         };
         let scalar = Ty::Int(IntTy::I32);
         let mut contract = RefContract {
+            static_regions: 0,
             results: fixture_result_regions(Some(RegionParamId(0)), ReturnContract::NoReference),
             input_regions: fixture_input_regions(Arc::from([
                 Some(RegionParamId(0)),
@@ -15701,6 +15720,7 @@ mod tests {
             referent: Arc::new(ty),
         };
         let contract = RefContract {
+            static_regions: 0,
             results: fixture_result_regions(
                 Some(RegionParamId(0)),
                 ReturnContract::SharedInputPaths(Arc::from([])),
@@ -15857,6 +15877,7 @@ mod tests {
         ];
         let result = reference(Ty::Int(IntTy::I32));
         let mut contract = RefContract {
+            static_regions: 0,
             results: fixture_result_regions(
                 Some(RegionParamId(0)),
                 ReturnContract::SharedInputPaths(Arc::from([])),
@@ -16021,6 +16042,7 @@ mod tests {
             projection: Arc::from([Projection::Field(0)]),
         };
         let mut contract = RefContract {
+            static_regions: 0,
             results: fixture_result_regions(
                 Some(RegionParamId(0)),
                 ReturnContract::SharedInputPaths(Arc::from([path(1), path(2)])),
@@ -16126,6 +16148,7 @@ mod tests {
         };
         let shared_result = reference(BorrowKind::Shared, Ty::Int(IntTy::I32));
         let mut contract = RefContract {
+            static_regions: 0,
             results: fixture_result_regions(
                 Some(RegionParamId(0)),
                 ReturnContract::SharedInputPaths(Arc::from([])),
@@ -16184,6 +16207,7 @@ mod tests {
         ];
         let result = mutable(Ty::Int(IntTy::I32));
         let contract = RefContract {
+            static_regions: 0,
             results: fixture_result_regions(
                 Some(RegionParamId(1)),
                 ReturnContract::MutInputPaths(empty_input_paths(&[2, 3])),
@@ -16250,6 +16274,7 @@ mod tests {
         contract.validate(&mixed, &result).unwrap();
         RefContract::default().validate(&mixed, &Ty::Unit).unwrap();
         let divergent = RefContract {
+            static_regions: 0,
             results: fixture_result_regions(
                 Some(RegionParamId(0)),
                 ReturnContract::MutInputPaths(empty_input_paths(&[])),
@@ -16276,6 +16301,7 @@ mod tests {
         ];
         let result = shared(Ty::Int(IntTy::I32));
         let contract = RefContract {
+            static_regions: 0,
             results: fixture_result_regions(
                 Some(RegionParamId(2)),
                 ReturnContract::SharedInputPaths(empty_input_paths(&[2, 3])),

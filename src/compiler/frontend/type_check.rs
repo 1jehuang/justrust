@@ -2473,6 +2473,7 @@ pub(super) fn canonical_ref_contract(
             previous = Some(region);
         }
     }
+    let mut static_regions = 0u64;
     for (index, (_, source_ty)) in source_params.iter().enumerate() {
         let mut ty = source_ty;
         let mut previous = None;
@@ -2484,10 +2485,11 @@ pub(super) fn canonical_ref_contract(
             if depth >= 128 {
                 return Err("reference depth exceeds supported limit128".into());
             }
-            if matches!(region, Some(RegionName::Static)) {
-                return Err("unsupported: 'static lifetimes on parameter references".into());
-            }
+            let is_static = matches!(region, Some(RegionName::Static));
             let region = fresh(region.as_ref())?;
+            if is_static {
+                static_regions |= 1u64 << region.0;
+            }
             if let Some(outer) = previous {
                 edges.push((region, outer));
             }
@@ -2576,11 +2578,27 @@ pub(super) fn canonical_ref_contract(
             .and_then(|n| n.checked_add(512))
             .ok_or("region allocation overflow")?,
     )?;
+    // `'static` outlives every region of the signature.
+    for long in 0..count {
+        if static_regions & (1u64 << long) == 0 {
+            continue;
+        }
+        for short in 0..count {
+            budget.charge_work(1)?;
+            if short != long {
+                edges.push((
+                    ir::RegionParamId(long as u16),
+                    ir::RegionParamId(short as u16),
+                ));
+            }
+        }
+    }
     let raw = ir::RefContract {
         region_count: count as u16,
         input_regions: inputs.into(),
         results: results.into(),
         outlives: edges.into(),
+        static_regions,
     };
     let normalized = ir::normalize_ref_contract(&raw, budget)?;
     // These are raw declaration schemas, not executable signatures. Preserve

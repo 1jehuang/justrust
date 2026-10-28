@@ -7182,6 +7182,7 @@ mod tests {
             name: "mixed".into(),
             signature: Signature {
                 ref_contract: std::sync::Arc::new(RefContract {
+                    static_regions: 0,
                     region_count: 1,
                     input_regions: (0..2)
                         .map(|param| super::super::ir::InputRegion {

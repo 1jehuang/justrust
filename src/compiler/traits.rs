@@ -8030,6 +8030,7 @@ impl ValidatedTraitWorld {
             input_regions: inputs.into(),
             results: results.into(),
             outlives: edges.into(),
+            static_regions: 0,
         };
         charged(
             &self.budget,
@@ -8404,6 +8405,7 @@ impl ValidatedTraitWorld {
             input_regions: inputs.into(),
             results: results.into(),
             outlives: edges.into(),
+            static_regions: 0,
         };
         let realized = charged(&self.budget, ir::normalize_ref_contract(&raw, &self.budget))?;
         let mut renumber = Vec::new();
@@ -11976,6 +11978,7 @@ mod tests {
             returns: ir::ReturnContract::NoReference,
         });
         let raw = RefContract {
+            static_regions: 0,
             region_count: 2,
             input_regions: Arc::from(inputs),
             results: Arc::from(results),
@@ -12943,6 +12946,7 @@ mod tests {
         let world = c.build().unwrap();
         let contract = |regions: [u16; 4], edges: &[(u16, u16)]| {
             let raw = RefContract {
+                static_regions: 0,
                 region_count: regions.iter().copied().max().unwrap() + 1,
                 input_regions: regions
                     .into_iter()
@@ -13175,6 +13179,7 @@ mod tests {
         );
         let make = |mapping: [u16; 4], result: Ty| {
             let raw = RefContract {
+                static_regions: 0,
                 region_count: mapping.iter().copied().max().unwrap() + 1,
                 input_regions: mapping
                     .into_iter()

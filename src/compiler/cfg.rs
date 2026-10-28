@@ -6728,6 +6728,7 @@ mod tests {
         );
         source.ref_contract = ir::normalize_ref_contract(
             &ir::RefContract {
+                static_regions: 0,
                 region_count: 2,
                 input_regions: (0..2)
                     .map(|depth| ir::InputRegion {

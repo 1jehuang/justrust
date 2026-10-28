@@ -318,10 +318,10 @@ fn rejects_outside_admitted_domain() {
     // Mutation through or of a slice element is never admitted.
     let message = rejected("fn f(b: &[u8]) { b[0] = 1; }", 0);
     assert!(!message.is_empty());
-    // Usize index is required, without i32 backward inference.
+    // Usize index is required, without i32 backward inference (stock E0277).
     let message = rejected("fn f(b: &[u8], i: i32) -> u8 { b[i] }", 0);
     assert!(
-        message.contains("E0308") && message.contains("Usize"),
+        message.contains("E0277") && message.contains("usize"),
         "{message}"
     );
     // `.len()` with arguments is not the builtin.
