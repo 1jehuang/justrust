@@ -1427,6 +1427,9 @@ struct CarrierBuilder<'a, 'b> {
     kinds: Vec<BorrowKind>,
     parents: Vec<Set>,
     dependencies: Vec<Set>,
+    /// Liveness-only `T: 'r` edges from a borrow to loans held inside its
+    /// referent. Not region provenance: the borrow does not derive from them.
+    outlives: Vec<Set>,
     calls: Vec<Option<Arc<super::traits::CarrierContractView>>>,
     physical_calls: Vec<Option<super::opaque_physical::PhysicalCarrierFlow>>,
     // Each block has one immutable callee/view and this builder has one fixed
@@ -3093,6 +3096,7 @@ impl<'a, 'b> CarrierBuilder<'a, 'b> {
             kinds,
             parents: vec![Set::new(n); n],
             dependencies: vec![Set::new(n); n],
+            outlives: vec![Set::new(n); n],
             calls: vec![None; f.blocks.len()],
             physical_calls: if physical.is_some() {
                 (0..f.blocks.len()).map(|_| None).collect()
@@ -3688,6 +3692,23 @@ impl CarrierBuilder<'_, '_> {
                     // chain. Its referent does not borrow the containing handle.
                     for parent in &target.authority {
                         self.dependencies[id.0].insert(*parent);
+                    }
+                    // `&'r T` implies `T: 'r`: every loan carried by a
+                    // reference stored inside the borrowed storage outlives
+                    // this loan, so it stays live while this loan does.
+                    for (index, slot) in self.cells.iter().enumerate() {
+                        self.budget.spend(slot.key.storage.projection.len() + 1)?;
+                        if slot.key.storage.root == target.place.root
+                            && slot
+                                .key
+                                .storage
+                                .projection
+                                .starts_with(&target.place.projection)
+                        {
+                            let held = &state.cells[index].references.0;
+                            self.budget.spend(held.0.len() + 1)?;
+                            self.outlives[id.0].union(held, self.budget)?;
+                        }
                     }
                     self.push_target(ReferenceOriginId(id.0), target)?;
                 }
@@ -5655,6 +5676,7 @@ impl CarrierBuilder<'_, '_> {
             outgoing,
             parents: self.parents,
             lifetime_deps: self.dependencies,
+            outlives: self.outlives,
             targets: self.targets,
             kinds: self.kinds,
             call_issuers,
@@ -6133,6 +6155,7 @@ pub(super) struct Plan {
     outgoing: Vec<Option<Point>>,
     parents: Vec<Set>,
     lifetime_deps: Vec<Set>,
+    outlives: Vec<Set>,
     targets: Vec<Vec<Target>>,
     kinds: Vec<BorrowKind>,
     // Distinct owned mutable result carriers of one call are exclusive, while
@@ -6864,8 +6887,11 @@ impl Plan {
         }
         let mut queue: Vec<usize> = active.members().collect();
         while let Some(loan) = queue.pop() {
-            budget.spend(self.lifetime_deps[loan].0.len() + 1)?;
-            for parent in self.lifetime_deps[loan].members() {
+            budget.spend(self.lifetime_deps[loan].0.len() + self.outlives[loan].0.len() + 1)?;
+            for parent in self.lifetime_deps[loan]
+                .members()
+                .chain(self.outlives[loan].members())
+            {
                 if !active.has(parent) {
                     active.insert(parent);
                     queue.push(parent);

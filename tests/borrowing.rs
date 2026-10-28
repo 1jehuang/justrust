@@ -345,6 +345,28 @@ while i<3{let s=String::from(\"b\");best=id(&s);i+=1;}println!(\"{}\",best);}\n"
 }
 
 #[test]
+fn borrow_of_reference_carrier_keeps_inner_loan_live() {
+    // `&'r Option<&'a T>` implies `'a: 'r`. Stock rejects each with E0502/E0506.
+    rejects(
+        "borrowed_option_ref_then_assign",
+        "fn main(){let mut x=1u32;let a=Some(&x);let r=&a;x=2;println!(\"{:?}\",r);}\n",
+    );
+    rejects(
+        "borrowed_get_result_then_pop",
+        "fn main(){let mut v:Vec<u32>=vec![1];let a=v.get(0);let r=&a;v.pop();println!(\"{:?}\",r);}\n",
+    );
+    rejects(
+        "format_get_and_pop",
+        "fn main(){let mut v:Vec<u32>=vec![1];println!(\"{:?} {:?}\",v.get(0),v.pop());}\n",
+    );
+    runs(
+        "fn main(){let mut x=1u32;let a=Some(&x);let r=&a;println!(\"{:?}\",r);x=2;\
+let mut v:Vec<u32>=vec![4];println!(\"{:?} {}\",v.get(0),v.len());v.pop();println!(\"{}\",x+v.len() as u32);}\n",
+        "Some(1)\nSome(4) 1\n2\n",
+    );
+}
+
+#[test]
 fn rejects_invalid_shared_mutable_conflict() {
     // Stock rejects this fixture with E0502.
     rejects(
