@@ -8760,3 +8760,26 @@ a genuine 63-second Rust test and a quick passing control. Exactly one libtest
 timeout warning reached the caller at 61.52s while its process was still alive;
 both tests then passed, with caller exit zero at 64.65s. This validates live
 delivery across the actual hosted transport, not just an in-process sink stub.
+
+Service follow-through `a6cfa5dc3` is pushed and installed. Linux detached
+recorders receive SIGTERM when their owning agent dies, including the
+parent-death setup race. Recorder cancellation is tracked before cargo exits
+and prevents new pool work and failure-confirmation retries. Reaped cargo PIDs
+are cleared before waiting on pooled tests, avoiding signals to recycled PIDs.
+Subprocess regressions exercise owner death and cancellation of running tests.
+Final hosted check, recorder tests, and warning-free clippy passed in
+`20261027-191349143-2744389`, `20261027-191352602-2744973`, and
+`20261027-191357642-2745358`. The final committed-source full hosted run
+`20261027-191550739-2756664` passed 827 tests, with six ignored, in 8.0s host
+wall and 20.0s client wall (including 11.19s synchronization).
+
+An installed-client cancellation acceptance canceled a single-test hosted
+63-second fixture immediately after its process-start diagnostic. The caller
+exited on SIGTERM, the remote child was gone, and a later process inspection
+found no fixture recorder or test left running. Exactly one test start and no
+confirmation retry were observed. An initial two-test variant incorrectly
+expected one process start despite normal sharding; both children still exited,
+and the corrected single-test acceptance passed. Final installed hosted run
+`20261027-191513371-2753567` additionally verified warning persistence in
+`output.jsonl` before the test process exited. These fixes do not require a
+cloud infrastructure deployment or a change to tenant resource limits.
