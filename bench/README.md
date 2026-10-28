@@ -80,6 +80,14 @@ Compare the installed baseline and candidate with `JUSTRUST=/absolute/path`
 and `bench/suite.py compare`, keeping execution mode identical. Local execution
 is intentional for this controlled scheduler diagnostic.
 
+`suite.py run --remote` stores pinned snapshots under
+`~/.cache/justrust-bench/work` by default. Local runs retain
+`~/.justrust/bench/work`. Hosted GC intentionally refuses source roots under
+protected `.justrust`, `.cargo`, `.git`, or `target` components, so copying
+the local benchmark location to hosted builds is not supported. An explicit
+`JUSTRUST_BENCH_WORK` override remains available in either mode and must select
+an authorized source location for hosted runs. No protection is bypassed.
+
 `python3 bench/suite.py run test-retry-storm -n 5` isolates confirmation
 overhead with a pinned, dependency-free fixture: 32 intentionally failing
 tests each sleep 200 ms, plus one passing test. The fixed libtest thread count

@@ -41,8 +41,17 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 HOME = Path.home()
 JR_HOME = Path(os.environ.get("JUSTRUST_HOME", HOME / ".justrust"))
-WORK = Path(os.environ.get("JUSTRUST_BENCH_WORK", JR_HOME / "bench" / "work"))
 RESULTS = ROOT / "bench" / "results"
+
+
+def benchmark_work_root(remote=False, env=None) -> Path:
+    """Hosted source roots cannot live under protected .justrust state."""
+    env = os.environ if env is None else env
+    default = HOME / ".cache" / "justrust-bench" / "work" if remote else JR_HOME / "bench" / "work"
+    return Path(env.get("JUSTRUST_BENCH_WORK", default))
+
+
+WORK = benchmark_work_root()
 
 
 def resolve_justrust_binary(env=None) -> str:
@@ -1382,7 +1391,7 @@ def cmd_list(_args) -> None:
 
 
 def cmd_run(args) -> None:
-    global TOOLCHAIN, REMOTE, RUSTC_THREADS, WORKSPACE_THREADS, PASS_TIMES, MINIZ_OPT_LEVEL
+    global TOOLCHAIN, REMOTE, RUSTC_THREADS, WORKSPACE_THREADS, PASS_TIMES, MINIZ_OPT_LEVEL, WORK
     TOOLCHAIN = args.toolchain
     RUSTC_THREADS = getattr(args, "rustc_threads", None)
     WORKSPACE_THREADS = getattr(args, "workspace_threads", None)
@@ -1401,6 +1410,7 @@ def cmd_run(args) -> None:
     if (RUSTC_THREADS is not None or WORKSPACE_THREADS is not None or PASS_TIMES) and args.synth is not None:
         sys.exit("bench: compiler thread/pass options require named pinned scenarios")
     REMOTE = getattr(args, "remote", False)
+    WORK = benchmark_work_root(REMOTE)
     identity = None
     if getattr(args, "toolchain_identity", None):
         if args.synth is None or REMOTE or getattr(args, "resume", False):

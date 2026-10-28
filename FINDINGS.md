@@ -8645,3 +8645,46 @@ The first push was rejected because October's exported JSONL crossed GitHub's
 `2026-10-archive-1.jsonl`, keeping later lines in `2026-10.jsonl`. Concatenation
 was byte-for-byte identical to the pre-split backup. Export deduplication
 already reads all JSONL siblings, so no run records were dropped or duplicated.
+
+### Hosted follow-through: benchmark source placement (2026-10-27)
+
+Resolved the installed-client smoke blocker without changing GC or tenant
+security. The daemon's authenticated sync log identifies the actual cause:
+`target GC enrollment refused ... root outside authorized source scope` for
+the fixture under `~/.justrust/bench/work`. The receipt registry intentionally
+refuses any source root with a `.justrust`, `.cargo`, `.git`, or `target` path
+component. Failure to register then correctly prevents the build, although the
+follow-on missing-receipt error obscured the original reason.
+
+The suite now selects `~/.cache/justrust-bench/work` for `--remote` snapshots,
+retaining the previous default for local runs and preserving explicit
+`JUSTRUST_BENCH_WORK` overrides. This fixes benchmark placement rather than
+relaxing the protected-state exclusion. Three regression tests cover default
+selection, overrides, and actual command-mode wiring. All 36 suite Python tests
+pass. Existing wrappers that assign `suite.WORK` and call `run_scenario`
+directly retain their own workspace handling.
+
+Installed-client forced-hosted acceptance passed with all 72 expected failures
+and eight passing controls, no local fallback. Three quiet samples in
+`20261027-retry-contention-hosted-acceptance.json`:
+
+- `20261027-171019802-2089987823`: 2.445s client / 0.825s host.
+- `20261027-171022269-2089987488`: 1.439s client / 0.825s host.
+- `20261027-171023737-2089987142`: 1.450s client / 0.823s host.
+
+After the harness fix, running the same command with **no workspace override**
+also passed: `20261027-171117187-2095552310`, saved in
+`20261027-retry-contention-hosted-default.json` (1.43s client, 0.82s host).
+`justrust show` confirms `where remote on hosted`, eight binaries with exactly
+nine failing tests and one passing test each. These are acceptance observations,
+not hosted before/after speed comparisons.
+
+Investigated the earlier noisy rewrite comparison rather than attributing its
+regression to the fix: its longest **passing** test,
+`bounded_panic_family_exact_grammar_and_diagnostics`, increased from 116.613s
+to 138.887s, compared with a 20.600s overall increase. Neither run logged an
+expensive whole-group isolated confirmation. This is consistent with changed
+contention in the identical pinned compiler test binary, not proof of a cause.
+The prior caveat remains: no full-suite speedup or comprehensive synthetic
+promotion is claimed. The installed hosted retry path is now validated, and the
+previous source-placement acceptance blocker is closed.

@@ -1,0 +1,139 @@
+{
+ "started": "2026-10-27T17:11:15-0700",
+ "env": {
+  "host": "xps14",
+  "cpu": "Intel(R) Core(TM) Ultra X9 388H",
+  "ncpu": 16,
+  "mem_gb": 62.3,
+  "kernel": "7.2.11-arch1-1",
+  "foreign_rustc_policy": "proc-stat-live-excluding-Z-X-x-fail-closed-v1",
+  "justrust": "justrust 0.1.0-alpha.19",
+  "justrust_rev": "34f52c02e71f",
+  "benchmark_repo_rev": "34f52c02e71f",
+  "justrust_binary_revision": null,
+  "justrust_revision_source": "repository HEAD, not binary revision",
+  "justrust_binary_sha256": "09e88d869331eb8fc78ec61331e52dcaf26db76167247d551e168966cd58c41a",
+  "justrust_dirty": true,
+  "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13) (Arch Linux rust 1:1.99.1-1)",
+  "toolchain": "system",
+  "optimization_env": {},
+  "rustc_threads": null,
+  "workspace_threads": null,
+  "pass_times": false,
+  "miniz_opt_level": null,
+  "cargo": "cargo 1.99.1 (5f94df478 2026-08-27) (Arch Linux rust 1:1.99.1-1)",
+  "governor": "powersave",
+  "on_ac": "0",
+  "snapshots": {
+   "desktop": {
+    "jcode-desktop": "7d38fb7",
+    "jcode": "abff94eeb"
+   },
+   "justrust": {
+    "justrust": "f97fcc2"
+   },
+   "retry-contention": {
+    "retry-contention": "73d295045677e43a370205458091b60487fe4e47"
+   }
+  },
+  "execution": "remote",
+  "hosted_early": false,
+  "target_state": "persistent remote target; first run is warmup"
+ },
+ "runs_per_scenario": 1,
+ "scenarios": {
+  "test-retry-contention": {
+   "what": "eight expensive deterministic failure groups, preserving all 72 failures and eight passing controls",
+   "cmd": [
+    "test",
+    "--tests",
+    "--no-fail-fast"
+   ],
+   "samples": [
+    {
+     "id": "20261027-171117187-2095552310",
+     "wall": 1.431,
+     "first_error": 1.379,
+     "first_fail": 1.379,
+     "early": null,
+     "recorded_wall": 0.825,
+     "remote": {
+      "machine": "hosted",
+      "sync_ms": 23.057355,
+      "client_wall": 1.4279265780000001,
+      "host_wall": 0.8247365951538086,
+      "toolchain": "system",
+      "target_state": "persistent remote target"
+     },
+     "admission_transport": "curl",
+     "cpu": 0.1,
+     "startup": 0.011,
+     "compile": 0.0,
+     "test_run": 0.412,
+     "units": 0,
+     "local_units": 0,
+     "dep_units": 0,
+     "reuse": {
+      "compiled": 0,
+      "fresh": 1,
+      "depcache_hits": 0,
+      "depcache_misses": 0,
+      "depcache_saved_secs": 0.0,
+      "script_hits": 0,
+      "script_saved_secs": 0.0,
+      "slot_refreshed_units": 0,
+      "local_hits": 0,
+      "local_saved_secs": -0.0
+     },
+     "split": {
+      "frontend": 0.0,
+      "codegen": 0.0,
+      "link": 0.0,
+      "incremental": 0.0,
+      "other": 0.0
+     },
+     "link_secs": 0.0,
+     "hotpatch": null,
+     "tests_passed": 8,
+     "tests_failed": 72,
+     "other_cores": 1.31,
+     "foreign_rustc_before": 0,
+     "load_before": 4.01,
+     "noisy": false,
+     "top_unit": null,
+     "workspace_frontend_threads": null
+    }
+   ],
+   "stats": {
+    "first_fail": 1.379,
+    "first_fail_min": 1.379,
+    "first_fail_max": 1.379,
+    "n": 1,
+    "first_error": 1.379,
+    "first_error_min": 1.379,
+    "first_error_max": 1.379,
+    "median": 1.431,
+    "min": 1.431,
+    "max": 1.431,
+    "quiet_n": 1,
+    "quiet_median": 1.431,
+    "phases": {
+     "startup": 0.011,
+     "compile": 0.0,
+     "test_run": 0.412,
+     "cpu": 0.1,
+     "link_secs": 0.0
+    },
+    "split": {
+     "frontend": 0.0,
+     "codegen": 0.0,
+     "link": 0.0,
+     "incremental": 0.0,
+     "other": 0.0
+    },
+    "units": 0
+   }
+  }
+ },
+ "finished": "2026-10-27T17:11:18-0700"
+}

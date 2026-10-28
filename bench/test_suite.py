@@ -14,6 +14,31 @@ import suite
 
 
 class HostedMeasurements(unittest.TestCase):
+    def test_hosted_work_root_is_outside_protected_client_state(self):
+        self.assertEqual(suite.benchmark_work_root(False, {}), suite.JR_HOME / "bench" / "work")
+        hosted = suite.benchmark_work_root(True, {})
+        self.assertEqual(hosted, suite.HOME / ".cache" / "justrust-bench" / "work")
+        self.assertTrue(set(hosted.parts).isdisjoint({".justrust", ".cargo", ".git", "target"}))
+
+    def test_work_root_override_is_preserved_in_both_modes(self):
+        for remote in (False, True):
+            self.assertEqual(suite.benchmark_work_root(remote, {"JUSTRUST_BENCH_WORK": "/fixture/work"}),
+                             Path("/fixture/work"))
+
+    def test_command_selects_workspace_before_running_scenarios(self):
+        for remote in (False, True):
+            args = argparse.Namespace(toolchain="system", remote=remote, synth=None, cold=False,
+                                      scenarios=["desktop-noop-test"], n=1, warmup=0,
+                                      quiet_wait=0, out="unused.json")
+            def observe_workspace(*args):
+                self.assertEqual(suite.WORK, suite.benchmark_work_root(remote, {}))
+                raise RuntimeError("observed selected workspace")
+            with patch.dict(suite.os.environ, {}, clear=True), \
+                    patch.object(suite, "env_info", return_value={}), \
+                    patch.object(suite, "run_scenario", side_effect=observe_workspace), \
+                    self.assertRaisesRegex(RuntimeError, "observed selected workspace"):
+                suite.cmd_run(args)
+
     def test_public_cache_cap_is_pinned_and_opt_in(self):
         scenario = suite.BY_NAME["justrust-public-cache-cap"]
         self.assertTrue(scenario.opt_in)
@@ -389,6 +414,7 @@ class HostedMeasurements(unittest.TestCase):
 
     def tearDown(self):
         suite.REMOTE = False
+        suite.WORK = suite.benchmark_work_root(False)
         suite.TOOLCHAIN = "system"
         suite.RUSTC_THREADS = None
         suite.WORKSPACE_THREADS = None
