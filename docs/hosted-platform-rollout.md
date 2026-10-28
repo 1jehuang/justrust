@@ -53,8 +53,10 @@ the native verifier, and publishes to a new path without replacing the unsigned
 input. It does not accept raw private keys, PFX passwords, or credentials in
 build arguments. Its 17 Python safety tests pass, including inline `codesign`
 requirement syntax. The embedded helper is reinstalled with fix `17c344f2e`.
-Its standalone native signing execution is not independently validated by the
-separate Jcode CI signing implementation described below.
+Its standalone native Python signing execution separately passed protected
+macOS ARM64 fixture run `40632462506`, including real native signing/verification,
+unchanged input, wrong-hash refusal, and destination-collision refusal. See
+[trusted release signing](trusted-release-signing.md) for its precise scope.
 
 The helper currently needs a trusted macOS signing host for Developer ID or a
 trusted Windows signing host with a certificate-store identity and SignTool.

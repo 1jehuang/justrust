@@ -132,6 +132,39 @@ These checks validate the installed dispatch and wrong-host boundary, not native
 macOS signing by this helper. The separate Jcode signing/notarization workflow's
 acceptance is recorded in [platform rollout](hosted-platform-rollout.md).
 
+### Native helper acceptance on October 28, 2026
+
+Jcode's protected manual workflow run `40632462506`, attempt 1, passed at source
+`001a400fa2969711d48932dc3c40707a749bc54b`, checking out this helper at exact
+revision `17c344f2e83f836598b82715950497c0879aa713`. It built a fixed, trusted
+C executable on native macOS ARM64 before exposing signing credentials. After
+normal required-reviewer approval, an isolated temporary keychain supplied the
+dedicated Developer ID identity; credentials were unset before helper execution.
+
+The actual standalone Python helper invoked `/usr/bin/codesign`, passed its native
+verifier, and atomically published the signed copy. An additional native verifier
+bound the Apple Developer ID chain, `com.jcode.cli`, and exact Team ID, then the
+signed fixture executed the expected string. The unsigned input hash was
+unchanged. Real wrong-hash execution and existing-destination attempts refused
+without producing/changing the requested outputs, and plan-only mode remained
+non-mutating. All 17 helper tests and 7 validation fixtures passed in that job.
+
+Public receipt artifact `12791579782` is preserved in the Jcode repository at
+`docs/evidence/signing-helper-validation-40632462506.json`. It records unsigned
+SHA256 `23d1b729b0f05187fef29dcc0247887e1b31bdf0b2e2e22a9454b652e341d9a5`
+and signed SHA256 `095213c0d300ca7dfb5a0acee2d0e81623a2974d941c27d49f6a1e2645a96950`.
+Only the public receipt was uploaded. No release, notarization, Windows signing,
+or native Rust CLI execution is claimed by this helper-fixture run.
+
+The helper-containing client separately passed hosted check
+`20261027-212450633-3366843` and full test run `20261027-212543417-3370608`
+(827 passed, with an initial parallel `procfs::tests::reads_child_process` failure
+passing its isolated confirmation). Strict clippy initially exposed an unrelated
+child-lifecycle fixture timeout cleanup issue, fixed in `7ca2bf765`; its targeted
+test `20261027-212650479-3374822` and strict all-targets clippy
+`20261027-212656010-3375529` then passed. Cited local run summaries are exported
+under `data/runs/`.
+
 ## Primary references
 
 Syntax and policy references consulted 2026-10-26:
