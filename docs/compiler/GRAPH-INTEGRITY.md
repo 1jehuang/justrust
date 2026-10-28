@@ -59,6 +59,83 @@ facts, `parse`/`resolve`/`signatures` split, `PlanCtx`/`ValidatedTraitWorld`
 memo state into keyed nodes, budgets per node. Coordinate with shark before
 editing `src/engine.rs` or the dispatch in `src/compiler/mod.rs`.
 
+## Dependency contracts and proof pilot (proposed 2026-10-28)
+
+The intended property is **dependency-minimality**, not simply small nodes.
+A graph records the dependencies its producers request; it does not establish
+that those dependencies are necessary. A per-declaration signature node that
+extracts one signature from a whole-program context still inherits that context's
+dependencies. Renaming or wrapping the request does not remove the barrier.
+Incremental reuse likewise does not make a broad producer independently
+computable when its result is missing or invalidated.
+
+### Define the guarantee before selecting a prover
+
+Fix a node's semantic specification, supported input domain, fact granularity,
+and observable output, including relevant failure distinctions. For a declared
+input set D, distinguish:
+
+- **Sufficiency:** any two valid input worlds that agree on D yield the same
+  specified answer. No required semantic input is missing.
+- **Set minimality:** no proper subset of D is sufficient across the valid
+  domain. Necessity witnesses must respect the domain's consistency constraints;
+  facts cannot be varied independently when their meanings constrain each other.
+- **Execution-specific minimality:** the facts actually requested on one path
+  are necessary for that case. This is a separate, stronger target than proving
+  a fixed dependency set minimal across all cases.
+
+These are relative guarantees, not proof of optimal compilation speed or the
+globally best node vocabulary. A different fact representation or algorithm
+can change the dependencies. Logical facts also need not correspond one-to-one
+with scheduled tasks: batching may reduce scheduling overhead without making
+unrelated facts prerequisites of an answer.
+
+### Structural approach
+
+Give each producer its own scoped source input and a role-specific typed lookup
+interface, rather than access to a whole-program `PlanCtx`. Apply the restriction
+recursively to supporting producers. A signature producer should consume its
+declaration header and explicitly request referenced declarations or types,
+not extract its answer from a completed global signature table. Recursive
+declarations need explicit cycle or fixed-point semantics, not a hidden join.
+Legitimate completeness requirements remain explicit keyed facts, and the check
+root must still validate required items even when unused.
+
+This can forbid known broad-access patterns by construction, but scoped access
+alone does not prove minimality: a producer could still request an unrelated
+fact through an allowed lookup. Existing graph-shape gates remain necessary.
+
+### Bounded experiment and tool choice
+
+Start with one signature-producing path and a precisely bounded supported
+subset. Establish that its answer is correct and independent of unrelated
+function bodies, and that its implementation cannot request those bodies or
+the whole-program signature context. State allowed header and lookup inputs,
+cycle behavior, and diagnostic obligations explicitly. Do not claim full
+dependency-minimality from this narrower noninterference/access contract.
+
+Evaluate tools on that same contract before choosing a project-wide approach:
+
+- **Lean:** candidate for formalizing the dependency model and proving reusable
+  composition rules for a restricted node-definition language.
+- **Verus:** candidate for verifying contracts closer to the executable Rust
+  producer, subject to the language features and libraries it can verify.
+
+A mathematical model proof alone does not certify the Rust implementation.
+Identify the correspondence proof, verified generation, or other implementation
+connection, and record any unverified boundary and trusted assumptions. Choose
+based on that connection, expressiveness for the contract, and proof maintenance
+cost, not on a presumed universal best prover. Neither tool automatically
+discovers minimal dependencies.
+
+The pilot should deliver a checked specification and proof with its trust
+boundary, plus executable regressions for unrelated-body independence and
+forbidden broad requests. Any production integration must retain semantic,
+invalid-input, forged-fact and graph-integrity gates. Compare the affected
+workload before and after before claiming a speed improvement. This proposal
+does not select a prover, add a dependency, certify existing nodes, or relax a
+ratchet.
+
 ## How this happened
 
 ARCHITECTURE.md section 17 required this from the start. The first compiler
