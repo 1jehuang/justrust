@@ -20,10 +20,16 @@ pub(super) struct Operation {
 }
 
 impl Operation {
-    /// Only an indexing operator's receiver may wait on a lazy element
-    /// coercion. Other operators keep the conservative quiescence barrier.
-    pub(super) fn index_inputs(&self) -> Option<(Term, Option<Term>)> {
-        matches!(self.kind, Kind::Index(_)).then_some((self.left, self.right))
+    /// Indexing and binary operators may wait on a lazy element coercion.
+    /// Others keep the conservative quiescence barrier.
+    pub(super) fn lazy_frontier_inputs(&self) -> Option<(Term, Option<Term>)> {
+        matches!(self.kind, Kind::Index(_) | Kind::Binary(_)).then_some((self.left, self.right))
+    }
+
+    /// The element produced by a pending index, which only the lazy
+    /// coercion of its receiver can reveal.
+    pub(super) fn index_result(&self) -> Option<Term> {
+        matches!(self.kind, Kind::Index(_)).then_some(self.result)
     }
 }
 
@@ -257,15 +263,32 @@ impl Solver<'_, '_, '_> {
             (1, _) => Vec::new(),
             (2, Some(right)) => {
                 if matches!(self.domain(right), Domain::Integer | Domain::Float) {
-                    if let Some(argument) = self.checker.numeric_operator_rhs_hint(
-                        &receiver,
-                        declaration,
-                        &method,
-                        module,
-                        matches!(self.domain(right), Domain::Float),
-                    )? {
-                        let formal = self.fixed(argument)?;
-                        self.coerce(right, formal)?;
+                    // `guard[1]`: the literal's type comes from the `Index`
+                    // impl of the first autoderef step that has one, exactly
+                    // as the selection loop below walks the receiver.
+                    let mut hinted = receiver.clone();
+                    for _ in 0..8 {
+                        if let Some(argument) = self.checker.numeric_operator_rhs_hint(
+                            &hinted,
+                            declaration,
+                            &method,
+                            module,
+                            matches!(self.domain(right), Domain::Float),
+                        )? {
+                            let formal = self.fixed(argument)?;
+                            self.coerce(right, formal)?;
+                            break;
+                        }
+                        if !matches!(kind, Kind::Index(_)) {
+                            break;
+                        }
+                        hinted = match &hinted {
+                            ir::Ty::Ref { referent, .. } => referent.as_ref().clone(),
+                            other => match self.checker.deref_target_hint(other)? {
+                                Some(next) => next,
+                                None => break,
+                            },
+                        };
                     }
                     if !self.projection_defaults
                         && matches!(self.domain(right), Domain::Integer | Domain::Float)

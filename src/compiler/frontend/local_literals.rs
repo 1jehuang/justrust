@@ -1160,7 +1160,7 @@ impl<'s> Solver<'_, '_, 's> {
             || self
                 .operators
                 .iter()
-                .any(|operator| operator.index_inputs().is_none())
+                .any(|operator| operator.lazy_frontier_inputs().is_none())
             || !self.iterator_items.is_empty()
             || !self.associated_equalities.is_empty()
             || !self.patterns.is_empty()
@@ -1182,18 +1182,17 @@ impl<'s> Solver<'_, '_, 's> {
             }
             targets.push(*expected);
         }
+        targets.extend(self.operators.iter().filter_map(|o| o.index_result()));
         for operator in &self.operators {
-            let Some((base, index)) = operator.index_inputs() else {
+            let Some((left, right)) = operator.lazy_frontier_inputs() else {
                 return Ok(false);
             };
-            if !self.lazy_input_frontier(base, &targets, 0)? {
-                return Ok(false);
-            }
-            if let Some(index) = index
-                && !matches!(self.domain(index), Domain::Integer)
-                && !self.lazy_input_frontier(index, &targets, 0)?
-            {
-                return Ok(false);
+            for input in std::iter::once(left).chain(right) {
+                if !matches!(self.domain(input), Domain::Integer | Domain::Float)
+                    && !self.lazy_input_frontier(input, &targets, 0)?
+                {
+                    return Ok(false);
+                }
             }
         }
         for method in methods {
