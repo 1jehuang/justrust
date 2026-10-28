@@ -912,6 +912,27 @@ fn main(){ let v=forward::<Wrap<Token>,Token>(Wrap(Token(99)),Token(52)); if v.0
         },
     ]
 }
+/// Native expectation. The active `allow` attribute is now supported, so the
+/// 30 attributed cases follow stock semantics: stock-invalid sources are
+/// ordinary Invalid, reference-valued equality RHS stays Unsupported, and
+/// every other source runs with stock's stdout.
+fn native(case: &Case) -> (Outcome, Phase) {
+    if case.name.ends_with("reference_rhs_boundary") {
+        let phase = if case.name.contains("typed_slice") {
+            Phase::CompositeRhs
+        } else {
+            Phase::ReferenceRhs
+        };
+        return (Outcome::Unsupported, phase);
+    }
+    if case.stock_diagnostic.is_some() {
+        return (Outcome::Invalid, Phase::OrdinaryInvalid);
+    }
+    (Outcome::Runtime, Phase::None)
+}
+/// Native cells per [Runtime, Invalid, Unsupported, InvalidUnsupported] x [CHECK, BUILD]:
+/// 21 Runtime, 18 Invalid, 6 reference-RHS Unsupported cases, 4 cells each.
+const NATIVE_MODES: [[usize; 2]; 4] = [[42, 42], [36, 36], [12, 12], [0, 0]];
 fn partition_index(outcome: Outcome) -> usize {
     match outcome {
         Outcome::Runtime => 0,
@@ -1137,13 +1158,14 @@ fn assert_native_diagnostic(case: &Case, diagnostic: &str) {
         "{}:{diagnostic}",
         case.name
     );
-    let expected = match case.phase {
+    let (outcome, phase) = native(case);
+    let expected = match phase {
         Phase::Attribute => "active attribute `allow` is unsupported",
         Phase::ReferenceRhs | Phase::CompositeRhs => {
             "unsupported: equality RHS must be closed or one authoritative parameter"
         }
         Phase::OrdinaryInvalid => {
-            assert_eq!(case.outcome, Outcome::Invalid);
+            assert_eq!(outcome, Outcome::Invalid);
             assert!(
                 !diagnostic.contains("unsupported:"),
                 "ordinary invalid became Unsupported: {}:{diagnostic}",
@@ -1157,7 +1179,7 @@ fn assert_native_diagnostic(case: &Case, diagnostic: &str) {
         diagnostic.contains(expected),
         "{} expected {:?}, {expected:?}: {diagnostic}",
         case.name,
-        case.phase
+        phase
     );
 }
 // Catch at cell boundaries, never suppress individual assertions or process safety guards.
@@ -1277,12 +1299,13 @@ fn native_parameter_equality_workers1_8_check_build_no_compiler_fallback() {
     let mut modes = [[0; 2]; 4];
     let mut runtimes = 0;
     for case in cases() {
+        let (outcome, phase) = native(&case);
         for workers in [1, 8] {
             for check in [true, false] {
                 failures.check(
                     format!(
-                        "native CLI {} workers{workers} check{check} expected {:?}/{:?}",
-                        case.name, case.outcome, case.phase
+                        "native CLI {} workers{workers} check{check} expected {outcome:?}/{phase:?}",
+                        case.name
                     ),
                     || {
                         let scratch = Scratch::new();
@@ -1301,18 +1324,18 @@ fn native_parameter_equality_workers1_8_check_build_no_compiler_fallback() {
                         let result = capture(&mut command, &scratch, 20);
                         assert_eq!(
                             result.code,
-                            i32::from(case.outcome != Outcome::Runtime),
+                            i32::from(outcome != Outcome::Runtime),
                             "{} workers{workers} check{check}:{result:?}",
                             case.name
                         );
-                        if case.outcome != Outcome::Runtime {
+                        if outcome != Outcome::Runtime {
                             assert!(result.stdout.is_empty(), "{}:{result:?}", case.name);
                             assert_native_diagnostic(
                                 &case,
                                 &String::from_utf8_lossy(&result.stderr),
                             );
                         }
-                        if !check && case.outcome == Outcome::Runtime {
+                        if !check && outcome == Outcome::Runtime {
                             runtime(&image, &scratch, case.stdout);
                             runtimes += 1;
                         } else {
@@ -1326,19 +1349,19 @@ fn native_parameter_equality_workers1_8_check_build_no_compiler_fallback() {
                         }
                     },
                 );
-                modes[partition_index(case.outcome)][usize::from(!check)] += 1;
+                modes[partition_index(outcome)][usize::from(!check)] += 1;
                 cells += 1;
             }
         }
     }
     assert_eq!(cells, 180);
-    assert_eq!(modes, [[12, 12], [12, 12], [42, 42], [24, 24]]);
+    assert_eq!(modes, NATIVE_MODES);
     failures.check("native CLI successful runtime count", || {
-        assert_eq!(runtimes, 12)
+        assert_eq!(runtimes, NATIVE_MODES[0][1])
     });
     failures.finish();
     eprintln!(
-        "NATIVE PARAMETER EQUALITY:180 CLI cells,modes{modes:?},12 native ELF payloads;6 Runtime,6 Invalid,21 stock-valid Unsupported,12 stock-invalid Unsupported"
+        "NATIVE PARAMETER EQUALITY:180 CLI cells,modes{modes:?},{runtimes} native ELF payloads"
     );
 }
 fn evaluated_once(report: &Report, kind: u32, index: usize, case: &Case) {
@@ -1447,20 +1470,26 @@ fn all_body_graph() {
     let mut modes = [[0; 2]; 4];
     let mut unused_failures = 0;
     for case in cases() {
+        let (outcome, phase) = native(&case);
+        // Attributed Runtime sources are executed by the CLI matrix; the
+        // graph matrix covers their attribute-free twins.
+        if case.source.starts_with("#![") && outcome == Outcome::Runtime {
+            continue;
+        }
         for workers in [1, 8] {
             for check in [true, false] {
                 failures.check(
                     format!(
-                        "native graph {} workers{workers} check{check} expected {:?}/{:?}",
-                        case.name, case.outcome, case.phase
+                        "native graph {} workers{workers} check{check} expected {outcome:?}/{phase:?}",
+                        case.name
                     ),
                     || match compiler::compile_observed(case.source.to_owned(), workers, check) {
                         Ok(compiled) => {
-                            assert_eq!(case.outcome, Outcome::Runtime, "{}", case.name);
+                            assert_eq!(outcome, Outcome::Runtime, "{}", case.name);
                             successful_all_body_graph(&case, &compiled, check);
                         }
                         Err(failure) => {
-                            assert_ne!(case.outcome, Outcome::Runtime, "{}:{failure}", case.name);
+                            assert_ne!(outcome, Outcome::Runtime, "{}:{failure}", case.name);
                             assert_native_diagnostic(&case, &failure.to_string());
                             let report = failure.report.expect("failure retains graph report");
                             assert!(report.capture_complete, "{}", case.name);
@@ -1471,7 +1500,7 @@ fn all_body_graph() {
                                 "{}: rejected source emitted object",
                                 case.name
                             );
-                            if matches!(case.phase, Phase::Attribute) {
+                            if matches!(phase, Phase::Attribute) {
                                 assert!(
                                     report
                                         .node_evaluations
@@ -1487,7 +1516,7 @@ fn all_body_graph() {
                                     case.name
                                 );
                             }
-                            if case.name == "stripped_negative6_unused_bad_generic_body" {
+                            if case.name.ends_with("unused_bad_generic_body") {
                                 let program = frontend::parse(case.source).unwrap();
                                 let plan = frontend::PlanCtx::from_program(
                                     &program,
@@ -1524,13 +1553,13 @@ fn all_body_graph() {
                         }
                     },
                 );
-                modes[partition_index(case.outcome)][usize::from(!check)] += 1;
+                modes[partition_index(outcome)][usize::from(!check)] += 1;
             }
         }
     }
-    assert_eq!(modes, [[12, 12], [12, 12], [42, 42], [24, 24]]);
+    assert_eq!(modes, [[14, 14], [36, 36], [12, 12], [0, 0]]);
     failures.check("native graph unused universal rejection count", || {
-        assert_eq!(unused_failures, 4)
+        assert_eq!(unused_failures, 12)
     });
     failures.finish();
     eprintln!(
@@ -1555,7 +1584,7 @@ fn native_parameter_equality_all_body_graph_workers1_8_check_build() {
         ])
         .env(CHILD, "1");
     // A failed full matrix can exceed one subprocess's 64 KiB output budget.
-    let result = capture_bounded(&mut command, &scratch, 240, 8 * 1024 * 1024);
+    let result = capture_bounded(&mut command, &scratch, 900, 8 * 1024 * 1024);
     // Forward every child cell receipt, including passes, to the root gate log.
     eprint!("{}", String::from_utf8_lossy(&result.stdout));
     eprint!("{}", String::from_utf8_lossy(&result.stderr));

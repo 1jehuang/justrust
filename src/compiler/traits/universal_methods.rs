@@ -488,12 +488,30 @@ impl ValidatedTraitWorld {
             *parameter =
                 self.map_universal_projection_type(parameter, facts.env(), 0, &mut reduce)?;
         }
+        let projected_result = charged(
+            &self.budget,
+            ir::contains_associated_types(&instantiated.signature.result, &self.budget),
+        )?;
         instantiated.signature.result = self.map_universal_projection_type(
             &instantiated.signature.result,
             facts.env(),
             0,
             &mut reduce,
         )?;
+        // A declaration result written as a projection has no reference
+        // positions in its schema contract. A reference-valued equality RHS
+        // would need region authority that the schema never declared.
+        if projected_result
+            && charged(
+                &self.budget,
+                ir::root_reference_layers(&instantiated.signature.result),
+            )? > instantiated.signature.ref_contract.results.len()
+        {
+            return Err(FactsError::unsupported(
+                &self.budget,
+                "unsupported: equality RHS must be closed or one authoritative parameter",
+            ));
+        }
         instantiated.predicates = self.normalize_instantiated_projection_predicates(
             &instantiated.predicates,
             context,
