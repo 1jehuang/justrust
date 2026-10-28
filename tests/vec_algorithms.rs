@@ -134,6 +134,8 @@ fn static_string_vector_seed_replays_all_closed_inputs() {
         "fn main(){let values=vec![\"éx\"];println!(\"{}\",values[0]);}",
         "fn main(){let e;e=vec![1u32];let z;z=vec![0u8;3];println!(\"{} {:?}\",e[0],z);}",
         "fn main(){let mut value=1i32;let e=vec![&mut value];let s=2i32;let f=vec![&s];println!(\"{} {}\",*e[0],*f[0]);}",
+        "fn main(){let mut a=1i32;let mut b=5i32;let mut v:Vec<&mut i32>=vec![&mut a,&mut b];*v[0]+=10;*v[1]=7;println!(\"{} {}\",v[0],v[1]);}",
+        "struct P{x:i32}fn main(){let mut v=vec![P{x:1}];v[0].x*=5;let mut w=vec![[1i32,2]];w[0][1]+=10;w[0][0]=3;let r=w[0];println!(\"{} {:?}\",v[0].x,r);}",
         "struct Holder<T>{value:T}fn keep<T>(value:T,_capacity:usize)->Holder<T>{println!(\"called\");Holder{value}}fn main(){let held=keep(\"abc\",2usize);println!(\"{}\",held.value);}",
     ] {
         iterator_oracle::stock_native(source);

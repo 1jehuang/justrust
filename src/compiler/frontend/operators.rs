@@ -349,6 +349,9 @@ impl type_check::Checker<'_> {
         statement: &Stmt,
         statements: &mut Vec<ir::TypedStmt>,
     ) -> Result<Option<(ir::TypedStmt, bool)>, String> {
+        if let Some(result) = self.interior_index_assignment(statement, statements)? {
+            return Ok(Some(result));
+        }
         let (base, literal, index, op, value) = match statement {
             Stmt::AssignIndex {
                 array,
@@ -565,6 +568,148 @@ impl type_check::Checker<'_> {
                 place,
                 value: loaded,
             }
+        };
+        Ok(Some((result, completes)))
+    }
+
+    /// `*v[i] (op)= x`, `v[i][j] (op)= x`, `v[i].f (op)= x`: an overloaded
+    /// index that is not the last selector. Stock evaluates the right operand,
+    /// then `IndexMut::index_mut(&mut v, i)`, then projects the remaining
+    /// selectors through the returned `&mut` (writability follows them).
+    fn interior_index_assignment(
+        &mut self,
+        statement: &Stmt,
+        statements: &mut Vec<ir::TypedStmt>,
+    ) -> Result<Option<(ir::TypedStmt, bool)>, String> {
+        let (place, op, value) = match statement {
+            Stmt::AssignPlace { place, value, .. } => (place, None, value),
+            Stmt::AssignOp {
+                place, op, value, ..
+            } => (place, Some(*op), value),
+            _ => return Ok(None),
+        };
+        let fields = &place.fields;
+        let mut split = None;
+        for (at, selector) in fields.iter().enumerate() {
+            self.signatures.plan()?.budget.charge_work(1)?;
+            let FieldSelector::ConstantIndex(index) = selector else {
+                continue;
+            };
+            let prefix = Place {
+                local: place.local,
+                fields: fields[..at].to_vec(),
+            };
+            let Ok((_, owner, writable)) = self.checked_place(&prefix) else {
+                return Ok(None);
+            };
+            if overloadable(&owner) {
+                split = Some((at, prefix, *index, owner, writable));
+            } else if let ir::Ty::Ref { kind, referent } = &owner
+                && overloadable(referent)
+                && !matches!(referent.as_ref(), ir::Ty::Tuple(_))
+            {
+                let mut prefix = prefix;
+                prefix.fields.push(FieldSelector::Deref);
+                split = Some((
+                    at,
+                    prefix,
+                    *index,
+                    referent.as_ref().clone(),
+                    *kind == ir::BorrowKind::Mut,
+                ));
+            }
+            break;
+        }
+        let Some((at, base, index, owner, writable)) = split else {
+            return Ok(None);
+        };
+        if at + 1 == fields.len() {
+            // The final-selector case keeps its dedicated lowering.
+            return Ok(None);
+        }
+        let index = Expr::Integer(IntegerLiteral {
+            magnitude: index as u128,
+            suffix: None,
+        });
+        let Some(reference) = self.index_reference_hint(&owner, &index)? else {
+            return Ok(None);
+        };
+        if !writable {
+            return Err("E0596: cannot mutably index an immutable place".into());
+        }
+        let carrier_ty = match reference {
+            ir::Ty::Ref { referent, .. } => ir::Ty::Ref {
+                kind: ir::BorrowKind::Mut,
+                referent,
+            },
+            _ => return Err("Index must return a reference".into()),
+        };
+        let mut rest = Vec::with_capacity(fields.len() - at);
+        rest.push(FieldSelector::Deref);
+        rest.extend(fields[at + 1..].iter().cloned());
+        let (projection, destination, writable) = self.call_place_projection(&carrier_ty, &rest)?;
+        if !writable {
+            return Err("E0594: cannot assign to data behind a shared reference".into());
+        }
+        let (rhs, rhs_flow) = if let Some(op) = op {
+            self.compound_value(op, &destination, value)?
+        } else {
+            let rhs = self.expr_expected(value, Some(&destination))?;
+            let flow = self.flow(rhs);
+            self.require(&flow, &destination)?;
+            (rhs, flow)
+        };
+        let rhs_ty = self.exprs[rhs.0].ty.clone();
+        let saved = self.temporary(
+            "$index_rhs",
+            if rhs_ty == ir::Ty::Never {
+                destination.clone()
+            } else {
+                rhs_ty.clone()
+            },
+            false,
+        )?;
+        self.charge_node(
+            std::mem::size_of::<ir::TypedStmt>() * 2 + std::mem::size_of::<ir::TypedExpr>(),
+        )?;
+        statements.push(ir::TypedStmt::Let {
+            local: saved,
+            value: rhs,
+        });
+        let call = self.operator_call(
+            ("ops", "IndexMut", "index_mut"),
+            owner,
+            Some(ir::Ty::Int(ir::IntTy::Usize)),
+            First::Place(ir::BorrowKind::Mut, &base),
+            std::slice::from_ref(&index),
+        )?;
+        self.record_operator(statement as *const Stmt as usize | 1, call)?;
+        let completes = rhs_flow.completes && self.flow(call).completes;
+        let carrier = self.temporary("$index_carrier", self.exprs[call.0].ty.clone(), false)?;
+        statements.push(ir::TypedStmt::Let {
+            local: carrier,
+            value: call,
+        });
+        let loaded = ir::ExprId(self.exprs.len());
+        self.exprs.push(ir::TypedExpr {
+            ty: rhs_ty,
+            completion: ir::Completion::Returns,
+            kind: ir::ExprKind::Local(saved),
+        });
+        let place = ir::Place {
+            local: carrier,
+            projection,
+        };
+        let result = match op {
+            Some(op) => ir::TypedStmt::AssignOp {
+                place,
+                op,
+                value: loaded,
+            },
+            None => ir::TypedStmt::AssignPlace {
+                place,
+                value: loaded,
+            },
         };
         Ok(Some((result, completes)))
     }
