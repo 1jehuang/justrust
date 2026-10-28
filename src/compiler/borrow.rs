@@ -1958,7 +1958,9 @@ impl CarrierBuilder<'_, '_> {
                     region
                 };
                 let mut invariant = false;
-                let prefix = value_projection(&original.location);
+                // `location` is the substituted image of the original row, so
+                // its nominal identities match the call's substituted signature.
+                let prefix = value_projection(&location);
                 for (index, step) in prefix.iter().enumerate() {
                     if *step == Projection::Deref
                         && matches!(

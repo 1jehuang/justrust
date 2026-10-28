@@ -251,6 +251,16 @@ fn main() {
                 expect: Expect::Invalid("E0502"),
             },
             Case {
+                name: "generic_option_reference_copied_and_cloned",
+                source: r#"fn f<K:Copy>(v:&[K])->Option<K>{let mut it=v.iter();it.next().copied()}fn g<K:Clone>(o:Option<&K>)->Option<K>{o.cloned()}fn h<K:Copy>(v:&Vec<K>)->Option<K>{v.first().copied()}fn main(){let v=vec![5u8,6];println!("{:?} {:?} {:?}",f(&v),g(Some(&7u8)),h(&v));}"#,
+                expect: Expect::Run("Some(5) Some(7) Some(5)\n"),
+            },
+            Case {
+                name: "generic_first_reference_keeps_vector_borrowed",
+                source: r#"fn f<'a,K:Copy>(v:&'a mut Vec<K>,k:K)->Option<&'a K>{let x=v.first();v.push(k);x}fn main(){}"#,
+                expect: Expect::Invalid("E0502"),
+            },
+            Case {
                 name: "clone_vector_of_borrowed_str_and_slice_refs",
                 source: r#"fn main(){let v:Vec<&str>=vec!["a","b"];let w=v.clone();let a=[1u8,2];let s:&[u8]=&a;let t=s.clone();println!("{} {:?} {}",w.len(),w,t.len());}"#,
                 expect: Expect::Run("2 [\"a\", \"b\"] 2\n"),
