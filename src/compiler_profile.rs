@@ -3,6 +3,8 @@ use justrust_engine::{Report, compiler::ir::PlanUsageSnapshot};
 use std::collections::{BTreeMap, HashMap};
 use std::io::{self, Write};
 
+mod dependencies;
+
 pub(crate) struct Profile<'a> {
     pub mode: &'a str,
     pub workers: usize,
@@ -227,7 +229,9 @@ fn write_graph(out: &mut impl Write, report: &Report) -> io::Result<()> {
         }
         write!(out, "]}}")?;
     }
-    write!(out, "]}}")
+    write!(out, "],\"dependency_leverage\":")?;
+    dependencies::write(out, report, &times, unmatched)?;
+    write!(out, "}}")
 }
 
 #[cfg(test)]
