@@ -3558,6 +3558,51 @@ impl CarrierBuilder<'_, '_> {
                 )?;
             }
             for index in indices {
+                // A by-value parameter's own reference slot keeps its declared
+                // lifetime: a store must outlive it (`c = d` needs 'd: 'c).
+                if diagnose
+                    && let CanonicalRoot::Owned(local) = self.cells[index].key.storage.root
+                    && self.f.params.contains(&local)
+                    && let Some(input) = self.cells[index].input.clone()
+                    && matches!(input.location.channel, CarrierChannel::Fixed(_))
+                    && let Some(body) = self.body.clone()
+                {
+                    self.budget.spend(self.input_regions.len() + 1)?;
+                    let mut slots: Vec<AnalysisRegionId> = self
+                        .input_regions
+                        .iter()
+                        .filter(|(row, _)| *row == input)
+                        .map(|(_, region)| *region)
+                        .collect();
+                    if slots.is_empty() {
+                        self.budget
+                            .spend(body.source_region_env().carriers.len() + 1)?;
+                        if let Some(row) = body.source_region_env().carriers.iter().find(|row| {
+                            row.parameter == Some(input.param) && row.location == input.location
+                        }) {
+                            let term = row.region.clone();
+                            for (_, region) in self.body_term_regions(&term)? {
+                                slots.push(region);
+                            }
+                        }
+                    }
+                    let sources = self.origin_regions(origins)?;
+                    if slots.is_empty() {
+                        // An elided slot is an anonymous lifetime that only
+                        // `'static` (or loan-free) data is known to outlive.
+                        if !sources.is_empty() {
+                            self.problem(block, statement, Problem::Invalid("assignment to a reference parameter requires its source to outlive the parameter's declared lifetime".into()))?;
+                        }
+                    } else {
+                        if sources.iter().any(|region| {
+                            slots
+                                .iter()
+                                .any(|slot| !self.regions.entails(*region, *slot))
+                        }) {
+                            self.problem(block, statement, Problem::Invalid("assignment to a reference parameter requires its source to outlive the parameter's declared lifetime".into()))?;
+                        }
+                    }
+                }
                 if diagnose
                     && matches!(
                         self.cells[index].key.storage.root,
