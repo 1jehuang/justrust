@@ -3860,6 +3860,7 @@ pub(in crate::compiler) fn instantiate_checked_with_constants(
             | ExprKind::Str(_)
             | ExprKind::ByteStr(_)
             | ExprKind::ByteRepeat { .. }
+            | ExprKind::PromotedScalar(_)
             | ExprKind::Float(_)
             | ExprKind::Deref { .. }
             | ExprKind::DynamicIndex { .. }
@@ -5876,6 +5877,36 @@ impl CharValue {
             return Err("character constant is not a Unicode scalar".into());
         }
         Ok(())
+    }
+}
+
+/// Closed constant scalar admitted by rvalue static promotion.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum PromotedScalar {
+    Int(IntValue),
+    Bool(bool),
+    Char(CharValue),
+}
+impl PromotedScalar {
+    pub fn validate(self) -> Result<(), String> {
+        match self {
+            Self::Int(value) => value.validate(),
+            Self::Bool(_) => Ok(()),
+            Self::Char(value) => value.validate(),
+        }
+    }
+    pub fn value_ty(self) -> Ty {
+        match self {
+            Self::Int(value) => Ty::Int(value.ty),
+            Self::Bool(_) => Ty::Bool,
+            Self::Char(_) => Ty::Char,
+        }
+    }
+    pub fn reference_ty(self) -> Ty {
+        Ty::Ref {
+            kind: BorrowKind::Shared,
+            referent: Arc::new(self.value_ty()),
+        }
     }
 }
 
@@ -9306,6 +9337,9 @@ pub enum ExprKind {
     Str(String),
     /// Exact shared array reference over immutable static program bytes.
     ByteStr(Vec<u8>),
+    /// Shared `&'static T` over an immutable program-data copy of a constant
+    /// scalar (stock rvalue static promotion of `&3u32`, `&true`, `&'c'`).
+    PromotedScalar(PromotedScalar),
     /// Shared `&[u8; len]` over immutable static bytes all equal to `byte`
     /// (stock static promotion of `&[byte; len]`), without a per-element payload.
     ByteRepeat {
@@ -10192,6 +10226,7 @@ impl CheckedFunction {
                 ExprKind::Str(text) => storage(budget, text.len(), 1)?,
                 ExprKind::ByteStr(bytes) => storage(budget, bytes.len(), 1)?,
                 ExprKind::ByteRepeat { .. } => storage(budget, 1, 16)?,
+                ExprKind::PromotedScalar(_) => storage(budget, 1, 24)?,
                 ExprKind::AssociatedConst(operand) => operand.validate_context(facts, budget)?,
                 ExprKind::Println(text) => storage(budget, text.len(), 1)?,
                 ExprKind::Panic(payload) => {
@@ -11820,6 +11855,13 @@ impl CheckedFunction {
                     value: Some(value), ..
                 } => expr(*value)?,
                 ExprKind::Break { value: None, .. } | ExprKind::Continue { .. } => {}
+                ExprKind::PromotedScalar(scalar) => {
+                    scalar.validate()?;
+                    if value.ty != scalar.reference_ty() || value.completion != Completion::Returns
+                    {
+                        return Err("promoted scalar expression type mismatch".into());
+                    }
+                }
                 ExprKind::ByteRepeat { len, .. } => {
                     if value.ty != Ty::byte_string_ty(*len)
                         || value.completion != Completion::Returns

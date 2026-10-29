@@ -482,11 +482,30 @@ fn main(){run();}"#,
 }
 
 #[test]
-fn rejects_legal_unsupported_bool_to_integer() {
-    rejects(
-        "legalunsupported: bool_to_integer",
+fn accepts_bool_and_fieldless_enum_to_integer() {
+    // Stock rustc (edition 2024) prints these exact lines.
+    runs(
         r#"fn run()->i32{if true as u8==1u8{7}else{0}}
-fn main(){if run()==7{println!("cast oracle ok");}}"#,
+fn f(b: bool) -> i64 { b as i64 }
+fn main(){if run()==7{println!("cast oracle ok");} let t = true; println!("{} {} {} {} {}", t as u8, false as i32, !t as i8, f(true) + f(false), (t as u16) << 3);}"#,
+        "cast oracle ok\n1 0 0 1 8\n",
+    );
+    runs(
+        r#"#[derive(Clone, Copy)]
+enum E { A, B, C }
+enum One { X }
+fn idx(e: E) -> usize { e as usize }
+fn main(){ let v = [E::A, E::B, E::C]; let mut s = 0i32; for e in v { s = s * 10 + e as i32; } println!("{} {} {} {}", s, idx(E::C), One::X as u8, (E::C as i8) - 5); }"#,
+        "12 2 0 -3\n",
+    );
+}
+
+#[test]
+fn rejects_payload_enum_and_float_from_bool() {
+    rejects(
+        "negative: payload_enum_to_integer",
+        r#"enum E { A(i32), B }
+fn main(){ let e = E::B; let _ = e as i32; }"#,
     );
 }
 

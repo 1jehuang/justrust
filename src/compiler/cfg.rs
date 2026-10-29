@@ -614,6 +614,8 @@ pub enum Rvalue {
         byte: u8,
         len: usize,
     },
+    /// `&'static T` over a program-data copy of one constant scalar.
+    PromotedScalar(ir::PromotedScalar),
     Println(String),
     Format {
         pieces: Vec<String>,
@@ -759,6 +761,7 @@ impl Rvalue {
             | Self::Output(_)
             | Self::Str(_)
             | Self::ByteStr(_)
+            | Self::PromotedScalar(_)
             | Self::ByteRepeat { .. } => {}
         }
         Ok(())
@@ -1279,6 +1282,7 @@ impl Function {
                             Rvalue::Str(text) => add(&mut bytes, text.len(), 1, budget)?,
                             Rvalue::ByteStr(text) => add(&mut bytes, text.len(), 1, budget)?,
                             Rvalue::ByteRepeat { .. } => add(&mut bytes, 1, 16, budget)?,
+                            Rvalue::PromotedScalar(_) => add(&mut bytes, 1, 24, budget)?,
                             Rvalue::IndexCopy { array, .. } | Rvalue::Discriminant(array) => {
                                 path(&mut bytes, array, budget)?
                             }
@@ -1951,6 +1955,7 @@ impl Function {
                             | Rvalue::Output(_)
                             | Rvalue::Str(_)
                             | Rvalue::ByteStr(_)
+                            | Rvalue::PromotedScalar(_)
                             | Rvalue::ByteRepeat { .. } => {}
                         }
                     }
@@ -2667,6 +2672,7 @@ impl Function {
             Rvalue::Str(_) => Ok(Ty::shared_str_ty()),
             Rvalue::ByteStr(bytes) => Ok(Ty::byte_string_ty(bytes.len())),
             Rvalue::ByteRepeat { len, .. } => Ok(Ty::byte_string_ty(*len)),
+            Rvalue::PromotedScalar(scalar) => Ok(scalar.reference_ty()),
             Rvalue::Unary { op, value } => {
                 let ty = self.operand_ty_with_facts(value, facts, scratch)?;
                 match (op, &ty) {
@@ -4973,6 +4979,9 @@ impl Lowerer<'_> {
                 Rvalue::ByteStr(std::sync::Arc::from(bytes.as_slice())),
                 origin,
             ),
+            ir::ExprKind::PromotedScalar(scalar) => {
+                self.assign(destination.clone(), Rvalue::PromotedScalar(*scalar), origin)
+            }
             ir::ExprKind::ByteRepeat { byte, len } => self.assign(
                 destination.clone(),
                 Rvalue::ByteRepeat {
@@ -6556,6 +6565,36 @@ mod tests {
         .freeze()
         .unwrap();
         (names.freeze().unwrap(), modules)
+    }
+    #[test]
+    fn promoted_scalar_rejects_forged_value_or_type() {
+        use crate::compiler::frontend;
+        let budget = ir::PlanBudget::default();
+        let program = frontend::parse("fn f()->&'static u8{&7u8}fn main(){}").unwrap();
+        let plan = frontend::PlanCtx::from_program(&program, &budget).unwrap();
+        let declaration = plan.function_decl(0).unwrap();
+        let checked =
+            frontend::type_callable_with_plan(&program, declaration, &plan, &budget).unwrap();
+        let facts = plan.callable_facts(declaration).unwrap();
+        let ctx = ir::FactsCtx::from_validated(&facts);
+        checked.validate_with_facts(ctx).unwrap();
+        let position = checked
+            .exprs
+            .iter()
+            .position(|e| matches!(e.kind, ir::ExprKind::PromotedScalar(_)))
+            .expect("&7u8 is promoted");
+        // A value outside the declared width.
+        let mut forged = checked.clone();
+        forged.exprs[position].kind =
+            ir::ExprKind::PromotedScalar(ir::PromotedScalar::Int(IntValue {
+                ty: IntTy::U8,
+                bits: 300,
+            }));
+        assert!(forged.validate_with_facts(ctx).is_err());
+        // A scalar that disagrees with the expression's reference type.
+        let mut forged = checked;
+        forged.exprs[position].kind = ir::ExprKind::PromotedScalar(ir::PromotedScalar::Bool(true));
+        assert!(forged.validate_with_facts(ctx).is_err());
     }
     #[test]
     fn leading_zeros_survives_substitution_and_rejects_generated_replay() {
@@ -12508,6 +12547,7 @@ mod tests {
                             | Rvalue::Output(_)
                             | Rvalue::Str(_)
                             | Rvalue::ByteStr(_)
+                            | Rvalue::PromotedScalar(_)
                             | Rvalue::ByteRepeat { .. } => {}
                         }
                     }

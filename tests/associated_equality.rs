@@ -70,8 +70,8 @@ fn main() { if forward::<S>() != 17 { std::process::exit(1); } println!("ok"); }
             source_fingerprint: 16900025135850887326,
             stock_diagnostic: None,
             stdout: b"ok\n",
-            outcome: Outcome::Unsupported,
-            phase: Phase::ParseProjection,
+            outcome: Outcome::Runtime,
+            phase: Phase::None,
         },
         // Source SHA256 87d52a49cf167d5f022ba7fae98043ff98e62b67190c3a99281c734fa65fdfed
         Case {
@@ -86,8 +86,8 @@ fn main() { if take::<S>() != 17 { std::process::exit(1); } println!("ok"); }
             source_fingerprint: 1378467388530890083,
             stock_diagnostic: None,
             stdout: b"ok\n",
-            outcome: Outcome::Unsupported,
-            phase: Phase::ExternalExit,
+            outcome: Outcome::Runtime,
+            phase: Phase::None,
         },
         // Source SHA256 6e12372e3fc2ce507c14e4c79483d335a96b06978f4dbc048bd7a536e089a074
         Case {
@@ -102,8 +102,8 @@ fn main() { let w = Wrap { value: 23 }; if close::<Wrap<i32>>(w.value) != 23 { s
             source_fingerprint: 746155412715955163,
             stock_diagnostic: None,
             stdout: b"ok\n",
-            outcome: Outcome::Unsupported,
-            phase: Phase::ExternalExit,
+            outcome: Outcome::Runtime,
+            phase: Phase::None,
         },
         // Source SHA256 4ea624781247b0ce927da4ab75d1b5230439c5794a2d5baca27a46122fc6fcfc
         Case {
@@ -119,8 +119,8 @@ fn main() { let record = take::<S>(); if record.value != 29 { std::process::exit
             source_fingerprint: 7453723518854153011,
             stock_diagnostic: None,
             stdout: b"ok\n",
-            outcome: Outcome::Unsupported,
-            phase: Phase::ExternalExit,
+            outcome: Outcome::Runtime,
+            phase: Phase::None,
         },
         // Source SHA256 eeae904492030524323f1821482ae5f3f4f2520bc9beb1d42eaaadad36208ee2
         Case {
@@ -137,8 +137,8 @@ fn main() { if big::<Big>() != 170141183460469231731687303715884105727i128 { std
             source_fingerprint: 6256024800572299810,
             stock_diagnostic: None,
             stdout: b"ok\n",
-            outcome: Outcome::Unsupported,
-            phase: Phase::ExternalExit,
+            outcome: Outcome::Runtime,
+            phase: Phase::None,
         },
         // Source SHA256 81bc87985d694a5e98e355b79178f28d10f2dd56b3ed3ed8459552d3d8b40d7a
         Case {
@@ -185,8 +185,8 @@ fn main() {}
             source_fingerprint: 4224370094492200845,
             stock_diagnostic: Some("error[E0382]"),
             stdout: b"",
-            outcome: Outcome::InvalidUnsupported,
-            phase: Phase::ParseProjection,
+            outcome: Outcome::Invalid,
+            phase: Phase::Body,
         },
         // Source SHA256 9be7d43663f4a913da2b28c02120582b7728762dd3897d5098417baff96ef4eb
         Case {
@@ -202,8 +202,8 @@ fn main() { let a = bound::<S>(37); let b = equality::<S>(41); if a.0 != 37 || a
             source_fingerprint: 16334128787973259919,
             stock_diagnostic: None,
             stdout: b"ok\n",
-            outcome: Outcome::Unsupported,
-            phase: Phase::ParseProjection,
+            outcome: Outcome::Runtime,
+            phase: Phase::None,
         },
         // Source SHA256 1cae3dcdd478b2f2b237629f749fa2796b8045fb99a37b8e5450d4da9760dc40
         Case {
@@ -220,8 +220,8 @@ fn main() { let a = first::<S>(); let b = second::<S>(); if a != 43 || b.0 != 47
             source_fingerprint: 17623759176448353613,
             stock_diagnostic: None,
             stdout: b"ok\n",
-            outcome: Outcome::Unsupported,
-            phase: Phase::ExternalExit,
+            outcome: Outcome::Runtime,
+            phase: Phase::None,
         },
         // Source SHA256 8c77cf46b8118f0406c6274be55e136ceda1033b923e9e127c931fd2c7b08f2d
         Case {
@@ -236,8 +236,8 @@ fn main() { if !(forward::<S>() != 17) { println!("ok"); } }
             source_fingerprint: 3801088847737584331,
             stock_diagnostic: None,
             stdout: b"ok\n",
-            outcome: Outcome::Unsupported,
-            phase: Phase::ParseProjection,
+            outcome: Outcome::Runtime,
+            phase: Phase::None,
         },
         // Source SHA256 033f1ef08f0dec713207d48f93023c71d5b3467028a8963b635102c406cfbeb8
         Case {
@@ -320,8 +320,8 @@ fn main() { let a = bound::<S>(37); let b = equality::<S>(41); if !(a.0 != 37 ||
             source_fingerprint: 12682430148740272226,
             stock_diagnostic: None,
             stdout: b"ok\n",
-            outcome: Outcome::Unsupported,
-            phase: Phase::ParseProjection,
+            outcome: Outcome::Runtime,
+            phase: Phase::None,
         },
         // Source SHA256 83e877d09fb1ed77d18dc23da4ee1d3e29211977658cc5c49d1cc92abcde03f6
         Case {
@@ -669,8 +669,8 @@ fn main() { if forward(S) == 89 { println!("ok"); } }
             source_fingerprint: 12216343063597757803,
             stock_diagnostic: None,
             stdout: b"ok\n",
-            outcome: Outcome::Unsupported,
-            phase: Phase::ParseProjection,
+            outcome: Outcome::Runtime,
+            phase: Phase::None,
         },
         // Source SHA256 d98dfe72d19be0dfb6264dbb0a1834d214fc308c6a3a48c1cd93a230ae48a5d6
         Case {
@@ -685,8 +685,8 @@ fn main() { let x = forward(S); if x.0 == 97 && x.1 == 97 { println!("ok"); } }
             source_fingerprint: 3635878469295405380,
             stock_diagnostic: None,
             stdout: b"ok\n",
-            outcome: Outcome::Unsupported,
-            phase: Phase::ParseProjection,
+            outcome: Outcome::Runtime,
+            phase: Phase::None,
         },
         // Source SHA256 c38c80a7565f0d1d7e42a14c37bf4c7bc1b31ad085e04359130e9ea9976b1413
         Case {
@@ -781,8 +781,8 @@ fn main() { println!("ok"); }
             source_fingerprint: 11232338522751284758,
             stock_diagnostic: None,
             stdout: b"ok\n",
-            outcome: Outcome::Unsupported,
-            phase: Phase::StaticLifetime,
+            outcome: Outcome::Runtime,
+            phase: Phase::None,
         },
         // Source SHA256 2b9667b49aa67cf0109c46b47732c3bb8b5656a5b312e51bc53b0f61bc430089
         Case {
@@ -847,7 +847,7 @@ fn associated_equality_frozen_stock_partition_and_source_bytes() {
             case.name
         );
     }
-    assert_eq!(partition, [23, 6, 16, 1]);
+    assert_eq!(partition, [35, 7, 4, 0]);
     assert_eq!(stock, [39, 7]);
     assert_eq!(
         cases[..10]
@@ -1186,13 +1186,13 @@ fn native_associated_equality_workers1_8_check_build_no_compiler_fallback() {
         }
     }
     assert_eq!(cells, 184);
-    assert_eq!(modes, [[46, 46], [12, 12], [32, 32], [2, 2]]);
+    assert_eq!(modes, [[70, 70], [14, 14], [8, 8], [0, 0]]);
     failures.check("native CLI successful runtime count", || {
-        assert_eq!(runtimes, 46)
+        assert_eq!(runtimes, 70)
     });
     failures.finish();
     eprintln!(
-        "NATIVE ASSOCIATED EQUALITY:184 CLI cells,modes{modes:?},46 native ELF payloads;23 Runtime,6 Invalid,16 stock-valid Unsupported,1 stock-invalid Unsupported"
+        "NATIVE ASSOCIATED EQUALITY:184 CLI cells,modes{modes:?},70 native ELF payloads;35 Runtime,7 Invalid,4 stock-valid Unsupported,0 stock-invalid Unsupported"
     );
 }
 fn evaluated_once(report: &Report, kind: u32, index: usize, case: &Case) {
@@ -1205,11 +1205,21 @@ fn evaluated_once(report: &Report, kind: u32, index: usize, case: &Case) {
     assert_eq!(entries.len(), 1, "{}: missing/duplicate {key:?}", case.name);
     assert_eq!(entries[0].1, 1, "{}: repeated {key:?}", case.name);
 }
-fn successful_all_body_graph(case: &Case, compiled: &compiler::Compilation, check: bool) {
+/// Per-source oracle: the all-body check and plan depend only on the
+/// source, so the four worker/mode cells of one case share them.
+fn all_body_oracle(case: &Case) -> frontend::PlanCtx {
     let program = native_prelude::parse(case.source).expect("frozen positive source parses");
     frontend::check(&program).expect("all bodies check independently of reachability");
-    let plan = frontend::PlanCtx::from_program(&program, &ir::PlanBudget::default())
-        .expect("real source binders and declared predicates");
+    frontend::PlanCtx::from_program(&program, &ir::PlanBudget::default())
+        .expect("real source binders and declared predicates")
+}
+fn successful_all_body_graph(
+    case: &Case,
+    compiled: &compiler::Compilation,
+    check: bool,
+    oracle: &mut Option<frontend::PlanCtx>,
+) {
+    let plan = oracle.get_or_insert_with(|| all_body_oracle(case));
     assert_eq!(compiled.source_bytes, case.source.len());
     assert_eq!(compiled.source_files, 1);
     assert_eq!(compiled.executable.is_none(), check);
@@ -1250,12 +1260,16 @@ fn successful_all_body_graph(case: &Case, compiled: &compiler::Compilation, chec
         "{}: equality caller must retain its universal binder",
         case.name
     );
+    // Prelude bodies reached by BUILD are admitted on demand, not eagerly.
     assert_eq!(
         compiled
             .report
             .node_evaluations
             .iter()
-            .filter(|(key, _)| key.kind == 110)
+            .filter(|(key, _)| key.kind == 110
+                && !plan
+                    .is_prelude_decl(plan.callable_decl(key.params[0] as usize).unwrap())
+                    .unwrap())
             .count(),
         eager_bodies
     );
@@ -1301,6 +1315,7 @@ fn all_body_graph() {
     let mut modes = [[0; 2]; 4];
     let mut unused_failures = 0;
     for case in cases() {
+        let mut oracle = None;
         for workers in [1, 8] {
             for check in [true, false] {
                 failures.check(
@@ -1311,7 +1326,7 @@ fn all_body_graph() {
                     || match compiler::compile_observed(case.source.to_owned(), workers, check) {
                         Ok(compiled) => {
                             assert_eq!(case.outcome, Outcome::Runtime, "{}", case.name);
-                            successful_all_body_graph(&case, &compiled, check);
+                            successful_all_body_graph(&case, &compiled, check, &mut oracle);
                         }
                         Err(failure) => {
                             assert_ne!(case.outcome, Outcome::Runtime, "{}:{failure}", case.name);
@@ -1382,7 +1397,7 @@ fn all_body_graph() {
             }
         }
     }
-    assert_eq!(modes, [[46, 46], [12, 12], [32, 32], [2, 2]]);
+    assert_eq!(modes, [[70, 70], [14, 14], [8, 8], [0, 0]]);
     failures.check("native graph unused universal rejection count", || {
         assert_eq!(unused_failures, 8)
     });

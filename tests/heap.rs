@@ -1059,6 +1059,65 @@ fn main() {
 }
 
 #[test]
+fn constant_scalar_borrows_are_statically_promoted() {
+    // Expected output is stock rustc's for each exact source.
+    runs_source(
+        "promoted_scalars",
+        "fn f()->&'static i8{&-5}\nfn g()->&'static u128{&340282366920938463463374607431768211455}\nfn main(){let r;{r=&3u32;}let b=&true;let c=&'z';println!(\"{} {} {} {} {} {}\",r,f(),g(),b,c,*r+1);}\n",
+        "3 -5 340282366920938463463374607431768211455 true z 4\n",
+    );
+    runs_source(
+        "promoted_through_generic",
+        "fn id<T>(x:T)->T{x}\nfn main(){let r=id(&3u32);let v=vec![&4u32];println!(\"{} {}\",r,v[0]);}\n",
+        "3 4\n",
+    );
+    runs_source(
+        "promoted_vec_iteration",
+        "fn main(){let v=vec![&3u32];for s in &v{println!(\"{}\",s.count_ones());}}\n",
+        "2\n",
+    );
+}
+
+#[test]
+fn field_assignment_through_returned_struct_reference() {
+    // Stock rustc prints the same output for this source.
+    runs_source(
+        "returned_struct_field_assign",
+        "struct S{f:i32}\nfn q(s:&mut S)->&mut S{s}\nfn main(){let mut s=S{f:1};q(&mut s).f+=1;let t=&mut s;q(t).f*=5;println!(\"{}\",s.f);}\n",
+        "10\n",
+    );
+}
+
+#[test]
+fn borrow_conflicts_report_stock_error_codes() {
+    // Each code matches stock rustc's diagnostic for the same program.
+    for (name, source, code) in [
+        (
+            "dangling_through_generic",
+            "fn id<T>(x:T)->T{x}\nfn main(){let r;{let a:String=String::from(\"x\");r=id(&a);}println!(\"{}\",r);}\n",
+            "E0597",
+        ),
+        (
+            "mut_while_shared",
+            "fn main(){let mut v=vec![1];let r=&v;v.push(2);println!(\"{}\",r[0]);}\n",
+            "E0502",
+        ),
+        (
+            "move_while_borrowed",
+            "fn main(){let v=String::new();let r=&v;let w=v;println!(\"{}{}\",r,w);}\n",
+            "E0505",
+        ),
+        (
+            "assign_while_borrowed",
+            "fn main(){let mut x=1;let r=&x;x=2;println!(\"{}{}\",r,x);}\n",
+            "E0506",
+        ),
+    ] {
+        rejects_source(name, source, code);
+    }
+}
+
+#[test]
 fn source_drop_escaping_borrows_and_unsupported_aggregates_reject() {
     let stock = Command::new("rustc")
         .arg("-vV")

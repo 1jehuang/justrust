@@ -230,6 +230,37 @@ fn compare(
                     depth + 1,
                 )?
         }
+        // Statically promoted `&literal`: the referent must be exactly the
+        // replayed scalar, and no frame temporary may stand behind it.
+        (
+            Expr::BorrowValue {
+                kind: ir::BorrowKind::Shared,
+                value: source,
+            },
+            ir::ExprKind::PromotedScalar(scalar),
+        ) => {
+            let ir::Ty::Ref {
+                kind: ir::BorrowKind::Shared,
+                referent,
+            } = ty
+            else {
+                return Ok(false);
+            };
+            if temporaries.contains_key(&id)
+                || !source_type_equal(referent, &scalar.value_ty(), facts, budget)?
+            {
+                return Ok(false);
+            }
+            match (source.as_ref(), scalar) {
+                (Expr::Bool(a), ir::PromotedScalar::Bool(b)) => *a == *b,
+                (Expr::Char(a), ir::PromotedScalar::Char(b)) => u32::from(*a) == b.value,
+                (Expr::Integer(literal), ir::PromotedScalar::Int(value)) => {
+                    resolve_integer(literal, false, None).map_err(|e| source_error(budget, &e))?
+                        == *value
+                }
+                _ => false,
+            }
+        }
         _ => false,
     })
 }
@@ -258,17 +289,23 @@ pub(super) fn validate(
             "closed literal input arity changed",
         ));
     }
-    // Returned references are admitted only from static strings and closed
-    // reference-free scalars, never from borrowed temporaries or constructors.
+    // Returned references are admitted only from static strings, closed
+    // reference-free scalars, and statically promoted `&scalar` inputs, never
+    // from borrowed temporaries or constructors.
     // Their values and all generic actuals are independently replayed below.
     if !ir::carrier_locations(&signature.result, budget)
         .map_err(|e| source_error(budget, &e))?
         .is_empty()
-        && !sources.iter().all(|source| {
-            matches!(
-                source,
-                Expr::Str(_) | Expr::Bool(_) | Expr::Char(_) | Expr::Integer(_)
-            )
+        && !sources.iter().all(|source| match source {
+            Expr::Str(_) | Expr::Bool(_) | Expr::Char(_) | Expr::Integer(_) => true,
+            Expr::BorrowValue {
+                kind: ir::BorrowKind::Shared,
+                value,
+            } => matches!(
+                value.as_ref(),
+                Expr::Bool(_) | Expr::Char(_) | Expr::Integer(_)
+            ),
+            _ => false,
         })
     {
         return Err(FactsError::unsupported(

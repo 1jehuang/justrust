@@ -2085,6 +2085,44 @@ impl<'a> Emitter<'a> {
         Ok(())
     }
 
+    /// `&'static T` to one constant scalar in the private frame layout: a
+    /// normalized eight-byte word, or (low, high) limbs for 128-bit integers.
+    fn promoted_scalar(&mut self, scalar: ir::PromotedScalar) -> Result<(), String> {
+        scalar.validate()?;
+        let budget = self.concrete.facts().budget().clone();
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(16)
+            .map_err(|_| "promoted scalar allocation failed")?;
+        budget.retain_bytes(16)?;
+        match scalar {
+            ir::PromotedScalar::Int(value) if value.ty.bits() == 128 => {
+                bytes.extend_from_slice(&value.bits.to_le_bytes());
+            }
+            ir::PromotedScalar::Int(value) => {
+                let bits = value.ty.bits();
+                let raw = value.bits as u64;
+                let word = if bits == 64 {
+                    raw
+                } else if value.ty.is_signed() {
+                    (((raw << (64 - bits)) as i64) >> (64 - bits)) as u64
+                } else {
+                    raw & ((1u64 << bits) - 1)
+                };
+                bytes.extend_from_slice(&word.to_le_bytes());
+            }
+            ir::PromotedScalar::Bool(value) => {
+                bytes.extend_from_slice(&u64::from(value).to_le_bytes())
+            }
+            ir::PromotedScalar::Char(value) => {
+                bytes.extend_from_slice(&u64::from(value.value).to_le_bytes())
+            }
+        }
+        self.data_relocation(bytes)?;
+        self.bytes(&[0x48, 0x89, 0xf0]); // mov rax, rsi: thin scalar pointer
+        Ok(())
+    }
+
     /// `&'static [u8; len]` of one repeated byte, in the same private element
     /// layout as byte string literals. Only the backend materializes storage.
     fn byte_repeat_literal(&mut self, byte: u8, len: usize) -> Result<(), String> {
@@ -3054,6 +3092,7 @@ impl Emitter<'_> {
             cfg::Rvalue::Str(text) => self.str_literal(text)?,
             cfg::Rvalue::ByteStr(bytes) => self.byte_string_literal(bytes)?,
             cfg::Rvalue::ByteRepeat { byte, len } => self.byte_repeat_literal(*byte, *len)?,
+            cfg::Rvalue::PromotedScalar(scalar) => self.promoted_scalar(*scalar)?,
             cfg::Rvalue::RefToDyn {
                 reference,
                 object,

@@ -3145,7 +3145,9 @@ impl<'a, 'b> CarrierBuilder<'a, 'b> {
                 matches!(
                     &statement.value,
                     Statement::Assign {
-                        value: Rvalue::ByteStr(_) | Rvalue::ByteRepeat { .. },
+                        value: Rvalue::ByteStr(_)
+                            | Rvalue::ByteRepeat { .. }
+                            | Rvalue::PromotedScalar(_),
                         ..
                     }
                 )
@@ -3754,7 +3756,7 @@ impl CarrierBuilder<'_, '_> {
         statement: usize,
     ) -> Result<Vec<(CarrierLocation, CarrierOrigins)>, Exhausted> {
         match value {
-            Rvalue::ByteStr(_) | Rvalue::ByteRepeat { .. } => {
+            Rvalue::ByteStr(_) | Rvalue::ByteRepeat { .. } | Rvalue::PromotedScalar(_) => {
                 let origin = self.static_origin.ok_or(Exhausted)?;
                 let mut origins = self.empty_origins()?;
                 origins.references.0.insert(origin.0);
@@ -6506,6 +6508,7 @@ fn visit_rvalue(f: &cfg::Function, value: &Rvalue, mut visit: impl FnMut(&Place,
         | Rvalue::Output(_)
         | Rvalue::Str(_)
         | Rvalue::ByteStr(_)
+        | Rvalue::PromotedScalar(_)
         | Rvalue::ByteRepeat { .. } => {}
     }
 }
@@ -7707,8 +7710,23 @@ impl Plan {
                     if self.disjoint_call_results(target, borrowed, loan, budget)? {
                         continue;
                     }
+                    // Stock rustc classes for the same conflicts.
+                    let code = match (access, self.kinds[loan]) {
+                        (Access::StorageEnd, _) => {
+                            "E0597: borrowed value does not live long enough"
+                        }
+                        (Access::Move, _) => "E0505: cannot move out of value while borrowed",
+                        (Access::Write, _) => "E0506: cannot assign to value while borrowed",
+                        (_, BorrowKind::Shared) => {
+                            "E0502: cannot borrow as mutable because it is also borrowed as immutable"
+                        }
+                        (Access::Read | Access::SharedBorrow, _) => {
+                            "E0502: cannot borrow as immutable because it is also borrowed as mutable"
+                        }
+                        _ => "E0499: cannot borrow as mutable more than once at a time",
+                    };
                     return Ok(Some(Problem::Conflict(format!(
-                        "access conflicts with live {:?} loan {}",
+                        "{code}: access conflicts with live {:?} loan {}",
                         self.kinds[loan], loan
                     ))));
                 }

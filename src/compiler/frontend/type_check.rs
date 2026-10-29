@@ -1636,11 +1636,13 @@ impl<'s> Checker<'s> {
             .predicates()
             .iter()
             .filter_map(|predicate| match predicate {
-                // Bare-parameter RHS is already covered by projected formals.
-                // A bare projection RHS (`IntoIter: Iterator<Item = Self::Item>`)
-                // names no slot; it is proven as an obligation, not evidence.
+                // A bare-parameter RHS (`T: Source<Out = U>`) may be the only
+                // evidence for `U`; constraints are idempotent when formals
+                // already fix it. A bare projection RHS
+                // (`IntoIter: Iterator<Item = Self::Item>`) names no slot; it
+                // is proven as an obligation, not evidence.
                 ir::Predicate::ProjectionEq { projection, ty }
-                    if !matches!(ty, ir::Ty::Param(_) | ir::Ty::AssociatedType(_))
+                    if !matches!(ty, ir::Ty::AssociatedType(_))
                         && inferred_owner::mentions_param(ty) =>
                 {
                     Some((ir::Ty::AssociatedType(Arc::new(projection.clone())), ty))
@@ -5613,6 +5615,56 @@ impl<'a> Checker<'a> {
         if !flow.completes {
             return Ok(value);
         }
+        // Stock rvalue static promotion: `&literal` is `&'static T` over
+        // immutable program data, not a statement-scoped temporary.
+        if kind == ir::BorrowKind::Shared
+            && (matches!(source, Expr::Integer(_) | Expr::Bool(_) | Expr::Char(_))
+                || matches!(source, Expr::Unary { op: UnaryOp::Neg, value, .. } if matches!(value.as_ref(), Expr::Integer(_))))
+        {
+            let scalar = match &self.exprs[value.0].kind {
+                ir::ExprKind::Int(literal) => Some(ir::PromotedScalar::Int(*literal)),
+                ir::ExprKind::Bool(literal) => Some(ir::PromotedScalar::Bool(*literal)),
+                ir::ExprKind::Char(literal) => Some(ir::PromotedScalar::Char(*literal)),
+                // `-literal` of a signed integer: exact two's-complement fold.
+                // Overflow (`&-128i8` is fine, `-(MIN)` is not representable
+                // as a literal) keeps the ordinary checked path.
+                ir::ExprKind::Unary {
+                    op: UnaryOp::Neg,
+                    value: operand,
+                } => match &self.exprs[operand.0].kind {
+                    ir::ExprKind::Int(literal) if literal.ty.is_signed() => {
+                        let bits = literal.ty.bits();
+                        let min = 1u128 << (bits - 1);
+                        (literal.bits <= min).then(|| {
+                            let negated = literal.bits.wrapping_neg();
+                            let masked = if bits == 128 {
+                                negated
+                            } else {
+                                negated & ((1u128 << bits) - 1)
+                            };
+                            ir::PromotedScalar::Int(ir::IntValue {
+                                ty: literal.ty,
+                                bits: masked,
+                            })
+                        })
+                    }
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some(scalar) = scalar
+                && scalar.value_ty() == flow.ty
+            {
+                self.charge_node(std::mem::size_of::<ir::TypedExpr>() + 24)?;
+                let id = ir::ExprId(self.exprs.len());
+                self.exprs.push(ir::TypedExpr {
+                    ty: scalar.reference_ty(),
+                    completion: ir::Completion::Returns,
+                    kind: ir::ExprKind::PromotedScalar(scalar),
+                });
+                return Ok(id);
+            }
+        }
         let extended = self
             .extending_borrows
             .contains(&(source as *const Expr as usize));
@@ -6540,11 +6592,14 @@ impl<'a> Checker<'a> {
         };
         let pf = self.flow(pointer);
         self.require(&pf, &carrier_ty)?;
-        let handle = self.temporary(
-            &format!("$carrier{}", self.locals.len()),
-            carrier_ty.clone(),
-            false,
-        )?;
+        // The hint may name a nominal by its source slot while the checked
+        // call result carries the realized identity; store the checked type.
+        let handle_ty = if pf.ty == ir::Ty::Never {
+            carrier_ty.clone()
+        } else {
+            pf.ty.clone()
+        };
+        let handle = self.temporary(&format!("$carrier{}", self.locals.len()), handle_ty, false)?;
         self.plan_budget_guard()?;
         statements.push(ir::TypedStmt::Let {
             local: handle,
@@ -9921,20 +9976,107 @@ impl<'a> Checker<'a> {
         let value = match target {
             ir::Ty::Int(to) => self.expr_with_expectation(value, Expectation::CastableToInt(to))?,
             ir::Ty::Float(_) | ir::Ty::Char => self.expr(value)?,
-            _ => return Err("unsupported cast target".into()),
+            ir::Ty::Bool => {
+                return Err("E0054: cannot cast as `bool`; compare with zero instead".into());
+            }
+            _ => return Err("E0605: non-primitive cast".into()),
         };
         let source = self.flow(value);
         let kind = match (&source.ty, &target) {
             (ir::Ty::Char, ir::Ty::Int(to)) => ir::ExprKind::CharToInt { value, to: *to },
             (ir::Ty::Int(ir::IntTy::U8), ir::Ty::Char) => ir::ExprKind::U8ToChar { value },
             (_, ir::Ty::Char) => {
-                return Err("unsupported cast to char: source must be u8".into());
+                return Err("E0604: only `u8` can be cast as `char`".into());
             }
             (ir::Ty::Char, _) => {
-                return Err("unsupported cast from char: target must be an integer".into());
+                return Err("E0606: casting `char` to a non-integer type is invalid".into());
+            }
+            // `b as {int}` is `if b { 1 } else { 0 }` with stock semantics.
+            (ir::Ty::Bool, ir::Ty::Int(to)) => {
+                let to = *to;
+                let mut arms = [ir::ExprId(0); 2];
+                for (arm, bits) in arms.iter_mut().zip([1, 0]) {
+                    self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
+                    *arm = ir::ExprId(self.exprs.len());
+                    self.exprs.push(ir::TypedExpr {
+                        ty: ir::Ty::Int(to),
+                        completion: ir::Completion::Returns,
+                        kind: ir::ExprKind::Int(ir::IntValue { ty: to, bits }),
+                    });
+                }
+                let [one, zero] = arms;
+                ir::ExprKind::If {
+                    condition: value,
+                    then_block: ir::TypedBlock {
+                        statements: Vec::new(),
+                        tail: Some(one),
+                    },
+                    else_block: ir::TypedBlock {
+                        statements: Vec::new(),
+                        tail: Some(zero),
+                    },
+                }
+            }
+            // A fieldless enum without explicit discriminants casts to its
+            // variant index, wrapped to the target width like stock `as`.
+            (ir::Ty::Enum(enumeration), ir::Ty::Int(to))
+                if enumeration
+                    .def()
+                    .variants
+                    .iter()
+                    .all(|variant| variant.shape == ir::VariantShape::Unit) =>
+            {
+                let (to, ty) = (*to, enumeration.clone());
+                let mut arms = Vec::new();
+                self.infer_storage(ty.def().variants.len())?;
+                for variant in 0..ty.def().variants.len() {
+                    self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
+                    let body = ir::ExprId(self.exprs.len());
+                    self.exprs.push(ir::TypedExpr {
+                        ty: ir::Ty::Int(to),
+                        completion: ir::Completion::Returns,
+                        kind: ir::ExprKind::Int(ir::IntValue {
+                            ty: to,
+                            bits: variant as u128 & to.mask(),
+                        }),
+                    });
+                    arms.push(ir::TypedMatchArm {
+                        guard: None,
+                        pattern: ir::MatchPattern::EnumVariant {
+                            ty: ty.clone(),
+                            variant,
+                            bindings: Vec::new(),
+                        },
+                        body,
+                    });
+                }
+                ir::ExprKind::Match {
+                    scrutinee: value,
+                    arms,
+                    scrutinee_scope: false,
+                }
             }
             _ => {
-                let from = ir::NumTy::of(&source.ty).ok_or("unsupported cast source")?;
+                let from = ir::NumTy::of(&source.ty).ok_or_else(|| {
+                    if matches!(source.ty, ir::Ty::Bool) {
+                        // Stock rejects `bool as f64` too, with E0606.
+                        "E0606: casting `bool` as a float is invalid"
+                    } else if let ir::Ty::Enum(enumeration) = &source.ty
+                        && enumeration
+                            .def()
+                            .variants
+                            .iter()
+                            .all(|variant| variant.shape == ir::VariantShape::Unit)
+                    {
+                        "E0606: casting a fieldless enum as a float is invalid"
+                    } else if matches!(source.ty, ir::Ty::Enum(_)) {
+                        "E0605: non-primitive cast"
+                    } else if matches!(source.ty, ir::Ty::Ref { .. }) {
+                        "E0606: casting a reference to a numeric type is invalid"
+                    } else {
+                        "E0605: non-primitive cast"
+                    }
+                })?;
                 let numeric = ir::NumTy::of(&target).ok_or("unsupported cast target")?;
                 match (from, numeric) {
                     (ir::NumTy::Int(_), ir::NumTy::Int(to)) => ir::ExprKind::IntCast { value, to },
@@ -13238,19 +13380,18 @@ pub fn check(program: &Program) -> Result<(), String> {
     // Each callable is an independent task with its own per-task budget, as
     // its graph node would have; one detached ledger must not span the loop.
     for i in 0..count {
-        let result = crate::engine::with_fresh_detached_ledgers(|| {
-            check_function_with_signatures(program, i, &signatures)
-        });
         // This graph-free checker lacks sealed graph facts (constants, derived
         // impl obligations) that native prelude bodies rely on. Those bodies
         // are checked by the graph CHECK root; user source is never exempt.
-        if result.is_err()
-            && let Some(plan) = signatures.plan.as_ref()
+        // Their result would be discarded, so they are not typed here at all.
+        if let Some(plan) = signatures.plan.as_ref()
             && plan.is_prelude_decl(plan.callable_decl(i)?)?
         {
             continue;
         }
-        result?;
+        crate::engine::with_fresh_detached_ledgers(|| {
+            check_function_with_signatures(program, i, &signatures)
+        })?;
     }
     Ok(())
 }

@@ -42,9 +42,15 @@ fn local_callable_signatures_match_stock() {
         ),
     ];
     for (name, text) in programs {
+        // The native compiler captures its source directory; keep each
+        // program's directory free of earlier stock/native executables.
+        let out = dir.join(format!("{name}-out"));
+        let dir = dir.join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::create_dir_all(&out).unwrap();
         let source = dir.join(format!("{name}.rs"));
         std::fs::write(&source, text).unwrap();
-        let stock = dir.join(format!("{name}-stock"));
+        let stock = out.join(format!("{name}-stock"));
         let output = Command::new("rustc")
             .args(["--edition=2024", "-Awarnings"])
             .arg(&source)
@@ -65,7 +71,7 @@ fn local_callable_signatures_match_stock() {
                 checked.status.success(),
                 "CHECK {name} workers{workers}: {checked:?}"
             );
-            let executable = dir.join(format!("{name}-{workers}"));
+            let executable = out.join(format!("{name}-{workers}"));
             let built = Command::new(env!("CARGO_BIN_EXE_jr-rust"))
                 .arg(&source)
                 .arg("--workers")
