@@ -170,6 +170,54 @@ impl SourceSnapshot {
         Ok(path)
     }
 
+    /// Resolve lookups component by component. Lexical normalization alone would
+    /// turn `missing/../main.rs` or `file/../main.rs` into a successful read and
+    /// erase a filesystem input (the traversed directory) from the namespace.
+    /// Construction still uses `path`: entries describe owned canonical names,
+    /// not filesystem walks, and may arrive in any order.
+    fn lookup_path(&self, path: &Path) -> io::Result<PathBuf> {
+        self.path(path)?;
+        let absolute = if path.is_absolute() {
+            path.to_owned()
+        } else {
+            self.root.join(path)
+        };
+        let mut resolved = PathBuf::new();
+        let mut components = absolute.components().peekable();
+        while let Some(component) = components.next() {
+            resolved.push(component);
+            resolved = normalize(&resolved)?;
+            if components.peek().is_some()
+                && !self.directories.contains(&resolved)
+                && !self.roots.iter().any(|root| root.starts_with(&resolved))
+            {
+                return Err(io::Error::new(
+                    if self.files.contains_key(&resolved) {
+                        io::ErrorKind::NotADirectory
+                    } else {
+                        io::ErrorKind::NotFound
+                    },
+                    "snapshot traversal requires an existing directory",
+                ));
+            }
+        }
+        let resolved = self.path(&resolved)?;
+        let spelling = path.as_os_str().as_encoded_bytes();
+        if (spelling.ends_with(b"/") || spelling.ends_with(b"/."))
+            && !self.directories.contains(&resolved)
+        {
+            return Err(io::Error::new(
+                if self.files.contains_key(&resolved) {
+                    io::ErrorKind::NotADirectory
+                } else {
+                    io::ErrorKind::NotFound
+                },
+                "snapshot traversal requires an existing directory",
+            ));
+        }
+        Ok(resolved)
+    }
+
     pub(crate) fn reader(&self) -> SnapshotReader<'_> {
         SnapshotReader(self)
     }
@@ -179,7 +227,7 @@ impl SourceSnapshot {
     }
 
     pub(crate) fn read_dir(&self, path: &Path) -> io::Result<Vec<std::ffi::OsString>> {
-        let path = self.path(path)?;
+        let path = self.lookup_path(path)?;
         if !self.directories.contains(&path) {
             return Err(io::Error::new(
                 io::ErrorKind::NotFound,
@@ -230,7 +278,7 @@ impl SourceReader for SnapshotReader<'_> {
         InputDomain::Snapshot
     }
     fn canonicalize(&mut self, path: &Path) -> io::Result<PathBuf> {
-        let path = self.0.path(path)?;
+        let path = self.0.lookup_path(path)?;
         if self.0.files.contains_key(&path) || self.0.directories.contains(&path) {
             Ok(path)
         } else {
@@ -245,11 +293,15 @@ impl SourceReader for SnapshotReader<'_> {
         Ok(self.0.files.contains_key(&path))
     }
     fn exists(&mut self, path: &Path) -> io::Result<bool> {
-        let path = self.0.path(path)?;
+        let path = match self.0.lookup_path(path) {
+            Ok(path) => path,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+            Err(error) => return Err(error),
+        };
         Ok(self.0.files.contains_key(&path) || self.0.directories.contains(&path))
     }
     fn read(&mut self, path: &Path, limit: usize) -> io::Result<Vec<u8>> {
-        let path = self.0.path(path)?;
+        let path = self.0.lookup_path(path)?;
         let bytes =
             self.0.files.get(&path).ok_or_else(|| {
                 io::Error::new(io::ErrorKind::NotFound, "snapshot file is absent")
@@ -261,6 +313,75 @@ impl SourceReader for SnapshotReader<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn snapshot_lookups_do_not_erase_missing_or_non_directory_components() {
+        let frozen = snapshot(&[("main.rs", "fn main() {}"), ("dir/anchor", "")]);
+        for path in [
+            "missing/../main.rs",
+            "main.rs/../main.rs",
+            "main.rs/",
+            "main.rs/.",
+        ] {
+            let path = Path::new(path);
+            assert!(frozen.reader().canonicalize(path).is_err(), "{path:?}");
+            assert!(frozen.reader().is_file(path).is_err(), "{path:?}");
+            assert!(frozen.reader().read(path, 100).is_err(), "{path:?}");
+            assert!(frozen.read_dir(path).is_err(), "{path:?}");
+            assert!(!frozen.reader().exists(path).unwrap_or(false), "{path:?}");
+        }
+        assert!(!frozen.reader().exists(Path::new("missing/mod.rs")).unwrap());
+        assert_eq!(
+            frozen
+                .reader()
+                .read(Path::new("dir/../main.rs"), 100)
+                .unwrap(),
+            b"fn main() {}"
+        );
+        assert!(frozen.read_dir(Path::new("dir/../dir/.")).is_ok());
+    }
+
+    #[test]
+    fn snapshot_root_traversal_rejection_matches_stock_at_one_and_eight_workers() {
+        use crate::compiler::{self, source::SourceOptions};
+        let root = std::env::temp_dir().join(format!("jr-frozen-traversal-{}", std::process::id()));
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join("main.rs"), "fn main() {}").unwrap();
+        let frozen =
+            SourceSnapshot::new(root.clone(), [("main.rs".into(), b"fn main() {}".to_vec())])
+                .unwrap();
+        for spelling in [
+            "missing/../main.rs",
+            "main.rs/../main.rs",
+            "main.rs/",
+            "main.rs/.",
+        ] {
+            let path = root.join(spelling);
+            let stock = std::process::Command::new(crate::compiler::stock_rustc::stock_rustc())
+                .arg("--edition=2024")
+                .arg(&path)
+                .arg("-o")
+                .arg(root.join("stock"))
+                .output()
+                .unwrap();
+            assert!(!stock.status.success(), "stock accepted {spelling}");
+            for workers in [1, 8] {
+                for check_only in [true, false] {
+                    let result = compiler::compile_file_observed_with_options(
+                        path.clone(),
+                        workers,
+                        check_only,
+                        SourceOptions {
+                            source_snapshot: Some(frozen.clone()),
+                            ..Default::default()
+                        },
+                    );
+                    assert!(result.is_err(), "snapshot accepted {spelling}");
+                }
+            }
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn multi_root_identity_binds_authorization_without_admitting_common_ancestors() {
         let app = PathBuf::from("/frozen/app");
