@@ -40,3 +40,4 @@
 24_longest_word	pass
 25_primes_gcd	pass
 26_generic_string_borrow	pass
+27_vec_of_string_refs	pass

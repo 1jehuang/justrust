@@ -274,7 +274,7 @@ pub(super) fn supported(
                 return Ok(false);
             };
             let site = &inventory.bindings[index];
-            if site.parameter.is_some() {
+            if site.parameter.is_some() || site.annotation.is_some() {
                 return Ok(true);
             }
             let Some(Stmt::Let { value, .. }) =
@@ -871,6 +871,24 @@ impl Replay<'_> {
                 checked_local_ty(ty, self.signatures).map_err(|e| source_error(self.budget, &e))
             })
             .transpose()?;
+        // A written annotation is the binding's authoritative type: the
+        // checker already required the initializer to conform to it, so the
+        // root contributes the annotation without replaying the initializer.
+        // Only reference-free annotations qualify: no loan can flow through.
+        if let Some(annotation) = annotation.as_ref()
+            && !syntax(source, self.budget, depth)?
+            && ir::carrier_locations(annotation, self.budget)
+                .map_err(|e| source_error(self.budget, &e))?
+                .is_empty()
+        {
+            if !self.equal(annotation, &declaration.ty)? {
+                return Err(FactsError::invalid(
+                    self.budget,
+                    "input annotated binding type changed",
+                ));
+            }
+            return Ok((local, annotation.clone()));
+        }
         let ty = self.expression(
             source,
             &site.node.child(3, 0, self.budget)?,
