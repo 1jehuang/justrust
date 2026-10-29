@@ -2071,8 +2071,16 @@ PlanCtx/interner/source-context debt and wide adapter activation remain held.
       writes are confined to the output directory, inherited descriptors are
       closed on exec, and process/network/namespace operations are denied.
       Because Landlock does not mediate pathname metadata, seccomp also denies
-      stat/access/readlink/chdir and O_PATH opens; descriptor fstat remains
-      available only for admitted descriptors. Landlock alone does not hide
+      stat/access/readlink/chdir and O_PATH opens. Descriptor fstat is brokered
+      into canonical x86-64 metadata: virtual device/inode identities derive from
+      captured relative paths, owners/times/padding are zero, and regular-file
+      lengths remain exact. Only regular captured/output files and registered
+      stdio/null descriptors are admitted. Directory descriptors, enumeration,
+      physical extent queries, O_DIRECT and mincore are denied. Child memory and
+      descriptor inspection use pinned proc-directory/mm handles, never a later
+      numeric-PID lookup. Bounded mapping checks preserve unreadable-path and
+      readonly-destination faults despite proc-memory access privileges.
+      Landlock alone does not hide
       host existence through open error codes, so native seccomp notification
       mediation copies bounded open/openat paths and resolves them only beneath
       pinned captured/output directory handles using openat2, without symlinks
@@ -2084,8 +2092,12 @@ PlanCtx/interner/source-context debt and wide adapter activation remain held.
       uniformly. Existing/missing outside paths and outside aliases to captured
       files cannot supply distinct lookup results. The notification ABI is
       checked before native buffers are used. Link supervision bounds elapsed
-      time and request count and kills/reaps on failure. Unsupported kernels or tools
-      fail closed, without changing host policy or retrying unconstrained.
+      time and request count and kills/reaps on failure. Pre-exec capability
+      sets are cleared, memory advice is allowlisted, and compiler death kills
+      the linker. The hosted controlled-link suite passes all 17 tests, including
+      canonical metadata across roots/mtimes/pipes, protected-memory faults and
+      the real parent-death lifecycle (`20261029-163644980-666112`). Unsupported
+      kernels or tools fail closed, without changing host policy or retrying unconstrained.
       Parent output acquisition rejects symlinks and special files, preventing a
       tool-created symlink from escaping confinement when its result is read.
       `justrust test --lib controlled_link` exercises adversarial file-content,

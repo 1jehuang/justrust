@@ -1,4 +1,68 @@
 use super::*;
+#[test]
+fn controlled_link_descriptor_metadata_is_reproducible_across_roots() {
+    let directory = Temp::new();
+    let source = directory.0.join("metadata.c");
+    let executable = directory.0.join("metadata");
+    fs::write(&source, r#"
+static long call(long n,long a,long b,long c){long r;__asm__ volatile("syscall":"=a"(r):"a"(n),"D"(a),"S"(b),"d"(c):"rcx","r11","memory");return r;}
+void _start(void){
+ unsigned char bytes[144];long fd=call(2,(long)"input",0,0);
+ if(fd<0||call(5,fd,(long)bytes,0)||call(1,1,(long)bytes,144)!=144)call(60,1,0,0);
+ if(call(5,1,(long)bytes,0)||call(1,1,(long)bytes,144)!=144)call(60,2,0,0);
+ if(call(5,2,(long)bytes,0)||call(1,1,(long)bytes,144)!=144)call(60,3,0,0);
+ if(call(5,0,(long)bytes,0)||call(1,1,(long)bytes,144)!=144)call(60,4,0,0);
+ call(60,0,0,0);
+}
+"#).unwrap();
+    let compiled = Command::new("cc")
+        .args([
+            "-nostdlib",
+            "-static",
+            "-fno-stack-protector",
+            "-no-pie",
+            "-O2",
+        ])
+        .arg(&source)
+        .arg("-o")
+        .arg(&executable)
+        .output()
+        .unwrap();
+    assert!(
+        compiled.status.success(),
+        "{}",
+        String::from_utf8_lossy(&compiled.stderr)
+    );
+    let mut results = Vec::new();
+    for (name, modified) in [("first", 1), ("second", 999)] {
+        let root = directory.0.join(name);
+        fs::create_dir(&root).unwrap();
+        fs::create_dir(root.join("out")).unwrap();
+        fs::copy(&executable, root.join("probe")).unwrap();
+        fs::write(root.join("input"), b"frozen").unwrap();
+        File::open(root.join("input"))
+            .unwrap()
+            .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(modified))
+            .unwrap();
+        let mut command = Command::new(root.join("probe"));
+        command.env_clear();
+        let output = super::super::link_sandbox_run::output(&mut command, &root).unwrap();
+        assert!(
+            output.status.success(),
+            "{}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(output.stdout.len(), 4 * 144);
+        for bytes in output.stdout.chunks_exact(144) {
+            assert_eq!(&bytes[28..48], &[0; 20]);
+            assert_eq!(&bytes[72..], &[0; 72]);
+        }
+        results.push(output.stdout);
+    }
+    assert_eq!(results[0], results[1]);
+    assert_ne!(&results[0][144..160], &results[0][288..304]);
+}
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[test]
 fn controlled_link_listener_transfer_rejects_missing_rights_and_nonlistener() {
@@ -372,6 +436,8 @@ fn controlled_link_boundary_denies_host_files_mutation_descriptors_network_and_p
     let source = directory.0.join("probe.c");
     fs::write(&source, format!(r#"
 static long call(long n,long a,long b,long c){{long r;__asm__ volatile("syscall":"=a"(r):"a"(n),"D"(a),"S"(b),"d"(c):"rcx","r11","memory");return r;}}
+static long call6(long n,long a,long b,long c,long d,long e,long f){{register long x __asm__("r10")=d;register long y __asm__("r8")=e;register long z __asm__("r9")=f;long r;__asm__ volatile("syscall":"=a"(r):"a"(n),"D"(a),"S"(b),"d"(c),"r"(x),"r"(y),"r"(z):"rcx","r11","memory");return r;}}
+static const unsigned char readonly_stat[144]={{0}};
 static void die(long code){{call(60,code,0,0);__builtin_unreachable();}}
 void _start(void){{
  char byte;
@@ -395,6 +461,7 @@ void _start(void){{
  if(call(2,(long)"input",0x400,0)!=-13)die(44);
  if(call(2,(long)"out",0x410002,0600)!=-13)die(45);
  if(call(2,(long)"out/async",0x2041,0600)!=-13)die(46);
+ if(call(2,(long)"input",0x4000,0)!=-13)die(66);
  if(call(76,(long)"input",0,0)!=-1)die(17);
  if(call(82,(long)"input",(long)"out/stolen",0)!=-1)die(18);
  if(call(86,(long)"input",(long)"out/linked",0)!=-1)die(19);
@@ -412,6 +479,31 @@ void _start(void){{
  if(call(1,{leaked},(long)"x",1)!=-9)die(30);
  if(call(77,{leaked},0,0)!=-9)die(31);
  long fd=call(2,(long)"input",0,0);if(fd<0||call(0,fd,(long)&byte,1)!=1||byte!='f')die(3);
+ union {{unsigned long aligned;unsigned char bytes[144];}} statbuf,duplicate;
+ if(call(5,fd,(long)statbuf.bytes,0)!=0)die(47);
+ if(*(unsigned long*)(statbuf.bytes+48)!=6||*(unsigned long*)(statbuf.bytes+16)!=1)die(48);
+ if(*(unsigned int*)(statbuf.bytes+24)!=0100444)die(49);
+ for(long i=28;i<48;i++)if(statbuf.bytes[i])die(50);
+ for(long i=72;i<144;i++)if(statbuf.bytes[i])die(51);
+ long dup=call(32,fd,0,0);if(dup<0||call(5,dup,(long)duplicate.bytes,0)!=0)die(52);
+ for(long i=0;i<144;i++)if(statbuf.bytes[i]!=duplicate.bytes[i])die(53);
+ if(call(5,fd,(long)readonly_stat,0)!=-14)die(54);
+ if(call(5,fd,0,0)!=-14)die(55);
+ if(call(5,999999,(long)statbuf.bytes,0)!=-9)die(56);
+ if(call(78,fd,(long)statbuf.bytes,144)!=-1)die(57);
+ if(call(217,fd,(long)statbuf.bytes,144)!=-1)die(58);
+ if(call(8,fd,0,3)!=-1||call(8,fd,0,4)!=-1)die(59);
+ if(call(2,(long)".",0x10000,0)!=-13)die(60);
+ long region=call6(9,0,8192,3,0x22,-1,0);if(region<0)die(61);
+ if(call(10,region+4096,4096,0)!=0)die(62);
+ char *edge=(char*)(region+4090);edge[0]='i';edge[1]='n';edge[2]='p';edge[3]='u';edge[4]='t';edge[5]=0;
+ if(call(2,region+4096,0,0)!=-14)die(63);
+ long edgefd=call(2,(long)edge,0,0);if(edgefd<0)die(64);
+ if(call(28,region,4096,100)!=-1||call(28,region,4096,101)!=-1)die(67);
+ if(call(28,region,4096,9999)!=-1)die(68);
+ if(call(27,region,4096,(long)&byte)!=-1)die(69);
+ if(call(28,region,4096,0)!=0)die(70);
+ if(call(11,region,8192,0)!=0)die(65);
  if(call(57,0,0,0)!=-1)die(5);
  if(call(435,0,0,0)!=-1)die(6);
  if(call(41,2,1,0)!=-1)die(7);

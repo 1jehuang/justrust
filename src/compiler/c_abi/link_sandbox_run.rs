@@ -32,7 +32,7 @@ pub(super) fn output(command: &mut Command, root: &Path) -> io::Result<Output> {
             }
         }
     }
-    let broker = Broker::new(root)?;
+    let mut broker = Broker::new(root)?;
     let socket = super::link_sandbox::confine(command, root)?;
     socket.set_read_timeout(Some(Duration::from_secs(5)))?;
     command
@@ -42,24 +42,24 @@ pub(super) fn output(command: &mut Command, root: &Path) -> io::Result<Output> {
     // Command::spawn waits for its exec error pipe to close. The bootstrap
     // listener must therefore run concurrently with spawn, before exec. No
     // untrusted image has run when this one initial event is continued.
-    let (mut child, listener) = std::thread::scope(|scope| {
+    let (mut child, listener, process) = std::thread::scope(|scope| {
         let transfer = scope.spawn(move || {
             let listener = receive(&socket)?;
-            let pid = bootstrap_exec(&listener)?;
-            Ok::<_, io::Error>((listener, pid))
+            let (pid, process) = bootstrap_exec(&listener)?;
+            Ok::<_, io::Error>((listener, pid, process))
         });
         let child = command.spawn().map(Guard);
         let transfer = transfer
             .join()
             .map_err(|_| io::Error::other("linker bootstrap receiver panicked"))?;
         let child = child?;
-        let (listener, pid) = transfer?;
+        let (listener, pid, process) = transfer?;
         if pid != child.0.id() {
             return Err(io::Error::other(
                 "linker bootstrap process identity mismatch",
             ));
         }
-        Ok::<_, io::Error>((child, listener))
+        Ok::<_, io::Error>((child, listener, process))
     })?;
     let stdout = child
         .0
@@ -71,6 +71,8 @@ pub(super) fn output(command: &mut Command, root: &Path) -> io::Result<Output> {
         .stderr
         .take()
         .ok_or_else(|| io::Error::other("missing linker stderr pipe"))?;
+    broker.bind_process(process)?;
+    broker.set_stdio(&stdout, &stderr)?;
     std::thread::scope(move |scope| {
         let mut child = child;
         fn drain(mut pipe: impl Read) -> io::Result<Vec<u8>> {
@@ -216,3 +218,7 @@ pub(super) unsafe fn send_listener(socket: i32, listener: i32) -> io::Result<()>
     }
     Ok(())
 }
+
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+#[path = "link_sandbox_lifecycle_tests.rs"]
+mod tests;

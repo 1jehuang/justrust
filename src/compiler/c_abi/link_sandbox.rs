@@ -19,6 +19,8 @@ pub(super) fn setup_error(error: &io::Error) -> String {
         8 => "close inherited descriptors",
         9 => "install syscall filter",
         10 => "transfer filesystem mediation listener",
+        11 => "bind linker lifetime to compiler",
+        12 => "drop linker capabilities",
         _ => "unknown boundary setup step",
     };
     format!(
@@ -45,6 +47,7 @@ pub(super) fn confine(
         fn close(fd: c_int) -> c_int;
         fn chdir(path: *const c_char) -> c_int;
         fn prctl(option: c_int, ...) -> c_int;
+        fn getppid() -> c_int;
     }
     #[repr(C)]
     struct Filter {
@@ -77,6 +80,7 @@ pub(super) fn confine(
     let out = CString::new(root.join("out").as_os_str().as_bytes())?;
     let root = CString::new(root.as_os_str().as_bytes())?;
     let (parent_socket, child_socket) = UnixDatagram::pair()?;
+    let parent_pid = std::process::id();
     let bootstrap = child_socket.as_raw_fd() as u32;
     let instruction = |code, jt, jf, value| Filter {
         code,
@@ -93,7 +97,7 @@ pub(super) fn confine(
     // Even denied Landlock opens distinguish missing host paths from existing
     // ones. Never issue them in the child: the parent copies and resolves the
     // request solely beneath captured directory handles, then injects the fd.
-    for number in [2, 59, 257] {
+    for number in [2, 5, 59, 257] {
         filter.extend([
             instruction(0x15, 0, 1, number),
             instruction(0x06, 0, 0, 0x7fc00000),
@@ -108,6 +112,24 @@ pub(super) fn confine(
         instruction(0x06, 0, 0, 0x7fff0000),
         instruction(0x06, 0, 0, 0x00050001),
     ]);
+    // Physical allocation (SEEK_DATA/HOLE) is not a captured input. Logical
+    // positions are derived from admitted bytes and may use SET/CUR/END only.
+    filter.extend([
+        instruction(0x15, 0, 4, 8),
+        instruction(0x20, 0, 0, 32),
+        instruction(0x25, 0, 1, 2),
+        instruction(0x06, 0, 0, 0x00050001),
+        instruction(0x06, 0, 0, 0x7fff0000),
+    ]);
+    // Ordinary allocator advice only, never HWPOISON/SOFT_OFFLINE or unknown
+    // future memory-control operations. Capability dropping is independent.
+    filter.push(instruction(0x15, 0, 18, 28));
+    filter.push(instruction(0x20, 0, 0, 32));
+    for advice in [0, 1, 2, 3, 4, 8, 14, 15] {
+        filter.push(instruction(0x15, 0, 1, advice));
+        filter.push(instruction(0x06, 0, 0, 0x7fff0000));
+    }
+    filter.push(instruction(0x06, 0, 0, 0x00050001));
     // prlimit64 only on self. fcntl only descriptor/flag operations.
     filter.extend([
         instruction(0x15, 0, 4, 302),
@@ -125,13 +147,15 @@ pub(super) fn confine(
     filter.push(instruction(0x06, 0, 0, 0x00050001));
     // Landlock does NOT mediate stat/access/readlink/chmod/chdir. Deny path
     // metadata entirely, including newfstatat (AT_EMPTY_PATH alone is unsafe:
-    // a nonempty path still resolves). Only descriptor fstat is permitted.
+    // a nonempty path still resolves). Descriptor fstat is emulated with
+    // canonical metadata. Directory listings exposing physical inode numbers
+    // are denied; this linker receives explicit captured file paths.
     // Exact native numbers also exclude x32, process/network/namespace APIs,
     // io_uring, ioctl and capability manipulation.
     for number in [
-        0u32, 1, 3, 5, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17, 18, 19, 20, 23, 24, 25, 26, 27, 28, 32,
-        33, 35, 39, 40, 60, 63, 74, 75, 77, 78, 79, 95, 96, 97, 98, 99, 100, 102, 104, 107, 108,
-        110, 115, 158, 186, 202, 204, 217, 218, 228, 229, 230, 231, 270, 271, 273, 318, 334, 436,
+        0u32, 1, 3, 7, 9, 10, 11, 12, 13, 14, 15, 17, 18, 19, 20, 23, 24, 25, 26, 32, 33, 35, 39,
+        40, 60, 63, 74, 75, 77, 79, 95, 96, 97, 98, 99, 100, 102, 104, 107, 108, 110, 115, 158,
+        186, 202, 204, 218, 228, 229, 230, 231, 270, 271, 273, 318, 334, 436,
     ] {
         filter.push(instruction(0x15, 0, 1, number));
         filter.push(instruction(0x06, 0, 0, 0x7fff0000));
@@ -154,11 +178,32 @@ pub(super) fn confine(
                     Ok(result)
                 }
             }
+            // Compiler cancellation must not leave a CPU-consuming orphan.
+            // Check after installing PDEATHSIG to close process-death setup
+            // races. Tool code cannot remove it because prctl is not granted.
+            checked(prctl(1, 9usize, 0usize, 0usize, 0usize) as c_long, 11)?;
+            if getppid() as u32 != parent_pid {
+                return Err(fail(11, 3));
+            }
             let abi = checked(syscall(444, std::ptr::null::<Ruleset>(), 0usize, 1u32), 1)?;
             if abi < 5 {
                 return Err(fail(1, 95));
             }
             checked(prctl(38, 1usize, 0usize, 0usize, 0usize) as c_long, 7)?;
+            #[repr(C)]
+            struct CapHeader {
+                version: u32,
+                pid: i32,
+            }
+            let header = CapHeader {
+                version: 0x20080522,
+                pid: 0,
+            };
+            let capabilities = [0u32; 6];
+            checked(
+                syscall(126, &header as *const CapHeader, capabilities.as_ptr()),
+                12,
+            )?;
             let attr = Ruleset {
                 handled_access_fs: HANDLED,
             };
