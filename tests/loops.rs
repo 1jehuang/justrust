@@ -815,15 +815,33 @@ fn referenced_array_for_rejects_aliasing_mutability_and_escape() {
 fn array_iteration_unsupported_boundaries_are_stock_valid_not_invalid_claims() {
     for source in [
         "struct Item{x:i32} fn main(){for item in [Item{x:1},Item{x:2}] {}}",
-        "struct Item{x:i32} fn main(){let a=[Item{x:1},Item{x:2}];for x in &a {let n=x.x;}}",
-        "fn main(){let a=[1,2];let mut last=&a[0];for x in &a {last=x;}let n=*last;}",
         "fn scan(a:&mut [i32]){for x in a {*x=3;}}fn main(){let mut a=[1,2];scan(&mut a);}",
-        "fn main(){for x in [1,2].iter() {}}",
         "fn main(){for x in [1,2].into_iter() {}}",
-        "fn relay<'a>(s:&'a [i32])->&'a [i32]{s}fn main(){for x in relay(&[4,5]){let n=*x;}}",
     ] {
         stock(source, Some(""));
         rejects("explicit unsupported iterator boundary", source);
+    }
+    // Formerly unsupported boundaries that now build and match stock.
+    for (source, expected) in [
+        (
+            r#"struct Item{x:i32} fn main(){let a=[Item{x:1},Item{x:2}];for x in &a {let n=x.x;println!("{}",n);}}"#,
+            "1\n2\n",
+        ),
+        (
+            r#"fn main(){let a=[1,2];let mut last=&a[0];for x in &a {last=x;}let n=*last;println!("{}",n);}"#,
+            "2\n",
+        ),
+        (
+            r#"fn main(){for x in [1,2].iter() {println!("{}",x);}}"#,
+            "1\n2\n",
+        ),
+        (
+            r#"fn relay<'a>(s:&'a [i32])->&'a [i32]{s}fn main(){for x in relay(&[4,5]){let n=*x;println!("{}",n);}}"#,
+            "4\n5\n",
+        ),
+    ] {
+        stock(source, Some(expected));
+        runs(source, expected);
     }
 }
 

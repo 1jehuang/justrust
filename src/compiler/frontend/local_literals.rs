@@ -1204,6 +1204,12 @@ impl<'s> Solver<'_, '_, 's> {
         // method in this body (`Some(&a).cloned().unwrap()`) waits on the
         // same local cycle, never on a missing graph producer.
         targets.extend(methods.iter().map(|method| method.result));
+        // Likewise a loop item (`for s in &v { *s }`) is produced by its
+        // pending source, which only this local cycle can reveal.
+        targets.extend(self.iterator_items.iter().map(|pending| match pending {
+            iteration::Pending::Ordinary(_, result) => *result,
+            iteration::Pending::ArrayMethod { result, .. } => *result,
+        }));
         for operator in &self.operators {
             let Some((left, right)) = operator.lazy_frontier_inputs() else {
                 return Ok(false);
