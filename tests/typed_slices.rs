@@ -653,6 +653,12 @@ fn shared_slice_static_reference_elements_match_stock() {
             "2\n",
         ),
         (
+            "mutable_outer_shared_elements",
+            "fn need<'a>(x:&mut[&'a i32],y:&'a i32){x[0]=y;} fn main(){let n=1;let m=2;let mut a=[&n];need(&mut a,&m);println!(\"{}\",a[0]);}",
+            true,
+            "2\n",
+        ),
+        (
             "static_elision",
             "fn bad(x:&[&'static i32])->&i32{x[0]} fn main(){}",
             false,
@@ -714,18 +720,11 @@ fn shared_slice_static_reference_elements_match_stock() {
 
 #[test]
 fn shared_slice_mutable_reference_boundaries_remain_explicit() {
-    let cases = [
-        (
-            "mutable_outer",
-            "fn need(x:&mut[&i32]){} fn main(){let n=1;let mut a=[&n];need(&mut a);println!(\"ok\");}",
-            true,
-        ),
-        (
-            "mutable_inner",
-            "fn need(x:&[&mut i32]){} fn main(){let mut n=1;let a=[&mut n];need(&a);println!(\"ok\");}",
-            true,
-        ),
-    ];
+    let cases = [(
+        "mutable_inner",
+        "fn need(x:&[&mut i32]){} fn main(){let mut n=1;let a=[&mut n];need(&a);println!(\"ok\");}",
+        true,
+    )];
     for (name, source, stock_valid) in cases {
         let scratch = Scratch::new();
         scratch.write("client.rs", source.as_bytes());

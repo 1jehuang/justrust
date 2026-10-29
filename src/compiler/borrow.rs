@@ -3680,7 +3680,40 @@ impl CarrierBuilder<'_, '_> {
                     indices.push(index);
                 }
             }
-            if diagnose && indices.len() != targets.len() {
+            let copy = self.copy_permission(&semantic)?;
+            let mut weak_cover = false;
+            if copy && !definite && indices.len() != targets.len() {
+                // Same weak subtree join as call effects: a store through a
+                // summarized element family updates every covered cell.
+                let mut covered = Vec::new();
+                let mut complete = true;
+                for target in &targets {
+                    match read_cell_cover(
+                        self.family_cover_locals
+                            .as_deref()
+                            .unwrap_or(&self.original_locals),
+                        &self.cell_index,
+                        target,
+                        &channel,
+                        self.budget,
+                    )? {
+                        Some(cover) if !cover.is_empty() => {
+                            for cell in cover {
+                                if !covered.contains(&cell) {
+                                    checked_vec_growth(&mut covered, self.budget)?;
+                                    covered.push(cell);
+                                }
+                            }
+                        }
+                        _ => complete = false,
+                    }
+                }
+                if complete {
+                    indices = covered;
+                    weak_cover = true;
+                }
+            }
+            if diagnose && !weak_cover && indices.len() != targets.len() {
                 self.problem(
                     block,
                     statement,
@@ -3689,7 +3722,6 @@ impl CarrierBuilder<'_, '_> {
                     ),
                 )?;
             }
-            let copy = self.copy_permission(&semantic)?;
             if diagnose && !copy && indices.len() != 1 {
                 self.problem(
                     block,
@@ -4119,17 +4151,52 @@ impl CarrierBuilder<'_, '_> {
                 // `(*s)[i] = v` through a slice carrier (MUTABLE-SLICES.md):
                 // slice elements are reference-free (slice element boundary),
                 // so the write cannot create or replace a carrier component.
-                if matches!(
-                    ir::indexed_array_ty(
-                        &self.f.locals[array.local.0].ty,
-                        &array.projection,
-                        false,
-                        &self.ledger,
-                    )
-                    .map_err(|_| Exhausted)?,
-                    Ty::Slice { .. }
-                ) {
+                if let Ty::Slice { element, .. } = ir::indexed_array_ty(
+                    &self.f.locals[array.local.0].ty,
+                    &array.projection,
+                    false,
+                    &self.ledger,
+                )
+                .map_err(|_| Exhausted)?
+                {
+                    fn generic(ty: &Ty) -> bool {
+                        match ty {
+                            Ty::Param(_) | Ty::AssociatedType(_) | Ty::Opaque(_) => true,
+                            Ty::Ref { referent, .. } => generic(referent),
+                            Ty::Array { element, .. } | Ty::Slice { element } => generic(element),
+                            Ty::Tuple(fields) => fields.iter().any(generic),
+                            Ty::Struct(t) => t.def().type_args.iter().any(generic),
+                            Ty::Enum(t) => t.def().type_args.iter().any(generic),
+                            _ => false,
+                        }
+                    }
+                    // Generic elements keep the reference-free contract: the
+                    // caller instantiates them, and the callee's write envelope
+                    // is checked against the instantiated signature.
+                    let carries = !generic(&element)
+                        && !ir::carrier_locations(&element, &self.ledger)
+                            .map_err(|_| Exhausted)?
+                            .is_empty();
+                    if !carries {
+                        self.consume(state, value)?;
+                        return Ok(());
+                    }
+                    // A reference-carrying element store is a weak update of
+                    // every element the slice may denote: the stored origins
+                    // join the referent's element cells, never replace them.
+                    let saved = self.operand_value(state, value)?;
                     self.consume(state, value)?;
+                    let mut destination = array.clone();
+                    destination
+                        .projection
+                        .push(Projection::DynamicIndex(LocalId(usize::MAX)));
+                    self.write_components(
+                        state,
+                        &destination,
+                        &saved,
+                        false,
+                        (block, Some(index), diagnose),
+                    )?;
                     return Ok(());
                 }
                 // A runtime row prefix (`m[i][j] = v`, NESTED-INDEX.md) has no
@@ -4585,7 +4652,44 @@ impl CarrierBuilder<'_, '_> {
                     }
                 }
                 let copy = self.copy_permission(&ty)?;
-                if diagnose && (indices.len() != targets.len() || (!copy && indices.len() != 1)) {
+                // A Copy carrier written through a summarized element family
+                // (`&mut [&'a T]` over owned storage) weakly joins every cell
+                // its subtree cover denotes. Affine carriers still need one
+                // exact destination.
+                let mut weak_cover = false;
+                if copy && indices.len() != targets.len() {
+                    let mut covered = Vec::new();
+                    let mut complete = true;
+                    for target in &targets {
+                        match read_cell_cover(
+                            self.family_cover_locals
+                                .as_deref()
+                                .unwrap_or(&self.original_locals),
+                            &self.cell_index,
+                            target,
+                            &channel,
+                            self.budget,
+                        )? {
+                            Some(cover) if !cover.is_empty() => {
+                                for cell in cover {
+                                    if !covered.contains(&cell) {
+                                        checked_vec_growth(&mut covered, self.budget)?;
+                                        covered.push(cell);
+                                    }
+                                }
+                            }
+                            _ => complete = false,
+                        }
+                    }
+                    if complete {
+                        indices = covered;
+                        weak_cover = true;
+                    }
+                }
+                if diagnose
+                    && !weak_cover
+                    && (indices.len() != targets.len() || (!copy && indices.len() != 1))
+                {
                     self.problem(block, None, Problem::Unsupported("call carrier effect lacks one affine target or a complete typed copy-cell cover".into()))?;
                 }
                 let mutable = match destination
@@ -4894,7 +4998,48 @@ impl CarrierBuilder<'_, '_> {
                     )?;
                 }
                 Terminator::Drop { cleanup, .. } => {
-                    self.used_place(state, cleanup.owner(), &mut used, &mut defs, true)?;
+                    // The prelude `Vec<T>` drops `#[may_dangle] T`: with a
+                    // Copy (glue-free) element, dropping the vector does not
+                    // use reference carriers stored in its element family.
+                    let mut dangle = false;
+                    if cleanup.owner().projection.is_empty()
+                        && let Ty::Struct(owner) = &self.f.locals[cleanup.owner().local.0].ty
+                        && owner.def().name
+                            == format!(
+                                "crate::{}::vec::Vec",
+                                crate::compiler::source::source_prelude::PRELUDE_MODULE
+                            )
+                    {
+                        dangle = true;
+                        for arg in owner.def().type_args.iter() {
+                            if !self.copy_permission(arg)? {
+                                dangle = false;
+                            }
+                        }
+                    }
+                    let mut drop_used = Set::new(self.cells.len());
+                    self.used_place(state, cleanup.owner(), &mut drop_used, &mut defs, true)?;
+                    if dangle {
+                        let root = CanonicalRoot::Owned(cleanup.owner().local);
+                        for (index, cell) in self.cells.iter().enumerate() {
+                            self.budget.spend(cell.key.storage.projection.len() + 1)?;
+                            if cell.key.storage.root == root
+                                && matches!(
+                                    cell.key.storage.projection.first(),
+                                    Some(Projection::DynamicIndex(_))
+                                )
+                                && cell.key.storage.projection[1..].iter().all(|step| {
+                                    matches!(
+                                        step,
+                                        Projection::Field(_) | Projection::ConstantIndex(_)
+                                    )
+                                })
+                            {
+                                drop_used.remove(index);
+                            }
+                        }
+                    }
+                    used.union(&drop_used, self.budget)?;
                 }
                 Terminator::Return => self.used_place(
                     state,

@@ -7286,14 +7286,20 @@ pub(super) fn validate_slice_carrier_with_facts(
     facts: FactsCtx<'_>,
 ) -> Result<(), String> {
     if let Some((kind, element)) = ty.slice_ref_element() {
-        if kind == BorrowKind::Mut && matches!(element, Ty::Ref { .. }) {
-            return Err("unsupported: mutable slices with reference-carrying elements".into());
-        }
+        // Mutable slices admit only shared references to reference-free
+        // pointees; element regions stay invariant through the carrier.
+        let shared_ref_element = match element {
+            Ty::Ref { kind, .. } if *kind == BorrowKind::Mut => {
+                return Err("unsupported: mutable slices with mutable reference elements".into());
+            }
+            Ty::Ref { .. } => true,
+            _ => false,
+        };
         validate_shared_slice_element_with_facts(element, facts)?;
         if kind == BorrowKind::Mut {
             slice_boundary_walk(
                 element,
-                false,
+                shared_ref_element,
                 facts
                     .validated()
                     .is_some_and(|f| f.phase() == super::traits::FactsPhase::Universal),

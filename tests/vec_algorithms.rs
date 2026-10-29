@@ -693,3 +693,24 @@ println!(\"{} {} {} {} {}\",eqk::<String,str>(&s,\"blue\"),eqk::<String,str>(&s,
         "str-borrow",
     );
 }
+
+#[test]
+fn vec_drop_may_dangle_copy_reference_elements() {
+    for source in [
+        r#"fn main(){let mut values=Vec::new();let late=5i32;values.push(&late);println!("{}",values[0usize]);}"#,
+        r#"fn keep<'a>(values:&mut Vec<&'a i32>,value:&'a i32){values.push(value);}fn main(){let mut values=Vec::new();let late=7i32;keep(&mut values,&late);println!("{}",values.len());}"#,
+    ] {
+        iterator_oracle::stock_native(source);
+    }
+    for source in [
+        r#"struct D<'a>(&'a i32);impl Drop for D<'_>{fn drop(&mut self){println!("{}",self.0);}}fn main(){let mut values=Vec::new();let late=5i32;values.push(D(&late));}"#,
+    ] {
+        iterator_oracle::stock_and_native_reject_observed(source, |workers, check, failure| {
+            assert!(
+                !failure.error.to_string().contains("unsupported"),
+                "workers={workers} check={check}: {}",
+                failure.error
+            );
+        });
+    }
+}

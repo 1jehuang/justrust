@@ -6705,8 +6705,9 @@ impl ValidatedTraitWorld {
                     ty.owned_sequence_element().unwrap().clone()
                 }
                 (ir::CarrierStep::SliceElement, Ty::Slice { element }) => {
-                    // A summary of shared elements never grants write authority.
-                    all_mutable = false;
+                    // Slice elements are writable exactly when every enclosing
+                    // referent is mutable (`&mut [&'a T]`); shared slices
+                    // already cleared authority at their referent step.
                     element.as_ref().clone()
                 }
                 (ir::CarrierStep::VariantField { variant, field }, Ty::Enum(value))

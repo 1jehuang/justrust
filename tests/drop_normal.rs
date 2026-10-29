@@ -317,17 +317,6 @@ fn stock(case: &Case) {
         execute(&scratch.path("stock"), case, &scratch, "stock runtime");
     }
 }
-fn attribute_blocked(case: &Case) -> bool {
-    matches!(
-        case.path.as_str(),
-        "positive/scope.rs"
-            | "positive/conditional.rs"
-            | "positive/moves_returns.rs"
-            | "positive/loops.rs"
-            | "positive/labeled_continue.rs"
-            | "positive/temporaries.rs"
-    )
-}
 fn native_accepted(case: &Case) -> bool {
     (case.category == "positive"
         || matches!(
@@ -346,7 +335,6 @@ fn native_accepted(case: &Case) -> bool {
                 | "unsupported/owned_match.rs"
                 | "unsupported/owned_if_let.rs"
         ))
-        && !attribute_blocked(case)
         && !path_blocked(case)
 }
 /// Unqualified `module::Trait::method` / `Trait::method` paths are existing
@@ -376,17 +364,6 @@ fn rejection_reason(message: &str, case: &Case) {
             "{}: infrastructure failure is not source rejection: {message}",
             case.path
         );
-    }
-    // Originals retain their exact frozen attributes. The separately frozen
-    // *_plain variants are native-positive, not silent source rewrites.
-    if attribute_blocked(case) {
-        assert!(
-            lower.contains("unsupported")
-                && (lower.contains("attribute") || lower.contains("derive")),
-            "{}: expected explicit unsupported attribute boundary: {message}",
-            case.path
-        );
-        return;
     }
     if path_blocked(case) {
         assert!(
@@ -539,11 +516,7 @@ fn frozen_stock_before_native_normal_drop() {
     );
     assert_eq!(
         cases.iter().filter(|case| native_accepted(case)).count(),
-        40
-    );
-    assert_eq!(
-        cases.iter().filter(|case| attribute_blocked(case)).count(),
-        6
+        46
     );
     if std::env::var(CHILD).ok().as_deref() == Some(MANIFEST_HASH) {
         // Stock has already checked the entire corpus before this child starts.
