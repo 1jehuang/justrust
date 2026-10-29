@@ -23,7 +23,7 @@ pub struct ControlledToolchain {
 impl ControlledToolchain {
     /// Change this framing whenever the execution boundary or fixed argv changes.
     pub(crate) fn policy(&self) -> &'static [u8] {
-        b"justrust-controlled-gnu-ld-glibc-x86-64-captured-interpreter-landlock-seccomp-v2"
+        b"justrust-controlled-gnu-ld-glibc-x86-64-captured-interpreter-brokered-paths-v3"
     }
     pub(crate) fn library_directory(&self) -> &Path {
         &self.library_dir
@@ -230,8 +230,7 @@ impl ControlledToolchain {
             .arg(staged(&self.library_dir.join("libc_nonshared.a")))
             .arg(loader)
             .arg(staged(&self.library_dir.join("crtn.o")));
-        super::link_sandbox::confine(&mut command, root).map_err(infrastructure)?;
-        let output = command.output().map_err(|e| {
+        let output = super::link_sandbox_run::output(&mut command, root).map_err(|e| {
             format!(
                 "infrastructure: controlled native linker boundary: {}",
                 super::link_sandbox::setup_error(&e)

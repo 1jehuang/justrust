@@ -1,4 +1,19 @@
 use super::*;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+fn controlled_link_listener_transfer_rejects_missing_rights_and_nonlistener() {
+    use std::os::unix::net::UnixDatagram;
+    let (sender, receiver) = UnixDatagram::pair().unwrap();
+    sender.send(b"x").unwrap();
+    assert!(super::super::link_sandbox_io::receive(&receiver).is_err());
+    sender.send(b"too long").unwrap();
+    assert!(super::super::link_sandbox_io::receive(&receiver).is_err());
+    let file = File::open("/dev/null").unwrap();
+    unsafe { super::super::link_sandbox_run::send_listener(sender.as_raw_fd(), file.as_raw_fd()) }
+        .unwrap();
+    let descriptor = super::super::link_sandbox_io::receive(&receiver).unwrap();
+    assert!(super::super::link_sandbox_io::bootstrap_exec(&descriptor).is_err());
+}
 #[test]
 fn controlled_link_output_acquisition_rejects_symlinks_and_fifos() {
     let directory = Temp::new();
@@ -351,6 +366,9 @@ fn controlled_link_boundary_denies_host_files_mutation_descriptors_network_and_p
     // cooperation by the invoking process, must close it before tool exec.
     assert_eq!(unsafe { fcntl(leaked.as_raw_fd(), 2, 0) }, 0);
     std::os::unix::fs::symlink(&secret, root.join("escape")).unwrap();
+    let alias = directory.0.join("outside-alias");
+    std::os::unix::fs::symlink(&root, &alias).unwrap();
+    let missing = directory.0.join("missing-host-path");
     let source = directory.0.join("probe.c");
     fs::write(&source, format!(r#"
 static long call(long n,long a,long b,long c){{long r;__asm__ volatile("syscall":"=a"(r):"a"(n),"D"(a),"S"(b),"d"(c):"rcx","r11","memory");return r;}}
@@ -359,14 +377,28 @@ void _start(void){{
  char byte;
  if(call(2,(long){secret:?},0,0)!=-13)die(1);
  if(call(2,(long){secret:?},1,0)!=-13)die(15);
- if(call(2,(long){secret:?},0x200000,0)!=-1)die(29);
- if(call(2,(long)"escape",0,0)!=-13)die(16);
+ if(call(2,(long){secret:?},0x200000,0)!=-13)die(29);
+ if(call(2,(long){missing:?},0,0)!=-13)die(32);
+ if(call(2,(long){alias:?},0,0)!=-13)die(33);
+ if(call(257,-100,(long){secret:?},0)!=-13)die(34);
+ if(call(257,-100,(long){missing:?},0)!=-13)die(35);
+ if(call(257,123,(long)"input",0)!=-13)die(36);
+ if(call(2,(long)"../secret",0,0)!=-13)die(37);
+ if(call(2,(long)"out/../input",1,0)!=-13)die(38);
+ if(call(59,(long){secret:?},0,0)!=-13)die(39);
+ if(call(59,(long){missing:?},0,0)!=-13)die(40);
+ if(call(2,(long)"escape",0,0)!=-40)die(16);
  if(call(2,(long)"input",1,0)!=-13)die(2);
- if(call(76,(long)"input",0,0)!=-13)die(17);
- if(call(82,(long)"input",(long)"out/stolen",0)!=-13)die(18);
- long linked=call(86,(long)"input",(long)"out/linked",0);
- if(linked!=-13&&linked!=-18)die(19);
- if(call(87,(long)"input",0,0)!=-13)die(20);
+ if(call(2,(long)"input",2,0)!=-13)die(41);
+ if(call(2,(long)"input",0x200,0)!=-13)die(42);
+ if(call(2,(long)"input",0x40,0600)!=-13)die(43);
+ if(call(2,(long)"input",0x400,0)!=-13)die(44);
+ if(call(2,(long)"out",0x410002,0600)!=-13)die(45);
+ if(call(2,(long)"out/async",0x2041,0600)!=-13)die(46);
+ if(call(76,(long)"input",0,0)!=-1)die(17);
+ if(call(82,(long)"input",(long)"out/stolen",0)!=-1)die(18);
+ if(call(86,(long)"input",(long)"out/linked",0)!=-1)die(19);
+ if(call(87,(long)"input",0,0)!=-1)die(20);
  char metadata[256];
  if(call(4,(long){secret:?},(long)metadata,0)!=-1)die(21);
  if(call(6,(long){secret:?},(long)metadata,0)!=-1)die(22);
@@ -392,7 +424,7 @@ void _start(void){{
  fd=call(2,(long)"out/allowed",65,0600);if(fd<0||call(1,fd,(long)"ok",2)!=2)die(12);
  call(1,1,(long)"confined\n",9);die(0);
 }}
-"#, secret = secret.to_str().unwrap(), leaked = leaked.as_raw_fd())).unwrap();
+"#, secret = secret.to_str().unwrap(), missing = missing.to_str().unwrap(), alias = alias.to_str().unwrap(), leaked = leaked.as_raw_fd())).unwrap();
     let compiled = Command::new("cc")
         .args([
             "-nostdlib",
@@ -413,9 +445,7 @@ void _start(void){{
     );
     let mut command = Command::new(root.join("probe"));
     command.env_clear();
-    super::super::link_sandbox::confine(&mut command, &root).unwrap();
-    let output = command
-        .output()
+    let output = super::super::link_sandbox_run::output(&mut command, &root)
         .unwrap_or_else(|error| panic!("{}", super::super::link_sandbox::setup_error(&error)));
     assert!(
         output.status.success(),

@@ -2072,7 +2072,19 @@ PlanCtx/interner/source-context debt and wide adapter activation remain held.
       closed on exec, and process/network/namespace operations are denied.
       Because Landlock does not mediate pathname metadata, seccomp also denies
       stat/access/readlink/chdir and O_PATH opens; descriptor fstat remains
-      available only for admitted descriptors. Unsupported kernels or tools
+      available only for admitted descriptors. Landlock alone does not hide
+      host existence through open error codes, so native seccomp notification
+      mediation copies bounded open/openat paths and resolves them only beneath
+      pinned captured/output directory handles using openat2, without symlinks
+      or parent traversal. Writes are admitted only beneath the output handle.
+      The broker injects descriptors atomically rather than continuing inspected
+      pointer-bearing requests. Only the trusted initial exec transition is
+      continued, by a bootstrap receiver started before Command::spawn waits for
+      exec; later exec requests and all other pathname mutations are denied
+      uniformly. Existing/missing outside paths and outside aliases to captured
+      files cannot supply distinct lookup results. The notification ABI is
+      checked before native buffers are used. Link supervision bounds elapsed
+      time and request count and kills/reaps on failure. Unsupported kernels or tools
       fail closed, without changing host policy or retrying unconstrained.
       Parent output acquisition rejects symlinks and special files, preventing a
       tool-created symlink from escaping confinement when its result is read.

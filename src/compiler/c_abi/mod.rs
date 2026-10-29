@@ -5,6 +5,9 @@ mod controlled_link;
 pub mod elf;
 pub mod layout;
 mod link_sandbox;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+mod link_sandbox_io;
+mod link_sandbox_run;
 pub use bridge::{export, import};
 
 pub(crate) fn attach_export(

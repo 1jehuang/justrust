@@ -1,8 +1,7 @@
 //! Unprivileged Linux native-link confinement. Landlock mediates file content
-//! and mutation, seccomp denies unmediated path metadata and ambient APIs.
-//! This is not a private pathname namespace: failed ordinary opens may still
-//! distinguish nonexistent host paths (ENOENT) from forbidden ones (EACCES).
-//! Do not treat this boundary as proving host-existence-independent output.
+//! and mutation, while native seccomp mediation closes host path/error oracles.
+//! Pathname opens are emulated against captured handles, including failures.
+//! Only the trusted initial exec is continued; later exec probes are denied.
 use std::{io, path::Path, process::Command};
 
 pub(super) fn setup_error(error: &io::Error) -> String {
@@ -19,6 +18,7 @@ pub(super) fn setup_error(error: &io::Error) -> String {
         7 => "set no-new-privileges",
         8 => "close inherited descriptors",
         9 => "install syscall filter",
+        10 => "transfer filesystem mediation listener",
         _ => "unknown boundary setup step",
     };
     format!(
@@ -28,10 +28,16 @@ pub(super) fn setup_error(error: &io::Error) -> String {
 }
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-pub(super) fn confine(command: &mut Command, root: &Path) -> io::Result<()> {
+pub(super) fn confine(
+    command: &mut Command,
+    root: &Path,
+) -> io::Result<std::os::unix::net::UnixDatagram> {
     use std::{
         ffi::{CString, c_char, c_int, c_long},
-        os::unix::{ffi::OsStrExt, process::CommandExt},
+        os::{
+            fd::AsRawFd,
+            unix::{ffi::OsStrExt, net::UnixDatagram, process::CommandExt},
+        },
     };
     unsafe extern "C" {
         fn syscall(number: c_long, ...) -> c_long;
@@ -70,6 +76,8 @@ pub(super) fn confine(command: &mut Command, root: &Path) -> io::Result<()> {
         READ | (1 << 1) | (1 << 4) | (1 << 5) | (1 << 7) | (1 << 8) | (1 << 13) | (1 << 14);
     let out = CString::new(root.join("out").as_os_str().as_bytes())?;
     let root = CString::new(root.as_os_str().as_bytes())?;
+    let (parent_socket, child_socket) = UnixDatagram::pair()?;
+    let bootstrap = child_socket.as_raw_fd() as u32;
     let instruction = |code, jt, jf, value| Filter {
         code,
         jt,
@@ -82,17 +90,24 @@ pub(super) fn confine(command: &mut Command, root: &Path) -> io::Result<()> {
         instruction(0x06, 0, 0, 0x80000000),
         instruction(0x20, 0, 0, 0),
     ];
-    // O_PATH bypasses Landlock content checks and would expose host metadata
-    // through fstat. Inspect open/openat flags before granting these syscalls.
-    for (number, flags_offset) in [(2, 24), (257, 32)] {
+    // Even denied Landlock opens distinguish missing host paths from existing
+    // ones. Never issue them in the child: the parent copies and resolves the
+    // request solely beneath captured directory handles, then injects the fd.
+    for number in [2, 59, 257] {
         filter.extend([
-            instruction(0x15, 0, 4, number),
-            instruction(0x20, 0, 0, flags_offset),
-            instruction(0x45, 0, 1, 0x200000),
-            instruction(0x06, 0, 0, 0x00050001),
-            instruction(0x06, 0, 0, 0x7fff0000),
+            instruction(0x15, 0, 1, number),
+            instruction(0x06, 0, 0, 0x7fc00000),
         ]);
     }
+    // Bootstrap only. The connected socket is CLOEXEC and no socket-creation
+    // syscall or socket descriptor can be admitted by the filesystem broker.
+    filter.extend([
+        instruction(0x15, 0, 4, 46),
+        instruction(0x20, 0, 0, 16),
+        instruction(0x15, 0, 1, bootstrap),
+        instruction(0x06, 0, 0, 0x7fff0000),
+        instruction(0x06, 0, 0, 0x00050001),
+    ]);
     // prlimit64 only on self. fcntl only descriptor/flag operations.
     filter.extend([
         instruction(0x15, 0, 4, 302),
@@ -114,10 +129,9 @@ pub(super) fn confine(command: &mut Command, root: &Path) -> io::Result<()> {
     // Exact native numbers also exclude x32, process/network/namespace APIs,
     // io_uring, ioctl and capability manipulation.
     for number in [
-        0u32, 1, 2, 3, 5, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17, 18, 19, 20, 23, 24, 25, 26, 27, 28,
-        32, 33, 35, 39, 40, 59, 60, 63, 74, 75, 76, 77, 78, 79, 82, 83, 84, 85, 86, 87, 95, 96, 97,
-        98, 99, 100, 102, 104, 107, 108, 110, 115, 158, 186, 202, 204, 217, 218, 228, 229, 230,
-        231, 257, 258, 263, 264, 270, 271, 273, 318, 334, 436,
+        0u32, 1, 3, 5, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17, 18, 19, 20, 23, 24, 25, 26, 27, 28, 32,
+        33, 35, 39, 40, 60, 63, 74, 75, 77, 78, 79, 95, 96, 97, 98, 99, 100, 102, 104, 107, 108,
+        110, 115, 158, 186, 202, 204, 217, 218, 228, 229, 230, 231, 270, 271, 273, 318, 334, 436,
     ] {
         filter.push(instruction(0x15, 0, 1, number));
         filter.push(instruction(0x06, 0, 0, 0x7fff0000));
@@ -181,19 +195,15 @@ pub(super) fn confine(command: &mut Command, root: &Path) -> io::Result<()> {
                 length: filter.len() as u16,
                 filter: filter.as_ptr(),
             };
-            checked(
-                prctl(22, 2usize, &program as *const Program, 0usize, 0usize) as c_long,
+            let listener = checked(
+                syscall(317, 1u32, 8u32 | 32u32, &program as *const Program),
                 9,
-            )?;
+            )? as i32;
+            super::link_sandbox_run::send_listener(child_socket.as_raw_fd(), listener)
+                .map_err(|error| fail(10, error.raw_os_error().unwrap_or(5)))?;
+            close(listener);
             Ok(())
         });
     }
-    Ok(())
-}
-#[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
-pub(super) fn confine(_: &mut Command, _: &Path) -> io::Result<()> {
-    Err(io::Error::new(
-        io::ErrorKind::Unsupported,
-        "controlled native link sandbox requires Linux x86-64",
-    ))
+    Ok(parent_socket)
 }
