@@ -1,6 +1,6 @@
-//! Bounded identity of the running compiler and its executable file mappings.
+//! Bounded identity of the running compiler, executable files and mapped code.
 //! Includes bounded process-visible configuration, not proof of arbitrary
-//! in-memory code/state, external tools, or an atomic filesystem snapshot.
+//! mutable process state, external tools, or an atomic filesystem snapshot.
 //! It never grants cache permission.
 use std::fs::{File, Metadata};
 use std::io::{self, Read};
@@ -174,9 +174,11 @@ fn capture_runtime() -> io::Result<CompilerImage> {
     let executable = capture(File::open("/proc/self/exe")?, MAX_IMAGE_BYTES)?;
     let mut bytes = executable.bytes;
     let mut hash = blake3::Hasher::new();
-    hash.update(b"justrust-running-compiler-runtime-v3");
+    hash.update(b"justrust-running-compiler-runtime-v4");
     hash.update(&process);
     hash.update(&executable.digest);
+    let memory = File::open("/proc/self/mem")?;
+    let mut remaining_code = 128 * 1024 * 1024u64;
     let mut files = Vec::new();
     for mapping in &mappings {
         let file = open_mapping(mapping)?;
@@ -191,12 +193,22 @@ fn capture_runtime() -> io::Result<CompilerImage> {
         hash.update(&mapping.offset.to_le_bytes());
         hash.update(&mapping.length.to_le_bytes());
         hash.update(&image.digest);
-        files.push((file, stamp(&metadata), image));
+        remaining_code = remaining_code
+            .checked_sub(mapping.length)
+            .ok_or_else(|| invalid("executable memory byte limit exceeded"))?;
+        let code = mapped_code_identity(&memory, mapping)?;
+        hash.update(&code);
+        files.push((file, stamp(&metadata), image, mapping, code));
     }
     // Recheck every pinned file after all reads, as well as mapping membership.
-    for (file, before, image) in files {
-        if stamp(&file.metadata()?) != before || capture(file, MAX_IMAGE_BYTES)? != image {
-            return Err(invalid("runtime file changed during capture"));
+    for (file, before, image, mapping, code) in files {
+        if stamp(&file.metadata()?) != before
+            || capture(file, MAX_IMAGE_BYTES)? != image
+            || mapped_code_identity(&memory, mapping)? != code
+        {
+            return Err(invalid(
+                "runtime file or mapped code changed during capture",
+            ));
         }
     }
     if read_mappings()? != mappings
@@ -209,6 +221,40 @@ fn capture_runtime() -> io::Result<CompilerImage> {
         bytes,
         digest: *hash.finalize().as_bytes(),
     })
+}
+
+/// MAP_PRIVATE code can differ from its backing file after a writable mapping
+/// is changed and made executable again. File identity alone misses that input.
+/// Read through the kernel rather than dereferencing addresses that can vanish
+/// concurrently. Address ranges select bytes but do not enter the digest: ASLR
+/// is not itself a code change. This still does not seal arbitrary mutable data.
+#[cfg(target_os = "linux")]
+fn mapped_code_identity(memory: &File, mapping: &ExecutableMapping) -> io::Result<[u8; 32]> {
+    use std::os::unix::fs::FileExt;
+    let (start, _) = mapping
+        .range
+        .split_once('-')
+        .ok_or_else(|| invalid("bad executable memory range"))?;
+    let mut address =
+        u64::from_str_radix(start, 16).map_err(|_| invalid("bad executable memory address"))?;
+    let mut remaining = mapping.length;
+    if remaining > 128 * 1024 * 1024 {
+        return Err(invalid("executable memory byte limit exceeded"));
+    }
+    let mut hash = blake3::Hasher::new();
+    hash.update(b"justrust-executable-memory-v1");
+    hash.update(&remaining.to_le_bytes());
+    let mut buffer = [0u8; 64 * 1024];
+    while remaining > 0 {
+        let length = remaining.min(buffer.len() as u64) as usize;
+        memory.read_exact_at(&mut buffer[..length], address)?;
+        hash.update(&buffer[..length]);
+        address = address
+            .checked_add(length as u64)
+            .ok_or_else(|| invalid("executable memory range overflow"))?;
+        remaining -= length as u64;
+    }
+    Ok(*hash.finalize().as_bytes())
 }
 
 #[cfg(target_os = "linux")]
@@ -481,6 +527,7 @@ mod tests {
                 offset: i64,
             ) -> *mut std::ffi::c_void;
             fn munmap(address: *mut std::ffi::c_void, length: usize) -> i32;
+            fn mprotect(address: *mut std::ffi::c_void, length: usize, protection: i32) -> i32;
         }
         let path = std::env::temp_dir().join(format!("jr-runtime-map-{}", std::process::id()));
         std::fs::write(&path, vec![0u8; 4096]).unwrap();
@@ -493,6 +540,21 @@ mod tests {
         let added = CompilerImage::current().unwrap();
         assert_ne!(before.digest(), added.digest());
         assert!(!before.matches_current());
+        assert!(added.matches_current());
+        // The same file, inode, mapping range and permissions can hide private
+        // code changes. Restore RX before capture so the mapping table itself
+        // cannot distinguish this from the original input.
+        assert_eq!(unsafe { mprotect(mapped, 4096, 1 | 2) }, 0);
+        unsafe { mapped.cast::<u8>().write_volatile(7) };
+        assert_eq!(unsafe { mprotect(mapped, 4096, 1 | 4) }, 0);
+        assert_eq!(std::fs::read(&path).unwrap(), vec![0u8; 4096]);
+        assert!(!added.matches_current());
+        let private_code = CompilerImage::current().unwrap();
+        assert_ne!(added.digest(), private_code.digest());
+        assert!(private_code.matches_current());
+        assert_eq!(unsafe { mprotect(mapped, 4096, 1 | 2) }, 0);
+        unsafe { mapped.cast::<u8>().write_volatile(0) };
+        assert_eq!(unsafe { mprotect(mapped, 4096, 1 | 4) }, 0);
         assert!(added.matches_current());
         std::fs::write(&path, vec![1u8; 4096]).unwrap();
         assert!(!added.matches_current());
