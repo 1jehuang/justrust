@@ -2059,6 +2059,30 @@ PlanCtx/interner/source-context debt and wide adapter activation remain held.
       | Network/unlocked/alternate registry acquisition, noncanonical cache aliases, Cargo configuration, reviewed probes, external tools/linkers | Legacy compatibility remains explicitly unproven or frozen mode rejects. Archive links and unsupported header extensions reject. |
       | Build scripts, proc macros, arbitrary process/in-memory state, atomic host snapshots | Not closed by this namespace capture. Complete-input-capture remains incomplete. |
       | Artifact reuse and global sharing | Disabled. No persistent or global private cache is enabled by this foundation. |
+
+      Controlled GNU/glibc native linking now captures the linker, ELF interpreter,
+      transitive shared libraries, startup objects and selected c/m libraries into
+      owned bytes. Its versioned execution policy invokes the captured interpreter
+      directly with a captured-only library path and disabled loader cache, never
+      the host PT_INTERP target. All object, library and output paths point into
+      the private staging tree. Linux x86-64 enforcement uses unprivileged
+      Landlock ABI >=5 plus seccomp, rather than relying on user namespaces that
+      the hosted AppArmor policy does not permit. Inputs are read/execute-only,
+      writes are confined to the output directory, inherited descriptors are
+      closed on exec, and process/network/namespace operations are denied.
+      Because Landlock does not mediate pathname metadata, seccomp also denies
+      stat/access/readlink/chdir and O_PATH opens; descriptor fstat remains
+      available only for admitted descriptors. Unsupported kernels or tools
+      fail closed, without changing host policy or retrying unconstrained.
+      Parent output acquisition rejects symlinks and special files, preventing a
+      tool-created symlink from escaping confinement when its result is read.
+      `justrust test --lib controlled_link` exercises adversarial file-content,
+      metadata, mutation, symlink, inherited-descriptor, process and network
+      boundaries. The previously blocked frozen libc-link regression now passes
+      hosted at workers 1/8 (`20261029-155843739-577071`). This closes that hosted
+      execution blocker, not arbitrary process-state sealing, build-script or
+      proc-macro support, durable graph persistence, or trusted sharing authority.
+      Global artifact sharing remains disabled.
 - [ ] Add bounded asynchronous persistence, atomic manifests, durable checkpoint
       contracts, recovery, eviction and corruption/crash/cancellation tests.
 - [ ] Specify authenticated provenance, artifact integrity and authorization for

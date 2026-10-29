@@ -23,7 +23,7 @@ pub struct ControlledToolchain {
 impl ControlledToolchain {
     /// Change this framing whenever the execution boundary or fixed argv changes.
     pub(crate) fn policy(&self) -> &'static [u8] {
-        b"justrust-controlled-gnu-ld-glibc-x86-64-readonly-root-no-network-no-descendants-v1"
+        b"justrust-controlled-gnu-ld-glibc-x86-64-captured-interpreter-landlock-seccomp-v2"
     }
     pub(crate) fn library_directory(&self) -> &Path {
         &self.library_dir
@@ -184,10 +184,24 @@ impl ControlledToolchain {
             std::fs::write(root.join(format!("inputs/{index}.o")), bytes)
                 .map_err(infrastructure)?;
         }
-        let mut command = Command::new("/usr/bin/ld");
+        // Execute the captured interpreter, never the host PT_INTERP target.
+        let staged = |path: &Path| root.join(path.strip_prefix("/").unwrap());
+        let loader = staged(Path::new("/lib64/ld-linux-x86-64.so.2"));
+        let library_paths = self
+            .files
+            .keys()
+            .filter_map(|p| p.parent())
+            .map(staged)
+            .collect::<std::collections::BTreeSet<_>>();
+        let library_paths = std::env::join_paths(library_paths)
+            .map_err(|e| format!("infrastructure: native library paths: {e}"))?;
+        let mut command = Command::new(&loader);
         command
             .env_clear()
-            .current_dir("/")
+            .current_dir(root)
+            .args(["--inhibit-cache", "--library-path"])
+            .arg(library_paths)
+            .arg(staged(Path::new("/usr/bin/ld")))
             .args([
                 "-m",
                 "elf_x86_64",
@@ -199,23 +213,23 @@ impl ControlledToolchain {
                 "-z",
                 "noexecstack",
                 "-o",
-                "/out/program",
             ])
+            .arg(root.join("out/program"))
             .args(["--dynamic-linker", "/lib64/ld-linux-x86-64.so.2"])
-            .arg(self.library_dir.join("crt1.o"))
-            .arg(self.library_dir.join("crti.o"))
-            .arg("/inputs/native.o");
+            .arg(staged(&self.library_dir.join("crt1.o")))
+            .arg(staged(&self.library_dir.join("crti.o")))
+            .arg(root.join("inputs/native.o"));
         for index in 0..objects.len() {
-            command.arg(format!("/inputs/{index}.o"));
+            command.arg(root.join(format!("inputs/{index}.o")));
         }
         if libraries.iter().any(|name| name == "m") {
-            command.arg(self.library_dir.join("libm.so.6"));
+            command.arg(staged(&self.library_dir.join("libm.so.6")));
         }
         command
-            .arg(self.library_dir.join("libc.so.6"))
-            .arg(self.library_dir.join("libc_nonshared.a"))
-            .arg("/lib64/ld-linux-x86-64.so.2")
-            .arg(self.library_dir.join("crtn.o"));
+            .arg(staged(&self.library_dir.join("libc.so.6")))
+            .arg(staged(&self.library_dir.join("libc_nonshared.a")))
+            .arg(loader)
+            .arg(staged(&self.library_dir.join("crtn.o")));
         super::link_sandbox::confine(&mut command, root).map_err(infrastructure)?;
         let output = command.output().map_err(|e| {
             format!(
@@ -231,7 +245,7 @@ impl ControlledToolchain {
                 String::from_utf8_lossy(&output.stderr)
             ));
         }
-        acquire_regular(
+        acquire_output(
             &root.join("out/program"),
             MAX_EXECUTABLE_BYTES,
             "native executable",
@@ -246,6 +260,9 @@ enum AcquisitionError {
     Limit,
 }
 fn open_regular(path: &Path, limit: usize) -> Result<File, AcquisitionError> {
+    open_regular_mode(path, limit, false)
+}
+fn open_regular_mode(path: &Path, limit: usize, nofollow: bool) -> Result<File, AcquisitionError> {
     let mut options = std::fs::OpenOptions::new();
     options.read(true);
     #[cfg(target_os = "linux")]
@@ -254,7 +271,7 @@ fn open_regular(path: &Path, limit: usize) -> Result<File, AcquisitionError> {
         // A FIFO substituted before open must reject, not block waiting for a
         // writer. Regular files ignore O_NONBLOCK. Validate the opened handle,
         // never metadata from a separate path lookup.
-        options.custom_flags(0x800);
+        options.custom_flags(0x800 | if nofollow { 0x20000 } else { 0 });
     }
     let file = options.open(path).map_err(AcquisitionError::Io)?;
     let metadata = file.metadata().map_err(AcquisitionError::Io)?;
@@ -281,19 +298,29 @@ fn bounded_read(reader: impl Read, limit: usize) -> Result<Vec<u8>, AcquisitionE
 fn acquire_regular(path: &Path, limit: usize, context: &str) -> Result<Vec<u8>, String> {
     open_regular(path, limit)
         .and_then(|file| bounded_read(file, limit))
-        .map_err(|error| match error {
-            AcquisitionError::Io(error) => {
-                format!("infrastructure: read {context} {}: {error}", path.display())
-            }
-            AcquisitionError::NotRegular => format!(
-                "unsupported: {context} must be a regular file: {}",
-                path.display()
-            ),
-            AcquisitionError::Limit => format!(
-                "resource limit: {context} exceeds {limit} byte acquisition limit: {}",
-                path.display()
-            ),
-        })
+        .map_err(|error| acquisition_error(error, path, limit, context))
+}
+// The linker is confined, but the parent reading its result is not. Never
+// follow a tool-created output symlink into an uncaptured host file.
+fn acquire_output(path: &Path, limit: usize, context: &str) -> Result<Vec<u8>, String> {
+    open_regular_mode(path, limit, true)
+        .and_then(|file| bounded_read(file, limit))
+        .map_err(|error| acquisition_error(error, path, limit, context))
+}
+fn acquisition_error(error: AcquisitionError, path: &Path, limit: usize, context: &str) -> String {
+    match error {
+        AcquisitionError::Io(error) => {
+            format!("infrastructure: read {context} {}: {error}", path.display())
+        }
+        AcquisitionError::NotRegular => format!(
+            "unsupported: {context} must be a regular file: {}",
+            path.display()
+        ),
+        AcquisitionError::Limit => format!(
+            "resource limit: {context} exceeds {limit} byte acquisition limit: {}",
+            path.display()
+        ),
+    }
 }
 fn infrastructure(error: std::io::Error) -> String {
     format!("infrastructure: controlled native link: {error}")

@@ -180,7 +180,7 @@ impl SourceInputs {
     pub fn shareability_blockers(&self) -> &'static [&'static str] {
         &[
             "live project discovery excludes registry planning IO and unsupported configuration sources; frozen projects reject them",
-            "compiler executable and executable mapped files are identified on disk; runtime memory/process state and external tools remain unsealed",
+            "compiler executable and mapped executable bytes are identified; arbitrary runtime memory/process state and uncontrolled tools remain unsealed",
             "attached reviewed source-probe receipts require separate validation",
             "build scripts and procedural macros require controlled input tracking",
             "live filesystem observations are not an atomic immutable snapshot; caller-owned namespaces do not prove atomic host acquisition",
