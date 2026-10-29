@@ -5010,7 +5010,7 @@ impl CanonicalSourceCapability {
                 .map_err(|e| self.render(e))?;
             let checked = &checker.locals[local.0];
             if checked.mutable != source.mutable
-                || !replay_type_equal(&checked.ty, &source.ty, budget)
+                || !root_type_equal(&checked.ty, &source.ty, &self.facts, budget)
                     .map_err(|e| self.render(e))?
             {
                 return Err(self.render(FactsError::invalid(
@@ -5192,6 +5192,25 @@ pub(super) fn replay_type_equal(
     budget: &ir::PlanBudget,
 ) -> Result<bool, FactsError> {
     metered_type_equal(left, right, budget, 0).map_err(|e| source_error(budget, &e))
+}
+/// Root-borrow replay: a source-annotated nominal root may carry a source-slot
+/// application identity while the checker holds the graph realization of the
+/// same application. Both are validated against the facts world, then
+/// compared canonically.
+fn root_type_equal(
+    checked: &ir::Ty,
+    source: &ir::Ty,
+    facts: &tr::ValidatedFacts,
+    budget: &ir::PlanBudget,
+) -> Result<bool, FactsError> {
+    if replay_type_equal(checked, source, budget)? {
+        return Ok(true);
+    }
+    facts.validate_ty_metadata_with_budget(checked, budget)?;
+    facts.validate_ty_metadata_with_budget(source, budget)?;
+    facts
+        .world()
+        .types_equal(std::slice::from_ref(checked), std::slice::from_ref(source))
 }
 /// Recompute identity, not definition authority. Callers must independently
 /// authenticate the declaration and ordered actual metadata before comparing.
@@ -5833,7 +5852,9 @@ fn root_borrow_origin(
             literal,
         }
     };
-    if !matches!(origin.ty, ir::Ty::Int(_) | ir::Ty::Bool | ir::Ty::Char) {
+    if origin.literal.is_some()
+        && !matches!(origin.ty, ir::Ty::Int(_) | ir::Ty::Bool | ir::Ty::Char)
+    {
         return Err(FactsError::unsupported(
             budget,
             "fresh borrow inference requires an integer, Bool or char root",
@@ -5863,7 +5884,9 @@ fn source_root_borrow_type(
         .locals
         .get(local.0)
         .ok_or_else(|| FactsError::invalid(budget, "borrow root outside checked locals"))?;
-    if actual.mutable != origin.mutable || !replay_type_equal(&actual.ty, &origin.ty, budget)? {
+    if actual.mutable != origin.mutable
+        || !root_type_equal(&actual.ty, &origin.ty, &original.facts, budget)?
+    {
         return Err(FactsError::invalid(
             budget,
             "borrow root type or mutable capability changed",
@@ -7759,7 +7782,8 @@ pub(super) fn replay_source_body_with_scratch(
         }
         retained.trace.validate_replayed(&trace, budget)?;
         let actual = trace.actual();
-        if target.type_args.len() != 1 || !replay_type_equal(&target.type_args[0], actual, budget)?
+        if target.type_args.len() != 1
+            || !root_type_equal(&target.type_args[0], actual, facts, budget)?
         {
             return Err(FactsError::invalid(
                 budget,
@@ -7782,7 +7806,7 @@ pub(super) fn replay_source_body_with_scratch(
         } else {
             matches!(value.kind, ir::ExprKind::Local(actual) if actual == local)
         };
-        if !exact_argument || !replay_type_equal(&value.ty, &ty, budget)? {
+        if !exact_argument || !root_type_equal(&value.ty, &ty, facts, budget)? {
             return Err(FactsError::invalid(
                 budget,
                 "reference identity argument changed original borrow kind, place or Var",
@@ -7811,8 +7835,8 @@ pub(super) fn replay_source_body_with_scratch(
             ));
         }
         if signature.params.len() != 1
-            || !replay_type_equal(&signature.params[0], actual, budget)?
-            || !replay_type_equal(&signature.result, actual, budget)?
+            || !root_type_equal(&signature.params[0], actual, facts, budget)?
+            || !root_type_equal(&signature.result, actual, facts, budget)?
         {
             return Err(FactsError::invalid(
                 budget,

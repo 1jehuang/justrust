@@ -39,3 +39,4 @@
 23_struct_stack	pass
 24_longest_word	pass
 25_primes_gcd	pass
+26_generic_string_borrow	pass
