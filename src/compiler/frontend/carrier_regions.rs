@@ -125,11 +125,6 @@ impl Collector<'_> {
             }
             return Err("undeclared source carrier lifetime".into());
         }
-        if path.contains(&ir::CarrierStep::SliceElement)
-            && matches!(region, Some(RegionName::Static))
-        {
-            return Err("unsupported: explicit 'static slice element references require static input authority".into());
-        }
         if matches!(region, Some(RegionName::Static)) {
             return Ok(Some(ir::CarrierRegionTerm::Static));
         }

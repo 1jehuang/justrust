@@ -1893,6 +1893,42 @@ impl CarrierBuilder<'_, '_> {
                 }
             }
         }
+        // Explicit `'static` slice element carriers admit only data that
+        // outlives every region, exactly like a fixed `'static` parameter.
+        if self.diagnosing {
+            let own_static = self
+                .body
+                .as_ref()
+                .map_or(0, |body| body.ref_contract().static_regions);
+            let rows: Vec<_> = view
+                .source_region_env()
+                .carriers
+                .iter()
+                .filter(|row| {
+                    matches!(row.region, ir::CarrierRegionTerm::Static)
+                        && row.location.path.0.contains(&CarrierStep::SliceElement)
+                })
+                .filter_map(|row| Some((row.parameter?, row.location.clone())))
+                .collect();
+            for (param, location) in rows {
+                self.budget.spend(location.path.0.len() + 1)?;
+                let actual = self.input_value(state, args, &InputCarrier { param, location })?;
+                let sources = self.origin_regions(&actual)?;
+                let escapes = sources.iter().any(|region| {
+                    !matches!(self.regions.keys[region.0], RegionKey::Fixed(id)
+                        if own_static & (1u64 << id.0) != 0)
+                });
+                if escapes {
+                    self.problem(
+                        block,
+                        None,
+                        Problem::Invalid(
+                            "borrowed value does not live long enough: argument requires that it is borrowed for `'static`".into(),
+                        ),
+                    )?;
+                }
+            }
+        }
         for original in view.original_contract().inputs.iter() {
             let Some(family) = original.location.channel.family() else {
                 continue;

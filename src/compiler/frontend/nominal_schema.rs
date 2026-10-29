@@ -740,15 +740,6 @@ impl PlanState {
                 let Type::Slice(element) = slice.as_ref() else {
                     return Err("invalid shared slice source shape".into());
                 };
-                if matches!(
-                    element.as_ref(),
-                    Type::Ref {
-                        region: Some(RegionName::Static),
-                        ..
-                    }
-                ) {
-                    return Err("unsupported: explicit 'static slice element references require static input authority".into());
-                }
                 let element = self.source_ty_with_transport(
                     registry,
                     element,
