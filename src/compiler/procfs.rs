@@ -105,17 +105,17 @@ fn executable_mappings(text: &str) -> io::Result<Vec<ExecutableMapping>> {
             .next()
             .ok_or_else(|| invalid("missing mapping inode"))?;
         let path = fields.collect::<Vec<_>>().join(" ");
-        // These are kernel-provided executable mappings, not user-loadable files.
-        // vsyscall is the fixed legacy x86-64 kernel trampoline.
-        if path == "[vdso]"
-            || (path == "[vsyscall]" && range == "ffffffffff600000-ffffffffff601000")
-        {
+        // The fixed legacy vsyscall trampoline is not readable via proc mem.
+        // vDSO, in contrast, is ordinary readable executable ELF code and can
+        // differ between kernels or private process mappings. Capture its bytes.
+        if path == "[vsyscall]" && range == "ffffffffff600000-ffffffffff601000" {
             if device != "00:00" || inode != "0" || permissions.contains('w') {
                 return Err(invalid("unexpected kernel executable mapping"));
             }
             continue;
         }
-        if !path.starts_with('/')
+        let vdso = path == "[vdso]";
+        if (!path.starts_with('/') && !vdso)
             || path.ends_with(" (deleted)")
             || path.contains('\\')
             || permissions != "r-xp"
@@ -135,7 +135,18 @@ fn executable_mappings(text: &str) -> io::Result<Vec<ExecutableMapping>> {
             .filter(|length| *length > 0)
             .ok_or_else(|| invalid("empty or reversed mapping"))?;
         let inode = inode.parse().map_err(|_| invalid("bad mapping inode"))?;
-        if inode == 0 {
+        if vdso && (major != "00" || minor != "00" || inode != 0 || hex(offset)? != 0) {
+            return Err(invalid("unexpected vDSO mapping identity"));
+        }
+        if vdso
+            && (length > 2 * 1024 * 1024
+                || result
+                    .iter()
+                    .any(|m: &ExecutableMapping| m.path == "[vdso]"))
+        {
+            return Err(invalid("duplicate or oversized vDSO mapping"));
+        }
+        if inode == 0 && !vdso {
             return Err(invalid("anonymous executable mapping"));
         }
         result.push(ExecutableMapping {
@@ -174,13 +185,29 @@ fn capture_runtime() -> io::Result<CompilerImage> {
     let executable = capture(File::open("/proc/self/exe")?, MAX_IMAGE_BYTES)?;
     let mut bytes = executable.bytes;
     let mut hash = blake3::Hasher::new();
-    hash.update(b"justrust-running-compiler-runtime-v4");
+    hash.update(b"justrust-running-compiler-runtime-v5");
     hash.update(&process);
     hash.update(&executable.digest);
     let memory = File::open("/proc/self/mem")?;
     let mut remaining_code = 128 * 1024 * 1024u64;
     let mut files = Vec::new();
+    let mut kernel_code = Vec::new();
     for mapping in &mappings {
+        if mapping.path == "[vdso]" {
+            remaining_code = remaining_code
+                .checked_sub(mapping.length)
+                .ok_or_else(|| invalid("executable memory byte limit exceeded"))?;
+            let code = mapped_code_identity(&memory, mapping)?;
+            hash.update(b"kernel-vdso");
+            hash.update(&mapping.length.to_le_bytes());
+            hash.update(&code);
+            bytes = bytes
+                .checked_add(mapping.length)
+                .filter(|n| *n <= 1024 * 1024 * 1024)
+                .ok_or_else(|| invalid("runtime image byte limit exceeded"))?;
+            kernel_code.push((mapping, code));
+            continue;
+        }
         let file = open_mapping(mapping)?;
         let metadata = file.metadata()?;
         let image = capture(file.try_clone()?, MAX_IMAGE_BYTES)?;
@@ -209,6 +236,11 @@ fn capture_runtime() -> io::Result<CompilerImage> {
             return Err(invalid(
                 "runtime file or mapped code changed during capture",
             ));
+        }
+    }
+    for (mapping, code) in kernel_code {
+        if mapped_code_identity(&memory, mapping)? != code {
+            return Err(invalid("kernel executable mapping changed during capture"));
         }
     }
     if read_mappings()? != mappings
@@ -750,6 +782,9 @@ mod tests {
             "1000-2000 r-xp 00000000 00:00 0 [jit]\n",
             "1000-2000 r-xp 00000000 08:01 17 /bad\\040name\n",
             "1000-2000 r-xp 00000000 08:01 17 [vdso]\n",
+            "1000-2000 rwxp 00000000 00:00 0 [vdso]\n",
+            "1000-2000 r-xp 00001000 00:00 0 [vdso]\n",
+            "1000-401000 r-xp 00000000 00:00 0 [vdso]\n",
         ] {
             assert!(executable_mappings(&format!("{supported}{unsupported}")).is_err());
         }
@@ -761,6 +796,77 @@ mod tests {
             ))
             .is_ok()
         );
+        let vdso = "3000-4000 r-xp 00000000 00:00 0 [vdso]\n";
+        let mappings = executable_mappings(&format!("{supported}{vdso}")).unwrap();
+        assert_eq!(mappings.len(), 2);
+        assert_eq!(mappings[1].path, "[vdso]");
+        assert!(executable_mappings(&format!("{supported}{vdso}{vdso}")).is_err());
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn runtime_vdso_child() {
+        if std::env::var_os("JR_VDSO_IDENTITY_CHILD").is_none() {
+            return;
+        }
+        use std::os::unix::fs::FileExt;
+        unsafe extern "C" {
+            fn mprotect(address: *mut std::ffi::c_void, length: usize, protection: i32) -> i32;
+        }
+        let mapping = read_mappings()
+            .unwrap()
+            .into_iter()
+            .find(|m| m.path == "[vdso]")
+            .expect("x86-64 kernel vDSO absent");
+        let start = u64::from_str_radix(mapping.range.split_once('-').unwrap().0, 16).unwrap();
+        let memory = File::open("/proc/self/mem").unwrap();
+        let mut magic = [0; 4];
+        memory.read_exact_at(&mut magic, start).unwrap();
+        assert_eq!(&magic, b"\x7fELF");
+        let before = CompilerImage::current().unwrap();
+        // EI_PAD is unused ELF identification padding, not instructions or
+        // dynamic symbols. Mutate only a private child mapping and restore RX
+        // before capture so permissions cannot explain the digest difference.
+        let byte = (start + 15) as *mut u8;
+        assert_eq!(
+            unsafe { mprotect(start as *mut _, mapping.length as usize, 1 | 2 | 4) },
+            0
+        );
+        let saved = unsafe { byte.read_volatile() };
+        unsafe { byte.write_volatile(saved ^ 1) };
+        assert_eq!(
+            unsafe { mprotect(start as *mut _, mapping.length as usize, 1 | 4) },
+            0
+        );
+        let changed = CompilerImage::current().unwrap();
+        assert_ne!(before.digest(), changed.digest());
+        assert!(!before.matches_current());
+        assert!(changed.matches_current());
+        assert_eq!(
+            unsafe { mprotect(start as *mut _, mapping.length as usize, 1 | 2 | 4) },
+            0
+        );
+        unsafe { byte.write_volatile(saved) };
+        assert_eq!(
+            unsafe { mprotect(start as *mut _, mapping.length as usize, 1 | 4) },
+            0
+        );
+        assert!(before.matches_current());
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn public_runtime_identity_tracks_private_vdso_mutations() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "compiler::procfs::tests::runtime_vdso_child",
+                "--nocapture",
+            ])
+            .env("JR_VDSO_IDENTITY_CHILD", "1")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
     }
     #[test]
     fn running_image_is_revalidated_without_path_aliases() {
