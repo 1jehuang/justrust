@@ -271,13 +271,10 @@ impl Driver {
         if ws.inputs.identity().is_none()
             || !ws.inputs.registry_capture_is_canonical()
             || ws.packages.iter().any(|package| {
-                package.dependencies.iter().any(|dep| {
-                    !matches!(
-                        dep.source,
-                        manifest::DependencySource::Path(_)
-                            | manifest::DependencySource::Registry(_)
-                    )
-                })
+                package
+                    .dependencies
+                    .iter()
+                    .any(|dep| manifest::needs_uncontrolled_acquisition(package, dep))
             })
         {
             eprintln!(

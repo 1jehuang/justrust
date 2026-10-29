@@ -736,15 +736,16 @@ fn locked_registry_earlier_edition_matches_stock_execution() {
                 .unwrap();
             assert_eq!(output.status.code(), expected.status.code(), "{output:?}");
             let stderr = String::from_utf8_lossy(&output.stderr);
-            // This unchanged package also declares an unlocked bench-only
-            // dependency (bencher). Capture currently rejects unresolved
-            // registry metadata even when inactive, so successful edition
-            // support must not turn into a false immutable-input claim.
+            // The authenticated crate's unlocked bench-only dependency is not
+            // an input to this dependency build. No source is acquired for it.
             assert!(
-                stderr.contains("native input capture is unproven"),
+                stderr.contains("Input capture: immutable native project namespace"),
                 "{stderr}"
             );
-            assert!(!stderr.contains("Input capture: immutable"), "{stderr}");
+            assert!(
+                !stderr.contains("native input capture is unproven"),
+                "{stderr}"
+            );
             if command == "run" {
                 assert_eq!(output.stdout, expected.stdout);
             } else {

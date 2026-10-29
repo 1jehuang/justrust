@@ -1358,8 +1358,13 @@ mod tests {
             ),
             ("leaf", "", "pub fn value() -> i32 { 42 }"),
         ] {
+            let dev_dependencies = if name == "leaf" {
+                "[dev-dependencies]\nunavailable='=99.0.0'\n"
+            } else {
+                ""
+            };
             let manifest = format!(
-                "[package]\nname='{name}'\nversion='0.1.0'\nedition='2024'\n{dependencies}"
+                "[package]\nname='{name}'\nversion='0.1.0'\nedition='2024'\n{dependencies}{dev_dependencies}"
             );
             let stem = format!("{name}-0.1.0");
             let base = format!("home/registry/src/index.crates.io-1949cf8c6b5b557f/{stem}");
@@ -1436,6 +1441,21 @@ mod tests {
             ] {
                 assert_eq!(driver.run(command).unwrap(), 0);
             }
+        }
+        // The unacquired dev declaration is harmless only while inactive.
+        // Selecting the registry package's tests must fail closed even after
+        // the host source/cache has disappeared, never fetch or reuse success.
+        driver.sel.packages = vec!["leaf".into()];
+        driver.sel.lib = true;
+        for workers in [1, 8] {
+            driver.sel.workers = workers;
+            let error = driver
+                .run(crate::project::driver::Command::Test)
+                .unwrap_err();
+            assert!(
+                error.to_string().contains("Cargo.lock does not pin"),
+                "{error}"
+            );
         }
         // Frozen discovery reauthenticates the retained archive, not merely a
         // caller assertion that its extracted source used to be valid.

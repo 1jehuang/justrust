@@ -57,6 +57,18 @@ pub enum DependencySource {
     Git,
 }
 
+/// A registry dependency's development-only declarations do not supply inputs
+/// when that package is compiled as a dependency. Retain the authenticated
+/// manifest, but do not require acquisition of unused source. Selecting that
+/// package's tests still activates the edge and `visible_dependencies` rejects
+/// it without fetching or consulting ambient sources.
+pub(crate) fn needs_uncontrolled_acquisition(package: &Package, dep: &Dependency) -> bool {
+    matches!(
+        dep.source,
+        DependencySource::Git | DependencySource::UnresolvedRegistry
+    ) && !(package.registry && dep.dev)
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct LockedRegistryPackage {
     pub name: String,
@@ -525,10 +537,7 @@ fn load_observed(manifest: &Path, inputs: &mut Recorder) -> Result<Workspace, Ma
         let deps: Vec<_> = loader.packages[i].dependencies.clone();
         for dep in deps {
             if loader.inputs.is_frozen()
-                && matches!(
-                    dep.source,
-                    DependencySource::Git | DependencySource::UnresolvedRegistry
-                )
+                && needs_uncontrolled_acquisition(&loader.packages[i], &dep)
             {
                 return err(
                     "unsupported: immutable native projects require path or checksum-locked cached registry dependencies; git/unlocked acquisition is not admitted",
