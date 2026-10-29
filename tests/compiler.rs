@@ -634,7 +634,14 @@ fn standalone_cli_captures_sibling_extern_roots_at_workers_one_and_eight() {
         let checked = capture(
             Command::new(env!("CARGO_BIN_EXE_jr-rust"))
                 .arg(&source)
-                .args(["--check", "--workers", workers, "--extern", &spec]),
+                .args([
+                    "--check",
+                    "--verbose",
+                    "--workers",
+                    workers,
+                    "--extern",
+                    &spec,
+                ]),
             &scratch,
             COMPILE_TIMEOUT,
         );
@@ -645,7 +652,7 @@ fn standalone_cli_captures_sibling_extern_roots_at_workers_one_and_eight() {
         );
         let output = scratch.path(&format!("native-{workers}"));
         let built = capture(
-            compiler(&source, &output).args(["--workers", workers, "--extern", &spec]),
+            compiler(&source, &output).args(["--verbose", "--workers", workers, "--extern", &spec]),
             &scratch,
             COMPILE_TIMEOUT,
         );
@@ -716,7 +723,7 @@ fn standalone_cli_uses_owned_source_namespace_at_workers_one_and_eight() {
         let check = capture(
             Command::new(env!("CARGO_BIN_EXE_jr-rust"))
                 .arg(&source)
-                .args(["--check", "--workers", workers]),
+                .args(["--check", "--verbose", "--workers", workers]),
             &scratch,
             COMPILE_TIMEOUT,
         );
@@ -727,7 +734,7 @@ fn standalone_cli_uses_owned_source_namespace_at_workers_one_and_eight() {
         );
         let output = scratch.path(&format!("native-{workers}"));
         let built = capture(
-            compiler(&source, &output).args(["--workers", workers]),
+            compiler(&source, &output).args(["--verbose", "--workers", workers]),
             &scratch,
             COMPILE_TIMEOUT,
         );
