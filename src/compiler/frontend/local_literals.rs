@@ -2311,6 +2311,10 @@ impl<'s> Solver<'_, '_, 's> {
         let result = match &block.tail {
             Some(tail) => self.expr(tail, depth + 1)?,
             None if block.statements.is_empty() => self.fixed(ir::Ty::Unit)?,
+            // A block ending in `return` diverges (`!{return x;}`).
+            None if matches!(block.statements.last(), Some(Stmt::Return(_))) => {
+                self.fixed(ir::Ty::Never)?
+            }
             None => self.fresh()?,
         };
         self.scopes.pop();

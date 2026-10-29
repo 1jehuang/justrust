@@ -192,6 +192,15 @@ fn main() {
 "#,
         "loop values ok\n",
     );
+    // `!` on a diverging operand is stock-valid; `-` on `!` is E0600.
+    let source = r#"fn a()->bool { !{return true;} }
+fn b()->bool { let x:u8 = !{return true;}; false }
+fn c()->bool { !loop{} }
+fn main(){ println!("{} {}", a(), b()); if false { c(); } }"#;
+    stock(source, Some("true true\n"));
+    runs(source, "true true\n");
+    stock("fn f()->i32 { -{return 3;} } fn main(){}", None);
+    rejects("negated never", "fn f()->i32 { -{return 3;} } fn main(){}");
 }
 
 #[test]

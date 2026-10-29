@@ -161,6 +161,15 @@ impl Solver<'_, '_, '_> {
                 _ => return Ok(false),
             }
         }
+        // A diverging `!` operand (`!{return x;}`): stock accepts `Not` on
+        // `!` (but rejects `-` with E0600, left to the checker). The result
+        // has no producer left; it is constrained only by its context.
+        if matches!(kind, Kind::Unary(UnaryOp::Not))
+            && matches!(self.domain(left), Domain::Fixed(ir::Ty::Never))
+        {
+            self.delayed_results.retain(|r| *r != result);
+            return Ok(true);
+        }
         if matches!(self.domain(left), Domain::Unknown) {
             if matches!(kind, Kind::Index(_)) {
                 return Ok(false);
