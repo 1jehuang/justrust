@@ -1,5 +1,31 @@
 use super::*;
 #[test]
+fn controlled_link_output_acquisition_rejects_symlinks_and_fifos() {
+    let directory = Temp::new();
+    let input = directory.0.join("input");
+    let output = directory.0.join("output");
+    fs::write(&input, b"frozen").unwrap();
+    std::os::unix::fs::symlink(&input, &output).unwrap();
+    assert_eq!(
+        acquire_regular(&output, 16, "captured input").unwrap(),
+        b"frozen"
+    );
+    assert!(acquire_output(&output, 16, "native executable").is_err());
+    fs::remove_file(&output).unwrap();
+    fs::write(&output, b"regular").unwrap();
+    assert_eq!(
+        acquire_output(&output, 16, "native executable").unwrap(),
+        b"regular"
+    );
+    fs::remove_file(&output).unwrap();
+    unsafe extern "C" {
+        fn mkfifo(path: *const std::ffi::c_char, mode: u32) -> i32;
+    }
+    let path = std::ffi::CString::new(output.as_os_str().as_encoded_bytes()).unwrap();
+    assert_eq!(unsafe { mkfifo(path.as_ptr(), 0o600) }, 0);
+    assert!(acquire_output(&output, 16, "native executable").is_err());
+}
+#[test]
 fn controlled_link_reproducible_across_staged_roots() {
     let directory = Temp::new();
     let source = directory.0.join("main.c");

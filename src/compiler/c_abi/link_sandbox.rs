@@ -66,15 +66,8 @@ pub(super) fn confine(command: &mut Command, root: &Path) -> io::Result<()> {
     const HANDLED: u64 = (1 << 16) - 1;
     const READ: u64 = (1 << 0) | (1 << 2) | (1 << 3);
     // No MAKE_CHAR, MAKE_BLOCK, MAKE_SOCK, MAKE_FIFO or IOCTL_DEV anywhere.
-    const OUTPUT: u64 = READ
-        | (1 << 1)
-        | (1 << 4)
-        | (1 << 5)
-        | (1 << 7)
-        | (1 << 8)
-        | (1 << 12)
-        | (1 << 13)
-        | (1 << 14);
+    const OUTPUT: u64 =
+        READ | (1 << 1) | (1 << 4) | (1 << 5) | (1 << 7) | (1 << 8) | (1 << 13) | (1 << 14);
     let out = CString::new(root.join("out").as_os_str().as_bytes())?;
     let root = CString::new(root.as_os_str().as_bytes())?;
     let instruction = |code, jt, jf, value| Filter {
