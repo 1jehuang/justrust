@@ -1,32 +1,24 @@
-//! Linux x86-64 enforced native-link boundary. The compiler process/kernel are
-//! the trusted enforcement base. No external sandbox helper or driver is run.
-//! All child setup uses preallocated data and async-signal-safe system calls.
+//! Unprivileged Linux native-link confinement. Landlock mediates file content
+//! and mutation, seccomp denies unmediated path metadata and ambient APIs.
+//! This is not a private pathname namespace: failed ordinary opens may still
+//! distinguish nonexistent host paths (ENOENT) from forbidden ones (EACCES).
+//! Do not treat this boundary as proving host-existence-independent output.
 use std::{io, path::Path, process::Command};
 
 pub(super) fn setup_error(error: &io::Error) -> String {
-    let Some(code) = error
-        .raw_os_error()
-        .filter(|code| (16384..20736).contains(code))
-    else {
+    let Some(code) = error.raw_os_error().filter(|c| (16384..20736).contains(c)) else {
         return error.to_string();
     };
     let stage = match (code - 16384) / 256 {
-        1 => "create user namespace",
-        2 => "deny supplementary groups",
-        3 => "map user identity",
-        4 => "map group identity",
-        5 => "create mount/network/IPC/UTS namespaces",
-        6 => "make mounts private",
-        7 => "bind captured root",
-        8 => "bind private output directory",
-        9 => "make captured root read-only",
-        10 => "enter captured root",
-        11 => "chroot to captured inputs",
-        12 => "reset working directory",
-        13 => "drop capabilities",
-        14 => "set no-new-privileges",
-        15 => "close inherited descriptors",
-        16 => "install syscall filter",
+        1 => "probe Landlock ABI (requires >=5)",
+        2 => "create Landlock ruleset",
+        3 => "open captured directory",
+        4 => "add Landlock path rule",
+        5 => "enforce Landlock ruleset",
+        6 => "enter captured directory",
+        7 => "set no-new-privileges",
+        8 => "close inherited descriptors",
+        9 => "install syscall filter",
         _ => "unknown boundary setup step",
     };
     format!(
@@ -38,26 +30,14 @@ pub(super) fn setup_error(error: &io::Error) -> String {
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 pub(super) fn confine(command: &mut Command, root: &Path) -> io::Result<()> {
     use std::{
-        ffi::{CString, c_char, c_int, c_long, c_ulong, c_void},
+        ffi::{CString, c_char, c_int, c_long},
         os::unix::{ffi::OsStrExt, process::CommandExt},
     };
     unsafe extern "C" {
         fn syscall(number: c_long, ...) -> c_long;
-        fn unshare(flags: c_int) -> c_int;
-        fn mount(
-            source: *const c_char,
-            target: *const c_char,
-            kind: *const c_char,
-            flags: c_ulong,
-            data: *const c_void,
-        ) -> c_int;
-        fn chroot(path: *const c_char) -> c_int;
-        fn chdir(path: *const c_char) -> c_int;
         fn open(path: *const c_char, flags: c_int, ...) -> c_int;
-        fn write(fd: c_int, bytes: *const c_void, count: usize) -> isize;
         fn close(fd: c_int) -> c_int;
-        fn getuid() -> u32;
-        fn getgid() -> u32;
+        fn chdir(path: *const c_char) -> c_int;
         fn prctl(option: c_int, ...) -> c_int;
     }
     #[repr(C)]
@@ -72,257 +52,145 @@ pub(super) fn confine(command: &mut Command, root: &Path) -> io::Result<()> {
         length: u16,
         filter: *const Filter,
     }
+    #[repr(C)]
+    struct Ruleset {
+        handled_access_fs: u64,
+    }
+    #[repr(C, packed)]
+    struct Beneath {
+        allowed_access: u64,
+        parent_fd: i32,
+    }
+    // All sixteen filesystem rights known through ABI 5 are handled, including
+    // REFER, TRUNCATE and IOCTL_DEV. Never grant bits discovered at runtime.
+    const HANDLED: u64 = (1 << 16) - 1;
+    const READ: u64 = (1 << 0) | (1 << 2) | (1 << 3);
+    // No MAKE_CHAR, MAKE_BLOCK, MAKE_SOCK, MAKE_FIFO or IOCTL_DEV anywhere.
+    const OUTPUT: u64 = READ
+        | (1 << 1)
+        | (1 << 4)
+        | (1 << 5)
+        | (1 << 7)
+        | (1 << 8)
+        | (1 << 12)
+        | (1 << 13)
+        | (1 << 14);
+    let out = CString::new(root.join("out").as_os_str().as_bytes())?;
     let root = CString::new(root.as_os_str().as_bytes())?;
-    let out = CString::new(format!("{}/out", root.to_string_lossy()))?;
-    // Preserve the invoking identities inside the namespace. Mapping to 0 would
-    // change the meaning of owner permissions in captured files unnecessarily.
-    let uid = unsafe { getuid() };
-    let gid = unsafe { getgid() };
-    let uid_map = format!("{uid} {uid} 1\n").into_bytes();
-    let gid_map = format!("{gid} {gid} 1\n").into_bytes();
+    let instruction = |code, jt, jf, value| Filter {
+        code,
+        jt,
+        jf,
+        value,
+    };
     let mut filter = vec![
-        Filter {
-            code: 0x20,
-            jt: 0,
-            jf: 0,
-            value: 4,
-        }, // seccomp_data.arch
-        Filter {
-            code: 0x15,
-            jt: 1,
-            jf: 0,
-            value: 0xc000003e,
-        }, // AUDIT_ARCH_X86_64
-        Filter {
-            code: 0x06,
-            jt: 0,
-            jf: 0,
-            value: 0x80000000,
-        }, // KILL_PROCESS
-        Filter {
-            code: 0x20,
-            jt: 0,
-            jf: 0,
-            value: 0,
-        }, // syscall number
+        instruction(0x20, 0, 0, 4),
+        instruction(0x15, 1, 0, 0xc000003e),
+        instruction(0x06, 0, 0, 0x80000000),
+        instruction(0x20, 0, 0, 0),
     ];
-    // A generic prlimit64 grant would let a same-UID tool modify unrelated host
-    // processes. Permit only pid 0 (self). Restrict fcntl to fd/flag operations,
-    // excluding async signal ownership, leases and other process interactions.
+    // O_PATH bypasses Landlock content checks and would expose host metadata
+    // through fstat. Inspect open/openat flags before granting these syscalls.
+    for (number, flags_offset) in [(2, 24), (257, 32)] {
+        filter.extend([
+            instruction(0x15, 0, 4, number),
+            instruction(0x20, 0, 0, flags_offset),
+            instruction(0x45, 0, 1, 0x200000),
+            instruction(0x06, 0, 0, 0x00050001),
+            instruction(0x06, 0, 0, 0x7fff0000),
+        ]);
+    }
+    // prlimit64 only on self. fcntl only descriptor/flag operations.
     filter.extend([
-        Filter {
-            code: 0x15,
-            jt: 0,
-            jf: 4,
-            value: 302,
-        },
-        Filter {
-            code: 0x20,
-            jt: 0,
-            jf: 0,
-            value: 16,
-        },
-        Filter {
-            code: 0x15,
-            jt: 0,
-            jf: 1,
-            value: 0,
-        },
-        Filter {
-            code: 0x06,
-            jt: 0,
-            jf: 0,
-            value: 0x7fff0000,
-        },
-        Filter {
-            code: 0x06,
-            jt: 0,
-            jf: 0,
-            value: 0x00050001,
-        },
-        Filter {
-            code: 0x15,
-            jt: 0,
-            jf: 14,
-            value: 72,
-        },
-        Filter {
-            code: 0x20,
-            jt: 0,
-            jf: 0,
-            value: 24,
-        },
+        instruction(0x15, 0, 4, 302),
+        instruction(0x20, 0, 0, 16),
+        instruction(0x15, 0, 1, 0),
+        instruction(0x06, 0, 0, 0x7fff0000),
+        instruction(0x06, 0, 0, 0x00050001),
+        instruction(0x15, 0, 14, 72),
+        instruction(0x20, 0, 0, 24),
     ]);
     for operation in [0, 1, 2, 3, 4, 1030] {
-        filter.push(Filter {
-            code: 0x15,
-            jt: 0,
-            jf: 1,
-            value: operation,
-        });
-        filter.push(Filter {
-            code: 0x06,
-            jt: 0,
-            jf: 0,
-            value: 0x7fff0000,
-        });
+        filter.push(instruction(0x15, 0, 1, operation));
+        filter.push(instruction(0x06, 0, 0, 0x7fff0000));
     }
-    filter.push(Filter {
-        code: 0x06,
-        jt: 0,
-        jf: 0,
-        value: 0x00050001,
-    });
-    // Exact native x86-64 numbers also exclude x32. No fork/clone, network,
-    // ptrace, process_vm, pidfd, mount, namespace, io_uring or capability APIs.
-    // Filesystem operations can reach only the chroot, whose sole writable
-    // mount is /out. exec is permitted for the initial captured ELF image;
-    // replacement images remain confined to the same immutable input closure.
-    let allowed = [
-        0u32, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 23, 24,
-        25, 26, 27, 28, 32, 33, 35, 39, 40, 59, 60, 63, 74, 75, 76, 77, 78, 79, 80, 82, 83, 84, 85,
-        86, 87, 89, 90, 91, 95, 96, 97, 98, 99, 100, 102, 104, 107, 108, 110, 115, 158, 186, 202,
-        204, 217, 218, 228, 229, 230, 231, 257, 258, 262, 263, 264, 267, 269, 270, 271, 273, 318,
-        332, 334, 436, 439,
-    ];
-    for number in allowed {
-        filter.push(Filter {
-            code: 0x15,
-            jt: 0,
-            jf: 1,
-            value: number,
-        });
-        filter.push(Filter {
-            code: 0x06,
-            jt: 0,
-            jf: 0,
-            value: 0x7fff0000,
-        }); // ALLOW
+    filter.push(instruction(0x06, 0, 0, 0x00050001));
+    // Landlock does NOT mediate stat/access/readlink/chmod/chdir. Deny path
+    // metadata entirely, including newfstatat (AT_EMPTY_PATH alone is unsafe:
+    // a nonempty path still resolves). Only descriptor fstat is permitted.
+    // Exact native numbers also exclude x32, process/network/namespace APIs,
+    // io_uring, ioctl and capability manipulation.
+    for number in [
+        0u32, 1, 2, 3, 5, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17, 18, 19, 20, 23, 24, 25, 26, 27, 28,
+        32, 33, 35, 39, 40, 59, 60, 63, 74, 75, 76, 77, 78, 79, 82, 83, 84, 85, 86, 87, 95, 96, 97,
+        98, 99, 100, 102, 104, 107, 108, 110, 115, 158, 186, 202, 204, 217, 218, 228, 229, 230,
+        231, 257, 258, 263, 264, 270, 271, 273, 318, 334, 436,
+    ] {
+        filter.push(instruction(0x15, 0, 1, number));
+        filter.push(instruction(0x06, 0, 0, 0x7fff0000));
     }
-    filter.push(Filter {
-        code: 0x06,
-        jt: 0,
-        jf: 0,
-        value: 0x00050001,
-    }); // ERRNO(EPERM)
-    // SAFETY: this closure owns only immutable, preallocated buffers. It does not
-    // allocate, lock, format, access Rust TLS, or call non-signal-safe std APIs.
-    // Any failed confinement step aborts exec through Command's error pipe.
+    filter.push(instruction(0x06, 0, 0, 0x00050001));
+    // SAFETY: immutable preallocated buffers and syscall-only child setup.
+    // No allocation, locks, formatting or privilege helper in pre_exec.
     unsafe {
         command.pre_exec(move || {
-            fn tagged(error: io::Error, stage: i32) -> io::Error {
-                io::Error::from_raw_os_error(
-                    16384 + stage * 256 + error.raw_os_error().unwrap_or(5).clamp(1, 255),
-                )
+            fn fail(stage: i32, errno: i32) -> io::Error {
+                io::Error::from_raw_os_error(16384 + stage * 256 + errno.clamp(1, 255))
             }
-            fn checked(result: c_int, stage: i32) -> io::Result<()> {
+            fn checked(result: c_long, stage: i32) -> io::Result<c_long> {
                 if result == -1 {
-                    Err(tagged(io::Error::last_os_error(), stage))
+                    Err(fail(
+                        stage,
+                        io::Error::last_os_error().raw_os_error().unwrap_or(5),
+                    ))
                 } else {
-                    Ok(())
+                    Ok(result)
                 }
             }
-            unsafe fn map(path: *const c_char, bytes: &[u8]) -> io::Result<()> {
-                let fd = unsafe { open(path, 1 | 0x80000) }; // WRONLY | CLOEXEC
-                if fd == -1 {
-                    return Err(io::Error::last_os_error());
-                }
-                let result = unsafe { write(fd, bytes.as_ptr().cast(), bytes.len()) };
-                let error = if result != bytes.len() as isize {
-                    Some(io::Error::last_os_error())
-                } else {
-                    None
-                };
-                unsafe {
-                    close(fd);
-                }
-                if let Some(error) = error {
-                    Err(error)
-                } else {
-                    Ok(())
-                }
+            let abi = checked(syscall(444, std::ptr::null::<Ruleset>(), 0usize, 1u32), 1)?;
+            if abi < 5 {
+                return Err(fail(1, 95));
             }
-            // A fresh user namespace grants mount capabilities only within this
-            // child. Never invoke a setuid helper, change host policy or relax a
-            // tenant sandbox to make this work. Unsupported hosts fail closed.
-            checked(unshare(0x10000000), 1)?; // CLONE_NEWUSER
-            map(c"/proc/self/uid_map".as_ptr(), &uid_map).map_err(|e| tagged(e, 3))?;
-            map(c"/proc/self/setgroups".as_ptr(), b"deny").map_err(|e| tagged(e, 2))?;
-            map(c"/proc/self/gid_map".as_ptr(), &gid_map).map_err(|e| tagged(e, 4))?;
-            checked(
-                unshare(0x00020000 | 0x40000000 | 0x08000000 | 0x04000000),
-                5,
-            )?; // mount, net, ipc, uts
-            checked(
-                mount(
-                    std::ptr::null(),
-                    c"/".as_ptr(),
-                    std::ptr::null(),
-                    (1 << 18) | (1 << 14),
-                    std::ptr::null(),
-                ),
-                6,
-            )?; // REC|PRIVATE
-            checked(
-                mount(
-                    root.as_ptr(),
-                    root.as_ptr(),
-                    std::ptr::null(),
-                    4096,
-                    std::ptr::null(),
-                ),
-                7,
-            )?;
-            checked(
-                mount(
-                    out.as_ptr(),
-                    out.as_ptr(),
-                    std::ptr::null(),
-                    4096,
-                    std::ptr::null(),
-                ),
-                8,
-            )?;
-            checked(
-                mount(
-                    std::ptr::null(),
-                    root.as_ptr(),
-                    std::ptr::null(),
-                    4096 | 32 | 1 | 2 | 4,
-                    std::ptr::null(),
-                ),
-                9,
-            )?; // BIND|REMOUNT|RDONLY|NOSUID|NODEV
-            checked(chdir(root.as_ptr()), 10)?;
-            checked(chroot(c".".as_ptr()), 11)?;
-            checked(chdir(c"/".as_ptr()), 12)?;
-            // Drop all permitted/effective/inheritable capabilities before exec.
-            #[repr(C)]
-            struct CapHeader {
-                version: u32,
-                pid: i32,
-            }
-            let header = CapHeader {
-                version: 0x20080522,
-                pid: 0,
+            checked(prctl(38, 1usize, 0usize, 0usize, 0usize) as c_long, 7)?;
+            let attr = Ruleset {
+                handled_access_fs: HANDLED,
             };
-            let capabilities = [0u32; 6];
-            if syscall(126, &header as *const CapHeader, capabilities.as_ptr()) == -1 {
-                return Err(tagged(io::Error::last_os_error(), 13));
+            let ruleset = checked(
+                syscall(
+                    444,
+                    &attr as *const Ruleset,
+                    std::mem::size_of::<Ruleset>(),
+                    0u32,
+                ),
+                2,
+            )? as i32;
+            for (path, rights) in [(&root, READ), (&out, OUTPUT)] {
+                let fd = checked(
+                    open(path.as_ptr(), 0x200000 | 0x80000 | 0x10000) as c_long,
+                    3,
+                )? as i32;
+                let rule = Beneath {
+                    allowed_access: rights,
+                    parent_fd: fd,
+                };
+                let result = syscall(445, ruleset, 1u32, &rule as *const Beneath, 0u32);
+                let result = checked(result, 4);
+                close(fd);
+                result?;
             }
-            checked(prctl(38, 1usize, 0usize, 0usize, 0usize), 14)?; // NO_NEW_PRIVS
-            // No caller file descriptor can become an undeclared input after
-            // exec. CLOEXEC preserves Command's error pipe until then.
-            if syscall(436, 3u32, u32::MAX, 4u32) == -1 {
-                return Err(tagged(io::Error::last_os_error(), 15));
-            }
+            checked(syscall(446, ruleset, 0u32), 5)?;
+            close(ruleset);
+            checked(chdir(root.as_ptr()) as c_long, 6)?;
+            // Includes Command's error pipe: CLOEXEC keeps it available to
+            // report setup failure but no inherited descriptor survives exec.
+            checked(syscall(436, 3u32, u32::MAX, 4u32), 8)?;
             let program = Program {
                 length: filter.len() as u16,
                 filter: filter.as_ptr(),
             };
             checked(
-                prctl(22, 2usize, &program as *const Program, 0usize, 0usize),
-                16,
+                prctl(22, 2usize, &program as *const Program, 0usize, 0usize) as c_long,
+                9,
             )?;
             Ok(())
         });

@@ -1,4 +1,31 @@
 use super::*;
+#[test]
+fn controlled_link_reproducible_across_staged_roots() {
+    let directory = Temp::new();
+    let source = directory.0.join("main.c");
+    let object = directory.0.join("main.o");
+    fs::write(&source, "int main(void) { return 0; }\n").unwrap();
+    let compiled = Command::new("cc")
+        .args(["-c", "-fno-ident", "-o"])
+        .arg(&object)
+        .arg(&source)
+        .output()
+        .unwrap();
+    assert!(
+        compiled.status.success(),
+        "{}",
+        String::from_utf8_lossy(&compiled.stderr)
+    );
+    let capsule = ControlledToolchain::capture(&[]).unwrap();
+    let own = fs::read(object).unwrap();
+    let first = directory.0.join("first");
+    let second = directory.0.join("second");
+    fs::create_dir(&first).unwrap();
+    fs::create_dir(&second).unwrap();
+    let a = capsule.execute(&first, &[], &own, &[]).unwrap();
+    let b = capsule.execute(&second, &[], &own, &[]).unwrap();
+    assert_eq!(a, b);
+}
 use std::{
     fs,
     os::unix::{fs::PermissionsExt, io::AsRawFd},
@@ -286,23 +313,47 @@ fn controlled_link_boundary_denies_host_files_mutation_descriptors_network_and_p
     fs::write(root.join("input"), b"frozen").unwrap();
     let secret = directory.0.join("secret");
     fs::write(&secret, b"not an input").unwrap();
-    let leaked = fs::File::open(&secret).unwrap();
+    let leaked = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&secret)
+        .unwrap();
     unsafe extern "C" {
         fn fcntl(fd: i32, command: i32, ...) -> i32;
     }
     // Deliberately leak a non-CLOEXEC host descriptor. The boundary, not
     // cooperation by the invoking process, must close it before tool exec.
     assert_eq!(unsafe { fcntl(leaked.as_raw_fd(), 2, 0) }, 0);
+    std::os::unix::fs::symlink(&secret, root.join("escape")).unwrap();
     let source = directory.0.join("probe.c");
     fs::write(&source, format!(r#"
 static long call(long n,long a,long b,long c){{long r;__asm__ volatile("syscall":"=a"(r):"a"(n),"D"(a),"S"(b),"d"(c):"rcx","r11","memory");return r;}}
 static void die(long code){{call(60,code,0,0);__builtin_unreachable();}}
 void _start(void){{
  char byte;
- if(call(2,(long){secret:?},0,0)!=-2)die(1);
- if(call(2,(long)"/input",1,0)!=-30)die(2);
+ if(call(2,(long){secret:?},0,0)!=-13)die(1);
+ if(call(2,(long){secret:?},1,0)!=-13)die(15);
+ if(call(2,(long){secret:?},0x200000,0)!=-1)die(29);
+ if(call(2,(long)"escape",0,0)!=-13)die(16);
+ if(call(2,(long)"input",1,0)!=-13)die(2);
+ if(call(76,(long)"input",0,0)!=-13)die(17);
+ if(call(82,(long)"input",(long)"out/stolen",0)!=-13)die(18);
+ long linked=call(86,(long)"input",(long)"out/linked",0);
+ if(linked!=-13&&linked!=-18)die(19);
+ if(call(87,(long)"input",0,0)!=-13)die(20);
+ char metadata[256];
+ if(call(4,(long){secret:?},(long)metadata,0)!=-1)die(21);
+ if(call(6,(long){secret:?},(long)metadata,0)!=-1)die(22);
+ if(call(21,(long){secret:?},0,0)!=-1)die(23);
+ if(call(89,(long)"escape",(long)metadata,256)!=-1)die(24);
+ if(call(90,(long){secret:?},0600,0)!=-1)die(25);
+ if(call(80,(long)"/",0,0)!=-1)die(26);
+ if(call(16,1,0,0)!=-1)die(27);
+ if(call(133,(long)"out/fifo",0010600,0)!=-1)die(28);
  if(call(0,{leaked},(long)&byte,1)!=-9)die(4);
- long fd=call(2,(long)"/input",0,0);if(fd<0||call(0,fd,(long)&byte,1)!=1||byte!='f')die(3);
+ if(call(1,{leaked},(long)"x",1)!=-9)die(30);
+ if(call(77,{leaked},0,0)!=-9)die(31);
+ long fd=call(2,(long)"input",0,0);if(fd<0||call(0,fd,(long)&byte,1)!=1||byte!='f')die(3);
  if(call(57,0,0,0)!=-1)die(5);
  if(call(435,0,0,0)!=-1)die(6);
  if(call(41,2,1,0)!=-1)die(7);
@@ -312,7 +363,7 @@ void _start(void){{
  if(call(0x40000000+39,0,0,0)!=-1)die(11);
  if(call(302,1,0,0)!=-1)die(13);
  if(call(72,1,8,1)!=-1)die(14);
- fd=call(2,(long)"/out/allowed",65,0600);if(fd<0||call(1,fd,(long)"ok",2)!=2)die(12);
+ fd=call(2,(long)"out/allowed",65,0600);if(fd<0||call(1,fd,(long)"ok",2)!=2)die(12);
  call(1,1,(long)"confined\n",9);die(0);
 }}
 "#, secret = secret.to_str().unwrap(), leaked = leaked.as_raw_fd())).unwrap();
@@ -334,7 +385,7 @@ void _start(void){{
         "{}",
         String::from_utf8_lossy(&compiled.stderr)
     );
-    let mut command = Command::new("/probe");
+    let mut command = Command::new(root.join("probe"));
     command.env_clear();
     super::super::link_sandbox::confine(&mut command, &root).unwrap();
     let output = command
