@@ -9062,6 +9062,8 @@ pub struct VariantDecl {
     pub name: AstIdent,
     pub shape: ir::VariantShape,
     pub fields: Vec<FieldDecl>,
+    /// Explicit integer-literal discriminant (`A = -3`): (negative, magnitude).
+    pub discriminant: Option<(bool, u128)>,
 }
 #[derive(Clone, Debug)]
 pub struct FieldDecl {
@@ -9570,6 +9572,33 @@ fn parse_float_literal(text: &str) -> Result<Option<FloatLiteral>, String> {
         return Ok(None);
     }
     Ok(Some(FloatLiteral { digits, suffix }))
+}
+
+/// Discriminant values of a fieldless enum in declaration order, as `isize`
+/// (the default representation): explicit values, else previous + 1.
+pub(crate) fn enum_discriminant_values(variants: &[VariantDecl]) -> Result<Vec<i128>, String> {
+    let mut next = 0i128;
+    let mut out = Vec::with_capacity(variants.len());
+    for variant in variants {
+        let value = match variant.discriminant {
+            Some((negative, magnitude)) => {
+                let magnitude = i128::try_from(magnitude)
+                    .map_err(|_| "E0080: enum discriminant overflowed isize")?;
+                if negative { -magnitude } else { magnitude }
+            }
+            None => next,
+        };
+        if value < i128::from(i64::MIN) || value > i128::from(i64::MAX) {
+            return Err(if variant.discriminant.is_some() {
+                "literal out of range for `isize`".into()
+            } else {
+                "E0370: enum discriminant overflowed".into()
+            });
+        }
+        out.push(value);
+        next = value + 1;
+    }
+    Ok(out)
 }
 
 fn parse_integer_literal(text: &str) -> Result<IntegerLiteral, String> {
@@ -14532,9 +14561,26 @@ impl<'input, 'names> Parser<'input, 'names> {
                     } else {
                         ir::VariantShape::Unit
                     };
-                if self.is("=") {
-                    return Err(self.unsupported("explicit enum discriminants are unsupported"));
-                }
+                let discriminant = if self.eat("=") {
+                    let negative = self.eat("-");
+                    if self.token().string
+                        || !self.token().text.starts_with(|c: char| c.is_ascii_digit())
+                    {
+                        return Err(self
+                            .unsupported("explicit enum discriminants must be integer literals"));
+                    }
+                    let literal =
+                        parse_integer_literal(self.token().text).map_err(|e| self.error(&e))?;
+                    if literal.suffix.is_some() {
+                        return Err(
+                            self.unsupported("explicit discriminants require unsuffixed literals")
+                        );
+                    }
+                    self.cursor.bump();
+                    Some((negative, literal.magnitude))
+                } else {
+                    None
+                };
                 if self.contains_name(
                     &variants.iter().map(|v| v.name).collect::<Vec<_>>(),
                     variant,
@@ -14559,6 +14605,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                     name: variant,
                     shape,
                     fields,
+                    discriminant,
                 });
                 if !self.eat(",") {
                     break;
@@ -14567,6 +14614,19 @@ impl<'input, 'names> Parser<'input, 'names> {
             self.expect("}")?;
             if variants.is_empty() {
                 return Err(self.unsupported("empty enums are unsupported"));
+            }
+            if variants.iter().any(|v| v.discriminant.is_some()) {
+                if variants.iter().any(|v| v.shape != ir::VariantShape::Unit) {
+                    return Err(self.error(
+                        "E0732: `#[repr(inttype)]` must be specified for enums with explicit discriminants and non-unit variants",
+                    ));
+                }
+                let values = enum_discriminant_values(&variants).map_err(|e| self.error(&e))?;
+                let mut sorted = values.clone();
+                sorted.sort_unstable();
+                if sorted.windows(2).any(|pair| pair[0] == pair[1]) {
+                    return Err(self.error("E0081: discriminant value assigned more than once"));
+                }
             }
             let declaration = parsed.program.enums.len();
             parsed.program.enums.push(EnumDecl {

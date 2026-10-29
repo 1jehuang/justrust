@@ -10029,7 +10029,23 @@ impl<'a> Checker<'a> {
                 let (to, ty) = (*to, enumeration.clone());
                 let mut arms = Vec::new();
                 self.infer_storage(ty.def().variants.len())?;
-                for variant in 0..ty.def().variants.len() {
+                let values = {
+                    let plan = self.signatures.plan()?;
+                    let info = plan.registry.declaration(ty.def().source_decl)?;
+                    if info.kind != ir::DeclKind::Enum {
+                        return Err("enum cast source is not an enum declaration".into());
+                    }
+                    let declaration = plan
+                        .program
+                        .enums
+                        .get(info.source_index)
+                        .ok_or("enum cast declaration missing")?;
+                    if declaration.variants.len() != ty.def().variants.len() {
+                        return Err("enum cast variant count changed".into());
+                    }
+                    crate::compiler::frontend::enum_discriminant_values(&declaration.variants)?
+                };
+                for (variant, value) in values.into_iter().enumerate() {
                     self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
                     let body = ir::ExprId(self.exprs.len());
                     self.exprs.push(ir::TypedExpr {
@@ -10037,7 +10053,7 @@ impl<'a> Checker<'a> {
                         completion: ir::Completion::Returns,
                         kind: ir::ExprKind::Int(ir::IntValue {
                             ty: to,
-                            bits: variant as u128 & to.mask(),
+                            bits: value as u128 & to.mask(),
                         }),
                     });
                     arms.push(ir::TypedMatchArm {

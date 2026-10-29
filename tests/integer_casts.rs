@@ -501,6 +501,28 @@ fn main(){ let v = [E::A, E::B, E::C]; let mut s = 0i32; for e in v { s = s * 10
 }
 
 #[test]
+fn explicit_discriminants_cast_like_stock() {
+    // Stock rustc (edition 2024) prints these exact lines.
+    runs(
+        r#"#[derive(Clone,Copy,Debug)]enum E{A=-2,B,C=0x10,D}enum F{X,Y=7,Z}
+fn main(){for e in [E::A,E::B,E::C,E::D]{println!("{} {} {:?}",e as i32,e as u8,e);}println!("{} {} {}",F::X as i64,F::Y as i64,F::Z as i64);}"#,
+        "-2 254 A\n-1 255 B\n16 16 C\n17 17 D\n0 7 8\n",
+    );
+    for (label, source) in [
+        (
+            "negative: duplicate discriminant E0081",
+            "enum E{A=1,B=0,C}fn main(){}",
+        ),
+        (
+            "negative: payload discriminant E0732",
+            "enum E{A(u8)=1,B}fn main(){}",
+        ),
+    ] {
+        rejects(label, source);
+    }
+}
+
+#[test]
 fn rejects_payload_enum_and_float_from_bool() {
     rejects(
         "negative: payload_enum_to_integer",
