@@ -837,6 +837,32 @@ mod tests {
     #[test]
     fn discovery_evidence_reaches_source_facts_and_manifest_changes_invalidate() {
         use crate::engine::Engine;
+        // Discovery intentionally rejects uncontrolled Cargo settings. Hosted
+        // test runners inject such settings, so test the clean-host case in a
+        // child instead of weakening production policy or changing the shared
+        // process environment underneath parallel receipt-revalidation tests.
+        const CHILD: &str = "JR_SOURCE_DISCOVERY_RECEIPT_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let host = Fixture::new();
+            let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+            command
+                .args([
+                    "--exact",
+                    "compiler::source::source_inputs::tests::discovery_evidence_reaches_source_facts_and_manifest_changes_invalidate",
+                    "--nocapture",
+                ])
+                .env_clear()
+                .env(CHILD, "1")
+                .env("HOME", host.0.join("home"))
+                .env("CARGO_HOME", host.0.join("cargo-home"))
+                .current_dir(&host.0);
+            if let Some(path) = std::env::var_os("PATH") {
+                command.env("PATH", path);
+            }
+            let output = command.output().unwrap();
+            assert!(output.status.success(), "{output:?}");
+            return;
+        }
         let f = Fixture::new();
         f.file("main.rs", "fn main() {}");
         let manifest = "[package]\nname='tracked'\nversion='0.1.0'\nedition='2024'\n[[bin]]\nname='tracked'\npath='main.rs'\n[dependencies]\ndep={path='selected'}\n";

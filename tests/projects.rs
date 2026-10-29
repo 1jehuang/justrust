@@ -9,6 +9,38 @@ use std::process::{Command, Output};
 #[path = "support/stock_rustc.rs"]
 mod stock_rustc;
 
+fn native_command() -> Command {
+    fixture_command(env!("CARGO_BIN_EXE_jr-rust"))
+}
+
+fn fixture_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
+    let mut command = Command::new(program);
+    // These fixtures model a clean native invocation. The hosted build harness
+    // injects Cargo profile/target settings which discovery correctly treats as
+    // uncontrolled. Do not inherit them, or ambient user Cargo configuration,
+    // and never mutate the parallel test process's environment.
+    command
+        .env_clear()
+        .env("HOME", target_dir("native-home"))
+        .env("CARGO_HOME", target_dir("native-cargo-home"));
+    if let Some(path) = std::env::var_os("PATH") {
+        command.env("PATH", path);
+    }
+    command
+}
+
+#[test]
+fn native_fixture_environment_is_explicit() {
+    // Inspect the actual child environment rather than get_envs, which cannot
+    // prove that inherited variables were removed.
+    let output = fixture_command("/usr/bin/env").output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    for line in String::from_utf8(output.stdout).unwrap().lines() {
+        let name = line.split_once('=').unwrap().0;
+        assert!(matches!(name, "HOME" | "CARGO_HOME" | "PATH"), "{name}");
+    }
+}
+
 fn stock_command() -> Command {
     let rustc = stock_rustc::stock_rustc();
     let rustdoc = Path::new(&rustc).with_file_name("rustdoc");
@@ -121,7 +153,7 @@ fn authenticated_registry_capture_checks_builds_runs_transitively_without_tar() 
     // This unrelated cache content must never be swept into the capture.
     std::os::unix::fs::symlink("missing", cache.join("unrelated")).unwrap();
     let invoke = |command: &str, workers: &str, output: &str| {
-        Command::new(env!("CARGO_BIN_EXE_jr-rust"))
+        native_command()
             .args([command, "-j", workers])
             .current_dir(&app)
             .env("CARGO_HOME", &home)
@@ -145,7 +177,7 @@ fn authenticated_registry_capture_checks_builds_runs_transitively_without_tar() 
     // a false immutable-capture claim or retrying after an acquisition failure.
     let alias = base.join("home-alias");
     std::os::unix::fs::symlink(&home, &alias).unwrap();
-    let legacy = Command::new(env!("CARGO_BIN_EXE_jr-rust"))
+    let legacy = native_command()
         .arg("check")
         .current_dir(&app)
         .env("CARGO_HOME", alias)
@@ -229,7 +261,7 @@ fn sibling_path_dependencies_are_captured_for_cli_check_build_run() {
         .unwrap();
     assert!(stock.status.success(), "{stock:?}");
     let invoke = |command: &str, workers: &str| {
-        Command::new(env!("CARGO_BIN_EXE_jr-rust"))
+        native_command()
             .args([command, "-j", workers])
             .current_dir(&root)
             .env("CARGO_HOME", base.join("home"))
@@ -293,7 +325,7 @@ fn ordinary_cli_captures_one_namespace_for_check_build_and_run() {
         .unwrap();
     assert!(stock.status.success(), "{stock:?}");
     let invoke = |command: &str, workers: &str| {
-        Command::new(env!("CARGO_BIN_EXE_jr-rust"))
+        native_command()
             .args([command, "-j", workers])
             .current_dir(&root)
             .env("CARGO_HOME", root.join("home"))
@@ -345,7 +377,7 @@ fn jr_with(
     args: &[&str],
     env: impl IntoIterator<Item = (&'static str, PathBuf)>,
 ) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_jr-rust"))
+    native_command()
         .args(args)
         .current_dir(fixture(project))
         .env("CARGO_TARGET_DIR", target_dir(project))
@@ -509,7 +541,7 @@ fn doctest_selection_is_explicit_and_never_reports_invented_success() {
     .unwrap();
     let invoke = |native: bool, args: &[&str]| {
         let mut command = if native {
-            Command::new(env!("CARGO_BIN_EXE_jr-rust"))
+            native_command()
         } else {
             stock_command()
         };
@@ -651,25 +683,73 @@ fn doctest_selection_is_explicit_and_never_reports_invented_success() {
 }
 
 #[test]
-fn locked_registry_earlier_edition_is_explicitly_unsupported() {
-    // Keep the authenticated external package unchanged. Positive registry
-    // execution remains blocked until edition 2021 semantics are implemented.
+fn locked_registry_earlier_edition_matches_stock_execution() {
+    // Keep the authenticated edition-2021 external package unchanged. Compile
+    // it directly with the pinned stock oracle, avoiding network/index inputs.
     let cargo_home = seed_registry_cache("utf8-width-0.1.8");
+    let oracle = target_dir("registry-edition-stock");
+    std::fs::create_dir_all(&oracle).unwrap();
+    let project = oracle.join("project");
+    std::fs::create_dir_all(project.join("src")).unwrap();
+    for path in ["Cargo.toml", "Cargo.lock", "src/main.rs"] {
+        std::fs::copy(fixture("registry").join(path), project.join(path)).unwrap();
+    }
+    let library = oracle.join("libutf8_width.rlib");
+    let stock = Command::new(stock_rustc::stock_rustc())
+        .args([
+            "--edition=2021",
+            "--crate-type=rlib",
+            "--crate-name=utf8_width",
+        ])
+        .arg(
+            cargo_home
+                .join("registry/src")
+                .join(CRATES_IO_CACHE_ID)
+                .join("utf8-width-0.1.8/src/lib.rs"),
+        )
+        .arg("-o")
+        .arg(&library)
+        .output()
+        .unwrap();
+    assert!(stock.status.success(), "{stock:?}");
+    let executable = oracle.join("registry");
+    let stock = Command::new(stock_rustc::stock_rustc())
+        .arg("--edition=2024")
+        .arg(project.join("src/main.rs"))
+        .arg("--extern")
+        .arg(format!("utf8_width={}", library.display()))
+        .arg("-o")
+        .arg(&executable)
+        .output()
+        .unwrap();
+    assert!(stock.status.success(), "{stock:?}");
+    let expected = Command::new(executable).output().unwrap();
+    assert!(expected.status.success(), "{expected:?}");
     for workers in ["1", "8"] {
         for command in ["check", "build", "run"] {
-            let output = jr_with(
-                "registry",
-                &[command, "-j", workers],
-                [("CARGO_HOME", cargo_home.clone())],
-            );
-            assert_eq!(output.status.code(), Some(101));
+            let output = native_command()
+                .args([command, "-j", workers])
+                .current_dir(&project)
+                .env("CARGO_HOME", &cargo_home)
+                .env("CARGO_TARGET_DIR", oracle.join("native"))
+                .output()
+                .unwrap();
+            assert_eq!(output.status.code(), expected.status.code(), "{output:?}");
             let stderr = String::from_utf8_lossy(&output.stderr);
+            // This unchanged package also declares an unlocked bench-only
+            // dependency (bencher). Capture currently rejects unresolved
+            // registry metadata even when inactive, so successful edition
+            // support must not turn into a false immutable-input claim.
             assert!(
-                stderr.contains("Rust edition 2021 is unsupported"),
+                stderr.contains("native input capture is unproven"),
                 "{stderr}"
             );
-            assert!(stderr.contains("utf8-width-0.1.8"), "{stderr}");
-            assert!(!stderr.contains("Finished"), "{stderr}");
+            assert!(!stderr.contains("Input capture: immutable"), "{stderr}");
+            if command == "run" {
+                assert_eq!(output.stdout, expected.stdout);
+            } else {
+                assert!(output.stdout.is_empty(), "{output:?}");
+            }
         }
     }
 }
@@ -697,7 +777,7 @@ fn locked_registry_dependency_reports_missing_cache_explicitly() {
     let cargo_home = scratch.join("empty-cargo-home");
     std::fs::create_dir_all(cargo_home.join("registry/src")).unwrap();
     std::fs::create_dir_all(cargo_home.join("registry/cache")).unwrap();
-    let out = Command::new(env!("CARGO_BIN_EXE_jr-rust"))
+    let out = native_command()
         .args(["check"])
         .current_dir(&project)
         .env("CARGO_TARGET_DIR", scratch.join("target"))
@@ -762,7 +842,7 @@ fn inactive_optional_registry_source_is_not_required_but_activation_checks_it() 
         for workers in ["1", "8"] {
             for command in ["check", "build", "run"] {
                 let invoke = |activate| {
-                    let mut cmd = Command::new(env!("CARGO_BIN_EXE_jr-rust"));
+                    let mut cmd = native_command();
                     cmd.args([command, "-j", workers]);
                     if activate {
                         cmd.args(["--features", "utf8-width"]);
@@ -820,7 +900,7 @@ fn locked_registry_dependency_reports_checksum_mismatch_explicitly() {
     )
     .unwrap();
     let cargo_home = seed_registry_cache("utf8-width-0.1.8");
-    let out = Command::new(env!("CARGO_BIN_EXE_jr-rust"))
+    let out = native_command()
         .args(["check"])
         .current_dir(&project)
         .env("CARGO_TARGET_DIR", scratch.join("target"))
@@ -856,7 +936,7 @@ fn locked_registry_dependency_rejects_mismatched_lock_entries() {
     )
     .unwrap();
     let cargo_home = seed_registry_cache("utf8-width-0.1.8");
-    let out = Command::new(env!("CARGO_BIN_EXE_jr-rust"))
+    let out = native_command()
         .args(["check"])
         .current_dir(&project)
         .env("CARGO_TARGET_DIR", scratch.join("target"))
@@ -956,7 +1036,7 @@ fn locked_registry_authority_rejects_forged_sources_and_locks() {
             _ => {}
         }
         for command in ["check", "build"] {
-            let out = Command::new(env!("CARGO_BIN_EXE_jr-rust"))
+            let out = native_command()
                 .args([command])
                 .current_dir(&project)
                 .env("CARGO_HOME", &isolated)
@@ -1007,7 +1087,7 @@ fn locked_registry_unchanged_probe_boundaries() {
         };
         std::fs::write(project.join("src/main.rs"), client).unwrap();
         for workers in ["1", "8"] {
-            let out = Command::new(env!("CARGO_BIN_EXE_jr-rust"))
+            let out = native_command()
                 .args(["check", "-j", workers])
                 .current_dir(&project)
                 .env("CARGO_HOME", &cargo_home)
@@ -1045,7 +1125,7 @@ fn invalid_projects_are_rejected_explicitly() {
         ),
     ] {
         std::fs::write(scratch.join("Cargo.toml"), manifest).unwrap();
-        let out = Command::new(env!("CARGO_BIN_EXE_jr-rust"))
+        let out = native_command()
             .args(["check"])
             .current_dir(&scratch)
             .env("CARGO_TARGET_DIR", scratch.join("target"))
@@ -1062,7 +1142,7 @@ fn invalid_projects_are_rejected_explicitly() {
     )
     .unwrap();
     std::fs::write(scratch.join("src/lib.rs"), "pub fn f() -> i32 { true }\n").unwrap();
-    let out = Command::new(env!("CARGO_BIN_EXE_jr-rust"))
+    let out = native_command()
         .args(["check"])
         .current_dir(&scratch)
         .env("CARGO_TARGET_DIR", scratch.join("target"))
