@@ -776,6 +776,11 @@ mod tests {
 
     #[test]
     fn live_configuration_appearance_invalidates_and_disables_identity() {
+        if !crate::project::in_clean_test_process(
+            "project::inputs::tests::live_configuration_appearance_invalidates_and_disables_identity",
+        ) {
+            return;
+        }
         let f = Fixture::new();
         f.package();
         let capture = || {
@@ -850,6 +855,11 @@ mod tests {
 
     #[test]
     fn discovery_tracks_manifest_lock_absence_and_target_listings() {
+        if !crate::project::in_clean_test_process(
+            "project::inputs::tests::discovery_tracks_manifest_lock_absence_and_target_listings",
+        ) {
+            return;
+        }
         let f = Fixture::new();
         f.package();
         let original = f.load().inputs;
@@ -882,6 +892,11 @@ mod tests {
 
     #[test]
     fn workspace_globs_track_new_members_and_missing_member_manifests() {
+        if !crate::project::in_clean_test_process(
+            "project::inputs::tests::workspace_globs_track_new_members_and_missing_member_manifests",
+        ) {
+            return;
+        }
         let f = Fixture::new();
         f.write(
             "Cargo.toml",
@@ -909,6 +924,11 @@ mod tests {
 
     #[test]
     fn nearest_manifest_negative_search_and_symlink_identity_are_recorded() {
+        if !crate::project::in_clean_test_process(
+            "project::inputs::tests::nearest_manifest_negative_search_and_symlink_identity_are_recorded",
+        ) {
+            return;
+        }
         let f = Fixture::new();
         f.package();
         let nested = f.0.join("nested/deep");
@@ -1196,6 +1216,11 @@ mod tests {
 
     #[test]
     fn path_planning_uses_observed_identity_after_symlink_mutation() {
+        if !crate::project::in_clean_test_process(
+            "project::inputs::tests::path_planning_uses_observed_identity_after_symlink_mutation",
+        ) {
+            return;
+        }
         let f = Fixture::new();
         f.write("Cargo.toml", &format!("{MANIFEST}\n[dependencies]\ndep={{path='selected', optional=true}}\n[features]\nuse_dep=['dep:dep','dep/marker']\n"));
         f.write("src/main.rs", "fn main() {}\n");
@@ -1311,6 +1336,11 @@ mod tests {
 
     #[test]
     fn immutable_registry_capture_survives_source_archive_and_manifest_deletion() {
+        if !crate::project::in_clean_test_process(
+            "project::inputs::tests::immutable_registry_capture_survives_source_archive_and_manifest_deletion",
+        ) {
+            return;
+        }
         let f = Fixture::new();
         f.write("app/Cargo.toml", "[package]\nname='app'\nversion='0.1.0'\nedition='2024'\n[dependencies]\ndep='=0.1.0'\n");
         f.write(
@@ -1472,6 +1502,11 @@ mod tests {
 
     #[test]
     fn registry_planning_freezes_selection_but_reauthenticates_bytes() {
+        if !crate::project::in_clean_test_process(
+            "project::inputs::tests::registry_planning_freezes_selection_but_reauthenticates_bytes",
+        ) {
+            return;
+        }
         let f = Fixture::new();
         f.write(
             "one/registry/src/index.crates.io-1949cf8c6b5b557f/dep-0.1.0/Cargo.toml",

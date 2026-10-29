@@ -570,6 +570,11 @@ mod tests {
 
     #[test]
     fn captured_driver_checks_builds_runs_after_host_inputs_disappear() {
+        if !crate::project::in_clean_test_process(
+            "project::capture::tests::captured_driver_checks_builds_runs_after_host_inputs_disappear",
+        ) {
+            return;
+        }
         use crate::project::driver::{Command, Driver, Selection};
         let root = std::env::temp_dir().join(format!("jr-captured-driver-{}", std::process::id()));
         std::fs::create_dir_all(root.join("src")).unwrap();
@@ -601,6 +606,11 @@ mod tests {
 
     #[test]
     fn captured_sibling_path_dependencies_run_after_both_roots_disappear() {
+        if !crate::project::in_clean_test_process(
+            "project::capture::tests::captured_sibling_path_dependencies_run_after_both_roots_disappear",
+        ) {
+            return;
+        }
         use crate::project::driver::{Command, Driver, Selection};
         let base =
             std::env::temp_dir().join(format!("jr-captured-siblings-{}", std::process::id()));
