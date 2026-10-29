@@ -135,9 +135,9 @@ fn scale_task_work_by_callable(types: &frontend::PlanCtx, declaration: ir::DeclI
     );
 }
 /// Bound on the type-tree size one instance may claim for its allowance.
-const TYPE_SIZE_CAP: usize = 4096;
+pub(crate) const TYPE_SIZE_CAP: usize = 4096;
 /// Nodes in one type tree, counting nominal and callable arguments, capped.
-fn type_tree_size(ty: &ir::Ty, cap: usize) -> usize {
+pub(crate) fn type_tree_size(ty: &ir::Ty, cap: usize) -> usize {
     let mut stack = vec![ty];
     let mut count = 0usize;
     while let Some(ty) = stack.pop() {

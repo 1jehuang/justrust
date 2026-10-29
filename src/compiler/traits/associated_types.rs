@@ -1693,8 +1693,20 @@ impl ValidatedTraitWorld {
         };
         // A repeated assignment pair with expanding arguments cannot terminate in this
         // closed-only RHS language. Catch it before spending the depth/resource allowance.
+        // A strictly smaller projection (`Filter<Filter<I, A>, B>::Item` reaching
+        // `Filter<I, A>::Item`) is structural descent and terminates.
+        let size = |p: &ir::AssociatedTypeProjection| {
+            crate::compiler::type_tree_size(
+                &ir::Ty::AssociatedType(Arc::new(p.clone())),
+                crate::compiler::TYPE_SIZE_CAP,
+            )
+        };
+        let current = size(projection);
         for (old, owner) in &stack.active {
-            if *owner == implementation && old.projection.item == projection.item {
+            if *owner == implementation
+                && old.projection.item == projection.item
+                && current >= size(&old.projection)
+            {
                 stack.obligations.cycles += 1;
                 return Err(FactsError::cycle(
                     &self.budget,

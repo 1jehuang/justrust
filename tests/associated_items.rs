@@ -537,21 +537,21 @@ fn main(){if run()==7{println!("associated items oracle ok");}}
 }
 
 #[test]
-fn rejects_legal_unsupported_omitted_method_type_arguments() {
-    rejects(
-        "legalunsupported: omitted_method_type_arguments",
+fn accepts_omitted_method_type_arguments() {
+    runs(
         r###"struct S{x:i32}impl S{fn choose<U>(self,u:U)->U{u}}fn run()->i32{S{x:0}.choose(7)}
 fn main(){if run()==7{println!("associated items oracle ok");}}
 "###,
+        "associated items oracle ok\n",
     );
 }
 
 #[test]
-fn rejects_legal_unsupported_partial_method_type_hole() {
-    rejects(
-        "legalunsupported: partial_method_type_hole",
+fn accepts_partial_method_type_hole() {
+    runs(
         r###"struct S{x:i32}impl S{fn choose<U>(self,u:U)->U{u}}fn run()->i32{S{x:0}.choose::<_>(7)}
 fn main(){if run()==7{println!("associated items oracle ok");}}
 "###,
+        "associated items oracle ok\n",
     );
 }
