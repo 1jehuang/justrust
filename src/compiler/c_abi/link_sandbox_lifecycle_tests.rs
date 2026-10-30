@@ -148,6 +148,107 @@ void _start(void){{
 }
 
 #[test]
+fn controlled_link_initial_auxv_random_is_normalized_across_launches() {
+    let root = std::env::temp_dir().join(format!(
+        "jr-link-auxv-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
+    let scratch = Scratch(root);
+    fs::create_dir(scratch.0.join("out")).unwrap();
+    let source = scratch.0.join("probe.S");
+    fs::write(
+        &source,
+        r#"
+.global _start
+.bss
+.balign 8
+observed: .skip 32
+.text
+_start:
+ mov (%rsp),%rcx
+ lea 16(%rsp,%rcx,8),%rsi
+1: lodsq
+ test %rax,%rax
+ jnz 1b
+ xor %r8d,%r8d
+2: lodsq
+ mov %rax,%rdx
+ lodsq
+ test %rdx,%rdx
+ jz 6f
+ cmp $25,%rdx
+ jne 3f
+ test %rax,%rax
+ jz 9f
+ mov (%rax),%rcx
+ mov %rcx,observed(%rip)
+ mov 8(%rax),%rcx
+ mov %rcx,observed+8(%rip)
+ or $1,%r8d
+3: cmp $33,%rdx
+ jne 4f
+ mov %rax,observed+16(%rip)
+4: cmp $4,%rdx
+ jne 5f
+ mov %rax,observed+24(%rip)
+ or $2,%r8d
+5: cmp $3,%rdx
+ je 8f
+ cmp $9,%rdx
+ jne 2b
+8: test %rax,%rax
+ jz 9f
+ jmp 2b
+6: cmp $3,%r8d
+ jne 9f
+ mov $1,%eax
+ mov $1,%edi
+ lea observed(%rip),%rsi
+ mov $32,%edx
+ syscall
+ cmp $32,%rax
+ jne 9f
+ mov $60,%eax
+ xor %edi,%edi
+ syscall
+9: mov $60,%eax
+ mov $1,%edi
+ syscall
+"#,
+    )
+    .unwrap();
+    let compiled = Command::new("cc")
+        .args(["-nostdlib", "-static", "-no-pie"])
+        .arg(&source)
+        .arg("-o")
+        .arg(scratch.0.join("probe"))
+        .output()
+        .unwrap();
+    assert!(compiled.status.success(), "{compiled:?}");
+    fs::set_permissions(scratch.0.join("probe"), fs::Permissions::from_mode(0o555)).unwrap();
+    let mut expected = b"jr-link-seed-v1!".to_vec();
+    expected.extend_from_slice(&0u64.to_le_bytes());
+    expected.extend_from_slice(&56u64.to_le_bytes());
+    for launch in 0..4 {
+        let mut command = Command::new(scratch.0.join("probe"));
+        command.env_clear();
+        // Exercise both an empty and a nonempty initial environment and argv.
+        if launch % 2 == 1 {
+            command.args(["one", "two"]).env("PROBE", "present");
+        }
+        let output = super::output(&mut command, &scratch.0).unwrap();
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(output.stdout, expected, "launch {launch}");
+        assert!(output.stderr.is_empty());
+    }
+}
+
+#[test]
 fn controlled_link_exec_stop_precedes_first_image_write_and_reaps_setup_errors() {
     use super::super::{
         link_sandbox,
@@ -202,6 +303,7 @@ fn controlled_link_exec_stop_precedes_first_image_write_and_reaps_setup_errors()
             (child, listener, process)
         });
         if failure == 2 {
+            assert!(child.normalize_launch(&process).is_err());
             // Receiver completed but no wait consumed the exec-stop yet.
             // Cleanup must not mistake that pending stop for task death.
             let pid = child.child.id();
@@ -227,6 +329,7 @@ fn controlled_link_exec_stop_precedes_first_image_write_and_reaps_setup_errors()
             0,
             "untrusted image wrote before parent setup"
         );
+        child.normalize_launch(&process).unwrap();
         broker.bind_process(process).unwrap();
         if failure == 1 {
             // Deliberately fail stdio admission with a regular file while the

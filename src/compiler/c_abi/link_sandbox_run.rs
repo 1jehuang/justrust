@@ -73,6 +73,7 @@ pub(super) fn output(command: &mut Command, root: &Path) -> io::Result<Output> {
         Ok::<_, io::Error>((child, listener, process))
     })?;
     child.await_exec()?;
+    child.normalize_launch(&process)?;
     let stdout = child
         .child
         .stdout
