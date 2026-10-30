@@ -68,12 +68,14 @@ pub fn scan(root: &Path) -> Result<Scan> {
             rels.push(lock);
         }
     }
+    let mut files = Vec::with_capacity(rels.len());
     for rel in rels {
         if skip_listed(root, &rel) {
             continue;
         }
         // Tracked files deleted from the worktree fail here and count as gone.
-        let Ok(md) = std::fs::symlink_metadata(root.join(&rel)) else {
+        let full = root.join(&rel);
+        let Ok(md) = std::fs::symlink_metadata(&full) else {
             continue;
         };
         if !md.file_type().is_file() {
@@ -84,17 +86,25 @@ pub fn scan(root: &Path) -> Result<Scan> {
             continue;
         }
         let (s, ns) = crate::sys::mtime(&md);
-        let mode = crate::sys::mode(&md, &root.join(&rel)) & 0o777;
-        out.files.insert(
+        let mode = crate::sys::mode(&md, &full) & 0o777;
+        files.push((
             rel,
             Stamp {
                 mtime_ns: s as i128 * 1_000_000_000 + ns as i128,
                 size: md.len(),
                 mode,
             },
-        );
+        ));
     }
+    out.files = manifest_from_observed_files(files);
     Ok(out)
+}
+
+fn manifest_from_observed_files(files: Vec<(PathBuf, Stamp)>) -> Manifest {
+    // FromIterator stably sorts and bulk-builds the tree. It retains the last
+    // stamp for duplicate keys, matching repeated insertion, without repeated
+    // O(log n) path comparisons for each freshly observed file.
+    files.into_iter().collect()
 }
 
 /// Whether a file not reaching the machine certainly breaks the build
@@ -1279,6 +1289,97 @@ mod tests {
     }
 
     #[test]
+    fn bulk_manifest_matches_ordered_insertions() {
+        let choices: Vec<_> = ["a", "b"]
+            .into_iter()
+            .flat_map(|key| {
+                [
+                    UNKNOWN,
+                    Stamp {
+                        mtime_ns: 1,
+                        size: 3,
+                        mode: 0o644,
+                    },
+                    Stamp {
+                        mtime_ns: -7,
+                        size: 9,
+                        mode: 0o755,
+                    },
+                ]
+                .into_iter()
+                .map(move |stamp| (PathBuf::from(key), stamp))
+            })
+            .collect();
+        for len in 0..=4 {
+            for mut n in 0..choices.len().pow(len) {
+                let rows: Vec<_> = (0..len)
+                    .map(|_| {
+                        let row = choices[n % choices.len()].clone();
+                        n /= choices.len();
+                        row
+                    })
+                    .collect();
+                let mut expected = Manifest::new();
+                for (path, stamp) in &rows {
+                    expected.insert(path.clone(), *stamp);
+                }
+                assert_eq!(manifest_from_observed_files(rows), expected);
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fresh_scan_observes_deletes_modes_symlinks_and_size_changes() {
+        let d = std::env::temp_dir().join(format!("jr-scan-fresh-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        assert!(
+            Command::new("git")
+                .args(["init", "-q"])
+                .current_dir(&d)
+                .status()
+                .unwrap()
+                .success()
+        );
+        for name in ["deleted", "mode", "replaced", "large"] {
+            std::fs::write(d.join(name), "x").unwrap();
+        }
+        assert!(
+            Command::new("git")
+                .args(["add", "."])
+                .current_dir(&d)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let initial = scan(&d).unwrap();
+        assert_eq!(initial.files.len(), 4);
+        std::fs::remove_file(d.join("deleted")).unwrap();
+        crate::sys::set_mode(&d.join("mode"), 0o755).unwrap();
+        std::fs::write(d.join("mode"), "longer").unwrap();
+        std::fs::remove_file(d.join("replaced")).unwrap();
+        std::os::unix::fs::symlink("missing", d.join("replaced")).unwrap();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(d.join("large"))
+            .unwrap()
+            .set_len(MAX_FILE + 1)
+            .unwrap();
+        let changed = scan(&d).unwrap();
+        assert_eq!(changed.files.len(), 1);
+        let stamp = changed.files.get(Path::new("mode")).unwrap();
+        assert_eq!(stamp.mode, 0o755);
+        assert_eq!(stamp.size, 6);
+        assert_eq!(changed.oversized, vec![PathBuf::from("large")]);
+        std::fs::write(d.join("large"), "small").unwrap();
+        let recovered = scan(&d).unwrap();
+        assert_eq!(recovered.files.len(), 2);
+        assert!(recovered.oversized.is_empty());
+        std::fs::remove_dir_all(d).unwrap();
+    }
+
+    #[test]
     fn scan_skips_target_and_big_files() {
         let d = std::env::temp_dir().join(format!("jr-scan-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
@@ -1387,6 +1488,108 @@ mod tests {
         std::fs::remove_file(d.join("cache/nested/Cargo.lock")).unwrap();
         assert!(!ignored_lockfiles(&d).contains(&PathBuf::from("cache/nested/Cargo.lock")));
         std::fs::remove_dir_all(d).unwrap();
+    }
+
+    /// Read-only focused diagnostic, not a substitute for bench/suite.py.
+    #[test]
+    #[ignore = "profiles the complete local vendored source tree"]
+    fn scan_phase_diagnostic() {
+        use std::hint::black_box;
+        use std::time::Instant;
+
+        let root = std::env::var_os("JUSTRUST_SCAN_BENCH_ROOT")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")));
+        let start = Instant::now();
+        let listed = Command::new("git")
+            .args(["ls-files", "-co", "--exclude-standard", "-z"])
+            .current_dir(&root)
+            .output()
+            .unwrap();
+        assert!(listed.status.success());
+        let mut rels: Vec<PathBuf> = listed
+            .stdout
+            .split(|b| *b == 0)
+            .filter(|p| !p.is_empty())
+            .map(|p| PathBuf::from(String::from_utf8_lossy(p).into_owned()))
+            .collect();
+        let listed_ns = start.elapsed().as_nanos();
+        let start = Instant::now();
+        for lock in ignored_lockfiles(&root) {
+            if !rels.contains(&lock) {
+                rels.push(lock);
+            }
+        }
+        let locks_ns = start.elapsed().as_nanos();
+        let listed_count = rels.len();
+        let start = Instant::now();
+        let rels: Vec<_> = rels
+            .into_iter()
+            .filter(|rel| !skip_listed(&root, rel))
+            .collect();
+        let filter_ns = start.elapsed().as_nanos();
+        let start = Instant::now();
+        let mut entries = Vec::new();
+        let mut oversized = Vec::new();
+        for rel in rels {
+            let full = root.join(&rel);
+            let Ok(md) = std::fs::symlink_metadata(&full) else {
+                continue;
+            };
+            if !md.file_type().is_file() {
+                continue;
+            }
+            if md.len() > MAX_FILE {
+                oversized.push(rel);
+                continue;
+            }
+            let (seconds, nanos) = crate::sys::mtime(&md);
+            entries.push((
+                rel,
+                Stamp {
+                    mtime_ns: seconds as i128 * 1_000_000_000 + nanos as i128,
+                    size: md.len(),
+                    mode: crate::sys::mode(&md, &full) & 0o777,
+                },
+            ));
+        }
+        let stat_ns = start.elapsed().as_nanos();
+        let mut insertion_samples = Vec::new();
+        let mut bulk_samples = Vec::new();
+        for _ in 0..7 {
+            let rows = entries.clone();
+            let start = Instant::now();
+            let mut inserted = Manifest::new();
+            for (path, stamp) in rows {
+                inserted.insert(path, stamp);
+            }
+            insertion_samples.push(start.elapsed().as_nanos());
+            let rows = entries.clone();
+            let start = Instant::now();
+            let bulk = manifest_from_observed_files(rows);
+            bulk_samples.push(start.elapsed().as_nanos());
+            assert_eq!(inserted, bulk);
+            black_box((inserted, bulk));
+        }
+        insertion_samples.sort_unstable();
+        bulk_samples.sort_unstable();
+        println!(
+            "scan_phases listed={listed_count} files={} oversized={} git_listing_ns={listed_ns} ignored_locks_ns={locks_ns} filter_ns={filter_ns} stat_ns={stat_ns} insertion_median_ns={} bulk_median_ns={}",
+            entries.len(),
+            oversized.len(),
+            insertion_samples[3],
+            bulk_samples[3]
+        );
+        for iteration in 0..3 {
+            let start = Instant::now();
+            let actual = scan(&root).unwrap();
+            println!(
+                "scan_whole iteration={iteration} files={} oversized={} elapsed_ns={}",
+                actual.files.len(),
+                actual.oversized.len(),
+                start.elapsed().as_nanos()
+            );
+        }
     }
 
     /// Read-only focused diagnostic, not a substitute for bench/suite.py.
