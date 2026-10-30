@@ -1,0 +1,43 @@
+{
+  "process": {
+    "command": [
+      "/home/jeremy/.jcode/scratch/native-cargo-frontier-20261030/jr-cargo",
+      "-vV"
+    ],
+    "status": 0,
+    "error": null,
+    "timed_out": false,
+    "elapsed_seconds": 0.009895933006191626,
+    "noise": {
+      "before": {
+        "busy_seconds": 344702.16,
+        "loadavg": [
+          6.12255859375,
+          4.396484375,
+          5.00830078125
+        ]
+      },
+      "after": {
+        "busy_seconds": 344702.2,
+        "loadavg": [
+          6.12255859375,
+          4.396484375,
+          5.00830078125
+        ]
+      },
+      "child_cpu_seconds": 0.010624999999999999,
+      "contamination": "unknown",
+      "reason": "Resident daemon CPU is not waited child CPU. This proxy does not establish a quiet machine.",
+      "other_cpu_seconds_estimate": 0.029375000037252904
+    },
+    "environment": {
+      "HOME": "/home/jeremy",
+      "JUSTRUST_CARGO_DAEMON": "0",
+      "XDG_RUNTIME_DIR": "/run/user/1000"
+    }
+  },
+  "stdout": "cargo 1.101.0-nightly (f3865b2a4 2026-09-29) (jr-cargo d57511c1f21d60aff7be78590c503d165d375ed5)\nrelease: 1.101.0-nightly\ncommit-hash: f3865b2a4d1acc5276f6b3c67d0e057f4dab3928\ncommit-date: 2026-09-29\nhost: x86_64-unknown-linux-gnu\nlibgit2: 1.9.6 (sys:0.21.0 vendored)\nlibcurl: 8.21.0-DEV (sys:0.4.90+curl-8.21.0 vendored ssl:OpenSSL/3.6.3)\nssl: OpenSSL 3.6.3 9 Jun 2026\nos: Arch Linux Rolling Release [64-bit]\n",
+  "stderr": "",
+  "sha256_before": "62eecc8e8a6a54e3ea992c7fdf86eb58f416f0e81ebcd1ea837f9427a64eab93",
+  "sha256_after": "62eecc8e8a6a54e3ea992c7fdf86eb58f416f0e81ebcd1ea837f9427a64eab93"
+}

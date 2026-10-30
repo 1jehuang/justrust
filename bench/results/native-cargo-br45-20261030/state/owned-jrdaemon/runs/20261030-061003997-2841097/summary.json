@@ -1,0 +1,165 @@
+{
+  "id": "20261030-061003997-2841097",
+  "args": [
+    "test",
+    "--lib",
+    "--",
+    "summary::tests::",
+    "--test-threads=1",
+    "--nocapture"
+  ],
+  "subcommand": "test",
+  "cwd": "/home/jeremy/.jcode/scratch/ba30/source",
+  "git": {
+    "root": null,
+    "head": null,
+    "dirty_files": null
+  },
+  "agent_session": "session_skunk_1793325801268_bca6e773d45c6a0a",
+  "start": 1793365804.0102062,
+  "wall": 1.3397414684295654,
+  "exit": 0,
+  "cpu_secs": 1.4591250000000002,
+  "savings": {
+    "dependency_hits": 0,
+    "local_hits": 0,
+    "build_script_hits": 0,
+    "original_task_secs": 0.0,
+    "measured_hit_overhead_secs": 0.0,
+    "estimated_task_secs_avoided": 0.0,
+    "hits_without_full_overhead": 0,
+    "hits_without_valid_timing": 0,
+    "malformed_records": 0
+  },
+  "cpu_secs_note": "compiler CPU lower bound",
+  "measurement_coverage": {
+    "samples": 8,
+    "processes": 7,
+    "sample_span_secs": 1.3394443988800049,
+    "max_sample_gap_secs": 0.2105698585510254
+  },
+  "ncpu": 16,
+  "phases": {
+    "startup": 0.01026153564453125,
+    "lock_wait": 0.0,
+    "compile": 1.3180885314941406,
+    "build_gaps": 0.0025491714477539062,
+    "test_run": 0.0025980472564697266,
+    "tail": 0.006244182586669922
+  },
+  "units": {
+    "compiled": 1,
+    "local": 1,
+    "dependencies": 0,
+    "build_scripts": 0,
+    "fresh": 47,
+    "rustc_cpu_secs": 1.46,
+    "rustc_wall_sum": 1.3180887699127195,
+    "with_pass_timings": 0,
+    "depcache_hits": 0,
+    "depcache_misses": 0,
+    "depcache_saved_secs": -0.0,
+    "depcache_miss_secs": -0.0,
+    "depcache_remote_hits": 0,
+    "depcache_peer_hits": 0,
+    "depcache_prebuilt_hits": 0,
+    "localcache_hits": 0,
+    "localcache_misses": 0,
+    "localcache_saved_secs": -0.0
+  },
+  "top_units": [
+    {
+      "name": "justrust (test)",
+      "kind": "test",
+      "local": true,
+      "start": 0.01026153564453125,
+      "wall": 1.3180887699127195,
+      "wall_share": 1.3180885314941406,
+      "cpu": 1.4591250000000002,
+      "max_rss_mb": 426.73046875,
+      "frontend_threads": null,
+      "rmeta_secs": null,
+      "split": null,
+      "top_passes": [],
+      "source_lines": null
+    }
+  ],
+  "link": {
+    "linker_processes": 2,
+    "linker_cpu_secs": 0.0,
+    "link_pass_secs": 0.0
+  },
+  "tests": {
+    "binaries": [
+      {
+        "name": "justrust-be688cf0e0173f41",
+        "start": 1.3343884944915771,
+        "wall": 0.0025980472564697266,
+        "passed": 4,
+        "failed": 0,
+        "filtered_out": 144
+      }
+    ],
+    "passed": 4,
+    "failed": 0,
+    "ignored": 0,
+    "filtered_out": 144,
+    "libtest_secs": 0.0,
+    "slowest": [
+      {
+        "name": "summary::tests::parses_libtest_results",
+        "binary": "justrust-be688cf0e0173f41",
+        "secs": 0.0,
+        "passed": true
+      },
+      {
+        "name": "summary::tests::splits_passes_without_double_counting",
+        "binary": "justrust-be688cf0e0173f41",
+        "secs": 0.0,
+        "passed": true
+      },
+      {
+        "name": "summary::tests::test_failures_are_not_compile_errors",
+        "binary": "justrust-be688cf0e0173f41",
+        "secs": 0.0,
+        "passed": true
+      }
+    ],
+    "timed_secs": 0.0,
+    "timed": 3
+  },
+  "resources": {
+    "avg_build_cores": 1.0891093799689393,
+    "peak_build_cores": 1.098105324506206,
+    "peak_build_rss_mb": 486.5078125,
+    "peak_unit_rss_mb": 426.73046875,
+    "min_mem_available_mb": 42243,
+    "avg_other_cores": 3.3094423022481387,
+    "max_foreign_rustc": 0,
+    "psi_cpu_secs": 0.014645999999999998,
+    "psi_mem_secs": 0.0,
+    "psi_io_secs": 0.000306
+  },
+  "diagnostics": {
+    "compile_errors": 0,
+    "warnings": 0,
+    "first_error": null,
+    "compile_failed": false
+  },
+  "rebuild_reasons": [
+    {
+      "package": "justrust",
+      "reason": "the file `src/summary.rs` has changed"
+    }
+  ],
+  "all_units": 1,
+  "slot": null,
+  "locks_waited": [],
+  "sched": {
+    "unit": "justrust-20261030-061003997-2841097.scope",
+    "final_weight": 999,
+    "setup_secs": 0.012776502,
+    "yielded_secs": 0.0
+  },
+  "route": "JUSTRUST_REMOTE=off"
+}

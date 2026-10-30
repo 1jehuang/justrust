@@ -1,0 +1,7 @@
+{"t":1793365796.3170462,"sys_cores":0.0,"build_cores":0.0,"build_rss_mb":19.4765625,"mem_available_mb":42470,"rustc_procs":0,"foreign_rustc_procs":0,"psi_cpu_ms":0.0,"psi_mem_ms":0.0,"psi_io_ms":0.0}
+{"t":1793365796.526973,"sys_cores":5.238095238095238,"build_cores":0.9050772007173221,"build_rss_mb":236.96875,"mem_available_mb":42326,"rustc_procs":2,"foreign_rustc_procs":0,"psi_cpu_ms":4.332,"psi_mem_ms":0.0,"psi_io_ms":0.0}
+{"t":1793365796.736792,"sys_cores":6.041297935103245,"build_cores":1.000862274088257,"build_rss_mb":272.64453125,"mem_available_mb":42340,"rustc_procs":2,"foreign_rustc_procs":0,"psi_cpu_ms":0.836,"psi_mem_ms":0.0,"psi_io_ms":0.0}
+{"t":1793365796.9470804,"sys_cores":3.5343283582089553,"build_cores":0.9986290905009336,"build_rss_mb":303.2578125,"mem_available_mb":42323,"rustc_procs":2,"foreign_rustc_procs":0,"psi_cpu_ms":1.131,"psi_mem_ms":0.0,"psi_io_ms":0.0}
+{"t":1793365797.156808,"sys_cores":3.4388059701492537,"build_cores":1.0489800957414277,"build_rss_mb":387.62890625,"mem_available_mb":42289,"rustc_procs":2,"foreign_rustc_procs":0,"psi_cpu_ms":0.556,"psi_mem_ms":0.0,"psi_io_ms":0.0}
+{"t":1793365797.3660495,"sys_cores":3.2955223880597013,"build_cores":1.0514160180396366,"build_rss_mb":467.51171875,"mem_available_mb":42245,"rustc_procs":2,"foreign_rustc_procs":0,"psi_cpu_ms":2.699,"psi_mem_ms":0.0,"psi_io_ms":0.0}
+{"t":1793365797.5439734,"sys_cores":4.069686411149826,"build_cores":0.0,"build_rss_mb":0.0,"mem_available_mb":42491,"rustc_procs":0,"foreign_rustc_procs":0,"psi_cpu_ms":1.721,"psi_mem_ms":0.0,"psi_io_ms":0.047}

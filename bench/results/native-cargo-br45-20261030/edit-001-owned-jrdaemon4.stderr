@@ -1,0 +1,12 @@
+    Blocking waiting for file lock on package cache
+jr-cargo daemon: served by a parked server
+
+justrust: ok: 4 tests passed in 1.3s
+  time    startup 0.01s | compile 1.24s
+  units   1 compiled (1 local, 0 deps, 0 build scripts), 47 fresh. Rebuilt because: edited src/summary.rs (justrust)
+          justrust (test)                    1.24s  cpu   1.5s    448 MB
+  tests   4 passed, 0 failed, 0 ignored, 144 filtered out, 1 binary in 0.00s
+  cpu     1.5s total (compiler CPU lower bound), avg 1.2/peak 1.2 of 16 cores; others used 4.2 cores
+  memory  peak 490 MB build, 448 MB largest rustc, 41.2 GB free; stalls cpu 0.01s mem 0.00s io 0.00s
+  waste   none detected
+  more    `justrust log 20261030-061000146-2839629` full output, `justrust show 20261030-061000146-2839629` full profile

@@ -1,0 +1,17 @@
+{
+  "medians_seconds": {
+    "owned-off": 1.2061499709961936,
+    "all3on": 1.2639216370007489,
+    "blaze": 0.09791097800189164,
+    "blaze-llvm": 0.10401339699456003,
+    "owned-jrcargo": 1.1774997460015584,
+    "owned-jrdaemon": 1.268063579002046,
+    "owned-jrdaemon4": 1.296976633995655
+  },
+  "excluded": [],
+  "store_scope": "warm-store seeded",
+  "known_unsafe_external_input_stacks": [],
+  "macro_cache_safety": "derive/attribute cache has confirmed stale env/file outputs including tracked APIs; explicit experiment timings are not correctness-certified optimizations",
+  "edit_hotpatch_outcomes": {},
+  "policy": "Failed, stale, incomplete or identity-changed stacks excluded. Gates untimed. Descriptive scoped diagnostic only."
+}

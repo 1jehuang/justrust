@@ -1,0 +1,171 @@
+{
+  "id": "20261030-060928868-2831197",
+  "args": [
+    "test",
+    "--lib",
+    "--",
+    "summary::tests::",
+    "--test-threads=1",
+    "--nocapture"
+  ],
+  "subcommand": "test",
+  "cwd": "/home/jeremy/.jcode/scratch/ba30/source",
+  "git": {
+    "root": null,
+    "head": null,
+    "dirty_files": null
+  },
+  "agent_session": "session_skunk_1793325801268_bca6e773d45c6a0a",
+  "start": 1793365768.8843455,
+  "wall": 1.374690294265747,
+  "exit": 0,
+  "cpu_secs": 1.4849009999999998,
+  "savings": {
+    "dependency_hits": 0,
+    "local_hits": 0,
+    "build_script_hits": 0,
+    "original_task_secs": 0.0,
+    "measured_hit_overhead_secs": 0.0,
+    "estimated_task_secs_avoided": 0.0,
+    "hits_without_full_overhead": 0,
+    "hits_without_valid_timing": 0,
+    "malformed_records": 0
+  },
+  "cpu_secs_note": "compiler CPU lower bound",
+  "measurement_coverage": {
+    "samples": 8,
+    "processes": 4,
+    "sample_span_secs": 1.374295949935913,
+    "max_sample_gap_secs": 0.2098846435546875
+  },
+  "ncpu": 16,
+  "phases": {
+    "startup": 0.00849151611328125,
+    "lock_wait": 0.0,
+    "compile": 1.3556604385375977,
+    "build_gaps": 0.0027816295623779297,
+    "test_run": 0.002426624298095703,
+    "tail": 0.005330085754394531
+  },
+  "units": {
+    "compiled": 1,
+    "local": 1,
+    "dependencies": 0,
+    "build_scripts": 0,
+    "fresh": 47,
+    "rustc_cpu_secs": 1.48,
+    "rustc_wall_sum": 1.3556606769561768,
+    "with_pass_timings": 0,
+    "depcache_hits": 0,
+    "depcache_misses": 0,
+    "depcache_saved_secs": -0.0,
+    "depcache_miss_secs": -0.0,
+    "depcache_remote_hits": 0,
+    "depcache_peer_hits": 0,
+    "depcache_prebuilt_hits": 0,
+    "localcache_hits": 0,
+    "localcache_misses": 0,
+    "localcache_saved_secs": -0.0
+  },
+  "top_units": [
+    {
+      "name": "justrust (test)",
+      "kind": "test",
+      "local": true,
+      "start": 0.00849151611328125,
+      "wall": 1.3556606769561768,
+      "wall_share": 1.3556604385375977,
+      "cpu": 1.4849009999999998,
+      "max_rss_mb": 404.52734375,
+      "frontend_threads": null,
+      "rmeta_secs": null,
+      "split": null,
+      "top_passes": [],
+      "source_lines": null
+    }
+  ],
+  "link": {
+    "linker_processes": 0,
+    "linker_cpu_secs": -0.0,
+    "link_pass_secs": 0.0
+  },
+  "tests": {
+    "binaries": [
+      {
+        "name": "justrust-be688cf0e0173f41",
+        "start": 1.3701064586639404,
+        "wall": 0.002426624298095703,
+        "passed": 4,
+        "failed": 0,
+        "filtered_out": 144
+      }
+    ],
+    "passed": 4,
+    "failed": 0,
+    "ignored": 0,
+    "filtered_out": 144,
+    "libtest_secs": 0.0,
+    "slowest": [
+      {
+        "name": "summary::tests::parses_libtest_results",
+        "binary": "justrust-be688cf0e0173f41",
+        "secs": 0.0,
+        "passed": true
+      },
+      {
+        "name": "summary::tests::shares_overlapping_time",
+        "binary": "justrust-be688cf0e0173f41",
+        "secs": 0.0,
+        "passed": true
+      },
+      {
+        "name": "summary::tests::splits_passes_without_double_counting",
+        "binary": "justrust-be688cf0e0173f41",
+        "secs": 0.0,
+        "passed": true
+      },
+      {
+        "name": "summary::tests::test_failures_are_not_compile_errors",
+        "binary": "justrust-be688cf0e0173f41",
+        "secs": 0.0,
+        "passed": true
+      }
+    ],
+    "timed_secs": 0.0,
+    "timed": 4
+  },
+  "resources": {
+    "avg_build_cores": 1.0801712983600562,
+    "peak_build_cores": 1.1500078941926846,
+    "peak_build_rss_mb": 461.97265625,
+    "peak_unit_rss_mb": 404.52734375,
+    "min_mem_available_mb": 42205,
+    "avg_other_cores": 2.910411031885097,
+    "max_foreign_rustc": 0,
+    "psi_cpu_secs": 0.012988,
+    "psi_mem_secs": 0.0,
+    "psi_io_secs": 0.000016
+  },
+  "diagnostics": {
+    "compile_errors": 0,
+    "warnings": 0,
+    "first_error": null,
+    "compile_failed": false
+  },
+  "rebuild_reasons": [
+    {
+      "package": "justrust",
+      "reason": "couldn't read metadata for file `/home/jeremy/.jcode/scratch/br45/owned-jrdaemon/target/debug/build/justrust/be688cf0e0173f41/out/justrust-be688cf0e0173f41`"
+    }
+  ],
+  "all_units": 1,
+  "slot": null,
+  "locks_waited": [],
+  "sched": {
+    "unit": "justrust-20261030-060928868-2831197.scope",
+    "final_weight": 999,
+    "setup_secs": 0.015419819,
+    "yielded_secs": 0.0
+  },
+  "route": "JUSTRUST_REMOTE=off"
+}

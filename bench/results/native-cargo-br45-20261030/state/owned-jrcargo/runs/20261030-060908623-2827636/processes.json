@@ -1,0 +1,42 @@
+[
+  {
+    "pid": 2827644,
+    "comm": "jr-cargo",
+    "cmdline": "/home/jeremy/.jcode/scratch/native-cargo-frontier-20261030/jr-cargo --config target.'cfg(all())'.runner=[\"/home/jeremy/.jcode/scratch/query-retention-bench-20261030/justrust-client\",\"__test-runner\"] --config term.progress.when=\"always\" --config term.progress.width=200 test --lib -- summary::tests:: --test-threads=1 --nocapture",
+    "kind": "other",
+    "first_seen": 1793365748.6353593,
+    "last_seen": 1793365749.6808546,
+    "cpu_secs": 0.06,
+    "max_rss_mb": 90.9140625
+  },
+  {
+    "pid": 2827668,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/demand-query-cache-20261030/sysroot/bin/rustc --crate-name justrust --edition=2024 src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --emit=dep-info,link -C embed-bitcode=no --test --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values()) -C metadata=ca7c44864225c396 -C extra-filename=-be688cf0e0173f41 --out-dir /home/jeremy/.jcode/scratch/br45/owned-jrcargo/target/debug/build/justrust/be688cf0e0173f41/out -C incremental=/home/jeremy/.jcode/scratch/br45/owned-jrcargo/target/debug/incremental -C strip",
+    "kind": "rustc",
+    "first_seen": 1793365748.8441389,
+    "last_seen": 1793365749.6808546,
+    "cpu_secs": 1.02,
+    "max_rss_mb": 352.84375
+  },
+  {
+    "pid": 2827667,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/br45/owned-jrcargo/home/.justrust/bin/shim/2b20db36a10e86a0/rustc --crate-name justrust --edition=2024 src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --emit=dep-info,link -C embed-bitcode=no --test --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values()) -C metadata=ca7c44864225c396 -C extra-filename=-be688cf0e0173f41 --out-dir /home/jeremy/.jcode/scratch/br45/owned-jrcargo/target/debug/build/justrust/be688cf0e0173f41/out -C incremental=/home/jeremy/.jcode/scratch/br45/owned-jrcargo/target/debug/",
+    "kind": "rustc",
+    "first_seen": 1793365748.8441389,
+    "last_seen": 1793365749.6808546,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.875
+  },
+  {
+    "pid": 2827940,
+    "comm": "cc",
+    "cmdline": "cc -m64 /home/jeremy/.jcode/scratch/br45/owned-jrcargo/target/debug/build/justrust/be688cf0e0173f41/out/rustc8Vg36Q/symbols.o /home/jeremy/.jcode/scratch/br45/owned-jrcargo/target/debug/build/justrust/be688cf0e0173f41/out/justrust-be688cf0e0173f41.00g978dkbebjflzks3o8kig3e.0bsnwcy.rcgu.o /home/jeremy/.jcode/scratch/br45/owned-jrcargo/target/debug/build/justrust/be688cf0e0173f41/out/justrust-be688cf0e0173f41.01umj3co13yb3djuaju4zjrou.0bsnwcy.rcgu.o /home/jeremy/.jcode/scratch/br45/owned-jrcargo/target/debug/build/justrust/be688cf0e0173f41/out/justrust-be688cf0e0173f41.01vc9990xcuedwst5fnxrqjvb.",
+    "kind": "linker",
+    "first_seen": 1793365749.6808546,
+    "last_seen": 1793365749.6808546,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 3.09765625
+  }
+]

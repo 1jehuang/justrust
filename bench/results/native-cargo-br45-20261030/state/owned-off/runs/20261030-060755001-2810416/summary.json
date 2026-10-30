@@ -1,0 +1,135 @@
+{
+  "id": "20261030-060755001-2810416",
+  "args": [
+    "test",
+    "--lib",
+    "--",
+    "summary::tests::",
+    "--test-threads=1",
+    "--nocapture"
+  ],
+  "subcommand": "test",
+  "cwd": "/home/jeremy/.jcode/scratch/ba30/source",
+  "git": {
+    "root": null,
+    "head": null,
+    "dirty_files": null
+  },
+  "agent_session": "session_skunk_1793325801268_bca6e773d45c6a0a",
+  "start": 1793365675.0145879,
+  "wall": 0.7795650959014893,
+  "exit": 101,
+  "cpu_secs": 0.784317,
+  "savings": {
+    "dependency_hits": 0,
+    "local_hits": 0,
+    "build_script_hits": 0,
+    "original_task_secs": 0.0,
+    "measured_hit_overhead_secs": 0.0,
+    "estimated_task_secs_avoided": 0.0,
+    "hits_without_full_overhead": 0,
+    "hits_without_valid_timing": 0,
+    "malformed_records": 0
+  },
+  "measurement_coverage": {
+    "samples": 5,
+    "processes": 3,
+    "sample_span_secs": 0.7792277336120605,
+    "max_sample_gap_secs": 0.21047735214233398
+  },
+  "ncpu": 16,
+  "phases": {
+    "startup": 0.031126022338867188,
+    "lock_wait": 0.0,
+    "compile": 0.7435750961303711,
+    "build_gaps": 0.0,
+    "test_run": 0.0,
+    "tail": 0.0048639774322509766
+  },
+  "units": {
+    "compiled": 1,
+    "local": 1,
+    "dependencies": 0,
+    "build_scripts": 0,
+    "fresh": 47,
+    "rustc_cpu_secs": 0.74,
+    "rustc_wall_sum": 0.7435750961303711,
+    "with_pass_timings": 0,
+    "depcache_hits": 0,
+    "depcache_misses": 0,
+    "depcache_saved_secs": -0.0,
+    "depcache_miss_secs": -0.0,
+    "depcache_remote_hits": 0,
+    "depcache_peer_hits": 0,
+    "depcache_prebuilt_hits": 0,
+    "localcache_hits": 0,
+    "localcache_misses": 0,
+    "localcache_saved_secs": -0.0
+  },
+  "top_units": [
+    {
+      "name": "justrust (test)",
+      "kind": "test",
+      "local": true,
+      "start": 0.031126022338867188,
+      "wall": 0.7435750961303711,
+      "wall_share": 0.7435750961303711,
+      "cpu": 0.741382,
+      "max_rss_mb": 377.4765625,
+      "frontend_threads": null,
+      "rmeta_secs": null,
+      "split": null,
+      "top_passes": [],
+      "source_lines": null
+    }
+  ],
+  "link": {
+    "linker_processes": 0,
+    "linker_cpu_secs": -0.0,
+    "link_pass_secs": 0.0
+  },
+  "tests": {
+    "binaries": [],
+    "passed": 0,
+    "failed": 0,
+    "ignored": 0,
+    "filtered_out": 0,
+    "libtest_secs": 0.0,
+    "timed_secs": 0.0,
+    "timed": 0
+  },
+  "resources": {
+    "avg_build_cores": 1.006095583452227,
+    "peak_build_cores": 1.0512135904633444,
+    "peak_build_rss_mb": 339.2421875,
+    "peak_unit_rss_mb": 377.4765625,
+    "min_mem_available_mb": 46751,
+    "avg_other_cores": 3.387953081266639,
+    "max_foreign_rustc": 0,
+    "psi_cpu_secs": 0.003803,
+    "psi_mem_secs": 0.0,
+    "psi_io_secs": 0.002679
+  },
+  "diagnostics": {
+    "compile_errors": 1,
+    "warnings": 0,
+    "first_error": "error[E0308]: mismatched types",
+    "compile_failed": true
+  },
+  "rebuild_reasons": [
+    {
+      "package": "justrust",
+      "reason": "the file `src/summary.rs` has changed"
+    }
+  ],
+  "all_units": 1,
+  "slot": null,
+  "locks_waited": [],
+  "sched": {
+    "unit": "justrust-20261030-060755001-2810416.scope",
+    "final_weight": 991,
+    "setup_secs": 0.013072378,
+    "yielded_secs": 0.0
+  },
+  "route": "JUSTRUST_REMOTE=off"
+}

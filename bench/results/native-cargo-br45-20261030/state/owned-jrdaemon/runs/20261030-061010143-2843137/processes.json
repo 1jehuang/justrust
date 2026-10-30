@@ -1,0 +1,42 @@
+[
+  {
+    "pid": 2843145,
+    "comm": "jr-cargo",
+    "cmdline": "/home/jeremy/.jcode/scratch/native-cargo-frontier-20261030/jr-cargo --config target.'cfg(all())'.runner=[\"/home/jeremy/.jcode/scratch/query-retention-bench-20261030/justrust-client\",\"__test-runner\"] --config term.progress.when=\"always\" --config term.progress.width=200 test --lib -- summary::tests:: --test-threads=1 --nocapture",
+    "kind": "other",
+    "first_seen": 1793365810.154976,
+    "last_seen": 1793365811.4189806,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 15.05859375
+  },
+  {
+    "pid": 2843149,
+    "comm": "jr-cargo",
+    "cmdline": "/home/jeremy/.jcode/scratch/native-cargo-frontier-20261030/jr-cargo --config target.'cfg(all())'.runner=[\"/home/jeremy/.jcode/scratch/query-retention-bench-20261030/justrust-client\",\"__test-runner\"] --config term.progress.when=\"always\" --config term.progress.width=200 test --lib -- summary::tests:: --test-threads=1 --nocapture",
+    "kind": "other",
+    "first_seen": 1793365810.3653948,
+    "last_seen": 1793365811.4189806,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 60.39453125
+  },
+  {
+    "pid": 2843154,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/demand-query-cache-20261030/sysroot/bin/rustc --crate-name justrust --edition=2024 src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --emit=dep-info,link -C embed-bitcode=no --test --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values()) -C metadata=ca7c44864225c396 -C extra-filename=-be688cf0e0173f41 --out-dir /home/jeremy/.jcode/scratch/br45/owned-jrdaemon/target/debug/build/justrust/be688cf0e0173f41/out -C incremental=/home/jeremy/.jcode/scratch/br45/owned-jrdaemon/target/debug/incremental -C str",
+    "kind": "rustc",
+    "first_seen": 1793365810.3653948,
+    "last_seen": 1793365811.4189806,
+    "cpu_secs": 1.27,
+    "max_rss_mb": 406.2109375
+  },
+  {
+    "pid": 2843153,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/br45/owned-jrdaemon/home/.justrust/bin/shim/2b20db36a10e86a0/rustc --crate-name justrust --edition=2024 src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --emit=dep-info,link -C embed-bitcode=no --test --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values()) -C metadata=ca7c44864225c396 -C extra-filename=-be688cf0e0173f41 --out-dir /home/jeremy/.jcode/scratch/br45/owned-jrdaemon/target/debug/build/justrust/be688cf0e0173f41/out -C incremental=/home/jeremy/.jcode/scratch/br45/owned-jrdaemon/target/deb",
+    "kind": "rustc",
+    "first_seen": 1793365810.3653948,
+    "last_seen": 1793365811.4189806,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.765625
+  }
+]

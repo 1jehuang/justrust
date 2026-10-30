@@ -1,0 +1,11 @@
+jr-cargo daemon: served by a parked server
+
+justrust: ok: 4 tests passed in 1.1s
+  time    compile 1.12s
+  units   1 compiled (1 local, 0 deps, 0 build scripts), 47 fresh. Rebuilt because: edited src/summary.rs (justrust)
+          justrust (test)                    1.12s  cpu   1.2s    426 MB
+  tests   4 passed, 0 failed, 0 ignored, 144 filtered out, 1 binary in 0.00s
+  cpu     1.2s total (compiler CPU lower bound), avg 1.1/peak 1.1 of 16 cores; others used 3.2 cores
+  memory  peak 459 MB build, 426 MB largest rustc, 41.3 GB free; stalls cpu 0.01s mem 0.00s io 0.00s
+  waste   none detected
+  more    `justrust log 20261030-060958975-2839245` full output, `justrust show 20261030-060958975-2839245` full profile

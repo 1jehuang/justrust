@@ -1,0 +1,72 @@
+[
+  {
+    "pid": 2837844,
+    "comm": "jr-cargo",
+    "cmdline": "/home/jeremy/.jcode/scratch/native-cargo-frontier-20261030/jr-cargo --config target.'cfg(all())'.runner=[\"/home/jeremy/.jcode/scratch/query-retention-bench-20261030/justrust-client\",\"__test-runner\"] --config term.progress.when=\"always\" --config term.progress.width=200 test --lib -- summary::tests:: --test-threads=1 --nocapture",
+    "kind": "other",
+    "first_seen": 1793365795.163381,
+    "last_seen": 1793365796.211817,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 14.92578125
+  },
+  {
+    "pid": 2837848,
+    "comm": "jr-cargo",
+    "cmdline": "/home/jeremy/.jcode/scratch/native-cargo-frontier-20261030/jr-cargo --config target.'cfg(all())'.runner=[\"/home/jeremy/.jcode/scratch/query-retention-bench-20261030/justrust-client\",\"__test-runner\"] --config term.progress.when=\"always\" --config term.progress.width=200 test --lib -- summary::tests:: --test-threads=1 --nocapture",
+    "kind": "other",
+    "first_seen": 1793365795.3730624,
+    "last_seen": 1793365796.211817,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 48.25390625
+  },
+  {
+    "pid": 2837853,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/demand-query-cache-20261030/sysroot/bin/rustc --crate-name justrust --edition=2024 src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --emit=dep-info,link -C embed-bitcode=no --test --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values()) -C metadata=ca7c44864225c396 -C extra-filename=-fd4f0e2776ee2399 --out-dir /home/jeremy/.jcode/scratch/br45/owned-jrdaemon4/target/debug/build/justrust/fd4f0e2776ee2399/out -C incremental=/home/jeremy/.jcode/scratch/br45/owned-jrdaemon4/target/debug/incremental -C s",
+    "kind": "rustc",
+    "first_seen": 1793365795.3730624,
+    "last_seen": 1793365796.211817,
+    "cpu_secs": 1.25,
+    "max_rss_mb": 438.04296875
+  },
+  {
+    "pid": 2837852,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/br45/owned-jrdaemon4/home/.justrust/bin/shim/2b20db36a10e86a0/rustc --crate-name justrust --edition=2024 src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --emit=dep-info,link -C embed-bitcode=no --test --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values()) -C metadata=ca7c44864225c396 -C extra-filename=-fd4f0e2776ee2399 --out-dir /home/jeremy/.jcode/scratch/br45/owned-jrdaemon4/target/debug/build/justrust/fd4f0e2776ee2399/out -C incremental=/home/jeremy/.jcode/scratch/br45/owned-jrdaemon4/target/",
+    "kind": "rustc",
+    "first_seen": 1793365795.3730624,
+    "last_seen": 1793365796.211817,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.7734375
+  },
+  {
+    "pid": 2838235,
+    "comm": "cc",
+    "cmdline": "cc -m64 /home/jeremy/.jcode/scratch/br45/owned-jrdaemon4/target/debug/build/justrust/fd4f0e2776ee2399/out/rustcS54uhA/symbols.o /home/jeremy/.jcode/scratch/br45/owned-jrdaemon4/target/debug/build/justrust/fd4f0e2776ee2399/out/justrust-fd4f0e2776ee2399.00g978dkbebjflzks3o8kig3e.0d4kmjt.rcgu.o /home/jeremy/.jcode/scratch/br45/owned-jrdaemon4/target/debug/build/justrust/fd4f0e2776ee2399/out/justrust-fd4f0e2776ee2399.01umj3co13yb3djuaju4zjrou.0d4kmjt.rcgu.o /home/jeremy/.jcode/scratch/br45/owned-jrdaemon4/target/debug/build/justrust/fd4f0e2776ee2399/out/justrust-fd4f0e2776ee2399.02q7wc0uhcy081gs4c",
+    "kind": "linker",
+    "first_seen": 1793365796.211817,
+    "last_seen": 1793365796.211817,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 3.00390625
+  },
+  {
+    "pid": 2838237,
+    "comm": "rust-lld",
+    "cmdline": "/home/jeremy/.jcode/scratch/demand-query-cache-20261030/sysroot/lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-lld -flavor gnu -plugin /usr/lib/gcc/x86_64-pc-linux-gnu/16/liblto_plugin.so -plugin-opt=/usr/lib/gcc/x86_64-pc-linux-gnu/16/lto-wrapper -plugin-opt=-fresolution=/home/jeremy/.jcode/scratch/ccItJLOD.res --build-id --eh-frame-hdr --hash-style=gnu -m elf_x86_64 -dynamic-linker /lib64/ld-linux-x86-64.so.2 -pie -o /home/jeremy/.jcode/scratch/br45/owned-jrdaemon4/target/debug/build/justrust/fd4f0e2776ee2399/out/justrust-fd4f0e2776ee2399 /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/Sc",
+    "kind": "other",
+    "first_seen": 1793365796.211817,
+    "last_seen": 1793365796.211817,
+    "cpu_secs": 0.09,
+    "max_rss_mb": 138.4296875
+  },
+  {
+    "pid": 2838236,
+    "comm": "collect2",
+    "cmdline": "/usr/lib/gcc/x86_64-pc-linux-gnu/16/collect2 -plugin /usr/lib/gcc/x86_64-pc-linux-gnu/16/liblto_plugin.so -plugin-opt=/usr/lib/gcc/x86_64-pc-linux-gnu/16/lto-wrapper -plugin-opt=-fresolution=/home/jeremy/.jcode/scratch/ccItJLOD.res --build-id --eh-frame-hdr --hash-style=gnu -m elf_x86_64 -dynamic-linker /lib64/ld-linux-x86-64.so.2 -pie -fuse-ld=lld -o /home/jeremy/.jcode/scratch/br45/owned-jrdaemon4/target/debug/build/justrust/fd4f0e2776ee2399/out/justrust-fd4f0e2776ee2399 /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/Scrt1.o /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/crti.o /us",
+    "kind": "linker",
+    "first_seen": 1793365796.211817,
+    "last_seen": 1793365796.211817,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 2.28125
+  }
+]
