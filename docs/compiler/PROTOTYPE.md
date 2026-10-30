@@ -32,8 +32,13 @@ and Clippy) and the separately released stable `justrust` client. Ensure
 `$HOME/.cargo/bin` and `$HOME/.local/bin` are on PATH before running these
 commands. Native execution acceptance currently requires Linux x86-64 with
 GNU `ld`, the glibc runtime and CRT/development objects (`glibc-devel` on
-RPM-based hosts). C ABI acceptance also needs `cc`. The stock Rust oracle
-requires `rustc`. Build caches are not transferred with a cloud
+RPM-based hosts). C ABI acceptance also needs `cc`. Differential suites using
+`tests/support/stock_rustc.rs` require the exact pinned Rust 1.98.1 toolchain,
+not just the current bootstrap compiler. Install it separately with
+`rustup toolchain install 1.98.1 --profile minimal --no-self-update` or set
+`JR_STOCK_RUSTC` to that exact compiler. The harness verifies its full version
+and commit. Repository probes that import `tomllib` need Python 3.11 or later.
+Build caches are not transferred with a cloud
 session, so allow disk space for a cold build. On a disk-constrained host,
 `CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0`
 reduces bootstrap artifact storage without changing the native compiler
