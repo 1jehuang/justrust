@@ -24,7 +24,12 @@ WILD_VERSION = '0.10.0'  # Shipping client's pinned src/linker.rs layout.
 
 PROFILES = {f'CARGO_PROFILE_{p}_{k}': v for p in ('DEV', 'TEST')
             for k, v in (('OPT_LEVEL', '0'), ('DEBUG', '0'), ('INCREMENTAL', 'true'))}
-ALLOW = base.ENV_LOG_ALLOWLIST | frozenset(PROFILES) | {'BLAZE_BACKEND', 'BLAZE_OPT', 'JUSTRUST_HOTPATCH'}
+NATIVE_STACKS = ('owned-jrcargo', 'owned-jrdaemon', 'owned-jrdaemon4')
+DAEMON_SERVED = 'jr-cargo daemon: served by a parked server'
+
+ALLOW = base.ENV_LOG_ALLOWLIST | frozenset(PROFILES) | {
+    'BLAZE_BACKEND', 'BLAZE_OPT', 'JUSTRUST_HOTPATCH',
+    'JUSTRUST_CARGO_DAEMON', 'JUSTRUST_CARGO_DAEMON_TRACE'}
 
 
 def logged_environment(env):
@@ -118,6 +123,83 @@ def classify_compiler(args, expected_hash):
     return receipt
 
 
+def absolute_executable(value):
+    path = Path(value).expanduser()
+    if not path.is_absolute() or not path.is_file() or not os.access(path, os.X_OK):
+        raise argparse.ArgumentTypeError('native Cargo must be an absolute executable file')
+    return path.resolve()
+
+
+def classify_native_cargo(args, expected_hash):
+    before = base.digest(args.native_cargo)
+    if before != expected_hash:
+        raise ValueError('native Cargo changed before version query')
+    prefix = args.output / 'native-cargo-version'
+    env = {k: v for k, v in os.environ.items() if not k.startswith('JUSTRUST_')}
+    env['JUSTRUST_CARGO_DAEMON'] = '0'
+    row = run_process([str(args.native_cargo), '-vV'], args.source, env, prefix, args.timeout)
+    stdout = prefix.with_suffix('.stdout').read_text(errors='replace')
+    receipt = {'process': row, 'stdout': stdout,
+               'stderr': prefix.with_suffix('.stderr').read_text(errors='replace'),
+               'sha256_before': before, 'sha256_after': base.digest(args.native_cargo)}
+    (args.output / 'native-cargo-version.json').write_text(json.dumps(receipt, indent=2) + '\n')
+    if (before != receipt['sha256_after'] or not base.succeeded(row)
+            or not stdout.startswith('cargo ')):
+        raise ValueError('native Cargo version query failed or identity changed')
+    return receipt
+
+
+def cleanup_native_daemons(args, environments, proc=Path('/proc')):
+    """Signal only pidfd-pinned, same-UID private native Cargo servers.
+
+    Open the pidfd before inspecting /proc, then recheck identity immediately
+    before signaling. A reused numeric PID can never redirect the signal.
+    Missing Linux pidfd support fails closed without a numeric-PID fallback.
+    """
+    native = getattr(args, 'native_cargo', None)
+    if native is None:
+        return []
+    reports = []
+    if not hasattr(os, 'pidfd_open') or not hasattr(signal, 'pidfd_send_signal'):
+        return [{'error': 'pidfd unavailable, no processes signaled'}]
+    allowed = {str(args.output / stack / 'runtime' / 'jr-cargo')
+               for stack in NATIVE_STACKS if stack in environments}
+    def matches(entry):
+        if entry.stat().st_uid != os.getuid():
+            return False
+        if os.readlink(entry / 'exe') != str(native):
+            return False
+        values = [v.split(b'=', 1)[1] for v in (entry / 'environ').read_bytes().split(b'\0')
+                  if v.startswith(b'JUSTRUST_CARGO_SERVE=')]
+        if len(values) != 1:
+            return False
+        socket = Path(os.fsdecode(values[0]))
+        return (socket.is_absolute() and '..' not in socket.parts
+                and str(socket.parent) in allowed and socket.name not in ('', '.', '..'))
+    try:
+        entries = list(proc.iterdir())
+    except OSError as exc:
+        return [{'error': repr(exc)}]
+    for entry in entries:
+        if not entry.name.isdigit():
+            continue
+        fd = None
+        try:
+            # Filter UID before opening handles to unrelated processes.
+            if entry.stat().st_uid != os.getuid():
+                continue
+            fd = os.pidfd_open(int(entry.name), 0)
+            if matches(entry) and matches(entry):
+                signal.pidfd_send_signal(fd, signal.SIGTERM, None, 0)
+                reports.append({'pid': int(entry.name), 'signal': 'SIGTERM'})
+        except OSError:
+            pass  # Exited, inaccessible, or changed identity: never broaden scope.
+        finally:
+            if fd is not None:
+                os.close(fd)
+    return reports
+
+
 def native_codegen_identities(rustc):
     root = Path(rustc).resolve().parent.parent
     backends = sorted(root.glob('lib/rustlib/*/codegen-backends/librustc_codegen_cranelift*.so'))
@@ -131,6 +213,9 @@ def identities(args):
     result = dict(base.identities(args))
     if getattr(args, 'native_backend_frontier', False):
         result.update(native_codegen_identities(args.rustc))
+    if getattr(args, 'native_cargo', None):
+        result['native_cargo'] = {'path': str(args.native_cargo),
+                                  'sha256': base.digest(args.native_cargo)}
     if args.wild:
         result['wild'] = {'path': str(args.wild), 'sha256': base.digest(args.wild)}
     return result
@@ -225,11 +310,19 @@ def accepted(row, output, expected=None, marker=None):
 
 
 def environment(args, stack):
+    if stack in NATIVE_STACKS:
+        args = argparse.Namespace(**vars(args))
+        args.cargo = args.native_cargo
     env = base.environment(args, 'owned-on' if stack == 'all3on' else
                            'blaze' if stack == 'blaze-llvm' else stack)
     # base uses stack-named isolation. Move LLVM's base directory separately by
     # supplying a nested output root rather than sharing the Blaze target.
     env.update(PROFILES)
+    if stack in NATIVE_STACKS:
+        env['JUSTRUST_CARGO_DAEMON'] = '0' if stack == 'owned-jrcargo' else '1'
+        env['JUSTRUST_CARGO_DAEMON_TRACE'] = '1'
+        if stack == 'owned-jrdaemon4':
+            env['RUSTFLAGS'] += ' -Zthreads=4'
     if not stack.startswith('blaze') and getattr(args, 'compiler_nightly', False):
         env['JUSTRUST_TOOLCHAIN_NIGHTLY'] = '1'
     if stack in ('all4on', 'all4hotpatch', 'owned-macro', 'owned-macro-hotpatch'):
@@ -328,6 +421,8 @@ def execute(args):
         stacks += ['owned-demand']
     if getattr(args, 'native_backend_frontier', False):
         stacks += ['owned-clif', 'owned-threads4', 'owned-clif-threads4']
+    if getattr(args, 'native_cargo', None):
+        stacks += list(NATIVE_STACKS)
     records, medians, environments = [], {}, {}
     metadata = {'scope': 'scoped filtered tests, not full suite or general speed claim',
                 'source_before': source_hashes(args.source, args.output),
@@ -369,6 +464,10 @@ def execute(args):
         else:
             output = ''.join(prefix.with_suffix('.' + s).read_text(errors='replace') for s in ('stdout', 'stderr'))
             row['raw_output'] = {'source': 'direct Blaze stdout/stderr'}
+        if stack in NATIVE_STACKS[1:] and phase == 'edit':
+            row['daemon_served'] = DAEMON_SERVED in output
+            if not row['daemon_served']:
+                row['error'] = row.get('error') or 'missing raw parked-server proof'
         row.update(stack=stack, phase=phase, replicate=rep,
                    source_sha256=hashlib.sha256(contents).hexdigest(), parsed=test_results(output))
         if args.command == 'build' and base.succeeded(row):
@@ -386,6 +485,9 @@ def execute(args):
         return accepted(row, output, expected, marker)
     try:
         save()
+        if getattr(args, 'native_cargo', None):
+            metadata['native_cargo_version'] = classify_native_cargo(
+                args, metadata['identities_before']['native_cargo']['sha256'])
         metadata['compiler_version'] = classify_compiler(args, metadata['identities_before']['rustc']['sha256'])
         args.compiler_nightly = metadata['compiler_version']['nightly']
         save()
@@ -452,6 +554,10 @@ def execute(args):
             if len(rows) == args.samples and all(r['accepted'] for r in rows):
                 medians[stack] = statistics.median(r['elapsed_seconds'] for r in rows)
     finally:
+        try:
+            metadata['native_daemon_cleanup'] = cleanup_native_daemons(args, environments)
+        except Exception as exc:
+            metadata['native_daemon_cleanup'] = [{'error': repr(exc)}]
         pinned.write_bytes(original)
         metadata['source_after'] = source_hashes(args.source, args.output)
         metadata['source_restored'] = pinned.read_bytes() == original
@@ -489,6 +595,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for key in ('source', 'output', 'blaze', 'justrust', 'rustc', 'cargo'):
         parser.add_argument('--' + key, required=True, type=lambda s: Path(s).expanduser().resolve())
+    parser.add_argument('--native-cargo', type=absolute_executable, default=None,
+                        help='frozen absolute native Cargo executable, adds isolated control and daemon stacks')
     parser.add_argument('--wild', type=lambda s: Path(s).expanduser().resolve(),
                         help='copy this linker into every private owned toolchain home')
     parser.add_argument('--samples', type=int, default=5)

@@ -24,6 +24,125 @@ def output(names=(NAME,), marker='', failed=False):
 
 
 class HarnessTests(unittest.TestCase):
+    def test_native_cargo_stacks_and_missing_raw_proof(self):
+        for served, mutation in ((True, False), (False, False), ('console-only', False), ('missing-second', False), (True, True)):
+            with self.subTest(served=served, mutation=mutation), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                rows = self.exercise(root, native=True, served=served, native_mutation=mutation)
+                summary = json.loads((root / 'out/summary.json').read_text())
+                for stack in h.NATIVE_STACKS:
+                    self.assertEqual(stack in summary['medians_seconds'],
+                                     not mutation and (served is True or stack == 'owned-jrcargo'))
+                    phases = [name for name, _ in rows if name.endswith('-' + stack)]
+                    for phase in ('prepare', 'type-error', 'type-recovery', 'test-failure', 'test-recovery'):
+                        self.assertIn(f'{phase}-000-{stack}', phases)
+                metadata = json.loads((root / 'out/metadata.json').read_text())
+                self.assertEqual(metadata['unchanged'], not mutation)
+
+    def test_native_cargo_environment_isolation(self):
+        with tempfile.TemporaryDirectory() as temp:
+            args = argparse.Namespace(output=Path(temp), cargo=Path('/mock/stock'),
+                                      native_cargo=Path('/mock/native'), rustc=Path('/mock/rustc'))
+            envs = {s: h.environment(args, s) for s in ('owned-off', *h.NATIVE_STACKS)}
+            self.assertEqual(args.cargo, Path('/mock/stock'))
+            for stack, env in envs.items():
+                cargo = '/mock/stock' if stack == 'owned-off' else '/mock/native'
+                self.assertEqual(env['CARGO'], cargo)
+                self.assertEqual(env['JUSTRUST_REAL_CARGO'], cargo)
+                self.assertEqual(os.readlink(Path(env['PATH'].split(os.pathsep)[0]) / 'cargo'), cargo)
+                self.assertEqual(env['JUSTRUST_CACHE_PROC_MACROS'], '0')
+                for flag in h.base.FLAGS:
+                    self.assertIn(f'-Z{flag}=no', env['RUSTFLAGS'])
+                self.assertEqual('-Zthreads=4' in env['RUSTFLAGS'], stack == 'owned-jrdaemon4')
+                if stack in h.NATIVE_STACKS:
+                    self.assertEqual(env['JUSTRUST_CARGO_DAEMON'], '0' if stack == 'owned-jrcargo' else '1')
+                    self.assertEqual(h.logged_environment(env)['JUSTRUST_CARGO_DAEMON_TRACE'], '1')
+
+    def test_native_version_once_and_hash_checked(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            cargo = root / 'cargo'
+            cargo.write_bytes(b'never executed')
+            args = argparse.Namespace(native_cargo=cargo, source=root, output=root, timeout=1)
+            def fake(command, cwd, env, prefix, timeout):
+                self.assertEqual(command, [str(cargo), '-vV'])
+                self.assertEqual(env['JUSTRUST_CARGO_DAEMON'], '0')
+                prefix.with_suffix('.stdout').write_text('cargo 1.99.0\n')
+                prefix.with_suffix('.stderr').write_text('')
+                return dict(status=0, timed_out=False, error=None)
+            with patch.object(h, 'run_process', side_effect=fake) as run:
+                receipt = h.classify_native_cargo(args, h.base.digest(cargo))
+                self.assertEqual(run.call_count, 1)
+                self.assertEqual(receipt['sha256_before'], receipt['sha256_after'])
+            with patch.object(h, 'run_process') as run:
+                with self.assertRaises(ValueError):
+                    h.classify_native_cargo(args, 'wrong')
+                run.assert_not_called()
+            def changed(*a):
+                row = fake(*a)
+                cargo.write_bytes(b'mutated during version')
+                return row
+            with patch.object(h, 'run_process', side_effect=changed):
+                with self.assertRaises(ValueError):
+                    h.classify_native_cargo(args, h.base.digest(cargo))
+
+    def test_native_cargo_absolute_executable_argument(self):
+        with self.assertRaises(argparse.ArgumentTypeError):
+            h.absolute_executable('relative/cargo')
+        with tempfile.TemporaryDirectory() as temp:
+            cargo = Path(temp) / 'cargo'
+            cargo.write_bytes(b'not loaded')
+            cargo.chmod(0o600)
+            with self.assertRaises(argparse.ArgumentTypeError):
+                h.absolute_executable(str(cargo))
+            cargo.chmod(0o700)
+            self.assertEqual(h.absolute_executable(str(cargo)), cargo)
+
+    def test_private_daemon_cleanup_mock_proc_and_syscalls(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            proc = root / 'proc'
+            proc.mkdir()
+            args = argparse.Namespace(output=root / 'out', native_cargo=root / 'native')
+            environments = {'owned-jrdaemon': {}}
+            private = args.output / 'owned-jrdaemon/runtime/jr-cargo'
+            sockets = [private / 'a.sock', private / 'nested/a.sock',
+                       root / 'shared/a.sock', private / 'b.sock', private / 'c.sock']
+            for pid, socket in enumerate(sockets, 10):
+                entry = proc / str(pid)
+                entry.mkdir()
+                (entry / 'environ').write_bytes(b'JUSTRUST_CARGO_SERVE=' + os.fsencode(socket) + b'\0')
+                (entry / 'exe').symlink_to(args.native_cargo if pid != 13 else root / 'other')
+            real_stat = Path.stat
+            def fake_stat(path, *a, **kw):
+                result = real_stat(path, *a, **kw)
+                if path == proc / '14':
+                    from types import SimpleNamespace
+                    return SimpleNamespace(st_uid=os.getuid() + 1)
+                return result
+            with patch.object(Path, 'stat', fake_stat), \
+                 patch.object(os, 'pidfd_open', side_effect=lambda pid, flags: pid + 100) as opened, \
+                 patch.object(signal, 'pidfd_send_signal') as send, \
+                 patch.object(os, 'close') as close:
+                reports = h.cleanup_native_daemons(args, environments, proc)
+                self.assertEqual(reports, [{'pid': 10, 'signal': 'SIGTERM'}])
+                send.assert_called_once_with(110, signal.SIGTERM, None, 0)
+                self.assertNotIn(unittest.mock.call(14, 0), opened.call_args_list)
+                self.assertEqual(close.call_count, 4)
+            # The executable changes after the pidfd is acquired. Rechecking
+            # /proc identity must suppress the signal, without a PID fallback.
+            with patch.object(os, 'pidfd_open', return_value=110), \
+                 patch.object(os, 'readlink', side_effect=[str(args.native_cargo), '/other',
+                                                          '/other', '/other', '/other', '/other']), \
+                 patch.object(signal, 'pidfd_send_signal') as send, \
+                 patch.object(os, 'close'):
+                self.assertEqual(h.cleanup_native_daemons(args, environments, proc), [])
+                send.assert_not_called()
+            with patch.object(os, 'pidfd_open', side_effect=ProcessLookupError), \
+                 patch.object(signal, 'pidfd_send_signal') as send:
+                self.assertEqual(h.cleanup_native_daemons(args, environments, proc), [])
+                send.assert_not_called()
+
     def test_native_codegen_identity_required_and_tracks_mutation(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -247,7 +366,7 @@ class HarnessTests(unittest.TestCase):
             self.assertFalse(row['timed_out'])
             self.assertEqual(row['status'], -signal.SIGTERM)
 
-    def exercise(self, root, crash=False, stale=False, raw_mode='valid', experiments=False, seeded=False, journal=True, macro=False, missing_journal_phase=None, demand=False, frontier=False):
+    def exercise(self, root, crash=False, stale=False, raw_mode='valid', experiments=False, seeded=False, journal=True, macro=False, missing_journal_phase=None, demand=False, frontier=False, native=False, served=True, native_mutation=False):
         source = root / 'source'
         (source / 'src').mkdir(parents=True)
         pinned = source / 'src/summary.rs'
@@ -258,9 +377,12 @@ class HarnessTests(unittest.TestCase):
             binary='justrust', blaze=Path('/fake/blaze'), justrust=Path('/fake/justrust'),
             owned_experiments=experiments, native_macro_cache=macro, demand_query_cache=demand,
             native_backend_frontier=frontier,
+            native_cargo=root / 'native-cargo' if native else None,
             cargo=Path('/fake/cargo'), rustc=Path('/fake/rustc'),
             blaze_seed_cache=root / 'seed' if seeded else None,
             wild=root / 'fake-wild' if experiments or macro else None)
+        if native:
+            args.native_cargo.write_bytes(b'fake cargo never executed')
         if args.wild:
             args.wild.write_bytes(b'fake executable, never invoked')
             args.wild.chmod(0o700)
@@ -290,6 +412,12 @@ class HarnessTests(unittest.TestCase):
                 import re
                 marker = re.search(rb'JR_RUNTIME_EXECUTED_\d+', contents).group().decode()
                 text = output(marker=marker)
+            if (env.get('JUSTRUST_CARGO_DAEMON') == '1' and served
+                    and served != 'console-only'
+                    and not (served == 'missing-second' and prefix.name.startswith('edit-001-'))):
+                text += '\n' + h.DAEMON_SERVED + '\n'
+            if native_mutation and prefix.name == 'edit-001-owned-jrdaemon4':
+                args.native_cargo.write_bytes(b'changed cargo')
             if command[0] == '/fake/justrust':
                 if args.wild:
                     private_wild = Path(env['JUSTRUST_HOME']) / 'toolchains/linkers/wild-0.10.0/wild'
@@ -307,11 +435,15 @@ class HarnessTests(unittest.TestCase):
                             'outcome': 'patched' if prefix.name.startswith('edit-') else 'full-link',
                             'detail': 'synthetic test evidence', 'ms': .1}) + '\n')
                 text = 'justrust: condensed UI, no test names or diagnostics'
+                if served == 'console-only':
+                    text += '\n' + h.DAEMON_SERVED
             prefix.with_suffix('.stdout').write_text(text)
             prefix.with_suffix('.stderr').write_text('')
             return dict(status=status, error=None, timed_out=False, elapsed_seconds=.001)
         with patch.object(h.base, 'identities', return_value={'fake': 'identity', 'rustc': {'sha256': 'fake'}}), \
              patch.object(h, 'native_codegen_identities', return_value={'native_codegen:fake': {'sha256': 'fake'}}), \
+             patch.object(h, 'classify_native_cargo', return_value={'mock_version': True}), \
+             patch.object(h, 'cleanup_native_daemons', return_value=[]), \
              patch.object(h, 'classify_compiler', return_value={'nightly': False}), \
              patch.object(h, 'environment', side_effect=synthetic_environment), \
              patch.object(h, 'run_process', side_effect=fake):
@@ -320,6 +452,7 @@ class HarnessTests(unittest.TestCase):
                     h.execute(args)
             else:
                 self.assertEqual(h.execute(args), 1 if stale or raw_mode != 'valid' or
+                                 (native and (served is not True or native_mutation)) or
                                  ((experiments or macro) and (not journal or missing_journal_phase)) else 0)
         self.assertEqual(pinned.read_bytes(), ORIGINAL)
         self.assertEqual((args.output / 'source.original').read_bytes(), ORIGINAL)
