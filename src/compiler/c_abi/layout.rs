@@ -13,6 +13,9 @@ pub enum Scalar {
 pub struct Leaf {
     pub c_offset: usize,
     pub private_offset: usize,
+    /// Bytes safely accessed at the private offset, independent of C width.
+    /// Standalone scalar/field carriers use eight, packed array leaves do not.
+    pub private_bytes: usize,
     pub bytes: usize,
     pub scalar: Scalar,
 }
@@ -108,6 +111,7 @@ fn build(
                 leaves.push(Leaf {
                     c_offset: offset,
                     private_offset: offset,
+                    private_bytes: 8,
                     bytes: (size - offset).min(8),
                     scalar,
                 });
@@ -137,7 +141,17 @@ fn build(
             if *len > ir::MAX_ARRAY_LEN {
                 return Err("resource limit: C array length".into());
             }
-            let element = build(element, repr_c, budget, depth + 1)?;
+            let stride = usize::try_from(backend::array_element_stride(element, budget)?)
+                .map_err(|_| "invalid physical array element stride")?;
+            let mut element = build(element, repr_c, budget, depth + 1)?;
+            // Array elements use exact memory extents, not rounded owning carriers.
+            // Struct fields retain their ordinary private carrier spacing.
+            element.private_size = stride;
+            if !element.indirect {
+                for leaf in &mut element.leaves {
+                    leaf.private_bytes = leaf.bytes;
+                }
+            }
             budget.charge_work(*len)?;
             budget.retain_bytes(
                 len.checked_mul(
@@ -196,4 +210,43 @@ fn build(
     }
     result.size = align_up(result.size, result.align)?;
     Ok(result)
+}
+
+#[cfg(test)]
+mod packed_array_tests {
+    use super::*;
+    use std::sync::Arc;
+
+    #[test]
+    fn packed_array_private_leaves_follow_memory_not_carrier_extents() {
+        let budget = ir::PlanBudget::default();
+        for (ty, width) in [
+            (ir::Ty::Int(ir::IntTy::U8), 1usize),
+            (ir::Ty::Int(ir::IntTy::U16), 2),
+            (ir::Ty::Int(ir::IntTy::I32), 4),
+            (ir::Ty::Float(ir::FloatTy::F32), 4),
+        ] {
+            let scalar = of(&ty, &|_| false, &budget).unwrap();
+            assert_eq!(scalar.private_size, 8);
+            assert_eq!(scalar.leaves[0].private_bytes, 8);
+            let row = ir::Ty::Array {
+                element: Arc::new(ty),
+                len: 3,
+            };
+            let nested = ir::Ty::Array {
+                element: Arc::new(row),
+                len: 2,
+            };
+            let layout = of(&nested, &|_| false, &budget).unwrap();
+            assert_eq!(layout.size, 6 * width);
+            assert_eq!(layout.private_size, (6 * width).div_ceil(8) * 8);
+            assert_eq!(layout.leaves.len(), 6);
+            for (index, leaf) in layout.leaves.iter().enumerate() {
+                assert_eq!(leaf.private_offset, index * width);
+                assert_eq!(leaf.c_offset, index * width);
+                assert_eq!(leaf.private_bytes, width);
+                assert_eq!(leaf.bytes, width);
+            }
+        }
+    }
 }

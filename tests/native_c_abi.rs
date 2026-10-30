@@ -4,6 +4,9 @@ use std::{
     path::{Path, PathBuf},
     process::Command,
 };
+#[path = "support/stock_rustc.rs"]
+mod stock_rustc;
+
 struct Scratch(PathBuf);
 impl Scratch {
     fn new() -> Self {
@@ -160,6 +163,74 @@ fn optimized_imports_keep_real_external_call_bodies_at_workers_1_8() {
 }
 
 #[test]
+fn narrow_scalar_array_imports_exports_and_callbacks_match_stock() {
+    let scratch = Scratch::new();
+    let source = scratch.file("packed.rs");
+    let c_source = scratch.file("packed.c");
+    let object = scratch.file("packed.o");
+    fs::write(
+        &c_source,
+        r#"
+#include <stdint.h>
+typedef struct { uint16_t values[3]; } Tiny;
+typedef struct { uint8_t bytes[3]; uint16_t halves[3]; float floats[3]; } Mixed;
+extern Mixed rust_packed(Mixed);
+Tiny c_tiny(Tiny x){x.values[1]+=7;return x;}
+Mixed c_mixed(Mixed x){x.bytes[2]+=3;x.halves[1]+=11;x.floats[0]+=0.5f;return x;}
+Mixed c_callback(Mixed x){return rust_packed(x);}
+"#,
+    )
+    .unwrap();
+    fs::write(&source,r#"
+#[repr(C)]#[derive(Clone,Copy)]pub struct Tiny{values:[u16;3]}
+#[repr(C)]#[derive(Clone,Copy)]pub struct Mixed{bytes:[u8;3],halves:[u16;3],floats:[f32;3]}
+unsafe extern "C"{fn c_tiny(x:Tiny)->Tiny;fn c_mixed(x:Mixed)->Mixed;fn c_callback(x:Mixed)->Mixed;}
+#[unsafe(no_mangle)]pub extern "C" fn rust_packed(mut x:Mixed)->Mixed{x.bytes[1]+=2u8;x.halves[2]+=13u16;x.floats[2]+=0.25f32;x}
+fn main(){
+    let tiny=unsafe{c_tiny(Tiny{values:[257u16,513u16,769u16]})};assert_eq!(tiny.values[0],257u16);assert_eq!(tiny.values[1],520u16);assert_eq!(tiny.values[2],769u16);
+    let source=Mixed{bytes:[11u8,22u8,33u8],halves:[257u16,513u16,769u16],floats:[1.5f32,2.25f32,3.5f32]};
+    let got=unsafe{c_mixed(source)};assert_eq!(got.bytes[0],11u8);assert_eq!(got.bytes[1],22u8);assert_eq!(got.bytes[2],36u8);assert_eq!(got.halves[0],257u16);assert_eq!(got.halves[1],524u16);assert_eq!(got.halves[2],769u16);assert_eq!(got.floats[0],2.0f32);assert_eq!(got.floats[1],2.25f32);assert_eq!(got.floats[2],3.5f32);
+    let got=unsafe{c_callback(got)};assert_eq!(got.bytes[1],24u8);assert_eq!(got.halves[2],782u16);assert_eq!(got.floats[2],3.75f32);assert_eq!(got.halves[1],524u16);assert_eq!(got.floats[1],2.25f32);
+    println!("packed C ABI");
+}"#).unwrap();
+    run(Command::new("cc")
+        .args(["-std=c11", "-O2", "-fno-pie", "-c"])
+        .arg(&c_source)
+        .arg("-o")
+        .arg(&object));
+    let stock = scratch.file("stock");
+    run(Command::new(stock_rustc::stock_rustc())
+        .args(["--edition=2024", "-Cpanic=abort", "-Clink-arg=-no-pie"])
+        .arg(&source)
+        .arg(format!("-Clink-arg={}", object.display()))
+        .arg("-o")
+        .arg(&stock));
+    let expected = run(&mut Command::new(stock));
+    assert_eq!(expected.stdout, b"packed C ABI\n");
+    for workers in [1, 8] {
+        run(Command::new(cli())
+            .arg(&source)
+            .args([
+                "--check",
+                "--workers",
+                &workers.to_string(),
+                "--native-object",
+            ])
+            .arg(&object));
+        let native = scratch.file(&format!("packed-{workers}"));
+        run(Command::new(cli())
+            .arg(&source)
+            .args(["--workers", &workers.to_string(), "--native-object"])
+            .arg(&object)
+            .arg("-o")
+            .arg(&native));
+        let actual = run(&mut Command::new(native));
+        assert_eq!(actual.stdout, expected.stdout);
+        assert_eq!(actual.stderr, expected.stderr);
+    }
+}
+
+#[test]
 fn real_c_imports_exports_callbacks_and_native_library_match_stock_at_workers_1_8() {
     let scratch = Scratch::new();
     let c = scratch.file("oracle.o");
@@ -169,7 +240,7 @@ fn real_c_imports_exports_callbacks_and_native_library_match_stock_at_workers_1_
         .arg("-o")
         .arg(&c));
     let stock = scratch.file("stock");
-    run(Command::new("rustc")
+    run(Command::new(stock_rustc::stock_rustc())
         .args(["--edition=2024", "-Cpanic=abort", "-Clink-arg=-no-pie"])
         .arg(fixture("program.rs"))
         .arg(format!("-Clink-arg={}", c.display()))

@@ -18,9 +18,9 @@
 //! an eight-byte tag followed by the largest variant's concatenated fields.
 //! Any non-unit variant shape makes the entire enum use aggregate transport,
 //! including unit variants of that enum and zero-field tuple/struct variants.
-//! Arrays are always indirect and concatenate element storage, with packed u8
-//! elements and eight-byte-aligned owning snapshots. Empty arrays
-//! own one initialized eight-byte dummy word, including when nested as elements.
+//! Arrays are always indirect and concatenate exact scalar/nested-array memory
+//! extents while owning snapshots reserve whole carrier words. Zero-sized
+//! arrays/elements have no memory bytes, but owning snapshots reserve a dummy word.
 //! Aggregate arguments carry snapshot pointers. Aggregate results use a
 //! caller-owned destination, passed last at rbp+16, even for a one-field aggregate.
 use super::cfg;
@@ -257,8 +257,8 @@ pub(super) fn value_size(ty: &ir::Ty, budget: &ir::PlanBudget) -> Result<i32, St
             // even though no element storage or stride is needed at runtime.
             return Ok(8);
         }
-        // Empty arrays still own an initialized dummy word. This rule also
-        // determines the stride of arrays whose elements are empty arrays.
+        // Owning carriers are rounded independently of physical element stride.
+        // Nested arrays never transport another owner's rounded tail padding.
         let stride = array_element_stride(element, budget)?;
         let len = i32::try_from(*len).map_err(|_| "array length exceeds private frame limit")?;
         return stride
@@ -309,25 +309,45 @@ pub(super) fn value_size(ty: &ir::Ty, budget: &ir::PlanBudget) -> Result<i32, St
 }
 
 /// Array and slice elements are memory, not scalar register/local carriers.
-/// Bytes are physically adjacent, including raw slices over UTF-8 storage.
-fn array_element_stride(ty: &ir::Ty, budget: &ir::PlanBudget) -> Result<i32, String> {
-    if matches!(ty, ir::Ty::Int(ir::IntTy::U8)) {
-        Ok(1)
-    } else {
-        value_size(ty, budget)
+/// Scalars and nested arrays use exact extents. Nominal aggregate storage
+/// remains private and does not authorize public Rust/FFI aggregate layout.
+pub(super) fn array_element_stride(ty: &ir::Ty, budget: &ir::PlanBudget) -> Result<i32, String> {
+    element_extent(ty, budget, 0)
+}
+
+fn element_extent(ty: &ir::Ty, budget: &ir::PlanBudget, depth: usize) -> Result<i32, String> {
+    budget.check_depth(depth)?;
+    budget.charge_work(1)?;
+    match ty {
+        ir::Ty::Array { element, len } => {
+            let stride = element_extent(element, budget, depth + 1)?;
+            stride
+                .checked_mul(
+                    i32::try_from(*len).map_err(|_| "array extent exceeds native memory limit")?,
+                )
+                .filter(|bytes| *bytes <= MAX_FRAME_BYTES)
+                .ok_or_else(|| {
+                    "unsupported: array element extent exceeds native memory limit".into()
+                })
+        }
+        ir::Ty::Unit | ir::Ty::FnItem(_) => Ok(0),
+        ir::Ty::Closure(closure) if closure.captures().is_empty() => Ok(0),
+        ir::Ty::Int(_) | ir::Ty::Bool | ir::Ty::Char | ir::Ty::Float(_) => {
+            Ok(scalar_memory_bytes(ty) as i32)
+        }
+        _ => value_size(ty, budget),
     }
 }
 
-/// A borrowed byte array may have no readable padding beyond its last byte.
+/// Borrowed array memory has no readable owning-carrier tail padding.
 /// Owning snapshots reserve rounded storage, but transport only real elements.
 fn copied_value_bytes(ty: &ir::Ty, budget: &ir::PlanBudget) -> Result<i32, String> {
     match ty {
-        ir::Ty::Array { len: 0, .. } => Ok(0),
-        ir::Ty::Array { element, len }
-            if matches!(element.as_ref(), ir::Ty::Int(ir::IntTy::U8)) =>
-        {
+        ir::Ty::FnItem(_) => Ok(0),
+        ir::Ty::Closure(closure) if closure.captures().is_empty() => Ok(0),
+        ir::Ty::Array { .. } => {
             value_size(ty, budget)?;
-            i32::try_from(*len).map_err(|_| "byte array exceeds private frame limit".into())
+            array_element_stride(ty, budget)
         }
         _ => value_size(ty, budget),
     }
@@ -335,6 +355,7 @@ fn copied_value_bytes(ty: &ir::Ty, budget: &ir::PlanBudget) -> Result<i32, Strin
 
 fn scalar_memory_bytes(ty: &ir::Ty) -> u32 {
     match ty {
+        ir::Ty::Unit => 0,
         ir::Ty::Int(integer) => integer.bits() / 8,
         ir::Ty::Bool => 1,
         ir::Ty::Char | ir::Ty::Float(ir::FloatTy::F32) => 4,
@@ -859,21 +880,31 @@ impl<'a> Emitter<'a> {
         }
         Ok(())
     }
-    // Indexed byte storage is packed, unlike an owning scalar local carrier.
+    // Memory elements have exact widths, unlike scalar local/register carriers.
     fn store_element_value(&mut self, ty: &ir::Ty) -> Result<(), String> {
-        if matches!(ty, ir::Ty::Int(ir::IntTy::U8)) {
-            self.bytes(&[0x88, 0x07]);
-            Ok(())
-        } else {
-            self.store_address_value(ty)
+        if indirect(ty, self.concrete.facts().budget())? {
+            return self.store_address_value(ty);
         }
+        if let ir::Ty::Int(integer) = ty {
+            self.normalize_integer(*integer);
+        }
+        match scalar_memory_bytes(ty) {
+            0 => {}
+            1 => self.bytes(&[0x88, 0x07]),
+            2 => self.bytes(&[0x66, 0x89, 0x07]),
+            4 => self.bytes(&[0x89, 0x07]),
+            _ => self.bytes(&[0x48, 0x89, 0x07]),
+        }
+        Ok(())
     }
 
     fn load_element_scalar(&mut self, ty: &ir::Ty) {
-        if matches!(ty, ir::Ty::Int(ir::IntTy::U8)) {
-            self.bytes(&[0x0f, 0xb6, 0x00]);
-        } else {
-            self.bytes(&[0x48, 0x8b, 0x00]);
+        match scalar_memory_bytes(ty) {
+            0 => self.immediate(0),
+            1 => self.bytes(&[0x0f, 0xb6, 0x00]),
+            2 => self.bytes(&[0x0f, 0xb7, 0x00]),
+            4 => self.bytes(&[0x8b, 0x00]),
+            _ => self.bytes(&[0x48, 0x8b, 0x00]),
         }
     }
     // Shared slice carrier helpers. Convention: a slice operand leaves
@@ -1310,7 +1341,7 @@ impl<'a> Emitter<'a> {
                 }
             }
             DropGlue::Array { len, element } => {
-                let stride = value_size(element.owner(), self.concrete.facts().budget())?;
+                let stride = array_element_stride(element.owner(), self.concrete.facts().budget())?;
                 self.bytes(&[0x6a, 0x00]); // push 0 (index)
                 let top = self.position();
                 self.bytes(&[0x48, 0x8b, 0x04, 0x24, 0x48, 0x3d]); // rax=idx; cmp rax, len
@@ -1520,13 +1551,11 @@ impl<'a> Emitter<'a> {
         let ty = self.place_address(place)?;
         let ty = &ty;
         self.bytes(&[0x48, 0x89, 0xc7, 0x4c, 0x89, 0xc8]);
-        if (place.projection.contains(&ir::Projection::Deref)
-            || (matches!(ty, ir::Ty::Int(ir::IntTy::U8)) && !place.projection.is_empty()))
-            && !indirect(ty, self.concrete.facts().budget())?
-        {
+        if !place.projection.is_empty() && !indirect(ty, self.concrete.facts().budget())? {
             // Heap storage is byte-addressed, unlike private eight-byte local
             // carriers. Never overwrite adjacent bytes or a mapping boundary.
             match scalar_memory_bytes(ty) {
+                0 => {}
                 1 => self.bytes(&[0x88, 0x07]),
                 2 => self.bytes(&[0x66, 0x89, 0x07]),
                 4 => self.bytes(&[0x89, 0x07]),
@@ -1595,13 +1624,13 @@ impl<'a> Emitter<'a> {
         let ty = self.place_address(place)?;
         let ty = &ty;
         if !indirect(ty, self.concrete.facts().budget())? {
-            let dereferenced = place.projection.contains(&ir::Projection::Deref)
-                || (matches!(ty, ir::Ty::Int(ir::IntTy::U8)) && !place.projection.is_empty());
+            let dereferenced = !place.projection.is_empty();
             match if dereferenced {
                 scalar_memory_bytes(ty)
             } else {
                 8
             } {
+                0 => self.immediate(0),
                 1 => self.bytes(&[0x0f, 0xb6, 0x00]),
                 2 => self.bytes(&[0x0f, 0xb7, 0x00]),
                 4 => self.bytes(&[0x8b, 0x00]),
@@ -1744,19 +1773,21 @@ impl<'a> Emitter<'a> {
                 self.bytes(&[0x48, 0x89, 0xc2, 0x41, 0xb8]); // rdx = source, r8d = len
                 self.i32(i32::try_from(*len).map_err(|_| "repeat length exceeds limit")?);
                 let again = self.position();
-                self.bytes(&[0x48, 0x89, 0xd6, 0xb9]); // rsi = source, ecx = stride words
-                self.i32(value_size(element, self.concrete.facts().budget())? / 8);
-                self.bytes(&[0xfc, 0xf3, 0x48, 0xa5]); // cld; rep movsq
+                self.bytes(&[0x48, 0x89, 0xd6, 0xb9]); // rsi = source, ecx = exact element extent
+                self.i32(copied_value_bytes(element, self.concrete.facts().budget())?);
+                self.bytes(&[0xfc, 0xf3, 0xa4]); // cld; rep movsb, including partial final words
                 self.bytes(&[0x49, 0xff, 0xc8]); // dec r8
                 let more = self.jump(&[0x0f, 0x85]);
                 self.patch(more, again)?;
             } else {
                 self.bytes(&[0xb9]); // ecx = len; rax is the scalar snapshot
                 self.i32(i32::try_from(*len).map_err(|_| "repeat length exceeds limit")?);
-                if matches!(element.as_ref(), ir::Ty::Int(ir::IntTy::U8)) {
-                    self.bytes(&[0xfc, 0xf3, 0xaa]); // cld; rep stosb
-                } else {
-                    self.bytes(&[0xfc, 0xf3, 0x48, 0xab]); // cld; rep stosq
+                match scalar_memory_bytes(element) {
+                    0 => {}
+                    1 => self.bytes(&[0xfc, 0xf3, 0xaa]), // rep stosb
+                    2 => self.bytes(&[0xfc, 0xf3, 0x66, 0xab]), // rep stosw
+                    4 => self.bytes(&[0xfc, 0xf3, 0xab]), // rep stosd
+                    _ => self.bytes(&[0xfc, 0xf3, 0x48, 0xab]), // rep stosq
                 }
             }
         }
@@ -3209,11 +3240,10 @@ impl Emitter<'_> {
                         .aggregate_scratch
                         .checked_add(field)
                         .ok_or("aggregate offset too large")?;
-                    if matches!(ty, ir::Ty::Array { .. })
-                        && matches!(field_ty, ir::Ty::Int(ir::IntTy::U8))
-                    {
-                        self.bytes(&[0x88, 0x85]); // mov byte [rbp+offset], al
+                    if matches!(ty, ir::Ty::Array { .. }) {
+                        self.bytes(&[0x48, 0x8d, 0xbd]); // rdi = exact element destination
                         self.i32(offset);
+                        self.store_element_value(&field_ty)?;
                     } else {
                         self.store_value(offset, &field_ty)?;
                     }
@@ -3460,11 +3490,8 @@ impl Emitter<'_> {
                 self.bytes(&[0x49, 0x89, 0xc1]); // r9 = checked destination
                 self.operand(value)?;
                 self.bytes(&[0x48, 0x89, 0xc1]); // rhs RCX
-                if matches!(element, ir::Ty::Int(ir::IntTy::U8)) {
-                    self.bytes(&[0x41, 0x0f, 0xb6, 0x01]); // old byte [r9] RAX
-                } else {
-                    self.bytes(&[0x49, 0x8b, 0x01]); // old carrier [r9] RAX
-                }
+                self.bytes(&[0x4c, 0x89, 0xc8]); // rax = same checked destination
+                self.load_element_scalar(element);
                 match element {
                     ir::Ty::Int(integer) => {
                         self.normalize_integer(*integer);
@@ -5044,12 +5071,12 @@ mod tests {
             element: std::sync::Arc::new(ir::Ty::Char),
             len: 3,
         };
-        assert_eq!(value_size(&array, &ir::PlanBudget::default()), Ok(24));
+        assert_eq!(value_size(&array, &ir::PlanBudget::default()), Ok(16));
         assert_eq!(
             array_offset(&array, 2, &ir::PlanBudget::default())
                 .unwrap()
                 .0,
-            16
+            8
         );
         let concrete = unit_concrete_fixture();
         let resolve = |_: &ir::CallTarget| -> Result<String, String> { Err("no calls".into()) };
@@ -5796,8 +5823,40 @@ mod tests {
                 );
             }
         }
-        let word = ir::Ty::Int(ir::IntTy::U64);
-        assert_eq!(array_element_stride(&word, &budget), Ok(8));
+        for (element, width) in [
+            (ir::Ty::Int(ir::IntTy::I8), 1),
+            (ir::Ty::Int(ir::IntTy::U16), 2),
+            (ir::Ty::Int(ir::IntTy::I16), 2),
+            (ir::Ty::Int(ir::IntTy::U32), 4),
+            (ir::Ty::Int(ir::IntTy::I32), 4),
+            (ir::Ty::Bool, 1),
+            (ir::Ty::Char, 4),
+            (ir::Ty::Float(ir::FloatTy::F32), 4),
+            (ir::Ty::Float(ir::FloatTy::F64), 8),
+            (ir::Ty::Int(ir::IntTy::U64), 8),
+            (ir::Ty::Int(ir::IntTy::U128), 16),
+            (ir::Ty::Unit, 0),
+        ] {
+            assert_eq!(array_element_stride(&element, &budget), Ok(width));
+            assert_eq!(
+                value_size(&element, &budget),
+                Ok(if width == 16 { 16 } else { 8 })
+            );
+            let row = ir::Ty::Array {
+                element: std::sync::Arc::new(element),
+                len: 3,
+            };
+            let nested = ir::Ty::Array {
+                element: std::sync::Arc::new(row.clone()),
+                len: 2,
+            };
+            assert_eq!(array_element_stride(&row, &budget), Ok(3 * width));
+            assert_eq!(copied_value_bytes(&nested, &budget), Ok(6 * width));
+            assert_eq!(
+                value_size(&nested, &budget),
+                Ok((((6 * width) as usize).div_ceil(8) * 8).max(8) as i32)
+            );
+        }
     }
 
     #[test]
@@ -5881,6 +5940,13 @@ mod tests {
                 bytes[0usize]+=1u8;
                 if bytes[0usize]!=92u8 { panic!("last byte"); }
                 let byte=&bytes[0usize]; if *byte!=92u8 { panic!("byte reference"); }
+                let halves=(guard-6usize)as *mut[u16;3];unsafe{*halves=[257u16,513u16,769u16];}
+                let saved=unsafe{*halves};if saved[2]!=769u16{panic!("half array extent");}
+                let last=(guard-2usize)as *mut u16;let halves=unsafe{std::slice::from_raw_parts_mut(last,1usize)};halves[0usize]=65530u16;halves[0usize]+=5u16;if halves[0usize]!=65535u16{panic!("half scalar extent");}
+                let words=(guard-12usize)as *mut[u32;3];unsafe{*words=[70000u32,90000u32,110000u32];}
+                let saved=unsafe{*words};if saved[2]!=110000u32{panic!("word array extent");}
+                let last=(guard-4usize)as *mut u32;let words=unsafe{std::slice::from_raw_parts_mut(last,1usize)};words[0usize]=70000u32;words[0usize]+=3u32;if words[0usize]!=70003u32{panic!("word scalar extent");}
+                let nested=(guard-6usize)as *mut[[u8;3];2];unsafe{*nested=[[11u8,22u8,33u8];2];}let saved=unsafe{*nested};let row=saved[1];if row[2]!=33u8{panic!("nested exact extent");}
                 let empty=guard as *const[u8;0]; let copied=unsafe{*empty};
                 let _moved=copied;
                 let status=unsafe{__justrust_linux_syscall6!(11usize,base,8192usize,0usize,0usize,0usize,0usize)};
@@ -5903,26 +5969,32 @@ mod tests {
 
     #[test]
     fn typed_slice_layout_uses_exact_array_stride_and_two_word_transport() {
-        for element in [
-            ir::Ty::Int(ir::IntTy::I8),
-            ir::Ty::Int(ir::IntTy::U128),
-            ir::Ty::Float(ir::FloatTy::F32),
-            ir::Ty::Bool,
-            ir::Ty::Tuple(vec![ir::Ty::Int(ir::IntTy::U128), ir::Ty::Bool].into()),
-            ir::Ty::Array {
-                element: std::sync::Arc::new(ir::Ty::Int(ir::IntTy::U64)),
-                len: 40,
-            },
-            ir::Ty::Array {
-                element: std::sync::Arc::new(ir::Ty::Bool),
-                len: 0,
-            },
+        for (element, expected_stride) in [
+            (ir::Ty::Int(ir::IntTy::I8), 1),
+            (ir::Ty::Int(ir::IntTy::U128), 16),
+            (ir::Ty::Float(ir::FloatTy::F32), 4),
+            (ir::Ty::Bool, 1),
+            (
+                ir::Ty::Tuple(vec![ir::Ty::Int(ir::IntTy::U128), ir::Ty::Bool].into()),
+                24,
+            ),
+            (
+                ir::Ty::Array {
+                    element: std::sync::Arc::new(ir::Ty::Int(ir::IntTy::U64)),
+                    len: 40,
+                },
+                320,
+            ),
+            (
+                ir::Ty::Array {
+                    element: std::sync::Arc::new(ir::Ty::Bool),
+                    len: 0,
+                },
+                0,
+            ),
         ] {
             let layout = shared_slice_layout(&element, &ir::PlanBudget::default()).unwrap();
-            assert_eq!(
-                layout.element_stride as i32,
-                value_size(&element, &ir::PlanBudget::default()).unwrap()
-            );
+            assert_eq!(layout.element_stride as i32, expected_stride);
             let slice = ir::Ty::Ref {
                 kind: ir::BorrowKind::Shared,
                 referent: std::sync::Arc::new(ir::Ty::Slice {
@@ -8431,12 +8503,12 @@ mod tests {
             element: std::sync::Arc::new(empty),
             len: 3,
         };
-        assert_eq!(value_size(&nested, &ir::PlanBudget::default()).unwrap(), 24);
+        assert_eq!(value_size(&nested, &ir::PlanBudget::default()).unwrap(), 8);
         assert_eq!(
             array_offset(&nested, 2, &ir::PlanBudget::default())
                 .unwrap()
                 .0,
-            16
+            0
         );
     }
 

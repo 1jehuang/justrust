@@ -58,6 +58,7 @@ fn private_carriers_are_not_c_storage_and_forged_transport_is_rejected() {
     let budget = ir::PlanBudget::default();
     let byte = layout::of(&ir::Ty::Int(ir::IntTy::U8), &|_| false, &budget).unwrap();
     assert_eq!((byte.size, byte.align, byte.private_size), (1, 1, 8));
+    assert_eq!(byte.leaves[0].private_bytes, 8);
     let bytes = layout::of(
         &ir::Ty::Array {
             element: std::sync::Arc::new(ir::Ty::Int(ir::IntTy::U8)),
@@ -67,14 +68,14 @@ fn private_carriers_are_not_c_storage_and_forged_transport_is_rejected() {
         &budget,
     )
     .unwrap();
-    assert_eq!((bytes.size, bytes.align, bytes.private_size), (3, 1, 24));
+    assert_eq!((bytes.size, bytes.align, bytes.private_size), (3, 1, 8));
     assert_eq!(
         bytes
             .leaves
             .iter()
-            .map(|x| (x.c_offset, x.private_offset))
+            .map(|x| (x.c_offset, x.private_offset, x.private_bytes))
             .collect::<Vec<_>>(),
-        vec![(0, 0), (1, 8), (2, 16)]
+        vec![(0, 0, 1), (1, 1, 1), (2, 2, 1)]
     );
     let word = layout::of(&ir::Ty::Int(ir::IntTy::U64), &|_| false, &budget).unwrap();
     let pair = layout::of(

@@ -139,7 +139,12 @@ impl Code {
     ) -> Result<(), String> {
         for leaf in &layout.leaves {
             if to_c {
-                self.load(0, private_base, private + leaf.private_offset)?;
+                self.narrow_load(
+                    private_base,
+                    private + leaf.private_offset,
+                    leaf.private_bytes,
+                    matches!(leaf.scalar, Scalar::Integer { signed: true }),
+                )?;
                 self.narrow_store(c_base, c + leaf.c_offset, leaf.bytes)?;
             } else {
                 self.narrow_load(
@@ -148,7 +153,11 @@ impl Code {
                     leaf.bytes,
                     matches!(leaf.scalar, Scalar::Integer { signed: true }),
                 )?;
-                self.store(0, private_base, private + leaf.private_offset)?;
+                self.narrow_store(
+                    private_base,
+                    private + leaf.private_offset,
+                    leaf.private_bytes,
+                )?;
             }
         }
         Ok(())
