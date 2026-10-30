@@ -1,5 +1,6 @@
 """Mocked orchestration only. Never invokes a native engine or compiler."""
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -37,7 +38,23 @@ class HarnessTests(unittest.TestCase):
             (self.root / name).write_bytes(b'\x7fELFmock')
         self.args = argparse.Namespace(source=source, output=self.root / 'o',
             reference_engine=self.root / 'ra-jit', engine=self.root / 'jr-engine',
-            blaze=None, samples=5, timeout=1)
+            blaze=None, samples=5, timeout=1, proc_macro_server=None,
+            toolchain=self.root / compare.TOOLCHAIN_NAME)
+        tc = self.args.toolchain
+        for name in ('bin', 'lib/rustlib/src/rust/library',
+                     'lib/rustlib/wasm32-wasip1/lib/self-contained'):
+            (tc / name).mkdir(parents=True)
+        for name in ('bin/rustc', 'bin/cargo',
+                     'lib/rustlib/wasm32-wasip1/lib/self-contained/crt1-reactor.o'):
+            (tc / name).write_bytes(b'\x7fELFmock')
+        manifest = b'mocked toolchain manifest'
+        (tc / 'lib/rustlib/multirust-channel-manifest.toml').write_bytes(manifest)
+        (tc / 'lib/rustlib/components').write_text('\n'.join((
+            'rustc-x86_64-unknown-linux-gnu', 'cargo-x86_64-unknown-linux-gnu',
+            'rust-std-x86_64-unknown-linux-gnu', 'rust-std-wasm32-wasip1', 'rust-src')))
+        manifest_patch = patch.object(compare, 'TOOLCHAIN_MANIFEST', hashlib.sha256(manifest).hexdigest())
+        manifest_patch.start()
+        self.addCleanup(manifest_patch.stop)
         self.calls = []
         self.fault = None
 
@@ -91,10 +108,20 @@ class HarnessTests(unittest.TestCase):
             self.assertEqual(env.get('HOME'), os.environ.get('HOME'))
             self.assertTrue(Path(env['BLAZE_CACHE']).is_relative_to(self.args.output / stack))
             self.assertEqual('JR_ENGINE_HOME' in env, stack == 'engine')
+            link = Path(env['BLAZE_HOME']) / 'toolchains' / compare.TOOLCHAIN_NAME
+            self.assertTrue(link.is_symlink())
+            self.assertEqual(link.resolve(), self.args.toolchain)
+            if stack == 'engine':
+                self.assertEqual(Path(env['BLAZE_HOME']),
+                                 Path(env['JR_ENGINE_HOME']) / 'resident-v1/runtime')
+                self.assertEqual(Path(env['BLAZE_HOME']).stat().st_mode & 0o777, 0o700)
+            self.assertEqual(env['BLAZE_PROC_MACRO_SERVER'], '0')
+            self.assertEqual(env['RA_JIT_PROC_MACRO_SERVER'], '0')
         self.assertEqual((self.args.source / 'src/summary.rs').read_bytes(), self.original)
         metadata = json.loads((self.args.output / 'metadata.json').read_text())
         self.assertEqual(metadata['source_before'], metadata['source_after'])
         self.assertEqual(metadata['tools_before'], metadata['tools_after'])
+        self.assertEqual(metadata['toolchain_before'], metadata['toolchain_after'])
 
     def test_zero_tests_never_pass(self):
         self.fault = lambda s, p, n: (output(names=[]), 0) if p == 'prepare' else None
@@ -192,6 +219,68 @@ class HarnessTests(unittest.TestCase):
         self.assertTrue(self.summary()['source_built_parity'])
         self.assertEqual(len(self.summary()['medians_seconds']), 3)
 
+    def test_explicit_same_proc_macro_server_is_hashed_and_logged(self):
+        server = self.root / 'server'
+        server.write_bytes(b'\x7fELFmock server')
+        self.args.proc_macro_server = server
+        self.assertEqual(self.run_harness(), 0)
+        metadata = json.loads((self.args.output / 'metadata.json').read_text())
+        self.assertEqual(metadata['tools_before']['proc-macro-server'],
+                         metadata['tools_after']['proc-macro-server'])
+        for env in metadata['environments'].values():
+            self.assertEqual(env['BLAZE_PROC_MACRO_SERVER'], str(server))
+            self.assertEqual(env['RA_JIT_PROC_MACRO_SERVER'], str(server))
+        self.assertNotIn('proc-macro-server', self.summary()['medians_seconds'])
+
+    def test_proc_macro_server_mutation_excludes_all(self):
+        server = self.root / 'server'
+        server.write_bytes(b'\x7fELFmock server')
+        self.args.proc_macro_server = server
+        def mutate(s, p, n):
+            if s == 'engine' and p == 'edit' and n == 4:
+                server.write_bytes(b'\x7fELFchanged')
+        self.fault = mutate
+        self.assertEqual(self.run_harness(), 1)
+        self.assertEqual(self.summary()['medians_seconds'], {})
+
+    def test_toolchain_mutation_excludes_all(self):
+        def mutate(s, p, n):
+            if s == 'engine' and p == 'edit' and n == 4:
+                (self.args.toolchain / 'bin/rustc').write_bytes(b'\x7fELFchanged')
+        self.fault = mutate
+        self.assertEqual(self.run_harness(), 1)
+        self.assertEqual(self.summary()['medians_seconds'], {})
+
+    def test_incomplete_toolchain_refused_without_native_calls(self):
+        (self.args.toolchain / 'lib/rustlib/components').write_text('rust-src')
+        with self.assertRaisesRegex(ValueError, 'incomplete'):
+            self.run_harness()
+        self.assertEqual(self.calls, [])
+
+    def test_unpinned_toolchain_manifest_refused(self):
+        (self.args.toolchain / 'lib/rustlib/multirust-channel-manifest.toml').write_text('wrong')
+        with self.assertRaisesRegex(ValueError, 'manifest'):
+            self.run_harness()
+        self.assertEqual(self.calls, [])
+
+    def test_private_toolchain_link_replacement_excludes_all(self):
+        def mutate(s, p, n):
+            if s == 'engine' and p == 'edit' and n == 4:
+                link = self.args.output / 'engine/engine-home/resident-v1/runtime/toolchains' / compare.TOOLCHAIN_NAME
+                link.unlink()
+                link.mkdir()
+        self.fault = mutate
+        self.assertEqual(self.run_harness(), 1)
+        self.assertEqual(self.summary()['medians_seconds'], {})
+
+    def test_proc_macro_server_must_be_native_elf(self):
+        server = self.root / 'server'
+        server.write_text('#!/bin/sh\nexit 0\n')
+        self.args.proc_macro_server = server
+        with self.assertRaisesRegex(ValueError, 'native ELF'):
+            self.run_harness()
+        self.assertEqual(self.calls, [])
+
     def test_engine_operations_are_direct(self):
         for operation in ('test', 'build', 'check', 'run'):
             self.assertEqual(compare.command('/native/jr-engine', 'engine', operation, ['--lib']),
@@ -209,7 +298,6 @@ class HarnessTests(unittest.TestCase):
 
     def test_pin_verifies_all_blobs_without_workload(self):
         data = self.original
-        import hashlib
         oid = hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
         tree = f'100644 blob {oid}\tsrc/summary.rs\0'.encode()
         with patch.object(compare.subprocess, 'check_output', return_value=tree):

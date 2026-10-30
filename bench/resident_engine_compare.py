@@ -13,6 +13,8 @@ import blaze_runtime_compare as runtime
 
 PIN = 'f97fcc2'
 REFERENCE_VERSION = 'blaze 0.20261027.0 (5d4f78f7577cf7170993b74f735099dd03f5c6ca)'
+TOOLCHAIN_NAME = 'nightly-2026-10-27-x86_64-unknown-linux-gnu'
+TOOLCHAIN_MANIFEST = '34f3d9bf04640a082e561310f3f258846397f4cf64a2bcfebcea96ebf18e2572'
 NAMES = sorted('summary::tests::' + name for name in (
     'shares_overlapping_time', 'splits_passes_without_double_counting',
     'parses_libtest_results', 'test_failures_are_not_compile_errors'))
@@ -77,24 +79,64 @@ def command(tool, stack, operation='test', arguments=None):
         FILTER if arguments is None else arguments)
 
 
-def environment(output, stack):
+def toolchain_identity(root):
+    """Read-only inspection. Refuse incomplete inputs rather than installing anything."""
+    if root.name != TOOLCHAIN_NAME or not root.is_dir():
+        raise ValueError('toolchain must be the existing pinned ' + TOOLCHAIN_NAME)
+    manifest = root / 'lib/rustlib/multirust-channel-manifest.toml'
+    if runtime.base.digest(manifest) != TOOLCHAIN_MANIFEST:
+        raise ValueError('toolchain channel manifest does not match the pinned release')
+    needed = {'rustc-x86_64-unknown-linux-gnu', 'cargo-x86_64-unknown-linux-gnu',
+              'rust-std-x86_64-unknown-linux-gnu', 'rust-std-wasm32-wasip1', 'rust-src'}
+    if not needed <= set((root / 'lib/rustlib/components').read_text().splitlines()):
+        raise ValueError('toolchain components are incomplete, refusing downloads')
+    for name in ('bin/cargo', 'bin/rustc', 'lib/rustlib/src/rust/library',
+                 'lib/rustlib/wasm32-wasip1/lib/self-contained/crt1-reactor.o'):
+        if not (root / name).exists():
+            raise ValueError('toolchain is incomplete: ' + name)
+    files = {}
+    for path in sorted(root.rglob('*')):
+        if path.is_symlink() and (not path.resolve().is_relative_to(root) or path.is_dir()):
+            raise ValueError('toolchain links must be internal regular files')
+        if path.is_file():
+            files[str(path.relative_to(root))] = {'sha256': runtime.base.digest(path),
+                'link': os.readlink(path) if path.is_symlink() else None}
+        elif not path.is_dir():
+            raise ValueError('toolchain contains a special file')
+    return {'path': str(root), 'files': files}
+
+
+def environment(output, stack, toolchain=None, proc_macro_server=None):
     # HOME is intentionally unchanged. Engines must honor their native state roots.
     env = {k: v for k, v in os.environ.items()
            if not k.startswith(('JUSTRUST_', 'JR_ENGINE_', 'RA_JIT_', 'BLAZE_', 'CARGO_',
                                 'RUST', 'XDG_'))}
     root = output / stack
     for name in ('blaze-home', 'blaze-cache', 'engine-home', 'ra-home', 'ra-cache',
-                 'target', 'cargo-home', 'runtime', 'cache', 'config', 'data'):
+                 'target', 'cargo-home', 'rustup-home', 'runtime', 'cache', 'config', 'data'):
         (root / name).mkdir(parents=True, mode=0o700)
     env.update(runtime.PROFILES)
     env.update(BLAZE_HOME=str(root / 'blaze-home'), BLAZE_CACHE=str(root / 'blaze-cache'),
                BLAZE_BACKEND='cranelift', BLAZE_OPT='0',
                RA_JIT_HOME=str(root / 'ra-home'), RA_JIT_CACHE=str(root / 'ra-cache'),
                CARGO_HOME=str(root / 'cargo-home'), CARGO_TARGET_DIR=str(root / 'target'),
+               RUSTUP_HOME=str(root / 'rustup-home'),
+               BLAZE_REMOTE='off', RA_JIT_REMOTE='off',
+               BLAZE_PROC_MACRO_SERVER=str(proc_macro_server) if proc_macro_server else '0',
+               RA_JIT_PROC_MACRO_SERVER=str(proc_macro_server) if proc_macro_server else '0',
                XDG_RUNTIME_DIR=str(root / 'runtime'), XDG_CACHE_HOME=str(root / 'cache'),
                XDG_CONFIG_HOME=str(root / 'config'), XDG_DATA_HOME=str(root / 'data'))
     if stack == 'engine':
         env['JR_ENGINE_HOME'] = str(root / 'engine-home')
+        namespace = root / 'engine-home/resident-v1'
+        namespace.mkdir(mode=0o700)
+        (namespace / 'runtime').mkdir(mode=0o700)
+        env['BLAZE_HOME'] = str(namespace / 'runtime')
+        env['RA_JIT_HOME'] = env['BLAZE_HOME']
+    if toolchain:
+        links = Path(env['BLAZE_HOME']) / 'toolchains'
+        links.mkdir(mode=0o700)
+        (links / toolchain.name).symlink_to(toolchain, target_is_directory=True)
     return env
 
 
@@ -119,11 +161,14 @@ def execute(args):
     tools = {'reference': args.reference_engine, 'engine': args.engine}
     if args.blaze:
         tools['installed-blaze'] = args.blaze
+    proc_macro_server = getattr(args, 'proc_macro_server', None)
+    if proc_macro_server:
+        tools['proc-macro-server'] = proc_macro_server
     for name, tool in tools.items():
         with tool.open('rb') as stream:
             if name != 'installed-blaze' and stream.read(4) != b'\x7fELF':
                 raise ValueError('source-built engines must be native ELF executables, not wrappers')
-    stacks = list(tools)
+    stacks = [s for s in tools if s != 'proc-macro-server']
     pinned = args.source / 'src/summary.rs'
     original = pinned.read_bytes()
     backup = args.output / 'source.original'
@@ -136,7 +181,10 @@ def execute(args):
                 'store_scope': 'unseeded private cold stores, no automatic seeding',
                 'source_before': source_hashes(args.source),
                 'tools_before': {s: {'path': str(t), 'sha256': runtime.base.digest(t)} for s, t in tools.items()},
-                'versions': {}, 'environments': {}, 'profiles': runtime.PROFILES,
+                'toolchain_before': toolchain_identity(args.toolchain),
+                'proc_macro_policy': 'same explicit frozen native server' if proc_macro_server else 'compatibility control: rustc-built proc macros, both server variables explicitly 0',
+                'versions': {}, 'environments': {}, 'toolchain_links': {},
+                'profiles': runtime.PROFILES,
                 'native_contract': 'Blaze-derived native jr-engine with JR_ENGINE_HOME and direct test/build/check/run required',
                 'native_state_policy': 'Native entry may override requested BLAZE_HOME/CACHE beneath private JR_ENGINE_HOME/resident-v1; environment receipts are launcher inputs',
                 'installed_reference': 'separate descriptive only, excluded from source-built parity',
@@ -169,13 +217,18 @@ def execute(args):
 
     try:
         save()
-        for stack, tool in tools.items():
-            env = environment(args.output, stack)
+        for stack in stacks:
+            tool = tools[stack]
+            env = environment(args.output, stack, args.toolchain, proc_macro_server)
             environments[stack] = env
+            metadata['toolchain_links'][stack] = str(
+                Path(env['BLAZE_HOME']) / 'toolchains' / args.toolchain.name)
             metadata['environments'][stack] = {k: v for k, v in env.items()
                 if k in ('HOME', 'JR_ENGINE_HOME', 'RA_JIT_HOME', 'RA_JIT_CACHE',
                          'CARGO_HOME', 'CARGO_TARGET_DIR', 'BLAZE_HOME', 'BLAZE_CACHE',
-                         'BLAZE_BACKEND', 'BLAZE_OPT') or k in runtime.PROFILES}
+                         'BLAZE_BACKEND', 'BLAZE_OPT', 'RUSTUP_HOME', 'BLAZE_REMOTE',
+                         'RA_JIT_REMOTE', 'BLAZE_PROC_MACRO_SERVER',
+                         'RA_JIT_PROC_MACRO_SERVER') or k in runtime.PROFILES}
             row, text = invoke(stack, 'version', 0, env, cmd=[str(tool), '--version'])
             identity = (re.escape(REFERENCE_VERSION) + r'$' if stack == 'reference' else
                         r'jr-engine\s+\S+' if stack == 'engine' else r'blaze\s+\S+')
@@ -230,8 +283,14 @@ def execute(args):
         try:
             metadata['source_after'] = source_hashes(args.source)
             metadata['tools_after'] = {s: {'path': str(t), 'sha256': runtime.base.digest(t)} for s, t in tools.items()}
+            metadata['toolchain_after'] = toolchain_identity(args.toolchain)
             unchanged = (metadata['source_before'] == metadata['source_after']
-                         and metadata['tools_before'] == metadata['tools_after'])
+                         and metadata['tools_before'] == metadata['tools_after']
+                         and metadata['toolchain_before'] == metadata['toolchain_after'])
+            metadata['toolchain_links_valid'] = all(
+                Path(link).is_symlink() and Path(link).resolve() == args.toolchain
+                for link in metadata['toolchain_links'].values())
+            unchanged = unchanged and metadata['toolchain_links_valid']
         except (OSError, ValueError) as exc:
             metadata['identity_error'] = repr(exc)
             unchanged = False
@@ -243,19 +302,23 @@ def execute(args):
         (args.output / 'summary.json').write_text(json.dumps({
             'medians_seconds': medians, 'excluded': [s for s in stacks if s not in medians],
             'source_built_parity': all(s in medians for s in ('reference', 'engine')),
+            'proc_macro_policy': metadata['proc_macro_policy'],
+            'toolchain': str(args.toolchain), 'store_scope': metadata['store_scope'],
             'policy': 'Descriptive only. No general speed claim or independent optimization proof. Cold failures retained, never silently seeded.'}, indent=2) + '\n')
     return 0 if len(medians) == len(stacks) else 1
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    for name in ('reference-engine', 'engine', 'source', 'output'):
+    for name in ('reference-engine', 'engine', 'source', 'output', 'toolchain'):
         parser.add_argument('--' + name, type=absolute, required=True)
     parser.add_argument('--blaze', type=absolute, help='optional installed descriptive reference only')
+    parser.add_argument('--proc-macro-server', type=absolute,
+                        help='same native ELF server for all stacks, default 0/rustc-built proc macros')
     parser.add_argument('--samples', type=int, default=5)
     parser.add_argument('--timeout', type=float, default=360)
     args = parser.parse_args()
-    for tool in (args.reference_engine, args.engine, args.blaze):
+    for tool in (args.reference_engine, args.engine, args.blaze, args.proc_macro_server):
         if tool is not None and (not tool.is_file() or not os.access(tool, os.X_OK)):
             parser.error('tools must be absolute executable files')
     raise SystemExit(execute(args))

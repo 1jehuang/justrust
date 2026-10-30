@@ -19,7 +19,8 @@ reference and never changes `source_built_parity` acceptance.
 
 Only mocked Python tests have been run for this harness. No native engine build,
 version invocation, preparation or workload is part of that validation. The
-source-built baseline is being built separately and the candidate is not ready.
+coordinator reports a completed source-built reference, but candidate runtime
+acceptance is still pending separately.
 There are no native runtime results or speed claims in this document.
 
 ## Inputs and exact CLI
@@ -45,11 +46,14 @@ artifact paths to replace once both builds exist. Do not run it while the
 baseline build is competing for machine resources:
 
 ```bash
-python3 bench/resident_engine_compare.py --reference-engine /absolute/source-built/ra-jit --engine /absolute/derived/jr-engine --source /absolute/private/f97fcc2 --output /home/jeremy/re01 --samples 5 --timeout 360
+python3 bench/resident_engine_compare.py --reference-engine /home/jeremy/.jcode/scratch/blaze-native-engine-20261030/reference-bin/ra-jit --engine /absolute/derived/jr-engine --toolchain /home/jeremy/.blaze/toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu --source /absolute/private/f97fcc2 --output /home/jeremy/re01 --samples 5 --timeout 360
 ```
 
-The currently planned baseline artifact is
-`/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/baseline-build/target/release/ra-jit`.
+The coordinator's frozen reference artifact is
+`/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/reference-bin/ra-jit`,
+with reported SHA256
+`fa622aeca09858c050264f701fbbebd1a14aa07d2b02c1eb4de511b684ba0263`.
+The harness independently records before/after hashes of the supplied binary.
 The source argument must be a pristine private archive/copy of justrust `f97fcc2`,
 not the engine source checkout and not the active justrust working directory.
 Every tracked pinned blob is verified with Git blob hashing before any edit.
@@ -61,23 +65,46 @@ Output must be new, disjoint from source and at most 70 encoded bytes long to
 leave room for resident socket paths. The harness creates it mode 0700. Logs and
 manifests include private absolute paths and must not be published unredacted.
 Optional installed reference: append `--blaze /absolute/installed/blaze`.
+Optional matched auxiliary: append `--proc-macro-server /absolute/native/server`.
 Exactly five samples are required, not a configurable shortened success gate.
 
 ## Isolation and stores
 
 Each stack has private `BLAZE_HOME`, `BLAZE_CACHE`, `RA_JIT_HOME`, `RA_JIT_CACHE`,
-Cargo home, target and XDG directories beneath output. The derived stack also
+Cargo/Rustup homes, target and XDG directories beneath output. The derived stack also
 gets private `JR_ENGINE_HOME`. Inherited engine, justrust, Cargo and Rust override
 variables are removed. **HOME retains the caller's semantics** rather than
 redirecting relative home lookups to a synthetic home directory. Native engine
-code must honor its explicit state roots. No production Blaze toolchain/cache
-symlinks are installed and no production store is copied or written by this
-harness. Cargo registry state is private too. No compiler installation or
-prepopulation is silently supplied to a fresh engine home.
+code must honor its explicit state roots. No production cache is copied or
+written by this harness. Cargo registry state is private too. Both remote-cache
+variables are explicitly off.
+
+`--toolchain` is required and points to the existing matching pinned installation.
+The harness verifies the exact pinned channel-manifest hash, expected components
+and required rustc/Cargo/source/WASI paths before any native invocation. It never
+installs, downloads, copies or chmods a toolchain. It creates only private
+`toolchains/<pinned-name>` symlinks to that same existing directory, beneath each
+stack's effective `BLAZE_HOME`. For the candidate this is specifically
+`JR_ENGINE_HOME/resident-v1/runtime`, not the otherwise unused `blaze-home`.
+The global toolchain is used read-only by intent, not made read-only by chmod or
+an OS mount. The harness records the complete toolchain file/hash/link manifest
+before and after and validates private links still point to it. A changed
+toolchain excludes every median. Incomplete or mismatched inputs fail before
+engines run rather than triggering a download. Prepared toolchain inputs do not
+turn empty compilation stores into seeded stores.
+
+Proc-macro policy is identical on all stacks, including optional installed
+Blaze. With `--proc-macro-server`, the same absolute native ELF path is supplied
+via **both** `BLAZE_PROC_MACRO_SERVER` and `RA_JIT_PROC_MACRO_SERVER`, logged and
+hashed before/after. Without it, both variables are explicitly `0`, labeled
+**compatibility control: rustc-built proc macros** in metadata and summary.
+There is no auto-discovery of a sibling or installed server on only one stack.
+This control is not a claim to measure Blaze-native proc-macro compilation.
 
 The native entry currently derives effective Blaze roots under the existing,
 mode-0700 `JR_ENGINE_HOME/resident-v1` namespace, overriding the launcher-supplied
-`BLAZE_HOME`/`BLAZE_CACHE`. This is still private per-stack state. Environment
+`BLAZE_HOME`/`BLAZE_CACHE`. The harness precreates the runtime home mode 0700 and
+places its toolchain link there. This is still private per-stack state. Environment
 receipts describe launcher inputs, not introspection of native child overrides.
 The candidate build must supply its validated `resident-v1-<64 lowercase hex>`
 build identity. Native build-script propagation of private state roots is a
@@ -141,7 +168,7 @@ headline ratio, and partial successful-stack medians are not complete parity.
 The original edited source file is fsynced to `source.original` before mutations
 and restored **from that backup in finally**, including exceptions. Metadata
 contains full before/after SHA256 manifests of all input files except `.git`,
-full executable hashes, native versions, environments and restoration status.
+full executable/auxiliary/toolchain hashes, native versions, environments and restoration status.
 `records.json`, per-invocation `.stdout`/`.stderr`, `metadata.json` and
 `summary.json` retain failures rather than deleting or reseeding them. A hard
 process kill or power loss cannot run finally, so retain the backup for manual
@@ -156,5 +183,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s bench -p test_resident
 The tests mock every native invocation, verify direct argv, environment
 isolation/HOME semantics, pin checking, four-test gates, expected-failure gates,
 rotation, fresh markers, cold failure retention, identity mutation and source
-restoration on exceptions. They do not establish native correctness, actual
+restoration on exceptions. Fake toolchain fixtures also cover matched effective
+links, readiness rejection, matched server inputs and auxiliary/toolchain hash
+mutation exclusion. They do not establish native correctness, actual
 Cranelift compatibility, residency or performance.
