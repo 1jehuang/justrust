@@ -229,6 +229,32 @@ promotion of the native experiments. See
 `remote-sync-bulk-scan.md` and `remote-sync-concurrent-discovery.md` for bounded
 component evidence.
 
+## Local native-fresh execution follow-through
+
+The default-off `JUSTRUST_BUILDD_NATIVE_EMPTY=1` experiment is installed and
+verified. It skips the daemon's recursive source stamp only when its active
+and finished candidate maps are globally empty. It still launches Cargo for
+every request, so this is removal of redundant daemon validation, not a
+whole-command result-cache hit. Unstamped executions cannot authorize output
+sharing or enter the finished-result map.
+
+The same-binary controlled local diagnostic measured warm Clippy medians of
+751.823 ms off and 173.682 ms on. Separate installed isolated observations
+were 164.025 and 136.757 ms, with zero compiled units and 62 fresh units.
+These are scoped local observations under contention, not a hosted latency
+guarantee or a comprehensive benchmark comparison. The shared daemon correctly
+declined the shortcut when another project's candidates existed. See
+`daemon-native-empty.md` and `daemon-native-empty-installed.md` for exact run
+records, real edit/failure/restore, cancellation, and overlap acceptance.
+
+The native Cargo receipt now checks recorded content checksums in the bounded
+content-freshness case, with actual module, include and environment edits
+covered. It still explicitly denies whole-command replay authority. A content
+digest checked after compilation is not by itself proof that all compiler
+reads, planning inputs, failed probes, configuration and toolchain state were
+bound to the output. See `cargo-freshness-receipt.md` for that separate producer
+contract. No client result-replay consumer or default promotion is implied.
+
 ## Primary design references
 
 The implementation inventory above comes from this checkout. These independent
