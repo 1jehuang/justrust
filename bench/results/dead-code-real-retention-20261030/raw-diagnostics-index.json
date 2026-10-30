@@ -1,0 +1,229 @@
+{
+  "scope": "Unmodified full recorded cargo/compiler output plus meta and summary. All eight checks have no compiler errors or warnings. Reports/verbose commands contain private paths and non-comparable timing observations, not normalized diagnostic equality claims.",
+  "runs": [
+    {
+      "mode": "off",
+      "epoch": "prepare",
+      "run_id": "20261030-023716374-959586",
+      "diagnostics": {
+        "compile_errors": 0,
+        "compile_failed": false,
+        "first_error": null,
+        "warnings": 0
+      },
+      "files": {
+        "output.jsonl": {
+          "source_path": "/home/jeremy/.jcode/scratch/dead-code-real-retention-20261030/off/home/runs/20261030-023716374-959586/output.jsonl",
+          "sha256": "53d3148692c2617bcbf730400c841831833878f766c3d4d372147b2544520008",
+          "bytes": 100512
+        },
+        "meta.json": {
+          "source_path": "/home/jeremy/.jcode/scratch/dead-code-real-retention-20261030/off/home/runs/20261030-023716374-959586/meta.json",
+          "sha256": "c05bdf89821c1f6c714f74dd5fb0e3fe69afe202815222d651ea6d05bcb10d1d",
+          "bytes": 1207
+        },
+        "summary.json": {
+          "source_path": "/home/jeremy/.jcode/scratch/dead-code-real-retention-20261030/off/home/runs/20261030-023716374-959586/summary.json",
+          "sha256": "07cc43f9a26dbe998624947069c8c584481b0a940dfbf54a25a148bc4cb10907",
+          "bytes": 7427
+        }
+      }
+    },
+    {
+      "mode": "off",
+      "epoch": "unchanged",
+      "run_id": "20261030-023747510-965946",
+      "diagnostics": {
+        "compile_errors": 0,
+        "compile_failed": false,
+        "first_error": null,
+        "warnings": 0
+      },
+      "files": {
+        "output.jsonl": {
+          "source_path": "/home/jeremy/.jcode/scratch/dead-code-real-retention-20261030/off/home/runs/20261030-023747510-965946/output.jsonl",
+          "sha256": "00de12be6785a608e821f6b3101365a9e72e8a924960bf1a01725fbce4409eb9",
+          "bytes": 10684
+        },
+        "meta.json": {
+          "source_path": "/home/jeremy/.jcode/scratch/dead-code-real-retention-20261030/off/home/runs/20261030-023747510-965946/meta.json",
+          "sha256": "9d9b5d8140613afaffc8cf5f948f9ac27e1d70a6b27037314588b4fadba8c0d6",
+          "bytes": 1207
+        },
+        "summary.json": {
+          "source_path": "/home/jeremy/.jcode/scratch/dead-code-real-retention-20261030/off/home/runs/20261030-023747510-965946/summary.json",
+          "sha256": "7287dbfae052877f9be211b591f288daadac513a8180d02faf1119d6ac5428f8",
+          "bytes": 3170
+        }
+      }
+    },
+    {
+      "mode": "off",
+      "epoch": "body-edit",
+      "run_id": "20261030-023823155-970084",
+      "diagnostics": {
+        "compile_errors": 0,
+        "compile_failed": false,
+        "first_error": null,
+        "warnings": 0
+      },
+      "files": {
+        "output.jsonl": {
+          "source_path": "/home/jeremy/.jcode/scratch/dead-code-real-retention-20261030/off/home/runs/20261030-023823155-970084/output.jsonl",
+          "sha256": "a2164ef910a3073e8434a6f2d1b0715c3932e3a93779e52bf14b79dba702e70f",
+          "bytes": 10688
+        },
+        "meta.json": {
+          "source_path": "/home/jeremy/.jcode/scratch/dead-code-real-retention-20261030/off/home/runs/20261030-023823155-970084/meta.json",
+          "sha256": "d6cd17ef54bf401e9c2b5bc4b25df9daa4442e351417c389927840f71b774882",
+          "bytes": 1207
+        },
+        "summary.json": {
+          "source_path": "/home/jeremy/.jcode/scratch/dead-code-real-retention-20261030/off/home/runs/20261030-023823155-970084/summary.json",
+          "sha256": "022f3349c93952d15c84e9e4042e3ffc3eb07032a4736c89d86d8748d339fe7e",
+          "bytes": 3205
+        }
+      }
+    },
+    {
+      "mode": "off",
+      "epoch": "restored",
+      "run_id": "20261030-023848655-972564",
+      "diagnostics": {
+        "compile_errors": 0,
+        "compile_failed": false,
+        "first_error": null,
+        "warnings": 0
+      },
+      "files": {
+        "output.jsonl": {
+          "source_path": "/home/jeremy/.jcode/scratch/dead-code-real-retention-20261030/off/home/runs/20261030-023848655-972564/output.jsonl",
+          "sha256": "4e42429147bf29e77647f347ab351d6bc8742198bbd037c70c8b1bc8d10f0ab6",
+          "bytes": 10688
+        },
+        "meta.json": {
+          "source_path": "/home/jeremy/.jcode/scratch/dead-code-real-retention-20261030/off/home/runs/20261030-023848655-972564/meta.json",
+          "sha256": "e7f72865b829990d7e358ac48c9ed337c955650778a81edcd5fdccb694dc8f3c",
+          "bytes": 1207
+        },
+        "summary.json": {
+          "source_path": "/home/jeremy/.jcode/scratch/dead-code-real-retention-20261030/off/home/runs/20261030-023848655-972564/summary.json",
+          "sha256": "e9526afea0bfa95436a40c24386e8f0be68c744bdd578d58e9b83ecfd8f28b40",
+          "bytes": 3175
+        }
+      }
+    },
+    {
+      "mode": "on",
+      "epoch": "prepare",
+      "run_id": "20261030-023733853-963497",
+      "diagnostics": {
+        "compile_errors": 0,
+        "compile_failed": false,
+        "first_error": null,
+        "warnings": 0
+      },
+      "files": {
+        "output.jsonl": {
+          "source_path": "/home/jeremy/.jcode/scratch/dead-code-real-retention-20261030/on/home/runs/20261030-023733853-963497/output.jsonl",
+          "sha256": "7c06d137cef84991cd8bc1b29df878110d1fb4d6ef7ba511cdfc3c66fd673368",
+          "bytes": 100243
+        },
+        "meta.json": {
+          "source_path": "/home/jeremy/.jcode/scratch/dead-code-real-retention-20261030/on/home/runs/20261030-023733853-963497/meta.json",
+          "sha256": "e45e22b55275e67bf97950be48f81c4cddbc193768933b251529de38d5ff07d4",
+          "bytes": 1206
+        },
+        "summary.json": {
+          "source_path": "/home/jeremy/.jcode/scratch/dead-code-real-retention-20261030/on/home/runs/20261030-023733853-963497/summary.json",
+          "sha256": "253aac51b91d51ce05bfefc529d18e60ee55c9f71b7d86b09102620d5aa6c754",
+          "bytes": 7396
+        }
+      }
+    },
+    {
+      "mode": "on",
+      "epoch": "unchanged",
+      "run_id": "20261030-023748774-966185",
+      "diagnostics": {
+        "compile_errors": 0,
+        "compile_failed": false,
+        "first_error": null,
+        "warnings": 0
+      },
+      "files": {
+        "output.jsonl": {
+          "source_path": "/home/jeremy/.jcode/scratch/dead-code-real-retention-20261030/on/home/runs/20261030-023748774-966185/output.jsonl",
+          "sha256": "6d91f11191985eaeb712ae77a4f0062ee7dd1261484fdecc982eddfc9ba63593",
+          "bytes": 10647
+        },
+        "meta.json": {
+          "source_path": "/home/jeremy/.jcode/scratch/dead-code-real-retention-20261030/on/home/runs/20261030-023748774-966185/meta.json",
+          "sha256": "62901340242099211aa1e2c592c4d7447a778b3aa625f4afdc030ebe9dafb43b",
+          "bytes": 1206
+        },
+        "summary.json": {
+          "source_path": "/home/jeremy/.jcode/scratch/dead-code-real-retention-20261030/on/home/runs/20261030-023748774-966185/summary.json",
+          "sha256": "909202f17148d68f099ecde5e81fe3ffbb78c7f4062c4a8db71e357521e50b07",
+          "bytes": 3186
+        }
+      }
+    },
+    {
+      "mode": "on",
+      "epoch": "body-edit",
+      "run_id": "20261030-023824354-970287",
+      "diagnostics": {
+        "compile_errors": 0,
+        "compile_failed": false,
+        "first_error": null,
+        "warnings": 0
+      },
+      "files": {
+        "output.jsonl": {
+          "source_path": "/home/jeremy/.jcode/scratch/dead-code-real-retention-20261030/on/home/runs/20261030-023824354-970287/output.jsonl",
+          "sha256": "20be6ea9d47261ff7923d801624c0b2abaa94e7afab854e14685bae6bf32f92b",
+          "bytes": 10652
+        },
+        "meta.json": {
+          "source_path": "/home/jeremy/.jcode/scratch/dead-code-real-retention-20261030/on/home/runs/20261030-023824354-970287/meta.json",
+          "sha256": "cfd49bfc231cfe1dfe8d0f5ebfe5b646713c362052017ced92cbfed831073aa3",
+          "bytes": 1205
+        },
+        "summary.json": {
+          "source_path": "/home/jeremy/.jcode/scratch/dead-code-real-retention-20261030/on/home/runs/20261030-023824354-970287/summary.json",
+          "sha256": "49fab7f36952a0fdb9f0fe0facaf96031547cd2fd2e27d4d8c0f522c81bfda68",
+          "bytes": 3179
+        }
+      }
+    },
+    {
+      "mode": "on",
+      "epoch": "restored",
+      "run_id": "20261030-023849948-972683",
+      "diagnostics": {
+        "compile_errors": 0,
+        "compile_failed": false,
+        "first_error": null,
+        "warnings": 0
+      },
+      "files": {
+        "output.jsonl": {
+          "source_path": "/home/jeremy/.jcode/scratch/dead-code-real-retention-20261030/on/home/runs/20261030-023849948-972683/output.jsonl",
+          "sha256": "3af3df1d0812bfcd0b561f6a9db17b598ffd63496b5dbdc275e1e0ceb8a6cdfd",
+          "bytes": 10650
+        },
+        "meta.json": {
+          "source_path": "/home/jeremy/.jcode/scratch/dead-code-real-retention-20261030/on/home/runs/20261030-023849948-972683/meta.json",
+          "sha256": "f1dad85f545038f3525ed8bd4d8db1791b90984467e9cf90c6973681ed45aac2",
+          "bytes": 1206
+        },
+        "summary.json": {
+          "source_path": "/home/jeremy/.jcode/scratch/dead-code-real-retention-20261030/on/home/runs/20261030-023849948-972683/summary.json",
+          "sha256": "653165880fcb61d0db2712ccc18c5001c435e0302dfcaee2267d3b2ce5d7cbfe",
+          "bytes": 3176
+        }
+      }
+    }
+  ]
+}

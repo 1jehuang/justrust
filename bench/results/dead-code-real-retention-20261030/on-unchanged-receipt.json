@@ -1,0 +1,114 @@
+{
+  "mode": "on",
+  "epoch": "unchanged",
+  "identities": {
+    "/home/jeremy/.jcode/scratch/dead-item-cache-20261030/sysroot/bin/rustc": "570faeb27338cea8625c4a4a7eaeef71fc75470508657ff489c3da96ce5f9144",
+    "/home/jeremy/.jcode/scratch/dead-item-cache-20261030/sysroot/lib/librustc_driver-e2bd696299265a4a.so": "3527393f3db7e09eeef270a83f51c5aeedb787c77f845ab76a76618f76ae137e",
+    "/home/jeremy/.jcode/scratch/query-retention-bench-20261030/justrust-client": "1dd6ee7da925924eaa0c25f9cbefafaabe1441c7b8f95a87b6cddfbaf20510a9",
+    "/home/jeremy/.jcode/scratch/lint-profile-20261030/home/toolchains/nightly-2026-10-08/bin/cargo": "994419eb0d12f1a4152a23d9030dc4d05c9bfd7a5c7af923f24bb3738afad95b"
+  },
+  "environment": {
+    "JUSTRUST_HOME": "/home/jeremy/.jcode/scratch/dead-code-real-retention-20261030/on/home",
+    "JUSTRUST_TOOLCHAIN": "system",
+    "JUSTRUST_REAL_CARGO": "/home/jeremy/.jcode/scratch/lint-profile-20261030/home/toolchains/nightly-2026-10-08/bin/cargo",
+    "RUSTC": "/home/jeremy/.jcode/scratch/dead-item-cache-20261030/sysroot/bin/rustc",
+    "JUSTRUST_REMOTE": "0",
+    "JUSTRUST_LOCALCACHE": "0",
+    "JUSTRUST_DEPCACHE": "0",
+    "JUSTRUST_PREBUILT": "off",
+    "JUSTRUST_BUILDD": "0",
+    "CARGO_TARGET_DIR": "/home/jeremy/.jcode/scratch/dead-code-real-retention-20261030/on/target",
+    "RUSTFLAGS": "-Zjr-empty-lint-level-fast-path=no -Zjr-cache-small-query-values=no -Zjr-cache-associated-items=no -Zjr-cache-dead-code-items=yes -Zself-profile=/home/jeremy/.jcode/scratch/dead-code-real-retention-20261030/on/profiles -Zself-profile-events=default,function-args -Zincremental-verify-ich"
+  },
+  "source_sha256": "8272de3756d2323b05777c851b19c2cc6aec6bdf073af79056da29370daf6bde",
+  "source_commit": "f97fcc2d7490ec3528a8d67657dc3f8d6d457a7d",
+  "status": 0,
+  "query_cache": {
+    "files": [
+      {
+        "path": "debug/incremental/justrust-3v9en76u90h6a/s-hnov0y6cpa-1fzbnwx-6ihe9y1fedr3hxlxcceqgajv6/query-cache.bin",
+        "logical": 13854433,
+        "allocated": 13856768,
+        "sha256": "83ef7f840b3be52323d7d21a3030b7d5fa66c7d4d1e2cd33790015f4265b095e"
+      }
+    ],
+    "logical": 13854433,
+    "allocated": 13856768
+  },
+  "profile": "/home/jeremy/.jcode/scratch/dead-code-real-retention-20261030/on/profiles/justrust-0966210.mm_profdata",
+  "profile_sha256": "90d626b211b54efece9bfbd9f03640c1886ab420496a5dea77122a5d242cb741",
+  "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stderr_sha256": "05e2ad710f26e6a2fec64ea178915905ec44cdc1f9f950269a2bd12ea3a1cac3",
+  "export_status": 0,
+  "analyses": {
+    "query_profile-strict": {
+      "status": 2,
+      "command": [
+        "/usr/bin/python3",
+        "/home/jeremy/justrust/bench/query_profile.py",
+        "--input",
+        "/home/jeremy/.jcode/scratch/dead-code-real-retention-20261030/on/profiles/justrust-0966210.mm_profdata",
+        "--output",
+        "/home/jeremy/justrust/bench/results/dead-code-real-retention-20261030/on-unchanged-query_profile-strict.json",
+        "--summary-only",
+        "--large-capture"
+      ]
+    },
+    "query_profile-unknown": {
+      "status": 0,
+      "command": [
+        "/usr/bin/python3",
+        "/home/jeremy/justrust/bench/query_profile.py",
+        "--input",
+        "/home/jeremy/.jcode/scratch/dead-code-real-retention-20261030/on/profiles/justrust-0966210.mm_profdata",
+        "--output",
+        "/home/jeremy/justrust/bench/results/dead-code-real-retention-20261030/on-unchanged-query_profile-unknown.json",
+        "--summary-only",
+        "--large-capture",
+        "--allow-unmapped-event-labels"
+      ]
+    },
+    "reuse_ceiling-strict": {
+      "status": 2,
+      "command": [
+        "/usr/bin/python3",
+        "/home/jeremy/justrust/bench/reuse_ceiling.py",
+        "--profile",
+        "/home/jeremy/.jcode/scratch/dead-code-real-retention-20261030/on/profiles/justrust-0966210.mm_profdata",
+        "--large-capture"
+      ]
+    },
+    "reuse_ceiling-unknown": {
+      "status": 0,
+      "command": [
+        "/usr/bin/python3",
+        "/home/jeremy/justrust/bench/reuse_ceiling.py",
+        "--profile",
+        "/home/jeremy/.jcode/scratch/dead-code-real-retention-20261030/on/profiles/justrust-0966210.mm_profdata",
+        "--large-capture",
+        "--allow-unmapped-event-labels"
+      ]
+    },
+    "provider_cost-strict": {
+      "status": 2,
+      "command": [
+        "/usr/bin/python3",
+        "/home/jeremy/justrust/bench/provider_cost.py",
+        "--profile",
+        "/home/jeremy/.jcode/scratch/dead-code-real-retention-20261030/on/profiles/justrust-0966210.mm_profdata",
+        "--large-capture"
+      ]
+    },
+    "provider_cost-unknown": {
+      "status": 0,
+      "command": [
+        "/usr/bin/python3",
+        "/home/jeremy/justrust/bench/provider_cost.py",
+        "--profile",
+        "/home/jeremy/.jcode/scratch/dead-code-real-retention-20261030/on/profiles/justrust-0966210.mm_profdata",
+        "--large-capture",
+        "--allow-unmapped-event-labels"
+      ]
+    }
+  }
+}

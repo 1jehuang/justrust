@@ -1,0 +1,394 @@
+{
+  "schema": 1,
+  "scope": "Count and correctness observations only, no causal elapsed comparisons. Named labels and marker arguments are resolved per invocation, never by cross-session numeric query ID joins.",
+  "captures": [
+    {
+      "mode": "off",
+      "epoch": "prepare",
+      "profile_sha256": "229f241e4a67097d4e1d5141ecaae7cab5c7c4b696dbfadaa5e152405f97a4d0",
+      "source_sha256": "8272de3756d2323b05777c851b19c2cc6aec6bdf073af79056da29370daf6bde",
+      "selected_records_by_kind": {
+        "jr_dead_code_item_usage": {},
+        "jr_dead_code_item_usage_allow_expect": {}
+      },
+      "selected_native_markers": {
+        "jr_dead_code_item_usage": {},
+        "jr_dead_code_item_usage_allow_expect": {}
+      },
+      "unknown_records_by_kind": {
+        "IncrementalResultHashing": 1
+      },
+      "unknown_marker_arguments": {},
+      "all_records_by_kind": {
+        "GenericActivity": 478346,
+        "IncrementalResultHashing": 325622,
+        "Query": 308560,
+        "ArtifactSize": 4,
+        "QueryCacheHitCount": 186866
+      },
+      "strict_replay": {
+        "status": "failed",
+        "type": "ValueError",
+        "error": "unmapped virtual string ID"
+      },
+      "query_cache": {
+        "files": [
+          {
+            "path": "debug/incremental/justrust-3v9en76u90h6a/s-hnov0lu8wb-04i4ls7-bvtw0blz4dr58fja9lt7fe7bi/query-cache.bin",
+            "logical": 13523426,
+            "allocated": 13524992,
+            "sha256": "ffa8ccf7164fe0b5ee6f77b44a9d8dc67a5aea1c530e31eea1385b65459d7374"
+          }
+        ],
+        "logical": 13523426,
+        "allocated": 13524992
+      },
+      "absent_labels": "unobserved, not proof of zero work"
+    },
+    {
+      "mode": "on",
+      "epoch": "prepare",
+      "profile_sha256": "2e92333f8e6f324fb22025073237b43f3d0d5d5282a4600c14d753f42f3308f8",
+      "source_sha256": "8272de3756d2323b05777c851b19c2cc6aec6bdf073af79056da29370daf6bde",
+      "selected_records_by_kind": {
+        "jr_dead_code_item_usage": {
+          "IncrementalResultHashing": 3216,
+          "Query": 3216
+        },
+        "jr_dead_code_item_usage_allow_expect": {
+          "IncrementalResultHashing": 180,
+          "Query": 180
+        }
+      },
+      "selected_native_markers": {
+        "jr_dead_code_item_usage": {},
+        "jr_dead_code_item_usage_allow_expect": {}
+      },
+      "unknown_records_by_kind": {
+        "IncrementalResultHashing": 1
+      },
+      "unknown_marker_arguments": {},
+      "all_records_by_kind": {
+        "GenericActivity": 481742,
+        "IncrementalResultHashing": 329018,
+        "Query": 311956,
+        "ArtifactSize": 4,
+        "QueryCacheHitCount": 186866
+      },
+      "strict_replay": {
+        "status": "failed",
+        "type": "ValueError",
+        "error": "unmapped virtual string ID"
+      },
+      "query_cache": {
+        "files": [
+          {
+            "path": "debug/incremental/justrust-3v9en76u90h6a/s-hnov0u7ysw-0u54gn8-6ihe9y1fedr3hxlxcceqgajv6/query-cache.bin",
+            "logical": 13880783,
+            "allocated": 13881344,
+            "sha256": "7a009332637e83a441a3e5c49b2fc18cc5f37fd93cfe2eb290d091bc66faf3b6"
+          }
+        ],
+        "logical": 13880783,
+        "allocated": 13881344
+      },
+      "absent_labels": "unobserved, not proof of zero work"
+    },
+    {
+      "mode": "off",
+      "epoch": "unchanged",
+      "profile_sha256": "f4a4779d12218d61223c5383ff97fae668ed5b6373d727d4efe34de65d37ccd1",
+      "source_sha256": "8272de3756d2323b05777c851b19c2cc6aec6bdf073af79056da29370daf6bde",
+      "selected_records_by_kind": {
+        "jr_dead_code_item_usage": {},
+        "jr_dead_code_item_usage_allow_expect": {}
+      },
+      "selected_native_markers": {
+        "jr_dead_code_item_usage": {},
+        "jr_dead_code_item_usage_allow_expect": {}
+      },
+      "unknown_records_by_kind": {
+        "QueryCacheHitCount": 12337,
+        "IncrementalLoadResult": 60754
+      },
+      "unknown_marker_arguments": {},
+      "all_records_by_kind": {
+        "GenericActivity": 412763,
+        "IncrementalResultHashing": 29630,
+        "Query": 33322,
+        "IncrementalLoadResult": 74170,
+        "QueryCacheHitCount": 43248,
+        "ArtifactSize": 3
+      },
+      "strict_replay": {
+        "status": "failed",
+        "type": "ValueError",
+        "error": "unmapped virtual string ID"
+      },
+      "query_cache": {
+        "files": [
+          {
+            "path": "debug/incremental/justrust-3v9en76u90h6a/s-hnov0xfc35-0yety82-bvtw0blz4dr58fja9lt7fe7bi/query-cache.bin",
+            "logical": 13497084,
+            "allocated": 13500416,
+            "sha256": "405a26d0eafb25fe7f7bc919ff7bd28aa187ed306d7b9f65954c2e116b971beb"
+          }
+        ],
+        "logical": 13497084,
+        "allocated": 13500416
+      },
+      "absent_labels": "unobserved, not proof of zero work"
+    },
+    {
+      "mode": "on",
+      "epoch": "unchanged",
+      "profile_sha256": "90d626b211b54efece9bfbd9f03640c1886ab420496a5dea77122a5d242cb741",
+      "source_sha256": "8272de3756d2323b05777c851b19c2cc6aec6bdf073af79056da29370daf6bde",
+      "selected_records_by_kind": {
+        "jr_dead_code_item_usage": {},
+        "jr_dead_code_item_usage_allow_expect": {}
+      },
+      "selected_native_markers": {
+        "jr_dead_code_item_usage": {},
+        "jr_dead_code_item_usage_allow_expect": {}
+      },
+      "unknown_records_by_kind": {
+        "QueryCacheHitCount": 12337,
+        "IncrementalLoadResult": 64150
+      },
+      "unknown_marker_arguments": {},
+      "all_records_by_kind": {
+        "GenericActivity": 416159,
+        "IncrementalResultHashing": 29630,
+        "Query": 33322,
+        "IncrementalLoadResult": 77566,
+        "QueryCacheHitCount": 43248,
+        "ArtifactSize": 3
+      },
+      "strict_replay": {
+        "status": "failed",
+        "type": "ValueError",
+        "error": "unmapped virtual string ID"
+      },
+      "query_cache": {
+        "files": [
+          {
+            "path": "debug/incremental/justrust-3v9en76u90h6a/s-hnov0y6cpa-1fzbnwx-6ihe9y1fedr3hxlxcceqgajv6/query-cache.bin",
+            "logical": 13854433,
+            "allocated": 13856768,
+            "sha256": "83ef7f840b3be52323d7d21a3030b7d5fa66c7d4d1e2cd33790015f4265b095e"
+          }
+        ],
+        "logical": 13854433,
+        "allocated": 13856768
+      },
+      "absent_labels": "unobserved, not proof of zero work"
+    },
+    {
+      "mode": "off",
+      "epoch": "body-edit",
+      "profile_sha256": "57f520c32d23cb56d39d67aa3d4cd59ddc0120cd77f61fd9bf257ac84121dbfb",
+      "source_sha256": "380d2c460c21db44000355fda5628eec49a9411fb59b1a0af79de662950d6786",
+      "selected_records_by_kind": {
+        "jr_dead_code_item_usage": {},
+        "jr_dead_code_item_usage_allow_expect": {}
+      },
+      "selected_native_markers": {
+        "jr_dead_code_item_usage": {},
+        "jr_dead_code_item_usage_allow_expect": {}
+      },
+      "unknown_records_by_kind": {
+        "IncrementalResultHashing": 1,
+        "QueryCacheHitCount": 8178,
+        "IncrementalLoadResult": 3454
+      },
+      "unknown_marker_arguments": {},
+      "all_records_by_kind": {
+        "GenericActivity": 527457,
+        "IncrementalResultHashing": 31747,
+        "Query": 58014,
+        "IncrementalLoadResult": 74040,
+        "ArtifactSize": 4,
+        "QueryCacheHitCount": 84480
+      },
+      "strict_replay": {
+        "status": "failed",
+        "type": "ValueError",
+        "error": "unmapped virtual string ID"
+      },
+      "query_cache": {
+        "files": [
+          {
+            "path": "debug/incremental/justrust-3v9en76u90h6a/s-hnov1in454-09dg0h2-4hq0e881lbd0adip3b0dqj95p/query-cache.bin",
+            "logical": 13539731,
+            "allocated": 13541376,
+            "sha256": "2332a80623ed7e348d50214e165a32d566486cebaa71aeffc43d55c6ecd713e4"
+          }
+        ],
+        "logical": 13539731,
+        "allocated": 13541376
+      },
+      "absent_labels": "unobserved, not proof of zero work"
+    },
+    {
+      "mode": "on",
+      "epoch": "body-edit",
+      "profile_sha256": "6ede3f8e48739369d010f1d4fc14604757414dc7afb5b53f9f76b49f1580cbe0",
+      "source_sha256": "380d2c460c21db44000355fda5628eec49a9411fb59b1a0af79de662950d6786",
+      "selected_records_by_kind": {
+        "jr_dead_code_item_usage": {
+          "IncrementalLoadResult": 3211,
+          "IncrementalResultHashing": 5,
+          "Query": 5
+        },
+        "jr_dead_code_item_usage_allow_expect": {
+          "IncrementalLoadResult": 180
+        }
+      },
+      "selected_native_markers": {
+        "jr_dead_code_item_usage": {
+          "jr_incremental_green_query": 3211,
+          "jr_incremental_provider_reexecuted_same_value": 5
+        },
+        "jr_dead_code_item_usage_allow_expect": {
+          "jr_incremental_green_query": 180
+        }
+      },
+      "unknown_records_by_kind": {
+        "IncrementalResultHashing": 1,
+        "QueryCacheHitCount": 9697,
+        "IncrementalLoadResult": 4981
+      },
+      "unknown_marker_arguments": {},
+      "all_records_by_kind": {
+        "GenericActivity": 532652,
+        "IncrementalResultHashing": 31752,
+        "Query": 57994,
+        "IncrementalLoadResult": 77431,
+        "ArtifactSize": 4,
+        "QueryCacheHitCount": 84452
+      },
+      "strict_replay": {
+        "status": "failed",
+        "type": "ValueError",
+        "error": "unmapped virtual string ID"
+      },
+      "query_cache": {
+        "files": [
+          {
+            "path": "debug/incremental/justrust-3v9en76u90h6a/s-hnov1jco7g-0ag8ohi-51ly5mltf9cwuii0fx0j8jgyk/query-cache.bin",
+            "logical": 13905127,
+            "allocated": 13905920,
+            "sha256": "ea32aeb6936c61238cff4ad44e41c3b169d7a1a812a7fa4fd12a1f274e2a2ade"
+          }
+        ],
+        "logical": 13905127,
+        "allocated": 13905920
+      },
+      "absent_labels": "unobserved, not proof of zero work"
+    },
+    {
+      "mode": "off",
+      "epoch": "restored",
+      "profile_sha256": "92ee3145805ce94db6cc90f6a35764b946ac29c13c0793d03a43fad2fb8ea77e",
+      "source_sha256": "8272de3756d2323b05777c851b19c2cc6aec6bdf073af79056da29370daf6bde",
+      "selected_records_by_kind": {
+        "jr_dead_code_item_usage": {},
+        "jr_dead_code_item_usage_allow_expect": {}
+      },
+      "selected_native_markers": {
+        "jr_dead_code_item_usage": {},
+        "jr_dead_code_item_usage_allow_expect": {}
+      },
+      "unknown_records_by_kind": {
+        "IncrementalResultHashing": 1,
+        "QueryCacheHitCount": 8178,
+        "IncrementalLoadResult": 3454
+      },
+      "unknown_marker_arguments": {},
+      "all_records_by_kind": {
+        "GenericActivity": 527381,
+        "IncrementalResultHashing": 31725,
+        "Query": 57966,
+        "IncrementalLoadResult": 74035,
+        "ArtifactSize": 4,
+        "QueryCacheHitCount": 84454
+      },
+      "strict_replay": {
+        "status": "failed",
+        "type": "ValueError",
+        "error": "unmapped virtual string ID"
+      },
+      "query_cache": {
+        "files": [
+          {
+            "path": "debug/incremental/justrust-3v9en76u90h6a/s-hnov1xtse5-1tva77o-bvtw0blz4dr58fja9lt7fe7bi/query-cache.bin",
+            "logical": 13539289,
+            "allocated": 13541376,
+            "sha256": "8be3d421996f5a291927fcc77dbf7b5958c77994f794275b8635738e99e38179"
+          }
+        ],
+        "logical": 13539289,
+        "allocated": 13541376
+      },
+      "absent_labels": "unobserved, not proof of zero work"
+    },
+    {
+      "mode": "on",
+      "epoch": "restored",
+      "profile_sha256": "3aefbd14fdb528d8f1e5ec8f6358a3c9b691c68c6f894592501d7b5326c54931",
+      "source_sha256": "8272de3756d2323b05777c851b19c2cc6aec6bdf073af79056da29370daf6bde",
+      "selected_records_by_kind": {
+        "jr_dead_code_item_usage": {
+          "IncrementalLoadResult": 3211,
+          "IncrementalResultHashing": 5,
+          "Query": 5
+        },
+        "jr_dead_code_item_usage_allow_expect": {
+          "IncrementalLoadResult": 180
+        }
+      },
+      "selected_native_markers": {
+        "jr_dead_code_item_usage": {
+          "jr_incremental_green_query": 3211,
+          "jr_incremental_provider_reexecuted_same_value": 5
+        },
+        "jr_dead_code_item_usage_allow_expect": {
+          "jr_incremental_green_query": 180
+        }
+      },
+      "unknown_records_by_kind": {
+        "IncrementalResultHashing": 1,
+        "QueryCacheHitCount": 9697,
+        "IncrementalLoadResult": 4981
+      },
+      "unknown_marker_arguments": {},
+      "all_records_by_kind": {
+        "GenericActivity": 532576,
+        "IncrementalResultHashing": 31730,
+        "Query": 57946,
+        "IncrementalLoadResult": 77426,
+        "ArtifactSize": 4,
+        "QueryCacheHitCount": 84426
+      },
+      "strict_replay": {
+        "status": "failed",
+        "type": "ValueError",
+        "error": "unmapped virtual string ID"
+      },
+      "query_cache": {
+        "files": [
+          {
+            "path": "debug/incremental/justrust-3v9en76u90h6a/s-hnov1yldru-142nmfj-6ihe9y1fedr3hxlxcceqgajv6/query-cache.bin",
+            "logical": 13904755,
+            "allocated": 13905920,
+            "sha256": "9356f42736d1777df1ebe1197023fc31d66dfcf80f06dbdb1acd13c6e57b1218"
+          }
+        ],
+        "logical": 13904755,
+        "allocated": 13905920
+      },
+      "absent_labels": "unobserved, not proof of zero work"
+    }
+  ]
+}

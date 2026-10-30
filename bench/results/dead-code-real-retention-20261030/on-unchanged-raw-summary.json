@@ -1,0 +1,131 @@
+{
+  "id": "20261030-023748774-966185",
+  "args": [
+    "check",
+    "--lib"
+  ],
+  "subcommand": "check",
+  "cwd": "/home/jeremy/.jcode/scratch/dead-code-real-retention-20261030/source",
+  "git": {
+    "root": null,
+    "head": null,
+    "dirty_files": null
+  },
+  "agent_session": "session_camel_1793351468973_0a1075eccb2fadde",
+  "start": 1793353068.7864966,
+  "wall": 0.8706347942352295,
+  "exit": 0,
+  "cpu_secs": 0.882801,
+  "savings": {
+    "dependency_hits": 0,
+    "local_hits": 0,
+    "build_script_hits": 0,
+    "original_task_secs": 0.0,
+    "measured_hit_overhead_secs": 0.0,
+    "estimated_task_secs_avoided": 0.0,
+    "hits_without_full_overhead": 0,
+    "hits_without_valid_timing": 0,
+    "malformed_records": 0
+  },
+  "measurement_coverage": {
+    "samples": 6,
+    "processes": 3,
+    "sample_span_secs": 0.8700520992279053,
+    "max_sample_gap_secs": 0.21039438247680664
+  },
+  "ncpu": 16,
+  "phases": {
+    "startup": 0.03021836280822754,
+    "lock_wait": 0.0,
+    "compile": 0.8349168300628662,
+    "build_gaps": 0.0014271736145019531,
+    "test_run": 0.0,
+    "tail": 0.004072427749633789
+  },
+  "units": {
+    "compiled": 1,
+    "local": 1,
+    "dependencies": 0,
+    "build_scripts": 0,
+    "fresh": 47,
+    "rustc_cpu_secs": 0.83,
+    "rustc_wall_sum": 0.8349168300628662,
+    "with_pass_timings": 0,
+    "depcache_hits": 0,
+    "depcache_misses": 0,
+    "depcache_saved_secs": -0.0,
+    "depcache_miss_secs": -0.0,
+    "depcache_remote_hits": 0,
+    "depcache_peer_hits": 0,
+    "depcache_prebuilt_hits": 0,
+    "localcache_hits": 0,
+    "localcache_misses": 0,
+    "localcache_saved_secs": -0.0
+  },
+  "top_units": [
+    {
+      "name": "justrust",
+      "kind": "check",
+      "local": true,
+      "start": 0.03021836280822754,
+      "wall": 0.8349168300628662,
+      "wall_share": 0.8349168300628662,
+      "cpu": 0.826874,
+      "max_rss_mb": 295.9140625,
+      "frontend_threads": null,
+      "rmeta_secs": 0.640918493270874,
+      "split": null,
+      "top_passes": [],
+      "source_lines": null
+    }
+  ],
+  "link": {
+    "linker_processes": 0,
+    "linker_cpu_secs": -0.0,
+    "link_pass_secs": 0.0
+  },
+  "tests": {
+    "binaries": [],
+    "passed": 0,
+    "failed": 0,
+    "ignored": 0,
+    "filtered_out": 0,
+    "libtest_secs": 0.0,
+    "timed_secs": 0.0,
+    "timed": 0
+  },
+  "resources": {
+    "avg_build_cores": 1.0139739484860093,
+    "peak_build_cores": 1.0456552946429178,
+    "peak_build_rss_mb": 328.2734375,
+    "peak_unit_rss_mb": 295.9140625,
+    "min_mem_available_mb": 52801,
+    "avg_other_cores": 3.4096079022626347,
+    "max_foreign_rustc": 0,
+    "psi_cpu_secs": 0.008367000000000001,
+    "psi_mem_secs": 0.0,
+    "psi_io_secs": 0.002944
+  },
+  "diagnostics": {
+    "compile_errors": 0,
+    "warnings": 0,
+    "first_error": null,
+    "compile_failed": false
+  },
+  "rebuild_reasons": [
+    {
+      "package": "justrust",
+      "reason": "the file `src/lib.rs` has changed"
+    }
+  ],
+  "all_units": 1,
+  "slot": null,
+  "locks_waited": [],
+  "sched": {
+    "unit": "justrust-20261030-023748774-966185.scope",
+    "final_weight": 991,
+    "setup_secs": 0.009990782,
+    "yielded_secs": 0.0
+  },
+  "route": "JUSTRUST_REMOTE=off"
+}
