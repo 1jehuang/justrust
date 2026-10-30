@@ -178,7 +178,7 @@ class HarnessTests(unittest.TestCase):
             self.assertFalse(row['timed_out'])
             self.assertEqual(row['status'], -signal.SIGTERM)
 
-    def exercise(self, root, crash=False, stale=False, raw_mode='valid', experiments=False, seeded=False, journal=True):
+    def exercise(self, root, crash=False, stale=False, raw_mode='valid', experiments=False, seeded=False, journal=True, macro=False, missing_journal_phase=None):
         source = root / 'source'
         (source / 'src').mkdir(parents=True)
         pinned = source / 'src/summary.rs'
@@ -187,8 +187,10 @@ class HarnessTests(unittest.TestCase):
             edit_file='src/summary.rs', edit_test=NAME, edit_anchor='fn shares_overlapping_time() {',
             blaze_llvm=True, command='test', test_filter='summary::tests::', timeout=1,
             binary='justrust', blaze=Path('/fake/blaze'), justrust=Path('/fake/justrust'),
-            owned_experiments=experiments, blaze_seed_cache=root / 'seed' if seeded else None,
-            wild=root / 'fake-wild' if experiments else None)
+            owned_experiments=experiments, native_macro_cache=macro,
+            cargo=Path('/fake/cargo'), rustc=Path('/fake/rustc'),
+            blaze_seed_cache=root / 'seed' if seeded else None,
+            wild=root / 'fake-wild' if experiments or macro else None)
         if args.wild:
             args.wild.write_bytes(b'fake executable, never invoked')
             args.wild.chmod(0o700)
@@ -196,6 +198,11 @@ class HarnessTests(unittest.TestCase):
             args.blaze_seed_cache.mkdir()
             (args.blaze_seed_cache / 'test.pack').write_bytes(b'private seeded pack')
         observed = []
+        real_environment = h.environment
+        def synthetic_environment(a, stack):
+            if stack.startswith('blaze'):
+                return {'BLAZE_CACHE': str(a.output / stack / 'cache')}
+            return real_environment(a, stack)
         def fake(command, cwd, env, prefix, timeout):
             contents = pinned.read_bytes()
             observed.append((prefix.name, contents))
@@ -224,7 +231,8 @@ class HarnessTests(unittest.TestCase):
                     raw = ''.join(json.dumps({'t': i, 's': 'o', 'l': line}) + '\n'
                                   for i, line in enumerate(text.splitlines()))
                     (recording / 'output.jsonl').write_text(raw if raw_mode == 'valid' else '{bad json')
-                    if prefix.name.endswith('-all4hotpatch') and journal:
+                    if (env.get('JUSTRUST_HOTPATCH') == '1' and journal
+                            and not prefix.name.startswith(str(missing_journal_phase) + '-')):
                         (recording / 'hotpatch.jsonl').write_text(json.dumps({
                             'outcome': 'patched' if prefix.name.startswith('edit-') else 'full-link',
                             'detail': 'synthetic test evidence', 'ms': .1}) + '\n')
@@ -234,15 +242,14 @@ class HarnessTests(unittest.TestCase):
             return dict(status=status, error=None, timed_out=False, elapsed_seconds=.001)
         with patch.object(h.base, 'identities', return_value={'fake': 'identity', 'rustc': {'sha256': 'fake'}}), \
              patch.object(h, 'classify_compiler', return_value={'nightly': False}), \
-             patch.object(h, 'environment', side_effect=lambda a, s: {
-                 'HOME': str(a.output / s), 'JUSTRUST_HOME': str(a.output / s / '.justrust'),
-                 'BLAZE_CACHE': str(a.output / s / 'cache')}), \
+             patch.object(h, 'environment', side_effect=synthetic_environment), \
              patch.object(h, 'run_process', side_effect=fake):
             if crash:
                 with self.assertRaises(RuntimeError):
                     h.execute(args)
             else:
-                self.assertEqual(h.execute(args), 1 if stale or raw_mode != 'valid' or (experiments and not journal) else 0)
+                self.assertEqual(h.execute(args), 1 if stale or raw_mode != 'valid' or
+                                 ((experiments or macro) and (not journal or missing_journal_phase)) else 0)
         self.assertEqual(pinned.read_bytes(), ORIGINAL)
         self.assertEqual((args.output / 'source.original').read_bytes(), ORIGINAL)
         return observed
@@ -250,6 +257,8 @@ class HarnessTests(unittest.TestCase):
     def test_end_to_end_gates_same_bytes_rotation(self):
         with tempfile.TemporaryDirectory() as temp:
             rows = self.exercise(Path(temp))
+            metadata = json.loads((Path(temp) / 'out/metadata.json').read_text())
+            self.assertEqual(metadata['stacks'], ['owned-off', 'all3on', 'blaze', 'blaze-llvm'])
             for rep in range(2):
                 edits = [(name, data) for name, data in rows if name.startswith(f'edit-{rep:03d}')]
                 self.assertEqual(len(edits), 4)
@@ -302,6 +311,74 @@ class HarnessTests(unittest.TestCase):
             summary = json.loads((root / 'out/summary.json').read_text())
             self.assertNotIn('all4hotpatch', summary['medians_seconds'])
             self.assertIn('all4on', summary['medians_seconds'])
+
+    def test_native_macro_flags_isolation_and_unchanged_baselines(self):
+        with tempfile.TemporaryDirectory() as temp:
+            args = argparse.Namespace(output=Path(temp), cargo=Path('/fake/cargo'),
+                                      rustc=Path('/shim/not-used-for-inference'))
+            stacks = ('owned-off', 'all3on', 'all4on', 'all4hotpatch',
+                      'owned-macro', 'owned-macro-hotpatch')
+            with patch.dict(os.environ, {'RUSTFLAGS': 'secret inherited flags',
+                                        'JUSTRUST_HOTPATCH': '1'}):
+                envs = {s: h.environment(args, s) for s in stacks}
+            for key in ('HOME', 'JUSTRUST_HOME', 'CARGO_TARGET_DIR'):
+                self.assertEqual(len({e[key] for e in envs.values()}), len(stacks))
+            for stack in stacks[:4]:
+                self.assertNotIn('cache-proc-macros', envs[stack]['RUSTFLAGS'])
+            for stack in stacks[4:]:
+                self.assertEqual(envs[stack]['RUSTFLAGS'],
+                                 envs['all4on']['RUSTFLAGS'] + ' -Zcache-proc-macros=yes')
+                self.assertEqual(h.logged_environment(envs[stack])['RUSTFLAGS'],
+                                 envs[stack]['RUSTFLAGS'])
+            self.assertNotIn('JUSTRUST_HOTPATCH', envs['owned-macro'])
+            self.assertEqual(envs['owned-macro-hotpatch']['JUSTRUST_HOTPATCH'], '1')
+            left, right = (dict(envs[s]) for s in stacks[4:])
+            left.pop('JUSTRUST_HOTPATCH', None)
+            right.pop('JUSTRUST_HOTPATCH', None)
+            left = {k: v.replace(str(args.output / 'owned-macro'), '<private>')
+                    for k, v in left.items()}
+            right = {k: v.replace(str(args.output / 'owned-macro-hotpatch'), '<private>')
+                     for k, v in right.items()}
+            self.assertEqual(left, right)
+
+    def test_native_macro_actual_journal_gates_and_seed_policy(self):
+        for phase in (None, 'prepare', 'edit'):
+            with self.subTest(phase=phase), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                rows = self.exercise(root, macro=True, seeded=True, missing_journal_phase=phase)
+                summary = json.loads((root / 'out/summary.json').read_text())
+                self.assertEqual('owned-macro-hotpatch' in summary['medians_seconds'], phase is None)
+                self.assertIn('owned-macro', summary['medians_seconds'])
+                metadata = json.loads((root / 'out/metadata.json').read_text())
+                self.assertEqual(set(metadata['wild_copies']),
+                                 {'owned-off', 'all3on', 'owned-macro', 'owned-macro-hotpatch'})
+                self.assertEqual(set(metadata['blaze_seed_manifests']), {'blaze', 'blaze-llvm'})
+                if phase is None:
+                    self.assertEqual(summary['edit_hotpatch_outcomes']['owned-macro-hotpatch'],
+                                     ['patched', 'patched'])
+                    for stack in ('owned-macro', 'owned-macro-hotpatch'):
+                        for gate in ('prepare', 'type-error', 'type-recovery', 'test-failure', 'test-recovery'):
+                            self.assertIn(f'{gate}-000-{stack}', [name for name, _ in rows])
+
+    def test_native_macro_cli_requires_wild_before_execution(self):
+        argv = ['compare', '--native-macro-cache']
+        for key in ('source', 'output', 'blaze', 'justrust', 'rustc', 'cargo'):
+            argv += ['--' + key, '/fake/' + key]
+        with patch.object(sys, 'argv', argv), patch.object(h, 'execute') as execute:
+            with self.assertRaises(SystemExit) as error:
+                h.main()
+            self.assertEqual(error.exception.code, 2)
+            execute.assert_not_called()
+
+    def test_native_macro_and_existing_experiments_are_distinct(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.exercise(root, macro=True, experiments=True)
+            metadata = json.loads((root / 'out/metadata.json').read_text())
+            self.assertEqual(len(metadata['stacks']), len(set(metadata['stacks'])))
+            self.assertEqual(set(metadata['wild_copies']),
+                             {'owned-off', 'all3on', 'all4on', 'all4hotpatch',
+                              'owned-macro', 'owned-macro-hotpatch'})
 
     def test_hotpatch_journal_invalid_and_full_link_evidence(self):
         with tempfile.TemporaryDirectory() as temp:

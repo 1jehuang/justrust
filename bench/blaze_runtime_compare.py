@@ -221,10 +221,12 @@ def environment(args, stack):
     env.update(PROFILES)
     if not stack.startswith('blaze') and getattr(args, 'compiler_nightly', False):
         env['JUSTRUST_TOOLCHAIN_NIGHTLY'] = '1'
-    if stack in ('all4on', 'all4hotpatch'):
+    if stack in ('all4on', 'all4hotpatch', 'owned-macro', 'owned-macro-hotpatch'):
         env['RUSTFLAGS'] = ' '.join(f'-Z{flag}=yes' for flag in
                                   (*base.FLAGS, 'jr-cache-dead-code-items'))
-    if stack == 'all4hotpatch':
+    if stack in ('owned-macro', 'owned-macro-hotpatch'):
+        env['RUSTFLAGS'] += ' -Zcache-proc-macros=yes'
+    if stack in ('all4hotpatch', 'owned-macro-hotpatch'):
         env['JUSTRUST_HOTPATCH'] = '1'
     if stack.startswith('blaze'):
         env.update(BLAZE_BACKEND='llvm' if stack == 'blaze-llvm' else 'cranelift',
@@ -299,7 +301,9 @@ def execute(args):
     stacks = ['owned-off', 'all3on', 'blaze'] + (['blaze-llvm'] if args.blaze_llvm else [])
     if args.owned_experiments:
         stacks += ['all4on', 'all4hotpatch']
-    records, medians = [], {}
+    if getattr(args, 'native_macro_cache', False):
+        stacks += ['owned-macro', 'owned-macro-hotpatch']
+    records, medians, environments = [], {}, {}
     metadata = {'scope': 'scoped filtered tests, not full suite or general speed claim',
                 'source_before': source_hashes(args.source, args.output),
                 'identities_before': identities(args), 'profiles': PROFILES,
@@ -326,7 +330,7 @@ def execute(args):
             try:
                 output, provenance = recorded_output(env, before_runs, prefix)
                 row['raw_output'] = provenance
-                if (stack == 'all4hotpatch' and phase in ('prepare', 'edit')
+                if (env.get('JUSTRUST_HOTPATCH') == '1' and phase in ('prepare', 'edit')
                         and base.succeeded(row) and not provenance['hotpatch']['present']):
                     row['error'] = 'hotpatch experiment produced no linker journal'
             except (OSError, ValueError, UnicodeError) as exc:
@@ -447,7 +451,7 @@ def execute(args):
             'edit_hotpatch_outcomes': {stack: [outcome for row in records
                 if row['stack'] == stack and row['phase'] == 'edit'
                 for outcome in row.get('raw_output', {}).get('hotpatch', {}).get('outcomes', [])]
-                for stack in stacks if stack == 'all4hotpatch'},
+                for stack in stacks if environments.get(stack, {}).get('JUSTRUST_HOTPATCH') == '1'},
             'policy': 'Failed, stale, incomplete or identity-changed stacks excluded. Gates untimed. Descriptive scoped diagnostic only.'}, indent=2) + '\n')
     return 0 if len(medians) == len(stacks) else 1
 
@@ -468,12 +472,16 @@ def main():
     parser.add_argument('--blaze-llvm', action='store_true')
     parser.add_argument('--owned-experiments', action='store_true',
                         help='add isolated all4on and all4hotpatch stacks')
+    parser.add_argument('--native-macro-cache', action='store_true',
+                        help='add isolated owned-macro and owned-macro-hotpatch stacks using native -Zcache-proc-macros=yes')
     parser.add_argument('--blaze-seed-cache', type=lambda s: Path(s).expanduser().absolute(),
                         help='copy a private successful store into each fresh Blaze cache; warm-store scope only')
     parser.add_argument('--timeout', type=float, default=360)
     args = parser.parse_args()
     if args.owned_experiments and not args.wild:
         parser.error('--owned-experiments requires --wild so hotpatch is not inert')
+    if args.native_macro_cache and not args.wild:
+        parser.error('--native-macro-cache requires --wild so hotpatch is not inert')
     if args.samples < 1 or args.timeout <= 0:
         parser.error('samples and timeout must be positive')
     if Path(args.edit_file).is_absolute() or '..' in Path(args.edit_file).parts:
