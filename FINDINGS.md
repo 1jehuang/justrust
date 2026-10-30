@@ -9136,3 +9136,42 @@ Blaze 0.100719/0.111574s. Evidence `832de3f19` retains all seven stacks and 35
 executed edits. Neither diagnostic is the comprehensive promotion gate. The
 experimental compiler used incremental compilation and thin-local LTO, not a
 trained distribution build. A parked Cargo process is not a resident frontend.
+
+## 2026-10-30: native resident parity, not an independent optimization
+
+The plain ThinLTO/CGU1/nonincremental compiler diagnostic br48 retained in
+`bench/results/native-release-br48-20261030/` passed 35 actual edits across seven
+stacks. Its best owned median was 0.966622s with four frontend threads, versus
+seeded-warm Blaze Cranelift 0.099186s and LLVM 0.109765s. These scoped descriptive
+observations still leave the faster-than-Blaze goal unmet, and are not a general
+speedup, PGO/BOLT result, or comprehensive default-promotion gate.
+
+To test the architectural difference directly, `toolchain/resident/` imports
+Blaze v0.20261027.0 at 5d4f78f7577cf7170993b74f735099dd03f5c6ca with original
+licenses and explicit attribution. The native `jr-engine` entry is experimental,
+Blaze-derived, and not a clean-room implementation or shipping client default.
+Source-built reference and derived entry use the identical existing nightly
+2026-10-27, explicit Cranelift/opt0 profiles and rustc-built proc macros (both
+server variables 0). The source-built re01 workflow starts with unseeded private
+stores and passes all actual four-test, deliberate type-error, assertion-failure,
+recovery, and five rotated runtime-marker edit gates on pristine f97fcc2. All
+source, executable and toolchain identities are unchanged. Medians are reference
+0.108226630s and derived 0.121279609s: parity of the bounded execution contract,
+not an optimization win. Broader Rust correctness remains unproven.
+
+Eight actual native entry cases also pass explicit private-home, permissions,
+symlink, hostile inherited alias and compiled source-identity checks. The first
+relocated shared-target build lacked that identity and was rejected, never used
+for accepted execution. A fresh separate target produced the accepted identified
+binary. Build runs `20261030-065842435-3161489`,
+`20261030-071109706-3226511` (rejected inert output), and
+`20261030-071449716-3240997` are exported under dedicated resident machine names.
+Later private speculative prebuild observations remain separate and are not
+runtime benchmark samples; the private build daemon was stopped before further
+controlled measurements. Full benchmark Python discovery passes 688 tests.
+
+Actual native worker logs show one-function edits with about 36-56ms reported
+whole-graph work while code generation is below 1ms. An attempted opt-in native
+trace did not produce a trace at all; absence is not zero cost. Native phase
+telemetry and safe graph reuse are the next experiments. No candidate has yet
+proved an independent improvement over Blaze, and shipping defaults stay intact.
