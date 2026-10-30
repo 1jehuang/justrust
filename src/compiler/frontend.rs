@@ -9490,6 +9490,8 @@ pub struct FloatLiteral {
 
 impl FloatLiteral {
     pub fn value(&self, ty: ir::FloatTy, negative: bool) -> Result<ir::FloatValue, String> {
+        super::procfs::validate_floating_environment()
+            .map_err(|error| format!("unsupported compiler floating environment: {error}"))?;
         let mut value = match ty {
             ir::FloatTy::F64 => ir::FloatValue::f64(
                 self.digits

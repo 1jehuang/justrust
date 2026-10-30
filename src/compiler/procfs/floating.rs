@@ -136,6 +136,37 @@ mod tests {
     }
 
     #[test]
+    fn floating_literal_conversion_checks_the_actual_worker_environment() {
+        use crate::compiler::{frontend::FloatLiteral, ir::FloatTy};
+        let launcher = crate::compiler::procfs::CompilerImage::current().unwrap();
+        let (before, rejected, after) = std::thread::spawn(|| {
+            let saved = Restore::new();
+            let literal = FloatLiteral {
+                digits: "0.1".into(),
+                suffix: None,
+            };
+            let before = literal.value(FloatTy::F64, false).unwrap().bits;
+            saved.set((saved.mxcsr & !0x3f) ^ 0x2000, saved.x87);
+            // These calls must reject before invoking Rust floating arithmetic.
+            let rejected = [
+                literal.value(FloatTy::F32, false).is_err(),
+                literal.value(FloatTy::F64, false).is_err(),
+                literal.value(FloatTy::F32, true).is_err(),
+                literal.value(FloatTy::F64, true).is_err(),
+            ];
+            saved.set(saved.mxcsr, saved.x87);
+            let after = literal.value(FloatTy::F32, false).unwrap().bits;
+            (before, rejected, after)
+        })
+        .join()
+        .unwrap();
+        assert_eq!(before, 0x3fb9_9999_9999_999a);
+        assert_eq!(rejected, [true; 4]);
+        assert_eq!(after, 0x3dcc_cccd);
+        launcher.validate_current().unwrap();
+    }
+
+    #[test]
     fn floating_controls_reject_unsupported_environment_but_ignore_sticky_status() {
         let saved = Restore::new();
         let baseline = current().unwrap();

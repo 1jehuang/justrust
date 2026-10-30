@@ -11,6 +11,14 @@ mod floating;
 
 const MAX_IMAGE_BYTES: u64 = 512 * 1024 * 1024;
 
+/// Launcher evidence does not establish the floating environment of a worker.
+/// Check at the operation that consumes native floating arithmetic as well.
+pub(super) fn validate_floating_environment() -> io::Result<()> {
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    floating::current()?;
+    Ok(())
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CompilerImage {
     bytes: u64,
