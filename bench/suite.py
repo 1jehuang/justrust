@@ -1577,8 +1577,12 @@ def named_test_failure_issues(result: dict) -> list[str]:
 
 
 def cmd_compare(args) -> None:
-    from runtime_context import require_matching_context
     a, b = (json.loads(Path(f).read_text()) for f in (args.a, args.b))
+    if a.get("schema", "").startswith("native_resident") or b.get("schema", "").startswith("native_resident"):
+        from resident_suite import compare
+        compare(a, b, args.floor)
+        return
+    from runtime_context import require_matching_context
     require_matching_context(a, b)
     if "synth" in a or "synth" in b:
         if not ("synth" in a and "synth" in b):
@@ -1679,6 +1683,8 @@ def cmd_compare(args) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
+    from resident_suite import add_parser as add_resident_parser
+    add_resident_parser(sub)
     sub.add_parser("list").set_defaults(fn=cmd_list)
     r = sub.add_parser("run")
     r.add_argument("scenarios", nargs="*")
