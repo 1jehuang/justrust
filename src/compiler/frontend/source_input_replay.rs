@@ -290,6 +290,31 @@ pub(super) fn copy_arguments(
     Ok(Some(copied))
 }
 
+// Prepublication selection must not suppress a source method's existing
+// inference path. Only authored shared slice/str receiver syntax establishes
+// this candidate class without consulting checked or inferred types. Lexical
+// selection is occurrence-based, so a shadowing Vec/nominal local cannot inherit
+// an outer descriptor annotation. Canonical replay still proves the operation.
+fn authored_len_receiver(
+    inventory: &SourceInventory,
+    node: &sr::SourceNode,
+    budget: &ir::PlanBudget,
+) -> Result<bool, FactsError> {
+    let receiver = node.child(10, 0, budget)?;
+    sr::work(budget, receiver.path.len())?;
+    let Some(binding) = inventory.operand_nodes.get(&receiver.path) else {
+        return Ok(false);
+    };
+    let Some(index) = source_binding_index(&inventory.bindings, binding, budget)? else {
+        return Ok(false);
+    };
+    Ok(matches!(
+        inventory.bindings[index].annotation.as_ref(),
+        Some(Type::Ref { kind: ir::BorrowKind::Shared, referent, .. })
+            if matches!(referent.as_ref(), Type::Slice(_) | Type::Str)
+    ))
+}
+
 pub(super) fn supported(
     source: &Expr,
     node: &sr::SourceNode,
@@ -439,11 +464,8 @@ pub(super) fn supported(
             && args.is_empty()
             && matches!(receiver.as_ref(), Expr::Var(path) if is_local_shaped_path(path)) =>
         {
-            // Intrinsic candidates have their own canonical occurrence proof
-            // (for example SliceLen), not a source Call producer receipt.
-            // Conservatively keep these source occurrences on that existing
-            // proof path. This excludes candidates only, never grants intrinsic
-            // authority from a method spelling or a checked result type.
+            // Selection here is provisional. Only replay of the exact builtin
+            // receipt and lexical receiver below grants SliceLen authority.
             sr::work(budget, inventory.calls.len())?;
             let Some(site) = inventory.calls.iter().find(|site| site.node == *node) else {
                 return Ok(false);
@@ -467,10 +489,15 @@ pub(super) fn supported(
                     .builtin_len_mapping
                     .iter()
                     .any(|row| row.source_index == index)
-                    || original
-                        .builtin_leading_zeros_mapping
-                        .iter()
-                        .any(|row| row.source_index == index)
+                {
+                    return Ok(site.len_candidate
+                        && !site.for_iterable
+                        && authored_len_receiver(inventory, node, budget)?);
+                }
+                if original
+                    .builtin_leading_zeros_mapping
+                    .iter()
+                    .any(|row| row.source_index == index)
                     || original
                         .builtin_intrinsic_mapping
                         .iter()
@@ -513,8 +540,11 @@ pub(super) fn supported(
                 {
                     return Ok(false);
                 }
-            } else if site.len_candidate || site.leading_zeros_candidate || site.intrinsic_candidate
-            {
+            } else if site.len_candidate {
+                // Do not route Vec/custom len methods away from their existing
+                // fallback just because their spelling is a builtin candidate.
+                return authored_len_receiver(inventory, node, budget);
+            } else if site.leading_zeros_candidate || site.intrinsic_candidate {
                 return Ok(false);
             }
             // Source method replay still authenticates the exact declaration,
@@ -1277,6 +1307,75 @@ impl Replay<'_> {
         Ok(declared.result.clone())
     }
 
+    /// The result is the builtin's fixed usize, never a checked inference seed.
+    /// This deliberately supports only an unadjusted shared descriptor local.
+    /// Other len receiver shapes stay on their existing canonical proof path.
+    fn builtin_len_result(
+        &self,
+        node: &sr::SourceNode,
+        id: ir::ExprId,
+        receiver: ir::ExprId,
+        depth: usize,
+    ) -> Result<ir::Ty, FactsError> {
+        validate_original_occurrence(self.original, node, self.budget)?;
+        sr::work(self.budget, self.inventory.calls.len())?;
+        let index = self
+            .inventory
+            .calls
+            .iter()
+            .position(|site| site.node == *node)
+            .ok_or_else(|| FactsError::invalid(self.budget, "len source occurrence missing"))?;
+        let site = &self.inventory.calls[index];
+        if !site.len_candidate
+            || site.for_iterable
+            || site.ordinary.is_some()
+            || site.application.is_some()
+        {
+            return Err(FactsError::invalid(
+                self.budget,
+                "len source candidate changed",
+            ));
+        }
+        sr::work(self.budget, self.original.builtin_len_mapping.len())?;
+        let mut rows = self
+            .original
+            .builtin_len_mapping
+            .iter()
+            .filter(|row| row.source_index == index);
+        let row = rows.next().ok_or_else(|| {
+            FactsError::invalid(self.budget, "len input lacks canonical builtin receipt")
+        })?;
+        if rows.next().is_some() || row.expr != id || row.receiver != receiver {
+            return Err(FactsError::invalid(
+                self.budget,
+                "len input occurrence changed",
+            ));
+        }
+        let receiver_node = node.child(10, 0, self.budget)?;
+        let (local, source_ty) = self.operand(&receiver_node, depth + 1)?;
+        if source_ty.shared_descriptor_element().is_none() {
+            return Err(FactsError::unsupported(
+                self.budget,
+                "len input requires an unadjusted shared descriptor source",
+            ));
+        }
+        let actual = self
+            .checked
+            .exprs
+            .get(receiver.0)
+            .ok_or_else(|| FactsError::invalid(self.budget, "len input receiver missing"))?;
+        if !matches!(actual.kind, ir::ExprKind::Local(root) if root == local)
+            || actual.completion != ir::Completion::Returns
+            || !self.equal(&source_ty, &actual.ty)?
+        {
+            return Err(FactsError::invalid(
+                self.budget,
+                "len input lexical receiver changed",
+            ));
+        }
+        Ok(ir::Ty::Int(ir::IntTy::Usize))
+    }
+
     pub(super) fn expression(
         &self,
         source: &Expr,
@@ -1505,6 +1604,20 @@ impl Replay<'_> {
                         .facts
                         .normalize_substituted_projection_type(&result, self.budget)?
                 }
+            }
+            (
+                Expr::MethodCall {
+                    receiver,
+                    type_args,
+                    args,
+                    ..
+                },
+                ir::ExprKind::SliceLen { slice },
+            ) if type_args.is_empty()
+                && args.is_empty()
+                && matches!(receiver.as_ref(), Expr::Var(path) if is_local_shaped_path(path)) =>
+            {
+                self.builtin_len_result(node, id, *slice, depth + 1)?
             }
             (
                 source @ Expr::MethodCall { .. },
@@ -1988,11 +2101,11 @@ mod literal_context_tests {
             .position(|site| site.ordinary.is_some())
             .unwrap();
         assert!(
-            !recursive_argument_sources_supported(&plan, declaration, &inventory, call, &budget)
+            recursive_argument_sources_supported(&plan, declaration, &inventory, call, &budget)
                 .unwrap()
         );
         assert!(
-            !recursive_argument_sources_supported_with_original(
+            recursive_argument_sources_supported_with_original(
                 &plan,
                 declaration,
                 &inventory,
@@ -2019,6 +2132,132 @@ mod literal_context_tests {
                 replay_source_body(&original, &Arc::new(forged), publication.facts(), &budget)
                     .expect_err("forged builtin length must fail");
             assert_eq!(error.kind(), tr::FactsErrorKind::InvalidMetadata);
+        }
+    }
+
+    #[test]
+    fn provisional_len_selection_keeps_nominal_method_fallbacks() {
+        // These source-only fixtures do not load the canonical prelude. Real
+        // Vec::len fallback coverage stays in typed_slices' differential suite.
+        for (source, eligible) in [
+            (
+                "fn consume(a:&usize){}fn main(){let values=[1i32,2];let receiver:&[i32]=&values;let n=receiver.len();consume(&n);}",
+                true,
+            ),
+            (
+                "struct Buffer{value:usize}impl Buffer{fn len(&self)->usize{self.value}}fn consume(a:&usize){}fn main(){let receiver:Buffer=Buffer{value:2usize};let n=receiver.len();consume(&n);}",
+                false,
+            ),
+            (
+                "struct Owner<T>{value:T}impl<T> Owner<T>{fn len(&self)->usize{2usize}}fn consume(a:&usize){}fn main(){let receiver=Owner{value:1i32};let n=receiver.len();consume(&n);}",
+                false,
+            ),
+            (
+                "struct Owner{value:usize}impl Owner{fn len(&self)->usize{self.value}}fn consume(a:&usize){}fn main(){let values=[1i32,2];let receiver:&[i32]=&values;{let receiver=Owner{value:3usize};let n=receiver.len();consume(&n);}}",
+                false,
+            ),
+        ] {
+            let program = parse(source).unwrap();
+            let budget = ir::PlanBudget::default();
+            let plan = PlanCtx::from_program(&program, &budget).unwrap();
+            let declaration = plan.function_decl(program.functions.len() - 1).unwrap();
+            let PublishedCallableBody::Source(publication) =
+                plan.publish_callable_body(declaration, &budget).unwrap()
+            else {
+                panic!("expected source")
+            };
+            let original = publication.original().source_for_test();
+            let function = plan.callable_body(&plan.program, declaration).unwrap();
+            let inventory =
+                SourceInventory::build(&plan.program, function, original.identity.clone(), &budget)
+                    .unwrap();
+            let length = inventory
+                .calls
+                .iter()
+                .find(|site| site.len_candidate)
+                .unwrap();
+            assert_eq!(
+                authored_len_receiver(&inventory, &length.node, &budget).unwrap(),
+                eligible,
+                "{source}"
+            );
+            let consumer = inventory
+                .calls
+                .iter()
+                .position(|site| {
+                    site.ordinary.is_some() && site.argument_borrow == Some(ir::BorrowKind::Shared)
+                })
+                .unwrap();
+            assert_eq!(
+                recursive_argument_sources_supported(
+                    &plan,
+                    declaration,
+                    &inventory,
+                    consumer,
+                    &budget,
+                )
+                .unwrap(),
+                eligible,
+                "prepublication route: {source}"
+            );
+        }
+    }
+
+    #[test]
+    fn generic_len_inputs_reject_forged_receipts_and_receivers() {
+        let program = parse("fn consume<T>(a:T,b:T){}fn main(){let values=[1i32,2];let slice:&[i32]=&values;let sibling:&[i32]=&values;let n=slice.len();let other=sibling.len();let m=2usize;consume(&n,&m);consume(&other,&m);}").unwrap();
+        let budget = ir::PlanBudget::default();
+        let plan = PlanCtx::from_program(&program, &budget).unwrap();
+        let declaration = plan.function_decl(1).unwrap();
+        let PublishedCallableBody::Source(publication) =
+            plan.publish_callable_body(declaration, &budget).unwrap()
+        else {
+            panic!("expected source")
+        };
+        let original = publication.original().source_for_test();
+        let checked = publication.source();
+        replay_source_body(&original, checked, publication.facts(), &budget).unwrap();
+        assert_eq!(original.builtin_len_mapping.len(), 2);
+        let first = original.builtin_len_mapping[0];
+        let second = original.builtin_len_mapping[1];
+        for mutation in 0..7 {
+            let mut source = original.clone();
+            let mut payload = checked.as_ref().clone();
+            match mutation {
+                0 => {
+                    source.builtin_len_mapping.remove(0);
+                }
+                1 => {
+                    source.builtin_len_mapping[0].receiver = second.receiver;
+                }
+                2 => {
+                    payload.exprs[first.expr.0].ty = ir::Ty::Bool;
+                }
+                3 => {
+                    payload.exprs[first.expr.0].kind = ir::ExprKind::Int(ir::IntValue::usize(2));
+                }
+                4 => {
+                    payload.exprs[first.expr.0].kind = ir::ExprKind::SliceLen {
+                        slice: second.receiver,
+                    };
+                }
+                5 => {
+                    payload.exprs[first.receiver.0].kind =
+                        payload.exprs[second.receiver.0].kind.clone();
+                }
+                6 => {
+                    source.builtin_len_mapping[0].source_index = second.source_index;
+                }
+                _ => unreachable!(),
+            }
+            let error =
+                replay_source_body(&source, &Arc::new(payload), publication.facts(), &budget)
+                    .expect_err("generic input must not launder a forged len receipt");
+            assert_eq!(
+                error.kind(),
+                tr::FactsErrorKind::InvalidMetadata,
+                "mutation {mutation}"
+            );
         }
     }
 

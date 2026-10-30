@@ -441,8 +441,81 @@ fn stock_all() {
     assert_eq!(counts, [23, 3, 5, 1]);
 }
 #[test]
+fn generic_len_source_check_never_demands_codegen() {
+    for source in [
+        "fn consume<T>(a:T,b:T){}fn main(){let values=[1i32,2];let slice:&[i32]=&values;let n=slice.len();let m=2usize;consume(&n,&m);}",
+        "fn consume<T>(a:T){}fn main(){let values=[1i32,2];let slice:&[i32]=&values;let n=slice.len();consume(&n);}",
+    ] {
+        for workers in [1, 8] {
+            let result = compiler::compile_observed(source.into(), workers, true)
+                .unwrap_or_else(|failure| panic!("workers={workers}: {}", failure.error));
+            assert!(result.report.capture_complete);
+            assert!(!result.report.published_kind(103));
+            assert!(!result.report.published_kind(108));
+            assert!(
+                result
+                    .report
+                    .node_evaluations
+                    .iter()
+                    .all(|(key, _)| !matches!(key.kind, 103 | 105 | 108))
+            );
+        }
+    }
+}
+
+#[test]
 fn shared_reference_elements_stock_native_workers1_8() {
     let cases = [
+        (
+            "vec_len_explicit_generic_fresh_borrow_unchanged",
+            "fn consume<T>(a:T){}fn main(){let values=vec![1i32,2];let n=values.len();consume::<&usize>(&n);if n==2usize{println!(\"ok\");}}",
+            true,
+        ),
+        (
+            "custom_generic_len_explicit_fresh_borrow_unchanged",
+            "struct Owner<T>{value:T}impl<T> Owner<T>{fn len(&self)->usize{2usize}}fn consume<T>(a:T){}fn main(){let values=Owner{value:1i32};let n=values.len();consume::<&usize>(&n);if n==2usize{println!(\"ok\");}}",
+            true,
+        ),
+        (
+            "shadowed_source_len_explicit_fresh_borrow_unchanged",
+            "struct Owner{value:usize}impl Owner{fn len(&self)->usize{self.value}}fn consume<T>(a:T){}fn main(){let values=[1i32,2];let slice:&[i32]=&values;{let slice=Owner{value:3usize};let n=slice.len();consume::<&usize>(&n);if n==3usize{println!(\"ok\");}}}",
+            true,
+        ),
+        (
+            "vec_len_inferred_generic_fresh_borrow_fallback_unchanged",
+            "fn consume<T>(a:T){}fn main(){let values=vec![1i32,2];let n:usize={values.len()};consume(&n);if n==2usize{println!(\"ok\");}}",
+            true,
+        ),
+        (
+            "custom_generic_len_inferred_fresh_borrow_fallback_unchanged",
+            "struct Owner<T>{value:T}impl<T> Owner<T>{fn len(&self)->usize{2usize}}fn consume<T>(a:T){}fn main(){let values=Owner{value:1i32};let n:usize={values.len()};consume(&n);if n==2usize{println!(\"ok\");}}",
+            true,
+        ),
+        (
+            "shadowed_source_len_inferred_fresh_borrow_fallback_unchanged",
+            "struct Owner{value:usize}impl Owner{fn len(&self)->usize{self.value}}fn consume<T>(a:T){}fn main(){let values=[1i32,2];let slice:&[i32]=&values;{let slice=Owner{value:3usize};let n:usize={slice.len()};consume(&n);if n==3usize{println!(\"ok\");}}}",
+            true,
+        ),
+        (
+            "generic_len_pending_peer_source_proof",
+            "fn consume<T>(a:T,b:T){}fn main(){let values=[1i32,2];let slice:&[i32]=&values;let n=slice.len();let m=2usize;consume(&n,&m);println!(\"ok\");}",
+            true,
+        ),
+        (
+            "generic_len_unary_source_proof",
+            "fn consume<T>(a:T){}fn main(){let values=[1i32,2];let slice:&[i32]=&values;let n=slice.len();consume(&n);println!(\"ok\");}",
+            true,
+        ),
+        (
+            "generic_len_shadowed_receiver_source_proof",
+            "fn consume<T>(a:T,b:T){}fn main(){let values=[1i32,2];let slice:&[i32]=&values;{let values=[3i32];let slice:&[i32]=&values;let n=slice.len();let alias=n;let m=1usize;consume(&alias,&m);if n==1usize{println!(\"ok\");}}}",
+            true,
+        ),
+        (
+            "generic_len_rejects_cross_width_peer",
+            "fn consume<T>(a:T,b:T){}fn main(){let values=[1i32,2];let slice:&[i32]=&values;let n=slice.len();let m=2u32;consume(&n,&m);}",
+            false,
+        ),
         (
             "cloned_vec_keeps_canonical_mut_slice_adaptation",
             r###"fn touch<T:Copy>(s:&mut[T]){let first=s[0];s[0]=first;}fn main(){let data=vec![3i32,1,2];let mut cloned=data.clone();touch(&mut cloned);if cloned[0]==3i32&&data[0]==3i32{println!("ok");}}"###,
