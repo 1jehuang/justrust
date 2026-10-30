@@ -23,3 +23,4 @@ pub mod config;
 pub mod expand;
 pub mod module;
 pub mod proc_macro;
+pub mod declarative_cache;

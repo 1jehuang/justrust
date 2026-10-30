@@ -200,6 +200,8 @@ pub struct MacroRulesMacroExpander {
     kinds: MacroKinds,
     rules: Vec<MacroRule>,
     macro_rules: bool,
+    cache_definition: Option<TokenStream>,
+    edition: Edition,
 }
 
 impl MacroRulesMacroExpander {
@@ -304,6 +306,8 @@ impl TTMacroExpander for MacroRulesMacroExpander {
             input,
             &self.rules,
             self.on_unmatched_args.as_ref(),
+            self.cache_definition.as_ref(),
+            self.edition,
         ))
     }
 }
@@ -438,12 +442,87 @@ fn expand_macro<'cx, 'a: 'cx>(
     arg: TokenStream,
     rules: &'a [MacroRule],
     on_unmatched_args: Option<&Directive>,
+    cache_definition: Option<&TokenStream>,
+    edition: Edition,
 ) -> Box<dyn MacResult + 'cx> {
     let psess = &cx.sess.psess;
 
     if cx.trace_macros() {
         let msg = format!("expanding `{}! {{ {} }}`", name, pprust::tts_to_string(&arg));
         trace_macros_note(&mut cx.expansions, sp, msg);
+    }
+
+    let cache_eligible = cx.sess.opts.unstable_opts.jr_cache_declarative_macros
+        && cx.sess.opts.incremental.is_some()
+        && cache_definition.is_some()
+        && crate::declarative_cache::cacheable_tokens(&arg);
+    // Generic-activity events count eligible and rejected invocations even
+    // when the query provider is skipped by an in-memory or disk cache hit.
+    let _cache_scope = cx.sess.opts.unstable_opts.jr_cache_declarative_macros.then(|| {
+        cx.sess.prof.generic_activity(if cache_eligible {
+            "jr_declarative_macro_eligible"
+        } else {
+            "jr_declarative_macro_ineligible"
+        })
+    });
+
+    // Literal-only rules cannot invoke the Rust fragment parser, emit matcher
+    // diagnostics, or register gated spans. All other rules use the original
+    // path, including mixed rule sets where an earlier arm might have effects.
+    if cache_eligible && let Some(definition) = cache_definition {
+        let id = cx.current_expansion.id;
+        let compute = || {
+            let Ok((index, MacroRule::Func { rhs, .. }, matches)) =
+                try_match_macro(psess, &arg, rules, &mut NoopTracker)
+            else {
+                return None;
+            };
+            let mbe::TokenTree::Delimited(span, _, rhs) = rhs else { return None };
+            match transcribe(psess, &matches, rhs, *span, transparency, id) {
+                Ok(tokens) if crate::declarative_cache::cacheable_tokens(&tokens) => {
+                    Some((u32::try_from(index).ok()?, tokens))
+                }
+                Ok(_) => None,
+                Err(err) => {
+                    // The original path below owns error emission and recovery.
+                    err.cancel();
+                    None
+                }
+            }
+        };
+        let mode = ((edition as u16) << 8) | transparency as u16;
+        let cached = (*crate::declarative_cache::EXPAND_DECLARATIVE_MACRO_CACHED)(
+            id,
+            definition.clone(),
+            arg.clone(),
+            (def_span, mode),
+            &compute,
+        );
+        if let Some((index, tokens)) = cached
+            && let Some(MacroRule::Func { lhs, rhs, .. }) = rules.get(index as usize)
+        {
+            if let mbe::TokenTree::Delimited(span, _, _) = rhs {
+                let _result = cx.sess.prof.generic_activity("jr_declarative_macro_cache_success");
+                if cx.trace_macros() {
+                    let msg = format!("to `{}`", pprust::tts_to_string(&tokens));
+                    trace_macros_note(&mut cx.expansions, sp, msg);
+                }
+                let is_local = is_defined_in_current_crate(node_id);
+                if is_local {
+                    cx.resolver.record_macro_rule_usage(node_id, index as usize);
+                }
+                return Box::new(ParserAnyMacro::from_tts(
+                    cx,
+                    tokens,
+                    sp,
+                    span.entire(),
+                    is_local,
+                    name,
+                    rules,
+                    lhs,
+                ));
+            }
+        }
     }
 
     // Track nothing for the best performance.
@@ -932,6 +1011,23 @@ pub fn compile_declarative_macro(
     .flatten()
     .map(|directive| *directive);
 
+    let cache_definition = (sess.opts.unstable_opts.jr_cache_declarative_macros
+        && sess.opts.incremental.is_some()
+        && !sess.opts.unstable_opts.incremental_ignore_spans
+        && rules.iter().all(|rule| match rule {
+            MacroRule::Func { lhs, rhs, .. } => {
+                lhs.iter().all(|loc| {
+                    matches!(
+                        loc,
+                        MatcherLoc::Token { .. } | MatcherLoc::Delimited | MatcherLoc::Eof
+                    )
+                }) && literal_transcriber(rhs)
+            }
+            _ => false,
+        }))
+    .then(|| macro_def.body.tokens.clone())
+    .filter(crate::declarative_cache::cacheable_tokens);
+
     let exp = MacroRulesMacroExpander {
         name: ident,
         kinds,
@@ -941,8 +1037,18 @@ pub fn compile_declarative_macro(
         transparency,
         rules,
         macro_rules,
+        cache_definition,
+        edition,
     };
     mk_syn_ext(SyntaxExtensionKind::MacroRules(Arc::new(exp)))
+}
+
+fn literal_transcriber(tree: &mbe::TokenTree) -> bool {
+    match tree {
+        mbe::TokenTree::Token(_) => true,
+        mbe::TokenTree::Delimited(_, _, inner) => inner.tts.iter().all(literal_transcriber),
+        _ => false,
+    }
 }
 
 fn check_no_eof(sess: &Session, p: &Parser<'_>, msg: &'static str) -> Option<ErrorGuaranteed> {

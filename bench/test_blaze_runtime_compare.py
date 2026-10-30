@@ -24,6 +24,20 @@ def output(names=(NAME,), marker='', failed=False):
 
 
 class HarnessTests(unittest.TestCase):
+    def test_declarative_only_stack(self):
+        with tempfile.TemporaryDirectory() as temp:
+            args = argparse.Namespace(output=Path(temp), cargo=Path('/mock/cargo'),
+                                      rustc=Path('/mock/rustc'), compiler_nightly=True)
+            with patch.dict(os.environ, {'JUSTRUST_CACHE_PROC_MACROS': '1',
+                                        'RUSTFLAGS': '-Zcache-proc-macros=yes'}, clear=False):
+                env = h.environment(args, 'owned-declarative')
+            self.assertEqual(env['JUSTRUST_CACHE_PROC_MACROS'], '0')
+            self.assertIn('-Zjr-cache-declarative-macros=yes', env['RUSTFLAGS'])
+            self.assertNotIn('-Zcache-proc-macros=yes', env['RUSTFLAGS'])
+            for flag in h.base.FLAGS:
+                self.assertIn(f'-Z{flag}=no', env['RUSTFLAGS'])
+            self.assertNotIn('JUSTRUST_HOTPATCH', env)
+
     def test_false_success_and_counts(self):
         row = dict(status=0, timed_out=False, error=None)
         for text in ('Finished compilation', '', output().replace('1 passed', '2 passed')):

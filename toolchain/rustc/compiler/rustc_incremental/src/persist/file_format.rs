@@ -28,6 +28,11 @@ const FILE_MAGIC: &[u8] = b"RSIC";
 /// Change this if the header format changes.
 const HEADER_FORMAT_VERSION: u16 = 0;
 
+/// Private query-kind/payload identity, independent of the telemetry schema.
+/// Schema 5 adds declarative_macro_expansion. Development compiler builds can
+/// share cfg_version, so it alone cannot protect serialized discriminants.
+const QUERY_CACHE_SCHEMA: u16 = 5;
+
 pub(crate) fn write_file_header(stream: &mut FileEncoder<'_>, sess: &Session) {
     stream.emit_raw_bytes(FILE_MAGIC);
     stream.emit_raw_bytes(&u16::to_le_bytes(HEADER_FORMAT_VERSION));
@@ -194,6 +199,6 @@ fn rustc_version(sess: &Session) -> Cow<'static, str> {
     {
         Cow::Owned(env_version)
     } else {
-        Cow::Borrowed(sess.cfg_version)
+        Cow::Owned(format!("{}-jr-query-schema-{}", sess.cfg_version, QUERY_CACHE_SCHEMA))
     }
 }

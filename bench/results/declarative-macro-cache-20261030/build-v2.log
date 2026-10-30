@@ -1,0 +1,82 @@
+Building bootstrap
+    Finished `dev` profile [unoptimized] target(s) in 0.04s
+WARNING: The `jemalloc` option is deprecated. Please use `build.allocator = "jemalloc"` instead of `rust.jemalloc = true`
+/home/jeremy/justrust/toolchain/rustc/build/x86_64-unknown-linux-gnu/ci-llvm/bin/llvm-strip does not exist; skipping copy
+Building stage1 compiler artifacts (stage0 -> stage1, x86_64-unknown-linux-gnu)
+   Compiling rustc_middle v0.0.0 (/home/jeremy/justrust/toolchain/rustc/compiler/rustc_middle)
+   Compiling rustc_expand v0.0.0 (/home/jeremy/justrust/toolchain/rustc/compiler/rustc_expand)
+   Compiling rustc_builtin_macros v0.0.0 (/home/jeremy/justrust/toolchain/rustc/compiler/rustc_builtin_macros)
+   Compiling rustc_infer v0.0.0 (/home/jeremy/justrust/toolchain/rustc/compiler/rustc_infer)
+   Compiling rustc_transmute v0.0.0 (/home/jeremy/justrust/toolchain/rustc/compiler/rustc_transmute)
+   Compiling rustc_symbol_mangling v0.0.0 (/home/jeremy/justrust/toolchain/rustc/compiler/rustc_symbol_mangling)
+   Compiling rustc_mir_dataflow v0.0.0 (/home/jeremy/justrust/toolchain/rustc/compiler/rustc_mir_dataflow)
+   Compiling rustc_metadata v0.0.0 (/home/jeremy/justrust/toolchain/rustc/compiler/rustc_metadata)
+   Compiling rustc_ty_walk v0.0.0 (/home/jeremy/justrust/toolchain/rustc/compiler/rustc_ty_walk)
+   Compiling rustc_incremental v0.0.0 (/home/jeremy/justrust/toolchain/rustc/compiler/rustc_incremental)
+   Compiling rustc_ast_lowering v0.0.0 (/home/jeremy/justrust/toolchain/rustc/compiler/rustc_ast_lowering)
+   Compiling rustc_pattern_analysis v0.0.0 (/home/jeremy/justrust/toolchain/rustc/compiler/rustc_pattern_analysis)
+   Compiling rustc_query_impl v0.0.0 (/home/jeremy/justrust/toolchain/rustc/compiler/rustc_query_impl)
+   Compiling rustc_public_bridge v0.0.0 (/home/jeremy/justrust/toolchain/rustc/compiler/rustc_public_bridge)
+   Compiling rustc_expand_queries v0.0.0 (/home/jeremy/justrust/toolchain/rustc/compiler/rustc_expand_queries)
+   Compiling rustc_privacy v0.0.0 (/home/jeremy/justrust/toolchain/rustc/compiler/rustc_privacy)
+   Compiling rustc_public v0.1.0-preview (/home/jeremy/justrust/toolchain/rustc/compiler/rustc_public)
+   Compiling rustc_monomorphize v0.0.0 (/home/jeremy/justrust/toolchain/rustc/compiler/rustc_monomorphize)
+   Compiling rustc_resolve v0.0.0 (/home/jeremy/justrust/toolchain/rustc/compiler/rustc_resolve)
+   Compiling rustc_trait_selection v0.0.0 (/home/jeremy/justrust/toolchain/rustc/compiler/rustc_trait_selection)
+   Compiling rustc_sanitizers v0.0.0 (/home/jeremy/justrust/toolchain/rustc/compiler/rustc_sanitizers)
+   Compiling rustc_codegen_ssa v0.0.0 (/home/jeremy/justrust/toolchain/rustc/compiler/rustc_codegen_ssa)
+   Compiling rustc_hir_analysis v0.0.0 (/home/jeremy/justrust/toolchain/rustc/compiler/rustc_hir_analysis)
+   Compiling rustc_const_eval v0.0.0 (/home/jeremy/justrust/toolchain/rustc/compiler/rustc_const_eval)
+   Compiling rustc_lint v0.0.0 (/home/jeremy/justrust/toolchain/rustc/compiler/rustc_lint)
+   Compiling rustc_passes v0.0.0 (/home/jeremy/justrust/toolchain/rustc/compiler/rustc_passes)
+   Compiling rustc_borrowck v0.0.0 (/home/jeremy/justrust/toolchain/rustc/compiler/rustc_borrowck)
+   Compiling rustc_mir_build v0.0.0 (/home/jeremy/justrust/toolchain/rustc/compiler/rustc_mir_build)
+   Compiling rustc_traits v0.0.0 (/home/jeremy/justrust/toolchain/rustc/compiler/rustc_traits)
+   Compiling rustc_ty_utils v0.0.0 (/home/jeremy/justrust/toolchain/rustc/compiler/rustc_ty_utils)
+   Compiling rustc_codegen_llvm v0.0.0 (/home/jeremy/justrust/toolchain/rustc/compiler/rustc_codegen_llvm)
+   Compiling rustc_hir_typeck v0.0.0 (/home/jeremy/justrust/toolchain/rustc/compiler/rustc_hir_typeck)
+   Compiling rustc_mir_transform v0.0.0 (/home/jeremy/justrust/toolchain/rustc/compiler/rustc_mir_transform)
+   Compiling rustc_interface v0.0.0 (/home/jeremy/justrust/toolchain/rustc/compiler/rustc_interface)
+   Compiling rustc_driver_impl v0.0.0 (/home/jeremy/justrust/toolchain/rustc/compiler/rustc_driver_impl)
+   Compiling rustc_driver v0.0.0 (/home/jeremy/justrust/toolchain/rustc/compiler/rustc_driver)
+   Compiling rustc-main v0.0.0 (/home/jeremy/justrust/toolchain/rustc/compiler/rustc)
+    Finished `release` profile [optimized + debuginfo] target(s) in 2m 27s
+Creating a sysroot for stage1 compiler (use `rustup toolchain link 'name' build/host/stage1`)
+Building stage1 codegen backend cranelift (stage0 -> stage1, x86_64-unknown-linux-gnu)
+   Compiling rustc_codegen_cranelift v0.1.0 (/home/jeremy/justrust/toolchain/rustc/compiler/rustc_codegen_cranelift)
+    Finished `release` profile [optimized + debuginfo] target(s) in 4.86s
+Building stage1 lld-wrapper (stage0 -> stage1, x86_64-unknown-linux-gnu)
+    Finished `release` profile [optimized + debuginfo] target(s) in 0.13s
+Building stage1 library artifacts{alloc, compiler_builtins, core, panic_abort, panic_unwind, proc_macro, profiler_builtins, rustc-std-workspace-core, std, std_detect, sysroot, test, unwind} (stage1 -> stage1, x86_64-unknown-linux-gnu)
+   Compiling find-msvc-tools v0.1.11
+   Compiling shlex v2.0.1
+   Compiling core v0.0.0 (/home/jeremy/justrust/toolchain/rustc/library/core)
+   Compiling libc v0.2.189
+   Compiling object v0.39.1
+   Compiling std v0.0.0 (/home/jeremy/justrust/toolchain/rustc/library/std)
+   Compiling test v0.0.0 (/home/jeremy/justrust/toolchain/rustc/library/test)
+   Compiling cc v1.4.3
+   Compiling compiler_builtins v0.1.160 (/home/jeremy/justrust/toolchain/rustc/library/compiler-builtins/compiler-builtins)
+   Compiling profiler_builtins v0.0.0 (/home/jeremy/justrust/toolchain/rustc/library/profiler_builtins)
+   Compiling rustc-std-workspace-core v1.99.0 (/home/jeremy/justrust/toolchain/rustc/library/rustc-std-workspace-core)
+   Compiling alloc v0.0.0 (/home/jeremy/justrust/toolchain/rustc/library/alloc)
+   Compiling memchr v2.8.3
+   Compiling adler2 v2.0.1
+   Compiling rustc-demangle v0.1.28
+   Compiling cfg-if v1.0.4
+   Compiling rustc-literal-escaper v0.0.8
+   Compiling unwind v0.0.0 (/home/jeremy/justrust/toolchain/rustc/library/unwind)
+   Compiling rustc-std-workspace-alloc v1.99.0 (/home/jeremy/justrust/toolchain/rustc/library/rustc-std-workspace-alloc)
+   Compiling panic_abort v0.0.0 (/home/jeremy/justrust/toolchain/rustc/library/panic_abort)
+   Compiling panic_unwind v0.0.0 (/home/jeremy/justrust/toolchain/rustc/library/panic_unwind)
+   Compiling gimli v0.34.0
+   Compiling std_detect v0.1.5 (/home/jeremy/justrust/toolchain/rustc/library/std_detect)
+   Compiling hashbrown v0.17.1
+   Compiling miniz_oxide v0.9.1
+   Compiling addr2line v0.27.1
+   Compiling rustc-std-workspace-std v1.99.0 (/home/jeremy/justrust/toolchain/rustc/library/rustc-std-workspace-std)
+   Compiling proc_macro v0.0.0 (/home/jeremy/justrust/toolchain/rustc/library/proc_macro)
+   Compiling getopts v0.2.24
+   Compiling sysroot v0.0.0 (/home/jeremy/justrust/toolchain/rustc/library/sysroot)
+    Finished `dist` profile [optimized + debuginfo] target(s) in 50.91s
+Build completed successfully in 0:03:26

@@ -164,6 +164,15 @@ rustc_queries! {
         cache_on_disk
     }
 
+    /// Audited literal-only declarative matching and transcription. Key includes
+    /// the invocation hygiene identity, complete definition and input tokens,
+    /// definition span, definition edition and transparency. No parsing or
+    /// resolver rule-use bookkeeping is performed inside this query.
+    query declarative_macro_expansion(key: (LocalExpnId, &'tcx TokenStream, &'tcx TokenStream, (Span, u16))) -> Option<(u32, &'tcx TokenStream)> {
+        desc { "matching and transcribing a literal declarative macro" }
+        cache_on_disk
+    }
+
     /// This exists purely for testing the interactions between delayed bugs and incremental.
     query trigger_delayed_bug(key: DefId) {
         desc { "triggering a delayed bug for testing incremental" }

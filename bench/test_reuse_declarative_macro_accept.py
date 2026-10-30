@@ -43,6 +43,9 @@ class HarnessTests(unittest.TestCase):
         self.assertEqual(len(fixtures), len(H.cases()))
         self.assertIsNone(fixtures['edition-2021-expr']['expected'])
         self.assertIsNotNone(fixtures['edition-2024-expr']['expected'])
+        for name in ('edition-2021-expr', 'edition-2024-expr'):
+            self.assertIn('($e) + private', fixtures[name]['source'])
+            self.assertIn('value!(const { 2 })', fixtures[name]['source'])
         self.assertIn('(never) => { 99 }; ($e:expr)', H.BASE)
         self.assertIn('$crate::helper()', H.DEPENDENCY)
         self.assertIn('forward!(3)', H.BASE)

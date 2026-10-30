@@ -1,0 +1,76 @@
+Building bootstrap
+    Finished `dev` profile [unoptimized] target(s) in 0.11s
+WARNING: The `jemalloc` option is deprecated. Please use `build.allocator = "jemalloc"` instead of `rust.jemalloc = true`
+/home/jeremy/justrust/toolchain/rustc/build/x86_64-unknown-linux-gnu/ci-llvm/bin/llvm-strip does not exist; skipping copy
+Building stage1 compiler artifacts (stage0 -> stage1, x86_64-unknown-linux-gnu)
+   Compiling rustc_session v0.0.0 (/home/jeremy/justrust/toolchain/rustc/compiler/rustc_session)
+   Compiling rustc_middle v0.0.0 (/home/jeremy/justrust/toolchain/rustc/compiler/rustc_middle)
+   Compiling rustc_parse v0.0.0 (/home/jeremy/justrust/toolchain/rustc/compiler/rustc_parse)
+   Compiling rustc_attr_parsing v0.0.0 (/home/jeremy/justrust/toolchain/rustc/compiler/rustc_attr_parsing)
+   Compiling rustc_expand v0.0.0 (/home/jeremy/justrust/toolchain/rustc/compiler/rustc_expand)
+   Compiling rustc_ast_passes v0.0.0 (/home/jeremy/justrust/toolchain/rustc/compiler/rustc_ast_passes)
+   Compiling rustc_builtin_macros v0.0.0 (/home/jeremy/justrust/toolchain/rustc/compiler/rustc_builtin_macros)
+error[E0277]: the trait bound `(LocalExpnId, &TokenStream, &TokenStream, Span, u16): StableHash` is not satisfied
+   --> compiler/rustc_middle/src/query/keys.rs:415:25
+    |
+415 | impl<'tcx> QueryKey for (LocalExpnId, &'tcx TokenStream, &'tcx TokenStream, Span, u16) {
+    |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `rustc_data_structures::stable_hash::StableHash` is not implemented for `(LocalExpnId, &TokenStream, &TokenStream, Span, u16)`
+    |
+    = help: the following other types implement trait `rustc_data_structures::stable_hash::StableHash`:
+              (T₁, T₂, …, Tₙ) up to tuples of arity 4
+    = note: required for `(LocalExpnId, &TokenStream, &TokenStream, Span, u16)` to implement `QueryKeyBounds`
+note: required by a bound in `QueryKey`
+   --> compiler/rustc_middle/src/query/keys.rs:31:29
+    |
+ 31 | pub trait QueryKey: Sized + QueryKeyBounds {
+    |                             ^^^^^^^^^^^^^^ required by this bound in `QueryKey`
+    = note: the full name for the type has been written to '/home/jeremy/justrust/toolchain/rustc/build/x86_64-unknown-linux-gnu/stage1-rustc/x86_64-unknown-linux-gnu/release/build/rustc_middle/9a79cd3e760dabfc/out/rustc_middle-9a79cd3e760dabfc.long-type-8723188245418660606.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+
+error[E0277]: the trait bound `(LocalExpnId, &TokenStream, &TokenStream, Span, u16): QueryKeyBounds` is not satisfied
+    --> compiler/rustc_middle/src/query/query_api.rs:186:67
+     |
+   9 | / macro_rules! define_query_api {
+...    |
+ 186 | |                             $crate::query::QueryKey::default_span(key, tcx),
+     | |                             ------------------------------------- ^^^ the trait `rustc_data_structures::stable_hash::StableHash` is not implemented for `(LocalExpnId, &TokenStream, &TokenStream, Span, u16)`
+     | |                             |
+     | |                             required by a bound introduced by this call
+...    |
+ 362 | |     };
+ 363 | | }
+     | |_- in this expansion of `define_query_api!` (#2)
+     |
+    ::: compiler/rustc_middle/src/queries.rs:145:1
+     |
+ 145 | / rustc_queries! {
+ 146 | |     /// Caches the expansion of a derive proc macro, e.g. `#[derive(Serialize)]`.
+ 147 | |     /// The key is:
+ 148 | |     /// - A unique key corresponding to the invocation of a macro.
+...    |
+2940 | |     non_query Metadata
+2941 | | }
+     | | -
+     | | |
+     | |_in this expansion of `rustc_with_all_queries!` (#1)
+     |   in this macro invocation (#2)
+2942 |
+2943 |   rustc_with_all_queries! { define_query_api! }
+     |   --------------------------------------------- in this macro invocation (#1)
+     |
+     = help: the following other types implement trait `rustc_data_structures::stable_hash::StableHash`:
+               (T₁, T₂, …, Tₙ) up to tuples of arity 4
+     = note: required for `(LocalExpnId, &TokenStream, &TokenStream, Span, u16)` to implement `QueryKeyBounds`
+note: required by a bound in `QueryKey::default_span`
+    --> compiler/rustc_middle/src/query/keys.rs:31:29
+     |
+  31 | pub trait QueryKey: Sized + QueryKeyBounds {
+     |                             ^^^^^^^^^^^^^^ required by this bound in `QueryKey::default_span`
+...
+  44 |     fn default_span(&self, tcx: TyCtxt<'_>) -> Span;
+     = note: the full name for the type has been written to '/home/jeremy/justrust/toolchain/rustc/build/x86_64-unknown-linux-gnu/stage1-rustc/x86_64-unknown-linux-gnu/release/build/rustc_middle/9a79cd3e760dabfc/out/rustc_middle-9a79cd3e760dabfc.long-type-6061650689246875273.txt'
+     = note: consider using `--verbose` to print the full type name to the console
+
+For more information about this error, try `rustc --explain E0277`.
+error: could not compile `rustc_middle` (lib) due to 2 previous errors
+Build completed unsuccessfully in 0:00:17
