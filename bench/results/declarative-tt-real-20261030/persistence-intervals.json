@@ -1,0 +1,275 @@
+[
+  {
+    "phase": "prepare",
+    "intervals": [
+      {
+        "label": "encode_query_results_for",
+        "thread": 3,
+        "records": 66,
+        "elapsed_union_ns": 113147717
+      },
+      {
+        "label": "encode_query_values",
+        "thread": 3,
+        "records": 1,
+        "elapsed_union_ns": 113240794
+      },
+      {
+        "label": "incr_comp_encode_dep_graph",
+        "thread": 3,
+        "records": 647014,
+        "elapsed_union_ns": 86932375
+      },
+      {
+        "label": "incr_comp_encode_dep_graph_finish",
+        "thread": 3,
+        "records": 1,
+        "elapsed_union_ns": 67142
+      },
+      {
+        "label": "incr_comp_finalize_session_directory",
+        "thread": 3,
+        "records": 1,
+        "elapsed_union_ns": 70344
+      },
+      {
+        "label": "incr_comp_garbage_collect_session_directories",
+        "thread": 3,
+        "records": 1,
+        "elapsed_union_ns": 12602
+      },
+      {
+        "label": "incr_comp_load_query_result_cache",
+        "thread": 3,
+        "records": 1,
+        "elapsed_union_ns": 698
+      },
+      {
+        "label": "incr_comp_persist_dep_graph",
+        "thread": 3,
+        "records": 1,
+        "elapsed_union_ns": 102662
+      },
+      {
+        "label": "incr_comp_persist_result_cache",
+        "thread": 3,
+        "records": 1,
+        "elapsed_union_ns": 121321332
+      },
+      {
+        "label": "incr_comp_prepare_load_dep_graph",
+        "thread": 3,
+        "records": 1,
+        "elapsed_union_ns": 140
+      },
+      {
+        "label": "incr_comp_prepare_session_directory",
+        "thread": 3,
+        "records": 1,
+        "elapsed_union_ns": 85773
+      },
+      {
+        "label": "incr_comp_query_cache_promotion",
+        "thread": 3,
+        "records": 1,
+        "elapsed_union_ns": 777
+      },
+      {
+        "label": "incr_comp_serialize_result_cache",
+        "thread": 3,
+        "records": 1,
+        "elapsed_union_ns": 121255932
+      }
+    ]
+  },
+  {
+    "phase": "edit",
+    "intervals": [
+      {
+        "label": "encode_query_results_for",
+        "thread": 3,
+        "records": 66,
+        "elapsed_union_ns": 80719131
+      },
+      {
+        "label": "encode_query_values",
+        "thread": 3,
+        "records": 1,
+        "elapsed_union_ns": 80791455
+      },
+      {
+        "label": "incr_comp_encode_dep_graph",
+        "thread": 3,
+        "records": 647328,
+        "elapsed_union_ns": 52050400
+      },
+      {
+        "label": "incr_comp_encode_dep_graph_finish",
+        "thread": 3,
+        "records": 1,
+        "elapsed_union_ns": 22969
+      },
+      {
+        "label": "incr_comp_finalize_session_directory",
+        "thread": 3,
+        "records": 1,
+        "elapsed_union_ns": 6486872
+      },
+      {
+        "label": "incr_comp_garbage_collect_session_directories",
+        "thread": 3,
+        "records": 1,
+        "elapsed_union_ns": 62814
+      },
+      {
+        "label": "incr_comp_load_dep_graph",
+        "thread": 3,
+        "records": 1,
+        "elapsed_union_ns": 16396118
+      },
+      {
+        "label": "incr_comp_load_dep_graph_reverse_index",
+        "thread": 3,
+        "records": 220,
+        "elapsed_union_ns": 12536464
+      },
+      {
+        "label": "incr_comp_load_query_result_cache",
+        "thread": 3,
+        "records": 1,
+        "elapsed_union_ns": 2632207
+      },
+      {
+        "label": "incr_comp_persist_dep_graph",
+        "thread": 3,
+        "records": 1,
+        "elapsed_union_ns": 48176
+      },
+      {
+        "label": "incr_comp_persist_result_cache",
+        "thread": 3,
+        "records": 1,
+        "elapsed_union_ns": 139570204
+      },
+      {
+        "label": "incr_comp_prepare_load_dep_graph",
+        "thread": 3,
+        "records": 1,
+        "elapsed_union_ns": 16856909
+      },
+      {
+        "label": "incr_comp_prepare_session_directory",
+        "thread": 3,
+        "records": 1,
+        "elapsed_union_ns": 92370
+      },
+      {
+        "label": "incr_comp_query_cache_promotion",
+        "thread": 3,
+        "records": 1,
+        "elapsed_union_ns": 52568464
+      },
+      {
+        "label": "incr_comp_serialize_result_cache",
+        "thread": 3,
+        "records": 1,
+        "elapsed_union_ns": 86538629
+      }
+    ]
+  },
+  {
+    "phase": "restore",
+    "intervals": [
+      {
+        "label": "encode_query_results_for",
+        "thread": 3,
+        "records": 66,
+        "elapsed_union_ns": 79559391
+      },
+      {
+        "label": "encode_query_values",
+        "thread": 3,
+        "records": 1,
+        "elapsed_union_ns": 79631044
+      },
+      {
+        "label": "incr_comp_encode_dep_graph",
+        "thread": 3,
+        "records": 647279,
+        "elapsed_union_ns": 48720637
+      },
+      {
+        "label": "incr_comp_encode_dep_graph_finish",
+        "thread": 3,
+        "records": 1,
+        "elapsed_union_ns": 30251
+      },
+      {
+        "label": "incr_comp_finalize_session_directory",
+        "thread": 3,
+        "records": 1,
+        "elapsed_union_ns": 5494235
+      },
+      {
+        "label": "incr_comp_garbage_collect_session_directories",
+        "thread": 3,
+        "records": 1,
+        "elapsed_union_ns": 56694
+      },
+      {
+        "label": "incr_comp_load_dep_graph",
+        "thread": 3,
+        "records": 1,
+        "elapsed_union_ns": 18957693
+      },
+      {
+        "label": "incr_comp_load_dep_graph_reverse_index",
+        "thread": 3,
+        "records": 220,
+        "elapsed_union_ns": 17586687
+      },
+      {
+        "label": "incr_comp_load_query_result_cache",
+        "thread": 3,
+        "records": 1,
+        "elapsed_union_ns": 2515297
+      },
+      {
+        "label": "incr_comp_persist_dep_graph",
+        "thread": 3,
+        "records": 1,
+        "elapsed_union_ns": 35560
+      },
+      {
+        "label": "incr_comp_persist_result_cache",
+        "thread": 3,
+        "records": 1,
+        "elapsed_union_ns": 133466244
+      },
+      {
+        "label": "incr_comp_prepare_load_dep_graph",
+        "thread": 3,
+        "records": 1,
+        "elapsed_union_ns": 19593066
+      },
+      {
+        "label": "incr_comp_prepare_session_directory",
+        "thread": 3,
+        "records": 1,
+        "elapsed_union_ns": 138862
+      },
+      {
+        "label": "incr_comp_query_cache_promotion",
+        "thread": 3,
+        "records": 1,
+        "elapsed_union_ns": 47501483
+      },
+      {
+        "label": "incr_comp_serialize_result_cache",
+        "thread": 3,
+        "records": 1,
+        "elapsed_union_ns": 85564009
+      }
+    ]
+  }
+]

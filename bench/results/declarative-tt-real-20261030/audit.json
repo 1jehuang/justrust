@@ -1,0 +1,30 @@
+{
+  "verdict": "passed",
+  "workflows": 3,
+  "selected_tests_per_workflow": 4,
+  "counts": {
+    "prepare": {
+      "jr_declarative_macro_eligible": 633,
+      "jr_declarative_macro_ineligible": 1329,
+      "jr_declarative_macro_cache_lookup": 633,
+      "jr_declarative_macro_cache_provider": 633,
+      "jr_declarative_macro_cache_success": 633
+    },
+    "edit": {
+      "jr_declarative_macro_eligible": 634,
+      "jr_declarative_macro_ineligible": 1330,
+      "jr_declarative_macro_cache_lookup": 634,
+      "jr_declarative_macro_cache_provider": 1,
+      "jr_declarative_macro_cache_success": 634
+    },
+    "restore": {
+      "jr_declarative_macro_eligible": 633,
+      "jr_declarative_macro_ineligible": 1329,
+      "jr_declarative_macro_cache_lookup": 633,
+      "jr_declarative_macro_cache_provider": 0,
+      "jr_declarative_macro_cache_success": 633
+    }
+  },
+  "intervals": "recomputed nested descriptive intervals, not additive time saved",
+  "scope": "real TT cache mechanism reuse only, no latency claim"
+}

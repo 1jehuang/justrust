@@ -1,0 +1,628 @@
+{
+  "status": "completed",
+  "scope": "real-tt-cache-eligibility-not-speedup",
+  "source_before": {
+    ".github/pull_request_template.md": "dce3a7ad2b89f01e2bb05e8f70ad15db593f985d503618f07b38dee3a65caf51",
+    ".github/workflows/ci.yml": "147666fae4789d416216533b24ebb0578398341b85932451357357692d77030a",
+    ".gitignore": "44c92e3a70ad3307b7056871c2bdb096d8bfa9373f5bf06a79bb6324a20ff2fb",
+    "AGENTS.md": "b9b2ef0cd612c592d738aac21803764e8839e2f501fb56f12d76ef56428dd11c",
+    "CHANGELOG.md": "0be955bd492f121b03ee238939227d5b6db1a4aae39103dbfd5f5b854b3f924e",
+    "CONTRIBUTING.md": "05d125b07517166c5c831edb9b8dae6c67fe8448ec1817bf3f7478abf9227781",
+    "Cargo.lock": "39d6d146027ef4b23c839030a6476f520aab875ede947c64e00c52c4fad65811",
+    "Cargo.toml": "16ce3d25ea6fda7adab4906008781cad3d1c7ba092d2de121c158c2acba45b78",
+    "FINDINGS.md": "4cf388d60126778d21212bd85824b56f3cfd954c24467b3ddbb67b52521b1d0d",
+    "LICENSE": "ed021f4de6462d46361a10a7af1daae8ae89fab63bce5c0d40b03c6a009e0f49",
+    "LICENSING.md": "b2525cb8582adb7eeb825a176d3aaae112ad47556634e89b9b2c374fddf0c09c",
+    "NOTICE": "a91ba9c76618d36a93bf5a85994044087dccc757ebf948342b3ef2689d9ea761",
+    "README.md": "00716dec5c85e0e859a208a8ab2d61782cbc580d55ecea99aa1b14cc5b3d6af0",
+    "bench/bench_edit.sh": "9c72ee447e3939d44e67098c8be38065f12f3c8f9e6d0e74bf10c440abe5deb3",
+    "bench/cranelift/bench.sh": "6147d998cc966db2a414fdd84c6029faf0a0a12b575d69f88ab5098f12d259cc",
+    "bench/cranelift/clif-local-wrapper": "e2a351b839f5b66cff3a0516b1cc74cd8afe3bd457256b37e04eddbfdbfc3027",
+    "bench/depcache-fresh.sh": "49bf9a45b1fd41a8e183928a37edbb5818a2971a0cb8c3de34012be4ff3a1d63",
+    "bench/edit-loop.sh": "f36334ed3501b4ebcbddddb0e49e37bb084afadd782abf6fedcb6f17e776ba07",
+    "bench/feature-switch.sh": "011c927031397293ef09d7f01d1bc44da2990678f6f332e2cc64b39241ccbb23",
+    "bench/sched-contention.sh": "a920a2a19a6177d8c838d201343ddcd54cbfeb5f962b0288e8e3052be5055a2f",
+    "bench/split-apply-e2e.sh": "4d645a3a8986935c1e0faec59fe0ee5791e3f535f25ec8c93e86618f00dbe6e0",
+    "bench/split-before-after.sh": "f33ea8dad30483f5af9eff3360016c078f107d6934a113dc07fc18c424b143e0",
+    "bench/split-fixture.sh": "a3bebd4d07306b1c7fb027ffe4e0aa4dba34540efa696651d765874a34d4631b",
+    "docs/AGENTS-snippet.md": "e3ebdbf1d0475dda9c482c81aa3db36855408fa105e6f44bc2759b7d55050eb7",
+    "docs/legal-review.md": "d19980eabff11d0a1541f1190e9e5c1e66e65ff6f880fe9231406944c72c064f",
+    "docs/remote-strategy.md": "e98bce12736539cbcad4d058c2f66a2a090bdac0a745361258fbd3f1bfb1dea4",
+    "docs/remote.md": "f09b2a7a738ebcccda7553aa0c31da09d23ed385a1556b79a6d5f28b78f30cc1",
+    "docs/toolchain.md": "299ae1a76960a0b6b1fed6e7329030b5e6775b49385598af787df741f84bbc43",
+    "server/LICENSE": "b1c4a7ff517c7427275919e298a913b5fbb941b8235977c175a37b4fe93f6aaa",
+    "server/README.md": "a5386f73f8c123157fdde27e97675f1fb505bcd3aef3ca9c3fd7db9293cc27e3",
+    "src/agent_output.rs": "8fdd8e3d60fd8475f9baa368ed7cb121a5f627e0ddab2385fd1df127d0f73119",
+    "src/buildscript.rs": "18940c329e34c486e770d5331bf8e46d2f4265e565eb4311822ed35b2b30bf3f",
+    "src/depcache.rs": "f4d1b5f8f7741117e50d68fa72152c1085c39512fd7840565082227f96c04d9a",
+    "src/depcache_gc.rs": "ed5a7742ffc230d9e762d76ef502065372cacee6bd94a52ebe62c148543280e8",
+    "src/findings.rs": "e17da6c5bac2c770878bae6296c372c66b40500c9470f0df9b362d090fd6726a",
+    "src/history.rs": "e74dfff9a19a48892087aa97cf68e9a265b2dc2a18ed123e137254eb78b66496",
+    "src/install.rs": "526546b6f8aa1e8e5b1b4fecd57dc60e4ea7d8d11703b08ec9921be648f37573",
+    "src/lib.rs": "4c9ac85114f9277914cb5973ec6d34743fd67b8735f34ca8247b2277e613cf78",
+    "src/live.rs": "1da476c118a0a0b7e9181e6764897b4d27fbc8efae64a526a36fec33275aacf8",
+    "src/main.rs": "47b5f5f8e308001db3f4e562437d70095306beabc56d20804c5e8bb82277f37d",
+    "src/paths.rs": "b21c4561342ab0997c354f9f7f417127ddf800a9756bc04eb597cc27a5177647",
+    "src/procfs.rs": "1133cde6c5ef022eb815816d2cdc2b08eef8bcc0fe2f30526b6fc99bfe9a18e3",
+    "src/record.rs": "13fffcbb7ef5712eef6661ec3f1b4fb610bfd95c8f6fea53a68dc0b159d4b384",
+    "src/remote.rs": "08f2ea2e292c26a9da2d6a0d10dc576fdfac30890dd8d08afd576f712cc9fe70",
+    "src/remote_agent.rs": "c0535a25701c3025973bbd85206bb0ffb0ee30ce5e5da95eb76c6c2cd4c69caf",
+    "src/remote_backend.rs": "b019017ca16ac353bb40de260f9f13cbff5b8a7fdc625436cada3f5fbe3ca90e",
+    "src/remote_build.rs": "1bfed489c878a34de45b9993575776ad58f8bdb3cca788d9930895509f896861",
+    "src/remote_daemon.rs": "55976b812c960d1dee9ef004e20221d9a3dc890e5ba7e0bdb13a3fa84b3e975a",
+    "src/remote_hosted.rs": "36152a07480331418de3be5de79c87afb8ef3c72a71276016fdb5db904888bd5",
+    "src/remote_proto.rs": "906cf9de4cf859461a46137b11770f7db7b47e43091b37d6c9cdd642b8b3e188",
+    "src/remote_sync.rs": "63302cef7e1d52f297e913f6b658708cd0eaa0d5169de6e9058d90ac15d089c0",
+    "src/remote_watch.rs": "f33c6ad2225e99ac3b89ce553b17fa1df051ee221ed8653c48b8db1d1f257ebc",
+    "src/route.rs": "d7e870f706d4d2604c77893382331a3a44cd1fce0f499bdbc2710da237951812",
+    "src/runs.rs": "8272de3756d2323b05777c851b19c2cc6aec6bdf073af79056da29370daf6bde",
+    "src/sched.rs": "f874189108e56d325d22c8dd5887105bf518a5833d505e0bad4bf096fcc53c6b",
+    "src/shim.rs": "780e620019db87b1b8302031820eb1735b18d49a2a74f89a3a95cad25c03e600",
+    "src/slots.rs": "b9df25c621d0518aa1fe84854bd9f3ba2978c8acc166a08d302d897f84db6033",
+    "src/split.rs": "efe1fa0a35e37e27e116c3ab5a4294367b01a079d61ae25c5e9c0bfe4d14d8c5",
+    "src/split_apply.rs": "212e3390997b698facf7cc71538978cbab356a5460f8a52ef7041aee887badaa",
+    "src/split_index.rs": "215fe3e8edd967a04c62b23c2b6269a177ccc936db368c0412ca5c87eb1277f3",
+    "src/status.rs": "67cf57a756e67891162716be1a16d220bc2b455119ebb5816cea5e8f58562a11",
+    "src/summary.rs": "40a8e4406a5ab5c70ca17b1e753ae76697d61cb5c4ebd7fecb8c8456067f403f",
+    "tests/remote_agent.rs": "8f39486a18862a7cafff974ddad536c6d689c17eaea5fd72012d57cefe71af41"
+  },
+  "identities_before": {
+    "rustc": {
+      "path": "/home/jeremy/.jcode/scratch/declarative-cache-20261030/sysroot-tt/bin/rustc",
+      "sha256": "570faeb27338cea8625c4a4a7eaeef71fc75470508657ff489c3da96ce5f9144"
+    },
+    "cargo": {
+      "path": "/home/jeremy/.jcode/scratch/lint-profile-20261030/home/toolchains/nightly-2026-10-08/bin/cargo",
+      "sha256": "994419eb0d12f1a4152a23d9030dc4d05c9bfd7a5c7af923f24bb3738afad95b"
+    },
+    "justrust": {
+      "path": "/home/jeremy/.jcode/scratch/query-retention-bench-20261030/justrust-client",
+      "sha256": "1dd6ee7da925924eaa0c25f9cbefafaabe1441c7b8f95a87b6cddfbaf20510a9"
+    },
+    "blaze": {
+      "path": "/home/jeremy/.jcode/scratch/blaze-comparison-20261030/cargo/bin/blaze",
+      "sha256": "767cb0f22328a12256b675be6f9b6e18f05c84ea98f71329b85dadddff606174"
+    },
+    "rustc_driver_0": {
+      "path": "/home/jeremy/.jcode/scratch/declarative-cache-20261030/sysroot-tt/lib/librustc_driver-e2bd696299265a4a.so",
+      "sha256": "ac116b9398e1f5c677e73952b8719be9d9e47190fe61fbaeba9b7cf270739595"
+    },
+    "blaze_companion:blaze": {
+      "path": "/home/jeremy/.jcode/scratch/blaze-comparison-20261030/cargo/bin/blaze",
+      "sha256": "767cb0f22328a12256b675be6f9b6e18f05c84ea98f71329b85dadddff606174"
+    },
+    "blaze_companion:blaze-proc-macro-srv": {
+      "path": "/home/jeremy/.jcode/scratch/blaze-comparison-20261030/cargo/bin/blaze-proc-macro-srv",
+      "sha256": "66676f4baa898bccc0551d343f392c72b73d07a98ab87918d083dde877c8a79b"
+    },
+    "blaze_companion:ra-jit": {
+      "path": "/home/jeremy/.jcode/scratch/blaze-comparison-20261030/cargo/bin/ra-jit",
+      "sha256": "04e84de57aad8a19102edd454e2cdd8ac2e4b58461a4070479919207f3a5590e"
+    },
+    "blaze_companion:ra-jit-rustc": {
+      "path": "/home/jeremy/.jcode/scratch/blaze-comparison-20261030/cargo/bin/ra-jit-rustc",
+      "sha256": "c20dfcb986324ac357d568501f977d0232cc4bbf8e1e8bbb5f2744d4dd1fa8bd"
+    },
+    "blaze_companion:ra-jit-rustc-first": {
+      "path": "/home/jeremy/.jcode/scratch/blaze-comparison-20261030/cargo/bin/ra-jit-rustc-first",
+      "sha256": "82c2d0b0dde382bf26a6ec4855e052f1a2753380d4b4596aa63a9ab46378117b"
+    },
+    "blaze_toolchain:toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/bin/rustc": {
+      "path": "/home/jeremy/.blaze/toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/bin/rustc",
+      "sha256": "6ff2b1ce1a1f378dd2964ccf2e39ccf10d37de18d801987b468bc5ab479171e8"
+    },
+    "blaze_toolchain:toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/bin/cargo": {
+      "path": "/home/jeremy/.blaze/toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/bin/cargo",
+      "sha256": "f93c96982673433e3b6c16039aa765aea0397a305ab06aa44e1a9e42ede56dcb"
+    },
+    "blaze_toolchain:toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/lib/librustc_driver-aaa8b10abbb2de39.so": {
+      "path": "/home/jeremy/.blaze/toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/lib/librustc_driver-aaa8b10abbb2de39.so",
+      "sha256": "e81ee13275c3e0965051ced606e35fa388cdc3c2ff4ef22e04fa9454edcb431f"
+    }
+  },
+  "rows": [
+    {
+      "command": [
+        "/home/jeremy/.jcode/scratch/query-retention-bench-20261030/justrust-client",
+        "test",
+        "--lib",
+        "--",
+        "summary::tests::",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "status": 0,
+      "error": null,
+      "timed_out": false,
+      "elapsed_seconds": 21.367126119002933,
+      "noise": {
+        "before": {
+          "busy_seconds": 329411.55,
+          "loadavg": [
+            10.96533203125,
+            8.404296875,
+            7.9365234375
+          ]
+        },
+        "after": {
+          "busy_seconds": 329617.52,
+          "loadavg": [
+            11.59130859375,
+            8.705078125,
+            8.044921875
+          ]
+        },
+        "child_cpu_seconds": 77.68311399999999,
+        "contamination": "unknown",
+        "reason": "Resident daemon CPU is not waited child CPU. This proxy does not establish a quiet machine.",
+        "other_cpu_seconds_estimate": 128.28688600003028
+      },
+      "environment": {
+        "CARGO": "/home/jeremy/.jcode/scratch/lint-profile-20261030/home/toolchains/nightly-2026-10-08/bin/cargo",
+        "CARGO_HOME": "/home/jeremy/.cargo",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_DEV_INCREMENTAL": "true",
+        "CARGO_PROFILE_DEV_OPT_LEVEL": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_PROFILE_TEST_INCREMENTAL": "true",
+        "CARGO_PROFILE_TEST_OPT_LEVEL": "0",
+        "CARGO_TARGET_DIR": "/home/jeremy/.jcode/scratch/dp41/owned-declarative/target",
+        "HOME": "/home/jeremy/.jcode/scratch/dp41/owned-declarative/home",
+        "JUSTRUST_BUILDD": "0",
+        "JUSTRUST_BUILDD_PREBUILD": "0",
+        "JUSTRUST_CACHE_PROC_MACROS": "0",
+        "JUSTRUST_CARGO_FORK": "0",
+        "JUSTRUST_DEPCACHE": "0",
+        "JUSTRUST_HOME": "/home/jeremy/.jcode/scratch/dp41/owned-declarative/home/.justrust",
+        "JUSTRUST_LOCALCACHE": "0",
+        "JUSTRUST_LOCALCACHE_TARGET_BOUND": "0",
+        "JUSTRUST_PEER_CACHE": "0",
+        "JUSTRUST_PREBUILT": "off",
+        "JUSTRUST_PREBUILT_ALWAYS": "0",
+        "JUSTRUST_REAL_CARGO": "/home/jeremy/.jcode/scratch/lint-profile-20261030/home/toolchains/nightly-2026-10-08/bin/cargo",
+        "JUSTRUST_REMOTE": "off",
+        "JUSTRUST_REMOTE_CACHE": "0",
+        "JUSTRUST_TOOLCHAIN": "system",
+        "JUSTRUST_TOOLCHAIN_AUTO_INSTALL": "0",
+        "JUSTRUST_TOOLCHAIN_NIGHTLY": "1",
+        "RUSTC": "/home/jeremy/.jcode/scratch/declarative-cache-20261030/sysroot-tt/bin/rustc",
+        "RUSTFLAGS": "-Zjr-empty-lint-level-fast-path=no -Zjr-cache-small-query-values=no -Zjr-cache-associated-items=no -Zjr-cache-declarative-macros=yes -Zself-profile=/home/jeremy/.jcode/scratch/dp41/profiles -Zself-profile-events=generic-activity,function-args",
+        "RUSTUP_HOME": "/home/jeremy/.rustup",
+        "XDG_CACHE_HOME": "/home/jeremy/.jcode/scratch/dp41/owned-declarative/cache",
+        "XDG_CONFIG_HOME": "/home/jeremy/.jcode/scratch/dp41/owned-declarative/config",
+        "XDG_DATA_HOME": "/home/jeremy/.jcode/scratch/dp41/owned-declarative/data",
+        "XDG_RUNTIME_DIR": "/home/jeremy/.jcode/scratch/dp41/owned-declarative/runtime"
+      },
+      "phase": "prepare",
+      "raw_output": {
+        "run_id": "20261030-051823510-2375716",
+        "artifact": "prepare.raw-output.jsonl",
+        "sha256": "58393f26b0fd5e46f412b4d7d158056c53cb91c60315973a17cbcb0d676be7ab",
+        "hotpatch": {
+          "present": false,
+          "outcomes": []
+        }
+      },
+      "parsed": {
+        "tests": [
+          [
+            "summary::tests::parses_libtest_results",
+            "ok"
+          ],
+          [
+            "summary::tests::shares_overlapping_time",
+            "ok"
+          ],
+          [
+            "summary::tests::splits_passes_without_double_counting",
+            "ok"
+          ],
+          [
+            "summary::tests::test_failures_are_not_compile_errors",
+            "ok"
+          ]
+        ],
+        "passed": 4,
+        "failed": 0,
+        "ignored": 0,
+        "filtered": 144
+      },
+      "source_sha256": "40a8e4406a5ab5c70ca17b1e753ae76697d61cb5c4ebd7fecb8c8456067f403f",
+      "profiles": [
+        {
+          "markers": {
+            "jr_declarative_macro_eligible": 633,
+            "jr_declarative_macro_ineligible": 1329,
+            "jr_declarative_macro_cache_lookup": 633,
+            "jr_declarative_macro_cache_provider": 633,
+            "jr_declarative_macro_cache_success": 633
+          },
+          "records": 972583,
+          "unresolved_records": 0,
+          "path": "justrust-2379038.mm_profdata",
+          "sha256": "3bbf1f0c17e0adbd38db767b2afe32ed2690bb5727fa6f8f13df0c3180307f19",
+          "metadata": {
+            "process_id": 2379038,
+            "start_time": 1793362713892373164,
+            "cmd": "/home/jeremy/.jcode/scratch/declarative-cache-20261030/sysroot-tt/bin/rustc --crate-name justrust --edition=2024 src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --emit=dep-info,link -C embed-bitcode=no --test --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values()) -C metadata=ca7c44864225c396 -C extra-filename=-64d0dfb701c2c14c --out-dir /home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/justrust/64d0dfb701c2c14c/out -C incremental=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/incremental -C strip=debuginfo -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/aho-corasick/6fc335e01c945724/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/anstream/fbeedebb82437229/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/anstyle-parse/83e1b998650da5c4/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/anstyle-query/c7950fee32240e97/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/anstyle/7b2ffcb98e5db290/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/clap_builder/c45afcf3f9865a7f/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/clap_derive/4413ed2328c75168/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/clap_lex/aa07522c565fd40e/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/colorchoice/6531622ce23cc92b/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/dirs-sys/52913b9551e86d4d/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/equivalent/51a493adbf17f164/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/hashbrown/ad03f57d54faa3d5/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/iana-time-zone/f11b2c67b0e16d6a/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/indexmap/84c00bf9de5b05f1/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/is_terminal_polyfill/002b8daeda1727b8/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/itoa/289661b61ff12bf6/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/libc/87e89ac8f3446c32/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/memchr/9b0aaafde7160724/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/num-traits/3468de48bd9042a5/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/option-ext/2706d8fd773694d1/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/regex-automata/17e833687de8e67e/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/regex-syntax/707fe44b59f8afd5/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/serde_core/dd39617666f25a4f/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/serde_derive/bad6b5d52d8ba76a/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/serde_spanned/7d4d7eb88c62c114/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/strsim/a5807431c38bf9af/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/toml_datetime/b75af6294df581cf/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/toml_parser/41591abdd09b7e91/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/toml_writer/52ffb6ad84b6a1f0/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/utf8parse/99bfa00d988364be/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/winnow/658289c502cf9b38/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/zmij/1ece682fbabc67c8/out --extern anyhow=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/anyhow/643d88bc665e47be/out/libanyhow-643d88bc665e47be.rlib --extern anyhow=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/anyhow/643d88bc665e47be/out/libanyhow-643d88bc665e47be.rmeta --extern chrono=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/chrono/8493a8f1fead392f/out/libchrono-8493a8f1fead392f.rlib --extern chrono=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/chrono/8493a8f1fead392f/out/libchrono-8493a8f1fead392f.rmeta --extern clap=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/clap/80f4c78bd6d8c493/out/libclap-80f4c78bd6d8c493.rlib --extern clap=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/clap/80f4c78bd6d8c493/out/libclap-80f4c78bd6d8c493.rmeta --extern dirs=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/dirs/9514795b6887b67c/out/libdirs-9514795b6887b67c.rlib --extern dirs=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/dirs/9514795b6887b67c/out/libdirs-9514795b6887b67c.rmeta --extern libc=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/libc/87e89ac8f3446c32/out/liblibc-87e89ac8f3446c32.rlib --extern libc=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/libc/87e89ac8f3446c32/out/liblibc-87e89ac8f3446c32.rmeta --extern regex=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/regex/c5e878669de21c77/out/libregex-c5e878669de21c77.rlib --extern regex=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/regex/c5e878669de21c77/out/libregex-c5e878669de21c77.rmeta --extern serde=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/serde/c0739c6fd6c24074/out/libserde-c0739c6fd6c24074.rlib --extern serde=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/serde/c0739c6fd6c24074/out/libserde-c0739c6fd6c24074.rmeta --extern serde_json=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/serde_json/b7b191c3c009b649/out/libserde_json-b7b191c3c009b649.rlib --extern serde_json=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/serde_json/b7b191c3c009b649/out/libserde_json-b7b191c3c009b649.rmeta --extern toml=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/toml/c7b17466583291e4/out/libtoml-c7b17466583291e4.rlib --extern toml=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/toml/c7b17466583291e4/out/libtoml-c7b17466583291e4.rmeta --extern toml_edit=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/toml_edit/1ac97b514edbf58e/out/libtoml_edit-1ac97b514edbf58e.rlib --extern toml_edit=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/toml_edit/1ac97b514edbf58e/out/libtoml_edit-1ac97b514edbf58e.rmeta -Zjr-empty-lint-level-fast-path=no -Zjr-cache-small-query-values=no -Zjr-cache-associated-items=no -Zjr-cache-declarative-macros=yes -Zself-profile=/home/jeremy/.jcode/scratch/dp41/profiles -Zself-profile-events=generic-activity,function-args --force-warn=unused_crate_dependencies "
+          }
+        }
+      ]
+    },
+    {
+      "command": [
+        "/home/jeremy/.jcode/scratch/query-retention-bench-20261030/justrust-client",
+        "test",
+        "--lib",
+        "--",
+        "summary::tests::",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "status": 0,
+      "error": null,
+      "timed_out": false,
+      "elapsed_seconds": 1.7616507730126614,
+      "noise": {
+        "before": {
+          "busy_seconds": 329675.9,
+          "loadavg": [
+            11.0634765625,
+            8.6435546875,
+            8.0283203125
+          ]
+        },
+        "after": {
+          "busy_seconds": 329689.92,
+          "loadavg": [
+            11.05810546875,
+            8.68310546875,
+            8.04443359375
+          ]
+        },
+        "child_cpu_seconds": 2.065714000000014,
+        "contamination": "unknown",
+        "reason": "Resident daemon CPU is not waited child CPU. This proxy does not establish a quiet machine.",
+        "other_cpu_seconds_estimate": 11.954285999960405
+      },
+      "environment": {
+        "CARGO": "/home/jeremy/.jcode/scratch/lint-profile-20261030/home/toolchains/nightly-2026-10-08/bin/cargo",
+        "CARGO_HOME": "/home/jeremy/.cargo",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_DEV_INCREMENTAL": "true",
+        "CARGO_PROFILE_DEV_OPT_LEVEL": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_PROFILE_TEST_INCREMENTAL": "true",
+        "CARGO_PROFILE_TEST_OPT_LEVEL": "0",
+        "CARGO_TARGET_DIR": "/home/jeremy/.jcode/scratch/dp41/owned-declarative/target",
+        "HOME": "/home/jeremy/.jcode/scratch/dp41/owned-declarative/home",
+        "JUSTRUST_BUILDD": "0",
+        "JUSTRUST_BUILDD_PREBUILD": "0",
+        "JUSTRUST_CACHE_PROC_MACROS": "0",
+        "JUSTRUST_CARGO_FORK": "0",
+        "JUSTRUST_DEPCACHE": "0",
+        "JUSTRUST_HOME": "/home/jeremy/.jcode/scratch/dp41/owned-declarative/home/.justrust",
+        "JUSTRUST_LOCALCACHE": "0",
+        "JUSTRUST_LOCALCACHE_TARGET_BOUND": "0",
+        "JUSTRUST_PEER_CACHE": "0",
+        "JUSTRUST_PREBUILT": "off",
+        "JUSTRUST_PREBUILT_ALWAYS": "0",
+        "JUSTRUST_REAL_CARGO": "/home/jeremy/.jcode/scratch/lint-profile-20261030/home/toolchains/nightly-2026-10-08/bin/cargo",
+        "JUSTRUST_REMOTE": "off",
+        "JUSTRUST_REMOTE_CACHE": "0",
+        "JUSTRUST_TOOLCHAIN": "system",
+        "JUSTRUST_TOOLCHAIN_AUTO_INSTALL": "0",
+        "JUSTRUST_TOOLCHAIN_NIGHTLY": "1",
+        "RUSTC": "/home/jeremy/.jcode/scratch/declarative-cache-20261030/sysroot-tt/bin/rustc",
+        "RUSTFLAGS": "-Zjr-empty-lint-level-fast-path=no -Zjr-cache-small-query-values=no -Zjr-cache-associated-items=no -Zjr-cache-declarative-macros=yes -Zself-profile=/home/jeremy/.jcode/scratch/dp41/profiles -Zself-profile-events=generic-activity,function-args",
+        "RUSTUP_HOME": "/home/jeremy/.rustup",
+        "XDG_CACHE_HOME": "/home/jeremy/.jcode/scratch/dp41/owned-declarative/cache",
+        "XDG_CONFIG_HOME": "/home/jeremy/.jcode/scratch/dp41/owned-declarative/config",
+        "XDG_DATA_HOME": "/home/jeremy/.jcode/scratch/dp41/owned-declarative/data",
+        "XDG_RUNTIME_DIR": "/home/jeremy/.jcode/scratch/dp41/owned-declarative/runtime"
+      },
+      "phase": "edit",
+      "raw_output": {
+        "run_id": "20261030-051853305-2385022",
+        "artifact": "edit.raw-output.jsonl",
+        "sha256": "f986a4f3e97ab7964802623296acaf78d06fe18232839b9db6fe48aff6f2d695",
+        "hotpatch": {
+          "present": false,
+          "outcomes": []
+        }
+      },
+      "parsed": {
+        "tests": [
+          [
+            "summary::tests::parses_libtest_results",
+            "ok"
+          ],
+          [
+            "summary::tests::shares_overlapping_time",
+            "ok"
+          ],
+          [
+            "summary::tests::splits_passes_without_double_counting",
+            "ok"
+          ],
+          [
+            "summary::tests::test_failures_are_not_compile_errors",
+            "ok"
+          ]
+        ],
+        "passed": 4,
+        "failed": 0,
+        "ignored": 0,
+        "filtered": 144
+      },
+      "source_sha256": "386f8eae276f2dcec6802e09ebd8c73acfd01c1b796a1b460308dce34a566668",
+      "profiles": [
+        {
+          "markers": {
+            "jr_declarative_macro_eligible": 634,
+            "jr_declarative_macro_ineligible": 1330,
+            "jr_declarative_macro_cache_lookup": 634,
+            "jr_declarative_macro_cache_provider": 1,
+            "jr_declarative_macro_cache_success": 634
+          },
+          "records": 871480,
+          "unresolved_records": 0,
+          "path": "justrust-2385038.mm_profdata",
+          "sha256": "467daad7cd56d2fb29a1d8cc35861c219fd8cbf28c0f383012fee6addcca43fc",
+          "metadata": {
+            "process_id": 2385038,
+            "start_time": 1793362733361516018,
+            "cmd": "/home/jeremy/.jcode/scratch/declarative-cache-20261030/sysroot-tt/bin/rustc --crate-name justrust --edition=2024 src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --emit=dep-info,link -C embed-bitcode=no --test --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values()) -C metadata=ca7c44864225c396 -C extra-filename=-64d0dfb701c2c14c --out-dir /home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/justrust/64d0dfb701c2c14c/out -C incremental=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/incremental -C strip=debuginfo -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/aho-corasick/6fc335e01c945724/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/anstream/fbeedebb82437229/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/anstyle-parse/83e1b998650da5c4/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/anstyle-query/c7950fee32240e97/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/anstyle/7b2ffcb98e5db290/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/clap_builder/c45afcf3f9865a7f/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/clap_derive/4413ed2328c75168/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/clap_lex/aa07522c565fd40e/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/colorchoice/6531622ce23cc92b/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/dirs-sys/52913b9551e86d4d/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/equivalent/51a493adbf17f164/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/hashbrown/ad03f57d54faa3d5/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/iana-time-zone/f11b2c67b0e16d6a/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/indexmap/84c00bf9de5b05f1/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/is_terminal_polyfill/002b8daeda1727b8/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/itoa/289661b61ff12bf6/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/libc/87e89ac8f3446c32/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/memchr/9b0aaafde7160724/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/num-traits/3468de48bd9042a5/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/option-ext/2706d8fd773694d1/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/regex-automata/17e833687de8e67e/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/regex-syntax/707fe44b59f8afd5/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/serde_core/dd39617666f25a4f/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/serde_derive/bad6b5d52d8ba76a/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/serde_spanned/7d4d7eb88c62c114/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/strsim/a5807431c38bf9af/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/toml_datetime/b75af6294df581cf/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/toml_parser/41591abdd09b7e91/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/toml_writer/52ffb6ad84b6a1f0/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/utf8parse/99bfa00d988364be/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/winnow/658289c502cf9b38/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/zmij/1ece682fbabc67c8/out --extern anyhow=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/anyhow/643d88bc665e47be/out/libanyhow-643d88bc665e47be.rlib --extern anyhow=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/anyhow/643d88bc665e47be/out/libanyhow-643d88bc665e47be.rmeta --extern chrono=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/chrono/8493a8f1fead392f/out/libchrono-8493a8f1fead392f.rlib --extern chrono=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/chrono/8493a8f1fead392f/out/libchrono-8493a8f1fead392f.rmeta --extern clap=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/clap/80f4c78bd6d8c493/out/libclap-80f4c78bd6d8c493.rlib --extern clap=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/clap/80f4c78bd6d8c493/out/libclap-80f4c78bd6d8c493.rmeta --extern dirs=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/dirs/9514795b6887b67c/out/libdirs-9514795b6887b67c.rlib --extern dirs=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/dirs/9514795b6887b67c/out/libdirs-9514795b6887b67c.rmeta --extern libc=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/libc/87e89ac8f3446c32/out/liblibc-87e89ac8f3446c32.rlib --extern libc=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/libc/87e89ac8f3446c32/out/liblibc-87e89ac8f3446c32.rmeta --extern regex=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/regex/c5e878669de21c77/out/libregex-c5e878669de21c77.rlib --extern regex=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/regex/c5e878669de21c77/out/libregex-c5e878669de21c77.rmeta --extern serde=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/serde/c0739c6fd6c24074/out/libserde-c0739c6fd6c24074.rlib --extern serde=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/serde/c0739c6fd6c24074/out/libserde-c0739c6fd6c24074.rmeta --extern serde_json=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/serde_json/b7b191c3c009b649/out/libserde_json-b7b191c3c009b649.rlib --extern serde_json=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/serde_json/b7b191c3c009b649/out/libserde_json-b7b191c3c009b649.rmeta --extern toml=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/toml/c7b17466583291e4/out/libtoml-c7b17466583291e4.rlib --extern toml=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/toml/c7b17466583291e4/out/libtoml-c7b17466583291e4.rmeta --extern toml_edit=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/toml_edit/1ac97b514edbf58e/out/libtoml_edit-1ac97b514edbf58e.rlib --extern toml_edit=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/toml_edit/1ac97b514edbf58e/out/libtoml_edit-1ac97b514edbf58e.rmeta -Zjr-empty-lint-level-fast-path=no -Zjr-cache-small-query-values=no -Zjr-cache-associated-items=no -Zjr-cache-declarative-macros=yes -Zself-profile=/home/jeremy/.jcode/scratch/dp41/profiles -Zself-profile-events=generic-activity,function-args --force-warn=unused_crate_dependencies "
+          }
+        }
+      ]
+    },
+    {
+      "command": [
+        "/home/jeremy/.jcode/scratch/query-retention-bench-20261030/justrust-client",
+        "test",
+        "--lib",
+        "--",
+        "summary::tests::",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "status": 0,
+      "error": null,
+      "timed_out": false,
+      "elapsed_seconds": 1.783981025000685,
+      "noise": {
+        "before": {
+          "busy_seconds": 329707.45,
+          "loadavg": [
+            11.05810546875,
+            8.68310546875,
+            8.04443359375
+          ]
+        },
+        "after": {
+          "busy_seconds": 329719.76,
+          "loadavg": [
+            11.1337890625,
+            8.73828125,
+            8.06591796875
+          ]
+        },
+        "child_cpu_seconds": 2.0628579999999914,
+        "contamination": "unknown",
+        "reason": "Resident daemon CPU is not waited child CPU. This proxy does not establish a quiet machine.",
+        "other_cpu_seconds_estimate": 10.24714199999768
+      },
+      "environment": {
+        "CARGO": "/home/jeremy/.jcode/scratch/lint-profile-20261030/home/toolchains/nightly-2026-10-08/bin/cargo",
+        "CARGO_HOME": "/home/jeremy/.cargo",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_DEV_INCREMENTAL": "true",
+        "CARGO_PROFILE_DEV_OPT_LEVEL": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_PROFILE_TEST_INCREMENTAL": "true",
+        "CARGO_PROFILE_TEST_OPT_LEVEL": "0",
+        "CARGO_TARGET_DIR": "/home/jeremy/.jcode/scratch/dp41/owned-declarative/target",
+        "HOME": "/home/jeremy/.jcode/scratch/dp41/owned-declarative/home",
+        "JUSTRUST_BUILDD": "0",
+        "JUSTRUST_BUILDD_PREBUILD": "0",
+        "JUSTRUST_CACHE_PROC_MACROS": "0",
+        "JUSTRUST_CARGO_FORK": "0",
+        "JUSTRUST_DEPCACHE": "0",
+        "JUSTRUST_HOME": "/home/jeremy/.jcode/scratch/dp41/owned-declarative/home/.justrust",
+        "JUSTRUST_LOCALCACHE": "0",
+        "JUSTRUST_LOCALCACHE_TARGET_BOUND": "0",
+        "JUSTRUST_PEER_CACHE": "0",
+        "JUSTRUST_PREBUILT": "off",
+        "JUSTRUST_PREBUILT_ALWAYS": "0",
+        "JUSTRUST_REAL_CARGO": "/home/jeremy/.jcode/scratch/lint-profile-20261030/home/toolchains/nightly-2026-10-08/bin/cargo",
+        "JUSTRUST_REMOTE": "off",
+        "JUSTRUST_REMOTE_CACHE": "0",
+        "JUSTRUST_TOOLCHAIN": "system",
+        "JUSTRUST_TOOLCHAIN_AUTO_INSTALL": "0",
+        "JUSTRUST_TOOLCHAIN_NIGHTLY": "1",
+        "RUSTC": "/home/jeremy/.jcode/scratch/declarative-cache-20261030/sysroot-tt/bin/rustc",
+        "RUSTFLAGS": "-Zjr-empty-lint-level-fast-path=no -Zjr-cache-small-query-values=no -Zjr-cache-associated-items=no -Zjr-cache-declarative-macros=yes -Zself-profile=/home/jeremy/.jcode/scratch/dp41/profiles -Zself-profile-events=generic-activity,function-args",
+        "RUSTUP_HOME": "/home/jeremy/.rustup",
+        "XDG_CACHE_HOME": "/home/jeremy/.jcode/scratch/dp41/owned-declarative/cache",
+        "XDG_CONFIG_HOME": "/home/jeremy/.jcode/scratch/dp41/owned-declarative/config",
+        "XDG_DATA_HOME": "/home/jeremy/.jcode/scratch/dp41/owned-declarative/data",
+        "XDG_RUNTIME_DIR": "/home/jeremy/.jcode/scratch/dp41/owned-declarative/runtime"
+      },
+      "phase": "restore",
+      "raw_output": {
+        "run_id": "20261030-051857330-2386556",
+        "artifact": "restore.raw-output.jsonl",
+        "sha256": "18b000bc4b143fdb04df89f86dc2d61ce932771b18cc9ba235d5f9bf078e0f14",
+        "hotpatch": {
+          "present": false,
+          "outcomes": []
+        }
+      },
+      "parsed": {
+        "tests": [
+          [
+            "summary::tests::parses_libtest_results",
+            "ok"
+          ],
+          [
+            "summary::tests::shares_overlapping_time",
+            "ok"
+          ],
+          [
+            "summary::tests::splits_passes_without_double_counting",
+            "ok"
+          ],
+          [
+            "summary::tests::test_failures_are_not_compile_errors",
+            "ok"
+          ]
+        ],
+        "passed": 4,
+        "failed": 0,
+        "ignored": 0,
+        "filtered": 144
+      },
+      "source_sha256": "40a8e4406a5ab5c70ca17b1e753ae76697d61cb5c4ebd7fecb8c8456067f403f",
+      "profiles": [
+        {
+          "markers": {
+            "jr_declarative_macro_eligible": 633,
+            "jr_declarative_macro_ineligible": 1329,
+            "jr_declarative_macro_cache_lookup": 633,
+            "jr_declarative_macro_cache_provider": 0,
+            "jr_declarative_macro_cache_success": 633
+          },
+          "records": 871147,
+          "unresolved_records": 0,
+          "path": "justrust-2386572.mm_profdata",
+          "sha256": "a56adbac10d833c8fb92686575a065acbfeba3992bd4a8d15dd2b8a84e3268bf",
+          "metadata": {
+            "process_id": 2386572,
+            "start_time": 1793362737397428113,
+            "cmd": "/home/jeremy/.jcode/scratch/declarative-cache-20261030/sysroot-tt/bin/rustc --crate-name justrust --edition=2024 src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --emit=dep-info,link -C embed-bitcode=no --test --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values()) -C metadata=ca7c44864225c396 -C extra-filename=-64d0dfb701c2c14c --out-dir /home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/justrust/64d0dfb701c2c14c/out -C incremental=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/incremental -C strip=debuginfo -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/aho-corasick/6fc335e01c945724/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/anstream/fbeedebb82437229/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/anstyle-parse/83e1b998650da5c4/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/anstyle-query/c7950fee32240e97/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/anstyle/7b2ffcb98e5db290/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/clap_builder/c45afcf3f9865a7f/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/clap_derive/4413ed2328c75168/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/clap_lex/aa07522c565fd40e/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/colorchoice/6531622ce23cc92b/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/dirs-sys/52913b9551e86d4d/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/equivalent/51a493adbf17f164/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/hashbrown/ad03f57d54faa3d5/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/iana-time-zone/f11b2c67b0e16d6a/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/indexmap/84c00bf9de5b05f1/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/is_terminal_polyfill/002b8daeda1727b8/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/itoa/289661b61ff12bf6/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/libc/87e89ac8f3446c32/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/memchr/9b0aaafde7160724/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/num-traits/3468de48bd9042a5/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/option-ext/2706d8fd773694d1/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/regex-automata/17e833687de8e67e/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/regex-syntax/707fe44b59f8afd5/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/serde_core/dd39617666f25a4f/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/serde_derive/bad6b5d52d8ba76a/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/serde_spanned/7d4d7eb88c62c114/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/strsim/a5807431c38bf9af/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/toml_datetime/b75af6294df581cf/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/toml_parser/41591abdd09b7e91/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/toml_writer/52ffb6ad84b6a1f0/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/utf8parse/99bfa00d988364be/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/winnow/658289c502cf9b38/out -L dependency=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/zmij/1ece682fbabc67c8/out --extern anyhow=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/anyhow/643d88bc665e47be/out/libanyhow-643d88bc665e47be.rlib --extern anyhow=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/anyhow/643d88bc665e47be/out/libanyhow-643d88bc665e47be.rmeta --extern chrono=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/chrono/8493a8f1fead392f/out/libchrono-8493a8f1fead392f.rlib --extern chrono=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/chrono/8493a8f1fead392f/out/libchrono-8493a8f1fead392f.rmeta --extern clap=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/clap/80f4c78bd6d8c493/out/libclap-80f4c78bd6d8c493.rlib --extern clap=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/clap/80f4c78bd6d8c493/out/libclap-80f4c78bd6d8c493.rmeta --extern dirs=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/dirs/9514795b6887b67c/out/libdirs-9514795b6887b67c.rlib --extern dirs=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/dirs/9514795b6887b67c/out/libdirs-9514795b6887b67c.rmeta --extern libc=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/libc/87e89ac8f3446c32/out/liblibc-87e89ac8f3446c32.rlib --extern libc=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/libc/87e89ac8f3446c32/out/liblibc-87e89ac8f3446c32.rmeta --extern regex=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/regex/c5e878669de21c77/out/libregex-c5e878669de21c77.rlib --extern regex=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/regex/c5e878669de21c77/out/libregex-c5e878669de21c77.rmeta --extern serde=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/serde/c0739c6fd6c24074/out/libserde-c0739c6fd6c24074.rlib --extern serde=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/serde/c0739c6fd6c24074/out/libserde-c0739c6fd6c24074.rmeta --extern serde_json=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/serde_json/b7b191c3c009b649/out/libserde_json-b7b191c3c009b649.rlib --extern serde_json=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/serde_json/b7b191c3c009b649/out/libserde_json-b7b191c3c009b649.rmeta --extern toml=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/toml/c7b17466583291e4/out/libtoml-c7b17466583291e4.rlib --extern toml=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/toml/c7b17466583291e4/out/libtoml-c7b17466583291e4.rmeta --extern toml_edit=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/toml_edit/1ac97b514edbf58e/out/libtoml_edit-1ac97b514edbf58e.rlib --extern toml_edit=/home/jeremy/.jcode/scratch/dp41/owned-declarative/target/debug/build/toml_edit/1ac97b514edbf58e/out/libtoml_edit-1ac97b514edbf58e.rmeta -Zjr-empty-lint-level-fast-path=no -Zjr-cache-small-query-values=no -Zjr-cache-associated-items=no -Zjr-cache-declarative-macros=yes -Zself-profile=/home/jeremy/.jcode/scratch/dp41/profiles -Zself-profile-events=generic-activity,function-args --force-warn=unused_crate_dependencies "
+          }
+        }
+      ]
+    }
+  ],
+  "source_after": {
+    ".github/pull_request_template.md": "dce3a7ad2b89f01e2bb05e8f70ad15db593f985d503618f07b38dee3a65caf51",
+    ".github/workflows/ci.yml": "147666fae4789d416216533b24ebb0578398341b85932451357357692d77030a",
+    ".gitignore": "44c92e3a70ad3307b7056871c2bdb096d8bfa9373f5bf06a79bb6324a20ff2fb",
+    "AGENTS.md": "b9b2ef0cd612c592d738aac21803764e8839e2f501fb56f12d76ef56428dd11c",
+    "CHANGELOG.md": "0be955bd492f121b03ee238939227d5b6db1a4aae39103dbfd5f5b854b3f924e",
+    "CONTRIBUTING.md": "05d125b07517166c5c831edb9b8dae6c67fe8448ec1817bf3f7478abf9227781",
+    "Cargo.lock": "39d6d146027ef4b23c839030a6476f520aab875ede947c64e00c52c4fad65811",
+    "Cargo.toml": "16ce3d25ea6fda7adab4906008781cad3d1c7ba092d2de121c158c2acba45b78",
+    "FINDINGS.md": "4cf388d60126778d21212bd85824b56f3cfd954c24467b3ddbb67b52521b1d0d",
+    "LICENSE": "ed021f4de6462d46361a10a7af1daae8ae89fab63bce5c0d40b03c6a009e0f49",
+    "LICENSING.md": "b2525cb8582adb7eeb825a176d3aaae112ad47556634e89b9b2c374fddf0c09c",
+    "NOTICE": "a91ba9c76618d36a93bf5a85994044087dccc757ebf948342b3ef2689d9ea761",
+    "README.md": "00716dec5c85e0e859a208a8ab2d61782cbc580d55ecea99aa1b14cc5b3d6af0",
+    "bench/bench_edit.sh": "9c72ee447e3939d44e67098c8be38065f12f3c8f9e6d0e74bf10c440abe5deb3",
+    "bench/cranelift/bench.sh": "6147d998cc966db2a414fdd84c6029faf0a0a12b575d69f88ab5098f12d259cc",
+    "bench/cranelift/clif-local-wrapper": "e2a351b839f5b66cff3a0516b1cc74cd8afe3bd457256b37e04eddbfdbfc3027",
+    "bench/depcache-fresh.sh": "49bf9a45b1fd41a8e183928a37edbb5818a2971a0cb8c3de34012be4ff3a1d63",
+    "bench/edit-loop.sh": "f36334ed3501b4ebcbddddb0e49e37bb084afadd782abf6fedcb6f17e776ba07",
+    "bench/feature-switch.sh": "011c927031397293ef09d7f01d1bc44da2990678f6f332e2cc64b39241ccbb23",
+    "bench/sched-contention.sh": "a920a2a19a6177d8c838d201343ddcd54cbfeb5f962b0288e8e3052be5055a2f",
+    "bench/split-apply-e2e.sh": "4d645a3a8986935c1e0faec59fe0ee5791e3f535f25ec8c93e86618f00dbe6e0",
+    "bench/split-before-after.sh": "f33ea8dad30483f5af9eff3360016c078f107d6934a113dc07fc18c424b143e0",
+    "bench/split-fixture.sh": "a3bebd4d07306b1c7fb027ffe4e0aa4dba34540efa696651d765874a34d4631b",
+    "docs/AGENTS-snippet.md": "e3ebdbf1d0475dda9c482c81aa3db36855408fa105e6f44bc2759b7d55050eb7",
+    "docs/legal-review.md": "d19980eabff11d0a1541f1190e9e5c1e66e65ff6f880fe9231406944c72c064f",
+    "docs/remote-strategy.md": "e98bce12736539cbcad4d058c2f66a2a090bdac0a745361258fbd3f1bfb1dea4",
+    "docs/remote.md": "f09b2a7a738ebcccda7553aa0c31da09d23ed385a1556b79a6d5f28b78f30cc1",
+    "docs/toolchain.md": "299ae1a76960a0b6b1fed6e7329030b5e6775b49385598af787df741f84bbc43",
+    "server/LICENSE": "b1c4a7ff517c7427275919e298a913b5fbb941b8235977c175a37b4fe93f6aaa",
+    "server/README.md": "a5386f73f8c123157fdde27e97675f1fb505bcd3aef3ca9c3fd7db9293cc27e3",
+    "src/agent_output.rs": "8fdd8e3d60fd8475f9baa368ed7cb121a5f627e0ddab2385fd1df127d0f73119",
+    "src/buildscript.rs": "18940c329e34c486e770d5331bf8e46d2f4265e565eb4311822ed35b2b30bf3f",
+    "src/depcache.rs": "f4d1b5f8f7741117e50d68fa72152c1085c39512fd7840565082227f96c04d9a",
+    "src/depcache_gc.rs": "ed5a7742ffc230d9e762d76ef502065372cacee6bd94a52ebe62c148543280e8",
+    "src/findings.rs": "e17da6c5bac2c770878bae6296c372c66b40500c9470f0df9b362d090fd6726a",
+    "src/history.rs": "e74dfff9a19a48892087aa97cf68e9a265b2dc2a18ed123e137254eb78b66496",
+    "src/install.rs": "526546b6f8aa1e8e5b1b4fecd57dc60e4ea7d8d11703b08ec9921be648f37573",
+    "src/lib.rs": "4c9ac85114f9277914cb5973ec6d34743fd67b8735f34ca8247b2277e613cf78",
+    "src/live.rs": "1da476c118a0a0b7e9181e6764897b4d27fbc8efae64a526a36fec33275aacf8",
+    "src/main.rs": "47b5f5f8e308001db3f4e562437d70095306beabc56d20804c5e8bb82277f37d",
+    "src/paths.rs": "b21c4561342ab0997c354f9f7f417127ddf800a9756bc04eb597cc27a5177647",
+    "src/procfs.rs": "1133cde6c5ef022eb815816d2cdc2b08eef8bcc0fe2f30526b6fc99bfe9a18e3",
+    "src/record.rs": "13fffcbb7ef5712eef6661ec3f1b4fb610bfd95c8f6fea53a68dc0b159d4b384",
+    "src/remote.rs": "08f2ea2e292c26a9da2d6a0d10dc576fdfac30890dd8d08afd576f712cc9fe70",
+    "src/remote_agent.rs": "c0535a25701c3025973bbd85206bb0ffb0ee30ce5e5da95eb76c6c2cd4c69caf",
+    "src/remote_backend.rs": "b019017ca16ac353bb40de260f9f13cbff5b8a7fdc625436cada3f5fbe3ca90e",
+    "src/remote_build.rs": "1bfed489c878a34de45b9993575776ad58f8bdb3cca788d9930895509f896861",
+    "src/remote_daemon.rs": "55976b812c960d1dee9ef004e20221d9a3dc890e5ba7e0bdb13a3fa84b3e975a",
+    "src/remote_hosted.rs": "36152a07480331418de3be5de79c87afb8ef3c72a71276016fdb5db904888bd5",
+    "src/remote_proto.rs": "906cf9de4cf859461a46137b11770f7db7b47e43091b37d6c9cdd642b8b3e188",
+    "src/remote_sync.rs": "63302cef7e1d52f297e913f6b658708cd0eaa0d5169de6e9058d90ac15d089c0",
+    "src/remote_watch.rs": "f33c6ad2225e99ac3b89ce553b17fa1df051ee221ed8653c48b8db1d1f257ebc",
+    "src/route.rs": "d7e870f706d4d2604c77893382331a3a44cd1fce0f499bdbc2710da237951812",
+    "src/runs.rs": "8272de3756d2323b05777c851b19c2cc6aec6bdf073af79056da29370daf6bde",
+    "src/sched.rs": "f874189108e56d325d22c8dd5887105bf518a5833d505e0bad4bf096fcc53c6b",
+    "src/shim.rs": "780e620019db87b1b8302031820eb1735b18d49a2a74f89a3a95cad25c03e600",
+    "src/slots.rs": "b9df25c621d0518aa1fe84854bd9f3ba2978c8acc166a08d302d897f84db6033",
+    "src/split.rs": "efe1fa0a35e37e27e116c3ab5a4294367b01a079d61ae25c5e9c0bfe4d14d8c5",
+    "src/split_apply.rs": "212e3390997b698facf7cc71538978cbab356a5460f8a52ef7041aee887badaa",
+    "src/split_index.rs": "215fe3e8edd967a04c62b23c2b6269a177ccc936db368c0412ca5c87eb1277f3",
+    "src/status.rs": "67cf57a756e67891162716be1a16d220bc2b455119ebb5816cea5e8f58562a11",
+    "src/summary.rs": "40a8e4406a5ab5c70ca17b1e753ae76697d61cb5c4ebd7fecb8c8456067f403f",
+    "tests/remote_agent.rs": "8f39486a18862a7cafff974ddad536c6d689c17eaea5fd72012d57cefe71af41"
+  },
+  "identities_after": {
+    "rustc": {
+      "path": "/home/jeremy/.jcode/scratch/declarative-cache-20261030/sysroot-tt/bin/rustc",
+      "sha256": "570faeb27338cea8625c4a4a7eaeef71fc75470508657ff489c3da96ce5f9144"
+    },
+    "cargo": {
+      "path": "/home/jeremy/.jcode/scratch/lint-profile-20261030/home/toolchains/nightly-2026-10-08/bin/cargo",
+      "sha256": "994419eb0d12f1a4152a23d9030dc4d05c9bfd7a5c7af923f24bb3738afad95b"
+    },
+    "justrust": {
+      "path": "/home/jeremy/.jcode/scratch/query-retention-bench-20261030/justrust-client",
+      "sha256": "1dd6ee7da925924eaa0c25f9cbefafaabe1441c7b8f95a87b6cddfbaf20510a9"
+    },
+    "blaze": {
+      "path": "/home/jeremy/.jcode/scratch/blaze-comparison-20261030/cargo/bin/blaze",
+      "sha256": "767cb0f22328a12256b675be6f9b6e18f05c84ea98f71329b85dadddff606174"
+    },
+    "rustc_driver_0": {
+      "path": "/home/jeremy/.jcode/scratch/declarative-cache-20261030/sysroot-tt/lib/librustc_driver-e2bd696299265a4a.so",
+      "sha256": "ac116b9398e1f5c677e73952b8719be9d9e47190fe61fbaeba9b7cf270739595"
+    },
+    "blaze_companion:blaze": {
+      "path": "/home/jeremy/.jcode/scratch/blaze-comparison-20261030/cargo/bin/blaze",
+      "sha256": "767cb0f22328a12256b675be6f9b6e18f05c84ea98f71329b85dadddff606174"
+    },
+    "blaze_companion:blaze-proc-macro-srv": {
+      "path": "/home/jeremy/.jcode/scratch/blaze-comparison-20261030/cargo/bin/blaze-proc-macro-srv",
+      "sha256": "66676f4baa898bccc0551d343f392c72b73d07a98ab87918d083dde877c8a79b"
+    },
+    "blaze_companion:ra-jit": {
+      "path": "/home/jeremy/.jcode/scratch/blaze-comparison-20261030/cargo/bin/ra-jit",
+      "sha256": "04e84de57aad8a19102edd454e2cdd8ac2e4b58461a4070479919207f3a5590e"
+    },
+    "blaze_companion:ra-jit-rustc": {
+      "path": "/home/jeremy/.jcode/scratch/blaze-comparison-20261030/cargo/bin/ra-jit-rustc",
+      "sha256": "c20dfcb986324ac357d568501f977d0232cc4bbf8e1e8bbb5f2744d4dd1fa8bd"
+    },
+    "blaze_companion:ra-jit-rustc-first": {
+      "path": "/home/jeremy/.jcode/scratch/blaze-comparison-20261030/cargo/bin/ra-jit-rustc-first",
+      "sha256": "82c2d0b0dde382bf26a6ec4855e052f1a2753380d4b4596aa63a9ab46378117b"
+    },
+    "blaze_toolchain:toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/bin/rustc": {
+      "path": "/home/jeremy/.blaze/toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/bin/rustc",
+      "sha256": "6ff2b1ce1a1f378dd2964ccf2e39ccf10d37de18d801987b468bc5ab479171e8"
+    },
+    "blaze_toolchain:toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/bin/cargo": {
+      "path": "/home/jeremy/.blaze/toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/bin/cargo",
+      "sha256": "f93c96982673433e3b6c16039aa765aea0397a305ab06aa44e1a9e42ede56dcb"
+    },
+    "blaze_toolchain:toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/lib/librustc_driver-aaa8b10abbb2de39.so": {
+      "path": "/home/jeremy/.blaze/toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/lib/librustc_driver-aaa8b10abbb2de39.so",
+      "sha256": "e81ee13275c3e0965051ced606e35fa388cdc3c2ff4ef22e04fa9454edcb431f"
+    }
+  }
+}

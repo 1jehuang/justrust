@@ -1,0 +1,1381 @@
+[
+  {
+    "label": "encode_query_results_for",
+    "query": "typeck_root",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 40422144
+  },
+  {
+    "label": "encode_query_results_for",
+    "query": "optimized_mir",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 17768537
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "shallow_lint_levels_on",
+    "thread": 3,
+    "records": 3831,
+    "union_ns": 15321081
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "layout_of",
+    "thread": 3,
+    "records": 1370,
+    "union_ns": 13608218
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "fn_abi_of_instance_no_deduced_attrs",
+    "thread": 3,
+    "records": 242,
+    "union_ns": 12190228
+  },
+  {
+    "label": "encode_query_results_for",
+    "query": "items_of_instance",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 10768780
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "upstream_drop_glue_for",
+    "thread": 3,
+    "records": 14,
+    "union_ns": 9624664
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "upstream_monomorphizations_for",
+    "thread": 3,
+    "records": 42,
+    "union_ns": 9480822
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "upstream_monomorphizations",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 8367974
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "try_normalize_generic_arg_after_erasing_regions",
+    "thread": 3,
+    "records": 74,
+    "union_ns": 7807088
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "param_env",
+    "thread": 3,
+    "records": 922,
+    "union_ns": 5298951
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "trait_impls_of",
+    "thread": 3,
+    "records": 39,
+    "union_ns": 5101374
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "exported_generic_symbols",
+    "thread": 3,
+    "records": 61,
+    "union_ns": 5046191
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "clauses_of",
+    "thread": 3,
+    "records": 1222,
+    "union_ns": 3617852
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "resolve_instance_raw",
+    "thread": 3,
+    "records": 186,
+    "union_ns": 3412528
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "module_children",
+    "thread": 3,
+    "records": 166,
+    "union_ns": 3320373
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "cross_crate_inlinable",
+    "thread": 3,
+    "records": 3705,
+    "union_ns": 3000049
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "associated_items",
+    "thread": 3,
+    "records": 739,
+    "union_ns": 2496729
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "param_env_normalized_for_post_analysis",
+    "thread": 3,
+    "records": 250,
+    "union_ns": 2424310
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "is_copy_raw",
+    "thread": 3,
+    "records": 128,
+    "union_ns": 2400686
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "needs_drop_raw",
+    "thread": 3,
+    "records": 72,
+    "union_ns": 2347121
+  },
+  {
+    "label": "encode_query_results_for",
+    "query": "symbol_name",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 2262307
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "dependency_formats",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 2189781
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "required_panic_strategy",
+    "thread": 3,
+    "records": 60,
+    "union_ns": 1936366
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "type_of",
+    "thread": 3,
+    "records": 1333,
+    "union_ns": 1928108
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "attrs_for_def",
+    "thread": 3,
+    "records": 248,
+    "union_ns": 1919364
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "adt_sizedness_constraint",
+    "thread": 3,
+    "records": 82,
+    "union_ns": 1896472
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "adt_def",
+    "thread": 3,
+    "records": 86,
+    "union_ns": 1870223
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "coroutine_kind",
+    "thread": 3,
+    "records": 3274,
+    "union_ns": 1793182
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "codegen_fn_attrs",
+    "thread": 3,
+    "records": 2088,
+    "union_ns": 1577545
+  },
+  {
+    "label": "encode_query_results_for",
+    "query": "declarative_macro_expansion",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 1521839
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "is_dyn_compatible",
+    "thread": 3,
+    "records": 5,
+    "union_ns": 1486402
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "dyn_compatibility_violations",
+    "thread": 3,
+    "records": 5,
+    "union_ns": 1472852
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "impl_trait_header",
+    "thread": 3,
+    "records": 615,
+    "union_ns": 1322448
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "def_kind",
+    "thread": 3,
+    "records": 3870,
+    "union_ns": 1302755
+  },
+  {
+    "label": "encode_query_results_for",
+    "query": "promoted_mir",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 1080219
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "dropck_outlives",
+    "thread": 3,
+    "records": 20,
+    "union_ns": 1058457
+  },
+  {
+    "label": "encode_query_results_for",
+    "query": "type_of",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 1050803
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "implementations_of_trait",
+    "thread": 3,
+    "records": 2379,
+    "union_ns": 1036501
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "is_sized_raw",
+    "thread": 3,
+    "records": 34,
+    "union_ns": 1002767
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "impl_item_implementor_ids",
+    "thread": 3,
+    "records": 54,
+    "union_ns": 925447
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "optimized_mir",
+    "thread": 3,
+    "records": 54,
+    "union_ns": 903585
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "opaque_types_defined_by",
+    "thread": 3,
+    "records": 115,
+    "union_ns": 902751
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "evaluate_root_goal_for_proof_tree_raw",
+    "thread": 3,
+    "records": 41,
+    "union_ns": 861354
+  },
+  {
+    "label": "encode_query_results_for",
+    "query": "mir_for_ctfe",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 845985
+  },
+  {
+    "label": "encode_query_results_for",
+    "query": "generics_of",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 808970
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "fn_sig",
+    "thread": 3,
+    "records": 333,
+    "union_ns": 725878
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "adt_dtorck_constraint",
+    "thread": 3,
+    "records": 31,
+    "union_ns": 708472
+  },
+  {
+    "label": "encode_query_results_for",
+    "query": "def_span",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 679620
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "associated_item",
+    "thread": 3,
+    "records": 563,
+    "union_ns": 644270
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "hir_owner",
+    "thread": 3,
+    "records": 6863,
+    "union_ns": 620496
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "generics_of",
+    "thread": 3,
+    "records": 469,
+    "union_ns": 551776
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "constness",
+    "thread": 3,
+    "records": 1149,
+    "union_ns": 551285
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "hir_owner_parent_q",
+    "thread": 3,
+    "records": 3717,
+    "union_ns": 546534
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "erase_and_anonymize_regions_ty",
+    "thread": 3,
+    "records": 465,
+    "union_ns": 534338
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "vtable_allocation",
+    "thread": 3,
+    "records": 2,
+    "union_ns": 523700
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "type_op_prove_predicate",
+    "thread": 3,
+    "records": 52,
+    "union_ns": 500484
+  },
+  {
+    "label": "encode_query_results_for",
+    "query": "fn_sig",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 495669
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "explicit_clauses_of",
+    "thread": 3,
+    "records": 323,
+    "union_ns": 477428
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "impl_super_outlives",
+    "thread": 3,
+    "records": 73,
+    "union_ns": 464724
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "vtable_entries",
+    "thread": 3,
+    "records": 2,
+    "union_ns": 455941
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "instantiate_and_check_impossible_clauses",
+    "thread": 3,
+    "records": 183,
+    "union_ns": 454489
+  },
+  {
+    "label": "encode_query_results_for",
+    "query": "explicit_clauses_of",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 396543
+  },
+  {
+    "label": "encode_query_results_for",
+    "query": "lookup_stability",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 375971
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "visibility",
+    "thread": 3,
+    "records": 542,
+    "union_ns": 330219
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "hir_attr_map",
+    "thread": 3,
+    "records": 3820,
+    "union_ns": 322429
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "incoherent_impls",
+    "thread": 3,
+    "records": 5,
+    "union_ns": 302583
+  },
+  {
+    "label": "encode_query_results_for",
+    "query": "size_estimate",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 297074
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "lookup_stability",
+    "thread": 3,
+    "records": 411,
+    "union_ns": 272005
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "is_freeze_raw",
+    "thread": 3,
+    "records": 7,
+    "union_ns": 248759
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "generics_require_sized_self",
+    "thread": 3,
+    "records": 23,
+    "union_ns": 235750
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "mir_borrowck_implied_outlives_bounds",
+    "thread": 3,
+    "records": 14,
+    "union_ns": 215802
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "crate_incoherent_impls",
+    "thread": 3,
+    "records": 124,
+    "union_ns": 202108
+  },
+  {
+    "label": "encode_query_results_for",
+    "query": "codegen_fn_attrs",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 196056
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "inhabited_predicate_type",
+    "thread": 3,
+    "records": 29,
+    "union_ns": 183194
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "reachable_non_generics",
+    "thread": 3,
+    "records": 4,
+    "union_ns": 182417
+  },
+  {
+    "label": "encode_query_results_for",
+    "query": "hir_module_items",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 167837
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "def_span",
+    "thread": 3,
+    "records": 207,
+    "union_ns": 167207
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "lookup_deprecation_entry",
+    "thread": 3,
+    "records": 344,
+    "union_ns": 164306
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "crate_inherent_impls",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 157776
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "method_autoderef_steps",
+    "thread": 3,
+    "records": 3,
+    "union_ns": 156152
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "inferred_outlives_of",
+    "thread": 3,
+    "records": 323,
+    "union_ns": 155149
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "is_reachable_non_generic",
+    "thread": 3,
+    "records": 15,
+    "union_ns": 154509
+  },
+  {
+    "label": "encode_query_results_for",
+    "query": "adt_def",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 149663
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "exported_non_generic_symbols",
+    "thread": 3,
+    "records": 59,
+    "union_ns": 145919
+  },
+  {
+    "label": "encode_query_results_for",
+    "query": "inferred_outlives_of",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 145330
+  },
+  {
+    "label": "encode_query_results_for",
+    "query": "lookup_deprecation_entry",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 136942
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "inhabited_predicate_for_def",
+    "thread": 3,
+    "records": 19,
+    "union_ns": 133324
+  },
+  {
+    "label": "encode_query_results_for",
+    "query": "associated_item",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 118447
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "native_libraries",
+    "thread": 3,
+    "records": 62,
+    "union_ns": 114008
+  },
+  {
+    "label": "encode_query_results_for",
+    "query": "def_ident_span",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 113983
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "eval_to_valtree",
+    "thread": 3,
+    "records": 2,
+    "union_ns": 111687
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "type_op_ascribe_user_type",
+    "thread": 3,
+    "records": 3,
+    "union_ns": 108887
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "defaultness",
+    "thread": 3,
+    "records": 193,
+    "union_ns": 108885
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "explicit_implied_clauses_of",
+    "thread": 3,
+    "records": 44,
+    "union_ns": 100962
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "anon_const_kind",
+    "thread": 3,
+    "records": 130,
+    "union_ns": 100499
+  },
+  {
+    "label": "encode_query_results_for",
+    "query": "specialization_graph_of",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 100415
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "diagnostic_items",
+    "thread": 3,
+    "records": 50,
+    "union_ns": 97476
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "associated_item_def_ids",
+    "thread": 3,
+    "records": 96,
+    "union_ns": 86554
+  },
+  {
+    "label": "encode_query_results_for",
+    "query": "impl_trait_header",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 84952
+  },
+  {
+    "label": "encode_query_results_for",
+    "query": "trivial_const",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 79661
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "trait_def",
+    "thread": 3,
+    "records": 50,
+    "union_ns": 79452
+  },
+  {
+    "label": "encode_query_results_for",
+    "query": "used_trait_imports",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 78818
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "intrinsic_raw",
+    "thread": 3,
+    "records": 166,
+    "union_ns": 76745
+  },
+  {
+    "label": "encode_query_results_for",
+    "query": "associated_item_def_ids",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 73730
+  },
+  {
+    "label": "encode_query_results_for",
+    "query": "ty_span",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 73340
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "type_op_normalize_fn_sig",
+    "thread": 3,
+    "records": 2,
+    "union_ns": 64557
+  },
+  {
+    "label": "encode_query_results_for",
+    "query": "eval_static_initializer",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 59940
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "is_no_builtins",
+    "thread": 3,
+    "records": 61,
+    "union_ns": 51656
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "lint_expectations",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 50779
+  },
+  {
+    "label": "encode_query_results_for",
+    "query": "has_ffi_unwind_calls",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 45720
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "impl_parent",
+    "thread": 3,
+    "records": 44,
+    "union_ns": 42582
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "adt_destructor",
+    "thread": 3,
+    "records": 37,
+    "union_ns": 41846
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "foreign_modules",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 36276
+  },
+  {
+    "label": "encode_query_results_for",
+    "query": "hir_owner_parent_q",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 34208
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "canonical_symbols",
+    "thread": 3,
+    "records": 62,
+    "union_ns": 34074
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "own_existential_vtable_entries",
+    "thread": 3,
+    "records": 4,
+    "union_ns": 33049
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "defined_lang_items",
+    "thread": 3,
+    "records": 61,
+    "union_ns": 30970
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "crate_name",
+    "thread": 3,
+    "records": 61,
+    "union_ns": 30538
+  },
+  {
+    "label": "encode_query_results_for",
+    "query": "codegen_select_candidate",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 30303
+  },
+  {
+    "label": "encode_query_results_for",
+    "query": "variances_of",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 29354
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "expn_that_defined",
+    "thread": 3,
+    "records": 12,
+    "union_ns": 28027
+  },
+  {
+    "label": "encode_query_results_for",
+    "query": "is_reachable_non_generic",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 27145
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "missing_lang_items",
+    "thread": 3,
+    "records": 61,
+    "union_ns": 26330
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "explicit_super_clauses_of",
+    "thread": 3,
+    "records": 11,
+    "union_ns": 26133
+  },
+  {
+    "label": "encode_query_results_for",
+    "query": "adt_drop_tys",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 25931
+  },
+  {
+    "label": "encode_query_results_for",
+    "query": "inherent_impls",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 24474
+  },
+  {
+    "label": "encode_query_results_for",
+    "query": "coroutine_kind",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 24240
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "variances_of",
+    "thread": 3,
+    "records": 17,
+    "union_ns": 23245
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "implied_outlives_bounds",
+    "thread": 3,
+    "records": 2,
+    "union_ns": 22936
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "const_conditions",
+    "thread": 3,
+    "records": 16,
+    "union_ns": 22537
+  },
+  {
+    "label": "encode_query_results_for",
+    "query": "constness",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 21252
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "check_liveness",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 20524
+  },
+  {
+    "label": "encode_query_results_for",
+    "query": "adt_destructor",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 18589
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "is_profiler_runtime",
+    "thread": 3,
+    "records": 61,
+    "union_ns": 18311
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "def_ident_span",
+    "thread": 3,
+    "records": 22,
+    "union_ns": 17916
+  },
+  {
+    "label": "encode_query_results_for",
+    "query": "mir_const_qualif",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 17394
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "is_mir_available",
+    "thread": 3,
+    "records": 10,
+    "union_ns": 16426
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "is_panic_runtime",
+    "thread": 3,
+    "records": 62,
+    "union_ns": 16056
+  },
+  {
+    "label": "encode_query_results_for",
+    "query": "const_of_item",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 15116
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "is_compiler_builtins",
+    "thread": 3,
+    "records": 60,
+    "union_ns": 14900
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "item_self_bounds",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 13755
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "panic_in_drop_strategy",
+    "thread": 3,
+    "records": 57,
+    "union_ns": 12708
+  },
+  {
+    "label": "encode_query_results_for",
+    "query": "reachable_set",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 12592
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "inherent_impls",
+    "thread": 3,
+    "records": 3,
+    "union_ns": 12301
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "explicit_implied_const_bounds",
+    "thread": 3,
+    "records": 5,
+    "union_ns": 12066
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "mir_promoted",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 11259
+  },
+  {
+    "label": "encode_query_results_for",
+    "query": "associated_items",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 11158
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "mir_for_ctfe",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 8429
+  },
+  {
+    "label": "encode_query_results_for",
+    "query": "eval_to_allocation_raw",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 8427
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "exportable_items",
+    "thread": 3,
+    "records": 2,
+    "union_ns": 7400
+  },
+  {
+    "label": "encode_query_results_for",
+    "query": "eval_to_const_value_raw",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 7212
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "asyncness",
+    "thread": 3,
+    "records": 13,
+    "union_ns": 6762
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "explicit_item_self_bounds",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 6467
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "thir_abstract_const",
+    "thread": 3,
+    "records": 14,
+    "union_ns": 6196
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "is_opsem_inhabited_adt_cached",
+    "thread": 3,
+    "records": 7,
+    "union_ns": 5042
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "is_doc_hidden",
+    "thread": 3,
+    "records": 5,
+    "union_ns": 4828
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "explicit_item_bounds",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 4345
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "unsizing_params_for_adt",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 4142
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "late_bound_vars_map",
+    "thread": 3,
+    "records": 9,
+    "union_ns": 3699
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "inherited_align",
+    "thread": 3,
+    "records": 12,
+    "union_ns": 3691
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "sanitizer_settings_for",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 3226
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "stability_implications",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 2782
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "symbol_mangling_version",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 2745
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "region_scope_tree",
+    "thread": 3,
+    "records": 5,
+    "union_ns": 2741
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "upvars_mentioned",
+    "thread": 3,
+    "records": 3,
+    "union_ns": 2543
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "should_inherit_track_caller",
+    "thread": 3,
+    "records": 12,
+    "union_ns": 1884
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "assumed_wf_types",
+    "thread": 3,
+    "records": 4,
+    "union_ns": 1835
+  },
+  {
+    "label": "encode_query_results_for",
+    "query": "exported_non_generic_symbols",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 1771
+  },
+  {
+    "label": "encode_query_results_for",
+    "query": "externally_implementable_items",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 1769
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "limits",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 1756
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "check_transmutes",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 1725
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "lib_features",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 1592
+  },
+  {
+    "label": "encode_query_results_for",
+    "query": "derive_macro_expansion",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 1218
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "is_unreachable_local_definition",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 1160
+  },
+  {
+    "label": "encode_query_results_for",
+    "query": "exported_generic_symbols",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 1086
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "backend_optimization_level",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 999
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "proc_macro_decls_static",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 913
+  },
+  {
+    "label": "jr_incremental_green_recompute",
+    "query": "named_variable_map",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 852
+  },
+  {
+    "label": "encode_query_results_for",
+    "query": "trait_def",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 670
+  },
+  {
+    "label": "encode_query_results_for",
+    "query": "explicit_implied_clauses_of",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 661
+  },
+  {
+    "label": "encode_query_results_for",
+    "query": "const_param_default",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 653
+  },
+  {
+    "label": "encode_query_results_for",
+    "query": "is_mir_available",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 562
+  },
+  {
+    "label": "encode_query_results_for",
+    "query": "explicit_item_bounds",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 467
+  },
+  {
+    "label": "encode_query_results_for",
+    "query": "jr_dead_code_item_usage",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 403
+  },
+  {
+    "label": "encode_query_results_for",
+    "query": "explicit_super_clauses_of",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 399
+  },
+  {
+    "label": "encode_query_results_for",
+    "query": "attr_macro_expansion",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 390
+  },
+  {
+    "label": "encode_query_results_for",
+    "query": "explicit_item_self_bounds",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 388
+  },
+  {
+    "label": "encode_query_results_for",
+    "query": "adt_async_destructor",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 385
+  },
+  {
+    "label": "encode_query_results_for",
+    "query": "coerce_unsized_info",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 262
+  },
+  {
+    "label": "encode_query_results_for",
+    "query": "collect_return_position_impl_trait_in_trait_tys",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 259
+  },
+  {
+    "label": "encode_query_results_for",
+    "query": "lookup_const_stability",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 247
+  },
+  {
+    "label": "encode_query_results_for",
+    "query": "impl_is_fully_generic_for_reflection",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 202
+  },
+  {
+    "label": "encode_query_results_for",
+    "query": "jr_dead_code_item_usage_allow_expect",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 196
+  },
+  {
+    "label": "encode_query_results_for",
+    "query": "mir_callgraph_cyclic",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 180
+  },
+  {
+    "label": "encode_query_results_for",
+    "query": "mir_coroutine_witnesses",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 178
+  },
+  {
+    "label": "encode_query_results_for",
+    "query": "adt_async_drop_tys",
+    "thread": 3,
+    "records": 1,
+    "union_ns": 95
+  }
+]
