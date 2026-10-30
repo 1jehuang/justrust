@@ -28,7 +28,8 @@ meaning. Strict decoding remains the default.
 * Missing provider observations for hit IDs are coverage facts, not proof of
   disk reuse. Filters, request denominator, losses and capture completeness
   remain unknown. No hit-rate percentage is inferred.
-* There are no time sums, including nested wall spans. CPU work, elapsed savings,
+* There are no duration sums, including nested wall spans. Native markers below
+  additionally support per-thread elapsed interval unions. CPU work, elapsed savings,
   execution span, semantic avoidability and maximum reuse stay null.
 
 Optional `--before-graph BEFORE --after-graph AFTER` accepts only the pinned
@@ -57,7 +58,8 @@ python3 bench/reuse_ceiling.py --profile /home/jeremy/.jcode/scratch/toolchain-p
 
 The original retained capture is local, not committed. SHA-256:
 `1d25795172c75d893f16ac264015bf865bf61dcdfce2e8b1eabcf99177a21f8e`.
-Its report is reproduced below, formatted without changing fields or values.
+Its original report at commit `c363484a3` is reproduced below, formatted without
+changing fields or values. The current tool additionally emits `native_green_reuse`.
 
 ```json
 {
@@ -124,3 +126,71 @@ The full regression command `python3 -m unittest discover -s bench -p 'test_*.py
 also passed: `Ran 435 tests in 10.611s`, `OK`.
 
 The existing decoder suites own raw format and filesystem-boundary validation.
+
+## Native proven-green recomputation follow-up
+
+Compiler instrumentation commit `7cc77351b` adds two `GenericActivity` interval
+markers in `load_from_disk_or_invoke_provider_green`:
+
+* `jr_incremental_green_query`: entered only on the native already-green
+  dependency-node route. Includes loading or recomputation and subsequent
+  verification. This is not every query request or every green dependency node.
+* `jr_incremental_green_recompute`: the `None` disk-result branch around provider
+  invocation. This is observed provider recomputation despite an already-green
+  node, a **resident-value-reuse investigation opportunity**, not proof the value
+  can be retained safely or the interval removed in full. It does not distinguish
+  nonserializable values from disk misses and does not give stable query keys.
+
+The additive `profile.native_green_reuse` object counts each marker independently,
+groups counts by safe query-name argument when available, and computes interval
+**unions separately per profiler thread and marker**. Nested, crossing, identical,
+touching and zero-length intervals cannot inflate a union by duration summation.
+No sum across threads or marker classes is reported. These are elapsed coverage
+windows, not CPU work or time saved. The green outer marker and recompute inner
+marker overlap and must not be added. Profiler threads are not proven OS TIDs.
+
+`query_profile` deliberately exposes only the label before `\x1e`. The diagnostic
+resolves the original marker event string with `strings.resolve(event_id)` and
+uses the second component only when it is one safe Rust-style query name. Missing
+or unexpected arguments count as unknown, rather than guessing from labels.
+When a marker is absent its count is **null**, with `unknown-marker-absent`, not
+zero. Enabled marker filters, completeness, semantic avoidability and saved time
+remain unknown even when some marker intervals are present. The input hash pins
+bytes, not compiler provenance. Marker interpretation relies on the caller's
+trusted native-instrumented capture, not attestation of an arbitrary input file.
+
+Exact commands retaining compact reports, from repository root:
+
+```sh
+python3 bench/reuse_ceiling.py --profile /home/jeremy/.jcode/scratch/reuse-ceiling-real-20261030/profiles-macro-cache/justrust-1486494.mm_profdata --allow-unmapped-event-labels > bench/results/reuse-ceiling-20261030/macro-cache.json
+python3 bench/reuse_ceiling.py --profile /home/jeremy/.jcode/scratch/reuse-ceiling-native-20261030-v5/unchanged/reuse_fixture-1441144.mm_profdata --allow-unmapped-event-labels > bench/results/reuse-ceiling-20261030/unchanged.json
+```
+
+Both exited 0. The committed JSON files are the complete exact stdout reports,
+7,385 bytes combined. Original private profiles are not committed. Observations:
+
+| Capture | Green-route records | Recompute records | Green-route thread-3 union ns | Recompute thread-3 union ns | Marker records missing query name |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Warm justrust macro-cache | 119,322 | 70,506 | 248,143,496 | 110,519,125 | 0 / 0 |
+| Unchanged small fixture | 712 | 602 | 2,828,751 | 1,595,160 | 712 / 602 |
+
+The application capture has 68,987,990 bytes and SHA-256
+`89becb2c1b2cb0d851a55bbf61fd05391450e7337efe20a93649cbd8986adbc9`.
+It contains 1,922,417 raw records, including 268,111 unresolved event labels
+explicitly permitted by the opt-in. Marker arguments are nevertheless all
+resolved. The fixture has 294,058 bytes, SHA-256
+`1b06c8ca2eb3f1719c99a531d93fa49f53333be4e8f520fc0eb35bb5c9eec898`,
+8,352 records and 139 unresolved labels. Its marker names are resolved but query
+arguments are absent. These are separate captures and epochs, never combined.
+
+This demonstrates native green-provider recomputation, not a theoretical maximum
+or a measured speedup. The native results do not reclassify all unchanged
+fingerprints as unnecessary execution. No compiler or client file was changed by
+this diagnostic follow-up.
+
+Follow-up validation: `python3 -m unittest discover -s bench -p
+'test_reuse_ceiling.py'` reported `Ran 16 tests`, `OK`; the complete command
+`python3 -m unittest discover -s bench -p 'test_*.py'` reported
+`Ran 440 tests in 10.271s`, `OK`. New fixtures exercise nested/crossing/duplicate
+intervals, independent threads, absent markers, unknown/safe query arguments,
+invalid marker types/timestamps and real MMPD CLI argument decoding.

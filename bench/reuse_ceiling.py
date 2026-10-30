@@ -6,9 +6,10 @@ Numeric query IDs never cross invocations. Graph comparisons use (kind, key
 fingerprint), not serialization indices. No elapsed spans are added.
 """
 import argparse
-from collections import Counter
+from collections import Counter, defaultdict
 import hashlib
 import json
+import re
 
 import query_graph
 import query_profile
@@ -24,17 +25,72 @@ LIMITATIONS = [
 ]
 
 
-def summarize_records(records):
+NATIVE_MARKERS = ('jr_incremental_green_query', 'jr_incremental_green_recompute')
+
+
+def interval_union_ns(intervals):
+    """Union within one profiler thread and epoch, never CPU or saved time."""
+    for start, stop in intervals:
+        if any(type(v) is not int or v < 0 for v in (start, stop)) or stop < start:
+            raise ValueError('invalid native marker interval')
+    end = None
+    total = 0
+    for start, stop in sorted(intervals):
+        total += max(0, stop - max(start, end if end is not None else start))
+        end = max(stop, end if end is not None else stop)
+    return total
+
+
+def native_summary(markers):
+    result = {}
+    for marker in NATIVE_MARKERS:
+        values = markers[marker]
+        threads = defaultdict(list)
+        names = Counter()
+        unknown_names = 0
+        for event, name in values:
+            threads[event['thread']].append((event['start_ns'], event['end_ns']))
+            if name is None:
+                unknown_names += 1
+            else:
+                names[name] += 1
+        result[marker] = dict(
+            evidence='observed' if values else 'unknown-marker-absent',
+            interval_records=len(values) if values else None,
+            query_name_interval_records=dict(sorted(names.items())),
+            records_without_query_name=unknown_names if values else None,
+            per_thread=[dict(thread=thread, interval_records=len(spans),
+                             union_elapsed_ns=interval_union_ns(spans))
+                        for thread, spans in sorted(threads.items())],
+        )
+    return dict(markers=result, capture_complete=None, marker_filter_enabled=None,
+                semantically_avoidable_provider_calls=None, time_saved_ns=None,
+                scope='Native proven-green route and provider-recompute branch only. Counts are invocations, not distinct query keys. Per-thread elapsed unions are not summed across threads or markers, CPU work, or removable time.')
+
+
+def summarize_records(records, resolve_event=None):
     kinds = Counter()
     providers = Counter()
     hits = Counter()
     counters = {}
     unresolved = 0
     loads = 0
+    markers = defaultdict(list)
     for event in records:
         kind, typ = event['kind'], event['record_type']
         kinds[kind] += 1
         unresolved += not event['label_resolved']
+        if event.get('label') in NATIVE_MARKERS:
+            if kind != 'GenericActivity' or typ != 'interval':
+                raise ValueError('invalid native marker event type')
+            if type(event.get('thread')) is not int or event['thread'] < 0:
+                raise ValueError('invalid native marker thread')
+            # The normal decoder intentionally discards function arguments.
+            # Resolve only these known marker strings, never arbitrary labels.
+            parts = resolve_event(event['event_id']).split('\x1e') if resolve_event else []
+            name = (parts[1] if len(parts) == 2 and parts[0] == event['label']
+                    and re.fullmatch(r'[A-Za-z_][A-Za-z_0-9]*', parts[1]) else None)
+            markers[event['label']].append((event, name))
         expected = {'Query': 'interval', 'QueryCacheHit': 'instant',
                     'QueryCacheHitCount': 'integer', 'IncrementalLoadResult': 'interval'}
         if kind in expected and typ != expected[kind]:
@@ -75,6 +131,7 @@ def summarize_records(records):
                       cross_session_reused_query_count=None, semantic_avoidable_query_count=None),
         cpu_work_ns=None, time_saved_ns=None, execution_span_ns=None,
         theoretical_maximum_reuse=None,
+        native_green_reuse=native_summary(markers),
     )
 
 
@@ -123,7 +180,7 @@ def main(argv=None):
         result = dict(schema=1, profile_sha256=hashlib.sha256(raw).hexdigest(),
                       profile_bytes=len(raw),
                       profile=summarize_records(query_profile.iter_prepared_records(
-                          events, strings, args.allow_unmapped_event_labels)),
+                          events, strings, args.allow_unmapped_event_labels), strings.resolve),
                       graph_comparison=None, limitations=LIMITATIONS)
         if args.before_graph:
             result['graph_comparison'] = compare_graphs(*[

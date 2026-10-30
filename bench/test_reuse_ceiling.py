@@ -7,7 +7,7 @@ import tempfile
 import unittest
 
 import reuse_ceiling as rc
-from test_query_profile import fixture
+from test_query_profile import BASE, fixture, raw
 
 
 def event(kind='Query', identity=1, typ='interval', **kwargs):
@@ -25,6 +25,65 @@ def node(key, value, kind=1):
 
 
 class ReuseTests(unittest.TestCase):
+    def marker(self, start=0, end=100, thread=1, label=rc.NATIVE_MARKERS[1]):
+        return dict(kind='GenericActivity', record_type='interval', event_id=BASE + 8,
+                    label=label, label_resolved=True, thread=thread,
+                    start_ns=start, end_ns=end)
+
+    def test_native_union_nested_crossing_disjoint_equal_and_zero(self):
+        rows = [self.marker(), self.marker(10, 20), self.marker(90, 110),
+                self.marker(120, 130), self.marker(120, 130), self.marker(140, 140),
+                self.marker(0, 100, thread=2)]
+        report = rc.summarize_records(rows)['native_green_reuse']
+        result = report['markers'][rc.NATIVE_MARKERS[1]]
+        self.assertEqual(result['interval_records'], 7)
+        self.assertEqual(result['per_thread'], [
+            dict(thread=1, interval_records=6, union_elapsed_ns=120),
+            dict(thread=2, interval_records=1, union_elapsed_ns=100)])
+        self.assertEqual(result['records_without_query_name'], 7)
+        self.assertIsNone(report['semantically_avoidable_provider_calls'])
+        self.assertIsNone(report['time_saved_ns'])
+        self.assertIsNone(report['markers'][rc.NATIVE_MARKERS[0]]['interval_records'])
+
+    def test_native_marker_absence_is_unknown(self):
+        for result in rc.summarize_records([])['native_green_reuse']['markers'].values():
+            self.assertEqual(result['evidence'], 'unknown-marker-absent')
+            self.assertIsNone(result['interval_records'])
+            self.assertEqual(result['per_thread'], [])
+
+    def test_native_names_are_arguments_not_decoder_labels(self):
+        marker = rc.NATIVE_MARKERS[1]
+        report = rc.summarize_records([self.marker()], lambda _: marker + '\x1etype_of')
+        self.assertEqual(report['native_green_reuse']['markers'][marker]
+                         ['query_name_interval_records'], {'type_of': 1})
+        for text in (marker, marker + '\x1eprivate/path', marker + '\x1ea\x1eb', 'wrong\x1etype_of'):
+            result = rc.summarize_records([self.marker()], lambda _: text)
+            self.assertEqual(result['native_green_reuse']['markers'][marker]
+                             ['records_without_query_name'], 1)
+
+    def test_native_invalid_shapes_rejected(self):
+        for change in ({'record_type': 'instant'}, {'kind': 'Query'},
+                       {'thread': True}, {'start_ns': -1}, {'end_ns': -1},
+                       {'end_ns': False}, {'start_ns': 101}):
+            row = self.marker()
+            row.update(change)
+            with self.assertRaises(ValueError):
+                rc.summarize_records([row])
+
+    def test_native_binary_cli_preserves_function_argument(self):
+        marker = rc.NATIVE_MARKERS[1]
+        strings = ('GenericActivity\xff' + marker + '\x1etype_of\xff').encode('latin1')
+        data = fixture(strings=strings, index=b'', events=raw(BASE + 8, BASE + 24, 7, 3, 9))
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'profile'
+            path.write_bytes(data)
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                rc.main(['--profile', str(path)])
+            result = json.loads(output.getvalue())['profile']['native_green_reuse']['markers'][marker]
+            self.assertEqual(result['query_name_interval_records'], {'type_of': 1})
+            self.assertEqual(result['per_thread'][0]['union_elapsed_ns'], 6)
+
     def test_overlapping_channels_not_added(self):
         rows = [event(), event('QueryCacheHit', typ='instant'),
                 event('QueryCacheHit', typ='instant'),
