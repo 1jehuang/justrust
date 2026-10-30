@@ -1,0 +1,4 @@
+ toolchain/resident/crates/ra-jit/src/cargo/cli.rs  |  8 ++
+ toolchain/resident/crates/ra-jit/src/cargo/mod.rs  | 86 ++++++++++++++++++++--
+ .../resident/crates/ra-jit/src/cargo/whole.rs      | 45 +++++++++--
+ 3 files changed, 124 insertions(+), 15 deletions(-)

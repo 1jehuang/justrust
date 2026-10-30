@@ -1,0 +1,4 @@
+7e5b21286fc850b32c2b6e532f2c25efb5d15d2dc92f885b2a33e610e603944a  crates/ra-jit/src/main.rs
+a25deb958d403ade47c440ae2227cf376a13fb04e9a76e00c7c04154727643e5  crates/ra-jit/src/jr_engine.rs
+e921580836226b26455c81bfc26efe84b9b6dc6260ed5e7a58f500b3ca995241  crates/ra-jit/Cargo.toml
+7b2c813f9fbba24c6d84ff8dc79f9192f3d57577bf2f656bb41f768153bab49b  crates/ra-jit/build.rs

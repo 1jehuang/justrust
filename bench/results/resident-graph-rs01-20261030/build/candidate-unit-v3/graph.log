@@ -1,0 +1,74 @@
+justrust: sends usage stats (timings, counts, no code, paths, or names; linked to your account when signed in) to improve it. Off: `justrust telemetry off` or JUSTRUST_NO_TELEMETRY=1.
+warning: unused workspace dependency `arrayvec`
+   --> Cargo.toml:154:1
+    |
+154 | arrayvec = "0.7.6"
+    | ^^^^^^^^
+    |
+    = note: `cargo::unused_workspace_dependencies` is set to `warn` by default
+help: consider removing the workspace dependency `arrayvec`
+warning: unused workspace dependency `bitflags`
+   --> Cargo.toml:155:1
+    |
+155 | bitflags = "2.9.1"
+    | ^^^^^^^^
+    |
+help: consider removing the workspace dependency `bitflags`
+warning: unused workspace dependency `camino`
+   --> Cargo.toml:157:1
+    |
+157 | camino = "1.2.2"
+    | ^^^^^^
+    |
+help: consider removing the workspace dependency `camino`
+error[E0603]: function `worker_named` is private
+   --> crates/ra-jit/src/cargo/mod.rs:480:27
+    |
+480 |             assert!(!cli::worker_named(name), "{name} must not change a worker's identity");
+    |                           ^^^^^^^^^^^^ private function
+    |
+note: the function `worker_named` is defined here
+   --> crates/ra-jit/src/cargo/cli.rs:142:1
+    |
+142 | fn worker_named(name: &str) -> bool {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0308]: mismatched types
+     --> crates/ra-jit/src/main.rs:11794:52
+      |
+11794 |             db.set_file_text_with_durability(file, source, ide_db::base_db::salsa::Durability::LOW);
+      |                -----------------------------       ^^^^^^ expected `&str`, found `String`
+      |                |
+      |                arguments to this method are incorrect
+      |
+note: method defined here
+     --> vendor/rust-analyzer/crates/base-db/src/lib.rs:422:8
+      |
+  411 | pub trait SourceDatabase: salsa::Database + std::fmt::Debug {
+...
+  422 |     fn set_file_text_with_durability(
+      |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider borrowing here
+      |
+11794 |             db.set_file_text_with_durability(file, &source, ide_db::base_db::salsa::Durability::LOW);
+      |                                                    +
+
+Some errors have detailed explanations: E0308, E0603.
+For more information about an error, try `rustc --explain E0308`.
+error: could not compile `ra-jit` (bin "jr-engine" test) due to 2 previous errors; 1 warning emitted
+
+
+justrust: FAILED to compile (2 errors) in 221.0s
+  time    startup 0.32s | compile 220.67s | after 0.03s
+  units   120 compiled (43 local, 75 deps, 2 build scripts), 311 fresh
+          hir_ty                            26.53s  cpu 169.7s   1833 MB
+          hir_ty_codegen                    21.46s  cpu 103.6s   1374 MB
+          aws_sdk_s3                        16.36s  cpu 104.1s   1708 MB
+          hir_def                           14.48s  cpu  86.5s   1063 MB
+  cpu     1256.2s total, avg 5.7/peak 6.8 of 16 cores; others used 3.5 cores
+  memory  peak 6011 MB build, 1833 MB largest rustc, 38.4 GB free; stalls cpu 2.37s mem 0.00s io 0.14s
+  output  3 warnings shown, 249 hidden; 560 progress and 0 passing-test lines hidden
+  waste   2 issues (estimated cost each; they can overlap):
+          ~ 44.3s  65.4s went to recompiling oversized crates: hir_ty (80k lines, 26.5s), hir_def (52k lines, 14.5s), jr_engine (78k lines, 10.4s), blaze_fmt (45k lines, 8.7s), ide_db (42k lines, 5.3s). rustc redoes most of a crate after any edit to it and rebuilds everything downstream, so per-edit cost grows with crate size and no compiler flag removes it. Split them: move the modules that change often (the ones you are editing) into new leaf crates that depend on the big crate rather than the other way round, and keep their tests there. Edits in split-out crates measured 6-13x faster. `justrust split` names the modules to move, from this workspace's recorded edits. Also, these units ran rustc's front-end single-threaded; a -Zthreads rustc wrapper typically halves a full rebuild
+          ~ 25.8s  rebuilt 75 registry dependencies and 2 build scripts (25.8s)
+  more    `justrust log 20261030-074346273-3451497` full output, `justrust show 20261030-074346273-3451497` full profile
