@@ -5,6 +5,7 @@ import importlib.util
 import json
 from pathlib import Path
 import subprocess
+import struct
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -46,6 +47,10 @@ class HarnessTests(unittest.TestCase):
         self.assertIn('$crate::helper()', H.DEPENDENCY)
         self.assertIn('forward!(3)', H.BASE)
         self.assertEqual(H.cases()[-1]['source'], H.BASE)
+        self.assertEqual(fixtures['literal-eligible']['source'], H.LITERAL)
+        self.assertNotIn('$', H.LITERAL)
+        self.assertIn('() => { 42 }', H.LITERAL)
+        self.assertEqual(fixtures['literal-eligible-body-edit']['expected'], '')
 
     def test_schedule_persistence_and_freshness(self):
         first, second = H.schedule(0), H.schedule(1)
@@ -121,13 +126,15 @@ class HarnessTests(unittest.TestCase):
             self.assertEqual(identity['sha256'], H.digest(compiler))
             self.assertEqual(identity['drivers'][0]['sha256'], H.digest(driver))
 
-    def capture_mock(self, root, compile_fn=None, probe_records=None, trace_record=None, identities=None):
+    def capture_mock(self, root, compile_fn=None, probe_records=None, trace_record=None, identities=None,
+                     require_native_hit=False, evidence_fn=None):
         identities = identities or [dict(sha256='compiler', drivers=['driver'])] * 2
         with patch.object(H, 'identity', side_effect=identities), \
              patch.object(H, 'probe', return_value=probe_records or {'no': record(), 'yes': record()}), \
              patch.object(H, 'run', return_value=trace_record or record(stderr=b'note: trace_macro\n')), \
-             patch.object(H, 'compile_case', side_effect=compile_fn or (lambda r, p, f, e, c: result(f))):
-            return H.capture(Path('/mock/rustc'), root)
+             patch.object(H, 'compile_case', side_effect=compile_fn or (lambda r, p, f, e, c: result(f))), \
+             patch.object(H, 'native_evidence', side_effect=evidence_fn):
+            return H.capture(Path('/mock/rustc'), root, require_native_hit=require_native_hit)
 
     def test_full_matrix_mocked(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -192,6 +199,138 @@ class HarnessTests(unittest.TestCase):
                 with self.assertRaisesRegex(AssertionError, 'identity changed'):
                     self.capture_mock(root, identities=[dict(sha256='compiler', drivers=['driver']), changed])
                 self.assertEqual(json.loads((root / 'acceptance.json').read_text())['verdict'], 'failed')
+
+    def test_marker_counts_never_guess_unresolved_virtual_labels(self):
+        records = [dict(label_resolved=True, label=label, kind='GenericActivity', record_type='interval')
+                   for label in H.MARKERS]
+        records += [dict(label_resolved=False, label=None, kind='Query', record_type='interval'),
+                    dict(label_resolved=True, label='irrelevant', kind='GenericActivity', record_type='interval')]
+        counted = H.marker_counts(records)
+        self.assertEqual(counted['markers'], dict.fromkeys(H.MARKERS, 1))
+        self.assertEqual(counted['unresolved_records'], 1)
+        with self.assertRaises(AssertionError):
+            H.marker_counts([dict(label_resolved=True, label=H.MARKERS[0], kind='Query', record_type='interval')])
+
+    def positive_observations(self):
+        return [dict(name=name, profile=dict(markers=dict(zip(H.MARKERS, counts))))
+                for name, counts in [('off-before', [0, 0, 0, 0, 0]),
+                                     ('cold-yes', [1, 0, 1, 1, 1]),
+                                     ('warm-yes', [1, 0, 1, 0, 1]),
+                                     ('body-edit-yes', [1, 0, 1, 0, 1]),
+                                     ('off-after', [0, 0, 0, 0, 0])]]
+
+    def test_positive_native_proof_requires_cold_provider_then_warm_avoidance(self):
+        proof = H.validate_native_markers(self.positive_observations())
+        self.assertEqual(proof['inferred_provider_avoided'], {'warm-yes': 1, 'body-edit-yes': 1})
+        for name, counts in [('cold-yes', [0, 0, 0, 0, 0]),
+                             ('cold-yes', [1, 0, 1, 0, 1]),
+                             ('warm-yes', [0, 0, 0, 0, 0]),
+                             ('warm-yes', [1, 0, 1, 1, 1]),
+                             ('body-edit-yes', [1, 0, 1, 1, 1]),
+                             ('body-edit-yes', [1, 1, 1, 0, 1]),
+                             ('off-after', [1, 0, 1, 0, 1])]:
+            observations = self.positive_observations()
+            next(o for o in observations if o['name'] == name)['profile']['markers'] = dict(zip(H.MARKERS, counts))
+            with self.subTest(name=name, counts=counts), self.assertRaises(AssertionError):
+                H.validate_native_markers(observations)
+
+    def test_evidence_profiles_must_exist_unambiguously(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            with self.assertRaisesRegex(AssertionError, 'exactly one'):
+                H.profile_evidence(root)
+            for name in ('one', 'two'):
+                (root / f'{name}.mm_profdata').write_bytes(b'not a native execution')
+            with self.assertRaisesRegex(AssertionError, 'exactly one'):
+                H.profile_evidence(root)
+
+    def test_profile_parser_synthetic_capture_keeps_unknown_query_ids_unknown(self):
+        # Pure synthetic measureme v9 bytes, not a compiler invocation.
+        def header(magic):
+            return magic + struct.pack('<I', 9)
+        strings = bytearray()
+        def add_string(value):
+            offset = 8 + len(strings)
+            strings.extend(value.encode() + b'\xff')
+            return 100000003 + offset
+        kind = add_string('GenericActivity')
+        query = add_string('Query')
+        label = add_string(H.MARKERS[0])
+        metadata = add_string(json.dumps(dict(process_id=7, start_time=12, cmd='synthetic compiler command')))
+        events = struct.pack('<QQIIII', kind, label, 0, 1, 2, 0)
+        events += struct.pack('<QQIIII', query, 42, 0, 2, 3, 0)
+        streams = [header(b'MMES') + events, header(b'MMSD') + strings,
+                   header(b'MMSI') + struct.pack('<QQ', 100000001, metadata - 100000003)]
+        data = header(b'MMPD')
+        for tag, stream in enumerate(streams):
+            data += struct.pack('<BI', tag, len(stream)) + stream
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            path = root / 'synthetic.mm_profdata'
+            path.write_bytes(data)
+            evidence = H.profile_evidence(root)
+            self.assertEqual(evidence['markers'][H.MARKERS[0]], 1)
+            self.assertEqual(evidence['unresolved_records'], 1)
+            self.assertEqual(evidence['records'], 2)
+            self.assertEqual(evidence['sha256'], H.digest(path))
+            self.assertEqual(evidence['metadata']['cmd'], 'synthetic compiler command')
+            path.write_bytes(b'corrupt')
+            with self.assertRaises(ValueError):
+                H.profile_evidence(root)
+
+    def test_native_evidence_commands_and_results_are_separate(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            seen = []
+            def compile_fn(r, p, f, enabled, cache, profile=None):
+                seen.append((f, enabled, cache, profile))
+                return result(f)
+            profiles = [o['profile'] for o in self.positive_observations()]
+            evidence = dict(observations=[])
+            with patch.object(H, 'compile_case', side_effect=compile_fn), \
+                 patch.object(H, 'profile_evidence', side_effect=profiles):
+                H.native_evidence(Path('/mock/rustc'), root, evidence)
+            self.assertEqual(len(seen), 5)
+            self.assertEqual([v[1] for v in seen], [False, True, True, True, False])
+            self.assertEqual(len({v[2] for v in seen[1:]}), 1)
+            self.assertEqual(len({v[3] for v in seen}), 5)
+            self.assertEqual(seen[1][0]['source'], seen[2][0]['source'])
+            self.assertNotEqual(seen[2][0]['source'], seen[3][0]['source'])
+            self.assertIn('proof', evidence)
+
+    def test_semantic_pass_is_not_native_hit_proof(self):
+        with tempfile.TemporaryDirectory() as temp:
+            report = self.capture_mock(Path(temp) / 'semantics')
+            self.assertEqual(report['semantic_verdict'], 'passed')
+            self.assertEqual(report['native_hit_verdict'], 'not-requested')
+            def failed_evidence(*args):
+                raise AssertionError('no native hit')
+            root = Path(temp) / 'native'
+            with self.assertRaisesRegex(AssertionError, 'no native hit'):
+                self.capture_mock(root, require_native_hit=True, evidence_fn=failed_evidence)
+            report = json.loads((root / 'acceptance.json').read_text())
+            self.assertEqual(report['semantic_verdict'], 'passed')
+            self.assertEqual(report['native_hit_verdict'], 'failed')
+            self.assertEqual(report['verdict'], 'failed')
+            report = self.capture_mock(Path(temp) / 'positive', require_native_hit=True)
+            self.assertEqual(report['native_hit_verdict'], 'passed')
+
+    def test_profile_flags_are_explicit_and_all_native_cases_verify_ich(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            commands = []
+            def fake_run(command):
+                commands.append([str(v) for v in command])
+                if '-o' in command:
+                    Path(command[command.index('-o') + 1]).write_bytes(b'mock')
+                return record()
+            with patch.object(H, 'run', side_effect=fake_run):
+                H.compile_case(Path('/mock/rustc'), root, H.case('literal', H.LITERAL, ''),
+                               True, 'proof/cache', profile=root / 'profiles/cold')
+            command = commands[0]
+            self.assertIn('-Zself-profile-events=default,function-args', command)
+            self.assertIn(f'-Zself-profile={root}/profiles/cold', command)
+            self.assertIn('-Zincremental-verify-ich', command)
 
     def test_existing_output_is_rejected(self):
         with tempfile.TemporaryDirectory() as temp:

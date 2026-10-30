@@ -24,7 +24,8 @@ After root releases the frozen compiler, run from the repository root:
 ```sh
 python3 bench/reuse-declarative-macro-accept.py \
   --rustc /absolute/path/to/frozen/rustc \
-  --output /absolute/path/to/new-declarative-macro-acceptance
+  --output /absolute/path/to/new-declarative-macro-acceptance \
+  --require-native-hit
 ```
 
 The output directory must not exist and its parent must exist. Pass the actual
@@ -81,6 +82,7 @@ The ordered matrix includes unchanged rebuilds and final recovery, plus:
 
 | Family | Coverage |
 | --- | --- |
+| Eligible literal subset | Isolated `() => { 42 }`, unchanged rebuild, and unrelated same-width body edit, without metavariables or parser fragments |
 | Definition/input | Macro body change and invocation argument change |
 | Ordinary body | Non-macro function body edit alongside unchanged invocations |
 | Scope | Nested local macro shadowing with an edited inner definition |
@@ -99,7 +101,60 @@ This does not remove any correctness cases. Unsupported invocation shapes must
 fall back without observable differences, including unused-rule accounting,
 hygiene, diagnostics, and errors. The literal nested invocations also provide
 simple cache-eligible candidates without depending on interpolation support.
-The harness does not infer eligibility or promise a hit counter contract.
+The semantic matrix does not infer eligibility from a successful build. Native
+eligibility and reuse require the separate marker gate below.
+
+## Positive native reuse evidence is a separate gate
+
+Semantic equivalence alone is not proof of a cache hit. The recommended CLI
+above includes `--require-native-hit`. Without it, the report explicitly sets
+`native_hit_verdict` to `not-requested`, even when `semantic_verdict` is `passed`.
+Never promote a semantic-only pass as evidence that the native path was exercised.
+
+With the option enabled, a separate literal-only fixture contains exactly one
+`macro_rules! literal { () => { 42 }; }` invocation. It has no metavariables,
+parser fragments, interpolation, formatting macros, or assertion macros.
+Its main function exits nonzero if the literal expansion and ordinary function
+body produce the wrong value. The independent evidence sequence is:
+
+1. Off reference in a new evidence cache.
+2. Cold on in another new evidence cache.
+3. Unchanged warm on in that same on cache, in a new compiler process.
+4. An unrelated same-width body edit with warm on in the same cache.
+5. Off after in the same cache.
+
+All five executions retain exact status/diagnostic/runtime comparisons. They
+use the same fixture source and output paths as each other, `verify-ich`, and
+`-Zself-profile-events=default,function-args`. Each invocation has its own new
+profile directory, retained under `native-profiles/`. Exactly one `.mm_profdata`
+file must exist in each. The bundled `query_profile.py` parser validates the
+raw capture and records its SHA-256, metadata, size, record count, and unresolved
+record count. Full-profile virtual query IDs can be unresolved. They remain
+unknown, never inferred, and are not used for native-hit proof.
+
+The native marker schema consists of these exact resolved `GenericActivity`
+interval labels:
+
+- `jr_declarative_macro_eligible`
+- `jr_declarative_macro_ineligible`
+- `jr_declarative_macro_cache_lookup`
+- `jr_declarative_macro_cache_provider`
+- `jr_declarative_macro_cache_success`
+
+The off runs must have zero such markers. Cold on must have positive and equal
+eligible, lookup, provider, and success counts, with zero ineligible events.
+Both warm runs must have positive equal eligible, lookup, and success counts,
+zero ineligible events, and **strictly fewer provider executions than lookups**.
+Only after the cold provider calibration may that difference be interpreted as
+native query reuse. The report labels this difference `inferred_provider_avoided`,
+not a dedicated hit-counter measurement. Zero eligible invocations, absent
+markers, all-provider execution, a missing profile, or malformed profile data
+fails `--require-native-hit` even if every semantic case passed.
+
+This proves reuse only for the audited literal match/transcribe query, not
+full declarative expansion caching or a speedup. A wider native implementation
+or changed marker contract requires a reviewed harness schema update. The
+matrix still tests all fallback semantics outside this narrow subset.
 
 ## Capability gates and audit trail
 
