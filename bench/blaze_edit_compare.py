@@ -15,6 +15,7 @@ from pathlib import Path
 import platform
 import re
 import resource
+import signal
 import statistics
 import subprocess
 import time
@@ -22,6 +23,41 @@ import time
 STACKS = ('owned-off', 'owned-on', 'blaze')
 FLAGS = ('jr-empty-lint-level-fast-path', 'jr-cache-small-query-values',
          'jr-cache-associated-items')
+TIMEOUT_SECONDS = 360
+# Exact keys only. Never log inherited credentials, proxy URLs or arbitrary env.
+ENV_LOG_ALLOWLIST = frozenset(('HOME', 'CARGO_HOME', 'RUSTUP_HOME', 'CARGO_TARGET_DIR',
+    'XDG_CACHE_HOME', 'XDG_RUNTIME_DIR', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME',
+    'CARGO', 'RUSTC', 'RUSTFLAGS', 'BLAZE_HOME', 'BLAZE_CACHE',
+    'RA_JIT_HOME', 'RA_JIT_CACHE', 'JUSTRUST_TOOLCHAIN', 'JUSTRUST_REMOTE',
+    'JUSTRUST_DEPCACHE', 'JUSTRUST_REMOTE_CACHE', 'JUSTRUST_PEER_CACHE',
+    'JUSTRUST_CACHE_PROC_MACROS', 'JUSTRUST_BUILDD', 'JUSTRUST_BUILDD_PREBUILD',
+    'JUSTRUST_CARGO_FORK', 'JUSTRUST_TOOLCHAIN_AUTO_INSTALL', 'JUSTRUST_REAL_CARGO',
+    'JUSTRUST_HOME', 'JUSTRUST_LOCALCACHE', 'JUSTRUST_LOCALCACHE_TARGET_BOUND',
+    'JUSTRUST_PREBUILT', 'JUSTRUST_PREBUILT_ALWAYS'))
+
+
+def logged_environment(env):
+    return {k: env[k] for k in sorted(ENV_LOG_ALLOWLIST) if k in env}
+
+
+def succeeded(row):
+    return row['status'] == 0 and not row.get('timed_out') and not row.get('error')
+
+
+def type_error_bytes(original):
+    return edit_bytes(original, 0).replace(
+        b'std::hint::black_box(1u64);',
+        b'let _: u64 = "blaze_edit_compare_type_error";', 1)
+
+
+def type_error_detected(args, stack, row):
+    if row['status'] is None or row['status'] <= 0 or row.get('timed_out'):
+        return False
+    prefix = args.output / f'type-error-000-{stack}'
+    diagnostic = b''.join(prefix.with_suffix('.' + ext).read_bytes()
+                          for ext in ('stdout', 'stderr'))
+    return (b'blaze_edit_compare_type_error' in diagnostic
+            and (b'E0308' in diagnostic or b'mismatched types' in diagnostic))
 
 
 def digest(path):
@@ -86,12 +122,16 @@ def environment(args, stack):
             raise ValueError('Blaze toolchains must be installed by caller before benchmarking')
         (blaze_home / 'toolchains').symlink_to(installed)
         env.update(RA_JIT_HOME=str(root / 'daemon'), RA_JIT_CACHE=str(root / 'store'),
+                   BLAZE_CACHE=str(root / 'cache' / 'blaze'),
                    BLAZE_HOME=str(blaze_home))
     else:
         cargo_link = root / 'bin' / 'cargo'
         cargo_link.symlink_to(args.cargo)
         env.update(PATH=str(root / 'bin') + os.pathsep + env.get('PATH', ''),
                    CARGO=str(args.cargo), RUSTC=str(args.rustc),
+                   JUSTRUST_REAL_CARGO=str(args.cargo), JUSTRUST_HOME=str(root / 'home' / '.justrust'),
+                   JUSTRUST_LOCALCACHE='0', JUSTRUST_LOCALCACHE_TARGET_BOUND='0',
+                   JUSTRUST_PREBUILT='off', JUSTRUST_PREBUILT_ALWAYS='0',
                    JUSTRUST_TOOLCHAIN='system', JUSTRUST_REMOTE='off',
                    JUSTRUST_DEPCACHE='0', JUSTRUST_REMOTE_CACHE='0',
                    JUSTRUST_PEER_CACHE='0', JUSTRUST_CACHE_PROC_MACROS='0',
@@ -124,10 +164,27 @@ def run_command(args, stack, phase, replicate, env):
     start = time.perf_counter()
     error = None
     status = None
+    timed_out = False
     try:
         with prefix.with_suffix('.stdout').open('xb') as out, prefix.with_suffix('.stderr').open('xb') as err:
-            status = subprocess.run(command, cwd=args.source, env=env, stdout=out, stderr=err,
-                                    check=False).returncode
+            with subprocess.Popen(command, cwd=args.source, env=env, stdout=out, stderr=err,
+                                  start_new_session=True) as process:
+                try:
+                    status = process.wait(timeout=TIMEOUT_SECONDS)
+                except subprocess.TimeoutExpired:
+                    timed_out = True
+                    try:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    status = process.wait()
+                except BaseException:
+                    try:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    process.wait()
+                    raise
     except OSError as exc:
         error = repr(exc)
     elapsed = time.perf_counter() - start
@@ -138,9 +195,9 @@ def run_command(args, stack, phase, replicate, env):
     if before and after:
         noise['other_cpu_seconds_estimate'] = max(0, after['busy_seconds'] - before['busy_seconds'] - (child_after - child_before))
     result = dict(stack=stack, phase=phase, replicate=replicate, command=command,
-                  cwd=str(args.source), environment=env, started_utc=start_wall,
+                  cwd=str(args.source), environment=logged_environment(env), started_utc=start_wall,
                   perf_counter_start=start, elapsed_seconds=elapsed, status=status,
-                  error=error, noise=noise,
+                  error=error, noise=noise, timed_out=timed_out, timeout_seconds=TIMEOUT_SECONDS,
                   source_sha256=digest(args.source / 'src/runs.rs'))
     prefix.with_suffix('.json').write_text(json.dumps(result, indent=2) + '\n')
     return result
@@ -150,8 +207,13 @@ def summarize(records, samples, identity_valid):
     medians = {}
     for stack in STACKS:
         prep = [r for r in records if r['stack'] == stack and r['phase'] == 'prepare']
+        gates = [r for r in records if r['stack'] == stack and r['phase'] == 'type-error']
+        recoveries = [r for r in records if r['stack'] == stack and r['phase'] == 'recovery']
         rows = [r for r in records if r['stack'] == stack and r['phase'] == 'edit']
-        if identity_valid and len(prep) == 1 and prep[0]['status'] == 0 and len(rows) == samples and all(r['status'] == 0 for r in rows):
+        if (identity_valid and len(prep) == 1 and succeeded(prep[0])
+                and len(gates) == 1 and gates[0].get('gate_passed') is True
+                and len(recoveries) == 1 and succeeded(recoveries[0])
+                and len(rows) == samples and all(succeeded(r) for r in rows)):
             medians[stack] = statistics.median(r['elapsed_seconds'] for r in rows)
     return {'medians_seconds': medians,
             'descriptive_ratios_owned_off_over': {k: medians['owned-off'] / v for k, v in medians.items() if 'owned-off' in medians and v > 0},
@@ -171,7 +233,7 @@ def execute(args):
                 'cpuinfo': Path('/proc/cpuinfo').read_text(),
                 'meminfo': Path('/proc/meminfo').read_text()},
                 'source_sha256': hashlib.sha256(original).hexdigest(),
-                'policy': 'Sequential same source; isolated targets/HOME/XDG; shared normal CARGO_HOME dependency downloads; Blaze installed toolchain home shared read-only by intent; no enable or global config writes. Full environment logged privately.',
+                'policy': 'Sequential same source; isolated targets/HOME/XDG; shared normal CARGO_HOME dependency downloads; Blaze installed toolchain home shared read-only by intent; no enable or global config writes. Only explicit policy allowlist environment keys logged. Each stack must reject deliberate E0308 then recover before sampling.',
                 'samples': args.samples, 'command': args.command}
     (args.output / 'metadata.json').write_text(json.dumps(metadata, indent=2) + '\n')
     records = []
@@ -184,7 +246,17 @@ def execute(args):
             pinned.write_bytes(original)
             row = run_command(args, stack, 'prepare', 0, environments[stack])
             records.append(row)
-            if row['status'] == 0:
+            if not succeeded(row):
+                continue
+            pinned.write_bytes(type_error_bytes(original))
+            gate = run_command(args, stack, 'type-error', 0, environments[stack])
+            gate['gate_passed'] = type_error_detected(args, stack, gate)
+            records.append(gate)
+            (args.output / f'type-error-000-{stack}.json').write_text(json.dumps(gate, indent=2) + '\n')
+            pinned.write_bytes(original)
+            recovery = run_command(args, stack, 'recovery', 0, environments[stack])
+            records.append(recovery)
+            if gate['gate_passed'] and succeeded(recovery):
                 active.append(stack)
         for replicate in range(args.samples):
             edited = edit_bytes(original, replicate)
