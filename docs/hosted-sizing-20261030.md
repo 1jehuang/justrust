@@ -86,9 +86,12 @@ Post-resize forced-hosted acceptance:
 | `justrust clippy --remote --all-targets -- -D warnings` | `20261029-213518592-3013767` | Passed. |
 | Desktop FPS smoke | `20261029-213523554-3008035` | Blocked by four current source-fixture E0063 errors: missing `effective_budget` in `ApiEvent::TokenUsage` initializers. The host executed the build and reported the errors in full. No Desktop source edits were made. |
 
-The cloud suite passed 277 Node tests plus 70 existing Python tests and 15
-initial selector tests. Later selector consistency tests are recorded in the
-private repository. The hosted maintenance pause was explicitly released after
+The cloud suite passed 277 Node tests and 89 Python tests, including 19
+selector tests. Private cloud commit `5a0d402` adds bounded read-only EC2/API
+consistency polling after a mutation. Only an unchanged stopped host still
+reporting its exact old type may be retried, with no repeated mutation.
+Unexpected identity, tags, disk, state or type changes fail immediately.
+The hosted maintenance pause was explicitly released after
 the client check, full tests and strict Clippy passed. Selected redacted run
 summaries, including the failed Desktop build, are committed in
 `data/runs/hosted-sizing-20261030/2026-10.jsonl`.
