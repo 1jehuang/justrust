@@ -645,10 +645,16 @@ fn write_out_deps(tcx: TyCtxt<'_>, outputs: &OutputFilenames, out_filenames: &[P
             })
         }
 
-        let extra_tracked_files = hash_iter_files(
-            file_depinfo.iter().map(|path_sym| normalize_path(PathBuf::from(path_sym.as_str()))),
-            checksum_hash_algo,
-        );
+        let binary_reads = sess.tracked_binary_read_checksums.borrow();
+        let extra_tracked_files = file_depinfo.iter().map(|path_sym| {
+            let path = normalize_path(PathBuf::from(path_sym.as_str()));
+            match binary_reads.get(path_sym) {
+                Some(read) => (path, read.map_or((0, None), |(len, hash)| (len, Some(hash)))),
+                // Preserve the legacy behavior for untracked inputs, including proc macros.
+                // Such reopened checksums are not proof of the bytes consumed by the compiler.
+                None => hash_iter_files(iter::once(path), checksum_hash_algo).next().unwrap(),
+            }
+        });
         files.extend(extra_tracked_files);
 
         // We also need to track used PGO profile files

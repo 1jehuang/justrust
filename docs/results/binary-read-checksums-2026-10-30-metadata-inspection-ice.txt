@@ -1,0 +1,25 @@
+thread 'rustc' panicked at /rustc-dev/e3feeb59cd1bdd011a2bfcc0747b55125d9b8527/compiler/rustc_serialize/src/opaque.rs:319:9:
+MemDecoder exhausted
+stack backtrace:
+   0:     0x7f2eb3769715 - <std[617be2ca0a6fd877]::backtrace::Backtrace>::create
+   1:     0x7f2eb3769665 - <std[617be2ca0a6fd877]::backtrace::Backtrace>::force_capture
+   2:     0x7f2eb2492c41 - std[617be2ca0a6fd877]::panicking::update_hook::<alloc[2e1b2a31b91974c5]::boxed::Box<rustc_driver_impl[fec14241f8975cfd]::install_ice_hook::{closure#1}>>::{closure#0}
+   3:     0x7f2eb377f5a2 - std[617be2ca0a6fd877]::panicking::panic_with_hook
+   4:     0x7f2eb375d6f4 - std[617be2ca0a6fd877]::panicking::panic_handler::{closure#0}
+   5:     0x7f2eb3755279 - std[617be2ca0a6fd877]::sys::backtrace::__rust_end_short_backtrace::<std[617be2ca0a6fd877]::panicking::panic_handler::{closure#0}, !>
+   6:     0x7f2eb375f29d - __rustc[ea4f61d10b84890b]::rust_begin_unwind
+   7:     0x7f2eb019807c - core[a373ad73a504971]::panicking::panic_fmt
+   8:     0x7f2eb186998a - <rustc_serialize[7ec6f55aecd71be3]::opaque::MemDecoder>::decoder_exhausted
+   9:     0x7f2eb4d58948 - <rustc_metadata[51586874f2b8dd67]::rmeta::CrateRoot as rustc_serialize[7ec6f55aecd71be3]::serialize::Decodable<rustc_metadata[51586874f2b8dd67]::rmeta::decoder::BlobDecodeContext>>::decode
+  10:     0x7f2eb2aefaa8 - rustc_metadata[51586874f2b8dd67]::locator::list_file_metadata
+  11:     0x7f2eb4fa9034 - rustc_interface[f286839d7ce16120]::interface::run_compiler::<(), rustc_driver_impl[fec14241f8975cfd]::run_compiler::{closure#0}>::{closure#2}
+  12:     0x7f2eb501f7e4 - std[617be2ca0a6fd877]::sys::backtrace::__rust_begin_short_backtrace::<rustc_interface[f286839d7ce16120]::util::run_in_thread_with_globals<rustc_interface[f286839d7ce16120]::util::run_in_thread_pool_with_globals<rustc_interface[f286839d7ce16120]::interface::run_compiler<(), rustc_driver_impl[fec14241f8975cfd]::run_compiler::{closure#0}>::{closure#2}, ()>::{closure#0}, ()>::{closure#0}::{closure#0}, ()>
+  13:     0x7f2eb501f57d - <std[617be2ca0a6fd877]::thread::lifecycle::spawn_unchecked<rustc_interface[f286839d7ce16120]::util::run_in_thread_with_globals<rustc_interface[f286839d7ce16120]::util::run_in_thread_pool_with_globals<rustc_interface[f286839d7ce16120]::interface::run_compiler<(), rustc_driver_impl[fec14241f8975cfd]::run_compiler::{closure#0}>::{closure#2}, ()>::{closure#0}, ()>::{closure#0}::{closure#0}, ()>::{closure#1} as core[a373ad73a504971]::ops::function::FnOnce<()>>::call_once::{shim:vtable#0}
+  14:     0x7f2eb502a3ad - <std[617be2ca0a6fd877]::sys::thread::unix::Thread>::new::thread_start
+  15:     0x7f2eae098042 - <unknown>
+  16:     0x7f2eae12072c - <unknown>
+  17:                0x0 - <unknown>
+
+
+rustc version: 1.100.0-beta.1 (e3feeb59c 2026-09-27)
+platform: x86_64-unknown-linux-gnu

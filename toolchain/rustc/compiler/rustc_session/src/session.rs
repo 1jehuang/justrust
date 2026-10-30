@@ -24,7 +24,7 @@ use rustc_macros::StableHash;
 pub use rustc_span::def_id::StableCrateId;
 use rustc_span::edition::Edition;
 use rustc_span::source_map::{FilePathMapping, SourceMap};
-use rustc_span::{RealFileName, Span, Symbol};
+use rustc_span::{RealFileName, SourceFileHash, Span, Symbol};
 use rustc_structures::{CrateType, Limit};
 use rustc_target::asm::InlineAsmArch;
 use rustc_target::spec::{
@@ -529,6 +529,11 @@ pub struct Session {
     /// File paths accessed during the build.
     pub file_depinfo: Lock<FxIndexSet<Symbol>>,
 
+    /// Checksums of bytes actually consumed by builtin binary includes, only when requested.
+    /// An entry with `None` means unequal reads of the same path were observed: no single
+    /// checksum can describe the input. Absence means the path was not tracked here.
+    pub tracked_binary_read_checksums: Lock<FxHashMap<Symbol, Option<(u64, SourceFileHash)>>>,
+
     target_filesearch: Arc<FileSearch>,
     host_filesearch: Arc<FileSearch>,
     wasm_proc_macro_filesearch: Option<Arc<FileSearch>>,
@@ -606,6 +611,23 @@ pub struct LintGroup {
 }
 
 impl Session {
+    /// Bind dep-info to the bytes consumed, not to a later filesystem snapshot.
+    pub fn record_binary_file_read(&self, path: Symbol, bytes: &[u8]) {
+        let Some(algorithm) = self.opts.unstable_opts.checksum_hash_algorithm else {
+            return;
+        };
+        let read = (bytes.len() as u64, SourceFileHash::new_in_memory(algorithm, bytes));
+        self.tracked_binary_read_checksums
+            .borrow_mut()
+            .entry(path)
+            .and_modify(|previous| {
+                if *previous != Some(read) {
+                    *previous = None;
+                }
+            })
+            .or_insert(Some(read));
+    }
+
     /// justrust: record the interface hash (`-Zjr-iface-hash`, or
     /// `JUSTRUST_RUSTC_IFACE_HASH=1` so justrust can turn it on without touching
     /// RUSTFLAGS, which would change cargo's fingerprints). `=0` forces it off.
@@ -1588,6 +1610,7 @@ pub fn build_session(
         using_internal_features,
         env_depinfo: Default::default(),
         file_depinfo: Default::default(),
+        tracked_binary_read_checksums: Default::default(),
         target_filesearch,
         host_filesearch,
         wasm_proc_macro_filesearch,
