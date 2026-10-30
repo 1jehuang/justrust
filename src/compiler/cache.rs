@@ -102,22 +102,22 @@ fn ssa_key(
     key.field(&encoded.value);
     key.field(&(lowered.callees.len() as u64).to_le_bytes());
     for callee in &lowered.callees {
-        meter.work(
-            callee
-                .signature
-                .params
-                .len()
-                .saturating_add(callee.symbol.len())
-                .saturating_add(1),
-        )?;
+        // Graph targets are rebound from the current graph, never cached authority.
+        let ssa::lower::SsaCallee {
+            symbol,
+            target: _,
+            signature,
+        } = callee;
+        let ssa::SsaSignature { params, ret } = signature;
+        meter.work(params.len().saturating_add(symbol.len()).saturating_add(1))?;
         if symbols {
-            key.field(callee.symbol.as_bytes());
+            key.field(symbol.as_bytes());
         }
-        key.field(&(callee.signature.params.len() as u64).to_le_bytes());
-        for param in &callee.signature.params {
+        key.field(&(params.len() as u64).to_le_bytes());
+        for param in params {
             ty(&mut key, *param);
         }
-        ty(&mut key, callee.signature.ret);
+        ty(&mut key, *ret);
     }
     // A per-input admission/eligibility bound. A producer never stores a
     // result it could not read back within this same bound on the next build.
