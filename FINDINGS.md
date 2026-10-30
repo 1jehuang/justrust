@@ -9109,3 +9109,30 @@ support and comprehensive promotion gates remain incomplete, and maximizing
 retained values is not itself the objective. Next diagnostic isolates the owned
 Cranelift backend and four-thread frontend/overlapped-persistence paths under
 the same executed-test contract rather than claiming more cache hits are faster.
+
+## 2026-10-30: Native Cargo residency is exercised but does not close edit latency
+
+Prospective br45 accepted all seven stacks, 35 matching executed edits and every
+error/test-failure/recovery gate. All ten timed daemon edits contain the exact
+raw parked-server service marker. Medians were official Cargo 1.206150s, native
+Cargo with residency off 1.177500s, parked native Cargo 1.268064s and parked Cargo
+with four frontend threads 1.296977s. Seeded-warm Blaze measured 0.097911s
+Cranelift and 0.104013s LLVM. These descriptive scoped medians do not establish a
+residency win or justify a default change. Representative edit run IDs are
+`20261030-060949634-2835872`, `20261030-060952526-2837035`,
+`20261030-060953876-2837451` and `20261030-060955147-2837836`.
+
+Portable evidence `b03750a6b` retains all 50 owned recorder states/exports and
+646 sealed artifacts in `bench/results/native-cargo-br45-20261030/`. Source,
+compiler, Cargo and seed identities, runtime markers, exact negative gates and
+raw served proof independently replay. Cleanup receipts establish two reported
+SIGTERM attempts, not independently attested historical process ownership or
+exit. One daemon startup log reports an already-live private socket, which is
+preserved separately from the successful per-edit service proof.
+
+The preceding br44 native backend/thread frontier also remains far behind Blaze:
+Cranelift plus four frontend threads 1.186774s versus its baseline 1.288858s and
+Blaze 0.100719/0.111574s. Evidence `832de3f19` retains all seven stacks and 35
+executed edits. Neither diagnostic is the comprehensive promotion gate. The
+experimental compiler used incremental compilation and thin-local LTO, not a
+trained distribution build. A parked Cargo process is not a resident frontend.
