@@ -1,0 +1,15 @@
+justrust: sends usage stats (timings, counts, no code, paths, or names; linked to your account when signed in) to improve it. Off: `justrust telemetry off` or JUSTRUST_NO_TELEMETRY=1.
+
+justrust: ok: 4 tests passed in 17.7s
+  time    startup 0.07s | compile 17.58s
+  units   57 compiled (1 local, 47 deps, 9 build scripts), 0 fresh
+          justrust (test)                    8.39s  cpu  10.3s    727 MB
+          serde_derive                       1.37s  cpu   3.0s    386 MB
+          regex_automata                     0.89s  cpu   4.5s    416 MB
+          syn                                0.79s  cpu   5.4s    414 MB
+  tests   4 passed, 0 failed, 0 ignored, 144 filtered out, 1 binary in 0.00s
+  cpu     66.5s total, avg 3.8/peak 9.3 of 16 cores; others used 4.7 cores
+  memory  peak 2676 MB build, 727 MB largest rustc, 44.1 GB free; stalls cpu 0.82s mem 0.00s io 0.01s
+  waste   1 issue (estimated cost each; they can overlap):
+          ~  6.8s  rebuilt 47 registry dependencies and 9 build scripts (6.8s)
+  more    `justrust log 20261030-053346595-2554437` full output, `justrust show 20261030-053346595-2554437` full profile
