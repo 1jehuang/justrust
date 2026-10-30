@@ -48,6 +48,53 @@ A future consumer must retain normal current-graph admission, enforce per-operat
 
 Private-derived data and metadata require an explicit sharing policy as well as correct keys. Do not put source text, environment values, credentials, tenant identifiers, or private artifacts into public catalog/status metadata. Knowledge of a cache key alone is not proof of source ownership. Lookup timing and hit reporting must be included in the privacy threat model, not silently assumed harmless.
 
+## Offline computed-operation export v1
+
+The standalone compiler accepts `--computed-operation-export NEW_DIR` alongside
+`--cache-dir EXISTING_TRUSTED_DIR` for builds, not CHECK. Defaults are unchanged. The output directory must not exist and must be outside captured
+source roots. It is private (0700, files 0600). The compiler has no publisher
+credentials, transport, or global-cache permission.
+
+This first exporter supports **native-link v1 only**, after ordinary graph reads
+and CHECK admission. Only a newly computed eligible link miss writes a receipt.
+A warm hit or ineligible operation produces an empty operations list, never a
+COMPUTED record. The implementation digest comes from the actual admitted
+compiler image and mapped code, not an argument or caller-provided digest.
+Each payload is at most 16 MiB, narrower than the local cache's 64 MiB limit.
+Explicit export I/O, bounds, provenance or verification failures fail the CLI.
+Ordinary non-export local cache failures remain best-effort misses.
+
+On successful compilation the compiler seals `manifest.json`, at most 1024
+bytes, as compact UTF-8 JSON with sorted keys and one trailing LF. Format fields
+are `format: "justrust-computed-operations"`, `hash: "blake3-256"`,
+`version: 1` and `operations`, an array of zero or one records. A record has:
+
+- `operation: "justrust/native-link/x86_64-linux"` and `operation_version: 1`.
+- `implementation_digest`, `operation_key` and `payload_digest`: complete
+  BLAKE3-256 values encoded as exactly 64 lowercase hexadecimal characters.
+- `payload_bytes`: exact bounded byte length, and `payload_path`: exactly the
+  operation key, a single relative filename containing the raw payload.
+
+The directory also contains `computed-native-link-v1` for a computed record:
+a fixed 104-byte internal receipt (implementation digest, key, payload digest,
+then little-endian u64 length). It has no independent pointer authority. Sealing
+checks this fixed shape, the key-derived payload path, regular non-symlink files,
+length, digest and directory file count. No manifest is sealed on failed source
+checks or failed export. Consumers must require successful compiler exit as well
+as the sealed manifest, reject unexpected fields/files and verify all bounds,
+keys, paths and output digests before transport or interpretation.
+
+**This is evidence for a trusted producer, not authentication of an arbitrary
+local directory.** Trusted fleet orchestration must start with an empty private
+cache, run an operator-pinned compiler in an isolated credential-free environment
+on explicitly authorized public inputs, wait for the entire isolated process tree
+to exit, and verify the resulting manifest against that trusted implementation
+pin before publication. Never ingest caller-provided caches or export directories.
+A link computed using warm intermediate objects is not evidence that those
+objects came from trusted computation. The compiler does not attest that a
+caller-selected directory was initially empty or grant sharing permission.
+Private inputs remain unpublishable without a separate explicit sharing policy.
+
 ## Acceptance before global promotion
 
 Global promotion requires real producer/consumer workflows in addition to unit fixtures:

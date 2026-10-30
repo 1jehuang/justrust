@@ -15,6 +15,8 @@ const MAGIC: &[u8; 8] = b"JRLCACHE";
 const VERSION: u32 = 1;
 /// Maximum payload size accepted by the local cache.
 pub const MAX_ENTRY_BYTES: usize = 64 * 1024 * 1024;
+/// Deliberately narrower remote-export subset of local cache capacity.
+pub const MAX_EXPORTED_PAYLOAD_BYTES: usize = 16 * 1024 * 1024;
 const HEADER_SIZE: usize = 8 + 4 + 32 + 8 + 32;
 const KEY_DOMAIN: &[u8] = b"justrust.local-cache.key";
 
@@ -22,11 +24,104 @@ const KEY_DOMAIN: &[u8] = b"justrust.local-cache.key";
 #[derive(Clone, Debug)]
 pub struct LocalCache {
     directory: PathBuf,
+    computed_export: Option<PathBuf>,
 }
 
 impl LocalCache {
     pub fn new(directory: PathBuf) -> Self {
-        Self { directory }
+        Self {
+            directory,
+            computed_export: None,
+        }
+    }
+
+    /// Create a fresh private export directory. This conveys no publisher authority.
+    pub fn with_computed_export(mut self, directory: PathBuf) -> io::Result<Self> {
+        let mut builder = fs::DirBuilder::new();
+        #[cfg(unix)]
+        builder.mode(0o700);
+        builder.create(&directory)?;
+        self.computed_export = Some(directory);
+        Ok(self)
+    }
+
+    pub fn computed_export_enabled(&self) -> bool {
+        self.computed_export.is_some()
+    }
+
+    /// Native-link v1 only. Called solely after computing a cache miss.
+    pub fn export_computed_native_link(
+        &self,
+        key: &[u8; 32],
+        implementation: &[u8; 32],
+        bytes: &[u8],
+    ) -> io::Result<()> {
+        let Some(directory) = &self.computed_export else {
+            return Ok(());
+        };
+        if bytes.len() > MAX_EXPORTED_PAYLOAD_BYTES {
+            return Err(invalid("computed operation export exceeds 16 MiB"));
+        }
+        let name = blake3::Hash::from(*key).to_hex().to_string();
+        write_new(&directory.join(&name), bytes)?;
+        let mut receipt = Vec::with_capacity(104);
+        receipt.extend_from_slice(implementation);
+        receipt.extend_from_slice(key);
+        receipt.extend_from_slice(blake3::hash(bytes).as_bytes());
+        receipt.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+        write_new(&directory.join("computed-native-link-v1"), &receipt)
+    }
+
+    /// Seal only after successful compilation and current-graph/runtime checks.
+    /// The manifest is deliberately bounded to zero or one native-link record.
+    pub fn finish_computed_export(&self) -> io::Result<()> {
+        let Some(directory) = &self.computed_export else {
+            return Ok(());
+        };
+        let receipt_path = directory.join("computed-native-link-v1");
+        let operations = match fs::symlink_metadata(&receipt_path) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                if fs::read_dir(directory)?.next().is_some() {
+                    return Err(invalid("unexpected computed export files"));
+                }
+                String::new()
+            }
+            Err(error) => return Err(error),
+            Ok(_) => {
+                let receipt = read_regular_bounded(&receipt_path, 104)?;
+                if receipt.len() != 104 {
+                    return Err(invalid("invalid computed receipt"));
+                }
+                let hex = |bytes: &[u8]| {
+                    blake3::Hash::from(<[u8; 32]>::try_from(bytes).unwrap())
+                        .to_hex()
+                        .to_string()
+                };
+                let implementation = hex(&receipt[..32]);
+                let key = hex(&receipt[32..64]);
+                let digest = hex(&receipt[64..96]);
+                let length = u64::from_le_bytes(receipt[96..].try_into().unwrap());
+                if length > MAX_EXPORTED_PAYLOAD_BYTES as u64 {
+                    return Err(invalid("computed payload exceeds limit"));
+                }
+                let payload = read_regular_bounded(&directory.join(&key), length as usize)?;
+                if payload.len() as u64 != length
+                    || blake3::hash(&payload).to_hex().as_str() != digest
+                {
+                    return Err(invalid("computed payload digest or length mismatch"));
+                }
+                if fs::read_dir(directory)?.take(3).count() != 2 {
+                    return Err(invalid("unexpected computed export files"));
+                }
+                format!(
+                    "{{\"implementation_digest\":\"{implementation}\",\"operation\":\"justrust/native-link/x86_64-linux\",\"operation_key\":\"{key}\",\"operation_version\":1,\"payload_bytes\":{length},\"payload_digest\":\"{digest}\",\"payload_path\":\"{key}\"}}"
+                )
+            }
+        };
+        let manifest = format!(
+            "{{\"format\":\"justrust-computed-operations\",\"hash\":\"blake3-256\",\"operations\":[{operations}],\"version\":1}}\n"
+        );
+        write_new(&directory.join("manifest.json"), manifest.as_bytes())
     }
 
     fn entry_path(&self, key: &[u8; 32]) -> PathBuf {
@@ -149,6 +244,34 @@ impl LocalCache {
     }
 }
 
+fn write_new(path: &std::path::Path, bytes: &[u8]) -> io::Result<()> {
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut file = options.open(path)?;
+    file.write_all(bytes)?;
+    file.flush()
+}
+
+fn read_regular_bounded(path: &std::path::Path, bound: usize) -> io::Result<Vec<u8>> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    options.custom_flags(0x20000 | 0x800);
+    let file = options.open(path)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() || metadata.len() > bound as u64 {
+        return Err(invalid("computed export file is nonregular or oversized"));
+    }
+    let mut bytes = Vec::new();
+    file.take(bound as u64 + 1).read_to_end(&mut bytes)?;
+    if bytes.len() > bound {
+        return Err(invalid("computed export file grew"));
+    }
+    Ok(bytes)
+}
+
 fn create_directory(path: &std::path::Path) -> io::Result<()> {
     let mut builder = fs::DirBuilder::new();
     builder.recursive(true);
@@ -234,6 +357,81 @@ mod tests {
             builder.field(field);
         }
         builder.finish()
+    }
+
+    #[test]
+    fn computed_exports_are_new_bounded_and_verified_before_sealing() {
+        let directory = Directory::new();
+        let export = directory.0.join("export");
+        let cache = directory
+            .cache()
+            .with_computed_export(export.clone())
+            .unwrap();
+        assert!(
+            directory
+                .cache()
+                .with_computed_export(export.clone())
+                .is_err()
+        );
+        cache
+            .export_computed_native_link(&[3; 32], &[4; 32], b"payload")
+            .unwrap();
+        let key = blake3::Hash::from([3; 32]).to_hex().to_string();
+        let payload_path = export.join(&key);
+        fs::write(&payload_path, b"corrupt").unwrap();
+        assert!(cache.finish_computed_export().is_err());
+        assert!(!export.join("manifest.json").exists());
+        fs::write(&payload_path, b"payload").unwrap();
+        fs::rename(&payload_path, export.join("wrong-key")).unwrap();
+        assert!(cache.finish_computed_export().is_err());
+        fs::rename(export.join("wrong-key"), &payload_path).unwrap();
+        cache.finish_computed_export().unwrap();
+        assert!(cache.finish_computed_export().is_err());
+        let manifest = fs::read_to_string(export.join("manifest.json")).unwrap();
+        assert!(manifest.len() <= 1024);
+        assert!(manifest.contains(&format!("\"payload_path\":\"{key}\"")));
+        assert!(manifest.contains("\"payload_bytes\":7"));
+        let large = directory
+            .cache()
+            .with_computed_export(directory.0.join("large"))
+            .unwrap();
+        assert!(
+            large
+                .export_computed_native_link(
+                    &[1; 32],
+                    &[2; 32],
+                    &vec![0; MAX_EXPORTED_PAYLOAD_BYTES + 1]
+                )
+                .is_err()
+        );
+        assert_eq!(fs::read_dir(directory.0.join("large")).unwrap().count(), 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn computed_export_rejects_symlink_payload_and_receipt() {
+        use std::os::unix::fs::symlink;
+        let directory = Directory::new();
+        let export = directory.0.join("export");
+        let cache = directory
+            .cache()
+            .with_computed_export(export.clone())
+            .unwrap();
+        cache
+            .export_computed_native_link(&[3; 32], &[4; 32], b"payload")
+            .unwrap();
+        let payload = export.join(blake3::Hash::from([3; 32]).to_hex().as_str());
+        let saved = directory.0.join("saved");
+        fs::rename(&payload, &saved).unwrap();
+        symlink(&saved, &payload).unwrap();
+        assert!(cache.finish_computed_export().is_err());
+        fs::remove_file(&payload).unwrap();
+        fs::rename(&saved, &payload).unwrap();
+        let receipt = export.join("computed-native-link-v1");
+        fs::rename(&receipt, &saved).unwrap();
+        symlink(&saved, &receipt).unwrap();
+        assert!(cache.finish_computed_export().is_err());
+        assert!(!export.join("manifest.json").exists());
     }
 
     #[test]

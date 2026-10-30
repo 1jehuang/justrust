@@ -104,6 +104,12 @@ pub(super) fn link(
             Outcome::Disabled,
         );
     };
+    if cache.computed_export_enabled() && compiler.is_none() {
+        return (
+            Err("computed operation export requires actual compiler provenance".into()),
+            Outcome::MissNotStored,
+        );
+    }
     let Some((key, expected_length, work)) =
         compiler.and_then(|compiler| identity(functions, unwind, compiler.implementation_digest()))
     else {
@@ -132,6 +138,15 @@ pub(super) fn link(
             return Ok((bytes, Outcome::MissNotStored));
         }
         budget.charge_work(bytes.len())?;
+        if cache.computed_export_enabled() {
+            let compiler = compiler.ok_or("computed export lacks compiler provenance")?;
+            compiler
+                .validate_current()
+                .map_err(|error| format!("computed operation export provenance: {error}"))?;
+            cache
+                .export_computed_native_link(&key, compiler.implementation_digest(), &bytes)
+                .map_err(|error| format!("computed operation export: {error}"))?;
+        }
         let outcome = if cache.store(&key, &bytes).is_ok() {
             Outcome::MissStored
         } else {

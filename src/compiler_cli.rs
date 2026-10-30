@@ -12,7 +12,7 @@ mod compiler_profile;
 static ALLOCATION_PROFILE: allocation_profile::ProfilingAllocator<std::alloc::System> =
     allocation_profile::ProfilingAllocator::new(std::alloc::System);
 
-const HELP: &str = "jr-rust SOURCE [-o NEW_EXECUTABLE] [--workers N] [--check] [--edition YEAR] [--debug-assertions yes|no] [--cfg NAME_OR_KEY_VALUE] [--trace NEW_TRACE] [--profile NEW_JSON] [--verbose]\n\nClean-room Rust subset compiler. Direct Linux x86-64 ELF output, no rustc delegation.\nSee COMPILER.md for supported syntax and limitations. Existing files are never overwritten.\nAccounting is always enabled. --check performs semantic checks without code generation.\n--edition YEAR selects the source edition (default: 2024); only 2024 is currently supported.\n--cfg may be repeated for user names or key=\"value\" predicates; native target cfg is fixed.\n--debug-assertions yes|no sets native debug assertions (default: yes); may be supplied once.\n--opt off|adaptive|final selects the graph-native optimizer (default: off, or $JR_OPT).\n--source-lock PATH --source-item NAME adds a verified source declaration probe, not a library crate.\n--cache-dir PATH opts into lowering, optimization, machine-code and link-output reuse in an existing trusted local directory outside source roots. Not a shared or remote cache.\n--verbose reports input-capture provenance and native link-cache outcomes on stderr.\n--profile writes bounded task timings and exact first budget failure without CFG dumps.\nAllocator counters require a binary built with --features allocation-profile.\n";
+const HELP: &str = "jr-rust SOURCE [-o NEW_EXECUTABLE] [--workers N] [--check] [--edition YEAR] [--debug-assertions yes|no] [--cfg NAME_OR_KEY_VALUE] [--trace NEW_TRACE] [--profile NEW_JSON] [--verbose]\n\nClean-room Rust subset compiler. Direct Linux x86-64 ELF output, no rustc delegation.\nSee COMPILER.md for supported syntax and limitations. Existing files are never overwritten.\nAccounting is always enabled. --check performs semantic checks without code generation.\n--edition YEAR selects the source edition (default: 2024); only 2024 is currently supported.\n--cfg may be repeated for user names or key=\"value\" predicates; native target cfg is fixed.\n--debug-assertions yes|no sets native debug assertions (default: yes); may be supplied once.\n--opt off|adaptive|final selects the graph-native optimizer (default: off, or $JR_OPT).\n--source-lock PATH --source-item NAME adds a verified source declaration probe, not a library crate.\n--cache-dir PATH opts into lowering, optimization, machine-code and link-output reuse in an existing trusted local directory outside source roots. Not a shared or remote cache.\n--computed-operation-export NEW_DIR exports only newly computed native-link v1 operations (<=16 MiB), requires --cache-dir. No publication authority.\n--verbose reports input-capture provenance and native link-cache outcomes on stderr.\n--profile writes bounded task timings and exact first budget failure without CFG dumps.\nAllocator counters require a binary built with --features allocation-profile.\n";
 
 fn allocator_json() -> String {
     #[cfg(feature = "allocation-profile")]
@@ -71,6 +71,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut check = false;
     let mut verbose = false;
     let mut cache_dir: Option<PathBuf> = None;
+    let mut computed_export: Option<PathBuf> = None;
     let mut source_options = compiler::source::SourceOptions::default();
     // JR_OPT selects the optimizer mode; --opt overrides it. The compiler
     // itself only sees the resulting explicit input.
@@ -92,6 +93,15 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
             Some("--check") => check = true,
             Some("--verbose") => verbose = true,
+            Some("--computed-operation-export") => {
+                if computed_export.is_some() {
+                    return Err("--computed-operation-export may only be supplied once".into());
+                }
+                computed_export = Some(PathBuf::from(
+                    args.next()
+                        .ok_or("missing --computed-operation-export path")?,
+                ));
+            }
             Some("--cache-dir") => {
                 if cache_dir.is_some() {
                     return Err("--cache-dir may only be supplied once".into());
@@ -298,15 +308,41 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         .into(),
                 );
             }
-            source_options.local_cache = Some(justrust_engine::persistent_cache::LocalCache::new(
-                cache_dir,
-            ));
+            let mut cache = justrust_engine::persistent_cache::LocalCache::new(cache_dir);
+            if let Some(path) = &computed_export {
+                let name = path
+                    .file_name()
+                    .ok_or("export requires a NEW directory name")?;
+                let parent = path
+                    .parent()
+                    .filter(|p| !p.as_os_str().is_empty())
+                    .unwrap_or_else(|| Path::new("."));
+                let path = parent.canonicalize()?.join(name);
+                if std::iter::once(root)
+                    .chain(roots.iter().map(PathBuf::as_path))
+                    .any(|root| path.starts_with(root))
+                {
+                    return Err(
+                        "computed export directory must be outside captured source roots".into(),
+                    );
+                }
+                cache = cache.with_computed_export(path)?;
+            }
+            source_options.local_cache = Some(cache);
         }
         let excluded = output.clone().unwrap_or_else(|| root.join("target"));
         source_options.source_snapshot = Some(
             compiler::source::SourceSnapshot::capture_directories(root, &roots, &excluded)?,
         );
     }
+    if computed_export.is_some() && (cache_dir.is_none() || check) {
+        return Err(
+            "--computed-operation-export requires --cache-dir and a build (not --check)".into(),
+        );
+    }
+    let export_cache = computed_export
+        .as_ref()
+        .and(source_options.local_cache.clone());
     let compiled = match probe {
         Some(request) => compiler::compile_probe_file_observed_with_options(
             source.clone(),
@@ -355,6 +391,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             return Err(format!("{}: {error}\nnote: source preparation and syntax diagnostics use original file locations; semantic diagnostic source spans remain incomplete", source.display()).into());
         }
     };
+    if let Some(cache) = &export_cache {
+        cache
+            .finish_computed_export()
+            .map_err(|error| format!("computed operation export: {error}"))?;
+    }
     let source_bytes = compiled.source_bytes;
     if verbose {
         eprintln!("Native link cache: {:?}", compiled.link_cache);

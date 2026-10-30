@@ -345,6 +345,48 @@ fn unwritable_cache_fails_open_and_configuration_invalidates() {
     assert_eq!(result.executable, hit.executable);
 }
 #[test]
+fn computed_export_cli_rejects_existing_directory_and_invalid_unused_source() {
+    let scratch = Scratch::new();
+    let source_root = scratch.0.join("src");
+    let cache = scratch.0.join("cache");
+    let export = scratch.0.join("export");
+    fs::create_dir(&source_root).unwrap();
+    fs::create_dir(&cache).unwrap();
+    fs::create_dir(&export).unwrap();
+    fs::write(export.join("sentinel"), b"preserve").unwrap();
+    let source = source_root.join("main.rs");
+    fs::write(&source, "fn main() {}").unwrap();
+    let invoke = |export: &std::path::Path, output: &str| {
+        Command::new(env!("CARGO_BIN_EXE_jr-rust"))
+            .arg(&source)
+            .arg("-o")
+            .arg(scratch.0.join(output))
+            .arg("--cache-dir")
+            .arg(&cache)
+            .arg("--computed-operation-export")
+            .arg(export)
+            .output()
+            .unwrap()
+    };
+    let result = invoke(&export, "existing-out");
+    assert!(!result.status.success());
+    assert_eq!(fs::read(export.join("sentinel")).unwrap(), b"preserve");
+    assert!(!export.join("manifest.json").exists());
+    let cold = invoke(&scratch.0.join("cold"), "cold-out");
+    assert!(
+        cold.status.success(),
+        "{}",
+        String::from_utf8_lossy(&cold.stderr)
+    );
+    fs::write(&source, "fn unused() { let x: bool = 1; } fn main() {}").unwrap();
+    let bad_export = scratch.0.join("bad");
+    let bad = invoke(&bad_export, "bad-out");
+    assert!(!bad.status.success());
+    assert!(!bad_export.join("manifest.json").exists());
+    assert!(!scratch.0.join("bad-out").exists());
+}
+
+#[test]
 fn standalone_processes_reuse_outputs_despite_distinct_output_arguments() {
     let scratch = Scratch::new();
     let source_root = scratch.0.join("src");
@@ -355,12 +397,15 @@ fn standalone_processes_reuse_outputs_despite_distinct_output_arguments() {
     fs::write(&source, "fn main() { println!(\"cached\"); }").unwrap();
     for (run, expected) in ["MissStored", "Hit"].into_iter().enumerate() {
         let output = scratch.0.join(format!("out-{run}"));
+        let export = scratch.0.join(format!("export-{run}"));
         let result = Command::new(env!("CARGO_BIN_EXE_jr-rust"))
             .arg(&source)
             .arg("-o")
             .arg(&output)
             .arg("--cache-dir")
             .arg(&cache)
+            .arg("--computed-operation-export")
+            .arg(&export)
             .args(["--verbose", "--workers", if run == 0 { "1" } else { "8" }])
             .output()
             .unwrap();
@@ -376,5 +421,29 @@ fn standalone_processes_reuse_outputs_despite_distinct_output_arguments() {
             String::from_utf8_lossy(&result.stderr)
         );
         assert_eq!(Command::new(&output).output().unwrap().stdout, b"cached\n");
+        let manifest = fs::read_to_string(export.join("manifest.json")).unwrap();
+        assert!(manifest.len() < 1024);
+        if run == 0 {
+            let receipt = fs::read(export.join("computed-native-link-v1")).unwrap();
+            assert_eq!(receipt.len(), 104);
+            let key = blake3::Hash::from(<[u8; 32]>::try_from(&receipt[32..64]).unwrap())
+                .to_hex()
+                .to_string();
+            let payload = fs::read(export.join(&key)).unwrap();
+            assert_eq!(payload, fs::read(&output).unwrap());
+            assert_eq!(blake3::hash(&payload).as_bytes(), &receipt[64..96]);
+            assert!(manifest.contains(&format!("\"operation_key\":\"{key}\"")));
+            assert!(manifest.contains(&format!("\"payload_path\":\"{key}\"")));
+            assert!(manifest.contains("\"operation_version\":1"));
+            assert!(manifest.contains("\"operation\":\"justrust/native-link/x86_64-linux\""));
+            assert_ne!(&receipt[..32], &[0; 32]);
+            assert_eq!(fs::read_dir(&export).unwrap().count(), 3);
+        } else {
+            assert_eq!(
+                manifest,
+                "{\"format\":\"justrust-computed-operations\",\"hash\":\"blake3-256\",\"operations\":[],\"version\":1}\n"
+            );
+            assert_eq!(fs::read_dir(&export).unwrap().count(), 1);
+        }
     }
 }
