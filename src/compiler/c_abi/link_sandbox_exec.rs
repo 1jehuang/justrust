@@ -7,6 +7,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[path = "link_sandbox_inject.rs"]
+mod inject;
 #[path = "link_sandbox_launch.rs"]
 mod launch;
 
@@ -24,6 +26,7 @@ pub(super) struct Guard {
     traced: bool,
     stopped: bool,
     reaped: bool,
+    sealed: bool,
     owner: PhantomData<Rc<()>>,
 }
 impl Guard {
@@ -33,6 +36,7 @@ impl Guard {
             traced: true,
             stopped: false,
             reaped: false,
+            sealed: false,
             owner: PhantomData,
         }
     }
@@ -73,7 +77,24 @@ impl Guard {
         }
     }
 
-    pub(super) fn normalize_launch(&self, procdir: &std::fs::File) -> io::Result<()> {
+    pub(super) fn normalize_launch(&mut self, procdir: &std::fs::File) -> io::Result<()> {
+        let result = if self.sealed {
+            Err(io::Error::other("linker launch already sealed"))
+        } else {
+            self.normalize_stack(procdir)
+                .and_then(|()| inject::remove(self.child.id() as i32, procdir))
+        };
+        if result.is_ok() {
+            self.sealed = true;
+        } else {
+            // A partially injected task must never be detached, even if a
+            // caller catches this error instead of dropping its Guard.
+            self.terminate();
+        }
+        result
+    }
+
+    fn normalize_stack(&self, procdir: &std::fs::File) -> io::Result<()> {
         if !self.traced || !self.stopped || self.reaped {
             return Err(io::Error::other(
                 "linker launch normalization requires owned exec stop",
@@ -127,8 +148,10 @@ impl Guard {
     }
 
     pub(super) fn detach(&mut self) -> io::Result<()> {
-        if !self.traced || !self.stopped || self.reaped {
-            return Err(io::Error::other("linker detach requires owned exec stop"));
+        if !self.traced || !self.stopped || self.reaped || !self.sealed {
+            return Err(io::Error::other(
+                "linker detach requires sealed owned exec stop",
+            ));
         }
         // Signal zero suppresses the synthetic SIGTRAP. No image instruction
         // executes until every parent launch-state operation has succeeded.

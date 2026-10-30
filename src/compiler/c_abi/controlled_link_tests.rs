@@ -1,4 +1,75 @@
 use super::*;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+fn controlled_link_legacy_vsyscalls_cannot_observe_clock_or_cpu() {
+    use std::os::unix::process::ExitStatusExt;
+    let directory = Temp::new();
+    for (name, address) in [
+        ("gettimeofday", 0xffffffffff600000u64),
+        ("time", 0xffffffffff600400u64),
+        ("getcpu", 0xffffffffff600800u64),
+    ] {
+        let root = directory.0.join(name);
+        fs::create_dir(&root).unwrap();
+        fs::create_dir(root.join("out")).unwrap();
+        let source = directory.0.join(format!("{name}.S"));
+        let executable = root.join("probe");
+        // Valid writable arguments distinguish denial from a bad-pointer error.
+        // Keep separate processes: kernels may disable the legacy page entirely.
+        fs::write(
+            &source,
+            format!(
+                r#"
+.global _start
+.text
+_start:
+    mov $1, %eax
+    mov $1, %edi
+    lea ready(%rip), %rsi
+    mov $1, %edx
+    syscall
+    lea values(%rip), %rdi
+    lea values+32(%rip), %rsi
+    xor %edx, %edx
+    movabs ${address:#x}, %rax
+    call *%rax
+    cmp $-1, %rax
+    jne observed
+    xor %edi, %edi
+    jmp finish
+observed:
+    mov $99, %edi
+finish:
+    mov $60, %eax
+    syscall
+.section .rodata
+ready: .byte 82
+.bss
+.balign 16
+values: .skip 64
+.section .note.GNU-stack,"",@progbits
+"#
+            ),
+        )
+        .unwrap();
+        let compiled = Command::new("cc")
+            .args(["-nostdlib", "-static", "-no-pie"])
+            .arg(&source)
+            .arg("-o")
+            .arg(&executable)
+            .output()
+            .unwrap();
+        assert!(compiled.status.success(), "{compiled:?}");
+        let mut command = Command::new(&executable);
+        command.env_clear();
+        let output = super::super::link_sandbox_run::output(&mut command, &root).unwrap();
+        assert!(
+            output.status.success() || output.status.signal() == Some(11),
+            "legacy {name} was not denied: {output:?}"
+        );
+        assert_eq!(output.stdout, b"R", "probe did not reach legacy call");
+    }
+}
 #[test]
 fn controlled_link_descriptor_metadata_is_reproducible_across_roots() {
     let directory = Temp::new();

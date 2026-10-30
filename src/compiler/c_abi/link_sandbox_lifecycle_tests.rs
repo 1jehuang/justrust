@@ -354,6 +354,29 @@ fn controlled_link_exec_stop_precedes_first_image_write_and_reaps_setup_errors()
             "untrusted image wrote before parent setup"
         );
         child.normalize_launch(&process).unwrap();
+        // Open relative to the bootstrap-pinned proc directory, never a new
+        // numeric PID path. The first assembly instruction is still stopped.
+        let maps = {
+            unsafe extern "C" {
+                fn openat(directory: i32, path: *const std::ffi::c_char, flags: i32, ...) -> i32;
+            }
+            let fd = unsafe { openat(process.as_raw_fd(), c"maps".as_ptr(), 0x80000 | 0x20000) };
+            assert!(fd >= 0);
+            use std::io::Read;
+            let mut bytes = String::new();
+            unsafe { fs::File::from_raw_fd(fd) }
+                .take(65537)
+                .read_to_string(&mut bytes)
+                .unwrap();
+            assert!(bytes.len() <= 65536);
+            bytes
+        };
+        for mapping in ["[vdso]", "[vvar]", "[vvar_vclock]"] {
+            assert!(
+                !maps.contains(mapping),
+                "live kernel mapping at seal: {mapping}"
+            );
+        }
         broker.bind_process(process).unwrap();
         if failure == 1 {
             // Deliberately fail stdio admission with a regular file while the
