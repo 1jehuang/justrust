@@ -59,7 +59,11 @@ SHA-256 was
 The captured rustc-driver SHA-256 was
 `502401b14a878674fddf862e4fe7c7dca0948da8a7b8e8aefd3543ffd57a0eb7`.
 These hashes, rather than the upstream version string alone, identify the tested
-owned compiler. A subsequent compiler rebuild requires a new capture directory.
+owned compiler. After the coordinator confirmed the final compiler and tools
+build had settled, a fresh independent capture at
+`bench/results/query-value-retention-20261030/native-final-stage1/acceptance.json`
+also passed all 22 cases with exactly the same executable and driver hashes.
+A subsequent compiler rebuild requires a new capture directory.
 
 The companion `old-compiler-negative/acceptance.json` is an intentional failure:
 the old stage2 compiler rejected the unsupported flag, the harness exited 1,
