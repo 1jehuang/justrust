@@ -154,7 +154,7 @@ pub(super) fn confine(
     // CPU instructions and staging-path observations remain outside this bound.
     for number in [
         0u32, 1, 3, 7, 9, 10, 11, 12, 13, 14, 15, 17, 18, 19, 20, 23, 24, 25, 26, 32, 33, 35, 40,
-        60, 74, 75, 77, 79, 95, 158, 202, 218, 230, 231, 270, 271, 273, 334, 436,
+        60, 74, 75, 77, 158, 202, 218, 230, 231, 270, 271, 273, 334, 436,
     ] {
         filter.push(instruction(0x15, 0, 1, number));
         filter.push(instruction(0x06, 0, 0, 0x7fff0000));

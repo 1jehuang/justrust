@@ -537,7 +537,7 @@ void _start(void){{
  if(call(302,1,0,0)!=-1)die(13);
  // Raw syscalls deliberately bypass libc/vDSO. Valid writable output buffers
  // and invalid arguments must both receive uniform EPERM without writes.
- static const long observations[]={{39,63,96,97,98,99,100,102,104,107,108,110,115,118,120,121,124,125,186,201,204,228,229,309}};
+ static const long observations[]={{39,63,79,95,96,97,98,99,100,102,104,107,108,110,115,118,120,121,124,125,186,201,204,228,229,309}};
  volatile unsigned char observation[512];
  for(long i=0;i<512;i++)observation[i]=0xa5;
  for(long i=0;i<(long)(sizeof observations/sizeof observations[0]);i++){{
@@ -545,6 +545,8 @@ void _start(void){{
   if(call(n,(long)observation,(long)observation,(long)observation)!=-1)die(71);
   if(call(n,0,0,0)!=-1)die(72);
  }}
+ if(call(79,(long)observation,512,0)!=-1)die(83);
+ if(call(95,022,0,0)!=-1)die(84);
  if(call(97,3,(long)observation,0)!=-1)die(82);
  if(call(98,0,(long)observation,0)!=-1)die(73);
  if(call(204,0,512,(long)observation)!=-1)die(74);
