@@ -40,6 +40,20 @@ fn main() { let mut store=Store{record:Record{value:Value{text:String::from("hel
                 expect: Expect::Run("index\nindex\nhello!\n"),
             },
             Case {
+                name: "reference_vec_field_receivers",
+                source: r#"struct Record { name: String }
+fn read(records:&Vec<Record>) { println!("{}",records[0].name.as_str()); let i=0usize; println!("{}",records[i].name.as_str()); }
+fn change(records:&mut Vec<Record>) { records[0].name.push_str("!"); }
+fn main() { let mut records=vec![Record{name:String::from("hello")}]; read(&records); change(&mut records); read(&records); }"#,
+                expect: Expect::Run("hello\nhello\nhello!\nhello!\n"),
+            },
+            Case {
+                name: "shared_vec_implicit_index_cannot_mutate_field",
+                source: r#"struct Record { name: String }
+fn main() { let records=vec![Record{name:String::from("hello")}]; let shared=&records; shared[0].name.push_str("!"); }"#,
+                expect: Expect::Invalid("E0596"),
+            },
+            Case {
                 name: "shared_vec_cannot_mutate_field",
                 source: r#"struct Record { name: String }
 fn main() { let records=vec![Record{name:String::from("hello")}]; let shared=&records; (*shared)[0].name.push_str("!"); }"#,

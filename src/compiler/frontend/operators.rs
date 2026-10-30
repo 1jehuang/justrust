@@ -173,6 +173,14 @@ impl type_check::Checker<'_> {
         owner: &ir::Ty,
         index: &Expr,
     ) -> Result<Option<ir::Ty>, String> {
+        let owner = match owner {
+            ir::Ty::Ref { referent, .. }
+                if overloadable(referent) && !matches!(referent.as_ref(), ir::Ty::Tuple(_)) =>
+            {
+                referent.as_ref()
+            }
+            owner => owner,
+        };
         if !overloadable(owner) {
             return Ok(None);
         }
@@ -344,9 +352,24 @@ impl type_check::Checker<'_> {
             _ => return Ok(None),
         };
         let index = index.or(literal.as_ref()).unwrap();
-        let Some(owner) = self.method_receiver_hint(base)? else {
+        let Some(mut owner) = self.method_receiver_hint(base)? else {
             return Ok(None);
         };
+        // Match value indexing's builtin reference adjustment, retaining the
+        // original index occurrence as the canonical operator call site.
+        let explicit;
+        let mut base = base;
+        if let ir::Ty::Ref { referent, .. } = &owner
+            && overloadable(referent)
+            && !matches!(referent.as_ref(), ir::Ty::Tuple(_))
+        {
+            let referent = referent.as_ref().clone();
+            explicit = Expr::Deref {
+                value: Box::new(base.clone()),
+            };
+            base = &explicit;
+            owner = referent;
+        }
         if !overloadable(&owner) {
             return Ok(None);
         }
