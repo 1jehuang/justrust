@@ -621,6 +621,11 @@ void _start(void){{
  if(call(79,(long)observation,512,0)!=-1)die(83);
  if(call(95,022,0,0)!=-1)die(84);
  if(call(157,25,(long)observation,0)!=-1)die(101);
+ volatile int clear_tid=0x12345678;
+ if(call(218,(long)&clear_tid,0,0)!=-1||clear_tid!=0x12345678)die(102);
+ static unsigned char restartable[32] __attribute__((aligned(32)));
+ if(call6(334,(long)restartable,32,0,0x53053053,0,0)!=-1)die(103);
+ for(long i=0;i<32;i++)if(restartable[i])die(104);
  if(call(97,3,(long)observation,0)!=-1)die(82);
  if(call(98,0,(long)observation,0)!=-1)die(73);
  if(call(204,0,512,(long)observation)!=-1)die(74);

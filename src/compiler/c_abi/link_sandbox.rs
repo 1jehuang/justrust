@@ -150,12 +150,13 @@ pub(super) fn confine(
     // Exact native numbers also exclude x32, process/network/namespace APIs,
     // io_uring, ioctl and capability manipulation.
     // No direct machine/clock/resource/credential/affinity/entropy observations.
-    // Such native syscalls receive the same EPERM as unknown operations, not a
-    // fabricated host identity. This is only syscall confinement: auxv, vDSO,
-    // CPU instructions and staging-path observations remain outside this bound.
+    // This filter is one boundary layer: launch normalization and tracing handle
+    // selected auxv/vDSO/TSC inputs, not all CPU or address-layout observations.
+    // set_tid_address would return a host TID and rseq can expose live CPU IDs;
+    // neither is admitted by this single-threaded linker boundary.
     for number in [
         0u32, 1, 3, 7, 9, 10, 11, 12, 13, 14, 15, 17, 18, 19, 20, 23, 24, 25, 26, 32, 33, 35, 40,
-        60, 74, 75, 77, 158, 202, 218, 230, 231, 270, 271, 273, 334, 436,
+        60, 74, 75, 77, 158, 202, 230, 231, 270, 271, 273, 436,
     ] {
         filter.push(instruction(0x15, 0, 1, number));
         filter.push(instruction(0x06, 0, 0, 0x7fff0000));

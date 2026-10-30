@@ -2109,7 +2109,10 @@ PlanCtx/interner/source-context debt and wide adapter activation remain held.
       virtual counter and fixed RDTSCP CPU identifier, with register readback;
       other faults retain their original signals. A trace-stop budget and
       tracer-death kill supplement the existing deadline and teardown bounds.
-      Tools cannot reenable direct timestamp reads through prctl.
+      Tools cannot reenable direct timestamp reads through prctl. The boundary
+      also denies set_tid_address, whose return reveals a kernel thread ID, and
+      rseq registration, which would admit asynchronously kernel-written CPU
+      identity fields into child memory.
       Hosted acceptance includes real captured GNU ld, stock/native ABI parity
       at workers 1/8, canonical metadata, first-instruction ordering, kernel-map
       removal, deterministic timestamp probes, legacy vsyscall probes, floods
