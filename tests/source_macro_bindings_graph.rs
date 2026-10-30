@@ -4,6 +4,24 @@ use justrust_engine::compiler;
 mod oracle;
 
 #[test]
+fn separator_free_literal_repetition_check_has_no_codegen_or_duplicate_nodes() {
+    let source = "macro_rules! values {($($name:ident : $output:ty = $value:expr)*)=>{$(fn $name()->$output{$value})*};} values!{first:u16=1_000 second:u32=1_000_000 third:i32=-7} fn main(){assert_eq!(first(),1_000u16);assert_eq!(second(),1_000_000u32);assert_eq!(third(),-7);}";
+    for workers in [1, 8] {
+        let checked = compiler::compile_observed(source.into(), workers, true).unwrap();
+        assert!(checked.executable.is_none());
+        assert!(checked.report.capture_complete);
+        assert_eq!(checked.report.events_dropped, 0);
+        assert!(
+            checked
+                .report
+                .node_evaluations
+                .iter()
+                .all(|(key, count)| { *count == 1 && !matches!(key.kind, 103 | 105 | 130..=133) })
+        );
+    }
+}
+
+#[test]
 fn check_shadowing_has_no_codegen_and_preserves_source_node_keys() {
     for workers in [1, 8] {
         let plain = compiler::compile_observed(

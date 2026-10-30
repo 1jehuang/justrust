@@ -84,6 +84,69 @@ fn main() {}
 }
 
 #[test]
+fn separator_free_literal_capture_cannot_transfer_sibling_body_authority() {
+    let source = "macro_rules! emit {($($name:ident : $output:ty = $value:expr)*)=>{$(fn $name()->$output{$value})*};} emit!{first:i32=1 second:i32=2} fn main(){}";
+    let original = frontend::parse(source).expect("separator-free original source");
+    let plan =
+        PlanCtx::from_shared_program(Arc::new(original.clone()), &PlanBudget::default()).unwrap();
+    let literals = |body: &justrust_engine::compiler::ir::CheckedFunction| {
+        body.exprs
+            .iter()
+            .filter_map(|expression| match expression.kind {
+                justrust_engine::compiler::ir::ExprKind::Int(value) => Some(value),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    for swap_both in [false, true] {
+        let mut program = original.clone();
+        let first = function(&program, "first");
+        let second = function(&program, "second");
+        let saved = program.functions[first].body.clone();
+        program.functions[first].body = program.functions[second].body.clone();
+        if swap_both {
+            program.functions[second].body = saved;
+        }
+        // Item-product name validation seals lexical occurrences, not scalar
+        // literal AST values. As with candidate_edits_do_not_replace_original_
+        // checked_body in matches_macro_authority, candidate typing is not
+        // canonical publication. The retained plan must still publish exactly
+        // each original body, never either transplanted literal-only body.
+        for (index, original_value, candidate_value) in
+            [(first, 1, 2), (second, 2, if swap_both { 1 } else { 2 })]
+        {
+            use justrust_engine::compiler::{cfg, ir, ownership};
+            let declaration = plan.function_decl(index).unwrap();
+            let facts = plan.callable_facts(declaration).unwrap();
+            let candidate =
+                frontend::type_callable_with_plan(&program, declaration, &plan, facts.budget())
+                    .unwrap();
+            assert_eq!(
+                literals(&candidate),
+                vec![ir::IntValue::i32(candidate_value)]
+            );
+            let target = ir::CallTarget {
+                declaration,
+                type_args: Arc::from([]),
+            };
+            let retained = plan.checked_body(&target, &facts, facts.budget()).unwrap();
+            assert_eq!(literals(&retained), vec![ir::IntValue::i32(original_value)]);
+            retained
+                .validate_with_facts(ir::FactsCtx::Validated(&facts))
+                .unwrap();
+            let template =
+                cfg::lower_template(Arc::new(retained), facts.clone(), facts.budget()).unwrap();
+            assert!(
+                ownership::verify_template(template)
+                    .unwrap()
+                    .analysis()
+                    .passed()
+            );
+        }
+    }
+}
+
+#[test]
 fn exact_same_expansion_siblings_keep_separate_callable_sources() {
     let program = sibling_fixture();
     PlanCtx::from_shared_program(Arc::new(program), &PlanBudget::default()).unwrap();

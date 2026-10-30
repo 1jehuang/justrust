@@ -3,6 +3,34 @@
 mod oracle;
 
 #[test]
+fn separator_free_literal_expr_repetitions_preserve_the_next_identifier() {
+    for source in [
+        // Same nested fragment boundary as time-core 0.1.2 convert.rs, with
+        // the generated items restricted to the existing native language.
+        "macro_rules! units {($($unit:ident ($label:literal) per {$($name:ident : $output:ty = $value:expr)*})*)=>{$($(fn $name()->$output{$value})*)*};} units!{Nanosecond (\"nanosecond\") per {micro:u16=1_000 milli:u32=1_000_000} Second (\"second\") per {minute:u8=60 hour:u16=3_600}} fn main(){assert_eq!(micro(),1_000u16);assert_eq!(milli(),1_000_000u32);assert_eq!(minute(),60u8);assert_eq!(hour(),3_600u16);}",
+        "macro_rules! values {($($name:ident : $output:ty = $value:expr)*)=>{$(fn $name()->$output{$value})*};} values!{negative:i32=-7 positive:i32=11 truth:bool=true falsity:bool=false r#as:i32=13} fn main(){assert_eq!(negative(),-7);assert_eq!(positive(),11);assert_eq!(truth(),true);assert_eq!(falsity(),false);assert_eq!(r#as(),13);}",
+        // An actual cast keyword continues the literal expression. Arithmetic
+        // and parenthesized prefixes must retain the preexisting precedence.
+        "macro_rules! value {($value:expr)=>{$value};} fn main(){assert_eq!(value!(7 as u16),7u16);assert_eq!(value!(2+3*4),14);assert_eq!(value!((2+3)*4),20);}",
+        "macro_rules! values {($($name:ident = $value:expr_2021)*)=>{$(fn $name()->i32{$value})*};} values!{first=17 second=-19} fn main(){assert_eq!(first(),17);assert_eq!(second(),-19);}",
+    ] {
+        oracle::stock_native(source);
+    }
+}
+
+#[test]
+fn separator_free_literal_boundaries_do_not_hide_invalid_generated_items() {
+    for source in [
+        "macro_rules! values {($($name:ident : $output:ty = $value:expr)*)=>{$(fn $name()->$output{$value})*};} values!{first:i32=1 unused:i32=true} fn main(){}",
+        "macro_rules! values {($($name:ident : $output:ty = $value:expr)*)=>{$(fn $name()->$output{$value})*};} values!{first:i32=1 unused:i32=2+} fn main(){}",
+        "macro_rules! values {($($name:ident : $output:ty = $value:expr)*)=>{$(fn $name()->$output{$value})*};} values!{first:i32=1 unused:i32=} fn main(){}",
+        "macro_rules! values {($($name:ident : $output:ty = $value:expr)*)=>{$(fn $name()->$output{$value})*};} values!{first:i32=1 first:i32=2} fn main(){}",
+    ] {
+        oracle::stock_and_native_reject(source);
+    }
+}
+
+#[test]
 fn supported_fragment_and_parameter_projection_preserve_local_hygiene() {
     for source in [
         "macro_rules! unused {()=>{$missing};} macro_rules! value {($x:expr)=>{$x};()=>{0};} fn main(){assert_eq!(value!(3+4),7);assert_eq!(value!(),0);}",

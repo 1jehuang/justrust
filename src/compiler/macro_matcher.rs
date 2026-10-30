@@ -581,12 +581,52 @@ fn ident_of<'a>(event: &Event, session: &'a TokenSession) -> Result<Option<&'a s
         _ => None,
     })
 }
-/// Token-tree level recognizer for the syntactic fragment kinds. It consumes
-/// the longest run of top-level token trees that cannot belong to the
-/// fragment's FOLLOW set (Rust Reference, "Follow-set ambiguity
-/// restrictions"), so the remaining matcher sees exactly what rustc's parser
-/// would leave. The captured tokens are parsed by the real grammar after
-/// transcription; malformed fragments are rejected there.
+/// Recognize the narrow literal-expression boundary needed by separator-free
+/// repetitions. An identifier cannot continue a literal expression, except for
+/// the cast keyword. This decision is independent of the next matcher token.
+/// Operators, postfixes and arbitrary expression prefixes retain the existing
+/// scanner below, rather than claiming a complete expression parser here.
+fn literal_expr_boundary(
+    events: &[Event],
+    position: usize,
+    session: &TokenSession,
+) -> Result<Option<usize>, MacroError> {
+    work(session)?;
+    let minus = punct_of(&events[position]) == Some((['-', '\0', '\0'], 1));
+    let literal = position + usize::from(minus);
+    let Some(event) = events.get(literal) else {
+        return Ok(None);
+    };
+    let accepted = match &event.kind {
+        EventKind::Atom(LogicalToken::Leaf(Token {
+            kind: TokenKind::Literal { .. },
+            ..
+        })) => true,
+        EventKind::Atom(LogicalToken::Leaf(Token {
+            kind: TokenKind::Ident(ident),
+            ..
+        })) => !ident.raw && matches!(session.symbol(ident.symbol)?, "true" | "false"),
+        _ => false,
+    };
+    let end = literal + 1;
+    let Some(next) = events.get(end) else {
+        return Ok(None);
+    };
+    Ok((accepted
+        && matches!(
+            next.kind,
+            EventKind::Atom(LogicalToken::Leaf(Token {
+                kind: TokenKind::Ident(_),
+                ..
+            }))
+        )
+        && ident_of(next, session)? != Some("as"))
+    .then_some(end))
+}
+/// Token-tree level recognizer for syntactic fragments. FOLLOW delimiters are
+/// not generally expression boundaries (notably in separator-free repeats).
+/// The literal-prefix case is recognized separately. Broader fragment parsing
+/// remains bounded by the existing scanner and the post-transcription grammar.
 fn syntactic(
     kind: FragmentKind,
     events: &[Event],
@@ -656,8 +696,16 @@ fn syntactic(
             // expr, stmt, ty, path, pat, pat_param, meta
             let mut angle = 0i64;
             let typeish = matches!(kind, FragmentKind::Ty | FragmentKind::Path);
+            let literal_end = if matches!(kind, FragmentKind::Expr | FragmentKind::Expr2021) {
+                literal_expr_boundary(events, position, session)?
+            } else {
+                None
+            };
             while let Some(event) = events.get(end) {
                 work(session)?;
+                if literal_end == Some(end) {
+                    break;
+                }
                 if matches!(event.kind, EventKind::Close(_)) {
                     break;
                 }
