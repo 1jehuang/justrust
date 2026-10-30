@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "source_commit": "f97fcc2d7490ec3528a8d67657dc3f8d6d457a7d",
+  "historical": {
+    "0dba7c33e": {
+      "commit": "0dba7c33e453b63c5d353b75ab5b19c68b206705",
+      "files": {
+        "resident_workload_compare.py": "594f29147febbef96ec48ded5548542c823c7f2a21fed953855ced305f18bf4e",
+        "resident_engine_compare.py": "7da5b024344f662743b81043f4c200a23b3a49f61356e933b48257b2860c5a80",
+        "blaze_runtime_compare.py": "a7e2af863e2b1ea2878ae5c66a0f01aab1ad7fb9efe2e1027254a1269eefb568",
+        "blaze_edit_compare.py": "9c451fdb939d3a8c024ddf7e2b8c2fd3a8badc7c164a429415a7c636eb8c41a8",
+        "test_resident_workload_compare.py": "0b21f62976d297aee90aea570f86c8aafb06a76d2a49054509c7013dc351c347"
+      }
+    },
+    "fb9e3f14c": {
+      "commit": "fb9e3f14c7408ae380390fffb161d22a51078191",
+      "files": {
+        "resident_workload_compare.py": "e47ef667315c0044e2b0072eb43a9db68860f32b50757bdd927b49522de1e92d",
+        "test_resident_workload_compare.py": "42893d9d5b4893fdf635fb3aec1d5756539ff8fe07fcb7998a3ed8a98f8d9cb4"
+      }
+    }
+  },
+  "runs": [
+    "rwc01",
+    "rwc02"
+  ],
+  "scope": "Two private-store orders of four pinned real modules/body edits only. No comprehensive/default/significance claim.",
+  "expected_counts": {
+    "rows": 164,
+    "timed_edits": 80,
+    "raw_streams": 328,
+    "source_files": 63
+  },
+  "root_regression": "root/bench-broader-v28-regression.log",
+  "launch_provenance": "Exact direct engine commands are retained per row. Outer launcher provenance, if separately supplied, is retained under root/."
+}

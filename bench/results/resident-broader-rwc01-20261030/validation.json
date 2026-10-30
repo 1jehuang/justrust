@@ -1,0 +1,69 @@
+{
+  "status": "PASS",
+  "runs": {
+    "rwc01": {
+      "rows": 82,
+      "timed_edits": 40,
+      "raw_streams": 164,
+      "source_restored_derived": true,
+      "medians_seconds": {
+        "summary-test": {
+          "reference": 0.10927612100203987,
+          "engine": 0.08220685199194122
+        },
+        "shim-test": {
+          "reference": 0.08492891798960045,
+          "engine": 0.08093779899354558
+        },
+        "record-test": {
+          "reference": 0.08558956399792805,
+          "engine": 0.0819822129997192
+        },
+        "shim-function": {
+          "reference": 0.06359917200461496,
+          "engine": 0.06281203600519802
+        }
+      },
+      "workload_order": [
+        "summary-test",
+        "shim-test",
+        "record-test",
+        "shim-function"
+      ]
+    },
+    "rwc02": {
+      "rows": 82,
+      "timed_edits": 40,
+      "raw_streams": 164,
+      "source_restored_derived": true,
+      "medians_seconds": {
+        "shim-function": {
+          "reference": 0.0785928670084104,
+          "engine": 0.07547780500317458
+        },
+        "record-test": {
+          "reference": 0.09020413999678567,
+          "engine": 0.08132200299587566
+        },
+        "shim-test": {
+          "reference": 0.08271768600388896,
+          "engine": 0.07656454699463211
+        },
+        "summary-test": {
+          "reference": 0.1124739450024208,
+          "engine": 0.08155986899510026
+        }
+      },
+      "workload_order": [
+        "shim-function",
+        "record-test",
+        "shim-test",
+        "summary-test"
+      ]
+    }
+  },
+  "total_rows": 164,
+  "total_timed_edits": 80,
+  "raw_streams": 328,
+  "policy": "Offline semantic replay only, not a native rerun or cryptographic attestation. Four workloads, no comprehensive/default/significance claim."
+}

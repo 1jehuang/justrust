@@ -1,0 +1,27 @@
+{
+  "medians_seconds": {
+    "shim-function": {
+      "reference": 0.0785928670084104,
+      "engine": 0.07547780500317458
+    },
+    "record-test": {
+      "reference": 0.09020413999678567,
+      "engine": 0.08132200299587566
+    },
+    "shim-test": {
+      "reference": 0.08271768600388896,
+      "engine": 0.07656454699463211
+    },
+    "summary-test": {
+      "reference": 0.1124739450024208,
+      "engine": 0.08155986899510026
+    }
+  },
+  "excluded": {
+    "shim-function": [],
+    "record-test": [],
+    "shim-test": [],
+    "summary-test": []
+  },
+  "policy": "Descriptive scoped workloads only, not comprehensive/default promotion. Failed stacks excluded."
+}

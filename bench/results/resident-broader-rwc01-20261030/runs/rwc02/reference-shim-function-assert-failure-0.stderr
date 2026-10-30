@@ -1,0 +1,10 @@
+   Compiling justrust v0.1.0-alpha.1 (/home/jeremy/.jcode/scratch/resident-broader-v28-20261030/source63)
+    Finished `test` profile [blaze] target(s) in 0.09s
+     Running unittests src/lib.rs (/home/jeremy/rwc02/reference/target/debug/deps/justrust-16865e5c41c3cfce)
+
+thread 'shim::tests::parses_time_passes_json' (559056) panicked at src/shim.rs:244:1:
+assertion `left == right` failed: JR_WORKLOAD_FAILURE
+  left: 1
+ right: 2
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+error: test failed, to rerun pass `-p justrust --lib`

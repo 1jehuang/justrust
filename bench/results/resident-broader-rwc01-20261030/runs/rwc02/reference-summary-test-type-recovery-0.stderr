@@ -1,0 +1,3 @@
+   Compiling justrust v0.1.0-alpha.1 (/home/jeremy/.jcode/scratch/resident-broader-v28-20261030/source63)
+    Finished `test` profile [blaze] target(s) in 0.12s
+     Running unittests src/lib.rs (/home/jeremy/rwc02/reference/target/debug/deps/justrust-16865e5c41c3cfce)

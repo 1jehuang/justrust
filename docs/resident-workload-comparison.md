@@ -113,6 +113,49 @@ lists excluded stacks. Exit status is zero only when every selected workload
 has accepted samples from both stacks and unchanged final identities. Never
 report a failed stack as fast based on its partial receipts.
 
+## Retained root-owned rwc01/rwc02 observations
+
+`bench/results/resident-broader-rwc01-20261030/` retains a separately sanitized
+portable derivative of two native runs by the root session on October 30, 2026.
+Each completed 82 invocation rows and 40 accepted executed-marker edits with no
+excluded stack/workload. The second run used fresh private stores and reversed
+workload order. Full source/tool/toolchain before/after identities agreed.
+
+| Workload | First reference / native median ms | Repeat reference / native median ms |
+| --- | --- | --- |
+| `summary-test` | 109.276 / 82.207 | 112.474 / 81.560 |
+| `shim-test` | 84.929 / 80.938 | 82.718 / 76.565 |
+| `record-test` | 85.590 / 81.982 | 90.204 / 81.322 |
+| `shim-function` | 63.599 / 62.812 | 78.593 / 75.478 |
+
+These are descriptive observations of four pinned workloads only, not the
+comprehensive session-weighted suite, a default-promotion gate, or evidence of
+statistical significance. The root's native runs used historical harness
+`0dba7c33e`, before receipt-only privacy/restoration hardening `fb9e3f14c`. The
+evidence bundle keeps exact historical harness/helper bytes, all 164 rows,
+328 raw streams, all input-source/backup hashes and complete pinned source
+bytes, full recorded toolchain identities, both summaries, and the actual
+root-owned 710-test regression log.
+
+Never publish the original full-environment metadata. Each public derivative
+records original SHA256 commitments and an explicit allowlist transformation
+receipt with omitted-entry counts, not omitted secret keys/values. All process
+row environments use the same allowlist. Originals remain unchanged/private.
+See the bundle README for transformation limits and historic path identities.
+
+Portable replay, with no native execution or original absolute paths required:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 bench/results/resident-broader-rwc01-20261030/validate.py
+PYTHONDONTWRITEBYTECODE=1 python3 bench/results/resident-broader-rwc01-20261030/test_validate.py -v
+```
+
+The semantic replay reconstructs edited input hashes and reparses every raw
+libtest result, error/recovery oracle and executed marker, then recomputes
+medians. Its tests coherently re-sign altered checksums and still reject
+semantic corruption, and test relocation outside the repository. A checksum
+match alone is not admission, and offline replay is not a fresh native run.
+
 ## Source-only validation
 
 ```sh

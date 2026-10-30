@@ -1,0 +1,10 @@
+{
+  "kind": "worker-owned source-only follow-up verification, not a native benchmark",
+  "revision": "fb9e3f14c7408ae380390fffb161d22a51078191",
+  "command": ["python3", "-m", "unittest", "bench/test_resident_workload_compare.py", "-v"],
+  "environment_controls": {"PYTHONDONTWRITEBYTECODE": "1", "PYTHONPATH": "bench"},
+  "status": 0,
+  "tests": 12,
+  "raw_log": "root/followup-12-mocked.log",
+  "scope": "Source-only git-show fixture reads and mocked runtime processes. No native build or workload. No ambient environment recorded."
+}

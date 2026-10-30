@@ -1,0 +1,17 @@
+test_environment_receipt_allowlist_excludes_ambient_secrets (bench.test_resident_workload_compare.FixtureTests.test_environment_receipt_allowlist_excludes_ambient_secrets) ... ok
+test_exact_contract (bench.test_resident_workload_compare.FixtureTests.test_exact_contract) ... ok
+test_exact_pinned_anchors_and_original_function (bench.test_resident_workload_compare.FixtureTests.test_exact_pinned_anchors_and_original_function) ... ok
+test_reject_ambiguous_anchor (bench.test_resident_workload_compare.FixtureTests.test_reject_ambiguous_anchor) ... ok
+test_complete_rotation_identical_bytes_and_positive_samples (bench.test_resident_workload_compare.MockWorkflowTests.test_complete_rotation_identical_bytes_and_positive_samples) ... ok
+test_failed_stacks_excluded (bench.test_resident_workload_compare.MockWorkflowTests.test_failed_stacks_excluded) ... ok
+test_interruption_restores_backup (bench.test_resident_workload_compare.MockWorkflowTests.test_interruption_restores_backup) ... ok
+test_missing_reference_contract_cannot_qualify_candidate (bench.test_resident_workload_compare.MockWorkflowTests.test_missing_reference_contract_cannot_qualify_candidate) ... ok
+test_mutated_identity_excludes_everything (bench.test_resident_workload_compare.MockWorkflowTests.test_mutated_identity_excludes_everything) ... ok
+test_selection (bench.test_resident_workload_compare.MockWorkflowTests.test_selection) ... ok
+test_source_restored_false_for_unexpected_input (bench.test_resident_workload_compare.MockWorkflowTests.test_source_restored_false_for_unexpected_input) ... ok
+test_validation_before_source_access (bench.test_resident_workload_compare.MockWorkflowTests.test_validation_before_source_access) ... ok
+
+----------------------------------------------------------------------
+Ran 12 tests in 1.308s
+
+OK

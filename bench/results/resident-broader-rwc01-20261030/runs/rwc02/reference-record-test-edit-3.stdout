@@ -1,0 +1,11 @@
+
+running 5 tests
+test record::tests::classifies_processes ... ok
+test record::tests::finds_subcommand_after_global_flags ... JR_WORKLOAD_EXECUTED_record_test_4
+ok
+test record::tests::only_records_build_like_commands ... ok
+test record::tests::progress_config_goes_after_toolchain ... ok
+test record::tests::strips_ansi_sequences ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 143 filtered out; finished in 0.00s
+

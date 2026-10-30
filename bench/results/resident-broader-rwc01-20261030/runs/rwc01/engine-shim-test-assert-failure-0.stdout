@@ -1,0 +1,12 @@
+
+running 2 tests
+test shim::tests::describes_cargo_rustc_args ... FAILED
+test shim::tests::parses_time_passes_json ... ok
+
+failures:
+
+failures:
+    shim::tests::describes_cargo_rustc_args
+
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 146 filtered out; finished in 0.00s
+
