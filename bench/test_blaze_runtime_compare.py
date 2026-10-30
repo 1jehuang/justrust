@@ -88,6 +88,29 @@ class HarnessTests(unittest.TestCase):
         self.assertEqual(logged['CARGO_PROFILE_TEST_OPT_LEVEL'], '0')
         self.assertEqual(logged['BLAZE_BACKEND'], 'llvm')
 
+    def test_blaze_backend_and_opt_pinned_and_logged(self):
+        # No compiler or daemon is loaded. Exercise real isolation/environment
+        # setup with an empty fake installed toolchain directory.
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            installed = root / 'installed'
+            (installed / 'toolchains').mkdir(parents=True)
+            with patch.dict(os.environ, {'BLAZE_HOME': str(installed),
+                                        'BLAZE_BACKEND': 'wrong-inherited',
+                                        'BLAZE_OPT': '3', 'PRIVATE_TOKEN': 'secret'}):
+                for stack, backend in (('blaze', 'cranelift'), ('blaze-llvm', 'llvm')):
+                    args = argparse.Namespace(output=root / stack)
+                    env = h.environment(args, stack)
+                    self.assertEqual(env['BLAZE_BACKEND'], backend)
+                    self.assertEqual(env['BLAZE_OPT'], '0')
+                    for logger in (h.logged_environment, h.base.logged_environment):
+                        logged = logger(env)
+                        self.assertEqual(logged['BLAZE_BACKEND'], backend)
+                        self.assertEqual(logged['BLAZE_OPT'], '0')
+                        self.assertNotIn('PRIVATE_TOKEN', logged)
+                    for key, value in h.PROFILES.items():
+                        self.assertEqual(env[key], value)
+
     def test_timeout_signal_exact_output(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

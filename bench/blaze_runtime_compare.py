@@ -150,8 +150,9 @@ def environment(args, stack):
     # base uses stack-named isolation. Move LLVM's base directory separately by
     # supplying a nested output root rather than sharing the Blaze target.
     env.update(PROFILES)
-    if stack == 'blaze-llvm':
-        env.update(BLAZE_BACKEND='llvm', BLAZE_OPT='0')
+    if stack.startswith('blaze'):
+        env.update(BLAZE_BACKEND='llvm' if stack == 'blaze-llvm' else 'cranelift',
+                   BLAZE_OPT='0')
     return env
 
 
