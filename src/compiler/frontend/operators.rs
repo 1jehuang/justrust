@@ -1320,7 +1320,10 @@ impl type_check::Checker<'_> {
     }
 
     /// `*call` for an overloaded place operator returning `&Target`.
-    fn deref_overloaded_result(&mut self, call: ir::ExprId) -> Result<ir::ExprId, String> {
+    pub(super) fn deref_overloaded_result(
+        &mut self,
+        call: ir::ExprId,
+    ) -> Result<ir::ExprId, String> {
         let ir::Ty::Ref { referent, .. } = &self.exprs[call.0].ty else {
             return Err("overloaded place operator must return a reference".into());
         };

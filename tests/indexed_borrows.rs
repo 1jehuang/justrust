@@ -12,6 +12,43 @@ mod closure_oracle;
 mod stock_rustc;
 
 #[test]
+fn explicit_indexed_field_borrows_match_stock() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check_with_compiler(
+        "explicit-indexed-field-borrows",
+        &[
+            Case {
+                name: "mutable_constant_and_shared_dynamic_fields",
+                source: r#"struct Record { name: String }
+fn index()->usize { println!("index"); 0 }
+fn main() { let mut records=vec![Record{name:String::from("hello")}]; let name=&mut records[0].name; name.push_str("!"); let shared=&records[index()].name; println!("{}",shared.as_str()); }"#,
+                expect: Expect::Run("index\nhello!\n"),
+            },
+            Case {
+                name: "mutable_dynamic_field_evaluated_once",
+                source: r#"struct Record { name: String }
+fn index()->usize { println!("index"); 0 }
+fn main() { let mut records=vec![Record{name:String::from("hello")}]; let name=&mut records[index()].name; name.push_str("!"); println!("{}",records[0].name.as_str()); }"#,
+                expect: Expect::Run("index\nhello!\n"),
+            },
+            Case {
+                name: "shared_owner_rejects_mutable_field_borrow",
+                source: r#"struct Record { name: String }
+fn main() { let records=vec![Record{name:String::from("hello")}]; let shared=&records; let name=&mut shared[0].name; name.push_str("!"); }"#,
+                expect: Expect::Invalid("E0596"),
+            },
+            Case {
+                name: "overlapping_indexed_field_loans_reject",
+                source: r#"struct Record { name: String }
+fn main() { let mut records=vec![Record{name:String::from("hello")}]; let a=&mut records[0].name; let b=&mut records[0].name; a.push_str(b.as_str()); }"#,
+                expect: Expect::Invalid("E0499"),
+            },
+        ],
+        std::path::Path::new(&stock_rustc::stock_rustc()),
+    );
+}
+
+#[test]
 fn indexed_field_method_receivers_match_stock() {
     use closure_oracle::{Case, Expect};
     closure_oracle::check_with_compiler(

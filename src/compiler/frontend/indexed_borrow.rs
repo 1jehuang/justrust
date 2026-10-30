@@ -48,7 +48,8 @@ impl type_check::Checker<'_> {
             root = base;
         }
         if fields.is_empty()
-            || !(matches!(root, Expr::Index { .. }) || type_check::genuine_call(root))
+            || !(matches!(root, Expr::Index { .. } | Expr::DynamicIndex { .. })
+                || type_check::genuine_call(root))
         {
             return Ok(None);
         }
@@ -68,7 +69,16 @@ impl type_check::Checker<'_> {
         {
             return Ok(None);
         }
-        let evaluated = self.expr(root)?;
+        let indexed = if matches!(root, Expr::Index { .. } | Expr::DynamicIndex { .. }) {
+            self.overloaded_index_reference(kind, root, root as *const Expr as usize)?
+        } else {
+            None
+        };
+        let evaluated = if let Some(carrier) = indexed {
+            self.deref_overloaded_result(carrier)?
+        } else {
+            self.expr(root)?
+        };
         if self.exprs[evaluated.0].completion == ir::Completion::Never {
             return Ok(Some(evaluated));
         }
