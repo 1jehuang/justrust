@@ -8959,3 +8959,24 @@ coordination for 0.0ms. The old log incorrectly included scanning in its
 "waiting for a compile-only prebuild" label. This proves the next local
 bottleneck, not a before/after speedup. Hosted strict lint passed after install
 (`20261029-221012298-3290569`). See `docs/daemon-lookup-attribution.md`.
+
+### Candidate-free daemon execution leaves freshness with Cargo
+
+Default-off `75e009bb0` avoids a source stamp only under an atomic globally-empty
+active/finished-state reservation. Unstamped children never authorize attachment
+or replay. Controlled same-binary local Clippy medians were 751.823 ms off and
+173.682 ms on (three samples each, machine contention disclosed), with actual
+edit/failure/backup-restore, disconnect cancellation and overlapping agent /
+prebuild refusal verified. See `docs/daemon-native-empty.md` and its raw evidence.
+
+The installed executable passed full hosted tests (843 passed, 12 ignored,
+`20261029-225443553-3674420`) and strict all-target lint. Isolated installed
+Clippy runs `20261029-225910643-3719519` and `20261029-225910808-3719614`
+took 164.025 / 136.757 ms full wall with 62 fresh units and zero compilation;
+daemon logs showed native execution and zero source validation. The first
+isolated toolchain installation/rebuild took 57.554 s and is explicitly excluded
+from warm observations. Shared-daemon unrelated candidates correctly retained
+validation, so this is not a universal fast path. It remains default off, not a
+whole-command result cache or comprehensive speedup claim. Exact installed
+identity, remote-backoff/reconnection limits and cleanup are recorded in
+`docs/daemon-native-empty-installed.md`.
