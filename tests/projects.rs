@@ -1129,6 +1129,25 @@ fn locked_registry_nix_base32_matches_stock_end_to_end() {
         assert_eq!(decoded[0],1u8);
         assert_eq!(decoded[1],2u8);
         assert!(nix_base32::from_nix_base32("!").is_none());
+        for value in 0u16..256u16 {
+            let single=[value as u8];
+            let encoded=nix_base32::to_nix_base32(&single);
+            let decoded=nix_base32::from_nix_base32(&encoded).unwrap();
+            assert_eq!(decoded.len(),1usize);
+            assert_eq!(decoded[0],value as u8);
+        }
+        let mut input=[0u8;17];
+        let mut index=0usize;
+        while index<input.len() { input[index]=(index as u8)*13u8; index+=1usize; }
+        // The unchanged crate's debug encoder underflows for empty input.
+        // Compare successful roundtrips only where the stock oracle succeeds.
+        for length in 1usize..18usize {
+            let encoded=nix_base32::to_nix_base32(&input[..length]);
+            let decoded=nix_base32::from_nix_base32(&encoded).unwrap();
+            assert_eq!(decoded.len(),length);
+            let mut index=0usize;
+            while index<length { assert_eq!(decoded[index],input[index]); index+=1usize; }
+        }
         println!("true");
     }"#;
     let client = project.join("src/main.rs");

@@ -38,6 +38,9 @@ impl type_check::Checker<'_> {
         kind: ir::BorrowKind,
         value: &Expr,
     ) -> Result<Option<ir::ExprId>, String> {
+        if let Some(reference) = self.mutable_slice_field_borrow(kind, value)? {
+            return Ok(Some(reference));
+        }
         let mut fields = Vec::new();
         let mut root = value;
         while let Expr::Field { base, field } = root {

@@ -7813,6 +7813,17 @@ impl<'a> Checker<'a> {
                 }
                 Stmt::AssignOp {
                     place, op, value, ..
+                } if let Some(done) = self.mutable_slice_field_assignment(
+                    place,
+                    Some(*op),
+                    value,
+                    &mut statements,
+                )? =>
+                {
+                    done
+                }
+                Stmt::AssignOp {
+                    place, op, value, ..
                 } if let Some(done) =
                     self.mut_slice_constant_assignment(place, Some(*op), value)? =>
                 {
@@ -7904,6 +7915,16 @@ impl<'a> Checker<'a> {
                         },
                         flow.completes && index_flow.completes,
                     )
+                }
+                Stmt::AssignPlace { place, value, .. }
+                    if let Some(done) = self.mutable_slice_field_assignment(
+                        place,
+                        None,
+                        value,
+                        &mut statements,
+                    )? =>
+                {
+                    done
                 }
                 Stmt::AssignPlace { place, value, .. }
                     if let Some(done) =
@@ -8708,6 +8729,160 @@ impl<'a> Checker<'a> {
         });
         Ok(Some(id))
     }
+    /// Plan a scalar field access without ever reading the containing element.
+    /// Slice bounds remain runtime checks on the ordinary DynamicIndex place.
+    fn mutable_slice_field_place(
+        &mut self,
+        source: &Place,
+    ) -> Result<Option<(ir::Place, ir::Ty, usize)>, String> {
+        for (position, selector) in source.fields.iter().enumerate() {
+            let FieldSelector::ConstantIndex(index) = selector else {
+                continue;
+            };
+            if position + 1 == source.fields.len() {
+                continue;
+            }
+            self.charge_node(
+                std::mem::size_of_val(source.fields.as_slice())
+                    + (source.fields.len() + 2) * std::mem::size_of::<ir::Projection>(),
+            )?;
+            let prefix = Place {
+                local: source.local,
+                fields: source.fields[..position].to_vec(),
+            };
+            let Ok((mut place, carrier, _)) = self.checked_place(&prefix) else {
+                continue;
+            };
+            let Some(element) = carrier.mut_slice_element() else {
+                continue;
+            };
+            let mut ty = element.clone();
+            place.projection.push(ir::Projection::Deref);
+            place
+                .projection
+                .push(ir::Projection::DynamicIndex(ir::LocalId(usize::MAX)));
+            for field in &source.fields[position + 1..] {
+                let (index, next) = self.field_type(&ty, field)?;
+                place.projection.push(ir::Projection::Field(index));
+                ty = next;
+            }
+            if place.projection.len() > ir::MAX_PATTERN_PROJECTION_DEPTH {
+                return Err("place projection nesting exceeds limit128".into());
+            }
+            self.accessible(&ty)?;
+            return Ok(Some((place, ty, *index)));
+        }
+        Ok(None)
+    }
+
+    fn bind_slice_field_index(
+        &mut self,
+        place: &mut ir::Place,
+        index: usize,
+    ) -> Result<ir::TypedStmt, String> {
+        self.charge_node(std::mem::size_of_val(place.projection.as_slice()))?;
+        let value = self.for_expr(
+            ir::Ty::Int(ir::IntTy::Usize),
+            ir::ExprKind::Int(ir::IntValue {
+                ty: ir::IntTy::Usize,
+                bits: index as u128,
+            }),
+        )?;
+        let local = self.temporary("$slice_field_index", ir::Ty::Int(ir::IntTy::Usize), false)?;
+        for projection in &mut place.projection {
+            if *projection == ir::Projection::DynamicIndex(ir::LocalId(usize::MAX)) {
+                *projection = ir::Projection::DynamicIndex(local);
+            }
+        }
+        Ok(ir::TypedStmt::Let { local, value })
+    }
+
+    pub(super) fn mutable_slice_field_borrow(
+        &mut self,
+        kind: ir::BorrowKind,
+        expression: &Expr,
+    ) -> Result<Option<ir::ExprId>, String> {
+        let Ok(source) = static_source_place(expression) else {
+            return Ok(None);
+        };
+        let Some((mut place, _, index)) = self.mutable_slice_field_place(&source)? else {
+            return Ok(None);
+        };
+        let statement = self.bind_slice_field_index(&mut place, index)?;
+        let reference = self.borrow_expression(kind, place)?;
+        let ty = self.exprs[reference.0].ty.clone();
+        self.for_expr(
+            ty,
+            ir::ExprKind::Block(ir::TypedBlock {
+                statements: vec![statement],
+                tail: Some(reference),
+            }),
+        )
+        .map(Some)
+    }
+
+    fn mutable_slice_field_read(
+        &mut self,
+        expression: &Expr,
+    ) -> Result<Option<ir::ExprId>, String> {
+        let Ok(source) = static_source_place(expression) else {
+            return Ok(None);
+        };
+        let Some((mut place, ty, index)) = self.mutable_slice_field_place(&source)? else {
+            return Ok(None);
+        };
+        if !self.facts().must_copy(&ty)? {
+            return Err("cannot move a non-Copy field out of a borrowed slice element".into());
+        }
+        let statement = self.bind_slice_field_index(&mut place, index)?;
+        let reference = self.borrow_expression(ir::BorrowKind::Shared, place)?;
+        let value = self.for_expr(ty.clone(), ir::ExprKind::Deref { value: reference })?;
+        self.for_expr(
+            ty,
+            ir::ExprKind::Block(ir::TypedBlock {
+                statements: vec![statement],
+                tail: Some(value),
+            }),
+        )
+        .map(Some)
+    }
+
+    fn mutable_slice_field_assignment(
+        &mut self,
+        source: &Place,
+        op: Option<BinaryOp>,
+        value: &Expr,
+        statements: &mut Vec<ir::TypedStmt>,
+    ) -> Result<Option<(ir::TypedStmt, bool)>, String> {
+        let Some((mut place, ty, index)) = self.mutable_slice_field_place(source)? else {
+            return Ok(None);
+        };
+        if !self.facts().must_copy(&ty)? {
+            return Err("unsupported: mutable slice assignment of non-Copy fields".into());
+        }
+        let value = match op {
+            Some(op) => self.compound_value(op, &ty, value)?.0,
+            None => self.expr_expected(value, Some(&ty))?,
+        };
+        let flow = self.flow(value);
+        if op.is_none() {
+            self.require(&flow, &ty)?;
+        }
+        let saved = self.temporary("$slice_field_value", flow.ty.clone(), false)?;
+        statements.push(ir::TypedStmt::Let {
+            local: saved,
+            value,
+        });
+        let statement = self.bind_slice_field_index(&mut place, index)?;
+        statements.push(statement);
+        let value = self.for_expr(flow.ty, ir::ExprKind::Local(saved))?;
+        let statement = match op {
+            Some(op) => ir::TypedStmt::AssignOp { place, op, value },
+            None => ir::TypedStmt::AssignPlace { place, value },
+        };
+        Ok(Some((statement, flow.completes)))
+    }
+
     /// Check the closed borrowed-field capability before attempting a whole-element move.
     /// Repeated borrowed scans avoid a new projection allocation and charge every step.
     #[inline(never)]
@@ -9631,9 +9806,8 @@ impl<'a> Checker<'a> {
         )
     }
     /// Stock probing appends one unsizing step `[T; N] -> [T]` after the
-    /// array's own autoref steps fail. Only shared receivers are admitted:
-    /// the method must take the exact `&[T]` carrier (by-value `self: &[T]`
-    /// or `&self` on `[T]`). Anything else stays an ordinary missing method.
+    /// array's own autoref steps fail. Preserve the selected reference kind:
+    /// mutable slice receivers require a genuine mutable array reborrow.
     fn method_through_array_unsize(
         &mut self,
         receiver: &Expr,
@@ -9643,31 +9817,83 @@ impl<'a> Checker<'a> {
         args: &[Expr],
         expected: Option<&ir::Ty>,
     ) -> Result<Option<ir::ExprId>, String> {
-        let Some(carrier) = array_unsize_carrier(ty) else {
+        let Some(mut carrier) = array_unsize_carrier(ty) else {
             return Ok(None);
         };
-        let Some(selected) =
-            self.method_selection_with_inference(&carrier, name, type_args, args, expected)?
-        else {
+        let mut selected =
+            self.method_selection_with_inference(&carrier, name, type_args, args, expected)?;
+        if selected.as_ref().is_none_or(|selection| {
+            selection.depth != 0
+                || !matches!(selection.adjustment, ReceiverAdjustment::Identity)
+                || !matches!(
+                    selection.mode,
+                    ReceiverKind::Value { .. }
+                        | ReceiverKind::Borrowed {
+                            kind: ir::BorrowKind::Shared
+                        }
+                )
+        }) {
+            let ir::Ty::Ref { referent, .. } = carrier else {
+                unreachable!()
+            };
+            carrier = ir::Ty::Ref {
+                kind: ir::BorrowKind::Mut,
+                referent,
+            };
+            selected =
+                self.method_selection_with_inference(&carrier, name, type_args, args, expected)?;
+        }
+        let Some(selected) = selected else {
             return Ok(None);
         };
         let admitted = selected.depth == 0
             && matches!(selected.adjustment, ReceiverAdjustment::Identity)
             && matches!(
                 selected.mode,
-                ReceiverKind::Value { .. }
-                    | ReceiverKind::Borrowed {
-                        kind: ir::BorrowKind::Shared
-                    }
+                ReceiverKind::Value { .. } | ReceiverKind::Borrowed { .. }
             );
         if !admitted {
-            return Err(
-                "unsupported: array receiver unsizing to a mutable or by-value slice".into(),
-            );
+            return Err("unsupported: array receiver unsizing adjustment".into());
         }
-        let borrowed = self
-            .array_len_receiver(receiver)?
-            .ok_or("array unsizing receiver changed checked type")?;
+        let borrowed = if matches!(
+            carrier,
+            ir::Ty::Ref {
+                kind: ir::BorrowKind::Mut,
+                ..
+            }
+        ) {
+            match ty {
+                ir::Ty::Array { .. } => {
+                    if let Ok(source) = static_source_place(receiver) {
+                        let (place, _, _) = self.checked_place(&source)?;
+                        self.borrow_expression(ir::BorrowKind::Mut, place)?
+                    } else {
+                        self.borrow_value(ir::BorrowKind::Mut, receiver, None)?
+                    }
+                }
+                ir::Ty::Ref {
+                    kind: ir::BorrowKind::Mut,
+                    ..
+                } => {
+                    if super::array_len_receiver::explicit_mut_array_borrow(receiver) {
+                        self.expr(receiver)?
+                    } else {
+                        let source = static_source_place(receiver)?;
+                        let (mut place, _, _) = self.checked_place(&source)?;
+                        if place.projection.len() >= ir::MAX_PATTERN_PROJECTION_DEPTH {
+                            return Err("place projection nesting exceeds limit128".into());
+                        }
+                        self.charge_node(std::mem::size_of::<ir::Projection>())?;
+                        place.projection.push(ir::Projection::Deref);
+                        self.borrow_expression(ir::BorrowKind::Mut, place)?
+                    }
+                }
+                _ => return Err("E0596: cannot mutably borrow a shared array receiver".into()),
+            }
+        } else {
+            self.array_len_receiver(receiver)?
+                .ok_or("array unsizing receiver changed checked type")?
+        };
         let slice = self.coerce_shared_array_to_slice(borrowed, &carrier)?;
         let region_offset = match &selected.target {
             ir::Callee::Direct(target) => target.type_args.len().saturating_sub(type_args.len()),
@@ -12082,6 +12308,9 @@ impl<'a> Checker<'a> {
                 )
             }
             Expr::Field { base, field } => {
+                if let Some(value) = self.mutable_slice_field_read(e)? {
+                    return Ok(value);
+                }
                 self.reject_noncopy_slice_field(e)?;
                 let receiver = base.as_ref();
                 let local_hint = match static_source_place(receiver) {
@@ -13765,6 +13994,27 @@ mod checked_identity_tests {
             "fn read<T:Copy>(s:&[T],later:T)->T{s[0]}fn main(){let answer=read(&[42],7u16);}",
         ] {
             check(&parse(source).unwrap()).unwrap();
+        }
+    }
+
+    #[test]
+    fn mutable_slice_copy_fields_use_real_indexed_places() {
+        for source in [
+            "struct Item{n:i32}fn read(s:&mut[Item])->i32{s[0].n}fn main(){}",
+            "struct Item{n:i32}fn write(s:&mut[Item]){s[0].n=7;s[0].n+=2;}fn main(){}",
+            "struct Item{n:i32}fn read(s:&mut[Item]){println!(\"{}\",s[0].n);}fn main(){}",
+            "struct Item{n:i32}fn read(s:&mut[Item])->&i32{&s[0].n}fn main(){}",
+            "struct Item{n:i32}fn write(s:&mut[Item])->&mut i32{&mut s[0].n}fn main(){}",
+        ] {
+            check(&parse(source).unwrap()).unwrap();
+        }
+        for source in [
+            "struct Inner{n:i32}struct Item{inner:Inner}fn read(s:&mut[Item])->Inner{s[0].inner}fn main(){}",
+            "struct Item{n:i32}fn write(s:&[Item]){s[0].n=7;}fn main(){}",
+            "struct Item{n:i32}fn write(s:&mut[Item]){s[0].missing=7;}fn main(){}",
+            "struct Item{n:i32}fn write(s:&mut[Item]){s[0].n=true;}fn main(){}",
+        ] {
+            assert!(check(&parse(source).unwrap()).is_err(), "{source}");
         }
     }
 
