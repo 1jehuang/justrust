@@ -9207,3 +9207,15 @@ hard metadata exits remain a trace-finalization limitation. Full benchmark
 Python discovery passes 700 tests. Shipping defaults are unchanged, and the
 next hypothesis is avoiding unconditional all-body prewarming before tracked
 declaration-query validation.
+
+## 2026-10-30: native resident reuse did not produce a replicated edit-latency win
+
+Signature-IR flags, coarse dependency-tracked root snapshots, and removal of redundant warmup passes passed native semantic/oracle gates. The final candidate passed all 351 native tests (run `20261030-110141703-1799063`), and complete benchmark discovery passed 700 tests after measurements. This is the experimental licensed Blaze-derived resident, not the shipping client or clean-room compiler.
+
+The first v19 fresh pair RSB09/RSA15 looked promising: engine median 115.826 -> 94.381 ms (-18.51%), reference-normalized -21.76%. Candidate-first replication RSA16/RSB10 did not confirm it: 118.519 -> 117.143 ms (-1.16%), normalized +1.67% worse. Earlier v17 cumulative comparison was -7.41% raw/-7.19% normalized. Do not select the first pair as an established speedup.
+
+A separate extended warm diagnostic counterbalanced all six old/new/Blaze orders exactly seven times. All 141 invocations passed, including 126 timed edits with exact fresh runtime markers and 15 compile-error/assertion/recovery/control invocations. Forty-two-edit medians were old 100.358 ms, candidate 100.593 ms, Blaze 103.201 ms. The candidate was 0.234% slower than the old resident. All 63 source files, full toolchain contents and tool identities were checked unchanged/restored. This is warm-store only, not a replacement for the fixed-five suite, comprehensive workload or default-promotion gate.
+
+Instrumented v16->v17 root intervals fell 10.657 -> 5.888 ms. Nested elapsed intervals are not CPU work, saved time, critical path or a total-performance claim. Removing the remaining declaration warmup in v18 did not improve the uninstrumented absolute median (+3.77%). Thirty-four completed private daemon namespaces were stopped through exact native APIs before both final fresh sessions, stores preserved. Historical memory-pressure differences are recorded and must not be attributed to source changes.
+
+Promotion was rejected. All three modified production files were restored exactly to HEAD after preserving full frozen candidate bytes and patches. No experimental binary was installed over justrust and no shipping default changed. Signature evidence is in `bench/results/resident-signature-flags-20261030/`; complete coarse/warmup/repeat/interleaving evidence is in `bench/results/resident-root-snapshot-20261030/`. These are negative results for these hypotheses, not proof that justrust is generally faster than Blaze.
