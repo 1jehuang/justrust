@@ -27,6 +27,17 @@ added when useful. Document their purpose and measure performance-critical
 choices. Exact runnable commands and fixture options accompany implementation;
 there is no remaining bootstrap-policy blocker.
 
+On a fresh headless Linux host, install the Rust toolchain (including rustfmt
+and Clippy) and the separately released stable `justrust` client. Ensure
+`$HOME/.cargo/bin` and `$HOME/.local/bin` are on PATH before running these
+commands. Native execution acceptance currently requires Linux x86-64, and
+its stock oracle requires `rustc`. Build caches are not transferred with a cloud
+session, so allow disk space for a cold build. On a disk-constrained host,
+`CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0`
+reduces bootstrap artifact storage without changing the native compiler
+source-language configuration. Preserve checkout backups and other sessions
+caches rather than deleting them to make room.
+
 ## Scope
 
 Build a single-process, multicore engine for one immutable input snapshot.
