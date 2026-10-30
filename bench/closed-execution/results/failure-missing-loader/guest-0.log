@@ -1,0 +1,20 @@
+CAPSULE ENTROPY public-fixed-64-bytes-rndaddentropy-512
+{"schema":1,"mode":"check","source_bytes":74,"source_files":1,"functions":2,"structs":0,"enums":0,"cfg_blocks":7,"cfg_edges":5,"cfg_locals":12,"analysis_worklist_pops":6,"analysis_move_paths":12,"analysis_moves":0,"analysis_variant_proof_checks":0,"analysis_variant_refinements":0,"analysis_variant_proofs_killed":0,"workers":1,"executable_bytes":0,"total_ns":157711872421,"engine_ns":104427619174,"nodes":420,"edges":1084,"intern_hits":669,"failures":0,"events_dropped":0,"capture_complete":true,"measurement":"contended/uncontrolled"}
+CAPSULE RESULT check 0
+jr-rust: /work/valid.rs: infrastructure: read native toolchain capsule input /usr/lib/ld-linux-x86-64.so.2: No such file or directory (os error 2)
+note: source preparation and syntax diagnostics use original file locations; semantic diagnostic source spans remain incomplete
+CAPSULE RESULT build 1
+CAPSULE RESULT run 127
+jr-rust: /work/invalid.rs: E0308: mismatched types: expected Fixed(Bool), found Fixed(Int(I64))
+note: source preparation and syntax diagnostics use original file locations; semantic diagnostic source spans remain incomplete
+CAPSULE RESULT invalid-check 1
+jr-rust: /work/invalid.rs: infrastructure: read native toolchain capsule input /usr/lib/ld-linux-x86-64.so.2: No such file or directory (os error 2)
+note: source preparation and syntax diagnostics use original file locations; semantic diagnostic source spans remain incomplete
+CAPSULE RESULT invalid-build 1
+jr-rust: No such file or directory (os error 2)
+CAPSULE RESULT missing-source 1
+jr-rust: /work/valid.rs: infrastructure: read native toolchain capsule input /usr/lib/ld-linux-x86-64.so.2: No such file or directory (os error 2)
+note: source preparation and syntax diagnostics use original file locations; semantic diagnostic source spans remain incomplete
+CAPSULE RESULT existing-output 1
+CAPSULE DONE FAIL
+[  276.920524] reboot: Power down

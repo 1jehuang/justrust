@@ -1,0 +1,144 @@
+{
+  "nonauthorizing": true,
+  "success": true,
+  "repeats": [
+    {
+      "wall_seconds": 183.8509906429972,
+      "results": {
+        "check": 0,
+        "build": 0,
+        "run": 0,
+        "invalid-check": 1,
+        "invalid-build": 1,
+        "missing-source": 1,
+        "existing-output": 1
+      },
+      "elf_sha256": "f40ea7aaaecc89461d6806702c0e72fc12078f33565fe08145496ce4a17aeba6",
+      "elf_bytes": 8496,
+      "serial_sha256": "0cefb6048ea73e7fb4e3c1809346a3621e2a3009198be8df7cffd3e68fa7d47a"
+    },
+    {
+      "wall_seconds": 174.3506087840069,
+      "results": {
+        "check": 0,
+        "build": 0,
+        "run": 0,
+        "invalid-check": 1,
+        "invalid-build": 1,
+        "missing-source": 1,
+        "existing-output": 1
+      },
+      "elf_sha256": "f40ea7aaaecc89461d6806702c0e72fc12078f33565fe08145496ce4a17aeba6",
+      "elf_bytes": 8496,
+      "serial_sha256": "0cefb6048ea73e7fb4e3c1809346a3621e2a3009198be8df7cffd3e68fa7d47a"
+    }
+  ],
+  "success_scope": "owned operation acceptance and repeated same-path guest ELF equality only",
+  "limits": "No CPU/ASLR/kernel-input closure proof. No global cross-tenant cache authorization.",
+  "qemu_version": "QEMU emulator version 11.1.2\nCopyright (c) 2003-2026 Fabrice Bellard and the QEMU Project developers\n",
+  "qemu_sha256": "a2250f5e2b3b07c754473c0817df1cccf6c3c2443fc616dc474c4c311fa6ef1c",
+  "kernel_sha256": "7ca8265d776950dd3cdfb8eab7ee33978d139125e09bcf2a3a4ff482b7d5728c",
+  "initramfs_sha256": "83ab3fd4f91222c4352c58b5746ae6b00a4c05f3edc5005e22b6d3eba179e6c6",
+  "initramfs_bytes": 229803008,
+  "input_sha256": {
+    "compiler": "3e74d0659272e377f4a84c029a0c94a4e7261a2eff8fbd541ce5182c6cabb858",
+    "init": "7e6447edcdb3106e5fe2256581b539390c9af76f285d949d50b07c54f22d4d03",
+    "work/valid.rs": "09179fb45018731ccace67abcbe7503dbe8d0e74d032569243a2976f4fee8ce1",
+    "work/invalid.rs": "55b73ef93dcc1c8b5039471febd8a57b33a94bf7d374b663e707c021f3bdc637",
+    "lib64/ld-linux-x86-64.so.2": "f5e11cc62f8f2c24dff532982559f4303dba3b17e7450551372a88c8e7ea8757",
+    "usr/lib/libc.so.6": "02c8c3d06180beee9c7d0392aa85736c7d19f274a81e7f8f0b3d9e28e0641524",
+    "usr/lib/libgcc_s.so.1": "e618cb9c90c2eb3a1dad1cfea5b6c1eebcf2e799ad805976f4ae47bdd61c716a",
+    "usr/lib64/ld-linux-x86-64.so.2": "f5e11cc62f8f2c24dff532982559f4303dba3b17e7450551372a88c8e7ea8757",
+    "usr/bin/ld": "4d83828f709f0eade25bcae2f4a2508c47db2f01b58daaca5c1c4cefce897847",
+    "usr/lib/crt1.o": "e4c262fda945a76df8aaefc8343a4d09dd2add671735a322797c7dfe9352645e",
+    "usr/lib/crti.o": "caf7f0c99019735e97e9bfabf52c376e86e1ef92d1b53a63c36a5bc2688e8fcc",
+    "usr/lib/crtn.o": "71236f0a232a3686adf2319f3ae172831e8fd8166b9f0764ed184bc4df11be3c",
+    "usr/lib/libc_nonshared.a": "de2e822b005fc8ab5a2e6c99ad5067ff9e548f495f9e54c6a027506125507430",
+    "usr/lib/ld-linux-x86-64.so.2": "f5e11cc62f8f2c24dff532982559f4303dba3b17e7450551372a88c8e7ea8757",
+    "usr/lib/libbfd-2.47.so": "730687d04c52164e1386a4e82c587e829747bc375f84fd06de79250655d159fa",
+    "usr/lib/libctf.so.0": "efc76fbe2cf2c73101a77fdc2cb09cb81d72e64a40fb45f5f1d44076c13d0450",
+    "usr/lib/libjansson.so.4": "d8af5bd21fe80114ca9fa747c1d84998af122a49c6ca26276802f1f813f2995e",
+    "usr/lib/libz.so.1": "6c78c5e58c3bb49a1cd151a95cdf1a17fe07a91a57a59e0279b984c533075ca9",
+    "usr/lib/libzstd.so.1": "f023d49e85fb22057bfdd21857263d2638b73356c06f3b342f678a75212379f8",
+    "usr/lib/libsframe.so.3": "cdac88518dc3eb29fb5766463c4f9c3e6f8c8abb5223df759fc27e5d79b82d33"
+  },
+  "config": [
+    "-machine",
+    "pc-i440fx-11.1",
+    "-accel",
+    "tcg,thread=single",
+    "-cpu",
+    "qemu64,-rdrand,-rdseed",
+    "-smp",
+    "1",
+    "-m",
+    "1024",
+    "-nodefaults",
+    "-no-user-config",
+    "-display",
+    "none",
+    "-monitor",
+    "none",
+    "-serial",
+    "stdio",
+    "-nic",
+    "none",
+    "-no-reboot",
+    "-seed",
+    "42",
+    "-rtc",
+    "base=2026-01-01T00:00:00,clock=vm",
+    "-icount",
+    "shift=3,align=off,sleep=off",
+    "-append",
+    "console=ttyS0 quiet panic=-1 rdinit=/init nokaslr random.trust_cpu=off random.trust_bootloader=off"
+  ],
+  "config_sha256": "e391dfc45447be7cf5bb181a46a06d0373fe43607d529547ae9204d8350cbd67",
+  "entropy": "RNDADDENTROPY 512 credited bits, 64 public bytes byte[i]=(17*i+3)%256",
+  "native": [
+    {
+      "commands": [
+        {
+          "returncode": 0,
+          "wall_seconds": 5.526690429003793,
+          "output": "{\"schema\":1,\"mode\":\"check\",\"source_bytes\":74,\"source_files\":1,\"functions\":2,\"structs\":0,\"enums\":0,\"cfg_blocks\":7,\"cfg_edges\":5,\"cfg_locals\":12,\"analysis_worklist_pops\":6,\"analysis_move_paths\":12,\"analysis_moves\":0,\"analysis_variant_proof_checks\":0,\"analysis_variant_refinements\":0,\"analysis_variant_proofs_killed\":0,\"workers\":1,\"executable_bytes\":0,\"total_ns\":5487747319,\"engine_ns\":3181646184,\"nodes\":420,\"edges\":1084,\"intern_hits\":669,\"failures\":0,\"events_dropped\":0,\"capture_complete\":true,\"measurement\":\"contended/uncontrolled\"}\n"
+        },
+        {
+          "returncode": 0,
+          "wall_seconds": 3.2874302609998267,
+          "output": "{\"schema\":1,\"mode\":\"build\",\"source_bytes\":74,\"source_files\":1,\"functions\":2,\"structs\":0,\"enums\":0,\"cfg_blocks\":7,\"cfg_edges\":5,\"cfg_locals\":12,\"analysis_worklist_pops\":6,\"analysis_move_paths\":12,\"analysis_moves\":0,\"analysis_variant_proof_checks\":0,\"analysis_variant_refinements\":0,\"analysis_variant_proofs_killed\":0,\"workers\":1,\"executable_bytes\":8602,\"total_ns\":3266099512,\"engine_ns\":2341454197,\"nodes\":433,\"edges\":1220,\"intern_hits\":803,\"failures\":0,\"events_dropped\":0,\"capture_complete\":true,\"measurement\":\"contended/uncontrolled\"}\n"
+        },
+        {
+          "returncode": 0,
+          "wall_seconds": 0.002352756004256662,
+          "output": ""
+        }
+      ],
+      "elf_sha256": "a860b224d5259ff94439328923a1d6c0bff0a2e5737a042e9b66203475b7c956",
+      "elf_bytes": 8602
+    },
+    {
+      "commands": [
+        {
+          "returncode": 0,
+          "wall_seconds": 1.7156198390002828,
+          "output": "{\"schema\":1,\"mode\":\"check\",\"source_bytes\":74,\"source_files\":1,\"functions\":2,\"structs\":0,\"enums\":0,\"cfg_blocks\":7,\"cfg_edges\":5,\"cfg_locals\":12,\"analysis_worklist_pops\":6,\"analysis_move_paths\":12,\"analysis_moves\":0,\"analysis_variant_proof_checks\":0,\"analysis_variant_refinements\":0,\"analysis_variant_proofs_killed\":0,\"workers\":1,\"executable_bytes\":0,\"total_ns\":1702932758,\"engine_ns\":1295698910,\"nodes\":420,\"edges\":1084,\"intern_hits\":669,\"failures\":0,\"events_dropped\":0,\"capture_complete\":true,\"measurement\":\"contended/uncontrolled\"}\n"
+        },
+        {
+          "returncode": 0,
+          "wall_seconds": 5.225572136005212,
+          "output": "{\"schema\":1,\"mode\":\"build\",\"source_bytes\":74,\"source_files\":1,\"functions\":2,\"structs\":0,\"enums\":0,\"cfg_blocks\":7,\"cfg_edges\":5,\"cfg_locals\":12,\"analysis_worklist_pops\":6,\"analysis_move_paths\":12,\"analysis_moves\":0,\"analysis_variant_proof_checks\":0,\"analysis_variant_refinements\":0,\"analysis_variant_proofs_killed\":0,\"workers\":1,\"executable_bytes\":8602,\"total_ns\":5189420324,\"engine_ns\":4604572629,\"nodes\":433,\"edges\":1220,\"intern_hits\":803,\"failures\":0,\"events_dropped\":0,\"capture_complete\":true,\"measurement\":\"contended/uncontrolled\"}\n"
+        },
+        {
+          "returncode": 0,
+          "wall_seconds": 0.0041000730052473955,
+          "output": ""
+        }
+      ],
+      "elf_sha256": "a860b224d5259ff94439328923a1d6c0bff0a2e5737a042e9b66203475b7c956",
+      "elf_bytes": 8602
+    }
+  ],
+  "guest_elf_equal": true,
+  "native_guest_elf_equal": false
+}
