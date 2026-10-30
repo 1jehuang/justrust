@@ -94,15 +94,12 @@ impl Store {
     }
 
     fn identity(&self, root: &Path) -> io::Result<std::fs::Metadata> {
+        // This authorizes activity recording, not deletion. Sources may live
+        // under .justrust/bench (or other GC-excluded trees); target_of checks
+        // deletion eligibility separately, including immediately before GC.
         if !root.is_absolute()
             || root.canonicalize()? != root
             || self.prefix.as_ref().is_some_and(|p| !root.starts_with(p))
-            || root.components().any(|c| {
-                matches!(
-                    c.as_os_str().to_str(),
-                    Some(".justrust" | ".cargo" | ".git" | "target")
-                )
-            })
         {
             return Err(io::Error::other("root outside authorized source scope"));
         }

@@ -99,6 +99,17 @@ pub enum Skip {
 
 /// `<root>/target` if it is safe to delete, else why not.
 pub fn target_of(root: &Path) -> Result<PathBuf, Skip> {
+    // Source activity receipts protect builds even in benchmark workspaces
+    // below .justrust. Recording activity must not grant eviction authority
+    // over private/cache trees, including receipts written by another agent.
+    if root.components().any(|c| {
+        matches!(
+            c.as_os_str().to_str(),
+            Some(".justrust" | ".cargo" | ".git" | "target")
+        )
+    }) {
+        return Err(Skip::Unsafe("root is inside a private/cache tree".into()));
+    }
     let root_meta = std::fs::symlink_metadata(root).map_err(|_| Skip::Missing)?;
     if root_meta.file_type().is_symlink() || !root_meta.is_dir() {
         return Err(Skip::Unsafe("root is not a real directory".into()));

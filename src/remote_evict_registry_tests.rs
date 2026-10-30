@@ -305,7 +305,8 @@ fn symlink_receipts_and_private_cache_roots_are_never_authority() {
             .any(|l| l.contains("Unsafe"))
     );
     let cache = f.root(".justrust");
-    assert!(store.register(&cache).is_err());
+    store.register(&cache).unwrap();
+    assert!(matches!(ev::target_of(&cache), Err(Skip::Unsafe(_))));
 }
 
 #[test]
@@ -336,12 +337,53 @@ fn enrollment_failure_cannot_bypass_future_build_protection() {
         return;
     }
     let f = Fixture::new();
-    let root = f.root(".justrust");
+    let root = f.root("invalid");
+    std::fs::remove_dir_all(&root).unwrap();
     let mut registry = ev::Registry::from_store(f.store()).unwrap();
     assert!(registry.register(&root).is_err());
     assert_eq!(registry.root_of(&root), Some(root.clone()));
     assert!(registry.begin(&root).is_err());
     assert_eq!(collect(&registry, ev::Mode::On).0, 0);
+}
+
+#[test]
+fn benchmark_sources_record_activity_without_granting_private_tree_gc_authority() {
+    if ev::lock_tests::isolated_lock_test(
+        "remote_evict::durable::tests::benchmark_sources_record_activity_without_granting_private_tree_gc_authority",
+    ) {
+        return;
+    }
+    let f = Fixture::new();
+    for name in [
+        ".justrust/bench/work/project",
+        ".cargo/project",
+        ".git/project",
+        "target/project",
+    ] {
+        let root = f.root(name);
+        let mut registry = ev::Registry::from_store(f.store()).unwrap();
+        registry.register(&root).unwrap();
+        assert_eq!(registry.root_of(&root), Some(root.clone()));
+        let lock = ev::build_lock(&root).unwrap();
+        registry.begin(&root).unwrap();
+        assert_eq!(f.store().state(&root).unwrap().leases, 1);
+        registry.end(&root, ev::System.now()).unwrap();
+        drop(lock);
+        registry.finish_idle(&root).unwrap();
+        assert_eq!(f.store().state(&root).unwrap().leases, 0);
+        age(&f.store(), &root);
+        let registry = ev::Registry::from_store(f.store()).unwrap();
+        assert_eq!(collect(&registry, ev::Mode::On).0, 0);
+        assert!(
+            ev::evict(&ev::Eviction {
+                target: root.join("target"),
+                bytes: 4096,
+                last_build_end: 100,
+            })
+            .is_err()
+        );
+        assert!(root.join("target/debug/artifact").exists());
+    }
 }
 
 #[test]
