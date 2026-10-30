@@ -24,7 +24,8 @@ installed, selected, or enabled by justrust.
 The observation hook runs at `prepare_target` after native
 `compare_old_fingerprint`. It records Cargo's actual fresh/dirty decision, not a
 separate guess from a source directory scan. The supported prerequisite slice is
-one local-path, check-only, non-test leaf library unit with mtime dep-info, no
+one local-path, check-only, non-test leaf library unit with mtime or native
+content-checksum dep-info, no
 dependencies, build script, proc macro, compiler wrappers, extra compiler flags,
 or cross/custom target. Cold, dirty, failed, and unsupported invocations produce
 explicit denials. Successful compilation does not retroactively turn a dirty
@@ -61,7 +62,12 @@ native dep-info is not a record of symlink topology or all directory probes.
 File records contain length, mtime, and SHA-256. Before/after metadata and Unix
 identity/ctime checks reject files changed during hashing. The producer also
 rejects a native fingerprint changed around capture, source mtimes newer than
-the native dep-info reference, and output mtimes changed since native validation.
+the native dep-info reference in mtime mode, and output mtimes changed since native validation.
+Content mode instead requires each native dep-info length and checksum to match
+current bytes using the recorded algorithm, including Cargo's default BLAKE3.
+It records `native_freshness_method`, `native_dep_info_checksum`, and
+`native_dep_info_length`. Missing or mismatched native checksums deny support.
+A timestamp-only change is not rejected in content mode.
 These checks are **not** an atomic filesystem snapshot or content proof tying
 source bytes to historical compiler outputs. Concurrent same-timestamp edits,
 mutation after capture, or uncovered discovery changes can still race. Hence
@@ -73,9 +79,11 @@ plus newly observed content hashes cannot establish that those bytes produced
 an older artifact. The public backdated same-length edit regression exercises
 this exact counterexample through actual native Cargo, not a simulated receipt.
 
-A future checksum-backed path must distinguish checksums derived from bytes
+A checksum-backed observation must still distinguish checksums derived from bytes
 actually loaded by the compiler from checksums obtained by reopening tracked
-files when dep-info is written. The current compiler's `write_out_deps` uses
+files when dep-info is written. The separately implemented builtin-include read
+binding covers `include_str!` and `include_bytes!` in our compiler, not every
+tracked input or arbitrary compiler selected by Cargo. The compiler's `write_out_deps` uses
 SourceFile checksums for ordinary source-map files but reopens extra tracked
 files. A checksum-looking field alone is therefore not a complete historical
 read proof. None of these observations removes the planning/config/discovery/
@@ -128,3 +136,26 @@ explicitly fell back to local execution. The public tests used the actual final
 native Cargo binary, including parentless-sink and non-UTF8-path fail-open
 hardening. This validates producer behavior, not a hosted consumer or a no-op
 performance improvement.
+
+## Content-checksum prerequisite acceptance, 2026-10-30
+
+The additive content-mode observation is opt-in and does not enable checksum
+freshness by default. The actual native CLI test requests `-Zchecksum-freshness`
+and `--config 'build.fingerprint="content"'`. It verifies a fresh leaf records
+native BLAKE3 checksums, a same-length backdated edit becomes dirty, the next
+unchanged invocation becomes supported, and a timestamp-only change remains
+supported. All replay/trust flags remain false throughout. The separate mtime
+counterexample remains in the suite, so the distinction is tested explicitly.
+
+Hosted validation of the final producer and public executable:
+
+- Library check: `20261029-223459011-3499713`.
+- Six actual native CLI tests: `20261029-223502373-3499705`.
+- Library Clippy: `20261029-223521567-3502818`, passing with the same ten
+  inherited warnings, not a warning-free whole-tree claim.
+
+No client consumer, native toolchain selection, result replay, or performance
+promotion is included. A complete replay design still needs authoritative
+planning/configuration/discovery and negative-input closure, toolchain identity,
+output provenance, mutation barriers, and a consumer that rejects unsupported
+commands rather than trusting a current hash inventory.

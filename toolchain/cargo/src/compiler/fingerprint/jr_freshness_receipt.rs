@@ -164,8 +164,9 @@ pub fn observe(
     let mut files = Vec::new();
     let mut environment = Vec::new();
     let mut outputs = Vec::new();
+    let mut freshness_method = None;
     if reasons.is_empty() {
-        let collect = || -> anyhow::Result<(Vec<Value>, Vec<Value>, Vec<Value>)> {
+        let collect = || -> anyhow::Result<(Vec<Value>, Vec<Value>, Vec<Value>, &'static str)> {
             let mut files = Vec::new();
             let mut environment = Vec::new();
             let expected_fingerprint = crate::util::to_hex(fingerprint.hash_u64());
@@ -182,7 +183,7 @@ pub fn observe(
             }
             let LocalFingerprint::CheckDepInfo {
                 dep_info,
-                fingerprint: FingerprintMethod::Mtime,
+                fingerprint: method,
             } = &locals[0]
             else {
                 anyhow::bail!("unsupported-local-fingerprint-kind");
@@ -194,14 +195,27 @@ pub fn observe(
             if info.files.is_empty() {
                 anyhow::bail!("empty-native-input-closure");
             }
-            let mut source_paths: Vec<_> = info.files.into_keys().collect();
-            source_paths.sort();
-            for path in source_paths {
+            let mut source_paths: Vec<_> = info.files.into_iter().collect();
+            source_paths.sort_by(|left, right| left.0.cmp(&right.0));
+            for (path, prior_checksum) in source_paths {
                 if !path.starts_with(unit.pkg.root()) {
                     anyhow::bail!("external-source-input-unsupported");
                 }
-                files.push(file_observation(&path, "rustc-dep-info-input")?);
-                if cargo_util::paths::mtime(&path)? > reference_mtime {
+                let expected = match method {
+                    FingerprintMethod::Mtime => None,
+                    FingerprintMethod::Content => Some(
+                        prior_checksum
+                            .ok_or_else(|| anyhow::anyhow!("missing-native-input-checksum"))?,
+                    ),
+                };
+                files.push(file_observation_checked(
+                    &path,
+                    "rustc-dep-info-input",
+                    expected,
+                )?);
+                if *method == FingerprintMethod::Mtime
+                    && cargo_util::paths::mtime(&path)? > reference_mtime
+                {
                     anyhow::bail!("source-changed-after-native-freshness-comparison");
                 }
             }
@@ -240,11 +254,13 @@ pub fn observe(
             if fs::read_to_string(fingerprint_path)? != expected_fingerprint {
                 anyhow::bail!("native-fingerprint-changed-during-observation");
             }
-            Ok((files, environment, outputs))
+            Ok((files, environment, outputs, method.as_str()))
         };
         match collect() {
-            Ok(observed) => {
-                (files, environment, outputs) = observed;
+            Ok((observed_files, observed_environment, observed_outputs, method)) => {
+                (files, environment, outputs) =
+                    (observed_files, observed_environment, observed_outputs);
+                freshness_method = Some(method);
             }
             Err(error) => reasons.push(error.to_string()),
         }
@@ -254,6 +270,7 @@ pub fn observe(
         "target": unit.target.name(),
         "mode": unit.mode,
         "native_fresh": fresh,
+        "native_freshness_method": freshness_method,
         "compiler_read_content_bound_to_outputs": false,
         "supported": reasons.is_empty(),
         "unsupported_reasons": reasons,
@@ -271,6 +288,14 @@ pub fn observe(
 }
 
 fn file_observation(path: &Path, role: &str) -> anyhow::Result<Value> {
+    file_observation_checked(path, role, None)
+}
+
+fn file_observation_checked(
+    path: &Path,
+    role: &str,
+    expected: Option<(u64, Checksum)>,
+) -> anyhow::Result<Value> {
     let path_text = path
         .to_str()
         .ok_or_else(|| anyhow::anyhow!("non-utf8-file-path-unsupported"))?;
@@ -282,6 +307,13 @@ fn file_observation(path: &Path, role: &str) -> anyhow::Result<Value> {
         anyhow::bail!("directory-or-special-input-unsupported");
     }
     let hash = Checksum::compute(ChecksumAlgo::Sha256, File::open(path)?)?;
+    if let Some((length, checksum)) = expected {
+        if before.len() != length
+            || Checksum::compute(checksum.algo(), File::open(path)?)? != checksum
+        {
+            anyhow::bail!("native-input-checksum-changed-during-observation");
+        }
+    }
     let after = fs::symlink_metadata(path)?;
     let mtime = FileTime::from_last_modification_time(&before);
     if before.len() != after.len() || mtime != FileTime::from_last_modification_time(&after) {
@@ -301,6 +333,6 @@ fn file_observation(path: &Path, role: &str) -> anyhow::Result<Value> {
         }
     }
     Ok(
-        json!({ "path": path_text, "role": role, "length": before.len(), "mtime_seconds": mtime.unix_seconds(), "mtime_nanoseconds": mtime.nanoseconds(), "sha256": hash.to_string() }),
+        json!({ "path": path_text, "role": role, "length": before.len(), "mtime_seconds": mtime.unix_seconds(), "mtime_nanoseconds": mtime.nanoseconds(), "sha256": hash.to_string(), "native_dep_info_checksum": expected.map(|(_, checksum)| checksum.to_string()), "native_dep_info_length": expected.map(|(length, _)| length) }),
     )
 }

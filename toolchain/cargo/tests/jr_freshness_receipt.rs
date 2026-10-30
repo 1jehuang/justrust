@@ -64,6 +64,74 @@ fn receipt(root: &Path) -> Value {
 }
 
 #[test]
+fn content_freshness_receipt_checks_native_checksums_without_authorizing_replay() {
+    let temp = fixture("", "pub const VALUE: u8 = 1;\n");
+    let root = temp.path();
+    let content_command = || {
+        let mut cmd = command(root);
+        cmd.args([
+            "-Zchecksum-freshness",
+            "--config",
+            "build.fingerprint=\"content\"",
+        ])
+        .env("__CARGO_TEST_CHANNEL_OVERRIDE_DO_NOT_USE_THIS", "nightly")
+        .env("RUSTC_BOOTSTRAP", "1");
+        cmd
+    };
+    run(&mut content_command());
+    run(&mut content_command());
+    let before = receipt(root);
+    assert_eq!(before["prerequisite_supported"], true, "{before:#}");
+    assert_eq!(before["units"][0]["native_freshness_method"], "content");
+    let path = root.join("src/lib.rs");
+    let input = before["units"][0]["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|file| file["path"] == path.to_str().unwrap())
+        .unwrap();
+    assert!(
+        input["native_dep_info_checksum"]
+            .as_str()
+            .unwrap()
+            .starts_with("blake3=")
+    );
+    assert_eq!(
+        input["native_dep_info_length"],
+        fs::metadata(&path).unwrap().len()
+    );
+    let old_mtime = filetime::FileTime::from_last_modification_time(&fs::metadata(&path).unwrap());
+    fs::write(&path, "pub const VALUE: u8 = 2;\n").unwrap();
+    filetime::set_file_mtime(&path, old_mtime).unwrap();
+    run(&mut content_command());
+    assert_eq!(receipt(root)["units"][0]["native_fresh"], false);
+    run(&mut content_command());
+    let after = receipt(root);
+    assert_eq!(after["prerequisite_supported"], true, "{after:#}");
+    assert_eq!(
+        after["units"][0]["compiler_read_content_bound_to_outputs"],
+        false
+    );
+    let updated = after["units"][0]["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|file| file["path"] == path.to_str().unwrap())
+        .unwrap();
+    assert_ne!(
+        input["native_dep_info_checksum"],
+        updated["native_dep_info_checksum"]
+    );
+    filetime::set_file_mtime(
+        &path,
+        filetime::FileTime::from_unix_time(old_mtime.unix_seconds() + 60, 0),
+    )
+    .unwrap();
+    run(&mut content_command());
+    assert_eq!(receipt(root)["prerequisite_supported"], true);
+}
+
+#[test]
 fn backdated_same_length_edit_is_observational_not_content_authority() {
     let temp = fixture("", "pub const VALUE: u8 = 1;\n");
     let root = temp.path();
