@@ -1,0 +1,7 @@
+daemon 0.20261027.0-2f3d87f6-77b7aa8-18e363f477810f3e (jr-engine experimental 0.20261027.0 (Blaze-derived origin 5d4f78f7577cf7170993b74f735099dd03f5c6ca; build resident-v1-bef6ca29688da595e73820cee9c6cf2b785f31dd0acff6f06a1fd0c71474f39a)) of pid 2522879 listens on /home/jeremy/rsa18/engine/engine-home/resident-v1/runtime/daemon.sock
+worker 3e02130819eed9f6 of pid 2522882 for /home/jeremy/.jcode/scratch/ba30/source/
+/home/jeremy/.jcode/scratch/ba30/source: ready
+daemon of pid 2522879 ends at SystemTime { tv_sec: 1793387233, tv_nsec: 785310036 }
+daemon 0.20261027.0-2f3d87f6-77b7aa8-18e363f477810f3e (jr-engine experimental 0.20261027.0 (Blaze-derived origin 5d4f78f7577cf7170993b74f735099dd03f5c6ca; build resident-v1-bef6ca29688da595e73820cee9c6cf2b785f31dd0acff6f06a1fd0c71474f39a)) of pid 2572096 listens on /home/jeremy/rsa18/engine/engine-home/resident-v1/runtime/daemon.sock
+worker 3e02130819eed9f6 of pid 2572099 for /home/jeremy/.jcode/scratch/ba30/source/
+/home/jeremy/.jcode/scratch/ba30/source: ready

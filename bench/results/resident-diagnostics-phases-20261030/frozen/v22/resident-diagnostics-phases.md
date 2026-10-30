@@ -1,0 +1,46 @@
+# Native diagnostics phase telemetry
+
+Evidence-only instrumentation to investigate the reported approximately 19 ms diagnostics contribution. No optimization or speed claim, no persisted build state, and no changes to query demand, skeletons, CLEAN keys, source hashing, selective predicates, diagnostic filtering, or cache contents.
+
+## Activation and propagation contract
+
+Start a **private dedicated measurement daemon with `RA_JIT_DIAGNOSTICS_STATS=1` in its startup environment**, then create fresh workers under that daemon. Only the exact OS-string value `1` enables instrumentation. Unset, empty, `0`, and every other value disable it. The process-local `OnceLock` reads the inherited flag on first use. This is daemon/worker startup inheritance, not a dynamic request toggle or a worker-identity configuration variable. Changing only the requesting client's environment does not reconfigure existing daemons/workers. Do not replace or reconfigure a shared production daemon for measurement.
+
+Read-only propagation proof in `crates/ra-jit/src/cargo/`:
+
+- `mod.rs::asking` filters client-only `RA_JIT_STATS`/`RA_JIT_TRACE` and aliases out of requests. Although the new flag is not removed here, that alone does not prove it reaches a worker.
+- `cli.rs::WORKER_ENV` explicitly lists request-selected worker variables and does **not** list `RA_JIT_DIAGNOSTICS_STATS`. `worker_named` uses that list plus target rustflags. `worker_env` therefore does not select this flag as worker configuration/identity.
+- `cli.rs::blazes` recognizes all `RA_JIT_`/`BLAZE_` names. `taken_away`/`not_the_builds` preserve inherited blaze-owned variables not in `WORKER_ENV`, rather than clearing them with unrelated command environment.
+- `daemon.rs` starts workers with a normal `Command` inheriting the daemon environment, then `started.extend(config.builds_env())`, `command.envs(&started)`, and `exact_env`. The diagnostic flag is not selected by those configuration maps or removed by the exact-environment policy. It reaches workers through **daemon startup inheritance**, not a request config entry. Checkers similarly inherit the daemon environment and apply config envs.
+
+Verify the actual worker environment and require positive timing markers before interpreting profiles. `RA_JIT_STATS` and `RA_JIT_TRACE` alone do not enable diagnostics instrumentation. Client trace export may be toggled independently of a worker whose diagnostic timing remains enabled. Existing unrelated telemetry is unchanged.
+
+## Direct real-interval transport
+
+The four diagnostics phases use a local RAII helper in `main.rs`, with `PhantomData<Rc<()>>` making guards !Send and !Sync. Start and end are captured on the executing thread. At drop, `trace::span` records that same thread and the actual start/end with no breakdown level. The helper does not use tracing-crate subscribers, callsite registration, or duration thresholds.
+
+Completed spans enter a dedicated process-local Mutex collector capped at **4000 spans per drain window**, without a shortest-duration cutoff. Extra completions increment a saturating dropped counter. `worker_spans` appends the dedicated collector drain after the existing query-detail drain. Drain uses the existing `noticed` epoch convention: spans ending before `noticed` are stale and discarded. Each enabled drain reports:
+
+`diagnostics transport: retained=N stale=S dropped=D cap=4000`
+
+N is the number appended to the worker response, S is the stale count, D is the capacity-drop count, then the collector/counter reset. A nonzero D means incomplete coverage. A successful request response carries retained spans through existing `trace::with_spans`; errors that return before `worker_spans` may leave details until a later drain or process exit. The collector is process-global, not request-tagged: overlapping requests or stray work in the same process cannot be assigned uniquely by this receipt. Dedicated serialized measurement is required. No collection/receipt is promised after process termination.
+
+Disabled instrumentation performs no new clock reads, collector locks, tracing span construction, or timing report allocation. It checks the cached startup gate, leaves start timestamps absent, and does not drain/lock the collector. Existing unrelated telemetry is unchanged. Enabled span construction, allocation, locking, timestamp conversion and stderr reporting impose measurement overhead. The span's end is captured before collection, so collection overhead is not charged to that span but can appear in enclosing wall/semantic intervals.
+
+Earlier v21/v21b tracing-based captures failed the required positive-marker gate. Their failure evidence remains separate. Existing tracing Recorder has a 200 microsecond threshold, 255-callsite registration bound and ignored global-subscriber installation result, but source inspection alone does **not** establish which condition caused the observed missing details. The direct transport removes those dependencies for these four labels only. It does not repair or reinterpret other tracing/query detail.
+
+## Exact event/report contract
+
+- `diagnostics.broken_in.wall`: actual calling-thread scope from function entry through return, including configuration, worker spawning/joining, and final sort/dedup/message formatting. This thread can wait while other threads work.
+- `diagnostics.skeleton_key_clean`: actual `errors_of` executing-thread interval for crate-set hash/key construction, `outline::skeleton`, and CLEAN remove/matching lookup, including lock wait.
+- `diagnostics.semantic_inclusive_asked`: actual executing-thread interval around the eager `semantic_diagnostics_of_bodies` call. **Includes every asked callback**, source resolution, source text materialization/hash, function hash map update and selective predicate work, plus semantic computation and waits inside that call.
+- `diagnostics.filter_cache_update`: actual executing-thread interval for diagnostic filtering/collection, the pre-existing stats report, and conditional CLEAN insertion, including lock wait. The new callback timing report is outside this interval.
+- `check timing: {file:?}: asked_callback_calls=N asked_callback_cumulative_ns=T (source/hash/selective predicate, included in semantic)` is one stderr line per normally completed `errors_of` when the exact dedicated startup flag is enabled, independent of client stats/trace activation. N counts all callback invocations, including non-function and missing-source early returns. T sums monotonic elapsed durations of real callback scopes in nanoseconds. It includes all callback work, not hashing alone. Two clock observations per callback and local Cell updates avoid per-callback tracing, locks, allocations, or synthetic events. No callback report is emitted if `errors_of` unwinds.
+
+The existing `check: ... functions asked` report retains its original meaning and activation. The new all-callback count intentionally differs from its successful-function-source count. Reports identify files, not unique concurrent invocations or crate/rule keys; lines from concurrent invocations may appear in completion order.
+
+## Interpretation and source-only checks
+
+No sequential residual spans, fabricated timestamp intervals, or callback spans assigned to another thread are produced. The outer wall interval overlaps spawned work on other threads. Parallel file/crate diagnostic invocations overlap. Sums across threads are not wall time or critical path. Callback cumulative duration is a subset of the inclusive semantic interval, not an additional phase. It has no synthetic start timestamp and is not exported as a Chrome duration event. Detail events do not alter the existing level-based wall-time breakdown. Gaps between scopes and reporting overhead mean phase totals do not exhaust outer wall time. Absent markers never establish zero cost or successful activation, even with no duration threshold.
+
+Exactly three source unit tests match `diagnostics_timing_tests`: `startup_flag_requires_exact_one`, `disabled_interval_has_no_clock_or_accounting`, and `enabled_intervals_count_early_returns_and_accumulate`. Their bodies cover the pure exact-value parser, disabled phase drop while a local collector lock is held, absent timing/accounting, actual enabled phase thread attribution and bounded duration, local collector capacity/drop/stale/reset behavior, and callback count/cumulative monotonicity with early return. Local collectors avoid parallel-test interference with the production global collector. They are not executed in this lane. Only direct rustfmt and diff checks are permitted here. Root owns frozen-source native build/tests, diagnostics equivalence, positive-marker profiles, and overhead evaluation. No commit before root native acceptance.

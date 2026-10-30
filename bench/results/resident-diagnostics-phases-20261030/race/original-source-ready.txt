@@ -1,0 +1,23 @@
+diagnostic-flat-hash-v23 source-ready
+Date: 2026-10-30
+Status: SOURCE ONLY. Not integrated, compiled, tested, or performance measured.
+No commits. No main.rs/Cargo.toml edits. No native workloads.
+
+Integration payload:
+9a9d2dab6718dd7e84c675f72edda5832e9b7ebc7d422f9c5c11e95f9fcb8f06  diagnostic_hash.rs
+Destination after v22 release: /home/jeremy/justrust/toolchain/resident/crates/ra-jit/src/diagnostic_hash.rs
+
+a7596c5e59237227a8dd8b0930676ab144536ec5dbb3047c4041f2644afc77ae  resident-diagnostic-flat-text.md
+Identical working copy: /home/jeremy/justrust/docs/resident-diagnostic-flat-text.md
+
+Checks performed on staged helper: rustfmt --edition 2024, rustfmt --edition 2024 --check.
+Owned helper/doc git diff --no-index --check: no whitespace diagnostics, exit 1 for new-file differences.
+Actual fork rowan API source inspected for flat/text/range/green/new_root/to_flat/descendants.
+Native type/lifetime compilation, differential test execution, integration and timing remain pending root gates.
+
+Freeze incident:
+Real helper was created at 2026-10-30T19:16:27.868Z, immediately before scratch-only refinement received at 2026-10-30T19:16:27.869Z.
+Root skunk authorized scoped removal. Before-SHA ac81c907f0170e30b625c19da9b85a9b93bda566bce16649a91457603c2475cf, original backup cmp identical (exit 0). apply_patch deleted ONLY new unintegrated helper at 2026-10-30T19:19:15.481Z. Absence verified 2026-10-30T19:19:22.741Z. No remaining helper in toolchain. Integration deferred until root release.
+Original creation bytes preserved separately:
+ac81c907f0170e30b625c19da9b85a9b93bda566bce16649a91457603c2475cf  diagnostic_hash.pre-refinement.rs
+The integration payload differs from original bytes only by rustfmt formatting.

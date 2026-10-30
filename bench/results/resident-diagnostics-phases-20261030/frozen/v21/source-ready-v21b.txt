@@ -1,0 +1,9 @@
+Source-ready v21b. Supersedes activation contract only, preserves initial v21 source and receipt.
+Exact startup worker flag RA_JIT_DIAGNOSTICS_STATS=1 only, unset/0/other false. Positive check timing markers required.
+Exactly 3 tests match diagnostics_timing_tests. Source-only rustfmt --check and diff --check passed. No native builds/tests/workloads/commit.
+Base HEAD: 0f517922b175cd854c853ec615a1c0b5e3c69d71
+9705d35a5ad9cacbd830d52661112a794b47bfd21b11a9dfd805eaa5efacd8b2  /home/jeremy/.jcode/scratch/blaze-native-engine-20261030/diagnostics-phases-v21/main-v21b.rs
+10238f17373c3bf9f41a83af7b35b2d753e5f63bd023da22271b98b90d21e776  /home/jeremy/.jcode/scratch/blaze-native-engine-20261030/diagnostics-phases-v21/resident-diagnostics-phases-v21b.md
+
+Initial source preserved:
+d66178c6262ee5b2958d3dbf2c3151788297ece2779e6b8ed42bddb4e4303e02  /home/jeremy/.jcode/scratch/blaze-native-engine-20261030/diagnostics-phases-v21/main.rs

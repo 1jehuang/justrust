@@ -1,0 +1,12 @@
+[
+  {
+    "pid": 2401436,
+    "comm": "cargo",
+    "cmdline": "/home/jeremy/.blaze/toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/bin/cargo --config target.'cfg(all())'.runner=[\"/home/jeremy/.cargo/bin/justrust\",\"__test-runner\"] --config term.progress.when=\"always\" --config term.progress.width=200 test --release --locked -p ra-jit --bin jr-engine -j 6 -- resident_graph_reuse --nocapture",
+    "kind": "cargo",
+    "first_seen": 1793387021.6795294,
+    "last_seen": 1793387021.6795294,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 23.4140625
+  }
+]

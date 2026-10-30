@@ -1,0 +1,25 @@
+{
+  "verdict": "passed",
+  "native_test_rows": [
+    {
+      "filter": "diagnostics_timing_tests",
+      "passed": 3,
+      "run_id": "20261030-120258353-2398485"
+    },
+    {
+      "filter": "resident_graph_reuse",
+      "passed": 1,
+      "run_id": "20261030-120341661-2401400"
+    },
+    {
+      "filter": "the_roots_of_a_listed_crate",
+      "passed": 1,
+      "run_id": "20261030-120341879-2401449"
+    },
+    {
+      "filter": "telemetry",
+      "passed": 3,
+      "run_id": "20261030-120342143-2401496"
+    }
+  ]
+}

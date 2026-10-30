@@ -1,0 +1,69 @@
+{
+  "verdict": "passed",
+  "source_commit": "1a0326d59",
+  "corrected_full_native_run": "20261030-122938036-2828152",
+  "native_passed": 349,
+  "first_full_native_run_provenance_limited": "20261030-121731644-2778234",
+  "positive_profile_rows": 6,
+  "actual_edits": [
+    {
+      "mode": "edit-one",
+      "durations_us": {
+        "diagnostics.skeleton_key_clean": 1099,
+        "diagnostics.semantic_inclusive_asked": 98950,
+        "diagnostics.filter_cache_update": 1,
+        "diagnostics.broken_in.wall": 101261
+      }
+    },
+    {
+      "mode": "edit-two",
+      "durations_us": {
+        "diagnostics.skeleton_key_clean": 1050,
+        "diagnostics.semantic_inclusive_asked": 88040,
+        "diagnostics.filter_cache_update": 2,
+        "diagnostics.broken_in.wall": 89626
+      }
+    },
+    {
+      "mode": "edit-three",
+      "durations_us": {
+        "diagnostics.skeleton_key_clean": 1109,
+        "diagnostics.semantic_inclusive_asked": 64988,
+        "diagnostics.filter_cache_update": 4,
+        "diagnostics.broken_in.wall": 66549
+      }
+    }
+  ],
+  "transport_receipts": [
+    [
+      4,
+      94,
+      0
+    ],
+    [
+      4,
+      0,
+      0
+    ],
+    [
+      4,
+      0,
+      0
+    ]
+  ],
+  "edit_callback_receipts": [
+    [
+      373,
+      7969758
+    ],
+    [
+      373,
+      7676528
+    ],
+    [
+      373,
+      8332561
+    ]
+  ],
+  "claim": "instrumentation evidence only, inclusive concurrent timings, no speedup claim"
+}

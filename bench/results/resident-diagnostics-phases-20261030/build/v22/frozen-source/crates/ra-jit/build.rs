@@ -1,0 +1,233 @@
+//! `RA_JIT_SOURCES`: what this build of ra-jit is built from, for the store to key what it
+//! keeps by (`ra_jit_store::built_from`). A hash of every file of the workspace's crates, the
+//! vendored ones included, of the manifest and lock file that pick the crates of crates.io, of
+//! the files outside them a crate compiles in, of the features, the target and whether debug
+//! assertions are on, which some of codegen checks under. The compiler that builds ra-jit is
+//! not: what ra-jit compiles does not depend on it, and the toolchain it compiles against is
+//! in the store's key apart. Two such builds of the same sources compile the same code into
+//! the store, wherever they are built. Outside the workspace, as a published crate builds, it
+//! is not set, and the store keys by the bytes of the executable.
+//!
+//! The SHA-256 is written here rather than taken from `sha2`: a build dependency is built for
+//! the machine that builds, and `nix/units` holds one graph per target computed on Linux, where
+//! `sha2`'s `cpufeatures` needs no `libc`, which it needs on Apple's aarch64.
+
+use std::path::{Path, PathBuf};
+
+const JR_ENGINE_ORIGIN: &str = "5d4f78f7577cf7170993b74f735099dd03f5c6ca";
+
+fn main() {
+    println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rustc-env=JR_ENGINE_ORIGIN={JR_ENGINE_ORIGIN}");
+    // An unidentified build is not evidence of a particular owned source tree.
+    // The native entry rejects it for build/test operations.
+    println!("cargo:rustc-env=JR_ENGINE_BUILD_ID=resident-v1-unidentified");
+    git_sha();
+    sandbox_library();
+    println!("cargo:rerun-if-env-changed=CARGO_WORKSPACE_DIR");
+    let Some(root) = std::env::var_os("CARGO_WORKSPACE_DIR").map(PathBuf::from) else { return };
+    let (lock, crates, vendor) =
+        (root.join("Cargo.lock"), root.join("crates"), root.join("vendor"));
+    if !lock.is_file() || !crates.is_dir() {
+        return;
+    }
+    let mut files = Vec::new();
+    for top in [&crates, &vendor] {
+        println!("cargo:rerun-if-changed={}", top.display());
+        listed(top, &mut files);
+    }
+    // `harness/toolchain` is compiled in (`cargo/state.rs`).
+    for file in ["Cargo.toml", "Cargo.lock", ".cargo/config.toml", "harness/toolchain"] {
+        let path = root.join(file);
+        println!("cargo:rerun-if-changed={}", path.display());
+        files.push(path);
+    }
+    files.sort();
+    let mut hash = Sha256::new();
+    let mut field = |bytes: &[u8]| {
+        hash.update(&(bytes.len() as u64).to_le_bytes());
+        hash.update(bytes);
+    };
+    // Private formats must not share an upstream store identity, even before
+    // the first semantic fork. This salts the existing complete source key.
+    field(b"justrust-resident-v1");
+    field(JR_ENGINE_ORIGIN.as_bytes());
+    for path in &files {
+        let bytes = std::fs::read(path).unwrap_or_else(|error| {
+            panic!("resident source identity cannot read {}: {error}", path.display())
+        });
+        let name = path.strip_prefix(&root).unwrap_or(path).to_string_lossy().replace('\\', "/");
+        field(name.as_bytes());
+        field(&bytes);
+    }
+    let mut features: Vec<String> =
+        std::env::vars().map(|it| it.0).filter(|it| it.starts_with("CARGO_FEATURE_")).collect();
+    features.sort();
+    field(features.join(" ").as_bytes());
+    field(std::env::var("TARGET").unwrap_or_default().as_bytes());
+    field(&[u8::from(std::env::var_os("CARGO_CFG_DEBUG_ASSERTIONS").is_some())]);
+    let hex: String = hash.finish().iter().map(|byte| format!("{byte:02x}")).collect();
+    println!("cargo:rustc-env=RA_JIT_SOURCES={hex}");
+    println!("cargo:rustc-env=JR_ENGINE_BUILD_ID=resident-v1-{hex}");
+}
+
+/// On macOS, the library every process of a sandbox loads (`src/sandbox/macos_interpose.c`),
+/// built with the C compiler of the system (`CC` when set), which `src/sandbox/macos.rs`
+/// carries in the executable. A C file and no build dependency: dyld loads only a dynamic
+/// library, which cargo builds from Rust only as a crate of its own.
+/// Explicit build label, otherwise the recorded Blaze origin plus a local-fork marker.
+/// The enclosing justrust repository's HEAD is never interpreted as an upstream revision.
+fn git_sha() {
+    println!("cargo:rerun-if-env-changed=RA_JIT_GIT_SHA");
+    let given = std::env::var("RA_JIT_GIT_SHA").unwrap_or_default();
+    let sha = if given.is_empty() {
+        // This ordinary source tree lives inside justrust. The enclosing Git
+        // HEAD is not a Blaze commit and must never be presented as one.
+        format!("blaze-{JR_ENGINE_ORIGIN}+justrust-local")
+    } else {
+        given
+    };
+    if !sha.is_empty() {
+        println!("cargo:rustc-env=RA_JIT_GIT_SHA={sha}");
+    }
+}
+
+fn sandbox_library() {
+    let source = "src/sandbox/macos_interpose.c";
+    println!("cargo:rerun-if-changed={source}");
+    println!("cargo:rerun-if-env-changed=CC");
+    println!("cargo:rerun-if-env-changed=MACOSX_DEPLOYMENT_TARGET");
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("macos") {
+        return;
+    }
+    // Apple's own programs on Apple silicon (`cc`, `clang`, `ld`) are arm64e, and where macOS
+    // does not drop `DYLD_*` for them (SIP off, as on GitHub's macOS runners) dyld aborts one
+    // whose inserted library has no arm64e slice: every C build of a build script under the
+    // sandbox (#147). The arm64 slice is for every other program.
+    let arches: &[&str] = match std::env::var("CARGO_CFG_TARGET_ARCH").as_deref() {
+        Ok("aarch64") => &["-arch", "arm64", "-arch", "arm64e"],
+        Ok("x86_64") => &["-arch", "x86_64"],
+        other => panic!("no sandbox library for the architecture {other:?}"),
+    };
+    let out = PathBuf::from(std::env::var_os("OUT_DIR").unwrap()).join("ra_jit_sandbox.dylib");
+    let cc = std::env::var("CC").unwrap_or_else(|_| "cc".to_owned());
+    let target = std::env::var("MACOSX_DEPLOYMENT_TARGET").unwrap_or_else(|_| "11.0".to_owned());
+    let status = std::process::Command::new(&cc)
+        .args(["-dynamiclib", "-O2", "-Wall"])
+        .args(arches)
+        .arg(format!("-mmacosx-version-min={target}"))
+        .arg("-o")
+        .arg(&out)
+        .arg(source)
+        .status()
+        .unwrap_or_else(|error| panic!("{cc} did not run to build {source}: {error}"));
+    assert!(status.success(), "{cc} could not build {source}");
+    // Its name in the user's cache, by its contents, worked out here rather than at each run.
+    let mut hash = Sha256::new();
+    hash.update(&std::fs::read(&out).unwrap());
+    let hex: String = hash.finish().iter().take(12).map(|byte| format!("{byte:02x}")).collect();
+    println!("cargo:rustc-env=RA_JIT_SANDBOX_LIBRARY={hex}");
+}
+
+/// Every file below `dir`, but in hidden directories and in what cargo and npm build into.
+fn listed(dir: &Path, files: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Ok(kind) = entry.file_type() else { continue };
+        if kind.is_dir() {
+            let built = name == "target" || name == "node_modules";
+            if !name.to_string_lossy().starts_with('.') && !built {
+                listed(&entry.path(), files);
+            }
+        } else {
+            files.push(entry.path());
+        }
+    }
+}
+
+/// SHA-256 (FIPS 180-4).
+struct Sha256 {
+    state: [u32; 8],
+    pending: Vec<u8>,
+    len: u64,
+}
+
+const K: [u32; 64] = [
+    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+    0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+    0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+    0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+    0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+    0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+];
+
+impl Sha256 {
+    fn new() -> Sha256 {
+        let state = [
+            0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
+            0x5be0cd19,
+        ];
+        Sha256 { state, pending: Vec::with_capacity(64), len: 0 }
+    }
+
+    fn update(&mut self, mut bytes: &[u8]) {
+        self.len += bytes.len() as u64;
+        if !self.pending.is_empty() {
+            let take = (64 - self.pending.len()).min(bytes.len());
+            self.pending.extend_from_slice(&bytes[..take]);
+            bytes = &bytes[take..];
+            if self.pending.len() < 64 {
+                return;
+            }
+            let block: [u8; 64] = self.pending[..].try_into().unwrap();
+            self.compress(&block);
+            self.pending.clear();
+        }
+        let (blocks, rest) = bytes.as_chunks::<64>();
+        for block in blocks {
+            self.compress(block);
+        }
+        self.pending.extend_from_slice(rest);
+    }
+
+    fn finish(mut self) -> [u8; 32] {
+        let bits = self.len * 8;
+        let mut tail = vec![0x80];
+        tail.resize((119 - self.pending.len()) % 64 + 1, 0);
+        tail.extend_from_slice(&bits.to_be_bytes());
+        self.update(&tail);
+        let mut out = [0; 32];
+        for (word, at) in self.state.iter().zip(out.as_chunks_mut::<4>().0) {
+            *at = word.to_be_bytes();
+        }
+        out
+    }
+
+    fn compress(&mut self, block: &[u8; 64]) {
+        let mut w = [0u32; 64];
+        for (word, at) in w.iter_mut().zip(block.as_chunks::<4>().0) {
+            *word = u32::from_be_bytes(*at);
+        }
+        for i in 16..64 {
+            let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);
+            let s1 = w[i - 2].rotate_right(17) ^ w[i - 2].rotate_right(19) ^ (w[i - 2] >> 10);
+            w[i] = w[i - 16].wrapping_add(s0).wrapping_add(w[i - 7]).wrapping_add(s1);
+        }
+        let [mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut h] = self.state;
+        for i in 0..64 {
+            let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
+            let ch = (e & f) ^ (!e & g);
+            let t1 = h.wrapping_add(s1).wrapping_add(ch).wrapping_add(K[i]).wrapping_add(w[i]);
+            let s0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
+            let maj = (a & b) ^ (a & c) ^ (b & c);
+            let t2 = s0.wrapping_add(maj);
+            (h, g, f, e, d, c, b, a) = (g, f, e, d.wrapping_add(t1), c, b, a, t1.wrapping_add(t2));
+        }
+        for (word, add) in self.state.iter_mut().zip([a, b, c, d, e, f, g, h]) {
+            *word = word.wrapping_add(add);
+        }
+    }
+}

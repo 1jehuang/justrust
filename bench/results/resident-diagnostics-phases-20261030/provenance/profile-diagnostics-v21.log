@@ -1,0 +1,5 @@
+Traceback (most recent call last):
+  File "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/profile-diagnostics-v21.py", line 41, in <module>
+    if mode.startswith('edit-') and not {'diagnostics.broken_in.wall','diagnostics.semantic_inclusive_asked'}.issubset(labels):raise ValueError(f'{mode}: missing positive actual native diagnostics intervals')
+                                                                                                                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ValueError: edit-one: missing positive actual native diagnostics intervals

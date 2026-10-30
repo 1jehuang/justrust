@@ -1,0 +1,27 @@
+# Native diagnostics phase telemetry
+
+Evidence-only instrumentation to investigate the reported approximately 19 ms diagnostics contribution. No optimization or speed claim, no persisted build state, and no changes to query demand, skeletons, CLEAN keys, source hashing, selective predicates, diagnostic filtering, or cache contents.
+
+## Activation and collection contract
+
+Set `RA_JIT_STATS` (presence, including an empty value) or a nonempty `RA_JIT_TRACE` in the **executing worker process environment before startup**. The process-local `OnceLock` gate mirrors `cargo::telemetry_enabled`; it is private here because that Cargo helper is client-only. No new configuration forwarding or persistence is introduced. A client flag alone does not guarantee an already-running worker inherited that flag. Restart the measured worker with the intended environment. Disabled instrumentation performs no clock reads, tracing span construction, or timing report allocation. Existing unrelated telemetry is unchanged.
+
+The existing `trace::Recorder` must be installed, and the existing `take_detail`/worker response path collects the detail spans. These are INFO spans targeted at `ra_jit`, with no breakdown level. Recorder currently drops spans shorter than 200 microseconds and caps retained detail at 4000 per collection window. An absent span is not evidence of zero work. Timestamp conversion and collection use the existing trace implementation without modifications.
+
+## Exact event/report contract
+
+- `diagnostics.broken_in.wall`: actual calling-thread scope from function entry through return, including configuration, worker spawning/joining, and final sort/dedup/message formatting. This thread can wait while other threads work.
+- `diagnostics.skeleton_key_clean`: actual `errors_of` executing-thread interval for crate-set hash/key construction, `outline::skeleton`, and CLEAN remove/matching lookup, including lock wait.
+- `diagnostics.semantic_inclusive_asked`: actual executing-thread interval around the eager `semantic_diagnostics_of_bodies` call. **Includes every asked callback**, source resolution, source text materialization/hash, function hash map update and selective predicate work. It also includes semantic computation and any waits inside that call.
+- `diagnostics.filter_cache_update`: actual executing-thread interval for diagnostic filtering/collection, the pre-existing stats report, and conditional CLEAN insertion, including lock wait. The new callback timing report is outside this interval.
+- `check timing: {file:?}: asked_callback_calls=N asked_callback_cumulative_ns=T (source/hash/selective predicate, included in semantic)` is one stderr line per normally completed `errors_of` when enabled, including trace-only activation. N counts all callback invocations, including non-function and missing-source early returns. T sums monotonic elapsed durations of the real callback scopes in nanoseconds. It includes all callback work, not hashing alone. Two clock observations per callback and local Cell updates avoid per-callback tracing, locks, allocations, or synthetic events. Timing overhead remains and must be considered when interpreting small durations. No report is emitted if `errors_of` unwinds.
+
+The existing `check: ... functions asked` report retains its original meaning and activation. The new all-callback count intentionally differs from its successful-function-source count. Reports identify files, not unique concurrent invocations or crate/rule keys; lines from concurrent invocations may appear in completion order.
+
+## Interpretation and limitations
+
+All new spans are scoped entered tracing spans created and dropped on the same synchronous executing thread, including early return/unwind. No sequential residual spans, fabricated timestamp intervals, or callback spans assigned to another thread are produced. The outer wall interval overlaps spawned work on other threads. Parallel file/crate diagnostic invocations overlap, and existing query detail may nest within these intervals. Sums across threads are not wall time or critical path. The callback cumulative duration is a subset of the inclusive semantic interval, not an additional phase to add to it. It has no synthetic start timestamp and is not exported as a Chrome duration event. The detail events do not alter the existing level-based wall-time breakdown. Gaps between scopes and trace/reporting overhead mean phase totals are not promised to exhaust outer wall time.
+
+## Source-only validation and root acceptance
+
+Focused source unit tests cover the disabled interval's absent start/accounting and enabled callback count/cumulative monotonicity with early return. They are added but intentionally not executed in this lane. Only direct rustfmt and diff checks are permitted here. Root owns the frozen-source native build, tests, diagnostics equivalence checks, measured profile and disabled/enabled overhead evaluation. No commit before root native acceptance.

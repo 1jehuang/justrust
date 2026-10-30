@@ -1,0 +1,42 @@
+[
+  {
+    "pid": 2583367,
+    "comm": "cargo",
+    "cmdline": "/home/jeremy/.blaze/toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/bin/cargo --config target.'cfg(all())'.runner=[\"/home/jeremy/.cargo/bin/justrust\",\"__test-runner\"] --config term.progress.when=\"always\" --config term.progress.width=200 test --release --locked -p ra-jit --bin jr-engine -j 6",
+    "kind": "cargo",
+    "first_seen": 1793387366.5743306,
+    "last_seen": 1793387383.1290288,
+    "cpu_secs": 0.15,
+    "max_rss_mb": 105.87109375
+  },
+  {
+    "pid": 2583618,
+    "comm": "cargo",
+    "cmdline": "/home/jeremy/.blaze/toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/bin/cargo metadata --format-version 1 --manifest-path /home/jeremy/.jcode/scratch/.tmp8RxYKH/Cargo.toml --filter-platform x86_64-unknown-linux-gnu",
+    "kind": "cargo",
+    "first_seen": 1793387366.7842178,
+    "last_seen": 1793387366.7842178,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 16.078125
+  },
+  {
+    "pid": 2583374,
+    "comm": "jr_engine-93ff5",
+    "cmdline": "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/ra-jit/93ff5023e9192f9b/out/jr_engine-93ff5023e9192f9b -Z unstable-options --report-time",
+    "kind": "target-binary",
+    "first_seen": 1793387366.7842178,
+    "last_seen": 1793387383.1290288,
+    "cpu_secs": 3.91,
+    "max_rss_mb": 728.98828125
+  },
+  {
+    "pid": 2583617,
+    "comm": "cargo",
+    "cmdline": "",
+    "kind": "cargo",
+    "first_seen": 1793387366.7842178,
+    "last_seen": 1793387366.7842178,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 0.0
+  }
+]

@@ -1,0 +1,35 @@
+warning: unused workspace dependency `arrayvec`
+   --> Cargo.toml:154:1
+    |
+154 | arrayvec = "0.7.6"
+    | ^^^^^^^^
+    |
+    = note: `cargo::unused_workspace_dependencies` is set to `warn` by default
+help: consider removing the workspace dependency `arrayvec`
+warning: unused workspace dependency `bitflags`
+   --> Cargo.toml:155:1
+    |
+155 | bitflags = "2.9.1"
+    | ^^^^^^^^
+    |
+help: consider removing the workspace dependency `bitflags`
+warning: unused workspace dependency `camino`
+   --> Cargo.toml:157:1
+    |
+157 | camino = "1.2.2"
+    | ^^^^^^
+    |
+help: consider removing the workspace dependency `camino`
+
+justrust: ok: 349 tests passed in 16.8s
+  time    startup 0.16s | compile 0.00s | tests 16.58s
+  units   0 compiled (0 local, 0 deps, 0 build scripts), 429 fresh
+  tests   349 passed, 0 failed, 0 ignored, 0 filtered out, 1 binary in 16.58s
+          slowest tests (349 timed, 22.2s summed; a suite cannot finish before its slowest test):
+             16.52s  remote::gateway::tests::a_rate_limit_and_an_outage_are_waited_out_a_bounded_number_of_times
+  cpu     4.5s total, avg 0.3/peak 9.4 of 16 cores; others used 2.9 cores
+  memory  peak 835 MB build, 0 MB largest rustc, 34.9 GB free; stalls cpu 0.16s mem 0.02s io 0.05s
+  output  3 warnings shown, 251 hidden; 433 progress and 349 passing-test lines hidden
+  waste   1 issue (estimated cost each; they can overlap):
+          ~ 16.6s  tests in jr_engine-93ff5023e9192f9b took 16.6s to run; the slowest test alone took 16.5s (remote::gateway::tests::a_rate_limit_and_an_outage_are_waited_out_a_bounded_number_of_times). Speed it up or split it, or filter to the tests you changed
+  more    `justrust log 20261030-120926554-2583330` full output, `justrust show 20261030-120926554-2583330` full profile

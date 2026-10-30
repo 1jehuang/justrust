@@ -1,0 +1,15 @@
+Source-ready v22. Approved direct bounded real-interval transport in main.rs only.
+RA_JIT_DIAGNOSTICS_STATS exact1 inherited from dedicated daemon startup; no worker-identity config selection.
+Actual same-thread !Send/!Sync RAII. Cap4000, no threshold, explicit retained/stale/dropped receipt on drain.
+Existing 3 diagnostics_timing_tests expanded using local collectors, no global test interference.
+Source-only rustfmt --check and diff --check passed. No native builds/tests/workloads/commit.
+Prior v21/v21b full source and receipts preserved.
+Base HEAD: 0f517922b175cd854c853ec615a1c0b5e3c69d71
+
+Frozen full source and doc SHA256:
+56e2045c4f57a04631bdd206b8141e62e3a706abef0a940a59fea1e2b1df818a  /home/jeremy/.jcode/scratch/blaze-native-engine-20261030/diagnostics-phases-v22/main.rs
+3a666a9553713a81de3925ff9c5f6499a9e8a7fd9b905b86861625fd8a60b7c3  /home/jeremy/.jcode/scratch/blaze-native-engine-20261030/diagnostics-phases-v22/resident-diagnostics-phases.md
+
+Live source SHA256:
+56e2045c4f57a04631bdd206b8141e62e3a706abef0a940a59fea1e2b1df818a  toolchain/resident/crates/ra-jit/src/main.rs
+3a666a9553713a81de3925ff9c5f6499a9e8a7fd9b905b86861625fd8a60b7c3  docs/resident-diagnostics-phases.md

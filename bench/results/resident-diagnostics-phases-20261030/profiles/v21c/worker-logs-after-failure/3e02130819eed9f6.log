@@ -1,0 +1,64 @@
+symbols: 0 in 328.5µs
+load workspace: 137.0ms
+resolve: 69 crates in 415.6ms
+frozen, of 68 crates: def maps of 68, impls of 68, lang items of 68 from the store, 0 written in 76.0µs
+proc macros: 0 expanded in 0.00s, 111 from the store in 0.03s, 0.01s to key them
+standard library: from the store, 17 crates
+manifest: none used, the store has none of this build (13.2ms)
+store: 10657 functions found, 2 compiled and added
+entries: 33943 found, 10551 added, 0 as stored, 0 not as stored, 0 instances and 0 requests without a stable name
+not found: [("no entry", 9975), ("an entry that calls what cannot be used", 65), ("an entry linked against what the program lacks", 5)]
+cold: compiled 3990 of 3990 fns (+12896 instances) in 2.8s (+8.4µs emit)
+proc macros: 0 expanded in 0.00s, 224 from the store in 0.07s, 0.01s to key them
+check timing: FileId(1409): asked_callback_calls=11 asked_callback_cumulative_ns=149285 (source/hash/selective predicate, included in semantic)
+check timing: FileId(1407): asked_callback_calls=4 asked_callback_cumulative_ns=109785 (source/hash/selective predicate, included in semantic)
+check timing: FileId(1401): asked_callback_calls=41 asked_callback_cumulative_ns=622499 (source/hash/selective predicate, included in semantic)
+check timing: FileId(1410): asked_callback_calls=29 asked_callback_cumulative_ns=392134 (source/hash/selective predicate, included in semantic)
+check timing: FileId(1404): asked_callback_calls=28 asked_callback_cumulative_ns=1120927 (source/hash/selective predicate, included in semantic)
+check timing: FileId(1414): asked_callback_calls=49 asked_callback_cumulative_ns=855906 (source/hash/selective predicate, included in semantic)
+check timing: FileId(1413): asked_callback_calls=12 asked_callback_cumulative_ns=324573 (source/hash/selective predicate, included in semantic)
+check timing: FileId(1420): asked_callback_calls=13 asked_callback_cumulative_ns=328343 (source/hash/selective predicate, included in semantic)
+check timing: FileId(1415): asked_callback_calls=13 asked_callback_cumulative_ns=392647 (source/hash/selective predicate, included in semantic)
+check timing: FileId(1423): asked_callback_calls=49 asked_callback_cumulative_ns=911200 (source/hash/selective predicate, included in semantic)
+check timing: FileId(1408): asked_callback_calls=44 asked_callback_cumulative_ns=1152001 (source/hash/selective predicate, included in semantic)
+check timing: FileId(1405): asked_callback_calls=48 asked_callback_cumulative_ns=1213734 (source/hash/selective predicate, included in semantic)
+check timing: FileId(1406): asked_callback_calls=43 asked_callback_cumulative_ns=760421 (source/hash/selective predicate, included in semantic)
+check timing: FileId(1402): asked_callback_calls=91 asked_callback_cumulative_ns=2228734 (source/hash/selective predicate, included in semantic)
+check timing: FileId(1421): asked_callback_calls=52 asked_callback_cumulative_ns=689991 (source/hash/selective predicate, included in semantic)
+check timing: FileId(1403): asked_callback_calls=112 asked_callback_cumulative_ns=2668320 (source/hash/selective predicate, included in semantic)
+check timing: FileId(1429): asked_callback_calls=38 asked_callback_cumulative_ns=878906 (source/hash/selective predicate, included in semantic)
+check timing: FileId(1419): asked_callback_calls=30 asked_callback_cumulative_ns=604017 (source/hash/selective predicate, included in semantic)
+check timing: FileId(1422): asked_callback_calls=10 asked_callback_cumulative_ns=356163 (source/hash/selective predicate, included in semantic)
+check timing: FileId(1425): asked_callback_calls=126 asked_callback_cumulative_ns=3306832 (source/hash/selective predicate, included in semantic)
+check timing: FileId(1426): asked_callback_calls=121 asked_callback_cumulative_ns=3580652 (source/hash/selective predicate, included in semantic)
+check timing: FileId(1424): asked_callback_calls=72 asked_callback_cumulative_ns=2398922 (source/hash/selective predicate, included in semantic)
+check timing: FileId(33): asked_callback_calls=231 asked_callback_cumulative_ns=2913232 (source/hash/selective predicate, included in semantic)
+check timing: FileId(1417): asked_callback_calls=158 asked_callback_cumulative_ns=3412378 (source/hash/selective predicate, included in semantic)
+check timing: FileId(1412): asked_callback_calls=150 asked_callback_cumulative_ns=4383895 (source/hash/selective predicate, included in semantic)
+check timing: FileId(1418): asked_callback_calls=227 asked_callback_cumulative_ns=5018382 (source/hash/selective predicate, included in semantic)
+check timing: FileId(1411): asked_callback_calls=158 asked_callback_cumulative_ns=4522134 (source/hash/selective predicate, included in semantic)
+check timing: FileId(1416): asked_callback_calls=39 asked_callback_cumulative_ns=1003703 (source/hash/selective predicate, included in semantic)
+check timing: FileId(1428): asked_callback_calls=150 asked_callback_cumulative_ns=4339350 (source/hash/selective predicate, included in semantic)
+check timing: FileId(1427): asked_callback_calls=49 asked_callback_cumulative_ns=1659721 (source/hash/selective predicate, included in semantic)
+check timing: FileId(1430): asked_callback_calls=373 asked_callback_cumulative_ns=10948971 (source/hash/selective predicate, included in semantic)
+check: 31 files in 1.0s
+stats: 10632 of 44575 functions compiled, 33943 reused
+phases: compile 20.2ms, resolve 269.1ms, define 403.1ms, fallback 77.9µs, object 119.4ms, 1 rounds
+link: 173.5ms (exit status: 0; not spliced: no executable to add to)
+manifest: kept, 2 files, 38961344 bytes (69.9ms)
+watching 49 files
+tier: off (RA_JIT_TIER=off, blaze built without `--features llvm`, or not macOS on AArch64)
+request: sync at_us=1793387238614306
+change: 0 files
+request: sync at_us=1793387238634858
+request: sync at_us=1793387238668622
+request: sync at_us=1793387238701086
+request: sync at_us=1793387238732277
+change: 1 files
+check timing: FileId(1430): asked_callback_calls=373 asked_callback_cumulative_ns=7790236 (source/hash/selective predicate, included in semantic)
+edit (apply 9.4ms): compiled 3990 of 3990 fns (+10045 instances) in 207.5ms (+1.0µs emit)
+stats: 458 of 44575 functions compiled, 44117 reused
+patch: 1 functions
+phases: compile 84.2µs, resolve 115.9µs, define 6.8µs, fallback 0.0ns, object 190.7µs, 1 rounds
+link: 1.3ms (spliced: 1 functions redirected, 2105544 bytes, 0 copied)
+edit-to-binary: 221.5ms

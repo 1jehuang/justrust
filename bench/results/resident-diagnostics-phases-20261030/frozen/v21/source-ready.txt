@@ -1,0 +1,11 @@
+Source-ready: diagnostics-phases-v21
+Source-only rustfmt --check and git diff --check passed. No native builds/tests/workloads. No commit.
+Base HEAD: 0f517922b175cd854c853ec615a1c0b5e3c69d71
+
+Frozen full source and documentation SHA256:
+d66178c6262ee5b2958d3dbf2c3151788297ece2779e6b8ed42bddb4e4303e02  /home/jeremy/.jcode/scratch/blaze-native-engine-20261030/diagnostics-phases-v21/main.rs
+2651c63f1c5099f55e21042c31545a01d929ecef8eadd0f77111576baea3d19c  /home/jeremy/.jcode/scratch/blaze-native-engine-20261030/diagnostics-phases-v21/resident-diagnostics-phases.md
+
+Live source SHA256:
+d66178c6262ee5b2958d3dbf2c3151788297ece2779e6b8ed42bddb4e4303e02  toolchain/resident/crates/ra-jit/src/main.rs
+2651c63f1c5099f55e21042c31545a01d929ecef8eadd0f77111576baea3d19c  docs/resident-diagnostics-phases.md
