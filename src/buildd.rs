@@ -34,6 +34,9 @@
 //! Experimental `JUSTRUST_BUILDD_NATIVE_EMPTY=1` skips source validation only
 //! when no active or finished candidate exists. Native Cargo still runs, and
 //! the unvalidated execution can never be attached to or replayed.
+//! Experimental `JUSTRUST_BUILDD_NATIVE_NO_CANDIDATE=1` also permits unrelated
+//! map entries when no same-key owner/result or same-session wrong guess needs
+//! coordination. This is an operational gate, not dependency isolation.
 //!
 //! Wire format, both directions: `[u8 kind][u32 len, big endian][payload]`.
 //! Client to daemon: `R` request JSON, `P` ping, `S` shutdown. Daemon to
@@ -940,7 +943,7 @@ fn run(dm: &Arc<Daemon>, req: Request, mut s: UnixStream) -> Result<()> {
     // involved: the child must run Cargo's complete freshness path.
     let native = {
         let mut st = dm.state.lock().unwrap();
-        if native_empty_eligible(&st, &req) {
+        if native_empty_eligible(&st, &req) || native_no_candidate_eligible(&st, &req, &key) {
             let b = start(&req, None, &cwd)?;
             st.served += 1;
             st.last_request = Some(Instant::now());
@@ -1040,6 +1043,32 @@ fn native_empty_eligible(st: &State, req: &Request) -> bool {
 
 fn native_key_occupied(st: &State, key: &str) -> bool {
     st.builds.get(key).is_some_and(|b| b.stamp.is_none())
+}
+
+/// Skip only operations which have no candidate at this locked reservation.
+/// This makes no claim about path or dependency isolation: Cargo still runs.
+fn native_no_candidate_eligible(st: &State, req: &Request, key: &str) -> bool {
+    !req.prebuild
+        && req
+            .env
+            .iter()
+            .any(|(k, v)| k == "JUSTRUST_BUILDD_NATIVE_NO_CANDIDATE" && v == "1")
+        // Covers stale cancellation, compile-only settlement, attach, finished
+        // removal/replay and unstamped same-key reservations, without a stamp.
+        && !st.builds.contains_key(key)
+        && !st.finished.contains_key(key)
+        && !st
+            .builds
+            .iter()
+            .any(|(k, b)| wrong_guess_candidate(k, b, key, &session_of(req)))
+}
+
+fn wrong_guess_candidate(build_key: &str, b: &Build, key: &str, session: &str) -> bool {
+    if build_key == key || b.session != session {
+        return false;
+    }
+    let l = b.log.lock().unwrap();
+    l.exit.is_none() && ((*b.prebuild.lock().unwrap() && !l.claimed) || l.early_served)
 }
 
 fn remember_request(st: &mut State, req: &Request, key: &str, roots: &[PathBuf]) {
@@ -1457,13 +1486,7 @@ fn cancel_wrong_guess(dm: &Daemon, key: &str, session: &str) {
         let st = dm.state.lock().unwrap();
         st.builds
             .iter()
-            .filter(|(k, b)| {
-                let l = b.log.lock().unwrap();
-                k.as_str() != key
-                    && b.session == session
-                    && l.exit.is_none()
-                    && ((*b.prebuild.lock().unwrap() && !l.claimed) || l.early_served)
-            })
+            .filter(|(k, b)| wrong_guess_candidate(k, b, key, session))
             .map(|(_, b)| b.clone())
             .collect()
     };
@@ -1877,6 +1900,91 @@ mod tests {
     }
 
     #[test]
+    fn native_no_candidate_requires_exact_opt_in_and_real_request() {
+        let st = State::default();
+        let mut r = req(&[], &["check"]);
+        assert!(!native_no_candidate_eligible(&st, &r, "key"));
+        for value in ["0", "true", "on", "01", "", "1"] {
+            r.env = vec![("JUSTRUST_BUILDD_NATIVE_NO_CANDIDATE".into(), value.into())];
+            assert_eq!(native_no_candidate_eligible(&st, &r, "key"), value == "1");
+        }
+        r.prebuild = true;
+        assert!(!native_no_candidate_eligible(&st, &r, "key"));
+    }
+
+    #[test]
+    fn native_no_candidate_blocks_every_same_key_owner_and_result() {
+        let r = req(&[("JUSTRUST_BUILDD_NATIVE_NO_CANDIDATE", "1")], &["check"]);
+        for stamped in [false, true] {
+            for complete in [false, true] {
+                for compile_only in [false, true] {
+                    let mut st = State::default();
+                    let mut b = fake_build();
+                    if !stamped {
+                        b.stamp = None;
+                    }
+                    *b.compile_only.lock().unwrap() = compile_only;
+                    b.log.lock().unwrap().exit = complete.then_some(0);
+                    st.builds.insert("key".into(), Arc::new(b));
+                    assert!(!native_no_candidate_eligible(&st, &r, "key"));
+                    st.finished = std::mem::take(&mut st.builds);
+                    assert!(!native_no_candidate_eligible(&st, &r, "key"));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn native_no_candidate_matches_wrong_guess_operations_not_roots() {
+        for session in ["", "agent"] {
+            let r = req(
+                &[
+                    ("JUSTRUST_BUILDD_NATIVE_NO_CANDIDATE", "1"),
+                    ("JUSTRUST_SLOT_SESSION", session),
+                ],
+                &["check"],
+            );
+            for same_session in [false, true] {
+                for prebuild in [false, true] {
+                    for claimed in [false, true] {
+                        for early_served in [false, true] {
+                            for complete in [false, true] {
+                                let mut st = State::default();
+                                let mut b = fake_build();
+                                b.session = if same_session { session } else { "other" }.into();
+                                *b.prebuild.lock().unwrap() = prebuild;
+                                {
+                                    let mut l = b.log.lock().unwrap();
+                                    l.claimed = claimed;
+                                    l.early_served = early_served;
+                                    l.exit = complete.then_some(0);
+                                }
+                                let needs_cancel = same_session
+                                    && !complete
+                                    && ((prebuild && !claimed) || early_served);
+                                assert_eq!(
+                                    wrong_guess_candidate("other-key", &b, "key", session),
+                                    needs_cancel
+                                );
+                                st.builds.insert("other-key".into(), Arc::new(b));
+                                assert_eq!(
+                                    native_no_candidate_eligible(&st, &r, "key"),
+                                    !needs_cancel
+                                );
+                                // Finished other-key entries are never touched by
+                                // the skipped request lookup or cancellation.
+                                st.finished = std::mem::take(&mut st.builds);
+                                assert!(native_no_candidate_eligible(&st, &r, "key"));
+                                assert!(!native_empty_eligible(&st, &r));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn unstamped_execution_is_reserved_but_never_replayed() {
         let dm = Daemon {
             state: Mutex::default(),
@@ -1917,8 +2025,17 @@ mod tests {
         let mut owner = fake_build();
         owner.stamp = None;
         let owner = Arc::new(owner);
-        for prebuild in [false, true] {
-            let mut r = req(&[], &["check"]);
+        for (prebuild, flag) in [false, true].into_iter().flat_map(|prebuild| {
+            [
+                None,
+                Some("JUSTRUST_BUILDD_NATIVE_EMPTY"),
+                Some("JUSTRUST_BUILDD_NATIVE_NO_CANDIDATE"),
+            ]
+            .into_iter()
+            .map(move |flag| (prebuild, flag))
+        }) {
+            let env: Vec<_> = flag.into_iter().map(|flag| (flag, "1")).collect();
+            let mut r = req(&env, &["check"]);
             r.prebuild = prebuild;
             let key = request_key(&r);
             dm.state
