@@ -30,8 +30,10 @@ there is no remaining bootstrap-policy blocker.
 On a fresh headless Linux host, install the Rust toolchain (including rustfmt
 and Clippy) and the separately released stable `justrust` client. Ensure
 `$HOME/.cargo/bin` and `$HOME/.local/bin` are on PATH before running these
-commands. Native execution acceptance currently requires Linux x86-64, and
-its stock oracle requires `rustc`. Build caches are not transferred with a cloud
+commands. Native execution acceptance currently requires Linux x86-64 with
+GNU `ld`, the glibc runtime and CRT/development objects (`glibc-devel` on
+RPM-based hosts). C ABI acceptance also needs `cc`. The stock Rust oracle
+requires `rustc`. Build caches are not transferred with a cloud
 session, so allow disk space for a cold build. On a disk-constrained host,
 `CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0`
 reduces bootstrap artifact storage without changing the native compiler
